@@ -129,6 +129,7 @@ def quartz_rows(tmp_path_factory: pytest.TempPathFactory) -> list[dict]:
     return _analyzed(QUARTZ, tmp_path_factory.mktemp("held-quartz"), "scheduled_work")
 
 
+@pytest.mark.pins("chains.a-terminal-on-ANOTHER-type-is-not-the-chains")
 def test_a_trigger_built_over_statements_keeps_its_name_and_cron(quartz_rows):
     """`HeldTriggerScheduler`: `triggers.withIdentity("x")`, a held cron builder given a
     misfire policy in a statement of its own, `triggers.withSchedule(cron)`, then

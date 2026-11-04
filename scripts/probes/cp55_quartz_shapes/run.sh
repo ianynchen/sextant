@@ -10,7 +10,8 @@
 #
 # Needs a JDK 21 at `$JAVA_HOME` (for `javac` via Maven, `javap` and `java`), Maven, and network
 # on the first run only (Quartz 2.5.1 and spring-context-support 7.0.1 are cached in ~/.m2
-# afterwards). Not a test: nothing in the suite runs it. It starts no scheduler.
+# afterwards). Not a test: nothing in the suite runs it. It starts no scheduler: (g)'s
+# scheduler is created over the in-memory store and shut down without being started.
 set -euo pipefail
 
 cd "$(dirname "$0")"

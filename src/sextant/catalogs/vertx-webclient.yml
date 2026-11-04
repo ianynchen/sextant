@@ -93,8 +93,9 @@ matches:
   #   * `x(port, host, uri)` → `port`, `host` and `url`;
   #   * `xAbs(url)` → the whole address, split by CP-2.
   # The defaults are the client's (`client_model: vertx-web`): read off its options object, they
-  # fill the parts a request names none of; unset (`localhost` and `80`, rows 131-132) they are
-  # never published, since that a client sets none cannot be proven from the bytecode (§2a).
+  # fill the parts a request names none of, one row per path the client's options are read on;
+  # unset (`localhost` and `80`, rows 131-132) they are published only where the path proves
+  # them unset (the client model's `unset`, spec 2026-11-02-per-path-truth rule 5).
   #
   # A `UriTemplate` form reads its template off `UriTemplate.of(String)`, the one factory the
   # type declares (`url_via`; measured with `javap -s` on vertx-uri-template 4.5.10, 5.0.0 and

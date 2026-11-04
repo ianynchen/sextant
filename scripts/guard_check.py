@@ -146,6 +146,7 @@ _FLUENT = "sextant/application/resolve/engines/fluent.py"
 # The chain walk `fluent` derives from (Quartz spec 2026-10-28 §3d), moved out of `_FLUENT`
 # whole, with the guards on the walk's own rules.
 _CHAINS = "sextant/application/resolve/shapes/chains.py"
+_CLIENT_BASE = "sextant/application/resolve/shapes/client_base.py"
 # Which handler on a route chain answers (Vert.x spec 2026-10-30 §3b, plan Task 10).
 _PASS_THROUGH = "sextant/application/resolve/shapes/pass_through.py"
 _MOUNTS = "sextant/application/resolve/shapes/mounts.py"
@@ -279,11 +280,12 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="        found.extend((job, path) for job in (context.jobs_by_key or {})"
-                ".get(named, ()))",
-                replace="        found.extend((job, path) for key, jobs in (context.jobs_by_key "
-                'or {}).items() if key.rsplit(".", 1)[-1] == named.rsplit(".", 1)[-1] for job in '
-                "jobs)  # guard disabled by scripts/guard_check.py",
+                find="            (job, path, stored(path)) for job in (context.jobs_by_key "
+                "or {}).get(named, ())\n",
+                replace="            (job, path, stored(path)) for key, jobs in "
+                '(context.jobs_by_key or {}).items() if key.rsplit(".", 1)[-1] == '
+                'named.rsplit(".", 1)[-1] for job in jobs  # guard disabled by '
+                "scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -322,10 +324,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="        key = (row.name, row.trigger, row.expression, row.source, row.handler, "
-                "row.untied)",
-                replace="        key = (row.name, row.trigger, row.expression, row.source, row.handler, "
-                "row.untied, id(row))  # guard disabled by scripts/guard_check.py",
+                find="            row.untied,\n            refused,\n        )\n",
+                replace="            row.untied,\n            refused,\n            id(row),  # guard "
+                "disabled by scripts/guard_check.py\n        )\n",
             ),
         ),
     ),
@@ -438,11 +439,11 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="    for named, path in keys:\n        found.extend((job, path) for job in "
-                "(context.jobs_by_key or {}).get(named, ()))",
-                replace="    for named, path in keys:\n        found.extend((job, _ANY_PATH) for job "
-                "in (context.jobs_by_key or {}).get(named, ()))  # guard disabled by "
-                "scripts/guard_check.py",
+                find="            (job, path, stored(path)) for job in (context.jobs_by_key "
+                "or {}).get(named, ())\n",
+                replace="            (job, _ANY_PATH, stored(_ANY_PATH)) for job in "
+                "(context.jobs_by_key or {}).get(named, ())  # guard disabled by "
+                "scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -468,8 +469,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_SCHEDULED_CHAIN,
-                find="trigger.two_calls_of_one_helper(path) for trigger in triggers",
-                replace="True for trigger in triggers  # guard disabled by scripts/guard_check.py",
+                find="for trigger in triggers if trigger.two_calls_of_one_helper(path)]",
+                replace="for trigger in triggers]  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -1949,6 +1950,20 @@ GUARDS: dict[str, Guard] = {
                 replace='method: requestAbs, descriptor: "(Lio/vertx/core/http/HttpMethod;Lio/'
                 "vertx/core/net/SocketAddress;Ljava/lang/String;)Lio/vertx/ext/web/client/"
                 'HttpRequest;",\n        captures: { http_method: arg0, url: arg2 } }',
+            ),
+        ),
+    ),
+    "catalog.apache-httpclient.setUri-RETURNS-its-receiver": Guard(
+        what="`ClassicRequestBuilder.setUri` is flagged `returns_receiver` (`aload_0; areturn`, "
+        "httpcore5 5.1.3-5.4.3; audited 2026-11-03)",
+        why='`b.setUri("…/b");` written as a statement forks a branch of its own, and the '
+        "request `execute(b.build())` sends is published at the root's `/a`, `resolved`",
+        edits=(
+            Edit(
+                path="sextant/catalogs/apache-httpclient.yml",
+                find="    - { method: setUri, captures: { url: arg0 }, url_via: *uri_forms, "
+                "returns_receiver: true }",
+                replace="    - { method: setUri, captures: { url: arg0 }, url_via: *uri_forms }",
             ),
         ),
     ),
@@ -4012,33 +4027,18 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "fluent.a-default-set-and-unread-leaves-no-peer": Guard(
-        what="a client default a request takes that was set and not read, or disputed, leaves "
-        "the row's peer NULL at its own resolution (D02's options-object rung; final review I3)",
+        what="a client default a request takes that was set and not read, or is not known on the "
+        "path, leaves the row's peer NULL, `partial` (D02's options-object rung; final review I3; "
+        "spec 2026-11-02 rule 4)",
         why='without it `setDefaultHost("search").setDefaultPort(config.port())` publishes the '
         "peer `search` at `resolved`, where Vert.x sends to `search:<unread>`",
         edits=(
             Edit(
                 path=_FLUENT,
-                find="        text = defaults[part]\n        if text is None:\n            return None\n",
-                replace="        text = defaults[part]\n        if text is None:\n"
-                "            continue  # guard disabled\n",
-            ),
-        ),
-    ),
-    "client_base.a-default-the-paths-dispute-is-set-and-unread": Guard(
-        what="a part every path to the options sets, and two read otherwise, is set and not "
-        "read (None), never absent (final review I3)",
-        why="without it two factories naming two default ports read as no port set, and the "
-        "row publishes the host alone at `resolved`",
-        edits=(
-            Edit(
-                path="sextant/application/resolve/shapes/client_base.py",
-                find="        part: value if all(other[part] == value for other in rest) else None\n"
-                "        for part, value in first.items()\n"
-                "        if all(part in other for other in rest)\n",
-                replace="        part: value\n"
-                "        for part, value in first.items()\n"
-                "        if all(part in other and other[part] == value for other in rest)\n",
+                find="        if any(text is None for text in texts):\n"
+                "            readings.append((None, defaults.exact))\n",
+                replace="        if any(text is None for text in texts):\n"
+                "            pass  # guard disabled\n",
             ),
         ),
     ),
@@ -4240,8 +4240,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        ends = producers_of(self._index, site, RECEIVER, self._index.unscanned)\n",
-                replace="        ends = producers_of(self._index, site, RECEIVER, frozenset())  # guard disabled\n",
+                find="                self._index, site, RECEIVER, self._index.unscanned, which_object=True\n",
+                replace="                self._index, site, RECEIVER, frozenset(), which_object=True"
+                "  # guard disabled\n",
             ),
         ),
     ),
@@ -4855,9 +4856,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="    elif terminal is not None:\n        context.ends.append(",
-                replace="    elif True:  # guard disabled by scripts/guard_check.py\n"
-                "        context.ends.append(",
+                find="        elif terminal is not None:\n            context.ends.append(",
+                replace="        elif True:  # guard disabled by scripts/guard_check.py\n"
+                "            context.ends.append(",
             ),
         ),
     ),
@@ -7298,8 +7299,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_ROOTS,
-                find='        if row["handler"] is not None\n    }',
-                replace="        if True  # guard disabled\n    }",
+                find='        if row["handler"] is not None\n',
+                replace="        if True  # guard disabled\n",
             ),
         ),
     ),
@@ -7994,8 +7995,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",
-                find='            each.append(self.parts_of(built, int(rung["options_arg"])))\n',
-                replace="            each.append({})  # guard disabled by scripts/guard_check.py\n",
+                find='                    for read, options_path in self.paths_of(built, int(rung["options_arg"]))\n',
+                replace="                    for read, options_path in ()  # guard disabled\n",
             ),
         ),
     ),
@@ -8056,23 +8057,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="    if peer is not None or context.workspace is None:\n        return captures\n",
+                find="    if peer is not None or context.workspace is None:\n        return [(captures, True)]\n",
                 replace="    if context.workspace is None:  # guard disabled by scripts/guard_check.py\n"
-                "        return captures\n",
-            ),
-        ),
-    ),
-    "fluent.an-unread-default-leaves-the-resolution-alone": Guard(
-        what="a client default that was set and not read fills nothing (Q4 ruling 2026-10-31)",
-        why="Vert.x never rewrites the path, so an unread default host leaves only the peer "
-        "unread; filled as an unread part it would mark a fully read path `partial`",
-        edits=(
-            Edit(
-                path=_FLUENT,
-                find="        if text is None:\n            return None\n"
-                "        filled[part] = _part_argument(text)\n",
-                replace="        filled[part] = _UNRESOLVED_ARGUMENT if text is None else "
-                "_part_argument(text)  # guard disabled\n",
+                "        return [(captures, True)]\n",
             ),
         ),
     ),
@@ -8084,8 +8071,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="    if _OPTIONS in captures:\n        captures = _with_request_options(captures, context)\n",
-                replace="    if False:  # guard disabled by scripts/guard_check.py\n        pass\n",
+                find="    if _OPTIONS not in captures:\n        _derive_captured(end, captures, context)\n",
+                replace="    if True:  # guard disabled by scripts/guard_check.py\n"
+                "        _derive_captured(end, captures, context)\n",
             ),
         ),
     ),
@@ -8123,18 +8111,6 @@ GUARDS: dict[str, Guard] = {
                 path=_FLUENT,
                 find='        if field == "url":\n',
                 replace='        if field == "url" and text is not None:  # guard disabled\n',
-            ),
-        ),
-    ),
-    "client_base.paths-must-agree-on-a-default": Guard(
-        what="a client default is filled only where every path to the client agrees on it",
-        why="a client one of two factories built has no one default host; filling either "
-        "publishes a peer the module may not call",
-        edits=(
-            Edit(
-                path="sextant/application/resolve/shapes/client_base.py",
-                find="        part: value if all(other[part] == value for other in rest) else None\n",
-                replace="        part: value  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -8190,8 +8166,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="    client = _client_of(captures, context)\n",
-                replace="    client = None  # guard disabled by scripts/guard_check.py\n",
+                find="    client = _client_of(captures, context)\n    # The decision is the shared one",
+                replace="    client = None  # guard disabled by scripts/guard_check.py\n"
+                "    # The decision is the shared one",
             ),
         ),
     ),
@@ -8684,8 +8661,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="        _continue(consumer, _configured_for(site, consumer, captures, context), context)\n",
-                replace="        _continue(consumer, captures, context)  # guard disabled by scripts/guard_check.py\n",
+                find="        for handed in _configured_for(site, consumer, captures, context):\n",
+                replace="        for handed in [captures]:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -8703,6 +8680,1458 @@ GUARDS: dict[str, Guard] = {
                 path=_VALUES,
                 find="            if row is None or _call_of(row) not in self._configuring:\n",
                 replace="            if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-HAND-OFF-into-a-body-we-have-is-walked-into": Guard(
+        what="a call in the `escapes` window that hands the value to a body `call_edges` "
+        "resolves is walked into, and what the body does to its parameter is judged by the "
+        "same window rule, in order, at the hand-off's place (spec 2026-11-02 rule 1)",
+        why='`o = new Options().setHost("search"); configure(o); WebClient.create(vertx, o)` '
+        "with `configure` setting the port publishes peer `search` at `resolved`, a value the "
+        "code changed before it was used",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            events.append((ordinal, self._handed_to(method, ordinal, slot), None))\n",
+                replace="            continue  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-call-NOT-on-every-path-to-the-use-SPLITS-the-path": Guard(
+        what="a call between a value's producer and its use that is not on every path to the "
+        "use (not on the use's `dominator` chain, or not `on_every_exit` in a body the value "
+        "was handed to) splits the path: one where it ran, one where it did not (spec "
+        "2026-11-02 rule 9)",
+        why="`if (tls) o.setPort(443); client.get(…)` publishes port 443 `resolved`, false "
+        "whenever `tls` is false (review 2, M4)",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            and not always(ordinal)\n",
+                replace="            and False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.two-or-more-SPLIT-calls-make-every-path-of-the-window-inexact": Guard(
+        what="where two or more calls in one window split it, every path from the split is "
+        "inexact (`partial`), whichever parts they set: the fact does not say which branch a "
+        'call is on (rule 9, ruled by the user 2026-11-03, "A: every row partial")',
+        why="`if (x) setPort(1); else setPort(2);` publishes `neither` and `both` at "
+        "`resolved`, combinations no run makes",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="    return splits + (2 if any(step.context[0] == _SEVERAL for step in trail) else 0)\n",
+                replace="    return splits  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.several-splits-are-counted-over-the-whole-PATH": Guard(
+        what="two or more calls on branches anywhere on a path from the producer to the use, "
+        "in whichever frames, make every row of the path `partial` (ruled by the user "
+        '2026-11-03, "A: every row partial", per path — review 3, C1)',
+        why='`y(){ if (z) o.setHost("h"); send(o); }` with `send(o){ if (z) o.setPort(1); '
+        'use(o); }` publishes "port without host" `resolved`, a run nobody makes',
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="    splits = len(\n        {\n            step.context\n            for step in trail\n",
+                replace="    splits = 0 * len(  # guard disabled\n        {\n            step.context\n"
+                "            for step in trail\n",
+            ),
+        ),
+    ),
+    "chains.a-folded-call-NOT-on-every-path-to-the-terminal-FORKS": Guard(
+        what="a call the forward chain walk folds in place that is not on every path to the "
+        "fork it carries on to forks the chain, with it and without it — the value walk's own "
+        "rule (`values.Flow`; spec 2026-11-02 rule 9)",
+        why='`if (x) b.setUri("…/b"); execute(b.build())` publishes `/b` alone, `resolved`, '
+        "false whenever `x` is false",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            and not always(ordinal)\n",
+                replace="            and False  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-folded-call-AFTER-the-terminal-in-its-LOOP-forks": Guard(
+        what="a configuring call after the fork by ordinal that shares its loop group forks the "
+        "chain, its with-side never proven (the value walk's loop-later rule)",
+        why='`for (…) { execute(b.build()); b.setUri("…/b"); }` drops the `/b` every later '
+        "request is sent to",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        and (_chain_key(site) is None or _configures(site, context))\n"
+                '        and inside(int(site["ordinal"]))\n',
+                replace="        and (_chain_key(site) is None or _configures(site, context))\n"
+                "        and False  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.two-or-more-FORKS-make-every-row-partial": Guard(
+        what="two or more calls on branches on a chain's path make every row from it `partial` "
+        '(ruled 2026-11-03, "A: every row partial"), counted by the value walk\'s rule',
+        why="`if (x) b.setUri(b); if (y) b.setUri(c);` publishes combinations no run makes at "
+        "`resolved`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    return inexact(Path(trail)) or bool(captures.get(_UNPROVEN))\n",
+                replace="    return bool(captures.get(_UNPROVEN))  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.the-row-WITH-a-forked-call-needs-the-terminal-on-its-post-dominator-chain": Guard(
+        what="a side of a fork the facts do not prove a run takes to the fork (`Flow.reaches_use`) "
+        "makes its row `partial`",
+        why='`if (x) { b.setUri("…/b"); return; } execute(b.build())` publishes `/b` '
+        "`resolved`, though no run sends there",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                    if not ran_proven:\n",
+                replace="                    if False:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-fold-that-CHANGES-NOTHING-is-no-split": Guard(
+        what="a folded call that changes no capture is no split (as in the value walk)",
+        why="a void call no step names on a branch makes every row of the chain `partial`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="            changed = _without_rule_9(snapshot) != _without_rule_9(after[index])\n",
+                replace="            changed = True  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-split-setting-NO-PUBLISHED-part-does-not-count": Guard(
+        what="a call on a branch that sets no part the reader's row publishes does not count "
+        "toward the several-splits rule (ruled by the user 2026-11-03, option A)",
+        why="a branched call setting only an unpublished part makes every row `partial` beside "
+        "one real split",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="    if counting is None:\n        return True\n    return any(\n",
+                replace="    if True:  # guard disabled\n        return True\n    return any(\n",
+            ),
+        ),
+    ),
+    "values.a-window-counts-only-PUBLISHED-splits-as-several": Guard(
+        what="a window is collapsed as several only where two or more of its splits count for "
+        "the reader (ruled by the user 2026-11-03, option A)",
+        why="one published split beside an unpublished one is marked several, every row `partial`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        several = len(counted) > 1\n",
+                replace="        several = len(splitting) > 1  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-split-setting-NO-PUBLISHED-part-does-not-count": Guard(
+        what="the forward walk counts only the splits whose call sets a part the reader's rows "
+        "publish (ruled by the user 2026-11-03, option A)",
+        why="`if (x) b.url(…); if (y) b.tag(…)`, `tag` setting a part no row shows, makes both "
+        "rows `partial`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    return counts_split(parts, published)\n",
+                replace="    return True  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-reader-with-NO-DECLARED-PARTS-counts-every-split": Guard(
+        what="a reader that states no published parts counts every split (the conservative "
+        "default)",
+        why="a reader with no stated parts counts none, and two calls on branches publish "
+        "combinations no run makes at `resolved`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        None\n        if published is None\n",
+                replace="        (lambda method, ordinal: False)  # guard disabled\n"
+                "        if published is None\n",
+            ),
+        ),
+    ),
+    "chains.the-PATH-CAP-counts-splits-across-CHAINED-forks": Guard(
+        what="the forward walk's path cap counts every split already made on the path, across "
+        "chained forks, continuations and the walk back",
+        why="five guarded calls before each of two chained forks give 1,024 chain ends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    width = held * (1 if context.path is None else 2 ** split_sites(context.path))\n",
+                replace="    width = 1  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-split-whose-PARTS-ARE-NOT-KNOWN-counts": Guard(
+        what="a call on a branch whose path ends at a reason (`escapes`, `cycle`, the cap) counts "
+        "toward the several-splits rule: its parts are not known (review 3 re-review 2, C-1)",
+        why="`if (x) Objects.hash(b); if (x) b.setUri(c)` publishes `/a` and `/c` `resolved` "
+        "beside a call that may have changed the url",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        isinstance(gathered, str)\n        or any(",
+                replace="        False  # guard disabled\n        or any(",
+            ),
+        ),
+    ),
+    "values.a-HAND-OFF-split-counts-by-what-its-BODY-sets": Guard(
+        what="a branched hand-off into a body the walk read counts by the calls the body makes "
+        "on the value, in whichever method (review 3 re-review 2, C-1)",
+        why="`if (x) helper(b); if (x) b.queueUrl(Q2)`, `helper` setting the queue, publishes "
+        "`/acme/helper` `resolved`, a queue no run sends to",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        or any(counting(made_in, ordinal) for made_in, ordinal in gathered)\n",
+                replace="        or any(counting(made_in, ordinal) for made_in, ordinal in gathered "
+                "if made_in == method)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-call-on-a-configuring-calls-result-runs-WHERE-THAT-CALL-DOES": Guard(
+        what="a call made on a configuring call's result that is on that call's "
+        "`post_dominator` chain is no split of its own (review 3 re-review 2, m-1)",
+        why='`if (x) b.setUri("/b").setUri("/c")` publishes a `/b` row no run sends, and makes '
+        "every row `partial`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            chain = _post_dominators(self._index, method, parent)\n"
+                "            return chain is not None and ordinal in chain\n",
+                replace="            return False  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-HAND-OFF-of-the-chains-value-is-read-as-the-value-walk-reads-it": Guard(
+        what="the forward chain walk reads a hand-off of the chain's value by rules 1 and 2, "
+        "through the value walk's own code (`values.HandOffs`; review 3 re-review 2, C-2)",
+        why='`setB(b){ b.setUri("/b") }`, then `b = get("/a"); setB(b); execute(b.build())` '
+        "publishes `/a` `resolved`, which no run sends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    if producer is None or context.hand_offs is None:\n        return []\n",
+                replace="    if True:  # guard disabled\n        return []\n",
+            ),
+        ),
+    ),
+    "chains.a-hand-off-into-code-we-do-NOT-HAVE-leaves-the-parts-unknown": Guard(
+        what="a path of the forward walk through a hand-off into code we do not have has every "
+        "part a step sets unknown (rule 2; review 3 re-review 2, C-2)",
+        why="`Objects.hash(b)` before `execute(b.build())` publishes the root's `/a` though the "
+        "call may have changed it",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        _fold(captures, dict.fromkeys(context.step_parts, _unread(gathered)))\n",
+                replace="        pass  # guard disabled\n",
+            ),
+            Edit(
+                path=_CHAINS,
+                find="                parts.update(context.step_parts)\n",
+                replace="                pass  # guard disabled\n",
+            ),
+        ),
+    ),
+    "fluent.rows-of-ONE-IDENTITY-that-DIFFER-in-a-published-part-are-partial": Guard(
+        what="two chains of one row identity that differ in a published column or metadata "
+        "make the one row no surer than `partial` (review 3 re-review 2, m-2)",
+        why='`if (x) r.putHeader("X-Tenant", "acme"); r.send()` publishes one `resolved` row '
+        "carrying a header one run does not send",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if published != self.published:\n            self.differs = True\n",
+                replace="        if False:  # guard disabled\n            self.differs = True\n",
+            ),
+        ),
+    ),
+    "fluent.rows-of-ONE-IDENTITY-EQUAL-in-every-part-keep-the-most-EXACT": Guard(
+        what="two chains of one row identity equal in every published column give the row the "
+        "more exact resolution of the two (review 3 re-review 2, m-2)",
+        why="a request every run sends to `/b` is published `partial` because a branched "
+        "request to `/b` came first",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='                row["resolution"] = resolution\n',
+                replace="                pass  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-child-is-absorbed-only-BEFORE-THE-USE": Guard(
+        what="a call on a configuring call's result is absorbed into it only before the use; "
+        "one after the use in its loop keeps its own split, never proven (review 3 re-review 3, "
+        "N-1)",
+        why='`for (…) { r = b.setUri("/b"); execute(b.build()); r.setUri("/c"); }` publishes '
+        "`/c` `resolved` and drops `/b`, which every request is sent to",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if parent is None or (used_at is not None and ordinal > used_at):\n",
+                replace="            if parent is None:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-HAND-OFF-after-the-use-in-its-LOOP-forks": Guard(
+        what="a hand-off of the chain's value after the fork by ordinal that shares its loop "
+        "group forks the chain, its with-side never proven (review 3 re-review 3, N-2)",
+        why="`for (…) { execute(b.build()); setBthenC(b); }` drops the `/c` every later "
+        "request is sent to",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        for site, outcomes in handed\n",
+                replace="        for site, outcomes in ()  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-fold-AFTER-the-fork-outside-its-loop-is-not-in-its-window": Guard(
+        what="a call the forward walk folded in place after the fork by ordinal, outside the "
+        "fork's loop, is not in the fork's window (`Flow.inside`; fix round 5, concern 1)",
+        why='`r = b.setUri("/b"); execute(b.build()); r.setUri("/c");` publishes a `/c` row for '
+        "a request that never happens",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find='        if not inside(int(site["ordinal"])):\n            outside = True\n',
+                replace="        if False:  # guard disabled\n            outside = True\n",
+            ),
+        ),
+    ),
+    "chains.a-PARTIAL-path-keeps-its-row": Guard(
+        what="the walk back from a rootless terminal keeps a path it cannot call exact: the "
+        "row is the terminal's, which the code makes (review 3 re-review, M-B; rule 4)",
+        why="an SQS request with two branched `messageBody` calls derives no row at all",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        if not producer.chain:\n            continue\n",
+                replace="        if not producer.chain or producer.inexact:  # guard disabled\n"
+                "            continue\n",
+            ),
+        ),
+    ),
+    "fluent.an-INEXACT-chain-end-is-at-most-partial": Guard(
+        what="a chain the walk back reached on an inexact path gives a row no surer than "
+        "`partial` (review 3 re-review, M-B)",
+        why="an SQS request with two branched `messageBody` calls publishes a combination no run "
+        "makes at `resolved`",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="        if end.inexact and resolution == str(Resolution.RESOLVED):\n",
+                replace="        if False:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "client_base.each-PATH-to-the-options-is-its-own-READING": Guard(
+        what="a client's defaults are read once per path to its options, never merged (spec "
+        "2026-11-02 rule 4)",
+        why="two factories, one setting port 8443 and one setting none, published `two`, "
+        "`resolved` — false for the first; or a port the paths disputed hid both",
+        edits=(
+            Edit(
+                path=_CLIENT_BASE,
+                find="        return tuple(dict.fromkeys(found)) or (PathParts(_UNKNOWN),)\n",
+                replace="        return tuple(dict.fromkeys(found))[:1] or (PathParts(_UNKNOWN),)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "client_base.an-UNSET-part-takes-the-FRAMEWORKS-default": Guard(
+        what="a part a path proves unset takes the framework's own value, the client model's "
+        "`unset` (spec 2026-11-02 rule 5; Vert.x `localhost`, 80, CP-56 row 132)",
+        why="options setting no host send to `localhost`; without it the row has no peer",
+        edits=(
+            Edit(
+                path=_CLIENT_BASE,
+                find="                        else self._unset.get(part)\n",
+                replace="                        else None  # guard disabled\n",
+            ),
+        ),
+    ),
+    "client_base.an-unset-part-is-the-default-only-where-PROVEN": Guard(
+        what="the framework default is used only where the no-argument constructor built the "
+        "options and every call on them was read (spec 2026-11-02 rule 5)",
+        why="`new WebClientOptions(json)` reads its port from configuration; without it the "
+        "row publishes port 80, `resolved`, an address the JSON may not name",
+        edits=(
+            Edit(
+                path=_CLIENT_BASE,
+                find='            row.get("name") == "<init>"\n            and row.get("descriptor") == "()V"\n',
+                replace='            row.get("name") == "<init>"  # guard disabled\n',
+            ),
+        ),
+    ),
+    "client_base.the-options-reader-counts-only-PUBLISHED-parts": Guard(
+        what="a split on an options call that sets no part the rows publish (`setSsl`) is no "
+        "split for the several-splits rule (ruled 2026-11-03, option A)",
+        why="`if (a) setSsl(true); if (b) setDefaultPort(443)` makes both rows `partial` though "
+        "only one call moves the address",
+        edits=(
+            Edit(
+                path=_CLIENT_BASE,
+                find="            counting=self._counts,\n",
+                replace="            counting=None,  # guard disabled\n",
+            ),
+        ),
+    ),
+    "client_base.a-setter-in-an-ENTERED-body-reads-its-argument-through-the-HAND-OFF": Guard(
+        what="a setter gathered in a body a hand-off entered reads a parameter of that body at "
+        "the call that entered it on the path (item 1's review, concern 6; the shared rule "
+        "`values.read_through_hand_off`)",
+        why="`port(o, 1001)` and `port(o, 1002)` read the helper's parameter across both "
+        "callers, which disagree, and each row loses its peer",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="    for entered in path.entered_into(caller, ordinal) or ((),):\n",
+                replace="    for entered in ((),):  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-GATHERED-call-names-the-hand-off-that-ENTERED-its-body": Guard(
+        what="the walk writes, for each configuring call gathered inside an entered body, the "
+        "call that entered it (`_GATHERED`, item 1's review, concern 6)",
+        why="without it a reader of the call's argument has no hand-off to read it through, "
+        "and a helper's setter crosses to every caller of the helper",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                _entered_through((*steps, *_gathered_steps(callee, outcome)), method, ordinal),\n",
+                replace="                _entered_through(steps, method, ordinal),  # guard disabled\n",
+            ),
+        ),
+    ),
+    "fluent.a-default-read-on-an-INEXACT-path-is-partial": Guard(
+        what="a row composed from defaults read on a path rule 9 cannot call exact is no surer "
+        "than `partial` (several splits setting an address part)",
+        why='`if (a) setDefaultPort(1); if (b) setDefaultHost("h")` publishes `h:1` '
+        "`resolved`, a combination no run may make",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                if not exact:\n                    resolution = weaker(resolution, str(Resolution.PARTIAL))\n",
+                replace="                if False:  # guard disabled\n"
+                "                    resolution = weaker(resolution, str(Resolution.PARTIAL))\n",
+            ),
+        ),
+    ),
+    "chains.a-walk-back-that-ESCAPES-keeps-the-terminals-row": Guard(
+        what="a walk back from a rootless terminal that ends `escapes` or `cycle` keeps the "
+        "terminal's row, its parts unread (spec 2026-11-02 rule 4; item 2's B list)",
+        why="`send(b) { Objects.requireNonNull(b); http.execute(b.build()); }` derives no row "
+        "for a request the module sends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="_UNREAD_WALKS = (NON_ENUMERABLE, ESCAPES, CYCLE, EXTERNAL)\n",
+                replace="_UNREAD_WALKS = (NON_ENUMERABLE, EXTERNAL)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-request-executed-only-through-an-UNREAD-window-keeps-its-row": Guard(
+        what="a terminal the value walk pairs with its executing call only by identity — the "
+        "built value handed to code we do not have before it is sent — keeps its row, "
+        "`partial` (spec 2026-11-02 rules 4 and 8; item 2's B list)",
+        why="`req = make(); Objects.requireNonNull(req); http.execute(req, h)` derives no row "
+        "for a request the module sends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    if not found:\n        found = list(context.identified.get(_site_key(site), ()))\n",
+                replace="    if False:  # guard disabled\n"
+                "        found = list(context.identified.get(_site_key(site), ()))\n",
+            ),
+        ),
+    ),
+    "chains.a-request-executed-only-through-an-UNREAD-window-is-PARTIAL": Guard(
+        what="a row whose terminal is executed only through a pairing by identity is no surer "
+        "than `partial` (rule 2)",
+        why="what the JDK call did to the request is not known; `resolved` would claim it",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="                    or _executed_unread(terminal, context),\n",
+                replace="                    or False,  # guard disabled\n",
+            ),
+        ),
+    ),
+    "client_base.an-object-STORED-in-a-field-is-not-known": Guard(
+        what="an options object stored in a field is not known: anything can change it there "
+        "(rule 2; item 2 review, C1)",
+        why="options configured through `this.opts` in a constructor publish Vert.x's "
+        "`localhost:80`, `resolved`, for a client whose host and port are set",
+        edits=(
+            Edit(
+                path=_CLIENT_BASE,
+                find="            if not producer.rooted or not producer.chain or self._stored(producer.chain):\n",
+                replace="            if not producer.rooted or not producer.chain:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "client_base.a-call-through-a-FIELD-of-the-options-type-may-be-on-the-object": Guard(
+        what="a method that calls an options type through a field may be calling the object "
+        "its chain built, whose store D00 §5 does not record (item 2 review, C1)",
+        why="`o = new …(); this.held = o; this.held.setDefaultPort(5); create(vertx, o)` "
+        "publishes `hd:80`, `resolved`, where Vert.x sends to `hd:5`",
+        edits=(
+            Edit(
+                path=_CLIENT_BASE,
+                find="            if caller in self._configured_through_fields:\n",
+                replace="            if False:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-step-in-an-ENTERED-body-reads-its-argument-through-the-HAND-OFF": Guard(
+        what="a step the forward walk folds from a body a hand-off entered reads a parameter "
+        "argument at the call that entered it (item 2 review, C2; concern 6)",
+        why='`setU(b, "/one")` and `setU(b, "/two")` from two callers publish both uris '
+        "for each caller, `resolved`, though each sends one",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="            site = bound\n",
+                replace="            pass  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-walk-back-ending-EXTERNAL-keeps-the-terminals-row": Guard(
+        what="a walk back from a rootless terminal that ends `external` keeps the terminal's "
+        "row, its parts unread (rule 2 and 4; item 2 review, M1)",
+        why="a public method's builder parameter, or a builder returned through the JDK, "
+        "derives no row for a request the module sends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="_UNREAD_WALKS = (NON_ENUMERABLE, ESCAPES, CYCLE, EXTERNAL)\n",
+                replace="_UNREAD_WALKS = (NON_ENUMERABLE, ESCAPES, CYCLE)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-walk-back-keeps-a-row-for-a-terminal-of-the-chains-OWN-TYPE": Guard(
+        what="the types a catalog's chain is built on include what each root call hands back "
+        "(item 2 review, M1)",
+        why="`b = ClassicRequestBuilder.copy(src); Objects.requireNonNull(b); "
+        "http.execute(b.build())` derives no row for a request the module sends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="                types.add(built)\n",
+                replace="                pass  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-terminal-on-ANOTHER-type-is-not-the-chains": Guard(
+        what="a walk back keeps an unread terminal-only row only for a terminal called on a "
+        "type the catalog's chain is built on (item 2 review, M1)",
+        why="Quartz's name-only `terminal: [build]` reaches `JobBuilder.build()` from the "
+        "trigger walk and adds an unnamed `simpleSchedule()` entry no code schedules",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find='            if producer.reason != NON_ENUMERABLE and str(terminal["owner"]) not in rootless.types:\n',
+                replace="            if False:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-CONSTRUCTOR-roots-type-is-its-owner": Guard(
+        what="a constructor root builds its owner type, so a walk back from a terminal on it "
+        "keeps its unread row (item 2 re-review, N1)",
+        why="OkHttp's one root is `new Request.Builder()`; read off its descriptor it builds "
+        "nothing, and every OkHttp request whose walk back ends `escapes` loses its row",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find='                if name == "<init>"\n',
+                replace="                if False  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-JDK-NULL-CHECK-is-not-a-hand-off": Guard(
+        what="a call to a method a `not_hand_offs` entry names under `methods` takes the value "
+        "without handing it off (the user's ruling of 2026-11-03, OI-262, option B)",
+        why="`Objects.requireNonNull(b)` before `http.execute(b.build())` makes every such "
+        "request a row with nothing read",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='    if owner in shapes.not_hand_offs or owner + str(row["name"]) in shapes.not_hand_offs:\n',
+                replace="    if owner in shapes.not_hand_offs:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-request-handed-to-the-JDK-before-its-SAME-METHOD-execute-is-partial": Guard(
+        what="a built request handed to code we do not have before its same-method execute is "
+        "no surer than `partial` (item 2 review, C3; rule 2)",
+        why='`List.of(req).forEach(r -> r.setPath("/elsewhere"))` before `execute(req)` '
+        "publishes the built path, `resolved`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    if here and _handed_before_use(terminal, here, context):\n",
+                replace="    if False:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "chains.a-hand-off-AFTER-the-first-execute-leaves-its-request-as-built": Guard(
+        what="only a hand-off before the first same-method execute makes the row `partial` "
+        "(re-review minor on C3)",
+        why="`execute(req); List.of(req); execute(req)` makes the first request, sent as built, "
+        "`partial`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find='    first = min(int(consumer["ordinal"]) for consumer in consumers)\n',
+                replace='    first = max(int(consumer["ordinal"]) for consumer in consumers)  # guard disabled\n',
+            ),
+        ),
+    ),
+    "chains.a-CAPPED-walk-back-keeps-the-terminals-row": Guard(
+        what="a walk back past the path cap keeps the terminal's row, its parts unread "
+        "(review 3 re-review, M-B)",
+        why="an SQS request with nine branched calls derives no row at all",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        if not producer.chain and producer.reason in _UNREAD_WALKS:\n",
+                replace="        if False:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-later-call-in-the-uses-LOOP-GROUP-is-in-its-window": Guard(
+        what="a call after the use by ordinal that shares the use's `loop_group` is in its "
+        "window: it can run before a later run of the use (rule 9, ruled by the user "
+        "2026-11-03, option A for review 3's M1)",
+        why="`for (…) { use(o); o.setPort(443); }` publishes the unset port alone at "
+        "`resolved` and drops the 443 every later run sends",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                and self.loop_group(method, ordinal) == group\n",
+                replace="                and False  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-later-call-in-ANOTHER-loop-is-not-in-the-window": Guard(
+        what="a call after the use in a loop the use is not in cannot run before it, so it is "
+        "not in the window",
+        why="`for (…) { use(o); } for (…) { o.setPort(443); }` publishes a 443 row no run sends",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                and self.loop_group(method, ordinal) == group\n",
+                replace="                and self.loop_group(method, ordinal) is not None  # guard "
+                "disabled\n",
+            ),
+        ),
+    ),
+    "values.a-LOOP-LATER-call-is-in-the-window-even-where-the-value-is-made-in-the-loop": Guard(
+        what="a call after the use in the use's loop group is in the window even where the value "
+        "is produced in that group: nested loops are one group, and the five facts cannot tell "
+        "a fresh object from the outer loop's (review 3 re-review, M-A)",
+        why="`for (…) { o = create(); for (…) { use(o); o.setPort(443); } }` drops the 443 row "
+        "every later inner run sends",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                and group is not None\n",
+                replace="                and group is not None\n"
+                "                and group != self.loop_group(method, after)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-path-with-a-LOOP-LATER-call-is-never-resolved": Guard(
+        what="the side of a split that ran a call after the use in its loop is never proven: "
+        "the window's ordinal order is not the run order across the back edge (review 3 "
+        "re-review, C-A)",
+        why="`while (true) { o.setPort(80); use(o); if (flag()) return; o.setPort(443); }` "
+        "publishes port 443 `resolved`, though every use sees 80",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if used_at is not None and ordinal > used_at:\n            return False, True\n",
+                replace="        # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.the-PATH-CAP-counts-the-whole-path-across-frames": Guard(
+        what="the path cap counts the whole path, across the frames it crosses, not one window "
+        "(review 3 re-review, m-B)",
+        why="eight guarded setters in a caller and eight in its callee give 65,536 paths; a "
+        "third frame gives 16.7 million",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if len(reached) > PATH_CAP:\n",
+                replace="            if False:  # guard disabled\n",
+            ),
+            Edit(
+                path=_VALUES,
+                find="        if len(reached) > PATH_CAP:\n"
+                "            return ((trail, _unresolved(NON_ENUMERABLE)),)\n"
+                "        return tuple(reached)\n",
+                replace="        return tuple(reached)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.paths-that-gather-the-same-calls-are-ONE": Guard(
+        what="a window with two or more splits records one mark, not each choice, so paths "
+        "that gather the same calls are one (review 3, M2)",
+        why="nine guarded setters on one object enumerate a path per choice, where one per "
+        "distinct outcome says everything; the count doubles with each setter",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        several = len(counted) > 1\n",
+                replace="        several = len(counted) > 99  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-window-past-the-PATH-CAP-is-one-non-enumerable-row": Guard(
+        what="a window whose paths pass the cap is one path ending `non_enumerable`, stated, "
+        "never enumerated on (review 3, M2)",
+        why="twenty guarded setters on one object took 30.9 s and 2.15 GB for one site",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if len(paths) * width > PATH_CAP:\n",
+                replace="            if False:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-call-that-NEVER-RETURNS-blocks-the-path-to-the-use": Guard(
+        what="a call to a body this workspace read that has no normal return, on the way from "
+        "a split call to the use, means no run with the split call reaches the use (review 3, "
+        "m2)",
+        why="`if (tls) { o.setPort(443); boom(); } use(o)` with `boom()` always throwing "
+        "publishes port 443 `resolved`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="    return target in index.never_return\n",
+                replace="    return False  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.the-path-WITH-a-split-call-needs-the-use-on-its-POST-DOMINATOR-chain": Guard(
+        what="the path with a split call is exact only where the use is on the call's "
+        '`post_dominator` chain (rule 9, ruled by the user 2026-11-03, "A: add '
+        'post_dominator")',
+        why="`if (tls) { o.setPort(443); return; } connect(o);` publishes port 443 `resolved`, "
+        "though no run connects with it",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if chain is None or used_at not in chain:\n",
+                replace="            if chain is None or used_at not in chain:\n"
+                "                return True, True  # guard disabled\n"
+                "            if False:\n",
+            ),
+        ),
+    ),
+    "values.a-split-in-an-ENTERED-body-needs-a-normal-return-after-the-call": Guard(
+        what="in a body a hand-off entered, the path with a split call is exact only where a "
+        "`post_dominator` proves a normal return follows the call",
+        why="a helper whose setter on one branch is followed only by a throw publishes the "
+        "set part `resolved` for a caller no run reaches with it",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            return returns, True\n",
+                replace="            return True, True  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-split-before-a-RETURN-needs-a-normal-return-after-the-call": Guard(
+        what="where the use is a RETURN of the value, the path with a split call is exact only "
+        "where a `post_dominator` proves a normal return follows the call",
+        why="`if (x) { o.setPort(1); throw …; } return o;` publishes port 1 `resolved` for a "
+        "value no run returns",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        return returns and every, every\n",
+                replace="        return every, every  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-setter-that-REACHES-A-RETURN-reaches-the-returned-use": Guard(
+        what="a split call with no `post_dominator` whose `reaches_return` is true is one after "
+        "which a run returns (rule 9, ruled by the user 2026-11-03, option A)",
+        why="`Options make(tls){ o = new; if (tls) o.setSsl(true); return o; }` publishes its "
+        "ssl row `partial` though every run with the setter returns `o`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        returns = (bool(chain) or _reaches_return(self._index, method, "
+                "ordinal)) and not any(\n",
+                replace="        returns = (bool(chain) or False and _reaches_return(self._index, method, "
+                "ordinal)) and not any(  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.reaches_return-FALSE-is-not-a-return": Guard(
+        what="a call whose `reaches_return` is false or absent is not read as reaching a return",
+        why="`if (x) { o.setPort(1); throw …; } return o;` publishes port 1 `resolved` for a "
+        "value no run returns",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='    return row is not None and row.get("reaches_return") is True\n',
+                replace="    return row is not None  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-split-before-a-RETURN-needs-EVERY-return-to-hand-back-the-value": Guard(
+        what="where the use is a RETURN of the value, a side of a split is exact only where "
+        "every return of the method hands the value back",
+        why="a method with two returns publishes a path `resolved` that reaches the return of "
+        "another value",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        return returns and every, every\n",
+                replace="        return returns, True  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-call-on-a-SKIPPED-calls-result-is-skipped-too": Guard(
+        what="a call made on a configuring call's result runs only where that call ran: where "
+        "the split skips the configuring call, it skips the call on its result too",
+        why='`if (x) o.setHost("a").setPort(1);` gains a path with the port set and the host '
+        "not, which no run makes",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                if parent in skipped:\n",
+                replace="                if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-hand-off-to-code-we-do-NOT-have-escapes": Guard(
+        what="a hand-off whose site `call_edges` resolves to no body (code this module does "
+        "not have) ends the path at `escapes` (spec 2026-11-02 rule 2)",
+        why="a value handed to a library method that changes it reads as untouched, so the "
+        "address composed from it is published at `resolved` for a value the code never sent",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if row is None or not callees:\n            return (((), ESCAPES),)\n",
+                replace="        if row is None or not callees:\n"
+                "            return (((), ()),)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-DYNAMIC-hand-off-escapes": Guard(
+        what="a capture at a `dynamic` site whose lambda body does anything to the captured "
+        "parameter ends the path at `escapes` (spec 2026-11-02 rule 2, amended in fix round 1)",
+        why="when the body runs is not known, so reading what it does as nothing — or as a "
+        "configuring call at the capture's place — publishes a value the lambda may change "
+        "before the use",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        touched = self._touched_in(*mapped)\n        if touched is not None:\n",
+                replace="        touched = self._touched_in(*mapped)\n"
+                "        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-FIELD-WRITE-of-a-handed-value-escapes": Guard(
+        what="inside a body the value was handed to, a field write of it ends the path at "
+        "`escapes` (spec 2026-11-02 rule 2)",
+        why="a value parked in a field can be changed later by anything that reads the field, "
+        "and reading it as untouched publishes what it held before at `resolved`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if stored and in_body:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.an-IMMUTABLE-hand-off-is-not-a-hand-off": Guard(
+        what="an argument the site's own descriptor types as a primitive, `String` or a boxed "
+        "primitive is not a hand-off (spec 2026-11-02 rule 3)",
+        why="`log.info(url)` before `client.get(url)` makes the commonest readable address "
+        "`escapes`, a miss on every logged value the callee cannot change",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if slot < len(slots) and slots[slot] in _UNCHANGEABLE:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.several-CALLEES-of-one-hand-off-are-several-paths": Guard(
+        what="a hand-off whose call reaches several bodies is one path per body, never one "
+        "answer for all (spec 2026-11-02 rules 1 and 4)",
+        why="reading one body for a call that dispatches to two publishes that body's effect "
+        "as the effect of every call, at `resolved`, on the path where the other one runs",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            for callee in callees\n",
+                replace="            for callee in callees[:1]  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-hand-off-REPEATED-on-its-own-path-is-a-cycle": Guard(
+        what="entering a body for a parameter already being read on this path answers `cycle` "
+        "(spec 2026-11-02 rule 1)",
+        why="a recursive helper read as doing nothing on its repeat gives a finite chain for a "
+        "value the recursion may change any number of times",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if key in self._entering:\n            return (((), CYCLE),)\n",
+                replace="        if key in self._entering:\n"
+                "            return (((), ()),)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-capture-the-body-does-NOTHING-with-is-not-a-hand-off": Guard(
+        what="a capture whose lambda body does nothing to the captured parameter (no call on "
+        "it, no hand-off, no field write) is not a hand-off (spec 2026-11-02 rule 2, fix round "
+        "1 M6)",
+        why="every value a lambda closes over reads as `escapes` at every later use — a client "
+        "captured by one route handler loses its address in the next",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            return (((), touched),)\n        return (((), ()),)\n\n"
+                "    def _touched_in(",
+                replace="            return (((), touched),)\n"
+                "        return (((), ESCAPES),)  # guard disabled by scripts/guard_check.py\n\n"
+                "    def _touched_in(",
+            ),
+        ),
+    ),
+    "values.a-COMPILER-NULL-CHECK-is-not-a-hand-off": Guard(
+        what="a call to an owner the catalogs declare in `not_hand_offs` (a compiler's null "
+        "checks) takes the value without handing it off (user ruling 2026-11-02)",
+        why='every Kotlin function opens with `Intrinsics.checkNotNullParameter(p, "p")`, so '
+        "every Kotlin parameter and platform-typed local reads as `escapes` and no Kotlin value "
+        "the walk follows resolves",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='    if owner in shapes.not_hand_offs or owner + str(row["name"]) in shapes.not_hand_offs:\n',
+                replace='    if owner + str(row["name"]) in shapes.not_hand_offs:  # guard disabled\n',
+            ),
+        ),
+    ),
+    "scheduled_chain.a-job-whose-trigger-ESCAPES-keeps-its-row": Guard(
+        what="a pairing call whose trigger argument the walk answers `escapes` keeps a row for "
+        "the job it is handed, the trigger unknown, `partial` (user ruling 2026-11-02)",
+        why="a job scheduled with a trigger something unread may have changed disappears from "
+        "the document entirely, though the code schedules it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="            if not escaped:\n                continue\n            handlers:",
+                replace="            if True:  # guard disabled by scripts/guard_check.py\n"
+                "                continue\n            handlers:",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-JOB-that-ESCAPES-keeps-its-row": Guard(
+        what="a job the walk from a pairing's job argument answers `escapes` on a path is that "
+        "path's job, unknown, so the path keeps its row naming no job (user ruling 2026-11-02, "
+        "`_built_jobs`)",
+        why="a trigger whose job something unread may have changed loses that caller's row, "
+        "and the schedule disappears from the document though the code makes it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="        if producer.reason in _UNREAD_ENDS:\n            found.append((None, path))\n",
+                replace="        if producer.reason in _UNREAD_ENDS:  # guard disabled by "
+                "scripts/guard_check.py\n            pass\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-KEY-that-ESCAPES-keeps-its-row": Guard(
+        what="a `JobKey` the walk answers `escapes` on a path is that path's key, unknown, so "
+        "the path keeps its row naming no job (user ruling 2026-11-02, `_built_keys`)",
+        why="a trigger whose job key something unread may have changed loses that caller's "
+        "row, and the schedule disappears from the document though the code makes it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="        if producer.reason in _UNREAD_ENDS:\n            keys.append((None, path))\n",
+                replace="        if producer.reason in _UNREAD_ENDS:  # guard disabled by "
+                "scripts/guard_check.py\n            pass\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-SCHEDULE-that-ESCAPES-keeps-its-row": Guard(
+        what="a schedule the walk answers `escapes` on one path, while another path reads a "
+        "chain, is its own row with the declared kind and no expression (user ruling "
+        "2026-11-02, `_schedules`)",
+        why="the path whose schedule something unread may have changed is dropped, and the "
+        "document shows only the other path's cron as though it were the only one",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="    if chains:\n        found.extend(\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n"
+                "        found.extend(\n",
+            ),
+        ),
+    ),
+    "values.WHICH-CONSTANT-a-value-is-is-not-changed-by-a-hand-off": Guard(
+        what="a window path that ends `escapes` or `cycle` still answers a value the walk reads "
+        "as a declaration (`symbol`): no hand-off can make a variable another constant (spec "
+        "2026-11-02 rule 8, ruled by the user 2026-11-02)",
+        why="`HttpMethod.GET.equals(method)` before `exchange(url, method, …)` loses the verb "
+        "on every path — apollo-portal's 51 outbound rows without a verb",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="                reached.extend(self._identities_past(gathered, position, "
+                "crossed, frames))\n",
+                replace="                reached.append((crossed, _unresolved(gathered)))  "
+                "# guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.only-a-DECLARATION-answer-passes-a-hand-off": Guard(
+        what="rule 8 lets past a hand-off only a `symbol` answer, which names a declaration; "
+        "an object's contents, or a string an identity arm read, stays `escapes`",
+        why="an options object handed to code this module does not have publishes its "
+        "producer's contents as though nothing had changed them",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if answer.kind == LITERAL and answer.literal_kind == SYMBOL:\n",
+                replace="            if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-STATED-hand-off-keeps-the-trigger": Guard(
+        what="a hand-off to a call a catalog states the effect of (`hand_off_effects`) is a "
+        "step of the path, not `escapes`: the parts the call does not bind stay as they were "
+        "(spec 2026-11-02 rule 7, ruled by the user 2026-11-02)",
+        why="a trigger scheduled once is unknown to every later call, though Quartz's "
+        "measured `scheduleJob` changes only which job it names",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if row is not None and (*_call_of(row), slot) in self._index.stated:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-call-the-framework-REFUSES-is-marked-refused": Guard(
+        what="a pairing call whose trigger an earlier stated call already bound to another "
+        "job is marked `refused`, from the catalog's `refuses: bound_elsewhere` (rule 7)",
+        why="a job Quartz refuses to schedule (`Trigger does not reference given job!`) is "
+        "published as running on the trigger's schedule",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="    return _Refusal(bound_to=bound)\n",
+                replace="    return _ACCEPTED  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.ONE-JOBKEY-is-one-job-to-the-refusal": Guard(
+        what="two built jobs with one `JobKey` are one job to the refusal, as Quartz compares "
+        "keys (`JobKey.equals`, CP-55 row 27)",
+        why="a second `scheduleJob` naming the trigger's own job by key is marked refused, "
+        "though Quartz's check accepts it",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="    return one.key == other.key\n",
+                replace="    return False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "roots.a-REFUSED-schedule-is-NOT-a-root": Guard(
+        what="a `scheduled_work` row the framework refuses (`refused` set) gives no root: the "
+        "job never runs on that clock (user ruling 2026-11-02)",
+        why="a job Quartz refuses to schedule gets a trace, and its call graph reads as code "
+        "that runs",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/roots.py",
+                find='        and row["refused"] is None\n',
+                replace="        # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "schedules.the-DOCUMENT-says-a-schedule-is-REFUSED": Guard(
+        what="the document's schedule table and the job's detail block say a refused "
+        "schedule is refused by the framework (`scheduled_work.refused`, user ruling "
+        "2026-11-02)",
+        why="the document lists a job the framework refuses as a schedule that runs",
+        edits=(
+            Edit(
+                path="sextant/egress/render/document.py",
+                find='        if row.get("refused") is not None:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path="sextant/egress/render/document.py",
+                find='                + (_REFUSED_RESOLUTION if row.get("refused") is not None else "")\n',
+                replace="                # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "boundary.a-SCHEDULE-carries-its-refusal": Guard(
+        what="a boundary `schedule` entry carries `refused`, from a workspace and from a "
+        "bundle (spec 2026-11-02 rule 7, user ruling 2026-11-02)",
+        why="a diff or an observability map lists a schedule the framework refuses as one "
+        "that runs",
+        edits=(
+            Edit(
+                path="sextant/application/boundary/source.py",
+                find='            **_attributes(members, "expression", "resolution", "refused"),\n',
+                replace='            **_attributes(members, "expression", "resolution"),  '
+                "# guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.the-FIRST-BIND-is-the-builders-forJob": Guard(
+        what="a trigger whose builder calls `forJob(…)` is bound when it is built: that is "
+        "its first bind, and a later `scheduleJob` naming another job's key is refused "
+        "(spec 2026-11-02 rule 7, CP-55 row 44)",
+        why="`forJob(X)` then `scheduleJob(Y, t)` publishes Y as running on the trigger, "
+        'though Quartz throws "Trigger does not reference given job!"',
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="    binds: list[tuple[_Bound | None, Path]] = []\n",
+                replace="    return None  # guard disabled by scripts/guard_check.py\n"
+                "    binds: list[tuple[_Bound | None, Path]] = []\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.an-UNREAD-first-bind-decides-nothing": Guard(
+        what="a first bind whose job key cannot be read decides nothing: the later call is "
+        "neither refused nor accepted, and its row is capped at `partial`",
+        why="`forJob(<unreadable>)` then `scheduleJob(Y, t)` publishes Y `resolved` as "
+        "running, a refusal Quartz may well make guessed away",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="        if len(binds) != 1 or None in binds:\n            known = False\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            known = False\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.the-JOB-handed-to-scheduleJob-is-STATED": Guard(
+        what="the catalog states what `scheduleJob(JobDetail, Trigger)` does to its JOB "
+        "argument (nothing, CP-55 rows 27, 32, 35, 49-73), so the job stays a stated step, "
+        "not `escapes` (the user's ruling of 2026-11-02, option B)",
+        why="one job scheduled twice with one trigger publishes a second row naming no job",
+        edits=(
+            Edit(
+                path="sextant/catalogs/value-models/quartz-scheduler.yml",
+                find="    arg: arg0\n    hands_to:\n",
+                replace="    arg: arg9  # guard disabled by scripts/guard_check.py\n    hands_to:\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-module-LISTENER-is-read-as-a-capture": Guard(
+        what="a stated call that hands the value on to a method the module implements (a "
+        "`SchedulerListener.jobAdded`) is `escapes` where that body does anything to its "
+        "parameter, as a lambda's capture is (rule 2, the user's ruling of 2026-11-02)",
+        why="a module listener that re-classes every job it is handed is ignored, and the "
+        "job is published as the class the code built",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if stated in self._index.stated_hands:\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-binder-is-read-in-the-FRAME-that-entered-it": Guard(
+        what="a stated call inside a helper is read through the call that ENTERED the helper, "
+        "so two calls of one helper are two executions (review 2, C1)",
+        why="`sched(j, t){ scheduleJob(j, t); }` called with BJob then CJob reads the first "
+        "call's job as CJob and publishes CJob as running, though Quartz refuses it",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='    for outer in entered:\n        arguments = site["arguments"] or []\n',
+                replace="    for outer in ():  # guard disabled by scripts/guard_check.py\n"
+                '        arguments = site["arguments"] or []\n',
+            ),
+        ),
+    ),
+    "scheduled_chain.a-refusal-needs-the-binder-to-have-RUN-BEFORE-on-every-path": Guard(
+        what="a pairing call is refused only where the call that bound the trigger ran before "
+        "it on every path: on its `dominator` chain in one method, `on_every_exit` in a body "
+        "a hand-off entered (spec 2026-11-02 rule 9, review 2 C3)",
+        why="`if (useB) scheduleJob(B, t); else scheduleJob(C, t);` marks C refused and drops "
+        "it as a root, though C runs whenever `useB` is false",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="    return trigger.ran_before(\n",
+                replace="    return True or trigger.ran_before(  # guard disabled\n",
+            ),
+        ),
+    ),
+    "values.a-binder-INSIDE-a-helper-runs-before-only-on-every-exit": Guard(
+        what="a stated call inside a body a hand-off entered ran before a later call only "
+        "where it is `on_every_exit` in that body (rule 9, across a hand-off)",
+        why="`sched(j, t){ if (ok) scheduleJob(j, t); }` called twice marks the second job "
+        "refused, though the first call may not have bound the trigger",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if not _on_every_exit(index, *point):\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-binder-in-a-RETURNED-callee-ran-before-through-its-call": Guard(
+        what="a stated call inside a callee whose return the path read ran before a later "
+        "call where it is `on_every_exit` there and the callee's one call ran before (rule 9)",
+        why="`t = mk(); scheduleJob(C, t)` with `mk` binding the trigger to B reads the bind "
+        "as undecided and publishes C as running, though Quartz refuses it",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        len(set(calls)) == 1\n",
+                replace="        False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-CAPPED-walk-keeps-its-row": Guard(
+        what="a walk past the path cap (`non_enumerable`) is a part not read on the path, kept "
+        "like `escapes` and `cycle` (review 3 re-review, m-A)",
+        why="a job whose trigger window passes the cap loses its row",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="_UNREAD_ENDS = (ESCAPES, CYCLE, NON_ENUMERABLE)\n",
+                replace="_UNREAD_ENDS = (ESCAPES, CYCLE)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-trigger-walked-back-on-a-PARTIAL-path-keeps-its-row": Guard(
+        what="a trigger chain the walk back reached on an inexact path is no surer than "
+        "`partial` (review 3 re-review, M-B)",
+        why="a trigger built in a helper with two branched calls publishes its row `resolved`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="            if row.tied and not row.undecided and not end.inexact\n",
+                replace="            if row.tied and not row.undecided  # guard disabled\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.ONE-BUILD-is-one-job-only-in-ONE-EXECUTION": Guard(
+        what="two binds at one `build()` site are one job only where both paths reached it in "
+        "one execution (review 2, C2)",
+        why="`job(c){ return newJob(c).build(); }` called twice reads as one job, so the "
+        "second `scheduleJob` is published as running though its unique key differs",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="            and one.path.joined(other.path) is not None\n",
+                replace="            # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-forJob-row-takes-the-refusal-of-EVERY-storing-call": Guard(
+        what="a job `forJob` names takes the refusal where every call that would store the "
+        "trigger is refused: nothing is stored (review 2, M1)",
+        why="`forJob(X)` then a refused `scheduleJob(Y, t)` publishes X as running on `t` and "
+        "makes it a root, though Quartz stores nothing",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="        return replace(relevant[0], never_stored=True)\n",
+                replace="        return _ACCEPTED  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-call-the-reader-does-NOT-PAIR-may-store-the-trigger": Guard(
+        what="a call the reader does not pair (`scheduleJob(Trigger)`) may store the trigger, "
+        "so a `forJob` row keeps its standing (review 2, M1)",
+        why="a `forJob` trigger stored by the one-argument `scheduleJob` is published as never "
+        "stored, and its job loses its root",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="        unsure = unsure or not paired\n",
+                replace="        # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-CYCLE-keeps-the-row-as-ESCAPES-does": Guard(
+        what="a path that ends `cycle` keeps its row with the unknown part, as `escapes` does "
+        "(rule 4; review 2, M3)",
+        why="a trigger handed through a recursive helper drops its job's row, and the job "
+        "loses its root",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="_UNREAD_ENDS = (ESCAPES, CYCLE, NON_ENUMERABLE)\n",
+                replace="_UNREAD_ENDS = (ESCAPES, NON_ENUMERABLE)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-LISTENER-re-entered-is-a-CYCLE": Guard(
+        what="a listener or capture body read again while it is being read is `cycle` (rule 1; "
+        "review 2, M2)",
+        why="a module listener that schedules the job it is handed recurses without bound and "
+        "the module's analysis fails",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if key in self._entering_bodies:\n            return CYCLE\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            return CYCLE\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.the-FIRST-BINDER-is-first-in-RUN-order": Guard(
+        what="the trigger's first binder is the first stated call in RUN order: frames the "
+        "walk met later ran earlier (review 2 re-review, N1)",
+        why="`y(){ scheduleJob(B, t); h(t); }` with two CJob calls in `h` takes `h`'s first "
+        "call as the binder and publishes CJob as running, though Quartz refuses both",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="    for frame in reversed(trigger.stated_by_frame()):\n",
+                replace="    for frame in trigger.stated_by_frame():  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "scheduled_chain.a-pairing-call-with-NO-PAIRING-is-undecided": Guard(
+        what="a pairing call the walk reads no pairing from leaves a `forJob` row undecided, "
+        "not standing (review 2 re-review, N3)",
+        why="a `forJob` job whose only storing call may be refused is published `resolved`",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/engines/scheduled_chain.py",
+                find="                storing.append((_ANY_PATH, _UNDECIDED))\n",
+                replace="                unsure = True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-method-reads-its-OWN-PARAMETER-window": Guard(
+        what="a method's own parameter is windowed from the method's entry to the use: calls "
+        "on it and hand-offs of it inside the method are read by the same rules (spec "
+        "2026-11-02 rule 1, fix round 1 C1)",
+        why="`send(o) { configure(o); WebClient.create(vertx, o); }` publishes the caller's "
+        "options as the client's, at `resolved`, though `configure` changed them first",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        return self._windowed(\n"
+                "            method, (_PARAMETER, index), -1, used_at, (_PARAMETER, method, index), "
+                "trail, frames\n        )\n",
+                replace="        return self._resolve((_PARAMETER, method, index), trail, frames)"
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.an-IMMUTABLE-VALUE-is-not-handed-off": Guard(
+        what="a value whose own type is a primitive, `String` or a boxed primitive has an "
+        "empty window, whatever parameter it is handed to (spec 2026-11-02 rule 3, fix round 1 "
+        "M1)",
+        why='`log.info("{}", url)` through SLF4J\'s `info(String, Object)` before '
+        "`client.get(url)` turns the commonest readable address into `escapes`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if self._which_object or self._type_of(method, held) in _UNCHANGEABLE:\n",
+                replace="        if self._which_object:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-value-NESTED-in-an-argument-escapes": Guard(
+        what="a call reaching the value below the top level of an argument (an array element, "
+        "a merge candidate) ends the path at `escapes` (spec 2026-11-02 rule 2, fix round 1 M3)",
+        why="`mutateAll(new Options[]{o})` before the use reads as nothing happened, and the "
+        "options are published at `resolved` though the callee may have changed them",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            nested = self._index.nested.get((method, key), ())\n",
+                replace="            nested = ()  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_VALUES,
+                find="            nested = self._index.nested_parameters.get((method, key), ())\n",
+                replace="            nested = ()  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.an-UNREAD-RECEIVER-of-the-values-type-escapes": Guard(
+        what="in a window, an instance call on the value's own type whose receiver the facts "
+        "cannot name ends the path at `escapes` (fix round 1 M4)",
+        why="`if (o == null) o = new Options(); o.setPort(1)` merges the parameter away from "
+        "the receiver, so the body reads as doing nothing and the caller's port is published",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            () if held_type is None else self._index.unread_receivers.get("
+                "(method, held_type), ())\n",
+                replace="            ()  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-hand-off-through-a-LAMBDA-IMPLEMENTED-type-escapes": Guard(
+        what="a hand-off through a type a lambda or method reference in the module implements "
+        "ends the path at `escapes` (fix round 1 M5)",
+        why="`dispatch` lists no lambda body as a candidate, so the class bodies it does list "
+        "read as the whole story, and a lambda that sets the port is never seen",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='        if str(row.get("owner")) in self._index.lambda_types:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-hand-off-reads-the-PROJECTED-row": Guard(
+        what="hand-offs are read off the projected call sites, where slot i is the callee's "
+        "parameter i (fix round 1 M8; the module docstring's invariant)",
+        why="through a `$default` bridge the raw slot is shifted by the receiver, so the value "
+        "lands on the wrong parameter of the sibling and what the sibling does to it is missed",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="    for row in effective_call_sites(workspace):\n",
+                replace='    for row in workspace.query("call_sites"):  # guard disabled by '
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-CONCAT-OPERAND-is-used-at-the-concat": Guard(
+        what="a concat's operand is read where the concat uses it, so the window ends at the "
+        "concat site (spec 2026-11-02 rule 1)",
+        why="the concat's own hand-off of an object operand opens `escapes`, and a call on the "
+        "operand after the string was built hides an address the code states",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find='            used = (_SLOT, method, int(str(site["ordinal"])), at)\n',
+                replace="            used = (_SLOT, method, 2**62, at)  # guard disabled by "
+                "scripts/guard_check.py\n",
             ),
         ),
     ),

@@ -111,6 +111,7 @@ nothing. The `ImplBase` path does not ask this, because frameworks register a
 `BindableService` bean with no call in the module's code at all (OI-252)."""
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -430,7 +431,13 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
             for match in matches
         }
         for implementer, supertype, outer in _bound(
-            workspace, call_sites, binding, identities, known_by_bare
+            workspace,
+            call_sites,
+            binding,
+            identities,
+            known_by_bare,
+            catalog.not_hand_offs,
+            catalog.hand_off_effects,
         ):
             # The serving annotation, where the catalog names one, is a conjunct of every
             # form (CP-52 row 7), this one included.
@@ -494,6 +501,8 @@ def _bound(
     method: str,
     identities: "_Identities",
     known_by_bare: dict[str, str],
+    not_hand_offs: Sequence[str] = (),
+    hand_off_effects: Sequence[Mapping[str, Any]] = (),
 ) -> list[tuple[str, str, str]]:
     """`(implementer, the bind method's parameter type, marked outer)` for every class an
     instance of which reaches a static `method` call owned by a marked class, one entry per
@@ -521,7 +530,7 @@ def _bound(
             continue
         supertype = _catalog_symbol(parameters[0])
         if index is None:
-            index = cached_value_index(workspace)
+            index = cached_value_index(workspace, not_hand_offs, hand_off_effects)
         for binding in resolve_site(workspace, site, index):
             answer = binding.slots.get(0)
             if answer is None or answer.literal_kind != SYMBOL:

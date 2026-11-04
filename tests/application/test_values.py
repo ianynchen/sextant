@@ -24,10 +24,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fixture_module import write_fixture_module_fact
+from fixture_module import declared_parameters, write_fixture_module_fact
 
-from sextant.application.ports.catalogs import Catalog
-from sextant.application.resolve import path_prefix
+from flow_facts import straight_line
+from sextant.application.ports.catalogs import Catalog, CatalogError
+from sextant.application.resolve import path_prefix, values
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.engines import fluent
@@ -40,6 +41,7 @@ from sextant.application.resolve.values import (
     Answer,
     Binding,
     Producer,
+    producer_paths,
     producers_of,
     resolve_site,
     value_index,
@@ -60,6 +62,8 @@ from sextant.domain.facts import (
     TypeRef,
 )
 from sextant.domain.symbols import method_descriptor
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
@@ -88,6 +92,9 @@ _BUFFER = _PKG + "Buffer#"
 # `Buffer`'s supertype, as the hierarchy a producer-identity reader hands the walk names it.
 _BASE = _PKG + "Base#"
 _BUFFER_ANCESTORS = {_BUFFER: [(_BASE, "extends", True)]}
+# What the mutation fixtures' producer hands back: a `Buffer`, the type every call made on the
+# value is made on — a `String` cannot be changed by any call (spec 2026-11-02 rule 3).
+_MAKES_BUFFER = "()L" + _BUFFER[:-1] + ";"
 _BINDER = _PKG + "Binder#"
 # A binding whose WRITER the facts name — the sixth edge's own shape (spec
 # 2026-10-18). `Written#<init>(String)` assigns its parameter to the field, and two
@@ -205,12 +212,17 @@ def _type(owner: str) -> SymbolFact:
 
 
 def _declared(owner: str, name: str, jvm: str) -> SymbolFact:
+    """A method as a real scan declares it: one parameter per descriptor slot, each with the
+    erased type the descriptor names — the type a parameter value has to the walk."""
     return SymbolFact(
         document_id="doc_values",
         symbol=_symbol(owner, name, jvm),
         construct_kind=ConstructKind.METHOD,
         enclosing=_MODULE + owner,
-        signature=Signature(parameters=[], returns=TypeRef(symbol="java/lang/String#")),
+        signature=Signature(
+            parameters=declared_parameters(jvm),
+            returns=TypeRef(symbol="java/lang/String#"),
+        ),
     )
 
 
@@ -287,7 +299,7 @@ def _accessed(name: str, jvm: str, call: str = "contents") -> list[Fact]:
     given = [CallArgument(kind="string", value="k")] if not jvm.startswith("()") else []
     return [
         _declared(_MUTATOR, name, "()V"),
-        _site(caller, 0, (_NAMES, "one", _MAKES_STRING), result=7),
+        _site(caller, 0, (_NAMES, "one", _MAKES_BUFFER), result=7),
         _site(
             caller,
             1,
@@ -339,7 +351,7 @@ def _configured(name: str, second: str, second_jvm: str = _APPENDS) -> list[Fact
 
     return [
         _declared(_MUTATOR, name, "()V"),
-        _site(caller, 0, (_NAMES, "one", _MAKES_STRING), result=7),
+        _site(caller, 0, (_NAMES, "one", _MAKES_BUFFER), result=7),
         call(1, "append", 7, "x"),
         call(2, second, 11, "y", second_jvm),
         _site(
@@ -485,7 +497,7 @@ def _facts() -> list[Fact]:
         # A value handed to a method that might mutate it, and the same shape
         # with nothing in between.
         _declared(_MUTATOR, "escaped", "()V"),
-        _site(_symbol(_MUTATOR, "escaped", "()V"), 0, (_NAMES, "one", _MAKES_STRING), result=7),
+        _site(_symbol(_MUTATOR, "escaped", "()V"), 0, (_NAMES, "one", _MAKES_BUFFER), result=7),
         _site(
             _symbol(_MUTATOR, "escaped", "()V"),
             1,
@@ -1219,7 +1231,7 @@ def _facts() -> list[Fact]:
         # A value MUTATED inside the callee before the `return`, and its twin that is not.
         _declared(_NAMES, "built", _MAKES_STRING),
         _site(
-            _symbol(_NAMES, "built", _MAKES_STRING), 0, (_NAMES, "one", _MAKES_STRING), result=21
+            _symbol(_NAMES, "built", _MAKES_STRING), 0, (_NAMES, "one", _MAKES_BUFFER), result=21
         ),
         _site(
             _symbol(_NAMES, "built", _MAKES_STRING),
@@ -1792,7 +1804,7 @@ def walked(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
     the passes that own them. Handed back OPEN — every test reads through it."""
     tmp_path = tmp_path_factory.mktemp("values")
     facts = tmp_path / "facts"
-    write_fact_file(facts / "values.jsonl", _document(), _facts())
+    write_fact_file(facts / "values.jsonl", _document(), straight_line(_facts()))
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
@@ -1910,7 +1922,7 @@ def bridged(tmp_path_factory: pytest.TempPathFactory) -> dict[int, DuckDbWorkspa
     for mask in (0, 2):
         tmp_path = tmp_path_factory.mktemp(f"values_bridge_{mask}")
         facts = tmp_path / "facts"
-        write_fact_file(facts / "bridge.jsonl", _document(), _bridge_facts(mask))
+        write_fact_file(facts / "bridge.jsonl", _document(), straight_line(_bridge_facts(mask)))
         write_fixture_module_fact(facts)
         workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
         workspace.load_facts(facts)
@@ -3760,7 +3772,7 @@ def _unseen_facts() -> list[Fact]:
 def unseen(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
     tmp_path = tmp_path_factory.mktemp("values_unseen")
     facts = tmp_path / "facts"
-    write_fact_file(facts / "unseen.jsonl", _document(), _unseen_facts())
+    write_fact_file(facts / "unseen.jsonl", _document(), straight_line(_unseen_facts()))
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
@@ -4343,7 +4355,7 @@ def _cycle_facts() -> list[Fact]:
 def objects(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
     tmp_path = tmp_path_factory.mktemp("values_objects")
     facts = tmp_path / "facts"
-    write_fact_file(facts / "objects.jsonl", _document(), _object_facts())
+    write_fact_file(facts / "objects.jsonl", _document(), straight_line(_object_facts()))
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
@@ -4615,7 +4627,7 @@ def _fetch_facts() -> list[Fact]:
 def fetched(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
     tmp_path = tmp_path_factory.mktemp("values_fetch")
     facts = tmp_path / "facts"
-    write_fact_file(facts / "fetch.jsonl", _document(), _fetch_facts())
+    write_fact_file(facts / "fetch.jsonl", _document(), straight_line(_fetch_facts()))
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
@@ -4772,7 +4784,7 @@ def _chain_facts() -> list[Fact]:
 def chained(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
     tmp_path = tmp_path_factory.mktemp("values_chain")
     facts = tmp_path / "facts"
-    write_fact_file(facts / "chain.jsonl", _document(), _chain_facts())
+    write_fact_file(facts / "chain.jsonl", _document(), straight_line(_chain_facts()))
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
@@ -4784,12 +4796,20 @@ def chained(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
 def _ends(
     workspace: DuckDbWorkspace, method: str, ordinal: int, stop: frozenset[str] = frozenset()
 ) -> tuple[Producer, ...]:
-    return producers_of(
-        value_index(workspace),
-        _at(workspace, method, ordinal),
-        RECEIVER,
-        frozenset(),
-        stop_at_parameters_of=stop,
+    """The pass-through reader's question (`pass_through.py`): which object — whose
+    parameter — the receiver is, so calls made on it on the way are let past."""
+    return tuple(
+        dict.fromkeys(
+            producer
+            for producer, _ in producer_paths(
+                value_index(workspace),
+                _at(workspace, method, ordinal),
+                RECEIVER,
+                frozenset(),
+                stop_at_parameters_of=stop,
+                which_object=True,
+            )
+        )
     )
 
 
@@ -4892,3 +4912,1797 @@ def test_a_handler_that_is_itself_a_lambda_ends_at_the_lambdas_own_parameter(cha
     the framework's to supply, and the end names the lambda body's own parameter."""
     own = _symbol(_CHAIN, "lambda$register$1", _TAKES_CONTEXT)
     assert _ends(chained, own, 0) == (Producer(reason="external", parameter=(own, 0)),)
+
+
+# **Per-path truth, rules 1-3** (spec 2026-11-02): a value HANDED to another method inside
+# its `escapes` window. `Options` is built by an unscanned static factory, so the value walk
+# answers `external` for it where nothing touches it, and the chain reader names the factory.
+# Each `Uses#<name>()` builds one, does one thing with it, and hands it to `Client.of` — the
+# use. `Setup` holds the module's own methods the value is handed to.
+_OPTIONS = _PKG + "Options#"
+_OPTIONS_TYPE = "L" + _OPTIONS[:-1] + ";"
+_TAKES_OPTIONS = "(" + _OPTIONS_TYPE + ")V"
+_CREATE = (_OPTIONS, "create", "()" + _OPTIONS_TYPE)
+_SET_HOST = (_OPTIONS, "setHost", "(Ljava/lang/String;)" + _OPTIONS_TYPE)
+_SET_PORT = (_OPTIONS, "setPort", "(I)" + _OPTIONS_TYPE)
+_CLIENT_OF = (_PKG + "Client#", "of", _TAKES_OPTIONS)
+_SETUP = _PKG + "Setup#"
+_TUNER = _PKG + "Tuner#"
+_SILENT_TUNER = _PKG + "SilentTuner#"
+_USES = _PKG + "Uses#"
+_OPTIONS_SETTERS = frozenset({_SET_HOST, _SET_PORT})
+
+
+def _setup(name: str, *sites: Fact, owner: str = _SETUP) -> list[Fact]:
+    """`void <owner>.<name>(Options o) { … }`: a body this module has, so `call_edges`
+    resolves a call to it."""
+    return [_declared(owner, name, _TAKES_OPTIONS), _void(owner, name, _TAKES_OPTIONS), *sites]
+
+
+def _on_parameter(method: str, ordinal: int, target: tuple[str, str, str], **given: Any) -> Fact:
+    """A call made on `method`'s parameter 0."""
+    return _site(method, ordinal, target, kind="virtual", receiver_parameter=0, **given)
+
+
+def _hands_parameter(method: str, ordinal: int, target: tuple[str, str, str], **given: Any) -> Fact:
+    """`method` hands its parameter 0 on, as argument 0 of `target`."""
+    return _site(
+        method, ordinal, target, arguments=[CallArgument(kind="parameter", value=0)], **given
+    )
+
+
+def _uses(name: str, *between: Fact, last: int) -> list[Fact]:
+    """`void Uses.<name>() { Options o = Options.create(); <between>; Client.of(o); }` — the
+    value is id 1, `between` occupies ordinals 1..`last - 1`, and the use is at `last`."""
+    caller = _symbol(_USES, name, "()V")
+    return [
+        _declared(_USES, name, "()V"),
+        _site(caller, 0, _CREATE, result=1),
+        *between,
+        _site(caller, last, _CLIENT_OF, arguments=_results(1)),
+    ]
+
+
+def _handed(name: str, ordinal: int, target: tuple[str, str, str], **given: Any) -> Fact:
+    """`Uses.<name>` hands the value (id 1) to `target` as argument 0."""
+    return _site(_symbol(_USES, name, "()V"), ordinal, target, arguments=_results(1), **given)
+
+
+def _capture(name: str, *body: Fact, mapped: bool = True) -> list[Fact]:
+    """`void Uses.<name>() { o = create(); Runnable r = () -> lambda$<name>$0(o); run(r);
+    Client.of(o); }`: the capture site hands `o` to the `dynamic` site (result 4), whose body
+    `lambda$<name>$0(Options)` holds `body`. `mapped` False leaves out the `lambda` entry the
+    capture fold reads, so nothing says which parameter `o` lands on."""
+    caller = _symbol(_USES, name, "()V")
+    lambda_body = method_descriptor(_USES, f"lambda${name}$0", _TAKES_OPTIONS)
+    run = _site(
+        caller,
+        2,
+        (_PKG + "Executor#", "run", "(Ljava/lang/Runnable;)V"),
+        arguments=[CallArgument(kind="lambda", symbol=lambda_body, captures=1, source=4)]
+        if mapped
+        else [CallArgument(kind="unresolved", source=4)],
+    )
+    return [
+        *_uses(
+            name,
+            _handed(
+                name,
+                1,
+                (
+                    "java/lang/invoke/LambdaMetafactory#",
+                    "metafactory",
+                    "(" + _OPTIONS_TYPE + ")Ljava/lang/Runnable;",
+                ),
+                kind="dynamic",
+                result=4,
+            ).model_copy(update={"implementation": lambda_body}),
+            run,
+            last=3,
+        ),
+        *_setup(f"lambda${name}$0", *body, owner=_USES),
+    ]
+
+
+# Fix round 1's shapes. `Setup.send(o)` takes the value and uses it itself (C1); a String
+# logged through SLF4J's `info(String, Object)` (M1); a value inside an array or a merge (M3);
+# a body whose call on its parameter cannot name its receiver (M4); a functional interface a
+# lambda implements (M5); a hand-off through a compiler-emitted default-argument bridge (M8);
+# and a concat operand changed before and after the concat (`_joined`).
+_CUSTOMIZER = _PKG + "Customizer#"
+_NOOP_CUSTOMIZER = _PKG + "NoopCustomizer#"
+_QUIET = _PKG + "Quiet#"
+_NOOP_QUIET = _PKG + "NoopQuiet#"
+_OTHER_QUIET = _PKG + "OtherQuiet#"
+_TUNING = _PKG + "Tuning#"
+_TUNE = "(" + _OPTIONS_TYPE + "I)V"
+_TUNE_BRIDGE = "(L" + _TUNING[:-1] + ";" + _OPTIONS_TYPE + "IILjava/lang/Object;)V"
+_SLF4J_INFO = ("org/slf4j/Logger#", "info", "(Ljava/lang/String;Ljava/lang/Object;)V")
+_NULL_CHECK = (
+    "kotlin/jvm/internal/Intrinsics#",
+    "checkNotNullParameter",
+    "(Ljava/lang/Object;Ljava/lang/String;)V",
+)
+_JOINED = _PKG + "Joined#"
+_CONCAT_OBJECT = (
+    "java/lang/invoke/StringConcatFactory#",
+    "makeConcatWithConstants",
+    "(Ljava/lang/Object;)Ljava/lang/String;",
+)
+
+
+def _interface(owner: str, implementation: str) -> list[Fact]:
+    """`interface <owner> { void customize(Options o); }` and a class implementing it with a
+    body that does nothing."""
+    return [
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_MODULE + owner,
+            construct_kind=ConstructKind.INTERFACE,
+        ),
+        _declared(owner, "customize", _TAKES_OPTIONS),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_MODULE + implementation,
+            construct_kind=ConstructKind.CLASS,
+            interfaces=[_MODULE + owner],
+        ),
+        *_setup("customize", owner=implementation),
+    ]
+
+
+def _through_interface(name: str, owner: str) -> list[Fact]:
+    """`Uses.<name>`: `customizer.customize(o)` through the interface, the customizer a field."""
+    return _uses(
+        name,
+        _site(
+            _symbol(_USES, name, "()V"),
+            1,
+            (owner, "customize", _TAKES_OPTIONS),
+            kind="interface",
+            receiver_field=_USES + "customizer.",
+            arguments=_results(1),
+        ),
+        last=2,
+    )
+
+
+def _joined_facts(name: str, touched_at: int, concat_at: int) -> list[Fact]:
+    """`Joined.<name>`: `n = Name.of("raw-notify")`, `n + "/orders"` and a call made on `n`,
+    in the order the two ordinals say, then the address used."""
+    caller = _symbol(_JOINED, name, "()V")
+    return [
+        _declared(_JOINED, name, "()V"),
+        _site(caller, 0, (_NAME, "of", _OF_ONE), arguments=_string("raw-notify"), result=5),
+        _site(caller, touched_at, (_NAME, "touch", "()V"), kind="virtual", receiver=5),
+        _site(caller, concat_at, _CONCAT_OBJECT, kind="dynamic", arguments=_results(5), result=12),
+        _site(
+            caller,
+            3,
+            _ONE_TARGET,
+            kind="virtual",
+            arguments=[CallArgument(kind="concat", source=12, value="{}/orders")],
+        ),
+    ]
+
+
+def _fix_round_facts() -> list[Fact]:
+    send = _symbol(_SETUP, "send", _TAKES_OPTIONS)
+    tuned_send = _symbol(_SETUP, "tunedSend", _TAKES_OPTIONS)
+    checked = _symbol(_SETUP, "checkedSend", _TAKES_OPTIONS)
+    defaulting = _symbol(_SETUP, "defaulting", _TAKES_OPTIONS)
+    own = _symbol(_SETUP, "ownCall", _TAKES_OPTIONS)
+    stored_result = _symbol(_SETUP, "storeResult", _TAKES_OPTIONS)
+    named = _symbol(_SETUP, "logName", _TAKES_STRING)
+    return [
+        # `send(o) { configure(o); Client.of(o); }` and `tunedSend(o) { o.setHost("t");
+        # Client.of(o); }`, each called once with a fresh `Options`.
+        *_setup(
+            "send",
+            _hands_parameter(send, 0, (_SETUP, "configure", _TAKES_OPTIONS)),
+            _hands_parameter(send, 1, _CLIENT_OF),
+        ),
+        *_setup(
+            "tunedSend",
+            _on_parameter(tuned_send, 0, _SET_HOST, arguments=_string("t")),
+            _hands_parameter(tuned_send, 1, _CLIENT_OF),
+        ),
+        *_uses("viaSend", _handed("viaSend", 1, (_SETUP, "send", _TAKES_OPTIONS)), last=2),
+        *_uses(
+            "viaTunedSend",
+            _handed("viaTunedSend", 1, (_SETUP, "tunedSend", _TAKES_OPTIONS)),
+            last=2,
+        ),
+        # `checkedSend(o) { Intrinsics.checkNotNullParameter(o, "o"); Client.of(o); }` — the
+        # null check a compiler writes at the top of every non-private function.
+        *_setup(
+            "checkedSend",
+            _site(
+                checked,
+                0,
+                _NULL_CHECK,
+                arguments=[CallArgument(kind="parameter", value=0), *_string("o")],
+            ),
+            _hands_parameter(checked, 1, _CLIENT_OF),
+        ),
+        # `logName(String name) { log.info("{}", name); Client.named(name); }`, and a String
+        # value handed to the same `info(String, Object)`, from a call and from a concat.
+        _declared(_SETUP, "logName", _TAKES_STRING),
+        _void(_SETUP, "logName", _TAKES_STRING),
+        _site(
+            named,
+            0,
+            _SLF4J_INFO,
+            kind="interface",
+            receiver_field=_SETUP + "log.",
+            arguments=[*_string("{}"), CallArgument(kind="parameter", value=0)],
+        ),
+        _site(named, 1, _ONE_TARGET, arguments=[CallArgument(kind="parameter", value=0)]),
+        *[
+            fact
+            for name, producer, kind in (
+                ("slf4j", (_NAMES, "one", _MAKES_STRING), "static"),
+                (
+                    "slf4jConcat",
+                    ("java/lang/invoke/StringConcatFactory#", "make", "()Ljava/lang/String;"),
+                    "dynamic",
+                ),
+            )
+            for fact in (
+                _declared(_USES, name, "()V"),
+                _site(_symbol(_USES, name, "()V"), 0, producer, kind=kind, result=1),
+                _site(
+                    _symbol(_USES, name, "()V"),
+                    1,
+                    _SLF4J_INFO,
+                    kind="interface",
+                    receiver_field=_USES + "log.",
+                    arguments=[*_string("{}"), CallArgument(kind="unresolved", source=1)],
+                ),
+                _site(_symbol(_USES, name, "()V"), 2, _ONE_TARGET, arguments=_results(1)),
+            )
+        ],
+        # `Lib.mutateAll(new Options[]{o})` and `configure(flag ? o : other)`.
+        *_uses(
+            "arrayed",
+            _site(
+                _symbol(_USES, "arrayed", "()V"),
+                1,
+                (_PKG + "Lib#", "mutateAll", "([" + _OPTIONS_TYPE + ")V"),
+                arguments=[CallArgument(kind="array", elements=_results(1))],
+            ),
+            last=2,
+        ),
+        *_uses(
+            "merged",
+            _site(
+                _symbol(_USES, "merged", "()V"),
+                1,
+                (_SETUP, "configure", _TAKES_OPTIONS),
+                arguments=[CallArgument(kind="merge", candidates=_results(1, 9))],
+            ),
+            last=2,
+        ),
+        # `defaulting(o) { if (o == null) o = new Options(); o.setPort(1); }` — the call's
+        # receiver merges the parameter with the `new`, so the facts name neither — and
+        # `ownCall(o) { this.helper(); }`, a call on a receiver of another type.
+        *_setup(
+            "defaulting",
+            _site(
+                defaulting,
+                0,
+                _SET_PORT,
+                kind="virtual",
+                arguments=[CallArgument(kind="int", value=1)],
+            ),
+        ),
+        *_setup("ownCall", _site(own, 0, (_SETUP, "helper", "()V"), kind="virtual")),
+        *_uses(
+            "defaulted", _handed("defaulted", 1, (_SETUP, "defaulting", _TAKES_OPTIONS)), last=2
+        ),
+        *_uses("ownCalled", _handed("ownCalled", 1, (_SETUP, "ownCall", _TAKES_OPTIONS)), last=2),
+        # `storeResult(o) { this.options = o.setPort(1); }` — a configuring call's result,
+        # stored.
+        *_setup(
+            "storeResult",
+            _on_parameter(
+                stored_result, 0, _SET_PORT, arguments=[CallArgument(kind="int", value=1)], result=3
+            ),
+        ),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_SETUP + "options.",
+            value=CallArgument(kind="unresolved", source=3),
+            written_by=stored_result,
+        ),
+        *_uses(
+            "storedResult",
+            _handed("storedResult", 1, (_SETUP, "storeResult", _TAKES_OPTIONS)),
+            last=2,
+        ),
+        # `Customizer` is implemented by a lambda somewhere in the module; `Quiet` is not.
+        *_interface(_CUSTOMIZER, _NOOP_CUSTOMIZER),
+        *_interface(_QUIET, _NOOP_QUIET),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_MODULE + _OTHER_QUIET,
+            construct_kind=ConstructKind.CLASS,
+            interfaces=[_MODULE + _QUIET],
+        ),
+        *_setup("customize", owner=_OTHER_QUIET),
+        _declared(_USES, "lambdas", "()V"),
+        _site(
+            _symbol(_USES, "lambdas", "()V"),
+            0,
+            ("java/lang/invoke/LambdaMetafactory#", "metafactory", "()L" + _CUSTOMIZER[:-1] + ";"),
+            kind="dynamic",
+            result=1,
+        ).model_copy(
+            update={"implementation": method_descriptor(_USES, "lambda$lambdas$0", _TAKES_OPTIONS)}
+        ),
+        *_setup(
+            "lambda$lambdas$0",
+            _on_parameter(
+                _symbol(_USES, "lambda$lambdas$0", _TAKES_OPTIONS),
+                0,
+                _SET_PORT,
+                arguments=[CallArgument(kind="int", value=443)],
+            ),
+            owner=_USES,
+        ),
+        *_through_interface("customized", _CUSTOMIZER),
+        *_through_interface("quieted", _QUIET),
+        # `tuning.tune(o)` with its `port` left to its default: the compiler calls the static
+        # `tune$default(tuning, o, 0, 2, null)`, and `tune(o, port)` sets the port on `o`.
+        _type(_TUNING),
+        _declared(_TUNING, "tune", _TUNE),
+        _void(_TUNING, "tune", _TUNE),
+        _on_parameter(
+            _symbol(_TUNING, "tune", _TUNE),
+            0,
+            _SET_PORT,
+            arguments=[CallArgument(kind="parameter", value=1)],
+        ),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_symbol(_TUNING, "tune$default", _TUNE_BRIDGE),
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + _TUNING,
+            modifiers={"static": True, "synthetic": True},
+            bridge_of="tune",
+        ),
+        *_uses(
+            "bridged",
+            _site(
+                _symbol(_USES, "bridged", "()V"),
+                1,
+                (_TUNING, "tune$default", _TUNE_BRIDGE),
+                arguments=[
+                    CallArgument(kind="instance", symbol=_TUNING, source=70),
+                    CallArgument(kind="unresolved", source=1),
+                    CallArgument(kind="int", value=0),
+                    CallArgument(kind="int", value=2),
+                    CallArgument(kind="null"),
+                ],
+            ),
+            last=2,
+        ),
+        # The concat operand touched AFTER the concat built the string, and BEFORE.
+        *_joined_facts("after", touched_at=2, concat_at=1),
+        *_joined_facts("before", touched_at=1, concat_at=2),
+    ]
+
+
+def _handoff_facts() -> list[Fact]:
+    configure = _symbol(_SETUP, "configure", _TAKES_OPTIONS)
+    relay = _symbol(_SETUP, "relay", _TAKES_OPTIONS)
+    leak = _symbol(_SETUP, "leak", _TAKES_OPTIONS)
+    loop = _symbol(_SETUP, "loop", _TAKES_OPTIONS)
+    tune = _symbol(_TUNER, "tune", _TAKES_OPTIONS)
+    ordered = _symbol(_USES, "ordered", "()V")
+    return [
+        _type(_SETUP),
+        _type(_USES),
+        _type(_TUNER),
+        # `SilentTuner extends Tuner` and overrides `tune` with a body that does nothing, so
+        # a virtual `tuner.tune(o)` runs one of two bodies.
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_MODULE + _SILENT_TUNER,
+            construct_kind=ConstructKind.CLASS,
+            superclass=_MODULE + _TUNER,
+        ),
+        # `configure(o) { o.setPort(9090); }`
+        *_setup(
+            "configure",
+            _on_parameter(
+                configure, 0, _SET_PORT, arguments=[CallArgument(kind="int", value=9090)]
+            ),
+        ),
+        # `relay(o) { configure(o); o.setHost("relayed"); }` — hands it on again.
+        *_setup(
+            "relay",
+            _hands_parameter(relay, 0, (_SETUP, "configure", _TAKES_OPTIONS)),
+            _on_parameter(relay, 1, _SET_HOST, arguments=_string("relayed")),
+        ),
+        # `leak(o) { Registry.keep(o); }` — into code this module does not have.
+        *_setup("leak", _hands_parameter(leak, 0, (_REGISTRY, "keep", "(Ljava/lang/Object;)V"))),
+        # `loop(o) { o.setPort(1); loop(o); }`
+        *_setup(
+            "loop",
+            _on_parameter(loop, 0, _SET_PORT, arguments=[CallArgument(kind="int", value=1)]),
+            _hands_parameter(loop, 1, (_SETUP, "loop", _TAKES_OPTIONS)),
+        ),
+        # `store(o) { this.options = o; }`
+        *_setup("store"),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_SETUP + "options.",
+            from_parameter=0,
+            written_by=_symbol(_SETUP, "store", _TAKES_OPTIONS),
+        ),
+        # `Tuner.tune(o) { o.setPort(8080); }` and `SilentTuner.tune(o) { }`.
+        *_setup(
+            "tune",
+            _on_parameter(tune, 0, _SET_PORT, arguments=[CallArgument(kind="int", value=8080)]),
+            owner=_TUNER,
+        ),
+        *_setup("tune", owner=_SILENT_TUNER),
+        _declared(_SILENT_TUNER, "<init>", "()V"),
+        # Nothing between the factory and the use: the near-miss every arm below is read
+        # against.
+        *_uses("untouched", last=1),
+        # `configure(o)` alone, and `configure(o)` between two calls made on the value.
+        *_uses(
+            "configured", _handed("configured", 1, (_SETUP, "configure", _TAKES_OPTIONS)), last=2
+        ),
+        *_uses(
+            "ordered",
+            _site(
+                ordered, 1, _SET_HOST, kind="virtual", receiver=1, arguments=_string("a"), result=2
+            ),
+            _handed("ordered", 2, (_SETUP, "configure", _TAKES_OPTIONS)),
+            _site(
+                ordered, 3, _SET_HOST, kind="virtual", receiver=1, arguments=_string("b"), result=3
+            ),
+            last=4,
+        ),
+        *_uses("relayed", _handed("relayed", 1, (_SETUP, "relay", _TAKES_OPTIONS)), last=2),
+        *_uses("leaked", _handed("leaked", 1, (_SETUP, "leak", _TAKES_OPTIONS)), last=2),
+        *_uses("kept", _handed("kept", 1, (_REGISTRY, "keep", "(Ljava/lang/Object;)V")), last=2),
+        *_uses("looped", _handed("looped", 1, (_SETUP, "loop", _TAKES_OPTIONS)), last=2),
+        *_uses("stored", _handed("stored", 1, (_SETUP, "store", _TAKES_OPTIONS)), last=2),
+        *_uses(
+            "tuned",
+            _site(
+                _symbol(_USES, "tuned", "()V"),
+                1,
+                (_TUNER, "tune", _TAKES_OPTIONS),
+                kind="virtual",
+                receiver_field=_USES + "tuner.",
+                arguments=_results(1),
+            ),
+            last=2,
+        ),
+        # `Runnable r = () -> …o…; executor.run(r);` — a capture at an `invokedynamic` site,
+        # mapped to the body's parameter by the capture fold (the lambda entry `run` takes), and
+        # the same capture with nothing naming its body's parameters.
+        *_capture("captured"),
+        *_capture(
+            "capturedBusy",
+            _on_parameter(
+                _symbol(_USES, "lambda$capturedBusy$0", _TAKES_OPTIONS),
+                0,
+                _SET_PORT,
+                arguments=[CallArgument(kind="int", value=443)],
+            ),
+        ),
+        *_capture("capturedUnmapped", mapped=False),
+        *_fix_round_facts(),
+        # The value handed to code this module does not have, where the parameter it lands on
+        # cannot be changed by anything (rule 3), and the same with an `Object` parameter.
+        *[
+            fact
+            for name, descriptor in (
+                ("logged", "(Ljava/lang/String;)V"),
+                ("counted", "(J)V"),
+                ("boxed", "(Ljava/lang/Integer;)V"),
+                ("objected", "(Ljava/lang/Object;)V"),
+            )
+            for fact in _uses(name, _handed(name, 1, (_PKG + "Log#", "info", descriptor)), last=2)
+        ],
+    ]
+
+
+@pytest.fixture(scope="module")
+def handoffs(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
+    tmp_path = tmp_path_factory.mktemp("values_handoffs")
+    facts = tmp_path / "facts"
+    write_fact_file(facts / "handoffs.jsonl", _document(), straight_line(_handoff_facts()))
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_return_flows(workspace)
+    record_call_edges(workspace)
+    return workspace
+
+
+def _use_of(workspace: DuckDbWorkspace, name: str, configuring: frozenset = frozenset()):
+    """The chain reader on `Uses.<name>`'s use of the value, with `configuring` declared."""
+    caller = _symbol(_USES, name, "()V")
+    last = max(row["ordinal"] for row in workspace.query("call_sites") if row["caller"] == caller)
+    return producers_of(
+        value_index(workspace),
+        _at(workspace, caller, last),
+        0,
+        {(_CREATE[0], _CREATE[1])},
+        along_receivers=True,
+        configuring=configuring,
+    )
+
+
+def _walked_use(workspace: DuckDbWorkspace, name: str) -> list[str | None]:
+    """The value walk's reasons at `Uses.<name>`'s use of the value."""
+    caller = _symbol(_USES, name, "()V")
+    last = max(row["ordinal"] for row in workspace.query("call_sites") if row["caller"] == caller)
+    return _reasons(_bindings(workspace, caller, last))
+
+
+def test_a_value_nothing_is_done_to_resolves_as_before(handoffs):
+    """The control every hand-off test below is read against: factory, then use."""
+    caller = _symbol(_USES, "untouched", "()V")
+    assert _walked_use(handoffs, "untouched") == ["external"]
+    [producer] = _use_of(handoffs, "untouched", _OPTIONS_SETTERS)
+    assert producer.chain == ((caller, 0),)
+
+
+@pytest.mark.pins("values.a-HAND-OFF-into-a-body-we-have-is-walked-into")
+def test_a_hand_off_into_a_configuring_method_joins_the_chain_at_its_place(handoffs):
+    """`o = create(); o.setHost("a"); configure(o); o.setHost("b"); Client.of(o)`, where
+    `configure` calls `o.setPort(9090)`: the hand-off is walked into, and the call it makes
+    on its parameter takes the hand-off's place in the chain — between the two `setHost`s."""
+    ordered = _symbol(_USES, "ordered", "()V")
+    configure = _symbol(_SETUP, "configure", _TAKES_OPTIONS)
+    [producer] = _use_of(handoffs, "ordered", _OPTIONS_SETTERS)
+    assert (producer.chain, producer.rooted) == (
+        ((ordered, 0), (ordered, 1), (configure, 0), (ordered, 3)),
+        True,
+    )
+
+
+@pytest.mark.pins("values.a-HAND-OFF-into-a-body-we-have-is-walked-into")
+def test_a_hand_off_handed_on_again_is_followed_in_order(handoffs):
+    """`relay(o) { configure(o); o.setHost("relayed"); }`: the second hand-off is followed
+    too, and its call lands where `relay` makes it — before `relay`'s own `setHost`."""
+    relayed = _symbol(_USES, "relayed", "()V")
+    [producer] = _use_of(handoffs, "relayed", _OPTIONS_SETTERS)
+    assert producer.chain == (
+        (relayed, 0),
+        (_symbol(_SETUP, "configure", _TAKES_OPTIONS), 0),
+        (_symbol(_SETUP, "relay", _TAKES_OPTIONS), 1),
+    )
+
+
+@pytest.mark.pins("values.a-HAND-OFF-into-a-body-we-have-is-walked-into")
+def test_a_body_that_does_to_the_value_what_no_reader_declared_is_an_escape(handoffs):
+    """**Rule 1 is the general walk rule, not a chain-reader feature.** `configure(o)` sets
+    the port, and a reader that declares no configuring call — the value walk itself, and a
+    producer reader asking only which call built the value — reads that as a call nothing
+    says the effect of: `escapes`, exactly as if `o.setPort(9090)` were written in place.
+    Before rule 1 both answered as though `configure(o)` were not there."""
+    assert _walked_use(handoffs, "configured") == ["escapes"]
+    assert _use_of(handoffs, "configured") == (Producer(reason="escapes"),)
+    [producer] = _use_of(handoffs, "configured", _OPTIONS_SETTERS)
+    assert producer.chain[-1] == (_symbol(_SETUP, "configure", _TAKES_OPTIONS), 0)
+
+
+@pytest.mark.pins("values.a-hand-off-to-code-we-do-NOT-have-escapes")
+def test_a_hand_off_to_code_this_module_does_not_have_escapes(handoffs):
+    """`Registry.keep(o)` — a callee `call_edges` leaves NULL — directly, and from inside a
+    body the value was handed to (`leak(o)`): what that code does to `o` is unknown, so the
+    path is `escapes`, never "nothing happened"."""
+    for name in ("kept", "leaked"):
+        assert _walked_use(handoffs, name) == ["escapes"], name
+        assert _use_of(handoffs, name, _OPTIONS_SETTERS) == (Producer(reason="escapes"),), name
+
+
+@pytest.mark.pins("values.a-capture-the-body-does-NOTHING-with-is-not-a-hand-off")
+def test_a_capture_the_lambda_does_nothing_with_is_not_a_hand_off(handoffs):
+    """A capture into a lambda whose body does nothing to the captured parameter cannot
+    change the value (spec rule 2 as amended in fix round 1, M6): the capture fold names the
+    parameter it lands on, and the body's window over it is empty."""
+    assert _walked_use(handoffs, "captured") == ["external"]
+    caller = _symbol(_USES, "captured", "()V")
+    assert [p.chain for p in _use_of(handoffs, "captured", _OPTIONS_SETTERS)] == [((caller, 0),)]
+
+
+@pytest.mark.pins("values.a-DYNAMIC-hand-off-escapes")
+def test_a_capture_the_lambda_does_anything_with_escapes(handoffs):
+    """When the body runs is not known, so a body that does anything to the captured value —
+    here a configuring `setPort`, which a chain reader would otherwise gather — is `escapes`;
+    and a capture nothing maps to a parameter is `escapes` too."""
+    for name in ("capturedBusy", "capturedUnmapped"):
+        assert _walked_use(handoffs, name) == ["escapes"], name
+        assert _use_of(handoffs, name, _OPTIONS_SETTERS) == (Producer(reason="escapes"),), name
+
+
+@pytest.mark.pins("values.a-FIELD-WRITE-of-a-handed-value-escapes")
+def test_a_body_that_stores_the_value_in_a_field_escapes(handoffs):
+    """`store(o) { this.options = o; }`: once in a field, anything can change it later."""
+    assert _walked_use(handoffs, "stored") == ["escapes"]
+    assert _use_of(handoffs, "stored", _OPTIONS_SETTERS) == (Producer(reason="escapes"),)
+
+
+@pytest.mark.pins("values.an-IMMUTABLE-hand-off-is-not-a-hand-off")
+def test_a_value_handed_where_it_cannot_be_changed_is_not_a_hand_off(handoffs):
+    """Rule 3: read off the SITE's descriptor, a `String`, a primitive or a boxed primitive
+    parameter cannot be changed by the callee, so `log.info(url)` before `client.get(url)`
+    keeps the value. The same hand-off typed `Object` is a hand-off into code we do not
+    have, and escapes."""
+    for name in ("logged", "counted", "boxed"):
+        assert _walked_use(handoffs, name) == ["external"], name
+        assert [p.chain[-1][1] for p in _use_of(handoffs, name, _OPTIONS_SETTERS)] == [0], name
+    assert _walked_use(handoffs, "objected") == ["escapes"]
+
+
+@pytest.mark.pins("values.several-CALLEES-of-one-hand-off-are-several-paths")
+def test_a_hand_off_with_two_callees_is_two_paths_never_one(handoffs):
+    """`tuner.tune(o)` dispatches to `Tuner.tune` (sets port 8080) or `SilentTuner.tune`
+    (does nothing): two paths, each its own chain — never one chain merging both."""
+    tuned = _symbol(_USES, "tuned", "()V")
+    chains = sorted(producer.chain for producer in _use_of(handoffs, "tuned", _OPTIONS_SETTERS))
+    assert chains == [
+        ((tuned, 0),),
+        ((tuned, 0), (_symbol(_TUNER, "tune", _TAKES_OPTIONS), 0)),
+    ]
+    caller = _symbol(_USES, "tuned", "()V")
+    bindings = _bindings(handoffs, caller, 2)
+    assert sorted(_reasons(bindings), key=str) == ["escapes", "external"]
+    assert len({binding.path for binding in bindings}) == 2
+
+
+@pytest.mark.pins("values.a-hand-off-REPEATED-on-its-own-path-is-a-cycle")
+def test_a_hand_off_that_returns_to_itself_is_a_cycle(handoffs):
+    """`loop(o) { o.setPort(1); loop(o); }`: the second entry into `loop` is a repeat."""
+    assert _use_of(handoffs, "looped", _OPTIONS_SETTERS) == (Producer(reason="cycle"),)
+
+
+@pytest.mark.pins("values.a-method-reads-its-OWN-PARAMETER-window")
+def test_a_methods_own_parameter_is_windowed_from_entry_to_the_use(handoffs):
+    """C1: `send(o) { configure(o); Client.of(o); }` called with a fresh `Options`. The
+    window of `o` runs from `send`'s entry to the use, so the hand-off inside `send` is read
+    exactly as the caller's would be — the spec's own §1 example moved into a helper."""
+    send = _symbol(_SETUP, "send", _TAKES_OPTIONS)
+    via = _symbol(_USES, "viaSend", "()V")
+    configure = _symbol(_SETUP, "configure", _TAKES_OPTIONS)
+    site = _at(handoffs, send, 1)
+    assert _reasons(resolve_site(handoffs, site)) == ["escapes"]
+    [producer] = producers_of(
+        value_index(handoffs),
+        site,
+        0,
+        {(_CREATE[0], _CREATE[1])},
+        along_receivers=True,
+        configuring=_OPTIONS_SETTERS,
+    )
+    assert (producer.chain, producer.rooted) == (((via, 0), (configure, 0)), True)
+    tuned = _symbol(_SETUP, "tunedSend", _TAKES_OPTIONS)
+    [producer] = producers_of(
+        value_index(handoffs),
+        _at(handoffs, tuned, 1),
+        0,
+        {(_CREATE[0], _CREATE[1])},
+        along_receivers=True,
+        configuring=_OPTIONS_SETTERS,
+    )
+    assert producer.chain == ((_symbol(_USES, "viaTunedSend", "()V"), 0), (tuned, 0))
+
+
+_VERBS = _PKG + "Verbs#"
+_HTTP_METHOD = "org/springframework/http/HttpMethod#"
+_DO_EXECUTE = "(Lorg/springframework/http/HttpMethod;)V"
+
+
+def _identity_facts() -> list[Fact]:
+    """apollo-portal's `RetryableRestTemplate#doExecute(HttpMethod method, …)`, cut down:
+    `HttpMethod.GET.equals(method)` — a hand-off of `method` to code this module does not
+    have — then `Rest.exchange("/q", method)`; `get()` calls it with `HttpMethod.GET` and
+    `put()` with `HttpMethod.PUT`. And `handed()`, the same hand-off of an `Options` object
+    whose contents the reader asks for."""
+    execute = _symbol(_VERBS, "doExecute", _DO_EXECUTE)
+    exchange = (_PKG + "Rest#", "exchange", "(Ljava/lang/String;" + _DO_EXECUTE[1:])
+    facts: list[Fact] = [
+        _type(_VERBS),
+        _declared(_VERBS, "doExecute", _DO_EXECUTE),
+        _void(_VERBS, "doExecute", _DO_EXECUTE),
+        _site(
+            execute,
+            0,
+            (_HTTP_METHOD, "equals", "(Ljava/lang/Object;)Z"),
+            kind="virtual",
+            receiver_field=_HTTP_METHOD + "GET.",
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _site(
+            execute,
+            1,
+            exchange,
+            arguments=[
+                CallArgument(kind="string", value="/q"),
+                CallArgument(kind="parameter", value=0),
+            ],
+        ),
+    ]
+    for name, verb in (("get", "GET"), ("put", "PUT")):
+        facts += [
+            _declared(_VERBS, name, "()V"),
+            _void(_VERBS, name, "()V"),
+            _site(
+                _symbol(_VERBS, name, "()V"),
+                0,
+                (_VERBS, "doExecute", _DO_EXECUTE),
+                arguments=[CallArgument(kind="enum", symbol=f"{_HTTP_METHOD}{verb}.")],
+            ),
+        ]
+    return facts
+
+
+@pytest.mark.pins("values.WHICH-CONSTANT-a-value-is-is-not-changed-by-a-hand-off")
+def test_which_constant_a_value_is_survives_a_hand_off(tmp_path: Path):
+    """Rule 8 (ruled by the user 2026-11-02, "identity is not content"): Java hands a callee a
+    copy of the reference, so no callee can make the caller's `method` another constant.
+    `HttpMethod.GET.equals(method)` hands `method` to the JDK, which rule 2 reads as
+    `escapes` for a reader of an object's CONTENTS — but the answer here is WHICH constant
+    the value is, and that is `GET` on one path and `PUT` on the other, whatever `equals`
+    did. Before rule 8 both paths answered `escapes` and apollo-portal lost 51 verbs."""
+    facts = tmp_path / "facts"
+    write_fact_file(facts / "identity.jsonl", _document(), straight_line(_identity_facts()))
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace.load_facts(facts)
+        record_return_flows(workspace)
+        record_call_edges(workspace)
+        bindings = _bindings(workspace, _symbol(_VERBS, "doExecute", _DO_EXECUTE), 1)
+        assert sorted(
+            (binding.slots[1].kind, binding.slots[1].literal_kind, binding.slots[1].value)
+            for binding in bindings
+        ) == [
+            ("literal", "symbol", f"{_HTTP_METHOD}GET."),
+            ("literal", "symbol", f"{_HTTP_METHOD}PUT."),
+        ]
+    finally:
+        workspace.close()
+
+
+@pytest.mark.pins("values.only-a-DECLARATION-answer-passes-a-hand-off")
+def test_an_objects_contents_still_escape_a_hand_off(handoffs):
+    """The near-miss for rule 8: `Registry.keep(o)` hands an `Options` object to code this
+    module does not have. Its CONTENTS may have changed, and the answer is about them (the
+    value walk's `external` producer, a chain reader's chain), so the path stays `escapes`."""
+    assert _walked_use(handoffs, "kept") == ["escapes"]
+    assert _use_of(handoffs, "kept", _OPTIONS_SETTERS) == (Producer(reason="escapes"),)
+
+
+@pytest.mark.pins("values.a-COMPILER-NULL-CHECK-is-not-a-hand-off")
+def test_a_compiler_null_check_is_not_a_hand_off(handoffs):
+    """**The user's ruling of 2026-11-02**: `Intrinsics.checkNotNullParameter(o, "o")`, which
+    the compiler (not the author) writes at the top of every non-private function and which
+    only tests for null and throws, is not a hand-off. Recognised by its OWNER class, which the
+    shipped `value-models/compiler-null-checks.yml` declares, so a walk handed the shipped
+    catalogs' `not_hand_offs` reads past it; the same call with no owner declared is a call
+    into code this module does not have, `escapes`, as every such call is."""
+    checked = _symbol(_SETUP, "checkedSend", _TAKES_OPTIONS)
+    owners = YamlCatalogSource(catalogs_dir()).not_hand_offs()
+    assert _NULL_CHECK[0] in owners
+    ruled = resolve_site(handoffs, _at(handoffs, checked, 1), value_index(handoffs, owners))
+    assert _reasons(ruled) == ["external"]
+    unruled = resolve_site(handoffs, _at(handoffs, checked, 1), value_index(handoffs))
+    assert _reasons(unruled) == ["escapes"]
+
+
+@pytest.mark.pins("values.an-IMMUTABLE-VALUE-is-not-handed-off")
+def test_a_string_handed_to_an_object_parameter_is_not_a_hand_off(handoffs):
+    """M1: rule 3 is about the VALUE. SLF4J's `info(String, Object)` types the value's
+    parameter `Object`, but a `String` — from a call declared to return one, from a concat,
+    or a parameter declared as one — cannot be changed by anything, so `log.info("{}", url)`
+    before the use keeps it."""
+    for name in ("slf4j", "slf4jConcat"):
+        assert _reasons(_bindings(handoffs, _symbol(_USES, name, "()V"), 2)) == ["external"], name
+    assert _reasons(_bindings(handoffs, _symbol(_SETUP, "logName", _TAKES_STRING), 1)) == [
+        "external"
+    ]
+
+
+@pytest.mark.pins("values.a-value-NESTED-in-an-argument-escapes")
+def test_a_value_inside_an_array_or_a_merge_escapes(handoffs):
+    """M3: `Lib.mutateAll(new Options[]{o})` and `configure(flag ? o : other)` reach the value
+    below the top level of an argument, where no body can be followed per element: never
+    "nothing happened"."""
+    for name in ("arrayed", "merged"):
+        assert _walked_use(handoffs, name) == ["escapes"], name
+        assert _use_of(handoffs, name, _OPTIONS_SETTERS) == (Producer(reason="escapes"),), name
+
+
+@pytest.mark.pins("values.an-UNREAD-RECEIVER-of-the-values-type-escapes")
+def test_a_call_whose_receiver_may_be_the_reassigned_parameter_escapes(handoffs):
+    """M4: `defaulting(o) { if (o == null) o = new Options(); o.setPort(1); }` — the receiver
+    merges the parameter with the `new`, so the facts name neither; a call on an `Options`
+    whose receiver they cannot name may be a call on the value. A call on a receiver of
+    another type (`this.helper()`) is not."""
+    assert _walked_use(handoffs, "defaulted") == ["escapes"]
+    assert _use_of(handoffs, "defaulted", _OPTIONS_SETTERS) == (Producer(reason="escapes"),)
+    assert _walked_use(handoffs, "ownCalled") == ["external"]
+
+
+@pytest.mark.pins("values.a-hand-off-through-a-LAMBDA-IMPLEMENTED-type-escapes")
+def test_a_hand_off_through_an_interface_a_lambda_implements_escapes(handoffs):
+    """M5: `dispatch` lists no lambda as a candidate, so `customizer.customize(o)` on a type a
+    lambda in this module implements reaches a body `call_edges` does not name: `escapes`.
+    The same call through an interface no lambda implements is walked into, and its one
+    body does nothing."""
+    assert _walked_use(handoffs, "customized") == ["escapes"]
+    assert _walked_use(handoffs, "quieted") == ["external"]
+
+
+@pytest.mark.pins("values.a-hand-off-reads-the-PROJECTED-row")
+def test_a_hand_off_through_a_default_argument_bridge_lands_on_the_siblings_parameter(handoffs):
+    """M8: `tuning.tune(o)` compiled as `tune$default(tuning, o, 0, 2, null)`. Read raw, the
+    value is slot 1, which is the sibling's `port`; read off the projection it is the
+    sibling's parameter 0, the `Options` `tune` calls `setPort` on — so the call joins the
+    chain."""
+    bridged = _symbol(_USES, "bridged", "()V")
+    [producer] = _use_of(handoffs, "bridged", _OPTIONS_SETTERS)
+    assert producer.chain == ((bridged, 0), (_symbol(_TUNING, "tune", _TUNE), 0))
+
+
+@pytest.mark.pins("values.a-CONCAT-OPERAND-is-used-at-the-concat")
+def test_a_concat_operand_is_read_where_the_concat_uses_it(handoffs):
+    """The concat site consumes its operand: a call on the operand AFTER it cannot change
+    the string already built, so the address joins; the same call BEFORE it may have
+    changed what was rendered, so the hole stays a hole."""
+    identities = [_ADDRESS_IDENTITY]
+    after = _identified(handoffs, _symbol(_JOINED, "after", "()V"), 3, identities)
+    before = _identified(handoffs, _symbol(_JOINED, "before", "()V"), 3, identities)
+    assert [b.slots[0].value for b in after] == ["raw-notify/orders"]
+    assert [b.slots[0].value for b in before] == ["{}/orders"]
+
+
+def test_bodies_that_all_do_the_same_are_one_path(handoffs):
+    """Two callees that do the same thing to the value — `Quiet`'s two implementations both
+    do nothing — are one path with no choice on it, not two bindings saying one thing."""
+    caller = _symbol(_USES, "quieted", "()V")
+    assert len(value_index(handoffs).callees[(caller, 1)]) == 2
+    bindings = _bindings(handoffs, _symbol(_USES, "quieted", "()V"), 2)
+    assert [(b.path, _reasons([b])) for b in bindings] == [((), ["external"])]
+
+
+def test_a_configuring_result_stored_in_a_field_escapes(handoffs):
+    """`storeResult(o) { this.options = o.setPort(1); }`: the stored result is the same
+    object, now in a field."""
+    assert _use_of(handoffs, "storedResult", _OPTIONS_SETTERS) == (Producer(reason="escapes"),)
+
+
+# **Rule 9** (spec 2026-11-02, the fact approved by the user that day): a call between a value's
+# producer and its use that is not on every path to the use SPLITS the path — one where it ran,
+# one where it did not. Each `Uses#<name>()` is written with the position the extractor gives
+# it (`dominator`, `on_every_exit`), so the branch is in the facts as it is in the bytecode.
+
+
+def _placed(
+    fact: Fact,
+    dominator: int | None,
+    every: bool,
+    post: int | None = None,
+    returns: bool | None = None,
+) -> Fact:
+    """`fact` at a stated place in its method's control flow."""
+    assert isinstance(fact, CallSiteFact)
+    return fact.model_copy(
+        update={
+            "dominator": dominator,
+            "on_every_exit": every,
+            "post_dominator": post,
+            "reaches_return": returns,
+        }
+    )
+
+
+def _set(name: str, ordinal: int, target: tuple[str, str, str], argument: CallArgument, **given):
+    """A setter called on the value (id 1) in `Uses.<name>`."""
+    return _site(
+        _symbol(_USES, name, "()V"),
+        ordinal,
+        target,
+        kind="virtual",
+        receiver=given.pop("receiver", 1),
+        arguments=[argument],
+        **given,
+    )
+
+
+_DONE = (_PKG + "Log#", "done", "()V")
+_MAKES = "()" + _OPTIONS_TYPE
+
+
+def _frame_facts() -> list[Fact]:
+    """Review 3's C1 and m2 shapes, at the positions javac 21 gives them (the reviewer's
+    `Frames.java` and `Shapes.throwsAfter`, read off the real extractor's output).
+
+    - `send(o) { if (z) o.setPort(1); Client.of(o); }` and `y() { o = create(); if (z)
+      o.setHost("h"); send(o); }`: one branched call in each of two frames, one use.
+    - `Options makeZ() { o = create(); if (z) o.setPort(1); return o; }` and `viaMake() { o =
+      makeZ(); if (z) o.setHost("h"); Client.of(o); }`: a factory's split and the caller's.
+    - `boomed() { o = create(); if (tls) { o.setPort(443); Setup.boom(); } Client.of(o); }`,
+      where `boom()` always throws: its body has a throw and no normal return.
+    """
+    send = _symbol(_SETUP, "send", _TAKES_OPTIONS)
+    y = _symbol(_USES, "y", "()V")
+    make_z = _symbol(_SETUP, "makeZ", _MAKES)
+    via_make = _symbol(_USES, "viaMake", "()V")
+    boomed = _symbol(_USES, "boomed", "()V")
+    boom = _symbol(_SETUP, "boom", "()V")
+    one = CallArgument(kind="int", value=1)
+    return [
+        *_setup(
+            "send",
+            _placed(
+                _on_parameter(send, 0, _SET_PORT, arguments=[one], result=1), None, False, 1, True
+            ),
+            _placed(
+                _site(send, 1, _CLIENT_OF, arguments=[CallArgument(kind="parameter", value=0)]),
+                None,
+                True,
+                None,
+                True,
+            ),
+        ),
+        _declared(_USES, "y", "()V"),
+        _placed(_site(y, 0, _CREATE, result=1), None, True, 2, True),
+        _placed(_set("y", 1, _SET_HOST, _string("h")[0], result=2), 0, False, 2, True),
+        _placed(
+            _site(y, 2, (_SETUP, "send", _TAKES_OPTIONS), arguments=_results(1)),
+            0,
+            True,
+            None,
+            True,
+        ),
+        _declared(_SETUP, "makeZ", _MAKES),
+        _placed(_site(make_z, 0, _CREATE, result=1), None, True, None, True),
+        _placed(
+            _site(make_z, 1, _SET_PORT, kind="virtual", receiver=1, arguments=[one], result=2),
+            0,
+            False,
+            None,
+            True,
+        ),
+        _returns(_SETUP, "makeZ", _MAKES, 0, CallArgument(kind="unresolved", source=1)),
+        _declared(_USES, "viaMake", "()V"),
+        _placed(_site(via_make, 0, (_SETUP, "makeZ", _MAKES), result=1), None, True, 2, True),
+        _placed(_set("viaMake", 1, _SET_HOST, _string("h")[0], result=2), 0, False, 2, True),
+        _placed(_site(via_make, 2, _CLIENT_OF, arguments=_results(1)), 0, True, None, True),
+        _declared(_SETUP, "boom", "()V"),
+        CallSiteFact(
+            document_id="doc_values",
+            caller=boom,
+            target=CallTarget(owner="java/lang/IllegalStateException#"),
+            invoke_kind="throw",
+            ordinal=0,
+            on_every_exit=False,
+            reaches_return=False,
+        ),
+        _declared(_USES, "boomed", "()V"),
+        _placed(_site(boomed, 0, _CREATE, result=1), None, True, 3, True),
+        _placed(
+            _set("boomed", 1, _SET_PORT, CallArgument(kind="int", value=443), result=2),
+            0,
+            False,
+            2,
+            True,
+        ),
+        _placed(_site(boomed, 2, (_SETUP, "boom", "()V")), 1, False, 3, True),
+        _placed(_site(boomed, 3, _CLIENT_OF, arguments=_results(1)), 0, True, None, True),
+    ]
+
+
+def _looped(fact: Fact, dominator: int | None, group: int | None) -> Fact:
+    """`fact` in a loop body's position (`for (…) { … }`): not on every exit, no call follows on
+    every path, a normal return reachable, in the loop group `group`."""
+    assert isinstance(fact, CallSiteFact)
+    return fact.model_copy(
+        update={
+            "dominator": dominator,
+            "on_every_exit": False,
+            "post_dominator": None,
+            "reaches_return": True,
+            "loop_group": group,
+        }
+    )
+
+
+def _loop_facts() -> list[Fact]:
+    """M1 (ruled by the user 2026-11-03, option A: `loop_group`). Each `Uses#<name>()`:
+
+    - `looped`: `o = create(); for (…) { Client.of(o); o.setPort(443); }`;
+    - `plain`: `o = create(); Client.of(o); o.setPort(443);` — no loop;
+    - `apart`: `o = create(); for (…) { Client.of(o); } for (…) { o.setPort(443); }`;
+    - `nested`: `o = create(); for (…) { for (…) { Client.of(o); } o.setPort(443); }`;
+    - `fresh`: `for (…) { o = create(); Client.of(o); o.setPort(443); }` — a new object each
+      time round, so the setter's object is never used again;
+    - `sendLooped`: `o = create(); for (…) { sendIt(o); o.setPort(443); }`, where
+      `sendIt(o) { Client.of(o); }` — the use in a callee called from the loop."""
+    port = CallArgument(kind="int", value=443)
+    facts: list[Fact] = []
+    for name, groups in (
+        ("looped", (None, 1, 1)),
+        ("apart", (None, 1, 2)),
+        ("nested", (None, 1, 1)),
+        ("fresh", (0, 0, 0)),
+    ):
+        caller = _symbol(_USES, name, "()V")
+        create, use, setter = groups
+        facts += [
+            _declared(_USES, name, "()V"),
+            _looped(_site(caller, 0, _CREATE, result=1), None, create)
+            if create is not None
+            else _placed(_site(caller, 0, _CREATE, result=1), None, True, None, True),
+            _looped(_site(caller, 1, _CLIENT_OF, arguments=_results(1)), 0, use),
+            _looped(_set(name, 2, _SET_PORT, port, result=2), 1 if name != "apart" else 0, setter),
+        ]
+    plain = _symbol(_USES, "plain", "()V")
+    facts += [
+        _declared(_USES, "plain", "()V"),
+        _placed(_site(plain, 0, _CREATE, result=1), None, True, 1, True),
+        _placed(_site(plain, 1, _CLIENT_OF, arguments=_results(1)), 0, True, 2, True),
+        _placed(_set("plain", 2, _SET_PORT, port, result=2), 1, True, None, True),
+    ]
+    # Review 3 re-review 3, N-1 (`Child.java`, javac 21): `for (…) { r = o.setPort(80);
+    # Client.of(o); r.<setter>(…); }` — the second call is made on the first's result, which it
+    # post-dominates, but it runs AFTER the use, reaching it only on a later pass.
+    for name, (target, argument) in (
+        ("loopChildSame", (_SET_PORT, port)),
+        ("loopChild", (_SET_HOST, _string("h")[0])),
+    ):
+        caller = _symbol(_USES, name, "()V")
+        in_loop = lambda fact, dominator, post: fact.model_copy(
+            update={
+                "dominator": dominator,
+                "on_every_exit": False,
+                "post_dominator": post,
+                "reaches_return": True,
+                "loop_group": 1,
+            }
+        )
+        facts += [
+            _declared(_USES, name, "()V"),
+            _placed(_site(caller, 0, _CREATE, result=1), None, True, None, True),
+            in_loop(_set(name, 1, _SET_PORT, CallArgument(kind="int", value=80), result=2), 0, 2),
+            in_loop(_site(caller, 2, _CLIENT_OF, arguments=_results(1)), 1, 3),
+            in_loop(_set(name, 3, target, argument, receiver=2, result=3), 2, None),
+        ]
+    send_it = _symbol(_SETUP, "sendIt", _TAKES_OPTIONS)
+    send_looped = _symbol(_USES, "sendLooped", "()V")
+    facts += [
+        *_setup(
+            "sendIt",
+            _placed(
+                _site(send_it, 0, _CLIENT_OF, arguments=[CallArgument(kind="parameter", value=0)]),
+                None,
+                True,
+                None,
+                True,
+            ),
+        ),
+        _declared(_USES, "sendLooped", "()V"),
+        _placed(_site(send_looped, 0, _CREATE, result=1), None, True, None, True),
+        _looped(
+            _site(send_looped, 1, (_SETUP, "sendIt", _TAKES_OPTIONS), arguments=_results(1)), 0, 1
+        ),
+        _looped(_set("sendLooped", 2, _SET_PORT, port, result=2), 1, 1),
+    ]
+    return facts
+
+
+def _rerun_facts() -> list[Fact]:
+    """Review 3's re-review shapes, at the positions javac 21 gives them (`Loops.java`):
+
+    - `resetExitMid`: `o = create(); while (true) { o.setPort(80); Client.of(o); if
+      (Client.flag()) return; o.setPort(443); }` — the use always sees 80;
+    - `nestedProducer`: `for (…) { o = create(); for (…) { Client.of(o); o.setPort(443); } }` —
+      the producer and the use share one loop group with the inner setter."""
+    reset = _symbol(_USES, "resetExitMid", "()V")
+    nested = _symbol(_USES, "nestedProducer", "()V")
+    port = {value: CallArgument(kind="int", value=value) for value in (80, 443)}
+
+    def at(fact: Fact, dominator, every, post, group) -> Fact:
+        assert isinstance(fact, CallSiteFact)
+        return fact.model_copy(
+            update={
+                "dominator": dominator,
+                "on_every_exit": every,
+                "post_dominator": post,
+                "reaches_return": True,
+                "loop_group": group,
+            }
+        )
+
+    return [
+        _declared(_USES, "resetExitMid", "()V"),
+        at(_site(reset, 0, _CREATE, result=1), None, True, 1, None),
+        at(_set("resetExitMid", 1, _SET_PORT, port[80], result=2), 0, True, 2, 1),
+        at(_site(reset, 2, _CLIENT_OF, arguments=_results(1)), 1, True, 3, 1),
+        at(_site(reset, 3, (_PKG + "Client#", "flag", "()Z")), 2, True, None, 1),
+        at(_set("resetExitMid", 4, _SET_PORT, port[443], result=4), 3, False, 1, 1),
+        _declared(_USES, "nestedProducer", "()V"),
+        at(_site(nested, 0, _CREATE, result=1), None, False, None, 0),
+        at(_site(nested, 1, _CLIENT_OF, arguments=_results(1)), 0, False, 2, 0),
+        at(_set("nestedProducer", 2, _SET_PORT, port[443], result=2), 1, False, None, 0),
+    ]
+
+
+def _guarded(method: str, ordinals: range, held: dict[str, Any], last: int) -> list[Fact]:
+    """`if (fK) o.setPort(K);` at each of `ordinals` in `method`, on the value `held` names."""
+    return [
+        _placed(
+            _site(
+                method,
+                at,
+                _SET_PORT,
+                kind="virtual",
+                arguments=[CallArgument(kind="int", value=at)],
+                result=100 + at,
+                **held,
+            ),
+            None if at == ordinals.start else ordinals.start - 1,
+            False,
+            last,
+            True,
+        )
+        for at in ordinals
+    ]
+
+
+def _cross_facts(name: str, counts: tuple[int, ...]) -> list[Fact]:
+    """Review 3's re-review m-B: a chain of frames, each with `counts[k]` guarded setters on one
+    object before handing it on — the first frame `Uses.<name>` builds it, the last calls
+    `Client.of(o)`. `Uses.cross(){ o = create(); <setters>; hop1(o); }`,
+    `hop1(o){ <setters>; hop2(o); }`, …, `hopN(o){ <setters>; Client.of(o); }`."""
+    caller = _symbol(_USES, name, "()V")
+    first = counts[0]
+    facts: list[Fact] = [
+        _declared(_USES, name, "()V"),
+        _placed(_site(caller, 0, _CREATE, result=1), None, True, first + 1, True),
+        *_guarded(caller, range(1, first + 1), {"receiver": 1}, first + 1),
+        _placed(
+            _site(
+                caller, first + 1, (_SETUP, f"{name}Hop1", _TAKES_OPTIONS), arguments=_results(1)
+            ),
+            0,
+            True,
+            None,
+            True,
+        ),
+    ]
+    for hop, count in enumerate(counts[1:], start=1):
+        body = _symbol(_SETUP, f"{name}Hop{hop}", _TAKES_OPTIONS)
+        then = (
+            (_SETUP, f"{name}Hop{hop + 1}", _TAKES_OPTIONS) if hop + 1 < len(counts) else _CLIENT_OF
+        )
+        facts += _setup(
+            f"{name}Hop{hop}",
+            *_guarded(body, range(count), {"receiver_parameter": 0}, count),
+            _placed(
+                _site(body, count, then, arguments=[CallArgument(kind="parameter", value=0)]),
+                None,
+                True,
+                None,
+                True,
+            ),
+        )
+    return facts
+
+
+def _many_facts(count: int) -> list[Fact]:
+    """`many<count>() { o = create(); if (f0) o.setPort(0); … if (fN) o.setPort(N); Client.of(o);
+    }` — review 3's M2 input: `count` guarded setters on one object, as config mapping code
+    writes them."""
+    name = f"many{count}"
+    caller = _symbol(_USES, name, "()V")
+    last = count + 1
+    return [
+        _declared(_USES, name, "()V"),
+        _placed(_site(caller, 0, _CREATE, result=1), None, True, last, True),
+        *[
+            _placed(
+                _set(name, at, _SET_PORT, CallArgument(kind="int", value=at), result=100 + at),
+                0,
+                False,
+                last,
+                True,
+            )
+            for at in range(1, last)
+        ],
+        _placed(_site(caller, last, _CLIENT_OF, arguments=_results(1)), 0, True, None, True),
+    ]
+
+
+def _branch_facts() -> list[Fact]:
+    names = ("tls", "early", "either", "fluent", "made", "madeLogged", "madeOther", "madeThrows")
+    caller = {name: _symbol(_USES, name, "()V") for name in names}
+    tune = _symbol(_SETUP, "maybeTune", _TAKES_OPTIONS)
+    tune_logged = _symbol(_SETUP, "maybeTuneLogged", _TAKES_OPTIONS)
+    make = {
+        name: _symbol(_SETUP, name, _MAKES)
+        for name in ("make", "makeLogged", "makeOther", "makeThrows")
+    }
+    port = {value: CallArgument(kind="int", value=value) for value in (1, 2, 443)}
+
+    def on_made(name: str, ordinal: int) -> Fact:
+        return _site(
+            make[name], ordinal, _SET_PORT, kind="virtual", receiver=1, arguments=[port[1]]
+        )
+
+    return [
+        _type(_SETUP),
+        _type(_USES),
+        # `o = create(); if (tls) o.setPort(443); Client.of(o);` — review 2's M4. The use
+        # follows the call on every path to the return.
+        _declared(_USES, "tls", "()V"),
+        _placed(_site(caller["tls"], 0, _CREATE, result=1), None, True, 2),
+        _placed(_set("tls", 1, _SET_PORT, port[443], result=2), 0, False, 2),
+        _placed(_site(caller["tls"], 2, _CLIENT_OF, arguments=_results(1)), 0, True),
+        # `if (tls) { o.setPort(443); return; } Client.of(o);` — the branch leaves early, so
+        # nothing follows the call: no run uses `o` with port 443.
+        _declared(_USES, "early", "()V"),
+        _placed(_site(caller["early"], 0, _CREATE, result=1), None, True),
+        _placed(_set("early", 1, _SET_PORT, port[443], result=2), 0, False),
+        _placed(_site(caller["early"], 2, _CLIENT_OF, arguments=_results(1)), 0, False),
+        # `if (x) o.setPort(1); else o.setPort(2);` — two split calls setting one part.
+        _declared(_USES, "either", "()V"),
+        _placed(_site(caller["either"], 0, _CREATE, result=1), None, True, 3),
+        _placed(_set("either", 1, _SET_PORT, port[1], result=2), 0, False, 3),
+        _placed(_set("either", 2, _SET_PORT, port[2], result=3), 0, False, 3),
+        _placed(_site(caller["either"], 3, _CLIENT_OF, arguments=_results(1)), 0, True),
+        # `if (x) o.setHost("a").setPort(1);` — the second call is made on the first's result,
+        # so it runs only where the first did.
+        _declared(_USES, "fluent", "()V"),
+        _placed(_site(caller["fluent"], 0, _CREATE, result=1), None, True, 3),
+        _placed(_set("fluent", 1, _SET_HOST, _string("a")[0], result=2), 0, False, 2),
+        _placed(_set("fluent", 2, _SET_PORT, port[1], receiver=2, result=3), 1, False, 3),
+        _placed(_site(caller["fluent"], 3, _CLIENT_OF, arguments=_results(1)), 0, True),
+        # `maybeTune(o) { if (tls) o.setPort(443); }`, handed the value on a straight line:
+        # no call follows the setter, so the facts do not say a normal return does.
+        *_setup(
+            "maybeTune",
+            _placed(
+                _on_parameter(tune, 0, _SET_PORT, arguments=[port[443]], result=1),
+                None,
+                False,
+                returns=True,
+            ),
+        ),
+        *_uses("tuned", _handed("tuned", 1, (_SETUP, "maybeTune", _TAKES_OPTIONS)), last=2),
+        # `maybeTuneLogged(o) { if (tls) o.setPort(443); Log.done(); }`: `done` follows it on
+        # every path to the return.
+        *_setup(
+            "maybeTuneLogged",
+            _placed(
+                _on_parameter(tune_logged, 0, _SET_PORT, arguments=[port[443]], result=1),
+                None,
+                False,
+                1,
+            ),
+            _placed(_site(tune_logged, 1, _DONE), None, True),
+        ),
+        # `maybeTuneThrows(o) { if (tls) { o.setPort(443); throw …; } }`.
+        *_setup(
+            "maybeTuneThrows",
+            _placed(
+                _on_parameter(
+                    _symbol(_SETUP, "maybeTuneThrows", _TAKES_OPTIONS),
+                    0,
+                    _SET_PORT,
+                    arguments=[port[443]],
+                    result=1,
+                ),
+                None,
+                False,
+                returns=False,
+            ),
+        ),
+        *_uses(
+            "tunedThrows",
+            _handed("tunedThrows", 1, (_SETUP, "maybeTuneThrows", _TAKES_OPTIONS)),
+            last=2,
+        ),
+        *_uses(
+            "tunedLogged",
+            _handed("tunedLogged", 1, (_SETUP, "maybeTuneLogged", _TAKES_OPTIONS)),
+            last=2,
+        ),
+        # `Options make() { o = create(); if (x) o.setPort(1); return o; }` — the user's
+        # factory (ruling of 2026-11-03, test (c)).
+        _declared(_SETUP, "make", _MAKES),
+        _placed(_site(make["make"], 0, _CREATE, result=1), None, True),
+        _placed(on_made("make", 1), 0, False, returns=True),
+        _returns(_SETUP, "make", _MAKES, 0, CallArgument(kind="unresolved", source=1)),
+        # `Options makeThrows() { o = create(); if (x) { o.setPort(1); throw …; } return o; }`:
+        # every path from the setter throws, so no run returns `o` with port 1.
+        _declared(_SETUP, "makeThrows", _MAKES),
+        _placed(_site(make["makeThrows"], 0, _CREATE, result=1), None, True),
+        _placed(on_made("makeThrows", 1), 0, False, returns=False),
+        _returns(_SETUP, "makeThrows", _MAKES, 0, CallArgument(kind="unresolved", source=1)),
+        # The same with `Log.done();` before the return: `done` follows the setter.
+        _declared(_SETUP, "makeLogged", _MAKES),
+        _placed(_site(make["makeLogged"], 0, _CREATE, result=1), None, True, 2),
+        _placed(on_made("makeLogged", 1), 0, False, 2),
+        _placed(_site(make["makeLogged"], 2, _DONE), 0, True),
+        _returns(_SETUP, "makeLogged", _MAKES, 0, CallArgument(kind="unresolved", source=1)),
+        # `…; Log.done(); if (y) return other(); return o;` — not every return hands `o` back.
+        _declared(_SETUP, "makeOther", _MAKES),
+        _placed(_site(make["makeOther"], 0, _CREATE, result=1), None, True, 2),
+        _placed(on_made("makeOther", 1), 0, False, 2),
+        _placed(_site(make["makeOther"], 2, _DONE), 0, True),
+        _placed(_site(make["makeOther"], 3, _CREATE, result=4), 2, False),
+        _returns(_SETUP, "makeOther", _MAKES, 0, CallArgument(kind="unresolved", source=4)),
+        _returns(_SETUP, "makeOther", _MAKES, 1, CallArgument(kind="unresolved", source=1)),
+        *[
+            fact
+            for name, maker in (
+                ("made", "make"),
+                ("madeLogged", "makeLogged"),
+                ("madeOther", "makeOther"),
+                ("madeThrows", "makeThrows"),
+            )
+            for fact in (
+                _declared(_USES, name, "()V"),
+                _site(caller[name], 0, (_SETUP, maker, _MAKES), result=1),
+                _site(caller[name], 1, _CLIENT_OF, arguments=_results(1)),
+            )
+        ],
+    ]
+
+
+@pytest.fixture(scope="module")
+def branches(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
+    tmp_path = tmp_path_factory.mktemp("values_branches")
+    facts = tmp_path / "facts"
+    write_fact_file(
+        facts / "branches.jsonl",
+        _document(),
+        straight_line(
+            [
+                *_branch_facts(),
+                *_frame_facts(),
+                *_loop_facts(),
+                *_rerun_facts(),
+                *_cross_facts("crossTwo", (8, 8)),
+                *_cross_facts("crossThree", (4, 4, 4)),
+                *_many_facts(3),
+                *_many_facts(9),
+            ]
+        ),
+    )
+    write_fixture_module_fact(facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_return_flows(workspace)
+    record_call_edges(workspace)
+    return workspace
+
+
+def _chains(producers: tuple[Producer, ...]) -> list[tuple[tuple[int, ...], bool]]:
+    """Each producer's chain as the ordinals it ran, and whether it is inexact."""
+    return sorted(
+        (tuple(at for _, at in producer.chain), producer.inexact) for producer in producers
+    )
+
+
+@pytest.mark.pins("values.a-call-NOT-on-every-path-to-the-use-SPLITS-the-path")
+def test_a_call_on_one_branch_splits_the_path_in_two(branches):
+    """Review 2's M4: `o = create(); if (tls) o.setPort(443); Client.of(o)`. The call is not on
+    the use's `dominator` chain, so a run reaches the use with it and a run reaches it without:
+    two paths, one with the port set and one with it unset, both exact — never port 443 alone,
+    which is false whenever `tls` is."""
+    assert _chains(_use_of(branches, "tls", _OPTIONS_SETTERS)) == [((0,), False), ((0, 1), False)]
+    # The value walk, which declares no configuring call: the path with the call ends at
+    # `escapes`, the one without reads the factory, as the near-miss with nothing between does.
+    assert sorted(map(str, _walked_use(branches, "tls"))) == ["escapes", "external"]
+
+
+def test_a_call_on_every_path_to_the_use_does_not_split(handoffs):
+    """The near-miss: the same calls on a straight line (`ordered`, every call on the use's
+    `dominator` chain) are one path, as before rule 9."""
+    assert len(_use_of(handoffs, "ordered", _OPTIONS_SETTERS)) == 1
+
+
+@pytest.mark.pins("values.two-or-more-SPLIT-calls-make-every-path-of-the-window-inexact")
+def test_two_split_calls_give_every_combination_each_inexact(branches):
+    """`if (x) o.setPort(1); else o.setPort(2);`: the fact does not say which branch each call
+    is on, so the split gives every combination — neither, either, both — including two no run
+    makes. Rule 9's "not claimed": every path from such a split is `partial`, never
+    `resolved`."""
+    assert _chains(_use_of(branches, "either", _OPTIONS_SETTERS)) == [
+        ((0,), True),
+        ((0, 1), True),
+        ((0, 1, 2), True),
+        ((0, 2), True),
+    ]
+
+
+@pytest.mark.pins("values.a-call-on-a-SKIPPED-calls-result-is-skipped-too")
+@pytest.mark.pins("values.a-call-on-a-configuring-calls-result-runs-WHERE-THAT-CALL-DOES")
+def test_a_call_on_a_skipped_calls_result_is_skipped_with_it(branches):
+    """`if (x) o.setHost("a").setPort(1);`: `setPort` is made on `setHost`'s result, so no path
+    runs it without `setHost`; and it is on `setHost`'s `post_dominator` chain, so no path runs
+    `setHost` without it either. ONE split, two paths, both exact (review 3 re-review 2, m-1:
+    `Flow.paths`, the rule both walks share). Before, a third path ran `setHost` alone, which no
+    run makes, and the two splits made every path `partial`."""
+    assert _chains(_use_of(branches, "fluent", _OPTIONS_SETTERS)) == [
+        ((0,), False),
+        ((0, 1, 2), False),
+    ]
+
+
+@pytest.mark.pins("values.a-call-NOT-on-every-path-to-the-use-SPLITS-the-path")
+@pytest.mark.pins("values.a-setter-that-REACHES-A-RETURN-reaches-the-returned-use")
+def test_a_call_inside_a_callee_not_on_every_exit_splits_the_path(branches):
+    """`maybeTune(o) { if (tls) o.setPort(443); }` handed the value: the call is not
+    `on_every_exit` in the callee, so the caller's use is reached with it and without it. No
+    call follows the setter, but every path from it reaches a normal return (`reaches_return`,
+    ruled by the user 2026-11-03), so the port row is `resolved` again. Where `Log.done()`
+    follows it on every path to the return, both paths are exact too."""
+    tuned = _symbol(_USES, "tuned", "()V")
+    tune = _symbol(_SETUP, "maybeTune", _TAKES_OPTIONS)
+    assert sorted(
+        (producer.chain, producer.inexact)
+        for producer in _use_of(branches, "tuned", _OPTIONS_SETTERS)
+    ) == [(((tuned, 0),), False), (((tuned, 0), (tune, 0)), False)]
+    assert [
+        inexact for _, inexact in _chains(_use_of(branches, "tunedLogged", _OPTIONS_SETTERS))
+    ] == [
+        False,
+        False,
+    ]
+
+
+@pytest.mark.pins("values.the-path-WITH-a-split-call-needs-the-use-on-its-POST-DOMINATOR-chain")
+def test_a_call_on_a_branch_that_returns_early_never_reaches_the_use(branches):
+    """The user's ruling of 2026-11-03 ("A: add post_dominator"), case (b):
+    `if (tls) { o.setPort(443); return; } Client.of(o);`. The setter is not on the use's
+    `dominator` chain, so it splits as (a) does — but the use is not on the setter's
+    `post_dominator` chain: no run uses `o` with port 443. That path is `partial`; the path
+    without it is exact."""
+    assert _chains(_use_of(branches, "early", _OPTIONS_SETTERS)) == [((0,), False), ((0, 1), True)]
+
+
+def test_a_split_before_a_returned_value_is_exact_where_the_facts_prove_it(branches):
+    """A RETURN of the value is its use (ruling of 2026-11-03). `make() { o = create(); if (x)
+    o.setPort(1); Log.done(); return o; }`: `done` follows the setter on every path to a normal
+    return and the only return hands `o` back, so both paths are exact."""
+    assert _chains(_use_of(branches, "madeLogged", _OPTIONS_SETTERS)) == [
+        ((0,), False),
+        ((0, 1), False),
+    ]
+
+
+@pytest.mark.pins("values.a-split-before-a-RETURN-needs-EVERY-return-to-hand-back-the-value")
+def test_a_split_before_one_of_several_returns_is_partial(branches):
+    """`…; Log.done(); if (y) return other(); return o;`: which return a run takes is not in the
+    facts, so neither side of the split is proven to reach the return that hands `o` back. The
+    other return's value (`other()`, at 3) is its own exact row."""
+    assert _chains(_use_of(branches, "madeOther", _OPTIONS_SETTERS)) == [
+        ((0,), True),
+        ((0, 1), True),
+        ((3,), False),
+    ]
+
+
+@pytest.mark.pins("values.a-setter-that-REACHES-A-RETURN-reaches-the-returned-use")
+def test_a_factory_setting_a_part_on_one_branch_gives_two_resolved_rows(branches):
+    """The user's ruling of 2026-11-03, case (c): `Options make(tls) { o = new; if (tls)
+    o.setSsl(true); return o; }` gives both rows resolved. No call follows the setter, but
+    every path from it reaches a normal return (`reaches_return`, ruled that day, option A),
+    and the only return hands `o` back."""
+    assert _chains(_use_of(branches, "made", _OPTIONS_SETTERS)) == [
+        ((0,), False),
+        ((0, 1), False),
+    ]
+
+
+@pytest.mark.pins("values.reaches_return-FALSE-is-not-a-return")
+@pytest.mark.pins("values.a-split-before-a-RETURN-needs-a-normal-return-after-the-call")
+@pytest.mark.pins("values.a-split-in-an-ENTERED-body-needs-a-normal-return-after-the-call")
+def test_a_setter_followed_only_by_a_throw_stays_partial(branches):
+    """`makeThrows() { o = create(); if (x) { o.setPort(1); throw …; } return o; }`: every path
+    from the setter throws (`reaches_return` false), so no run returns `o` with port 1. That
+    row stays `partial`; the row without it is exact. The same in a helper the value is handed
+    to, `maybeTuneThrows(o) { if (tls) { o.setPort(443); throw …; } }`: no run returns to the
+    caller with port 443."""
+    assert _chains(_use_of(branches, "madeThrows", _OPTIONS_SETTERS)) == [
+        ((0,), False),
+        ((0, 1), True),
+    ]
+    assert [
+        inexact for _, inexact in _chains(_use_of(branches, "tunedThrows", _OPTIONS_SETTERS))
+    ] == [
+        False,
+        True,
+    ]
+
+
+@pytest.mark.pins("values.several-splits-are-counted-over-the-whole-PATH")
+def test_two_branched_calls_in_two_frames_make_every_row_partial(branches):
+    """Review 3's C1, ruled by the user 2026-11-03 ("A: every row partial", per PATH from the
+    producer to the use): `y() { o = create(); if (z) o.setHost("h"); send(o); }` and
+    `send(o) { if (z) o.setPort(1); Client.of(o); }`. Each frame's window holds one split, but
+    the path holds two, so "port without host" and "host without port" — runs nobody makes
+    where `z` is shared — are never `resolved`: all four rows are `partial`."""
+    send = _symbol(_SETUP, "send", _TAKES_OPTIONS)
+    found = producers_of(
+        value_index(branches),
+        _at(branches, send, 1),
+        0,
+        {(_CREATE[0], _CREATE[1])},
+        along_receivers=True,
+        configuring=_OPTIONS_SETTERS,
+    )
+    assert len(found) == 4
+    assert all(producer.inexact for producer in found), found
+
+
+@pytest.mark.pins("values.several-splits-are-counted-over-the-whole-PATH")
+def test_a_factorys_split_and_its_callers_split_make_every_row_partial(branches):
+    """Review 3's C1, the factory and its caller: `makeZ() { …; if (z) o.setPort(1); return o; }`
+    and `viaMake() { o = makeZ(); if (z) o.setHost("h"); Client.of(o); }` — two splits on the
+    path, so all four rows are `partial`."""
+    assert [inexact for _, inexact in _chains(_use_of(branches, "viaMake", _OPTIONS_SETTERS))] == [
+        True,
+        True,
+        True,
+        True,
+    ]
+
+
+@pytest.mark.pins("values.a-call-that-NEVER-RETURNS-blocks-the-path-to-the-use")
+def test_a_setter_followed_by_a_call_that_never_returns_never_reaches_the_use(branches):
+    """Review 3's m2: `if (tls) { o.setPort(443); Setup.boom(); } Client.of(o);`, where
+    `boom`'s body throws and has no normal return. The method's own facts read `boom()` as a
+    call that returns, so the use post-dominates the setter there — but no run gets past
+    `boom`. The 443 row is `partial`; the row without it is exact."""
+    assert _chains(_use_of(branches, "boomed", _OPTIONS_SETTERS)) == [((0,), False), ((0, 1), True)]
+
+
+def test_a_few_branched_setters_are_each_their_own_partial_row(branches):
+    """The near-miss for the cap: three guarded setters on one object give 2^3 paths, each its
+    own row, all `partial` (two or more splits)."""
+    found = _use_of(branches, "many3", _OPTIONS_SETTERS)
+    assert len(found) == 8
+    assert all(producer.inexact for producer in found)
+
+
+@pytest.mark.pins("values.a-window-past-the-PATH-CAP-is-one-non-enumerable-row")
+def test_a_window_stops_enumerating_at_the_cap(branches):
+    """The cap inside ONE window is what bounds the cost (review 3, M2): the whole-path cap in
+    `_windowed` gives the same row, but only after the window has built every path — 2^N of
+    them. So the window itself, nine guarded setters on one object, is one path ending
+    `non_enumerable`, never 512 built first."""
+    walk = values._Walk(value_index(branches), configuring=_OPTIONS_SETTERS)
+    assert walk._window(_symbol(_USES, "many9", "()V"), ("value", 1), 0, 10) == (
+        ((), "non_enumerable"),
+    )
+
+
+def test_a_window_with_too_many_paths_is_one_row_with_a_stated_reason(branches):
+    """Review 3's M2: nine guarded setters give 512 paths, every one `partial` by the ruling,
+    and the count doubles with each setter (twenty took 30.9 s and 2.15 GB). Past the cap the
+    window is ONE row whose parts are unknown, with the reason stated — never a silent drop."""
+    assert _use_of(branches, "many9", _OPTIONS_SETTERS) == (Producer(reason="non_enumerable"),)
+
+
+def _loop_chains(workspace: DuckDbWorkspace, name: str, use: int = 1, method: str | None = None):
+    """The chain reader's paths at `Client.of` in `Uses.<name>` (or `method`, at `use`)."""
+    at = _at(workspace, method or _symbol(_USES, name, "()V"), use)
+    return _chains(
+        producers_of(
+            value_index(workspace),
+            at,
+            0,
+            {(_CREATE[0], _CREATE[1])},
+            along_receivers=True,
+            configuring=_OPTIONS_SETTERS,
+        )
+    )
+
+
+@pytest.mark.pins("values.a-later-call-in-the-uses-LOOP-GROUP-is-in-its-window")
+def test_a_setter_after_the_use_in_a_loop_is_a_row_of_its_own(branches):
+    """Review 3's M1, ruled by the user 2026-11-03 (option A, `loop_group`):
+    `for (…) { Client.of(o); o.setPort(443); }`. The setter comes after the use in the body, but
+    shares its loop group, so it can run before a later run of the use: it splits the path.
+    Two rows, never one: port unset — the first time round, which the facts prove a run makes —
+    `resolved`; port 443 `partial`, since nothing proves the loop goes round twice (the use is
+    not on the setter's `post_dominator` chain: the loop may exit)."""
+    assert _loop_chains(branches, "looped") == [((0,), False), ((0, 2), True)]
+
+
+@pytest.mark.pins("values.a-child-is-absorbed-only-BEFORE-THE-USE")
+def test_a_child_after_the_use_in_its_loop_keeps_its_own_split(branches):
+    """Review 3 re-review 3, N-1: `for (…) { r = o.setPort(80); Client.of(o); r.setPort(443);
+    }`. The child post-dominates its parent but runs after the use: it reaches the use only on a
+    later pass, so it is not absorbed into the parent (the m-1 rule holds only before the use)
+    and keeps its own split, never proven (C-A). Port 80 exact; 443 `partial`. Before, one
+    exact chain ending at 443, which no use sees."""
+    assert _loop_chains(branches, "loopChildSame", use=2) == [((0, 1), False), ((0, 1, 3), True)]
+    # The child setting another part: the row without the host is kept, exact.
+    assert _loop_chains(branches, "loopChild", use=2) == [((0, 1), False), ((0, 1, 3), True)]
+
+
+def test_a_setter_after_the_use_with_no_loop_is_not_in_its_window(branches):
+    """The near-miss: `Client.of(o); o.setPort(443);` with no loop — the setter never runs
+    before the use, so one row, as before."""
+    assert _loop_chains(branches, "plain") == [((0,), False)]
+
+
+@pytest.mark.pins("values.a-later-call-in-ANOTHER-loop-is-not-in-the-window")
+def test_a_setter_in_another_loop_after_the_use_is_not_in_its_window(branches):
+    """`for (…) { Client.of(o); } for (…) { o.setPort(443); }`: two groups, so the setter cannot
+    run before the use: one row."""
+    assert _loop_chains(branches, "apart") == [((0,), False)]
+
+
+def test_a_setter_in_an_outer_loop_reaches_a_use_in_the_inner_one(branches):
+    """`for (…) { for (…) { Client.of(o); } o.setPort(443); }`: the inner loop lies in the outer
+    loop's group, so the setter can run before a later run of the use: two rows."""
+    assert _loop_chains(branches, "nested") == [((0,), False), ((0, 2), True)]
+
+
+@pytest.mark.pins(
+    "values.a-LOOP-LATER-call-is-in-the-window-even-where-the-value-is-made-in-the-loop"
+)
+def test_a_setter_on_an_object_built_each_time_round_stays_partial(branches):
+    """`for (…) { o = create(); Client.of(o); o.setPort(443); }`: the object is built again
+    before every use, so no run uses 443 — but the five facts cannot tell this from nested
+    loops whose producer is in the outer one (review 3 re-review, M-A: the same facts, one loop
+    group). So the 443 row is kept, `partial`, never `resolved`; the unset row is exact."""
+    assert _loop_chains(branches, "fresh") == [((0,), False), ((0, 2), True)]
+
+
+@pytest.mark.pins("values.a-later-call-in-the-uses-LOOP-GROUP-is-in-its-window")
+def test_a_setter_after_a_loops_call_to_the_use_is_a_row_of_its_own(branches):
+    """`for (…) { sendIt(o); o.setPort(443); }`, where `sendIt(o) { Client.of(o); }`: the call
+    that leads on to the use shares the setter's loop group, so the same holds: two rows."""
+    assert _loop_chains(branches, "", use=0, method=_symbol(_SETUP, "sendIt", _TAKES_OPTIONS)) == [
+        ((0,), False),
+        ((0, 2), True),
+    ]
+
+
+@pytest.mark.pins("values.paths-that-gather-the-same-calls-are-ONE")
+def test_paths_that_end_alike_are_one_however_the_choices_went(branches):
+    """The merge the M2 bound rests on: with nine guarded setters and no configuring call
+    declared, each setter is a call nothing says the effect of, so every path that ran one ends
+    `escapes`. Recorded choice by choice they are nine paths ending alike; merged, two
+    bindings — `escapes`, and the value with nothing done to it."""
+    caller = _symbol(_USES, "many9", "()V")
+    assert len(_bindings(branches, caller, 10)) == 2
+
+
+@pytest.mark.pins("values.a-path-with-a-LOOP-LATER-call-is-never-resolved")
+def test_a_loop_later_call_is_never_proven_whatever_post_dominates_it(branches):
+    """Review 3 re-review, C-A: `while (true) { o.setPort(80); Client.of(o); if (flag())
+    return; o.setPort(443); }`. The use post-dominates the later setter (the loop's exit is
+    between them), but the ordinal order the window gathers in is not the run order across the
+    back edge: every use sees 80, set after 443. So a path holding a loop-later call is never
+    `resolved` — the 443 row `partial`; the 80 row exact."""
+    assert _loop_chains(branches, "resetExitMid", use=2) == [((0, 1), False), ((0, 1, 4), True)]
+
+
+@pytest.mark.pins(
+    "values.a-LOOP-LATER-call-is-in-the-window-even-where-the-value-is-made-in-the-loop"
+)
+def test_a_producer_in_an_outer_loop_does_not_drop_the_inner_setter(branches):
+    """Review 3 re-review, M-A: `for (…) { o = create(); for (…) { Client.of(o);
+    o.setPort(443); } }` — the producer and the use share one loop group, the nested loops
+    being one component, yet the inner setter reaches the next use on the SAME object. The 443
+    row is kept, `partial`; nothing is dropped."""
+    assert _loop_chains(branches, "nestedProducer") == [((0,), False), ((0, 2), True)]
+
+
+@pytest.mark.pins("values.the-PATH-CAP-counts-the-whole-path-across-frames")
+def test_paths_past_the_cap_across_two_frames_are_one_row(branches):
+    """Review 3 re-review, m-B: eight guarded setters in the caller and eight in the method it
+    hands the value to — 256 paths in each window, 65,536 on the whole path. The cap counts the
+    whole path: one row, `non_enumerable`, stated."""
+    found = producers_of(
+        value_index(branches),
+        _at(branches, _symbol(_SETUP, "crossTwoHop1", _TAKES_OPTIONS), 8),
+        0,
+        {(_CREATE[0], _CREATE[1])},
+        along_receivers=True,
+        configuring=_OPTIONS_SETTERS,
+    )
+    assert found == (Producer(reason="non_enumerable"),)
+
+
+@pytest.mark.pins("values.the-PATH-CAP-counts-the-whole-path-across-frames")
+def test_paths_past_the_cap_across_three_frames_are_one_row(branches):
+    """Three frames of four guarded setters each: 16 paths a window, 4,096 on the whole path."""
+    found = producers_of(
+        value_index(branches),
+        _at(branches, _symbol(_SETUP, "crossThreeHop2", _TAKES_OPTIONS), 4),
+        0,
+        {(_CREATE[0], _CREATE[1])},
+        along_receivers=True,
+        configuring=_OPTIONS_SETTERS,
+    )
+    assert found == (Producer(reason="non_enumerable"),)
+
+
+@pytest.mark.pins("values.a-split-setting-NO-PUBLISHED-part-does-not-count")
+@pytest.mark.pins("values.a-window-counts-only-PUBLISHED-splits-as-several")
+def test_a_split_setting_no_published_part_does_not_count(branches):
+    """The user's ruling of 2026-11-03, option A: a reader that says only the first `setPort`
+    sets a part its row shows (`counting`) counts ONE split in `if (x) o.setPort(1); else
+    o.setPort(2);` — so the one-split rules apply and every path is exact. A reader that states
+    no parts (`counting` None) counts both: every path `partial`."""
+    either = _symbol(_USES, "either", "()V")
+    site = _at(branches, either, 3)
+    walk_args = ({(_CREATE[0], _CREATE[1])},)
+    stated = producers_of(
+        value_index(branches),
+        site,
+        0,
+        *walk_args,
+        along_receivers=True,
+        configuring=_OPTIONS_SETTERS,
+        counting=lambda method, ordinal: ordinal == 1,
+    )
+    unstated = producers_of(
+        value_index(branches),
+        site,
+        0,
+        *walk_args,
+        along_receivers=True,
+        configuring=_OPTIONS_SETTERS,
+    )
+    assert {producer.inexact for producer in stated} == {False}
+    assert {producer.inexact for producer in unstated} == {True}
+
+
+def _null_check_source(tmp_path: Path, entry: str) -> YamlCatalogSource:
+    models = tmp_path / "value-models"
+    models.mkdir(parents=True)
+    (models / "checks.yml").write_text(f"id: checks\nnot_hand_offs:\n{entry}", encoding="utf-8")
+    return YamlCatalogSource(tmp_path)
+
+
+def test_a_not_hand_offs_entry_may_name_the_methods_it_covers():
+    """The user's ruling of 2026-11-03 (OI-262, option B): an entry's optional `methods` limits
+    it to those methods of its owner — `java.util.Objects`' six null checks, never its `hash`,
+    `equals` or `toString`, which call the value's own methods. Absent, the whole owner, as the
+    Kotlin `Intrinsics` entry is."""
+    declared = YamlCatalogSource(catalogs_dir()).not_hand_offs()
+    assert "kotlin/jvm/internal/Intrinsics#" in declared
+    assert {d for d in declared if d.startswith("java/util/Objects#")} == {
+        "java/util/Objects#requireNonNull",
+        "java/util/Objects#requireNonNullElse",
+        "java/util/Objects#isNull",
+        "java/util/Objects#nonNull",
+    }
+
+
+@pytest.mark.parametrize(
+    "methods", ["requireNonNull", "[]", "[requireNonNull(Object)]", "['']", "[1]"]
+)
+def test_a_not_hand_offs_methods_list_that_is_not_a_list_of_method_names_is_refused(
+    tmp_path: Path, methods: str
+):
+    """`methods` is a non-empty list of method names, each a Java identifier: a bare string, an
+    empty list, a name with a descriptor or a non-name is refused at load, naming the file —
+    never read as "the whole owner"."""
+    source = _null_check_source(
+        tmp_path, f"  - {{owner: java.util.Objects, methods: {methods}, by: spec}}\n"
+    )
+    with pytest.raises(CatalogError, match="methods"):
+        source.not_hand_offs()

@@ -275,7 +275,14 @@ CREATE TABLE IF NOT EXISTS scheduled_work (
     -- disagree on them, not because the code states none: a helper two
     -- callers call with two names states both, and ties neither to the row
     -- (Quartz design, R20). NULL where no part is.
-    untied     VARCHAR[]
+    untied     VARCHAR[],
+    -- Why the framework REFUSES the call that schedules this job, as text ("trigger
+    -- nightly is already bound to BJob"), read from what the catalog states the call does
+    -- (spec 2026-11-02 rule 7, `hand_off_effects`) [ruled 2026-11-02 by the user]. NULL on
+    -- every row the framework accepts. `resolution` keeps its meaning — how sure the read
+    -- is — so a refused row keeps the resolution it was read at, and may be `partial`. A
+    -- refused row's handler is NOT a root: the job never runs on this schedule.
+    refused    TEXT
 );
 
 -- A scheduled job's placeholder expression, per environment (spec
@@ -1263,7 +1270,18 @@ SELECT document_id,
        payload ->> 'receiver_field'            AS receiver_field,
        payload ->> 'receiver_field_kind'       AS receiver_field_kind,
        (payload ->> 'result')::INTEGER         AS result,
-       payload ->  'arguments'                 AS arguments
+       payload ->  'arguments'                 AS arguments,
+       -- Rule 9 (spec 2026-11-02-per-path-truth, D00 §5): the nearest call that ran before
+       -- this one on every path, NULL where none did; whether this one runs on every path to
+       -- a normal return, NULL only where the position was never computed; the nearest call
+       -- that runs after this one on every path to a normal return, NULL where none does; and
+       -- whether every path from this one ends at a normal return, NULL only where not computed;
+       -- and the loop it is in, named by the loop's lowest call ordinal, NULL where none.
+       (payload ->> 'dominator')::INTEGER      AS dominator,
+       (payload ->> 'on_every_exit')::BOOLEAN  AS on_every_exit,
+       (payload ->> 'post_dominator')::INTEGER AS post_dominator,
+       (payload ->> 'reaches_return')::BOOLEAN AS reaches_return,
+       (payload ->> 'loop_group')::INTEGER     AS loop_group
 FROM raw_facts WHERE kind = 'call_site'
   AND document_id IN (SELECT document_id FROM selected_documents);
 

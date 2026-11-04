@@ -29,6 +29,7 @@ from test_call_engines import (
 )
 from test_config_join import _module_document
 
+from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import fluent
@@ -172,7 +173,7 @@ def _run(
     the join pass mints anything from the binding. `readers` are `read_by` edges already
     in the table when the engine runs — what the channel index's catalog wrote before
     it (spec §3a's "a channel name the channel index knows")."""
-    write_fact_file(tmp_path / "facts" / "Wiring.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Wiring.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     workspace.derive("endpoints_reset")
@@ -374,7 +375,7 @@ def test_the_join_pass_owns_the_row_of_a_linked_registration(tmp_path: Path):
     write_fact_file(
         tmp_path / "facts" / "Wiring.jsonl",
         _document(),
-        _adapter(("linkTo", [CallArgument(kind="string", value="ordersChannel")])),
+        straight_line(_adapter(("linkTo", [CallArgument(kind="string", value="ordersChannel")]))),
     )
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
@@ -1576,7 +1577,7 @@ def test_the_channel_index_is_written_before_the_engine_that_resolves_a_name_thr
         _declared(reader),
         _annotated(reader, ACTIVATOR_SYMBOL, {"inputChannel": "auditChannel"}),
     ]
-    write_fact_file(tmp_path / "facts" / "Wiring.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Wiring.jsonl", _document(), straight_line(facts))
     write_fact_file(
         tmp_path / "facts" / "module.jsonl",
         _module_document(),
@@ -1897,7 +1898,7 @@ def test_the_join_pass_mints_the_row_for_a_flow_that_links_a_channel_and_handles
         ),
         _body_symbol(),
     ]
-    write_fact_file(tmp_path / "facts" / "Wiring.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Wiring.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     assert derive_endpoints(workspace, [_catalog(_FLOW_MATCHES)], capabilities=CAPABILITIES) == []
@@ -3611,3 +3612,69 @@ def test_a_path_starting_with_an_expression_is_not_refused(tmp_path: Path, templ
     workspace.close()
 
     assert questions == []
+
+
+def test_a_void_setter_on_one_branch_is_a_row_with_it_and_one_without(tmp_path: Path):
+    """Rule 9 in the forward chain walk, for a void setter (the bean-wired registration):
+    `a = new QueueAdapter(ops, "orders.queue"); if (x) a.onMessage(h);`. The setter is not on
+    every path to the method's exit, so the adapter is registered with the handler on one run
+    and without it on another: two rows, both `resolved` — every path from the setter reaches a
+    return."""
+    facts = [*_adapter(("onMessage", [_lambda()])), _body_symbol()]
+    facts = [
+        fact.model_copy(
+            update={
+                "dominator": None if fact.ordinal == 0 else 0,
+                "on_every_exit": fact.ordinal == 0,
+                "post_dominator": None,
+                "reaches_return": True,
+            }
+        )
+        if isinstance(fact, CallSiteFact) and fact.caller == CALLER
+        else fact
+        for fact in facts
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
+    rows = _rows(workspace)
+    workspace.close()
+
+    assert sorted((row["path"], row["handler"] is not None, row["resolution"]) for row in rows) == [
+        (SUBSCRIPTION, False, "resolved"),
+        (SUBSCRIPTION, True, "resolved"),
+    ]
+
+
+@pytest.mark.pins("chains.a-fold-that-CHANGES-NOTHING-is-no-split")
+def test_a_void_call_that_sets_nothing_on_a_branch_is_no_split(tmp_path: Path):
+    """The near-miss for the several-splits rule in the forward walk: beside
+    `if (x) a.onMessage(h)`, an `if (y) a.touch()` that no step names folds nothing — it is no
+    split, as an event that changes nothing is none in the value walk — so the path has ONE call
+    on a branch and both rows stay `resolved`."""
+    facts = [
+        *_adapter(("onMessage", [_lambda()]), ("touch", [])),
+        _body_symbol(),
+    ]
+    facts = [
+        fact.model_copy(
+            update={
+                "dominator": None if fact.ordinal == 0 else 0,
+                "on_every_exit": fact.ordinal == 0,
+                "post_dominator": None,
+                "reaches_return": True,
+            }
+        )
+        if isinstance(fact, CallSiteFact) and fact.caller == CALLER
+        else fact
+        for fact in facts
+    ]
+    workspace = _run(tmp_path, facts, _catalog(_ADAPTER_MATCHES))
+    rows = _rows(workspace)
+    # A reader stating no published parts counts every split it is given; `touch` is still none.
+    unstated = {end.inexact for end in chain_ends(workspace, _catalog(_ADAPTER_MATCHES))}
+    workspace.close()
+
+    assert sorted((row["path"], row["handler"] is not None, row["resolution"]) for row in rows) == [
+        (SUBSCRIPTION, False, "resolved"),
+        (SUBSCRIPTION, True, "resolved"),
+    ]
+    assert unstated == {False}

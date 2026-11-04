@@ -26,6 +26,7 @@ from test_call_engines import (
 )
 from test_ktor_client import _inlined_call
 
+from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
@@ -297,7 +298,7 @@ def test_single_call_refuses_an_options_rung_or_a_receiver_client(tmp_path: Path
         source=catalog.source,
         value_model=catalog.value_model,
     )
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     with pytest.raises(CatalogError, match=rf"ktor-websocket-client\.yml.*{named}"):
@@ -530,7 +531,7 @@ def _ktor_client():
 def _resolved(tmp_path: Path, facts: list, catalog=None):
     """The facts, with the two derived tables the walk reads built by the passes that own
     them, then the catalog run (`ktor-client` unless another is given)."""
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     record_return_flows(workspace)

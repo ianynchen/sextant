@@ -76,6 +76,18 @@ SEXTANT_VERSION = version("sextant")
 #             strings "false" and "null" with no code path able to set either,
 #             so `partial_documents` reached the rendered gaps list and a
 #             bundle's `coverage.partial` as a number that could only be zero.
+#     6       `call_site` gains `dominator` (the nearest call that ran before it on
+#             every path), `on_every_exit` (whether it runs on every path to a
+#             normal return), `post_dominator` (the nearest call that runs after it
+#             on every path to a normal return), `reaches_return` (whether every path
+#             from it ends at a normal return) and `loop_group` (the loop it is in), read
+#             off the method's control-flow graph (spec 2026-11-02-per-path-truth rule 9:
+#             the first two approved by the user 2026-11-02, the last three ruled
+#             2026-11-03 while 6 was unshipped).
+#             A fact set of the older vintage has none of them, and a reader
+#             takes an absent `on_every_exit` as "not computed": it would read every
+#             call as undecided rather than as one on a branch or not, so it is
+#             refused and re-extracted, never read as "no branches".
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -157,6 +169,12 @@ SEXTANT_VERSION = version("sextant")
 #             the marker still means no verb was read. The export carries both columns. A
 #             workspace of the older vintage has no marker, so a pattern would be read as
 #             an address, and it is refused and re-analysed.
+#     14      `scheduled_work` gains `refused`: why the framework refuses the call that
+#             schedules a job, read from what the catalog states the call does (spec
+#             2026-11-02-per-path-truth rule 7, the column ruled by the user 2026-11-02),
+#             NULL where it accepts it. A refused row's handler is not a root. A workspace
+#             of the older vintage would read every refused schedule as one that runs, so it
+#             is refused and re-analysed.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -173,6 +191,11 @@ SEXTANT_VERSION = version("sextant")
 #             2026-10-28-quartz, ruling 5). Two Quartz triggers of one kind on one job, told
 #             apart only by their own names, are two entries rather than one with two
 #             disagreeing expressions.
-FACT_SCHEMA_VERSION = 5
-GRAPH_SCHEMA_VERSION = 13
-BOUNDARY_VOCABULARY_VERSION = 3
+#     4       `schedule`'s attributes gain `refused`: why the framework refuses the call that
+#             schedules the job, NULL where it accepts it (spec 2026-11-02-per-path-truth
+#             rule 7, the `scheduled_work.refused` column ruled by the user 2026-11-02). A
+#             consumer reading a schedule without it would take a refused one for work that
+#             runs.
+FACT_SCHEMA_VERSION = 6
+GRAPH_SCHEMA_VERSION = 14
+BOUNDARY_VOCABULARY_VERSION = 4

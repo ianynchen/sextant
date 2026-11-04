@@ -105,8 +105,16 @@ matches:
   # a verb or an address. `setEntity(HttpEntity)` is deliberately NOT a `body` capture —
   # an `HttpEntity` is a transport wrapper, never the wire type of what it carries, so
   # a capture there could only ever demote the row without naming a payload.
+  #
+  # `setUri` RETURNS THE BUILDER IT WAS CALLED ON, so it is `returns_receiver: true` (ruling 4,
+  # spec 2026-10-30; audited 2026-11-03 after review 3's re-review found
+  # `b.setUri("…/b"); execute(b.build())` published at its root's `/a`, `resolved`).
+  # `javap -c org.apache.hc.core5.http.io.support.ClassicRequestBuilder`, httpcore5 5.2.4
+  # (5.1.3, 5.3.6 and 5.4.3 the same):
+  #   public ClassicRequestBuilder setUri(java.net.URI);    `aload_0; aload_1; invokespecial super.setUri; pop; aload_0; areturn`
+  #   public ClassicRequestBuilder setUri(java.lang.String); `aload_0; aload_1; invokespecial super.setUri; pop; aload_0; areturn`
   steps:
-    - { method: setUri, captures: { url: arg0 }, url_via: *uri_forms }
+    - { method: setUri, captures: { url: arg0 }, url_via: *uri_forms, returns_receiver: true }
   # A mapping, not the bare flag, and BOTH executing calls the classic client declares
   # (measured on both owners, `scripts/probes/a2t8_http_client_builders.md`): `execute`
   # in eight overloads, and `executeOpen(HttpHost, ClassicHttpRequest, HttpContext)` —

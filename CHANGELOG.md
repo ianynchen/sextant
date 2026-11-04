@@ -17,6 +17,191 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **The JDK's null checks are not hand-offs, and a request handed to the JDK before its execute
+  in one method is `partial`** (item 2 review C3; the user's ruling of 2026-11-03 on OI-262,
+  option B). A `not_hand_offs` entry may now name `methods` of its owner (D02 §1f), and
+  `java.util.Objects`' `requireNonNull` (three overloads), `requireNonNullElse`, `isNull` and
+  `nonNull` are declared, measured with `javap`: `send(b) { Objects.requireNonNull(b);
+  http.execute(b.build()); }` gives its caller's row, `resolved`. `req = …build();
+  List.of(req).forEach(r -> r.setPath(…)); http.execute(req, h)` published the built path,
+  `resolved`, because the same-method `source` match never read the window; a hand-off of the
+  built value before the first same-method execute now makes the row `partial` (a hand-off after
+  it leaves that request as built).
+
+- **A constructor-rooted builder handed away keeps its row, and one shared rule reads a helper's
+  argument through its hand-off** (item 2 fix round 2, re-review N1). The walk back's type gate
+  read a constructor root's type off its descriptor, which hands back nothing, so OkHttp's
+  `new Request.Builder()` chains had no type and `send(b) { Objects.requireNonNull(b);
+  client.newCall(b.build()); }` lost its row; a constructor root now builds its owner. The
+  "entered twice with different arguments → unread" decision both the options reader and the
+  forward chain walk made is one function, `values.read_through_hand_off`.
+
+- **Options kept in a field are not proven unset, a helper's step reads its own caller's
+  argument, and a walk back that ends at code we do not have keeps its row** (item 2 fix round
+  1). Options configured through `this.opts` in a constructor published Vert.x's own
+  `localhost:80`, `resolved`, for a client whose host and port were set; an object stored in a
+  field (`ValueIndex.stored`), or one whose method calls the options type through a field (a
+  store from a local, `this.held = o`, has no fact), is now not known: peer NULL, `partial`.
+  `setU(b, "/one")` and `setU(b, "/two")` from two callers published both uris for each, both
+  `resolved`; the forward chain walk now reads a step gathered in a helper through the call that
+  entered it (`values.Path.entered_into`, `entered_position`), the options reader's rule. The
+  walk back from a rootless terminal keeps the terminal's row where it ends `external` too, and
+  decides whether the terminal is the catalog's by the type it is called on (what a root hands
+  back, an owner a step names), so a builder from `copy(src)` or a public method's parameter is
+  a row, and Quartz's name-only `terminal: [build]` still does not reach `JobBuilder.build()`.
+
+- **A Vert.x client's defaults are one answer per path, and Vert.x's own defaults are used
+  where a path proves them** (spec 2026-11-02-per-path-truth rules 4-6, item 2). The options
+  reader merged its paths: a part two paths read differently was unread, and a part one path
+  did not set was absent, so a client field written by two factories, one setting port 8443
+  and one setting none, published `two`, `resolved` — false for the first — and options it
+  could not read at all (`new WebClientOptions(json)`, an unrooted chain, an unlisted factory
+  overload) read as "nothing set". Now every path composes its own row: `two:8443` and
+  `two:80`; `if (tls) o.setDefaultPort(443)` gives `branched:443` and `branched:80`; a part the
+  path proves unset (the no-argument constructor, every call read) is Vert.x's own, `localhost`
+  or 80, declared in the client model as `unset` (CP-56 row 132; reverses the Vert.x spec's
+  §2a / item 23); a part set and unread, or unknown, leaves the row with its path, peer NULL,
+  `partial`. A request's own `RequestOptions` is read per path the same way, and an options
+  object nothing reads is a row, `unresolved`, not dropped. A setter inside a helper reads the
+  value its own caller hands in: the walk now names, for each configuring call gathered in a
+  body a hand-off entered, the call that entered it (`values.Path.entered_into`,
+  `entered_position`, shared with the Quartz binder). Two or more guarded calls setting an
+  address part make every row `partial`; the options reader declares its published parts
+  (`client_base.PUBLISHED_PARTS`), so a guarded `setSsl` is no split. `WebClient.create(vertx)`
+  is a factory overload no rung declares, so its rows' default host is unknown: `partial`.
+- **A request handed to code we do not have before it is sent keeps its row** (rule 4, item 2's
+  B list). `send(b) { Objects.requireNonNull(b); http.execute(b.build()); }` and `req = make();
+  Objects.requireNonNull(req); http.execute(req, h)` derived no row. The walk back from a
+  rootless terminal that ends `escapes` or `cycle` now keeps the terminal's row with its parts
+  unread, as one past the path cap already did; and an executing call the value walk can pair
+  with a `build()` only by identity (rule 8) — the window not read — executes it, the row no
+  surer than `partial`. A Vert.x mount whose router is handed away before it is mounted already
+  kept its prefix (the mount reader asks which object, `which_object`); measured, not changed.
+
+- **A call on a configuring call's result is absorbed into it only before the use, and the
+  forward walk reads a hand-off after the use in its loop** (rule 9 fix round 5, review 3
+  re-review 3). The user ruled on 2026-11-03 that the m-1 child rule stands and that a request
+  whose paths differ in a published part or header stays one `partial` row (option A, no schema
+  change). `for (…) { r = b.setUri("/b"); execute(b.build()); r.setUri("/c"); }` published `/c`
+  `resolved` alone, dropping `/b`, which every request goes to: the child now keeps its own
+  split after the use, never proven, in both walks (`/b` `resolved`, `/c` `partial`). `for (…)
+  { execute(b.build()); setBthenC(b); }` dropped the `/c` row; the loop-later hand-off now forks
+  the chain as a direct setter there does (`/a` `resolved`, `/c` `partial`). A call folded in place
+  after a build outside its loop (`r = b.setUri("/b"); execute(b.build()); r.setUri("/c")`) no
+  longer makes a `/c` row: the fork reads its folds by the value walk's window (`Flow.inside`).
+- **The forward chain walk follows a hand-off of the chain's value, and counts what it cannot
+  see** (rule 9 fix round 4, review 3 re-review 2). `setB(b){ b.setUri("/b"); }` then `b =
+  get("/a"); setB(b); http.execute(b.build())` published `GET /a`, `resolved`, which no run
+  sends: the walk read a hand-off as nothing. It now reads it by rules 1 and 2 through the value
+  walk's own code (`values.HandOffs`): into a body we have, the calls the body makes on its
+  parameter fold at the hand-off's place, each path through the body its own by rule 9 there;
+  into code we do not have (`Objects.hash(b)`), every part a step sets is unknown on that path
+  and its row no surer than `partial`. The split and its enumeration are now written once
+  (`values.Flow.paths`) for both walks: a split whose parts are not known — an `escapes`, a
+  hand-off into code we do not have — counts toward the several-splits rule, and a branched
+  hand-off into a body counts by what the body sets (`/acme/helper resolved` is gone from the
+  SQS walk back); and a call on a configuring call's result that is on its `post_dominator`
+  chain is no split of its own, so `if (x) b.setUri("/b").setUri("/c")` is `/a` and `/c`, both
+  `resolved`, in both walks. Two chains of one row identity that differ in a published column
+  or metadata (a header put on one branch) leave the one row `partial`, since the table holds
+  one row per identity; equal in everything, the row keeps the more exact resolution. Every
+  capture a fluent step sets is now in `fluent.PUBLISHED_PARTS` or the commented
+  `fluent.UNPUBLISHED_PARTS`, enforced by an architecture test.
+- **The forward chain walk reads branches by rule 9** (review 3 re-review, the walk's branch
+  blindness). A statement-style call it folds into a chain (void, or `returns_receiver`) was
+  folded whatever branch it was on: `if (x) b.setUri("…/b"); execute(b.build())` published
+  `/b` alone, `resolved`. It now forks where the call is not on every path to the fork it
+  carries on to — a row with it and a row without — by the value walk's own split and proof,
+  lifted into one shared place (`values.Flow`): the `post_dominator` proof, `reaches_return`,
+  the loop-later rule, the several-splits count across the whole path (`several_or_unproven`)
+  and the path cap, which counts the whole path across chained forks and continuations. A
+  fold that changes nothing is no split, and (ruled by the user 2026-11-03, option A) a call on
+  a branch that sets no part the row publishes does not count toward the several-splits rule —
+  each reader states its published parts (`fluent.PUBLISHED_PARTS`); one that states none
+  counts every split. Ktor's inline `setBody` compiles to two `setBody` calls on two branches,
+  and the body is a published part (`request_shape`), so a Ktor request with a body is
+  `partial`.
+- **A statement-style `setUri` on an Apache HttpClient builder is the request sent** (review 3
+  re-review, out of scope; audited 2026-11-03). `b = ClassicRequestBuilder.get("…/a");
+  b.setUri("…/b"); http.execute(b.build());` published `GET /a`, `resolved`: the `setUri` step
+  did not declare `returns_receiver`, so the statement forked a chain of its own.
+  `ClassicRequestBuilder.setUri` ends `aload_0; areturn` (javap, httpcore5 5.1.3-5.4.3), so the
+  step now says so (ruling 4). Every other builder step of every fluent catalog was audited the
+  same way: each step not flagged returns `void`, a different object, or — the Mutiny
+  `send…AndForget` terminals — its receiver as an ACTION that sends, which stays unflagged.
+- **A call on one branch is no longer read as a call on every path** (spec 2026-11-02 rule 9,
+  review 2's C3 and M4). Reading each call site's new `dominator` and `on_every_exit`: the
+  value walk SPLITS a path at a call between a value's producer and its use that is not on
+  every path to the use — one path where it ran, one where it did not — so
+  `if (tls) o.setPort(443); client.get(…)` gives a path with port 443 and one with the port
+  unset, never 443 alone. The path WITH the call is `resolved` only where the use is on the
+  call's `post_dominator` chain (ruled by the user 2026-11-03): in
+  `if (tls) { o.setPort(443); return; } connect(o);` no run connects with 443, so that row is
+  `partial`. A return of the value counts as the use. Where two or more calls on branches are
+  in one window, every row from the split is `partial`, whichever parts they set (ruled
+  2026-11-03, "A: every row partial"). Fix round 1 (review 3): the splits are counted per
+  PATH, across every frame the path enters, so a branched call in a helper and another in
+  its caller make every row `partial` too; a branched setter followed by a call to a body
+  that never returns normally is `partial`; and a window whose paths pass 256 (twenty
+  guarded setters on one object were a million) is one row ending `non_enumerable`, its
+  parts unknown, rather than 30 s and 2 GB for one site. A call after the use that shares
+  its `loop_group` (ruled 2026-11-03) is in the window, so
+  `for (…) { Client.of(o); o.setPort(443); }` gives the unset row `resolved` and the 443 row
+  `partial`, never dropping either. Fix round 2 (review 3 re-review): a path that ran such a
+  loop-later call is never `resolved` (the window's ordinal order is not the run order across
+  the back edge); a value produced in the use's loop group no longer drops the later call;
+  the path cap counts the whole path across frames; the walk back from a rootless terminal
+  keeps a `partial` path's row (an SQS request with two branched `messageBody` calls had no
+  row at all) and a capped walk's; Quartz keeps a capped walk's row. Quartz
+  marks a `scheduleJob` refused only where the call that bound the trigger ran before it on
+  every path: `if (useB) scheduleJob(B, t); else scheduleJob(C, t);` gives C `partial`,
+  unmarked, and C stays a root.
+- **The value walk follows a value HANDED to another method before it is used** (spec
+  2026-11-02 rules 1-3). Its `escapes` window counted only calls made ON the value, so
+  `o = new Options().setHost("search"); configure(o); WebClient.create(vertx, o)` read
+  `search` as the whole story while `configure` set the port. A hand-off into a body this
+  module (or an `extract_libraries` jar) has is now walked into and judged by the same rule —
+  configuring calls join the chain at the hand-off's place, one path per callee, a repeat is
+  `cycle`; a hand-off into code we do not have, a `dynamic` site, or a field write inside the
+  entered body is `escapes`; a `String`, primitive or boxed-primitive parameter is not a
+  hand-off. Fix round 1 closes what review found: a method's own parameter is windowed from
+  its entry to the use; a value whose own type is immutable (a `String` logged through
+  `info(String, Object)`) is not handed off; a value inside an array or merge argument, a
+  call on the value's type whose receiver the facts cannot name, and a call through a type a
+  lambda implements are `escapes`; a lambda capture is followed through the capture fold and
+  is no hand-off where the body does nothing to it. Per the user's rulings of 2026-11-02, a
+  compiler's own null checks (`kotlin.jvm.internal.Intrinsics`, declared in
+  `value-models/compiler-null-checks.yml`) are not hand-offs, and a Quartz job whose trigger
+  read ends `escapes` keeps its row with the trigger unknown, `partial`.
+- **A schedule the framework refuses is kept and marked `refused`, never shown as work that
+  runs** (spec 2026-11-02 rule 7, ruled by the user that day: "predict the framework's
+  behavior exactly, including its errors"; the column ruled "B: refused column"). A hand-off
+  to a call a catalog declares takes its effect from the catalog's new `hand_off_effects`
+  (D02 §1f), measured in CP-55 rows 24-48: Quartz's `scheduleJob(JobDetail, Trigger)` binds a
+  trigger that names no job and changes nothing else of it, and refuses a trigger already
+  bound to a job with another key. The trigger's binding is its first bind on the path —
+  the builder's `forJob(…)`, else the first such call. One trigger scheduled with `BJob`
+  then `CJob` is now `BJob @ c2` and `CJob @ c2` refused, where it was `CJob` with its
+  trigger unknown; a `forJob(X)` trigger handed to `scheduleJob(Y, t)` marks `Y` refused,
+  and `X` too where no call that would store the trigger accepts it. Each call of a helper
+  is its own execution, for the call that binds and for the `build()` that makes the job, and
+  a window path ending `cycle` keeps its row as `escapes` does.
+  The job argument is stated too (Quartz reads it and hands it to `SchedulerListener
+  .jobAdded`, CP-55 rows 49-73, 2.5.1 and 2.3.2): one job scheduled twice with one trigger is
+  one row, unless a listener the module implements does something to the job.
+  `scheduled_work` gains `refused` (graph schema 14; a refused row keeps its resolution), the
+  boundary `schedule` kind gains it as an attribute (vocabulary 4), the document says
+  `refused by the framework` with the reason, and a refused row's handler is no root. The job
+  store's own refusal of a second store of one key is measured and not built: which store a
+  module runs is configuration.
+- **A hand-off no longer hides which constant a value is** (spec 2026-11-02 rule 8, ruled by
+  the user that day: "identity is not content"). Java hands a callee a copy of the reference,
+  so no hand-off can make a variable another constant; where the walk reads a value as a
+  declaration (an enum constant, a class), a window path that ends `escapes` or `cycle` still
+  answers it. apollo-portal's `RetryableRestTemplate#doExecute(HttpMethod method, …)`, which
+  runs `HttpMethod.GET.equals(method)` before `exchange(…, method, …)`, has its verbs back:
+  76 outbound rows, every one with a verb, as before the hand-off rule. An object's contents
+  are unchanged: still `escapes`.
 - **A value an instance lambda closes over is read as its own, not its neighbour's**
   (OI-266, Critical). javac's capture site for a lambda that reads `this` hands `this` first,
   and the value walk bound capture *i* to the site's argument *i*, so every captured value was
@@ -114,6 +299,17 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Each call site states its place in the method's control flow** (spec
+  2026-11-02-per-path-truth rule 9; the fact approved by the user 2026-11-02, "Approve, build
+  it"). `call_site` gains `dominator`, the nearest call that ran before it on every path, and
+  `on_every_exit`, whether it runs on every path to a normal return, and — ruled by the user
+  2026-11-03, "A: add post_dominator" — `post_dominator`, the nearest call that runs after it
+  on every path to a normal return (a path ending in a throw reaches none), and
+  `reaches_return`, whether every path from it ends at a normal return (ruled 2026-11-03,
+  option A), and `loop_group`, the loop it is in (ruled 2026-11-03, option A for M1), all read
+  off the method's control-flow graph with exception-handler edges (D00 §5). Until now `a; b;` and
+  `if (x) a; else b;` were the same facts. The fact schema goes from 5 to 6, so every fact set
+  is re-extracted.
 - **Vert.x Web and Vert.x WebClient** (spec 2026-10-30-vertx-web; probe CP-56, Vert.x 4.5.10,
   5.0.0 and 5.2.1; catalogs `vertx-web.yml`, `vertx-webclient.yml` and
   `client-models/vertx-web.yml`). COVERAGE §5.1 and §5.2 read `✅` for both, with fifteen

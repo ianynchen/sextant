@@ -619,6 +619,57 @@ only thing an engine is handed, and every catalog of one source carries the iden
 A source that declares no `value-models/` and writes no hop declaration contributes an empty
 one, which is the state of a repository's own catalog set (§6) that declares neither.
 
+**`not_hand_offs` — owners whose calls take a value without handing it off** (spec
+2026-11-02, the user's ruling of that day; the key itself, as built here, approved by the user
+on 2026-11-02). A `value-models/` file may also declare
+`not_hand_offs: [{owner, methods?, by}]`, the owner dotted as every catalog spells a type. The value walk's `escapes` window reads every call that takes
+a value as a hand-off (rules 1-3 of that spec); a call one entry names is not one. Without
+`methods` the entry is the whole owner; **with `methods`** (ruled by the user 2026-11-03,
+OI-262, option B) it is those methods of the owner, every overload of each name, and
+`methods` is a non-empty list of identifiers, refused at load otherwise (as is any key but
+`owner`, `methods` and `by`). The loader spells a whole owner as its type symbol and a method
+as that symbol followed by the name. The shipped entries are in
+`value-models/compiler-null-checks.yml`: the class a JVM language's compiler calls to check
+a parameter or a platform result for null — the compiler, not the author, writes those
+calls, and each only checks and throws — and the JDK's own null checks
+(`java.util.Objects`' `requireNonNull`, its three overloads, `requireNonNullElse`, `isNull`,
+`nonNull`; measured with `javap`), never the class's `equals`, `hashCode`, `hash`,
+`toString` or `compare`, which call the value's own methods. `by` is required, as for `identified_by`. The loader
+reads it into `Catalog.not_hand_offs` (every catalog of a source carries the same tuple) and
+each engine hands it to `values.cached_value_index`.
+
+**`hand_off_effects` — what a declared call does to a value handed to it** (spec
+2026-11-02 rule 7, ruled by the user that day: "predict the framework's behavior exactly,
+including its errors"). A `value-models/` file may declare `hand_off_effects: [{owner,
+method, descriptor, arg, binds?, refuses?, by, rows?}]`, the owner dotted, `arg` and every
+argument written `argN`:
+
+- `arg` — the argument the value is handed at;
+- `binds: {part, to}` — where the value's `part` is not yet bound, the call binds it to the
+  value at argument `to`; **no other part of the value changes**;
+- `refuses` — when the call throws instead of doing so. A closed set, checked at load:
+  `bound_elsewhere`, the `binds` part already bound to another value. It needs `binds`;
+- `hands_to: [{owner, method, descriptor, arg}]` — interface methods the call hands the
+  value on to, which the module may implement (a listener). Each module body of one is read
+  as a lambda's capture is (rule 2): a body that does anything to the parameter at `arg`, or
+  bodies that cannot be listed, make the hand-off `escapes`; bodies that do nothing leave it
+  stated [ruled by the user 2026-11-02];
+- `by` — the probe that measured it, required as `identified_by`'s is (`rows` names its
+  rows).
+
+An entry with neither `binds` nor `refuses` states that the call changes nothing of the
+value. The loader refuses any other key, an `arg` not written `argN`, a malformed `hands_to`,
+and a `refuses` outside the set, naming the file, and reads the entries into `Catalog.hand_off_effects` (every catalog of
+a source carries the same tuple); each engine hands them to `values.cached_value_index`. The
+value walk reads a hand-off one entry states as a step of its path (`Path.stated`), never
+`escapes`: the parts the call does not bind are as they were. A reader of the part it binds
+applies the statement on that path — the Quartz reader marks a pairing call `refused`
+(`scheduled_work.refused`, D01) where an earlier stated call bound the trigger to a job with
+another key. A call the value is handed to that no entry states stays unknown (rule 2). The
+shipped entries are `value-models/quartz-scheduler.yml`'s `Scheduler.scheduleJob(JobDetail,
+Trigger)` at `arg1` (binds the trigger's job; CP-55 rows 24-48) and at `arg0` (changes nothing
+of the job, hands it to `SchedulerListener.jobAdded`; rows 27, 32, 35, 49-73).
+
 **What reads it is the walk, not any engine's own rule.** `resolve/values.resolve_site`
 takes the table as data and uses it where a value's producer is a call this module could not
 read through. The walk has found the call (distance); the table says which of its arguments
@@ -2333,6 +2384,7 @@ client_base:
   ladder:  [{ owner, method, options_arg, descriptor? }]   # the factory, the options argument
   setters: [{ owner, method, part: host | port | uri, value_arg, descriptor? }]
   configures: [{ owner, returns: [types] }]   # optional: calls handing back the same object
+  unset: { host: localhost, port: 80 }        # optional: the framework's own value of a part
   join: fill_authority
 ```
 
@@ -2345,22 +2397,41 @@ it is (`which_object`: the requests sent on it do not make it another client); t
 options argument by the chain reader, every call `configures` names — a call on an options type
 declared to return one of `returns` (an inherited setter returns a supertype) — gathered as the
 object configured rather than escaping (ruling 4). Each setter's value is traced by the value
-walk: a string or integer literal, or a configuration expression; any other answer leaves that
-part set and unread. Every path must agree on a part: one every path sets and two read
-otherwise is set and unread too, and a part one path does not reach is absent. **`fill_authority`** is Vert.x's join (CP-56 row group (e)): the defaults fill the host
-and the port a request names none of, each on its own, and the request's own parts — root
-arguments or `host(…)`/`port(…)` steps — win; an absolute request, or one whose address was not
-read, takes neither. The filled parts compose one peer as stated ones do. A default set and not
-read, or never reached, fills nothing: the row keeps its path and resolution with `peer` NULL,
-since the framework never rewrites the path and an unset default cannot be proven. That holds
-for a request naming its own host too: with its default port set and unread, its peer is
-NULL, never the host alone.
+walk on the path the object was reached by — a setter gathered inside a body a hand-off entered
+reads a parameter of that body at the call that entered it on that path (`values.Path.entered_into`,
+`entered_position`) — as a string or integer literal, or a configuration expression; any other
+answer, or several values, leaves that part set and unread.
+
+**One reading per path, never merged** (spec 2026-11-02-per-path-truth rules 4-6). The client's
+factories and the options each was handed are read path by path (`values.producer_paths`, with
+rule 9's splits), and each path composes its own address: two factories, one setting port 8080
+and one setting none, are two rows; paths giving one address are one row. On a path a part is
+the text read, set and unread, proven unset, or unknown. **Proven unset** needs the object built
+by the options type's NO-ARGUMENT constructor and every call on it read; such a part takes the
+framework's own value, `unset` (Vert.x: `localhost`, 80, CP-56 row 132), a map from a part to a
+port number or a non-empty string, refused at load otherwise. Optional: a part with no `unset`
+value is unknown. **An object that may be held in a field is not known at all** (rule 2): a value
+of its chain stored in a field, or a method of its chain calling the options type through a field
+(D00 §5 records no store from a local). A constructor handed anything (`new WebClientOptions(json)`), an unrooted
+chain, a path ending `escapes` or `cycle`, a factory overload no rung declares and a client the
+walk does not reach leave every part not set by a read call unknown. A path rule 9 cannot call
+exact (a side of a split no fact proves; two or more splits that set a part the reader's rows
+publish, `client_base.PUBLISHED_PARTS` — a guarded `setSsl` is no split for them) gives rows no
+surer than `partial`. **`fill_authority`** is Vert.x's join (CP-56 row group (e)): the defaults
+fill the host and the port a request names none of, each on its own, and the request's own parts
+— root arguments or `host(…)`/`port(…)` steps — win; an absolute request, or one whose address
+was not read, takes neither. The filled parts compose one peer as stated ones do. A default the
+request takes that is set and unread, or unknown on the path, leaves the row with its path,
+`peer` NULL, `partial` — never the other part alone: with its default port unread, a request
+naming its own host has no peer.
 
 **An `options: argN` capture** reads an options object a REQUEST is made from (Vert.x's
-`request(m, RequestOptions)`) with the same `setters`: its `uri` part is the `url`, its `host`
-and `port` the request's own, each only where the chain captured none of that field itself (a
-later step wins), and a read uri sets `serves: true`. Refused at load in a catalog whose
-`client_base` declares no `setters`.
+`request(m, RequestOptions)`) with the same `setters`, one reading per path as above: its `uri`
+part is the `url`, its `host` and `port` the request's own, each only where the chain captured
+none of that field itself (a later step wins), and a uri set — read, unread or unknown — sets
+`serves: true`. A part proven unset is left to the client's defaults (CP-56 row 126); no `unset`
+value is applied to a request's own options. Refused at load in a catalog whose `client_base`
+declares no `setters`.
 
 **`collects` accumulates where `captures` overwrites** (F5 §6.2, W29), and the difference
 is the whole reason it is a second key rather than a spelling of the first. A capture is
