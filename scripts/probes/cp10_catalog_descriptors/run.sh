@@ -127,6 +127,17 @@ ARTIFACTS=(
   # manifest `Implementation-Version:` and no `pom.properties` (CP-54's own identity
   # check reads the same entry). Pinned to the version CP-54 measured.
   "io.ktor|ktor-client-core-jvm|3.6.0|META-INF/MANIFEST.MF|Implementation-Version"
+  # Akka and Pekko actors (spec 2026-11-04 §3a). Scala/sbt-built, so no `pom.properties`;
+  # each states its manifest `Implementation-Version` (CP-57 read all twelve). The owners
+  # the actor catalogs name live in these three jars per family: `Receptionist` in
+  # `*-actor-typed`, `ClusterSharding` in `*-cluster-sharding-typed`, and the pub-sub
+  # messages in `*-cluster-tools`. Versions are the ones the actor fixtures pin.
+  "org.apache.pekko|pekko-actor-typed_2.13|1.1.3|META-INF/MANIFEST.MF|Implementation-Version"
+  "org.apache.pekko|pekko-cluster-sharding-typed_2.13|1.1.3|META-INF/MANIFEST.MF|Implementation-Version"
+  "org.apache.pekko|pekko-cluster-tools_2.13|1.1.3|META-INF/MANIFEST.MF|Implementation-Version"
+  "com.typesafe.akka|akka-actor-typed_2.13|2.6.21|META-INF/MANIFEST.MF|Implementation-Version"
+  "com.typesafe.akka|akka-cluster-sharding-typed_2.13|2.6.21|META-INF/MANIFEST.MF|Implementation-Version"
+  "com.typesafe.akka|akka-cluster-tools_2.13|2.6.21|META-INF/MANIFEST.MF|Implementation-Version"
 )
 
 specs=()

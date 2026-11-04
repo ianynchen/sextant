@@ -323,7 +323,17 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # and the fourteen `client_base` rungs for the wrappers' `create` and `wrap` (one slot each).
 # The roots the wrappers share with the core are the core's own entries with a longer `owner`
 # list, which adds no position.
+# **The Akka and Pekko actor catalogs joined on 2026-11-04** (spec 2026-11-04 §3a), twelve
+# new `single_call` catalogs: each row's `channel_arg` is one ask, and each `channel_via`
+# entry another (`receptionist` four rows with one entry each, `cluster-sharding` three, the
+# pub-sub constructor rows none).
 _ASKS_PER_CATALOG = {
+    "akka-cluster-sharding": (6, 6),
+    "akka-pubsub-publish": (2, 2),
+    "akka-pubsub-put": (1, 1),
+    "akka-pubsub-send": (2, 2),
+    "akka-pubsub-subscribe": (3, 3),
+    "akka-receptionist": (8, 8),
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
     "google-pubsub-client": (1, 1),
@@ -348,7 +358,13 @@ _ASKS_PER_CATALOG = {
     "ktor-sse-client": (39, 39),
     "ktor-websocket-client": (23, 23),
     "okhttp": (5, 6),
+    "pekko-cluster-sharding": (6, 6),
     "pekko-connectors-kafka": (15, 15),
+    "pekko-pubsub-publish": (2, 2),
+    "pekko-pubsub-put": (1, 1),
+    "pekko-pubsub-send": (2, 2),
+    "pekko-pubsub-subscribe": (3, 3),
+    "pekko-receptionist": (8, 8),
     "quartz": (8, 11),
     "spring-cloud-gateway": (14, 20),
     "spring-cloud-gateway-outbound": (4, 4),
@@ -422,7 +438,8 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # review): the three `setSsl` setters, no longer read since a peer carries no scheme.
     # **+182 on 2026-10-31** (Task 15): the RxJava 3 and Mutiny wrappers' own roots, steps,
     # mounts and factory rungs, same comment (5 in `vertx-web`, 177 in `vertx-webclient`).
-    assert sum(asks for asks, _ in counted.values()) == 1232
+    # **+44 on 2026-11-04**: the twelve Akka and Pekko actor catalogs, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 1276
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

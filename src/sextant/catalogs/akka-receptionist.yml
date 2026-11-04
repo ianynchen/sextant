@@ -1,0 +1,50 @@
+id: akka-receptionist
+displayName: Akka Receptionist (typed service keys)
+style: single_call
+protocol: actor
+direction: inbound
+
+# Spec 2026-11-04 §3a. A Receptionist service key is the name a typed actor is found by
+# across the cluster: `register` serves it, `subscribe`/`find` call it. The address is the
+# key's name, `ServiceKey.create(Class, String)` argument 1.
+detect:
+  coordinates: ["com.typesafe.akka:akka-actor-typed_2.13", "com.typesafe.akka:akka-actor-typed_3"]
+
+# CP-57 read every descriptor below with `javap -c -p` on the jars the fixture resolves,
+# and each jar's own manifest reports `Implementation-Version: 2.6.21`.
+measured:
+  - { artifact: com.typesafe.akka:akka-actor-typed_2.13, versions: ["2.6.21"],
+      identity: reported, by: scripts/probes/cp57_actors.md }
+
+requires: [call_site, string_constants]
+
+matches:
+  # MEASURED (CP-57 finding 8): `register`, `subscribe` and `find` are static factories
+  # returning a `Receptionist.Command` that is then `tell`-ed to `system.receptionist()`.
+  # The call that builds the command is the declaration; the `tell` only delivers it, so
+  # the row is read off the factory, where the key is an argument.
+  owner: akka.actor.typed.receptionist.Receptionist
+  methods:
+    # The key arrives as a static final field (`static final ServiceKey<C> KEY =
+    # ServiceKey.create(C.class, "stock")`); the walk reads it through the field's
+    # `<clinit>` to the `create` call, whose argument 1 is the name.
+    - { name: register, arity: 2,
+        descriptor: "(Lakka/actor/typed/receptionist/ServiceKey;Lakka/actor/typed/ActorRef;)Lakka/actor/typed/receptionist/Receptionist$Command;",
+        channel_arg: 0,
+        channel_via: [{ owner: akka.actor.typed.receptionist.ServiceKey, method: create, arg: 1 }] }
+    # The 3-argument form adds a reply-to for the `Registered` acknowledgement.
+    - { name: register, arity: 3,
+        descriptor: "(Lakka/actor/typed/receptionist/ServiceKey;Lakka/actor/typed/ActorRef;Lakka/actor/typed/ActorRef;)Lakka/actor/typed/receptionist/Receptionist$Command;",
+        channel_arg: 0,
+        channel_via: [{ owner: akka.actor.typed.receptionist.ServiceKey, method: create, arg: 1 }] }
+    # `subscribe` and `find` look the key up to send to its actors: outbound. A key this
+    # module registers itself is a hop, not an outbound row (§3d item 5,
+    # `resolve/self_calls.py`).
+    - { name: subscribe, arity: 2, direction: outbound,
+        descriptor: "(Lakka/actor/typed/receptionist/ServiceKey;Lakka/actor/typed/ActorRef;)Lakka/actor/typed/receptionist/Receptionist$Command;",
+        channel_arg: 0,
+        channel_via: [{ owner: akka.actor.typed.receptionist.ServiceKey, method: create, arg: 1 }] }
+    - { name: find, arity: 2, direction: outbound,
+        descriptor: "(Lakka/actor/typed/receptionist/ServiceKey;Lakka/actor/typed/ActorRef;)Lakka/actor/typed/receptionist/Receptionist$Command;",
+        channel_arg: 0,
+        channel_via: [{ owner: akka.actor.typed.receptionist.ServiceKey, method: create, arg: 1 }] }

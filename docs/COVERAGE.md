@@ -795,10 +795,16 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**96 of 110 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**108 of 122 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
+| `akka-cluster-sharding` | `com.typesafe.akka:akka-cluster-sharding-typed_2.13` | 2.6.21 |
+| `akka-pubsub-publish` | `com.typesafe.akka:akka-cluster-tools_2.13` | 2.6.21 |
+| `akka-pubsub-put` | `com.typesafe.akka:akka-cluster-tools_2.13` | 2.6.21 |
+| `akka-pubsub-send` | `com.typesafe.akka:akka-cluster-tools_2.13` | 2.6.21 |
+| `akka-pubsub-subscribe` | `com.typesafe.akka:akka-cluster-tools_2.13` | 2.6.21 |
+| `akka-receptionist` | `com.typesafe.akka:akka-actor-typed_2.13` | 2.6.21 |
 | `apache-httpclient` | `org.apache.httpcomponents.client5:httpclient5` | 5.2.3 |
 |  | `org.apache.httpcomponents.core5:httpcore5` | 5.2.4 |
 | `google-pubsub-client` | `com.google.cloud:google-cloud-pubsub` | 1.129.3 |
@@ -854,7 +860,13 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `microprofile-graphql` | `io.smallrye:smallrye-graphql-schema-builder` | 2.0.0, 2.18.5 |
 | `microprofile-rest-client` | `org.eclipse.microprofile.rest.client:microprofile-rest-client-api` | 3.0.1, 4.0.0 |
 | `okhttp` | `com.squareup.okhttp3:okhttp` | 3.14.9, 4.12.0 |
+| `pekko-cluster-sharding` | `org.apache.pekko:pekko-cluster-sharding-typed_2.13` | 1.1.3 |
 | `pekko-connectors-kafka` | `org.apache.pekko:pekko-connectors-kafka_2.13` | 1.1.0 |
+| `pekko-pubsub-publish` | `org.apache.pekko:pekko-cluster-tools_2.13` | 1.1.3 |
+| `pekko-pubsub-put` | `org.apache.pekko:pekko-cluster-tools_2.13` | 1.1.3 |
+| `pekko-pubsub-send` | `org.apache.pekko:pekko-cluster-tools_2.13` | 1.1.3 |
+| `pekko-pubsub-subscribe` | `org.apache.pekko:pekko-cluster-tools_2.13` | 1.1.3 |
+| `pekko-receptionist` | `org.apache.pekko:pekko-actor-typed_2.13` | 1.1.3 |
 | `quarkus-consume-event` | `io.quarkus:quarkus-vertx` | 3.17.5 |
 |  | `io.quarkus:quarkus-vertx-deployment` | 3.17.5 |
 | `quarkus-reactive-routes` | `io.quarkus:quarkus-reactive-routes` | 3.17.5 |

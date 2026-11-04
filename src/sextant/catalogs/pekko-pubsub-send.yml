@@ -1,0 +1,30 @@
+id: pekko-pubsub-send
+displayName: Apache Pekko classic distributed pub-sub (Send)
+style: single_call
+protocol: actor
+direction: outbound
+
+# Spec 2026-11-04 §3a. `Send(path, msg)` told to the mediator reaches one actor registered
+# with `Put` under that path. The address is the path, constructor argument 0. One file per
+# message class (`pekko-pubsub-subscribe.yml` says why).
+detect:
+  coordinates: ["org.apache.pekko:pekko-cluster-tools_2.13", "org.apache.pekko:pekko-cluster-tools_3"]
+
+# CP-57 read every descriptor below with `javap -c -p` on the jar the fixture resolves,
+# and the jar's own manifest reports `Implementation-Version: 1.1.3`.
+measured:
+  - { artifact: org.apache.pekko:pekko-cluster-tools_2.13, versions: ["1.1.3"],
+      identity: reported, by: scripts/probes/cp57_actors.md }
+
+requires: [call_site, string_constants]
+
+matches:
+  owner: org.apache.pekko.cluster.pubsub.DistributedPubSubMediator$Send
+  methods:
+    # `localAffinity` at argument 2; the path is still argument 0.
+    - { name: "<init>", arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Z)V",
+        channel_arg: 0 }
+    - { name: "<init>", arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)V",
+        channel_arg: 0 }

@@ -7006,8 +7006,49 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/self_calls.py",
-                find='        and str(row["path"]) in served\n',
-                replace='        and any(str(row["path"]).startswith(k) for k in served)  # guard disabled by scripts/guard_check.py\n',
+                find='        and (str(row["protocol"]), str(row["path"])) in served\n',
+                replace='        and any(str(row["path"]).startswith(k) for _, k in served)  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "actor.a-SERVED-key-is-not-an-outbound-row": Guard(
+        what="an outbound `actor` row naming a key or topic this module registers, inits or "
+        "subscribes to is removed",
+        why="spec 2026-11-04 §3d item 5: a key the module serves itself is a hop, not an "
+        "outbound call. Without `actor` in the pass, `entityRefFor(TypeKey)` in a module "
+        "that inits `TypeKey` publishes a call to a far end that is itself",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find='_PROTOCOLS: dict[str, str | None] = {"grpc": "/", "actor": None}\n',
+                replace='_PROTOCOLS: dict[str, str | None] = {"grpc": "/"}  # guard disabled\n',
+            ),
+        ),
+    ),
+    "actor.a-SERVED-key-is-matched-WHOLE": Guard(
+        what="an `actor` inbound path is its identity whole; nothing before a `/` in it is "
+        "read as a served service",
+        why="spec 2026-11-04 §3a: an actor key or topic has no method part. Read the gRPC way, "
+        "a module subscribing to `orders/eu` would drop its real outbound call to `orders`, "
+        "another topic",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find='_PROTOCOLS: dict[str, str | None] = {"grpc": "/", "actor": None}\n',
+                replace='_PROTOCOLS: dict[str, str | None] = {"grpc": "/", "actor": "/"}  # guard disabled\n',
+            ),
+        ),
+    ),
+    "self-calls.a-served-identity-is-matched-within-ITS-protocol": Guard(
+        what="an outbound row is dropped only for a served identity of its own protocol",
+        why="linking is by protocol and address (D01): an actor key named like a gRPC service "
+        "this module serves is another far end, and matching across protocols would erase "
+        "a real outbound call",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find='        and (str(row["protocol"]), str(row["path"])) in served\n',
+                replace='        and str(row["path"]) in {k for _, k in served}  # guard disabled\n',
             ),
         ),
     ),

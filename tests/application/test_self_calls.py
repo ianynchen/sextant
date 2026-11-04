@@ -146,7 +146,8 @@ def test_a_loopback_peer_is_this_module(tmp_path: Path) -> None:
 
 
 def test_another_protocol_is_untouched(tmp_path: Path) -> None:
-    """W27 files a question for the other protocols; this rule is gRPC's only (OI-198)."""
+    """W27 files a question for the other protocols; this rule is gRPC's and actor's only
+    (OI-198)."""
     workspace = _workspace(
         tmp_path,
         ("http", "inbound", "helloworld.Greeter/SayHello", HANDLER, None),
@@ -239,3 +240,61 @@ def test_these_peers_are_this_module(peer: str | None) -> None:
 )
 def test_these_peers_are_another_module(peer: str) -> None:
     assert not _is_this_module(peer)
+
+
+ACTOR_HANDLER = "com/acme/actors/Stock#create(sig_22222222)."
+ACTOR_CALLER = "com/acme/actors/Frontend#start(sig_33333333)."
+
+
+@pytest.mark.pins("actor.a-SERVED-key-is-not-an-outbound-row")
+def test_a_call_naming_a_key_this_module_serves_is_dropped(tmp_path: Path) -> None:
+    """Spec 2026-11-04 §3d item 5: a key the module registers, inits or subscribes to is a
+    hop, not an outbound row. An actor key is named whole on both sides."""
+    workspace = _workspace(
+        tmp_path,
+        ("actor", "inbound", "stock", ACTOR_HANDLER, None),
+        ("actor", "outbound", "stock", ACTOR_CALLER, None),
+        ("actor", "outbound", "inventory", ACTOR_CALLER, None),
+    )
+    record_self_calls(workspace)
+    assert _remaining(workspace) == [
+        ("actor", "inbound", "stock"),
+        ("actor", "outbound", "inventory"),
+    ]
+
+
+@pytest.mark.pins("actor.a-SERVED-key-is-matched-WHOLE")
+def test_an_actor_key_with_a_slash_serves_only_itself(tmp_path: Path) -> None:
+    """An actor key or topic has no method part: `orders/eu` serves `orders/eu` and not
+    `orders`, which is another topic."""
+    workspace = _workspace(
+        tmp_path,
+        ("actor", "inbound", "orders/eu", ACTOR_HANDLER, None),
+        ("actor", "outbound", "orders", ACTOR_CALLER, None),
+        ("actor", "outbound", "orders/eu", ACTOR_CALLER, None),
+    )
+    record_self_calls(workspace)
+    assert _remaining(workspace) == [
+        ("actor", "inbound", "orders/eu"),
+        ("actor", "outbound", "orders"),
+    ]
+
+
+@pytest.mark.pins("self-calls.a-served-identity-is-matched-within-ITS-protocol")
+def test_a_served_identity_drops_no_row_of_another_protocol(tmp_path: Path) -> None:
+    """Linking is by protocol and address: an actor key named like a gRPC service, or the
+    other way round, is a different far end."""
+    workspace = _workspace(
+        tmp_path,
+        ("grpc", "inbound", "helloworld.Greeter/SayHello", HANDLER, None),
+        ("actor", "outbound", "helloworld.Greeter", ACTOR_CALLER, None),
+        ("actor", "inbound", "pricing.Pricer", ACTOR_HANDLER, None),
+        ("grpc", "outbound", "pricing.Pricer", CALLER, None),
+    )
+    record_self_calls(workspace)
+    assert _remaining(workspace) == [
+        ("actor", "inbound", "pricing.Pricer"),
+        ("actor", "outbound", "helloworld.Greeter"),
+        ("grpc", "inbound", "helloworld.Greeter/SayHello"),
+        ("grpc", "outbound", "pricing.Pricer"),
+    ]

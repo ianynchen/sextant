@@ -1,0 +1,32 @@
+id: akka-pubsub-put
+displayName: Akka classic distributed pub-sub (Put)
+style: single_call
+protocol: actor
+direction: inbound
+
+# Spec 2026-11-04 §3a. `Put(ref)` registers an actor with the mediator under the actor's
+# own path, so that `Send(path, msg)` from any node reaches it. One file per message class
+# (`akka-pubsub-subscribe.yml` says why).
+detect:
+  coordinates: ["com.typesafe.akka:akka-cluster-tools_2.13", "com.typesafe.akka:akka-cluster-tools_3"]
+
+# CP-57 read the descriptor below with `javap -c -p` on the jar the fixture resolves, and
+# the jar's own manifest reports `Implementation-Version: 2.6.21`.
+measured:
+  - { artifact: com.typesafe.akka:akka-cluster-tools_2.13, versions: ["2.6.21"],
+      identity: reported, by: scripts/probes/cp57_actors.md }
+
+requires: [call_site, string_constants]
+
+matches:
+  owner: akka.cluster.pubsub.DistributedPubSubMediator$Put
+  methods:
+    # THE ADDRESS IS THE ACTOR'S PATH, AND NO ARGUMENT HERE NAMES IT. The path is set
+    # where the actor was started (`actorOf(props, "broker")`, or by its parent), and the
+    # one argument is the `ActorRef` itself. `channel_arg` names that argument because it
+    # IS what carries the address; it is never a string, so the row is inbound with path
+    # NULL and `unresolved`: a registration we saw and could not name, kept rather than
+    # dropped (D02 §2's unresolved-is-an-answer).
+    - { name: "<init>", arity: 1,
+        descriptor: "(Lakka/actor/ActorRef;)V",
+        channel_arg: 0 }
