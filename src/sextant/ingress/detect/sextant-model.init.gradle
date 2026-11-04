@@ -38,6 +38,7 @@ gradle.rootProject { rp ->
             def projectRecords = rp.allprojects.sort { it.path }.collect { p ->
                 def hasJava = p.plugins.hasPlugin("java")
                 def sourceRoots = []
+                def sourceLanguages = new TreeMap()
                 def resourceRoots = []
                 def classesDirs = []
                 def classpath = []
@@ -82,6 +83,27 @@ gradle.rootProject { rp ->
                         .findAll { !resourceDirs.contains(it) && !it.absolutePath.startsWith(buildDirPath) }
                         .collect { it.absolutePath }
                         .sort()
+                    // Which plugin's source-directory set registered each root (OI-273
+                    // round 2): `java` for the Java plugin's own, and every
+                    // SourceDirectorySet another plugin hung on the source set under the
+                    // name it chose (`kotlin`, `groovy`, ...). A directory's NAME says
+                    // nothing — `kotlin.srcDirs("src")` is ordinary — and one directory
+                    // can be in two sets: the Kotlin plugin adds `src/main/java` to its own.
+                    def languageSets = [java: main.java]
+                    main.extensions.extensionsSchema.each { schema ->
+                        def extension = main.extensions.findByName(schema.name)
+                        if (extension instanceof org.gradle.api.file.SourceDirectorySet) {
+                            languageSets[schema.name] = extension
+                        }
+                    }
+                    languageSets.each { language, set ->
+                        set.srcDirs.each { dir ->
+                            def key = dir.absolutePath
+                            if (sourceRoots.contains(key)) {
+                                sourceLanguages[key] = ((sourceLanguages[key] ?: []) + language).unique().sort()
+                            }
+                        }
+                    }
                     resourceRoots = resourceDirs.collect { it.absolutePath }.sort()
                     classesDirs = main.output.classesDirs.files.collect { it.absolutePath }.sort()
                     def compileClasspath = p.configurations.findByName("compileClasspath")
@@ -132,6 +154,7 @@ gradle.rootProject { rp ->
                     version: p.version.toString(),
                     dir: p.projectDir.absolutePath,
                     sourceRoots: sourceRoots,
+                    sourceLanguages: sourceLanguages,
                     resourceRoots: resourceRoots,
                     classesDirs: classesDirs,
                     declaredRelease: declaredRelease,

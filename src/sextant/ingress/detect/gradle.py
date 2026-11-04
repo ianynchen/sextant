@@ -405,7 +405,14 @@ class GradleDetector:
             # the CLI's existing skip gate (`_skip_reason`, 2M design §2)
             # recognise it without any Gradle-specific case there.
             packaging="jar" if project["classesDirs"] else "pom",
-            languages=frozenset(root.name for root in source_roots),
+            # The source-directory sets Gradle says registered each EXISTING root
+            # (OI-273 round 2) — never the directory's name, which `kotlin.srcDirs("src")`
+            # makes `src`. Keyed on the reported string, the same one `source_roots` came from.
+            languages=frozenset(
+                language
+                for root in source_roots
+                for language in project["sourceLanguages"].get(str(root), ())
+            ),
             source_roots=source_roots,
             output_dirs=tuple(Path(entry) for entry in project["classesDirs"]),
             resource_roots=resource_roots,

@@ -1210,6 +1210,21 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "detect.a-gradle-source-roots-LANGUAGE-is-the-plugin-that-registered-it": Guard(
+        what="a Gradle module's languages are the source-directory sets Gradle reports for "
+        "its existing source roots, never the roots' directory names",
+        why='ktor-samples\' client-tools declares `kotlin.srcDirs("src")`; read off the '
+        "name its language is `src`, no scanner accepts it, and the module cannot be "
+        "analysed at all (OI-273 round 2)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find='                for language in project["sourceLanguages"].get(str(root), ())\n',
+                replace="                for language in (root.name,)  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "render.the-document-SAYS-how-many-named-types-the-header-read-found": Guard(
         what="the coverage section carries one line: dependency types named, headers read, "
         "in no archive, and who answered for the classpath",

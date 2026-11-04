@@ -25,6 +25,10 @@ here would restate those documents rather than add anything.
   at all, so its module id is the root project name and project path (`Noty:app`; a root
   project is its name alone) and its symbols carry `. . .` (D00 §1). Grouped builds are
   unchanged: the six field pins do not move.
+- **A Gradle source directory's language is the plugin that registered it, not its name.**
+  ktor-samples' `client-tools` declares `kotlin.srcDirs("src")`, so its language read as `src`
+  and no scanner accepted the module. The init script now reports which source-directory set
+  (`java`, `kotlin`, ...) registered each root. Maven is unchanged.
 - **`sextant module analyze examples/x` with a relative path no longer crashes.** The Gradle
   detector runs the project's own `./gradlew` from inside the project, where a relative path
   named nothing, and the command died on an uncaught `FileNotFoundError`. The path is made

@@ -60,6 +60,7 @@ def _minimal_project(
         "version": version,
         "dir": dir_,
         "sourceRoots": source_roots or [],
+        "sourceLanguages": {root: ["java"] for root in source_roots or []},
         "resourceRoots": [],
         "classesDirs": classes_dirs or [],
         "publishing": False,
@@ -357,6 +358,7 @@ def _project(
     classpath: list | None = None,
     classes_dirs: list[str] | None = None,
     source_roots: list[str] | None = None,
+    source_languages: dict[str, list[str]] | None = None,
     resource_roots: list[str] | None = None,
 ) -> dict:
     """A project record backed by REAL directories on disk for its default
@@ -370,13 +372,17 @@ def _project(
         default_source.mkdir(parents=True, exist_ok=True)
     if resource_roots is None:
         default_resource.mkdir(parents=True, exist_ok=True)
+    reported_sources = [str(default_source)] if source_roots is None else source_roots
     return {
         "path": path,
         "group": group,
         "name": name,
         "version": version,
         "dir": str(tmp_path),
-        "sourceRoots": [str(default_source)] if source_roots is None else source_roots,
+        "sourceRoots": reported_sources,
+        "sourceLanguages": {root: ["java"] for root in reported_sources}
+        if source_languages is None
+        else source_languages,
         "resourceRoots": [str(default_resource)] if resource_roots is None else resource_roots,
         "classesDirs": [str(tmp_path / "build" / "classes" / "java" / "main")]
         if classes_dirs is None
@@ -464,6 +470,47 @@ def test_a_reported_source_root_that_does_exist_is_kept(tmp_path: Path):
     project = _project(tmp_path, source_roots=[str(real)])
     module = GradleDetector._module_of(tmp_path, project)
     assert module.source_roots == (real,)
+
+
+@pytest.mark.pins("detect.a-gradle-source-roots-LANGUAGE-is-the-plugin-that-registered-it")
+def test_a_source_roots_language_is_the_plugin_that_registered_it_not_its_name(
+    tmp_path: Path,
+):
+    """ktor-samples' `client-tools` declares `kotlin.srcDirs("src")`: the directory's
+    NAME is `src`, and reading the language off the name left a module no scanner
+    accepts. Gradle knows which source-directory set registered the root — the Kotlin
+    plugin's `kotlin` set here — and the init script reports it, so that is the answer."""
+    src = tmp_path / "src"
+    src.mkdir()
+    project = _project(tmp_path, source_roots=[str(src)], source_languages={str(src): ["kotlin"]})
+    module = GradleDetector._module_of(tmp_path, project)
+    assert module.languages == {"kotlin"}
+
+
+def test_a_root_two_plugins_registered_carries_both_languages(tmp_path: Path):
+    """The Kotlin plugin adds `src/main/java` to its own set as well — kotlinc compiles
+    `.kt` files found there — so Gradle reports both sets for that one directory, and
+    both are languages of the module."""
+    java = tmp_path / "src" / "main" / "java"
+    java.mkdir(parents=True)
+    project = _project(
+        tmp_path, source_roots=[str(java)], source_languages={str(java): ["java", "kotlin"]}
+    )
+    assert GradleDetector._module_of(tmp_path, project).languages == {"java", "kotlin"}
+
+
+def test_a_root_that_does_not_exist_contributes_no_language(tmp_path: Path):
+    """Every Kotlin JVM project REGISTERS `src/main/kotlin` and `src/main/java`; a
+    directory that is not on disk holds no source, so its language is not present."""
+    kotlin = tmp_path / "src" / "main" / "kotlin"
+    kotlin.mkdir(parents=True)
+    ghost = tmp_path / "src" / "main" / "java"
+    project = _project(
+        tmp_path,
+        source_roots=[str(ghost), str(kotlin)],
+        source_languages={str(ghost): ["java", "kotlin"], str(kotlin): ["kotlin"]},
+    )
+    assert GradleDetector._module_of(tmp_path, project).languages == {"kotlin"}
 
 
 # --- schema roots: proto/avro stay sibling-to-source; the resource-nested

@@ -140,6 +140,14 @@ never parsed from `settings.gradle`. Every path segment is kept, so `:libs:core`
 `:core` stay distinct. A reactor sibling with no group is not yet read as a library root:
 `_sibling_roots` skips it, because a library root's coordinate is a `group:artifact`.
 
+**A Gradle module's languages are the source-directory sets Gradle reports**, never a
+directory's name (OI-273 round 2). The init script reports, per source root, which set
+registered it — the Java plugin's `java`, and every `SourceDirectorySet` another plugin hangs on
+the source set under its own name (`kotlin`, `groovy`) — and a module's languages are those of
+its roots that exist on disk. `kotlin.srcDirs("src")` is therefore `kotlin`, and `src/main/java`
+in a Kotlin JVM project is both `java` and `kotlin`, because the Kotlin plugin registers it too.
+Maven still names a root's language by its directory, as before.
+
 A repository holding three services produces three modules, **each with its own
 workspace**. A sibling module enters a dependent's analysis as a first-party dependency
 through its build output — **by build declaration, no group pattern needed** — so
