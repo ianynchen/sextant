@@ -35,6 +35,8 @@ free the day it gains a producer.
   framework calls on a clock starts work, contains business logic, and gets a
   trace for the same reason an endpoint handler does — the user's own ruling,
   and the reason `I1` was promoted out of paperwork.
+  Not a row the framework REFUSES (`scheduled_work.refused`, spec 2026-11-02 rule
+  7, ruled by the user 2026-11-02): that job never runs on that clock.
 
 **One ROOT per (handler, kind); one ROW per address that reaches it.** A method
 serving three paths is ONE root: the walk that runs from it is the same walk
@@ -183,6 +185,11 @@ def record_roots(workspace: Workspace) -> None:
         # A schedule whose job was not found has no handler: there is no code to start a
         # trace at, and a root named "None" would claim one.
         if row["handler"] is not None
+        # A schedule the framework REFUSES never starts its job (spec 2026-11-02 rule 7, the
+        # `refused` column ruled by the user 2026-11-02): its handler's call graph is not code
+        # that runs on this clock, so it is no root. The same handler stays a root through
+        # any row the framework accepts.
+        and row["refused"] is None
     }
     rows = [
         {

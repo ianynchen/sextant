@@ -1513,6 +1513,29 @@ def test_a_placeholder_schedule_states_its_value_per_environment():
     ) in text
 
 
+@pytest.mark.pins("schedules.the-DOCUMENT-says-a-schedule-is-REFUSED")
+def test_a_refused_schedule_says_so_in_the_table_and_its_detail():
+    """A schedule the framework refuses (`scheduled_work.refused`, spec 2026-11-02 rule 7,
+    ruled by the user 2026-11-02) keeps the resolution it was read at — the read is as sure
+    as it was — and the document says, in the table AND under it, that the framework refuses
+    it, so no reader takes it for a job that runs. An accepted row beside it reads exactly
+    as before (the control)."""
+    refused = {
+        **_job("s maven c 1 com/acme/CJob#execute(Lorg/quartz/JobExecutionContext;)V.", "c2"),
+        "name": "DEFAULT.nightly",
+        "resolution": "resolved",
+        "catalog_id": "quartz",
+        "refused": "trigger DEFAULT.nightly is already bound to com.acme.BJob",
+    }
+    text = _schedules_document([_job(SWEEP, SWEEP_CRON), refused], [])
+    assert "| DEFAULT.nightly | `c2` | resolved, refused by the framework |" in text
+    assert (
+        "  - refused by the framework, so this job never runs on this schedule: trigger "
+        "DEFAULT.nightly is already bound to com.acme.BJob\n"
+    ) in text
+    assert f"| `{SWEEP_CRON}` | unresolved |" in text
+
+
 def test_environments_with_the_same_configured_value_share_one_entry():
     text = _schedules_document(
         [_job(SWEEP, SWEEP_CRON)],

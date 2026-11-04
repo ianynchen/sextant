@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fixture_module import declared_parameters
 
+from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
@@ -89,7 +91,7 @@ def _document(
 
 
 def _resolve(tmp_path: Path, facts: list, catalog: Catalog | None = None):
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     skipped = derive_endpoints(workspace, [catalog or _catalog()], capabilities=CAPABILITIES)
@@ -212,7 +214,7 @@ def _resolve_walked(tmp_path: Path, facts: list):
     """`_resolve`, with the two derived tables the walk's crossing edges read built first —
     `bound_to_parameter` is derived from `call_edges`, and a test whose address lives in a
     CALLER's literal needs it (the pipeline builds both before any engine runs)."""
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     record_return_flows(workspace)
@@ -237,6 +239,7 @@ def _declared_method(owner: str, name: str, jvm: str) -> SymbolFact:
         symbol=_MODULE + method_descriptor(owner, name, jvm),
         construct_kind="method",
         enclosing=_MODULE + owner,
+        signature=Signature(parameters=declared_parameters(jvm), returns=TypeRef(symbol="void#")),
     )
 
 
@@ -698,7 +701,7 @@ def test_a_bare_ptr_carrier_resolves_an_object_descriptor_and_the_shape_expands(
             ),
         ),
     ]
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     catalog = _catalog()
@@ -805,7 +808,9 @@ def test_a_carrier_subtype_declared_in_a_different_document_still_resolves(
     `List<OrderView>` payload as unresolved instead; this test is the one
     that would fail if that regressed."""
     caller = "com/acme/http/Client#batchSettlementsAcrossDocuments()."
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document("doc_1"), _batch_facts(caller))
+    write_fact_file(
+        tmp_path / "facts" / "Client.jsonl", _document("doc_1"), straight_line(_batch_facts(caller))
+    )
     write_fact_file(
         tmp_path / "facts" / "Types.jsonl",
         _document("doc_2", relative_path="com/acme/http/Types.java"),
@@ -1047,7 +1052,7 @@ def test_a_call_only_payload_type_still_reaches_shape_expansion(tmp_path: Path):
             ],
         ),
     ]
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     catalog = _catalog()
@@ -1824,7 +1829,7 @@ def test_a_row_declaring_both_url_arg_and_channel_arg_is_refused_at_run_start(
         "methods": [{"name": "send", "http_method": "SEND", "url_arg": 0, "channel_arg": 0}],
     }
     catalog = _single_call_catalog(matches, "invented-both-args")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -1854,7 +1859,7 @@ def test_an_invalid_row_level_direction_is_refused_at_run_start(tmp_path: Path):
         ],
     }
     catalog = _single_call_catalog(matches, "invented-bad-direction")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -2309,7 +2314,7 @@ def test_a_row_declaring_record_arg_with_body_arg_is_refused_at_run_start(tmp_pa
         "methods": [{"name": "send", "record_arg": 0, "body_arg": 1}],
     }
     catalog = _single_call_catalog(matches, "invented-record-body-conflict")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -2350,7 +2355,7 @@ def test_a_malformed_record_wrappers_entry_is_refused_at_run_start(tmp_path: Pat
         "record_wrappers": [wrapper],
     }
     catalog = _single_call_catalog(matches, "invented-bad-record-wrapper")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -2741,7 +2746,7 @@ def test_a_row_declaring_channel_via_without_channel_arg_or_url_arg_is_refused_a
         "methods": [{"name": "createProducer", "channel_via": _create_queue_form()}],
     }
     catalog = _channel_via_catalog(matches, "invented-channel-via-no-position", "jms")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -2769,7 +2774,7 @@ def test_a_row_declaring_channel_via_together_with_url_arg_is_refused_at_run_sta
         "methods": [{"name": "createProducer", "url_arg": 0, "channel_via": _create_queue_form()}],
     }
     catalog = _channel_via_catalog(matches, "invented-channel-via-with-url-arg", "jms")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -2803,7 +2808,7 @@ def test_a_malformed_channel_via_entry_is_refused_at_run_start(tmp_path: Path, e
         "methods": [{"name": "createProducer", "channel_arg": 0, "channel_via": entry}],
     }
     catalog = _channel_via_catalog(matches, "invented-bad-channel-via", "jms")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -2980,7 +2985,7 @@ def test_a_paired_destination_declared_in_a_shape_that_cannot_be_honoured_is_ref
     declared with no paired row is the mirror case: the author believed they
     had asked for a composite identity and would silently get half of one."""
     catalog = _paired_catalog({**_PAIRED_MATCHES, **matches_edit}, "invented-paired-broken")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -3004,7 +3009,7 @@ def test_a_non_single_character_address_separator_is_refused_by_type_and_length(
     catalog = _paired_catalog(
         {**_PAIRED_MATCHES, "address_separator": separator}, "invented-paired-broken"
     )
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -4164,7 +4169,7 @@ def _fluent_catalog(matches: dict, catalog_id: str = "invented-fluent") -> Catal
 
 
 def _resolve_fluent(tmp_path: Path, facts: list, catalog: Catalog):
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     skipped = derive_endpoints(workspace, [catalog], capabilities=FLUENT_CAPABILITIES)
@@ -5243,7 +5248,7 @@ def test_two_same_named_steps_with_no_distinguishing_owner_is_refused(tmp_path: 
         "terminal": ["retrieve"],
     }
     catalog = _fluent_catalog(matches, "invented-ambiguous")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -5292,7 +5297,7 @@ def test_a_capture_that_does_not_name_a_call_site_position_is_refused(
         "terminal": ["retrieve"],
     }
     catalog = _fluent_catalog(matches, "invented-bad-capture")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -5344,7 +5349,7 @@ def test_every_shipped_catalog_still_loads_and_derives(tmp_path: Path):
     one."""
     catalogs = YamlCatalogSource(CATALOGS_DIR).load()
     granted = {capability for catalog in catalogs for capability in catalog.requires}
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -6637,7 +6642,7 @@ def test_a_malformed_when_guard_is_refused_at_run_start(tmp_path: Path, when: ob
         "terminal": ["retrieve"],
     }
     catalog = _fluent_catalog(matches, "invented-bad-when")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -6673,7 +6678,7 @@ def test_a_when_guard_on_a_root_is_refused_at_run_start(tmp_path: Path):
         "terminal": ["retrieve"],
     }
     catalog = _fluent_catalog(matches, "invented-when-on-root")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -6919,7 +6924,7 @@ def _sqs_built_by_a_helper(
 def _resolve_fluent_walked(tmp_path: Path, facts: list, catalog: Catalog):
     """`_resolve_fluent`, with the two derived tables a crossing reads built first, as the
     pipeline builds them before any engine runs (`_resolve_walked`)."""
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     record_return_flows(workspace)
@@ -7092,6 +7097,125 @@ def test_a_request_started_in_a_helper_and_sent_by_its_caller_is_one_row(tmp_pat
     rows = [(r["path"], r["resolution"]) for r in found]
     assert rows == [("/acme/orders", "resolved")]
     assert [r["caller"] for r in found] == [send]
+
+
+def _sqs_built_on_branches(count: int, queue: str | None = None) -> list:
+    """`base(){ return SendMessageRequest.builder().queueUrl(Q); }` and `send(){ b = base();
+    if (x1) b.messageBody("1"); … if (xN) b.messageBody("N"); sqs.sendMessage(b.build()); }`,
+    each `messageBody` on its own branch (spec 2026-11-02 rule 9), at the positions javac gives
+    them (review 3 re-review, M-B, `probe_r4_sqs.py`). With `queue`, each branched call is
+    `queueUrl(queue)` instead."""
+    base = _sqs_method("base", _SQS_BUILDER_JVM)
+    send = _sqs_method("send")
+    build, sent = count + 1, count + 2
+    facts: list = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _SQS_PRODUCER, construct_kind="class"),
+        _declared_method(_SQS_PRODUCER, "base", _SQS_BUILDER_JVM),
+        _declared_method(_SQS_PRODUCER, "send", "()V"),
+        _call(base, _SQS_REQUEST, "builder", 0, receiver=None, result=1, invoke_kind="static"),
+        _call(
+            base,
+            _SQS_REQUEST,
+            "queueUrl",
+            1,
+            receiver=1,
+            result=2,
+            arguments=[CallArgument(kind="string", value="https://sqs.eu-west-1/acme/orders")],
+        ),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=base,
+            ordinal=2,
+            value=CallArgument(kind="unresolved", source=2),
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=send,
+            target=CallTarget(owner=_SQS_PRODUCER, name="base", descriptor=_SQS_BUILDER_JVM),
+            invoke_kind="static",
+            ordinal=0,
+            receiver=None,
+            result=5,
+            dominator=None,
+            on_every_exit=True,
+            post_dominator=build,
+            reaches_return=True,
+        ),
+        *[
+            CallSiteFact(
+                document_id="doc_1",
+                caller=send,
+                target=CallTarget(
+                    owner=_SQS_REQUEST,
+                    name="messageBody" if queue is None else "queueUrl",
+                    descriptor="(Ljava/lang/String;)" + _SQS_BUILDER_JVM[2:],
+                ),
+                invoke_kind="virtual",
+                ordinal=at,
+                receiver=5,
+                result=10 + at,
+                arguments=[CallArgument(kind="string", value=str(at) if queue is None else queue)],
+                dominator=0,
+                on_every_exit=False,
+                post_dominator=build,
+                reaches_return=True,
+            )
+            for at in range(1, count + 1)
+        ],
+        _call(send, _SQS_REQUEST, "build", build, receiver=5, result=7).model_copy(
+            update={
+                "dominator": 0,
+                "on_every_exit": True,
+                "post_dominator": sent,
+                "reaches_return": True,
+            }
+        ),
+        _sqs_send(send, sent, source=7).model_copy(
+            update={"dominator": build, "on_every_exit": True, "reaches_return": True}
+        ),
+        MethodReturnFact(document_id="doc_1", method=send, ordinal=5, value=None),
+    ]
+    return straight_line(facts)
+
+
+@pytest.mark.pins("chains.a-PARTIAL-path-keeps-its-row")
+def test_a_request_with_two_branched_calls_keeps_its_row_partial(tmp_path: Path):
+    """Review 3's re-review, M-B, and rule 4 ("never drop a row"): two `messageBody` calls on
+    branches make every path `partial` (ruled 2026-11-03). The walk back still reaches the root
+    on each, so the request is sent to the queue: the row is kept, `partial`, never dropped."""
+    workspace = _resolve_fluent_walked(tmp_path, _sqs_built_on_branches(2), _shipped("aws-sqs-sdk"))
+    found = workspace.query("endpoints")
+    workspace.close()
+    assert {(r["path"], r["resolution"]) for r in found} == {("/acme/orders", "partial")}
+
+
+@pytest.mark.pins("fluent.an-INEXACT-chain-end-is-at-most-partial")
+def test_a_request_whose_branched_calls_agree_is_still_partial(tmp_path: Path):
+    """Two branched `queueUrl` calls that both set the queue the root set: every path gives one
+    and the same row, so no difference between rows marks it (`fluent._Kept`); only the walk
+    back's inexact end does. Two calls on branches set a published part, so the row is
+    `partial` (ruled 2026-11-03), never `resolved` (review 3 re-review 2: the two-`messageBody`
+    test above no longer tells this rule from the rows-of-one-identity rule)."""
+    workspace = _resolve_fluent_walked(
+        tmp_path,
+        _sqs_built_on_branches(2, queue="https://sqs.eu-west-1/acme/orders"),
+        _shipped("aws-sqs-sdk"),
+    )
+    found = workspace.query("endpoints")
+    workspace.close()
+    assert {(r["path"], r["resolution"]) for r in found} == {("/acme/orders", "partial")}
+
+
+@pytest.mark.pins("chains.a-CAPPED-walk-back-keeps-the-terminals-row")
+def test_a_request_past_the_path_cap_keeps_one_row(tmp_path: Path):
+    """The same with nine branched calls: the window passes the path cap and the walk back
+    answers `non_enumerable`, with no chain. The send is still a call to this catalog's
+    terminal: one row, whose parts the walk did not read, never `resolved` and never dropped."""
+    workspace = _resolve_fluent_walked(tmp_path, _sqs_built_on_branches(9), _shipped("aws-sqs-sdk"))
+    found = workspace.query("endpoints")
+    workspace.close()
+    assert len(found) == 1
+    assert found[0]["resolution"] != "resolved"
 
 
 _OKHTTP_BUILDER = "okhttp3/Request$Builder#"
@@ -7581,7 +7705,7 @@ def test_a_fluent_root_declaring_channel_via_without_a_channel_capture_is_refuse
         "terminal": [{"method": "build", "terminal_via_argument": True}],
     }
     catalog = _fluent_catalog(matches, "invented-pubsub-channel-via-no-position")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -7610,7 +7734,7 @@ def test_a_malformed_channel_via_entry_on_a_fluent_root_is_refused_at_run_start(
         "terminal": [{"method": "build", "terminal_via_argument": True}],
     }
     catalog = _fluent_catalog(matches, "invented-pubsub-bad-channel-via")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -8030,6 +8154,1346 @@ def test_a_constructed_request_never_executed_derives_nothing(tmp_path: Path):
     assert rows == []
 
 
+@pytest.mark.pins("catalog.apache-httpclient.setUri-RETURNS-its-receiver")
+def test_a_statement_style_set_uri_is_the_request_built(tmp_path: Path):
+    """Review 3 re-review (out of scope, a false `resolved`): `b = ClassicRequestBuilder.get(
+    "http://svc/a"); b.setUri("http://svc/b"); http.execute(b.build());`. `setUri` returns the
+    builder it was called on (`aload_0; areturn`, `javap -c` of httpcore5 5.2.4), so the
+    statement-style call configures the request: it is sent to `/b`, and no `/a` row is
+    published."""
+    caller = "com/acme/http/Client#stmt()."
+    facts = [
+        _call(
+            caller,
+            APACHE_BUILDER,
+            "get",
+            0,
+            receiver=None,
+            result=1,
+            arguments=[CallArgument(kind="string", value="http://svc/a")],
+            invoke_kind="static",
+        ),
+        _call(
+            caller,
+            APACHE_BUILDER,
+            "setUri",
+            1,
+            receiver=1,
+            result=2,
+            arguments=[CallArgument(kind="string", value="http://svc/b")],
+        ),
+        _call(caller, APACHE_BUILDER, "build", 2, receiver=1, result=3),
+        _call(
+            caller,
+            APACHE_CLIENT,
+            "execute",
+            3,
+            receiver=9,
+            result=4,
+            arguments=[CallArgument(kind="unresolved", source=3)],
+        ),
+    ]
+    workspace = _resolve_fluent(tmp_path, straight_line(facts), _shipped("apache-httpclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+
+    assert [(r["method"], r["peer"], r["path"], r["resolution"]) for r in rows] == [
+        ("GET", "svc", "/b", "resolved")
+    ]
+
+
+# **Rule 9 in the forward chain walk** (review 3 re-review, the walk's branch blindness): a
+# statement-style call the walk folds into the chain in place (void, or `returns_receiver`)
+# that is not on the terminal's `dominator` chain forks the chain — a row with it and a row
+# without — by the same split and proof the value walk uses (`values.Flow`). Positions are the
+# ones javac 21 gives the review's `r4/src/q/Calls.java`, read off the extractor's output.
+
+
+def _placed_at(fact: CallSiteFact, dominator, every, post, returns=True, group=None):
+    return fact.model_copy(
+        update={
+            "dominator": dominator,
+            "on_every_exit": every,
+            "post_dominator": post,
+            "reaches_return": returns,
+            "loop_group": group,
+        }
+    )
+
+
+def _apache_set_uris(
+    caller: str, uris: list[str], places: dict[int, tuple], build_at: int | None = None
+) -> list:
+    """`b = ClassicRequestBuilder.get("http://svc/a"); b.setUri(u1); …; http.execute(b.build())`,
+    each site at its stated place (`places[ordinal] = (dominator, on_every_exit,
+    post_dominator[, reaches_return[, loop_group]])`)."""
+    build = len(uris) + 1 if build_at is None else build_at
+    sites = [
+        _call(
+            caller,
+            APACHE_BUILDER,
+            "get",
+            0,
+            receiver=None,
+            result=3,
+            arguments=[CallArgument(kind="string", value="http://svc/a")],
+            invoke_kind="static",
+        ),
+        *[
+            _call(
+                caller,
+                APACHE_BUILDER,
+                "setUri",
+                at,
+                receiver=3,
+                result=10 + at,
+                arguments=[CallArgument(kind="string", value=uri)],
+            )
+            for at, uri in enumerate(uris, start=1)
+            if at != build
+        ],
+        _call(caller, APACHE_BUILDER, "build", build, receiver=3, result=50),
+        _call(
+            caller,
+            APACHE_CLIENT,
+            "execute",
+            build + 1,
+            receiver=9,
+            result=51,
+            arguments=[CallArgument(kind="unresolved", source=50)],
+        ),
+    ]
+    if build_at is not None:
+        sites += [
+            _call(
+                caller,
+                APACHE_BUILDER,
+                "setUri",
+                build_at + 2,
+                receiver=3,
+                result=60,
+                arguments=[CallArgument(kind="string", value=uris[-1])],
+            )
+        ]
+    return [_placed_at(site, *places[site.ordinal]) for site in sites]
+
+
+def _apache_rows(tmp_path: Path, facts: list) -> list[tuple]:
+    workspace = _resolve_fluent(tmp_path, facts, _shipped("apache-httpclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+    return sorted((r["method"], r["path"], r["resolution"]) for r in rows)
+
+
+@pytest.mark.pins("chains.a-folded-call-NOT-on-every-path-to-the-terminal-FORKS")
+def test_a_set_uri_on_one_branch_gives_a_row_with_it_and_one_without(tmp_path: Path):
+    """`if (x) b.setUri("http://svc/b")`: the setter is not on `build()`'s dominator chain, so
+    a run builds the request with it and a run builds it without. Two rows, both `resolved`:
+    `/a` and `/b`. Before, the walk folded the setter into every path: `/b` alone."""
+    facts = _apache_set_uris(
+        "com/acme/http/Calls#oneBranch().",
+        ["http://svc/b"],
+        {0: (None, True, 2), 1: (0, False, 2), 2: (0, True, 3), 3: (2, True, None)},
+    )
+    assert _apache_rows(tmp_path, facts) == [("GET", "/a", "resolved"), ("GET", "/b", "resolved")]
+
+
+@pytest.mark.pins("chains.two-or-more-FORKS-make-every-row-partial")
+def test_two_set_uris_on_branches_make_every_row_partial(tmp_path: Path):
+    """`if (x) b.setUri(".../b"); if (y) b.setUri(".../c");`: two calls on branches, so every
+    row from the fork is `partial` (ruled 2026-11-03, "A: every row partial")."""
+    facts = _apache_set_uris(
+        "com/acme/http/Calls#twoBranches().",
+        ["http://svc/b", "http://svc/c"],
+        {
+            0: (None, True, 3),
+            1: (0, False, 3),
+            2: (0, False, 3),
+            3: (0, True, 4),
+            4: (3, True, None),
+        },
+    )
+    assert _apache_rows(tmp_path, facts) == [
+        ("GET", "/a", "partial"),
+        ("GET", "/b", "partial"),
+        ("GET", "/c", "partial"),
+    ]
+
+
+@pytest.mark.pins(
+    "chains.the-row-WITH-a-forked-call-needs-the-terminal-on-its-post-dominator-chain"
+)
+def test_a_set_uri_before_an_early_return_gives_its_row_partial(tmp_path: Path):
+    """`if (x) { b.setUri(".../b"); return; } http.execute(b.build())`: `build()` is not on the
+    setter's `post_dominator` chain, so no run builds the request with `/b`: that row is
+    `partial`; `/a` is `resolved`."""
+    facts = _apache_set_uris(
+        "com/acme/http/Calls#early().",
+        ["http://svc/b"],
+        {0: (None, True, None), 1: (0, False, None), 2: (0, False, 3), 3: (2, False, None)},
+    )
+    assert _apache_rows(tmp_path, facts) == [("GET", "/a", "resolved"), ("GET", "/b", "partial")]
+
+
+@pytest.mark.pins("chains.a-folded-call-AFTER-the-terminal-in-its-LOOP-forks")
+def test_a_set_uri_after_the_build_in_its_loop_gives_its_row_partial(tmp_path: Path):
+    """`for (…) { http.execute(b.build()); b.setUri(".../b"); }`: the setter comes after the
+    build but shares its loop group, so it can run before a later build (the value walk's
+    loop-later rule): two rows, `/a` `resolved` — the first time round — and `/b` `partial`."""
+    facts = _apache_set_uris(
+        "com/acme/http/Calls#loop().",
+        ["http://svc/b"],
+        {
+            0: (None, True, None),
+            1: (0, False, 2, True, 1),
+            2: (1, False, 3, True, 1),
+            3: (2, False, None, True, 1),
+        },
+        build_at=1,
+    )
+    assert _apache_rows(tmp_path, facts) == [("GET", "/a", "resolved"), ("GET", "/b", "partial")]
+
+
+def test_an_okhttp_post_on_one_branch_gives_a_get_row_and_a_post_row(tmp_path: Path):
+    """The shipped `okhttp` catalog: `b = new Request.Builder(); b.url(u); if (x) b.post(body);
+    client.newCall(b.build())` — `GET` without the call, `POST` with it, both `resolved`."""
+    caller = "com/acme/http/Client#maybePost()."
+    builder = "okhttp3/Request$Builder#"
+    sites = [
+        _call(caller, builder, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        _call(
+            caller,
+            builder,
+            "url",
+            1,
+            receiver=2,
+            result=8,
+            arguments=[CallArgument(kind="string", value="https://h/orders")],
+        ),
+        _call(
+            caller,
+            builder,
+            "post",
+            2,
+            receiver=2,
+            result=9,
+            arguments=[CallArgument(kind="instance", source=5, symbol=ORDER_REQUEST)],
+        ),
+        _call(caller, builder, "build", 3, receiver=2, result=14),
+        _call(
+            caller,
+            "okhttp3/OkHttpClient#",
+            "newCall",
+            4,
+            receiver=99,
+            result=104,
+            arguments=[CallArgument(kind="unresolved", source=14)],
+        ),
+    ]
+    places = {
+        0: (None, True, 1),
+        1: (0, True, 3),
+        2: (1, False, 3),
+        3: (1, True, 4),
+        4: (3, True, None),
+    }
+    workspace = _resolve_fluent(
+        tmp_path, [_placed_at(site, *places[site.ordinal]) for site in sites], _shipped("okhttp")
+    )
+    rows = sorted((r["method"], r["path"], r["resolution"]) for r in workspace.query("endpoints"))
+    workspace.close()
+    assert rows == [("GET", "/orders", "resolved"), ("POST", "/orders", "resolved")]
+
+
+# The several-splits rule counts only the splits that set a part the row publishes (ruled by the
+# user 2026-11-03, option A). `tag` captures `note`, a part no row of this reader shows.
+_TAGGED_MATCHES = {
+    "roots": [
+        {
+            "owner": "com.acme.http.Request$Builder",
+            "method": "<init>",
+            "captures": {"http_method": "GET", "url": "arg0"},
+        }
+    ],
+    "steps": [
+        {"method": "url", "returns_receiver": True, "captures": {"url": "arg0"}},
+        {"method": "tag", "returns_receiver": True, "captures": {"note": "arg0"}},
+    ],
+    "terminal": [{"method": "build", "terminal_via_argument": True}],
+}
+
+
+def _url_and_tag_on_branches(caller: str, second: str = "tag") -> list:
+    """`b = new Builder("https://h/a"); if (x) b.url("https://h/b"); if (y) b.<second>(…);
+    newCall(b.build())`, at the positions javac gives two independent `if`s."""
+    sites = [
+        _call(
+            caller,
+            BUILDER,
+            "<init>",
+            0,
+            receiver=2,
+            result=None,
+            arguments=[CallArgument(kind="string", value="https://h/a")],
+            invoke_kind="special",
+        ),
+        _url(caller, 1, "https://h/b", result=8),
+        _call(
+            caller,
+            BUILDER,
+            second,
+            2,
+            receiver=2,
+            result=9,
+            arguments=[
+                CallArgument(kind="string", value="https://h/c" if second == "url" else "t")
+            ],
+        ),
+        _call(caller, BUILDER, "build", 3, receiver=2, result=14),
+        _new_call(caller, 4, request=14),
+    ]
+    places = {
+        0: (None, True, 3),
+        1: (0, False, 3),
+        2: (0, False, 3),
+        3: (0, True, 4),
+        4: (3, True, None),
+    }
+    return [_placed_at(site, *places[site.ordinal]) for site in sites]
+
+
+@pytest.mark.pins("chains.a-split-setting-NO-PUBLISHED-part-does-not-count")
+def test_a_branched_call_setting_no_published_part_leaves_one_split(tmp_path: Path):
+    """`if (x) b.url(".../b"); if (y) b.tag("t");`: `tag` sets `note`, which no column of the
+    row shows, so it is no split for that row (the user's ruling of 2026-11-03, option A). One
+    split remains, and the one-split rules apply: `/a` and `/b`, both `resolved`."""
+    rows = _rows_of(
+        tmp_path, _url_and_tag_on_branches("com/acme/http/Client#tagged()."), _TAGGED_MATCHES
+    )
+    assert sorted(rows) == [
+        ("GET", "/a", "h", "resolved"),
+        ("GET", "/b", "h", "resolved"),
+    ]
+
+
+def test_two_branched_calls_setting_the_path_still_make_every_row_partial(tmp_path: Path):
+    """The near-miss: `if (x) b.url(".../b"); if (y) b.url(".../c");` — both set the path,
+    which the row publishes: every row `partial`."""
+    rows = _rows_of(
+        tmp_path,
+        _url_and_tag_on_branches("com/acme/http/Client#twoUrls().", second="url"),
+        _TAGGED_MATCHES,
+    )
+    assert {resolution for _, _, _, resolution in rows} == {"partial"}
+
+
+@pytest.mark.pins("chains.a-reader-with-NO-DECLARED-PARTS-counts-every-split")
+def test_a_reader_stating_no_published_parts_counts_every_split(tmp_path: Path):
+    """A reader that states no published parts (`chain_ends(…, published=None)`) keeps counting
+    every split: the same `url` + `tag` chain ends inexact, both ends."""
+    workspace = _resolve_fluent(
+        tmp_path,
+        _url_and_tag_on_branches("com/acme/http/Client#tagged()."),
+        _fluent_catalog(_TAGGED_MATCHES, "invented-receiver"),
+    )
+    catalog = _fluent_catalog(_TAGGED_MATCHES, "invented-receiver")
+    counted_all = {end.inexact for end in chain_ends(workspace, catalog)}
+    stated = {end.inexact for end in chain_ends(workspace, catalog, published=frozenset({"url"}))}
+    workspace.close()
+    assert (counted_all, stated) == ({True}, {False})
+
+
+@pytest.mark.pins("chains.the-PATH-CAP-counts-splits-across-CHAINED-forks")
+def test_the_path_cap_counts_splits_across_chained_forks(tmp_path: Path):
+    """The forward walk's cap counts the WHOLE path, as the value walk's does: five guarded
+    `tag` calls before a forking `url`, and five more on its result before `build()` — 2^10
+    paths on the whole chain. The second fork passes the cap and gives one path for each the
+    first gave: 32 chain ends, never 1,024."""
+    caller = "com/acme/http/Client#chained()."
+    matches = {
+        **_TAGGED_MATCHES,
+        "steps": [
+            {"method": "url", "captures": {"url": "arg0"}},
+            {"method": "tag", "returns_receiver": True, "captures": {"note": "arg0"}},
+        ],
+    }
+    tag = lambda at, receiver: _call(
+        caller,
+        BUILDER,
+        "tag",
+        at,
+        receiver=receiver,
+        result=100 + at,
+        arguments=[CallArgument(kind="string", value=str(at))],
+    )
+    sites = [
+        _call(
+            caller,
+            BUILDER,
+            "<init>",
+            0,
+            receiver=2,
+            result=None,
+            arguments=[CallArgument(kind="string", value="https://h/a")],
+            invoke_kind="special",
+        ),
+        *[tag(at, 2) for at in range(1, 6)],
+        _call(
+            caller,
+            BUILDER,
+            "url",
+            6,
+            receiver=2,
+            result=30,
+            arguments=[CallArgument(kind="string", value="https://h/b")],
+        ),
+        *[tag(at, 30) for at in range(7, 12)],
+        _call(caller, BUILDER, "build", 12, receiver=30, result=14),
+        _new_call(caller, 13, request=14),
+    ]
+    places = {
+        0: (None, True, 6),
+        **{at: (0, False, 6) for at in range(1, 6)},
+        6: (0, True, 12),
+        **{at: (6, False, 12) for at in range(7, 12)},
+        12: (6, True, 13),
+        13: (12, True, None),
+    }
+    workspace = _resolve_fluent(
+        tmp_path,
+        [_placed_at(site, *places[site.ordinal]) for site in sites],
+        _fluent_catalog(matches, "invented-receiver"),
+    )
+    ends = list(chain_ends(workspace, _fluent_catalog(matches, "invented-receiver")))
+    workspace.close()
+    assert len(ends) == 32
+
+
+# **Rule 9 fix round 4** (review 3 re-review 2): a split whose parts are not known counts (C-1),
+# the forward walk follows a hand-off of the chain's value by rules 1 and 2 (C-2), and a call on
+# a skipped call's result is no split of its own (m-1). Positions are the ones javac 21 gives the
+# review's `r4/src/q/Calls{2,3,4}.java`, read off the extractor's output.
+
+_HTTP_OWNER = "com/acme/http/Calls#"
+_SET_B_JVM = "(Lorg/apache/hc/core5/http/io/support/ClassicRequestBuilder;)V"
+_MAYBE_B_JVM = "(Lorg/apache/hc/core5/http/io/support/ClassicRequestBuilder;Z)V"
+
+
+def _http_method(name: str, jvm: str = "(Z)V") -> str:
+    return _MODULE + method_descriptor(_HTTP_OWNER, name, jvm)
+
+
+def _apache_set_uri_helper(name: str, uri: str, every: bool = True) -> list:
+    """`static void name(ClassicRequestBuilder b) { b.setUri(uri); }`, the setter on every
+    path through the body, or (`every` False, `maybeB`) `if (x) b.setUri(uri);`."""
+    jvm = _SET_B_JVM if every else _MAYBE_B_JVM
+    helper = _http_method(name, jvm)
+    return [
+        _declared_method(_HTTP_OWNER, name, jvm),
+        _placed_at(
+            _call(
+                helper,
+                APACHE_BUILDER,
+                "setUri",
+                0,
+                receiver=None,
+                result=4,
+                arguments=[CallArgument(kind="string", value=uri)],
+            ).model_copy(update={"receiver_parameter": 0}),
+            None,
+            every,
+            None,
+        ),
+        MethodReturnFact(document_id="doc_1", method=helper, ordinal=0, value=None),
+    ]
+
+
+def _apache_handing(name: str, events: list[tuple], places: dict[int, tuple]) -> list:
+    """`b = ClassicRequestBuilder.get("http://svc/a"); <events>; http.execute(b.build())` in
+    `Calls.name(boolean)`, each event at ordinal 1, 2, … in order: `("set", uri)` is
+    `b.setUri(uri)`, `("hand", helper, jvm)` is `helper(b)` (or `helper(b, x)`), `("hash",)`
+    is `Objects.hash(b)`, `("chained", u1, u2)` is `b.setUri(u1).setUri(u2)` (two ordinals).
+    Each site sits at `places[ordinal]`."""
+    caller = _http_method(name)
+    sites: list = [
+        _call(
+            caller,
+            APACHE_BUILDER,
+            "get",
+            0,
+            receiver=None,
+            result=3,
+            arguments=[CallArgument(kind="string", value="http://svc/a")],
+            invoke_kind="static",
+        )
+    ]
+    at = 1
+    for event in events:
+        if event[0] == "set":
+            sites.append(
+                _call(
+                    caller,
+                    APACHE_BUILDER,
+                    "setUri",
+                    at,
+                    receiver=3,
+                    result=10 + at,
+                    arguments=[CallArgument(kind="string", value=event[1])],
+                )
+            )
+        elif event[0] == "chained":
+            sites += [
+                _call(
+                    caller,
+                    APACHE_BUILDER,
+                    "setUri",
+                    at,
+                    receiver=3,
+                    result=10 + at,
+                    arguments=[CallArgument(kind="string", value=event[1])],
+                ),
+                _call(
+                    caller,
+                    APACHE_BUILDER,
+                    "setUri",
+                    at + 1,
+                    receiver=10 + at,
+                    result=11 + at,
+                    arguments=[CallArgument(kind="string", value=event[2])],
+                ),
+            ]
+            at += 1
+        elif event[0] == "hand":
+            arguments = [CallArgument(kind="unresolved", source=3)]
+            if event[2] == _MAYBE_B_JVM:
+                arguments.append(CallArgument(kind="parameter", value=0))
+            sites.append(
+                CallSiteFact(
+                    document_id="doc_1",
+                    caller=caller,
+                    target=CallTarget(owner=_HTTP_OWNER, name=event[1], descriptor=event[2]),
+                    invoke_kind="static",
+                    ordinal=at,
+                    receiver=None,
+                    result=None,
+                    arguments=arguments,
+                )
+            )
+        else:
+            sites.append(
+                CallSiteFact(
+                    document_id="doc_1",
+                    caller=caller,
+                    target=CallTarget(
+                        owner="java/util/Objects#", name="hash", descriptor="([Ljava/lang/Object;)I"
+                    ),
+                    invoke_kind="static",
+                    ordinal=at,
+                    receiver=None,
+                    result=15,
+                    arguments=[
+                        CallArgument(
+                            kind="array", elements=[CallArgument(kind="unresolved", source=3)]
+                        )
+                    ],
+                )
+            )
+        at += 1
+    sites += [
+        _call(caller, APACHE_BUILDER, "build", at, receiver=3, result=50),
+        _call(
+            caller,
+            APACHE_CLIENT,
+            "execute",
+            at + 1,
+            receiver=9,
+            result=51,
+            arguments=[CallArgument(kind="unresolved", source=50)],
+        ),
+    ]
+    return [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _HTTP_OWNER, construct_kind="class"),
+        _declared_method(_HTTP_OWNER, name, "(Z)V"),
+        *[
+            _placed_at(site, *places[site.ordinal]) if site.ordinal in places else site
+            for site in sites
+        ],
+        MethodReturnFact(document_id="doc_1", method=caller, ordinal=0, value=None),
+    ]
+
+
+def _apache_walked_rows(tmp_path: Path, facts: list) -> list[tuple]:
+    workspace = _resolve_fluent_walked(tmp_path, facts, _shipped("apache-httpclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+    return sorted(((r["method"], r["path"], r["resolution"]) for r in rows), key=str)
+
+
+@pytest.mark.pins("chains.a-HAND-OFF-of-the-chains-value-is-read-as-the-value-walk-reads-it")
+def test_a_builder_handed_to_a_helper_on_every_path_carries_what_the_helper_set(
+    tmp_path: Path,
+):
+    """C-2, rule 1 in the forward walk (`Calls3.helperAlways`): `setB(b){ b.setUri("/b"); }`,
+    then `b = get("/a"); setB(b); http.execute(b.build())`. The helper's setter runs on every
+    path through it and the hand-off on every path to the build: one row, `/b`, `resolved`.
+    Before, the walk read the hand-off as nothing: `/a resolved`, which no run sends."""
+    facts = [
+        *_apache_set_uri_helper("setB", "http://svc/b"),
+        *_apache_handing(
+            "helperAlways",
+            [("hand", "setB", _SET_B_JVM)],
+            {0: (None, True, 1), 1: (0, True, 2), 2: (1, True, 3), 3: (2, True, None)},
+        ),
+    ]
+    assert _apache_walked_rows(tmp_path, facts) == [("GET", "/b", "resolved")]
+
+
+@pytest.mark.pins("chains.a-HAND-OFF-of-the-chains-value-is-read-as-the-value-walk-reads-it")
+def test_a_builder_handed_to_a_helper_on_one_branch_is_a_row_with_it_and_one_without(
+    tmp_path: Path,
+):
+    """`Calls3.helperBranch`: `if (x) setB(b);` is one split, so `/a` and `/b`, both
+    `resolved` (rule 9's one-split case, across the hand-off)."""
+    facts = [
+        *_apache_set_uri_helper("setB", "http://svc/b"),
+        *_apache_handing(
+            "helperBranch",
+            [("hand", "setB", _SET_B_JVM)],
+            {0: (None, True, 2), 1: (0, False, 2), 2: (0, True, 3), 3: (2, True, None)},
+        ),
+    ]
+    assert _apache_walked_rows(tmp_path, facts) == [
+        ("GET", "/a", "resolved"),
+        ("GET", "/b", "resolved"),
+    ]
+
+
+@pytest.mark.pins("chains.a-HAND-OFF-of-the-chains-value-is-read-as-the-value-walk-reads-it")
+def test_two_branched_hand_offs_setting_the_url_make_every_row_partial(tmp_path: Path):
+    """`Calls2.twoHelpers`: `if (x) setB(b); if (!x) setB(b);` — two calls on branches that set
+    the url, a published part, so every row is `partial` (ruled 2026-11-03). Before, `/a
+    resolved`, which no run sends."""
+    facts = [
+        *_apache_set_uri_helper("setB", "http://svc/b"),
+        *_apache_handing(
+            "twoHelpers",
+            [("hand", "setB", _SET_B_JVM), ("hand", "setB", _SET_B_JVM)],
+            {
+                0: (None, True, 3),
+                1: (0, False, 3),
+                2: (0, False, 3),
+                3: (0, True, 4),
+                4: (3, True, None),
+            },
+        ),
+    ]
+    assert _apache_walked_rows(tmp_path, facts) == [
+        ("GET", "/a", "partial"),
+        ("GET", "/b", "partial"),
+    ]
+
+
+@pytest.mark.pins("chains.a-HAND-OFF-of-the-chains-value-is-read-as-the-value-walk-reads-it")
+def test_a_branched_setter_before_a_branched_helper_publishes_no_false_resolved(
+    tmp_path: Path,
+):
+    """`Calls3.reversed`: `if (x) b.setUri("/c"); maybeB(b, x);` with `maybeB` setting `/b` on
+    a branch of its own. Two splits, one in each frame, both setting the url: every row
+    `partial`, and the `/b` a run sends when `maybeB` sets it is a row. Before, `/a` and `/c`
+    `resolved`; `/c` is false whenever `x` holds."""
+    facts = [
+        *_apache_set_uri_helper("maybeB", "http://svc/b", every=False),
+        *_apache_handing(
+            "reversed",
+            [("set", "http://svc/c"), ("hand", "maybeB", _MAYBE_B_JVM)],
+            {
+                0: (None, True, 2),
+                1: (0, False, 2),
+                2: (0, True, 3),
+                3: (2, True, 4),
+                4: (3, True, None),
+            },
+        ),
+    ]
+    assert _apache_walked_rows(tmp_path, facts) == [
+        ("GET", "/a", "partial"),
+        ("GET", "/b", "partial"),
+        ("GET", "/c", "partial"),
+    ]
+
+
+@pytest.mark.pins("chains.a-hand-off-into-code-we-do-NOT-HAVE-leaves-the-parts-unknown")
+def test_a_builder_handed_to_code_we_do_not_have_is_partial_with_its_url_unknown(
+    tmp_path: Path,
+):
+    """C-2, rule 2 in the forward walk: `Objects.hash(b)` reaches the builder through a varargs
+    array, code the module does not have. What it does to the builder is unknown, so the url
+    the builder carries is unknown: one row, its path not read, never dropped and never `/a
+    resolved`. An address not read is `unresolved` by fluent's own rule, which is no surer than
+    `partial`."""
+    facts = _apache_handing(
+        "escapeAlways",
+        [("hash",)],
+        {0: (None, True, 1), 1: (0, True, 2), 2: (1, True, 3), 3: (2, True, None)},
+    )
+    rows = _apache_walked_rows(tmp_path, facts)
+    assert len(rows) == 1
+    assert rows[0][1] is None
+    assert rows[0][2] in ("partial", "unresolved")
+
+
+@pytest.mark.pins("values.a-split-whose-PARTS-ARE-NOT-KNOWN-counts")
+def test_a_branched_escape_beside_a_branched_setter_counts_as_a_split(tmp_path: Path):
+    """`Calls2.escapeSplit`: `if (x) Objects.hash(b); if (x) b.setUri("/c");`. The escape's
+    parts are not known, so it counts (C-1's rule): two splits, no row `resolved` — the paths
+    through the escape have no address read. Before, `/a` and `/c` `resolved`."""
+    facts = _apache_handing(
+        "escapeSplit",
+        [("hash",), ("set", "http://svc/c")],
+        {
+            0: (None, True, 3),
+            1: (0, False, 3),
+            2: (0, False, 3),
+            3: (0, True, 4),
+            4: (3, True, None),
+        },
+    )
+    rows = _apache_walked_rows(tmp_path, facts)
+    assert ("GET", "/a", "partial") in rows
+    assert ("GET", "/c", "partial") in rows
+    assert "resolved" not in {resolution for _, _, resolution in rows}
+
+
+@pytest.mark.pins("values.a-call-on-a-configuring-calls-result-runs-WHERE-THAT-CALL-DOES")
+def test_a_call_on_a_skipped_calls_result_is_no_split_of_its_own(tmp_path: Path):
+    """m-1, `Calls2.chainedOnBranch`: `if (x) b.setUri("/b").setUri("/c");`. The second call is
+    made on the first's result, so it runs exactly where the first does: ONE split, as the
+    value walk reads it. `/a` and `/c`, both `resolved`; no run sends `/b`. Before, `/a`, `/b`
+    and `/c`, all `partial`."""
+    facts = _apache_handing(
+        "chainedOnBranch",
+        [("chained", "http://svc/b", "http://svc/c")],
+        {
+            0: (None, True, 3),
+            1: (0, False, 2),
+            2: (1, False, 3),
+            3: (0, True, 4),
+            4: (3, True, None),
+        },
+    )
+    assert _apache_walked_rows(tmp_path, facts) == [
+        ("GET", "/a", "resolved"),
+        ("GET", "/c", "resolved"),
+    ]
+
+
+@pytest.mark.pins("values.a-child-is-absorbed-only-BEFORE-THE-USE")
+def test_a_child_after_the_build_in_its_loop_keeps_its_own_split(tmp_path: Path):
+    """Review 3 re-review 3, N-1, `Calls5.loopChild`: `for (…) { r = b.setUri("/b");
+    http.execute(b.build()); r.setUri("/c"); }`. Every build sees `/b`, set just before it; `/c`
+    reaches a build only on a later pass, and `/b` overwrites it first. The child is absorbed
+    into its parent only before the use, so here it keeps its own split, never proven: `/b`
+    `resolved`, `/c` `partial`. Before, `/c resolved` alone, with the true `/b` row dropped."""
+    facts = _apache_handing(
+        "loopChild",
+        [("chained", "http://svc/b", "http://svc/c")],
+        {0: (None, True, None), 1: (0, False, 2, True, 1), 2: (1, False, 3, True, 1)},
+    )
+    caller = _http_method("loopChild")
+    # Rebuilt in the loop's order: `setUri("/b")` 1, `build` 2, `execute` 3, `setUri("/c")` 4.
+    facts = [
+        fact
+        if not (isinstance(fact, CallSiteFact) and fact.caller == caller)
+        else {
+            0: lambda f: f,
+            1: lambda f: f,
+            2: lambda f: _placed_at(
+                _call(caller, APACHE_BUILDER, "build", 2, receiver=3, result=21),
+                1,
+                False,
+                3,
+                True,
+                1,
+            ),
+            3: lambda f: _placed_at(
+                _call(
+                    caller,
+                    APACHE_CLIENT,
+                    "execute",
+                    3,
+                    receiver=19,
+                    result=22,
+                    arguments=[CallArgument(kind="unresolved", source=21)],
+                ),
+                2,
+                False,
+                4,
+                True,
+                1,
+            ),
+            4: lambda f: _placed_at(
+                _call(
+                    caller,
+                    APACHE_BUILDER,
+                    "setUri",
+                    4,
+                    receiver=11,
+                    result=26,
+                    arguments=[CallArgument(kind="string", value="http://svc/c")],
+                ),
+                3,
+                False,
+                None,
+                True,
+                1,
+            ),
+        }[fact.ordinal](fact)
+        for fact in facts
+    ]
+    assert _apache_walked_rows(tmp_path, facts) == [
+        ("GET", "/b", "resolved"),
+        ("GET", "/c", "partial"),
+    ]
+
+
+@pytest.mark.pins("chains.a-fold-AFTER-the-fork-outside-its-loop-is-not-in-its-window")
+def test_a_child_after_the_build_with_no_loop_is_no_row(tmp_path: Path):
+    """Concern 1 of fix round 5: `r = b.setUri("/b"); http.execute(b.build());
+    r.setUri("/c");` with no loop. The second `setUri` runs after the only build, so no request
+    is sent to `/c`: one row, `/b` `resolved`. The fork reads its folds by the value walk's
+    window (`Flow.inside`). Before, a `/c` row, `partial`, for a request that never happens."""
+    caller = _http_method("afterBuild")
+    facts = [
+        *_apache_handing(
+            "afterBuild",
+            [("set", "http://svc/b")],
+            {0: (None, True, 1), 1: (0, True, 2), 2: (1, True, 3), 3: (2, True, 4)},
+        ),
+        _placed_at(
+            _call(
+                caller,
+                APACHE_BUILDER,
+                "setUri",
+                4,
+                receiver=11,
+                result=26,
+                arguments=[CallArgument(kind="string", value="http://svc/c")],
+            ),
+            3,
+            True,
+            None,
+        ),
+    ]
+    assert _apache_walked_rows(tmp_path, facts) == [("GET", "/b", "resolved")]
+
+
+@pytest.mark.pins("chains.a-HAND-OFF-after-the-use-in-its-LOOP-forks")
+def test_a_hand_off_after_the_build_in_its_loop_gives_its_row_partial(tmp_path: Path):
+    """Review 3 re-review 3, N-2, `Calls6.helperLoopLater`: `for (…) {
+    http.execute(b.build()); setBthenC(b); }` with `setBthenC(b){ b.setUri("/b");
+    b.setUri("/c"); }`. The hand-off comes after the build but shares its loop group, so it can
+    run before a later build, as a direct setter there does (`loopFork`): `/a` `resolved` (the
+    first time round), `/c` `partial`. Before, `/a resolved` alone, the `/c` row dropped."""
+    helper = _http_method("setBthenC", _SET_B_JVM)
+    caller = _http_method("helperLoopLater")
+    setter = lambda at, uri, dominator, post: _placed_at(
+        _call(
+            helper,
+            APACHE_BUILDER,
+            "setUri",
+            at,
+            receiver=None,
+            result=4 + 4 * at,
+            arguments=[CallArgument(kind="string", value=uri)],
+        ).model_copy(update={"receiver_parameter": 0}),
+        dominator,
+        True,
+        post,
+    )
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _HTTP_OWNER, construct_kind="class"),
+        _declared_method(_HTTP_OWNER, "setBthenC", _SET_B_JVM),
+        setter(0, "http://svc/b", None, 1),
+        setter(1, "http://svc/c", 0, None),
+        MethodReturnFact(document_id="doc_1", method=helper, ordinal=0, value=None),
+        _declared_method(_HTTP_OWNER, "helperLoopLater", "(Z)V"),
+        _placed_at(
+            _call(
+                caller,
+                APACHE_BUILDER,
+                "get",
+                0,
+                receiver=None,
+                result=3,
+                arguments=[CallArgument(kind="string", value="http://svc/a")],
+                invoke_kind="static",
+            ),
+            None,
+            True,
+            None,
+        ),
+        _placed_at(
+            _call(caller, APACHE_BUILDER, "build", 1, receiver=3, result=15), 0, False, 2, True, 1
+        ),
+        _placed_at(
+            _call(
+                caller,
+                APACHE_CLIENT,
+                "execute",
+                2,
+                receiver=13,
+                result=16,
+                arguments=[CallArgument(kind="unresolved", source=15)],
+            ),
+            1,
+            False,
+            3,
+            True,
+            1,
+        ),
+        _placed_at(
+            CallSiteFact(
+                document_id="doc_1",
+                caller=caller,
+                target=CallTarget(owner=_HTTP_OWNER, name="setBthenC", descriptor=_SET_B_JVM),
+                invoke_kind="static",
+                ordinal=3,
+                receiver=None,
+                result=None,
+                arguments=[CallArgument(kind="unresolved", source=3)],
+            ),
+            2,
+            False,
+            None,
+            True,
+            1,
+        ),
+        MethodReturnFact(document_id="doc_1", method=caller, ordinal=0, value=None),
+    ]
+    assert _apache_walked_rows(tmp_path, facts) == [
+        ("GET", "/a", "resolved"),
+        ("GET", "/c", "partial"),
+    ]
+
+
+def _apache_sent_by_a_helper(senders: dict[str, tuple[list[tuple], dict[int, tuple]]]) -> list:
+    """`send2(ClassicRequestBuilder b) { http.execute(b.build()); }` and, per entry of
+    `senders`, `name(x){ b = get("/a"); <events>; send2(b); }` — the builder handed to a module
+    method that builds and executes it (`Calls4`)."""
+    send2 = _http_method("send2", _SET_B_JVM)
+    facts: list = [
+        _declared_method(_HTTP_OWNER, "send2", _SET_B_JVM),
+        _call(send2, APACHE_BUILDER, "build", 0, receiver=None, result=11).model_copy(
+            update={"receiver_parameter": 0}
+        ),
+        _call(
+            send2,
+            APACHE_CLIENT,
+            "execute",
+            1,
+            receiver=9,
+            result=12,
+            arguments=[CallArgument(kind="unresolved", source=11)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=send2, ordinal=0, value=None),
+    ]
+    for name, (events, places) in senders.items():
+        handing = _apache_handing(name, [*events, ("hand", "send2", _SET_B_JVM)], places)
+        caller = _http_method(name)
+        # No build and no execute in the sender: the hand-off is its last call.
+        last = max(fact.ordinal for fact in handing if isinstance(fact, CallSiteFact)) - 2
+        facts += [
+            fact
+            for fact in handing
+            if not (
+                isinstance(fact, CallSiteFact) and fact.caller == caller and fact.ordinal > last
+            )
+        ]
+    return straight_line(facts)
+
+
+def test_a_builder_handed_to_a_module_method_that_sends_it_keeps_its_row(tmp_path: Path):
+    """M-1, `Calls4.acrossPlain`: `send2(get("/a"))` with `send2` building and executing what
+    it is handed. The row exists, `GET /a`, `resolved`: the walk back from `send2`'s build
+    crosses its parameter to the caller's root (ruling 5)."""
+    facts = _apache_sent_by_a_helper({"acrossPlain": ([], {})})
+    assert _apache_walked_rows(tmp_path, facts) == [("GET", "/a", "resolved")]
+
+
+_REQUIRE_NON_NULL = CallTarget(
+    owner="java/util/Objects#",
+    name="requireNonNull",
+    descriptor="(Ljava/lang/Object;)Ljava/lang/Object;",
+)
+# A call into code this module does not have that the catalogs state nothing about: the stand-in
+# for "the value was handed to the JDK" (rule 2). `Objects.requireNonNull` is not one since the
+# user's ruling of 2026-11-03 (option B, `value-models/compiler-null-checks.yml`).
+_HANDED_TO_JDK = CallTarget(
+    owner="java/util/List#", name="of", descriptor="(Ljava/lang/Object;)Ljava/util/List;"
+)
+
+
+@pytest.mark.pins("chains.a-walk-back-that-ESCAPES-keeps-the-terminals-row")
+def test_a_builder_a_helper_hands_to_code_we_do_not_have_before_sending_keeps_its_row(
+    tmp_path: Path,
+):
+    """Item 2's B list, `chains._walk_back` (spec 2026-11-02 rule 4, "never drop a row"):
+    `sendEscaping(b) { List.of(b); http.execute(b.build()); }`, called with
+    `get("/a")`. The JDK call is code we do not have, so the walk back from `build()` ends at
+    `escapes` (rule 2) and reads no chain — but the request is sent: one row, its parts the walk
+    did not read, never surer than `partial`. Measured on real javac 21 bytecode before the
+    change: no row at all."""
+    send = _http_method("sendEscaping", _SET_B_JVM)
+    facts = [
+        _declared_method(_HTTP_OWNER, "sendEscaping", _SET_B_JVM),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=send,
+            target=_HANDED_TO_JDK,
+            invoke_kind="static",
+            ordinal=0,
+            receiver=None,
+            result=10,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _call(send, APACHE_BUILDER, "build", 1, receiver=None, result=11).model_copy(
+            update={"receiver_parameter": 0}
+        ),
+        _call(
+            send,
+            APACHE_CLIENT,
+            "execute",
+            2,
+            receiver=9,
+            result=12,
+            arguments=[CallArgument(kind="unresolved", source=11)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=send, ordinal=0, value=None),
+    ]
+    handing = _apache_handing("callsEscaping", [("hand", "sendEscaping", _SET_B_JVM)], {})
+    caller = _http_method("callsEscaping")
+    facts += [
+        fact
+        for fact in handing
+        if not (isinstance(fact, CallSiteFact) and fact.caller == caller and fact.ordinal > 1)
+    ]
+
+    rows = _apache_walked_rows(tmp_path, _with_root_descriptor(facts))
+    assert len(rows) == 1, rows
+    assert rows[0][2] in ("partial", "unresolved"), rows
+
+
+@pytest.mark.pins("chains.a-request-executed-only-through-an-UNREAD-window-keeps-its-row")
+@pytest.mark.pins("chains.a-request-executed-only-through-an-UNREAD-window-is-PARTIAL")
+def test_a_built_request_handed_to_code_we_do_not_have_before_it_is_sent_keeps_its_row(
+    tmp_path: Path,
+):
+    """Item 2's B list, `chains._joined_through_values` (rules 4 and 8): `makeOnce()` returns
+    `get("http://svc/b").build()`, and `joinEscaping()` does `req = makeOnce();
+    List.of(req); http.execute(req, h)`. Which `build()` made the request is
+    identity, which no hand-off changes (rule 8), so the join pairs them; what the JDK call did
+    to the request is not known (rule 2), so the row is no surer than `partial`. Measured on
+    real javac 21 bytecode before the change: no row at all."""
+    make = _http_method("makeOnce", "()Lorg/apache/hc/core5/http/ClassicHttpRequest;")
+    join = _http_method("joinEscaping", "()V")
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _HTTP_OWNER, construct_kind="class"),
+        _declared_method(
+            _HTTP_OWNER, "makeOnce", "()Lorg/apache/hc/core5/http/ClassicHttpRequest;"
+        ),
+        _declared_method(_HTTP_OWNER, "joinEscaping", "()V"),
+        _call(
+            make,
+            APACHE_BUILDER,
+            "get",
+            0,
+            receiver=None,
+            result=3,
+            arguments=[CallArgument(kind="string", value="http://svc/b")],
+            invoke_kind="static",
+        ),
+        _call(make, APACHE_BUILDER, "build", 1, receiver=3, result=4),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=make,
+            ordinal=0,
+            value=CallArgument(kind="unresolved", source=4),
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=join,
+            target=CallTarget(
+                owner=_HTTP_OWNER,
+                name="makeOnce",
+                descriptor="()Lorg/apache/hc/core5/http/ClassicHttpRequest;",
+            ),
+            invoke_kind="static",
+            ordinal=0,
+            receiver=None,
+            result=5,
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=join,
+            target=_HANDED_TO_JDK,
+            invoke_kind="static",
+            ordinal=1,
+            receiver=None,
+            result=6,
+            arguments=[CallArgument(kind="unresolved", source=5)],
+        ),
+        _call(
+            join,
+            APACHE_CLIENT,
+            "execute",
+            2,
+            receiver=9,
+            result=7,
+            arguments=[CallArgument(kind="unresolved", source=5)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=join, ordinal=0, value=None),
+    ]
+
+    assert _apache_walked_rows(tmp_path, facts) == [("GET", "/b", "partial")]
+
+
+def test_two_forks_across_a_consumer_hand_off_make_every_row_partial(tmp_path: Path):
+    """The review's "two forks across a consumer hand-off" check, `Calls3.acrossConsumer`'s
+    shape on `send3`: `if (x) b.setUri("/c"); send3(b, y)` with `send3` doing `if (y)
+    b.setUri("/d"); http.execute(b.build())`. One split in each frame, both setting the url:
+    every row `partial`, and the `/d` the callee may set is a row."""
+    send3 = _http_method("send3", _MAYBE_B_JVM)
+    caller = _http_method("acrossTwo")
+    facts = [
+        _declared_method(_HTTP_OWNER, "send3", _MAYBE_B_JVM),
+        _placed_at(
+            _call(
+                send3,
+                APACHE_BUILDER,
+                "setUri",
+                0,
+                receiver=None,
+                result=6,
+                arguments=[CallArgument(kind="string", value="http://svc/d")],
+            ).model_copy(update={"receiver_parameter": 0}),
+            None,
+            False,
+            1,
+        ),
+        _placed_at(
+            _call(send3, APACHE_BUILDER, "build", 1, receiver=None, result=11).model_copy(
+                update={"receiver_parameter": 0}
+            ),
+            None,
+            True,
+            2,
+        ),
+        _placed_at(
+            _call(
+                send3,
+                APACHE_CLIENT,
+                "execute",
+                2,
+                receiver=9,
+                result=12,
+                arguments=[CallArgument(kind="unresolved", source=11)],
+            ),
+            1,
+            True,
+            None,
+        ),
+        MethodReturnFact(document_id="doc_1", method=send3, ordinal=0, value=None),
+        *[
+            fact
+            for fact in _apache_handing(
+                "acrossTwo",
+                [("set", "http://svc/c"), ("hand", "send3", _MAYBE_B_JVM)],
+                {
+                    0: (None, True, 2),
+                    1: (0, False, 2),
+                    2: (0, True, None),
+                    3: (2, True, 4),
+                    4: (3, True, None),
+                },
+            )
+            if not (isinstance(fact, CallSiteFact) and fact.caller == caller and fact.ordinal > 2)
+        ],
+    ]
+    assert _apache_walked_rows(tmp_path, facts) == [
+        ("GET", "/a", "partial"),
+        ("GET", "/c", "partial"),
+        ("GET", "/d", "partial"),
+    ]
+
+
+@pytest.mark.pins("fluent.rows-of-ONE-IDENTITY-EQUAL-in-every-part-keep-the-most-EXACT")
+def test_two_equal_requests_keep_the_most_exact_resolution(tmp_path: Path):
+    """m-2, `Calls2.equalTwo`: a request built with two branched `setUri("/b")` (every row
+    `partial`), then a second request from `get("/b")` (`resolved`). Both send `GET svc /b`
+    and are equal in every published part, so the one row keeps the most exact resolution,
+    `resolved`: a run always sends it. Before, the first wins and the row is `partial`."""
+    caller = _http_method("equalTwo", "(ZZ)V")
+    facts = [
+        *_apache_set_uris(
+            caller,
+            ["http://svc/b", "http://svc/b"],
+            {
+                0: (None, True, 3),
+                1: (0, False, 3),
+                2: (0, False, 3),
+                3: (0, True, 4),
+                4: (3, True, 5),
+                5: (4, True, 6),
+                6: (5, True, 7),
+                7: (6, True, None),
+            },
+        ),
+        _placed_at(
+            _call(
+                caller,
+                APACHE_BUILDER,
+                "get",
+                5,
+                receiver=None,
+                result=70,
+                arguments=[CallArgument(kind="string", value="http://svc/b")],
+                invoke_kind="static",
+            ),
+            4,
+            True,
+            6,
+        ),
+        _placed_at(_call(caller, APACHE_BUILDER, "build", 6, receiver=70, result=71), 5, True, 7),
+        _placed_at(
+            _call(
+                caller,
+                APACHE_CLIENT,
+                "execute",
+                7,
+                receiver=9,
+                result=72,
+                arguments=[CallArgument(kind="unresolved", source=71)],
+            ),
+            6,
+            True,
+            None,
+        ),
+    ]
+    assert _apache_rows(tmp_path, facts) == [("GET", "/a", "partial"), ("GET", "/b", "resolved")]
+
+
+def _sqs_handed_on_a_branch() -> list:
+    """C-1's input (`probe_r5_sqs_handoff.py`): `base(){ return
+    SendMessageRequest.builder().queueUrl(Q); }`, `helper(b){ b.queueUrl(QH); }` and `send(){ b
+    = base(); if (x) helper(b); if (x) b.queueUrl(Q2); sqs.sendMessage(b.build()); }`, both
+    calls on branches, at the positions javac gives them."""
+    queue = lambda name: CallArgument(kind="string", value=f"https://sqs.eu-west-1/acme/{name}")
+    queue_jvm = "(Ljava/lang/String;)" + _SQS_BUILDER_JVM[2:]
+    helper_jvm = "(Lsoftware/amazon/awssdk/services/sqs/model/SendMessageRequest$Builder;)V"
+    base = _sqs_method("base", _SQS_BUILDER_JVM)
+    send = _sqs_method("send")
+    helper = _sqs_method("helper", helper_jvm)
+    placed = lambda fact, dominator, every, post: fact.model_copy(
+        update={
+            "dominator": dominator,
+            "on_every_exit": every,
+            "post_dominator": post,
+            "reaches_return": True,
+        }
+    )
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _SQS_PRODUCER, construct_kind="class"),
+        _declared_method(_SQS_PRODUCER, "base", _SQS_BUILDER_JVM),
+        _declared_method(_SQS_PRODUCER, "send", "()V"),
+        _declared_method(_SQS_PRODUCER, "helper", helper_jvm),
+        _call(base, _SQS_REQUEST, "builder", 0, receiver=None, result=1, invoke_kind="static"),
+        _call(base, _SQS_REQUEST, "queueUrl", 1, receiver=1, result=2, arguments=[queue("orders")]),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=base,
+            ordinal=2,
+            value=CallArgument(kind="unresolved", source=2),
+        ),
+        placed(
+            CallSiteFact(
+                document_id="doc_1",
+                caller=helper,
+                target=CallTarget(owner=_SQS_REQUEST, name="queueUrl", descriptor=queue_jvm),
+                invoke_kind="interface",
+                ordinal=0,
+                receiver_parameter=0,
+                result=3,
+                arguments=[queue("helper")],
+            ),
+            None,
+            True,
+            None,
+        ),
+        MethodReturnFact(document_id="doc_1", method=helper, ordinal=1, value=None),
+        placed(
+            CallSiteFact(
+                document_id="doc_1",
+                caller=send,
+                target=CallTarget(owner=_SQS_PRODUCER, name="base", descriptor=_SQS_BUILDER_JVM),
+                invoke_kind="static",
+                ordinal=0,
+                receiver=None,
+                result=5,
+            ),
+            None,
+            True,
+            3,
+        ),
+        placed(
+            CallSiteFact(
+                document_id="doc_1",
+                caller=send,
+                target=CallTarget(owner=_SQS_PRODUCER, name="helper", descriptor=helper_jvm),
+                invoke_kind="static",
+                ordinal=1,
+                arguments=[CallArgument(kind="unresolved", source=5)],
+            ),
+            0,
+            False,
+            3,
+        ),
+        placed(
+            CallSiteFact(
+                document_id="doc_1",
+                caller=send,
+                target=CallTarget(owner=_SQS_REQUEST, name="queueUrl", descriptor=queue_jvm),
+                invoke_kind="interface",
+                ordinal=2,
+                receiver=5,
+                result=12,
+                arguments=[queue("second")],
+            ),
+            0,
+            False,
+            3,
+        ),
+        placed(_call(send, _SQS_REQUEST, "build", 3, receiver=5, result=7), 0, True, 4),
+        placed(_sqs_send(send, 4, source=7), 3, True, None),
+        MethodReturnFact(document_id="doc_1", method=send, ordinal=5, value=None),
+    ]
+    return straight_line(facts)
+
+
+@pytest.mark.pins("values.a-HAND-OFF-split-counts-by-what-its-BODY-sets")
+def test_a_branched_hand_off_into_a_helper_counts_by_what_the_helper_sets(tmp_path: Path):
+    """C-1: the helper sets the queue, a published part, so its branched hand-off is a split
+    that counts. Two splits: every row `partial`, and never `/acme/helper resolved` — which no
+    run sends, since `second` overwrites it whenever `x` holds. Before, all three `resolved`."""
+    workspace = _resolve_fluent_walked(tmp_path, _sqs_handed_on_a_branch(), _shipped("aws-sqs-sdk"))
+    found = workspace.query("endpoints")
+    workspace.close()
+    assert {(r["path"], r["resolution"]) for r in found} == {
+        ("/acme/orders", "partial"),
+        ("/acme/helper", "partial"),
+        ("/acme/second", "partial"),
+    }
+
+
 def _apache_builder_chain(caller: str) -> list:
     """`ClassicRequestBuilder.get("https://h/p").build()`, not yet executed."""
     return [
@@ -8141,7 +9605,7 @@ def test_a_url_via_ladder_that_reads_no_position_is_refused_at_run_start(
         "terminal": ["build"],
     }
     catalog = _fluent_catalog(matches, "invented-bad-url-via")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -8168,7 +9632,7 @@ def test_a_terminal_join_naming_no_executing_method_is_refused_at_run_start(tmp_
         ],
     }
     catalog = _fluent_catalog(matches, "invented-empty-join")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -8197,7 +9661,7 @@ def test_a_url_and_a_channel_capture_on_the_same_entry_is_refused_at_run_start(
         "terminal": ["build"],
     }
     catalog = _fluent_catalog(matches, "invented-url-and-channel-same-entry")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -8229,7 +9693,7 @@ def test_a_url_on_one_step_and_a_channel_on_a_different_step_is_refused_at_run_s
         "terminal": ["retrieve"],
     }
     catalog = _fluent_catalog(matches, "invented-url-and-channel-different-steps")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -8761,7 +10225,7 @@ def test_a_base_capture_and_a_channel_capture_together_are_refused_at_run_start(
         "terminal": ["retrieve"],
     }
     catalog = _fluent_catalog(matches, "invented-base-and-channel")
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -8805,7 +10269,7 @@ def test_a_malformed_field_sources_block_is_refused_at_run_start(tmp_path: Path,
     catalog = _fluent_catalog(
         {**_BASE_MATCHES, "field_sources": block}, "invented-bad-field-sources"
     )
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), [])
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line([]))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
 
@@ -10083,7 +11547,7 @@ def _ws_template_catalog() -> Catalog:
 
 
 def _resolve_ws(tmp_path: Path, facts: list):
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     skipped = derive_endpoints(workspace, [_ws_template_catalog()], capabilities=_WS_CAPABILITIES)
@@ -10238,7 +11702,7 @@ def _shipped_catalog(catalog_id: str) -> Catalog:
 def _resolve_shipped(
     tmp_path: Path, facts: list, catalog_id: str, capabilities: set[str] = CAPABILITIES
 ):
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     skipped = derive_endpoints(workspace, [_shipped_catalog(catalog_id)], capabilities=capabilities)
@@ -12598,3 +14062,397 @@ def test_a_non_bool_returns_receiver_is_refused(tmp_path: Path, matches: dict):
     load and naming the key, never read as truthy."""
     with pytest.raises(CatalogError, match="returns_receiver"):
         _resolve_fluent(tmp_path, [], _fluent_catalog(matches, "invented-receiver"))
+
+
+_SET_U_JVM = "(Lorg/apache/hc/core5/http/io/support/ClassicRequestBuilder;Ljava/lang/String;)V"
+# What javac writes for `ClassicRequestBuilder.get(String)` and `copy(ClassicHttpRequest)`: the
+# walk back reads the builder type a root hands back off it (`chains._RootlessWalk.types`).
+_ROOT_JVM = "(Ljava/lang/String;)Lorg/apache/hc/core5/http/io/support/ClassicRequestBuilder;"
+_COPY_JVM = (
+    "(Lorg/apache/hc/core5/http/ClassicHttpRequest;)"
+    "Lorg/apache/hc/core5/http/io/support/ClassicRequestBuilder;"
+)
+
+
+def _with_root_descriptor(facts: list) -> list:
+    """`facts` with each root call `ClassicRequestBuilder.get` spelled as javac writes it."""
+    return [
+        fact.model_copy(update={"target": fact.target.model_copy(update={"descriptor": _ROOT_JVM})})
+        if isinstance(fact, CallSiteFact)
+        and fact.target.name == "get"
+        and fact.target.owner == APACHE_BUILDER
+        else fact
+        for fact in facts
+    ]
+
+
+def _apache_rows_by_caller(tmp_path: Path, facts: list) -> list[tuple]:
+    workspace = _resolve_fluent_walked(tmp_path, facts, _shipped("apache-httpclient"))
+    rows = workspace.query("endpoints")
+    workspace.close()
+    return sorted(
+        (str(r["caller"]).split("#")[-1].split("(")[0], r["method"], r["path"], r["resolution"])
+        for r in rows
+    )
+
+
+def _apache_rows_with_roots(tmp_path: Path, facts: list) -> list[tuple]:
+    return _apache_rows_by_caller(tmp_path, _with_root_descriptor(facts))
+
+
+def _apache_sender(name: str, uri: str) -> list:
+    """`name(x) { b = get("http://svc/zero"); setU(b, uri); http.execute(b.build()); }`."""
+    caller = _http_method(name)
+    return [
+        _declared_method(_HTTP_OWNER, name, "(Z)V"),
+        _call(
+            caller,
+            APACHE_BUILDER,
+            "get",
+            0,
+            receiver=None,
+            result=3,
+            arguments=[CallArgument(kind="string", value="http://svc/zero")],
+            invoke_kind="static",
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(owner=_HTTP_OWNER, name="setU", descriptor=_SET_U_JVM),
+            invoke_kind="static",
+            ordinal=1,
+            receiver=None,
+            result=None,
+            arguments=[
+                CallArgument(kind="unresolved", source=3),
+                CallArgument(kind="string", value=uri),
+            ],
+        ),
+        _call(caller, APACHE_BUILDER, "build", 2, receiver=3, result=50),
+        _call(
+            caller,
+            APACHE_CLIENT,
+            "execute",
+            3,
+            receiver=9,
+            result=51,
+            arguments=[CallArgument(kind="unresolved", source=50)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=caller, ordinal=0, value=None),
+    ]
+
+
+@pytest.mark.pins("chains.a-step-in-an-ENTERED-body-reads-its-argument-through-the-HAND-OFF")
+def test_a_helper_setter_reads_the_uri_its_own_caller_hands_in(tmp_path: Path):
+    """Item 2 review, C2 (concern 6 in the forward chain walk): `a` and `c` each build
+    `get("/zero")` and hand it to `setU(b, u) { b.setUri(u); }` with their own uri. The step's
+    argument is `setU`'s parameter, read at the call that entered `setU` on the chain's own path
+    (`values.entered_position`): `a` sends `/one` and `c` sends `/two` — never both each, which
+    crossing the parameter to every caller of `setU` published, `resolved`."""
+    helper = _http_method("setU", _SET_U_JVM)
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _HTTP_OWNER, construct_kind="class"),
+        _declared_method(_HTTP_OWNER, "setU", _SET_U_JVM),
+        _call(
+            helper,
+            APACHE_BUILDER,
+            "setUri",
+            0,
+            receiver=None,
+            result=4,
+            arguments=[CallArgument(kind="parameter", value=1)],
+        ).model_copy(update={"receiver_parameter": 0}),
+        MethodReturnFact(document_id="doc_1", method=helper, ordinal=0, value=None),
+        *_apache_sender("a", "http://svc/one"),
+        *_apache_sender("c", "http://svc/two"),
+    ]
+    assert _apache_rows_by_caller(tmp_path, facts) == [
+        ("a", "GET", "/one", "resolved"),
+        ("c", "GET", "/two", "resolved"),
+    ]
+
+
+@pytest.mark.pins("chains.a-walk-back-ending-EXTERNAL-keeps-the-terminals-row")
+def test_a_builder_parameter_no_module_code_hands_in_keeps_its_row(tmp_path: Path):
+    """Item 2 review, M1 (rule 4): `sendNoCaller(b) { http.execute(b.build()); }`, public, with
+    no caller in the module. The walk back from `build()` ends `external` — the builder comes
+    from code we do not have — but the request is sent: one row, its parts unread. Before, no
+    row at all."""
+    send = _http_method("sendNoCaller", _SET_B_JVM)
+    facts = [
+        _declared_method(_HTTP_OWNER, "sendNoCaller", _SET_B_JVM),
+        _call(send, APACHE_BUILDER, "build", 0, receiver=None, result=11).model_copy(
+            update={"receiver_parameter": 0}
+        ),
+        _call(
+            send,
+            APACHE_CLIENT,
+            "execute",
+            1,
+            receiver=9,
+            result=12,
+            arguments=[CallArgument(kind="unresolved", source=11)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=send, ordinal=0, value=None),
+        # A call of a root elsewhere, so the catalog's walk back runs in this module at all.
+        *_apache_sender("a", "http://svc/one"),
+    ]
+    rows = [row for row in _apache_rows_with_roots(tmp_path, facts) if row[0] == "sendNoCaller"]
+    assert len(rows) == 1, rows
+    assert rows[0][3] in ("partial", "unresolved"), rows
+
+
+@pytest.mark.pins("chains.a-walk-back-keeps-a-row-for-a-terminal-of-the-chains-OWN-TYPE")
+def test_a_builder_from_a_factory_no_root_names_keeps_its_row_where_it_escapes(tmp_path: Path):
+    """Item 2 review, M1: `copyEscaping(src) { b = ClassicRequestBuilder.copy(src);
+    List.of(b); http.execute(b.build()); }`. `copy` is no root of the catalog,
+    but `build()` is called on the catalog's own builder type: the request is sent, one row, its
+    parts unread. The object-origin gate dropped it."""
+    caller = _http_method("copyEscaping")
+    facts = [
+        _declared_method(_HTTP_OWNER, "copyEscaping", "(Z)V"),
+        _call(
+            caller, APACHE_BUILDER, "copy", 0, receiver=None, result=3, invoke_kind="static"
+        ).model_copy(
+            update={"target": CallTarget(owner=APACHE_BUILDER, name="copy", descriptor=_COPY_JVM)}
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=_HANDED_TO_JDK,
+            invoke_kind="static",
+            ordinal=1,
+            receiver=None,
+            result=4,
+            arguments=[CallArgument(kind="unresolved", source=3)],
+        ),
+        _call(caller, APACHE_BUILDER, "build", 2, receiver=3, result=50),
+        _call(
+            caller,
+            APACHE_CLIENT,
+            "execute",
+            3,
+            receiver=9,
+            result=51,
+            arguments=[CallArgument(kind="unresolved", source=50)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=caller, ordinal=0, value=None),
+        *_apache_sender("a", "http://svc/one"),
+    ]
+    rows = [row for row in _apache_rows_with_roots(tmp_path, facts) if row[0] == "copyEscaping"]
+    assert len(rows) == 1, rows
+    assert rows[0][3] in ("partial", "unresolved"), rows
+
+
+_OK_BUILDER = "okhttp3/Request$Builder#"
+_OK_SEND_JVM = "(Lokhttp3/Request$Builder;)V"
+
+
+@pytest.mark.pins("chains.a-CONSTRUCTOR-roots-type-is-its-owner")
+def test_a_constructor_rooted_builder_handed_away_before_sending_keeps_its_row(tmp_path: Path):
+    """Item 2 re-review, N1: OkHttp's one root is `new Request.Builder()`, a constructor, whose
+    descriptor hands back nothing — the type it builds is its owner. `send(b) {
+    Objects.hash(b); client.newCall(b.build()); }`, called with `new
+    Request.Builder().url("https://svc/ok")`: the walk back from `build()` ends `escapes`, and
+    the request is sent, so it keeps its row, its parts unread. Read off the descriptor alone,
+    the chain had no type and the row was dropped."""
+    owner = "com/acme/http/OkSend#"
+    send = _MODULE + method_descriptor(owner, "send", _OK_SEND_JVM)
+    caller = _MODULE + method_descriptor(owner, "caller", "()V")
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + owner, construct_kind="class"),
+        _declared_method(owner, "send", _OK_SEND_JVM),
+        _declared_method(owner, "caller", "()V"),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=send,
+            target=CallTarget(
+                owner="java/util/Objects#", name="hash", descriptor="([Ljava/lang/Object;)I"
+            ),
+            invoke_kind="static",
+            ordinal=0,
+            receiver=None,
+            result=10,
+            arguments=[
+                CallArgument(kind="array", elements=[CallArgument(kind="parameter", value=0)])
+            ],
+        ),
+        _call(send, _OK_BUILDER, "build", 1, receiver=None, result=11).model_copy(
+            update={"receiver_parameter": 0}
+        ),
+        _call(
+            send,
+            "okhttp3/OkHttpClient#",
+            "newCall",
+            2,
+            receiver=99,
+            result=12,
+            arguments=[CallArgument(kind="unresolved", source=11)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=send, ordinal=0, value=None),
+        _call(caller, _OK_BUILDER, "<init>", 0, receiver=2, result=None, invoke_kind="special"),
+        _call(
+            caller,
+            _OK_BUILDER,
+            "url",
+            1,
+            receiver=2,
+            result=8,
+            arguments=[CallArgument(kind="string", value="https://svc/ok")],
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(owner=owner, name="send", descriptor=_OK_SEND_JVM),
+            invoke_kind="static",
+            ordinal=2,
+            receiver=None,
+            result=None,
+            arguments=[CallArgument(kind="unresolved", source=2)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=caller, ordinal=0, value=None),
+    ]
+    workspace = _resolve_fluent_walked(tmp_path, facts, _shipped("okhttp"))
+    rows = [
+        (r["resolution"],)
+        for r in workspace.query("endpoints")
+        if "OkSend#send" in str(r["caller"])
+    ]
+    workspace.close()
+    assert len(rows) == 1, rows
+    assert rows[0][0] in ("partial", "unresolved"), rows
+
+
+@pytest.mark.pins("values.a-JDK-NULL-CHECK-is-not-a-hand-off")
+def test_a_jdk_null_check_on_a_builder_is_not_a_hand_off(tmp_path: Path):
+    """The user's ruling of 2026-11-03 (OI-262, option B): `Objects.requireNonNull` and the other
+    JDK null checks only test for null and throw, so `send(b) { Objects.requireNonNull(b);
+    http.execute(b.build()); }` called with `get("http://svc/a")` reads past the check and the
+    row is the caller's own, `GET /a`, `resolved`. Read as a hand-off, it was a row with nothing
+    read."""
+    send = _http_method("sendChecked", _SET_B_JVM)
+    facts = [
+        _declared_method(_HTTP_OWNER, "sendChecked", _SET_B_JVM),
+        CallSiteFact(
+            document_id="doc_1",
+            caller=send,
+            target=_REQUIRE_NON_NULL,
+            invoke_kind="static",
+            ordinal=0,
+            receiver=None,
+            result=10,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        _call(send, APACHE_BUILDER, "build", 1, receiver=None, result=11).model_copy(
+            update={"receiver_parameter": 0}
+        ),
+        _call(
+            send,
+            APACHE_CLIENT,
+            "execute",
+            2,
+            receiver=9,
+            result=12,
+            arguments=[CallArgument(kind="unresolved", source=11)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=send, ordinal=0, value=None),
+    ]
+    handing = _apache_handing("callsChecked", [("hand", "sendChecked", _SET_B_JVM)], {})
+    caller = _http_method("callsChecked")
+    facts += [
+        fact
+        for fact in handing
+        if not (isinstance(fact, CallSiteFact) and fact.caller == caller and fact.ordinal > 1)
+    ]
+    assert _apache_walked_rows(tmp_path, _with_root_descriptor(facts)) == [
+        ("GET", "/a", "resolved")
+    ]
+
+
+def _apache_same_method(name: str, between: list[tuple[int, CallTarget]], executes: int = 1):
+    """`name() { req = get("http://svc/<name>").build(); <between>; http.execute(req, h)…; }`:
+    each `between` entry `(after_executes, target)` a static call handed `req`, placed after that
+    many executes; `executes` executes of the one request."""
+    caller = _http_method(name)
+    sites: list = [
+        _call(
+            caller,
+            APACHE_BUILDER,
+            "get",
+            0,
+            receiver=None,
+            result=3,
+            arguments=[CallArgument(kind="string", value=f"http://svc/{name}")],
+            invoke_kind="static",
+        ).model_copy(
+            update={"target": CallTarget(owner=APACHE_BUILDER, name="get", descriptor=_ROOT_JVM)}
+        ),
+        _call(caller, APACHE_BUILDER, "build", 1, receiver=3, result=4),
+    ]
+    ordinal = 2
+    for done in range(executes + 1):
+        for after, target in between:
+            if after == done:
+                sites.append(
+                    CallSiteFact(
+                        document_id="doc_1",
+                        caller=caller,
+                        target=target,
+                        invoke_kind="static",
+                        ordinal=ordinal,
+                        receiver=None,
+                        result=20 + ordinal,
+                        arguments=[CallArgument(kind="unresolved", source=4)],
+                    )
+                )
+                ordinal += 1
+        if done < executes:
+            sites.append(
+                _call(
+                    caller,
+                    APACHE_CLIENT,
+                    "execute",
+                    ordinal,
+                    receiver=9,
+                    result=40 + ordinal,
+                    arguments=[CallArgument(kind="unresolved", source=4)],
+                )
+            )
+            ordinal += 1
+    return [
+        _declared_method(_HTTP_OWNER, name, "(Z)V"),
+        *sites,
+        MethodReturnFact(document_id="doc_1", method=caller, ordinal=0, value=None),
+    ]
+
+
+@pytest.mark.pins("chains.a-request-handed-to-the-JDK-before-its-SAME-METHOD-execute-is-partial")
+def test_a_built_request_handed_to_the_jdk_before_its_execute_in_one_method_is_partial(
+    tmp_path: Path,
+):
+    """Item 2 review, C3 (rule 2): `req = get("/c5b").build(); List.of(req).forEach(…);
+    http.execute(req, h)` in one method. The request was handed to code we do not have before it
+    was sent, so what it holds is not known: `partial`. The `source` match found the execute
+    first and never read that window, so the row was `resolved`. A null check there
+    (`Objects.requireNonNull(req)`, ruled not a hand-off) leaves it `resolved`."""
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _HTTP_OWNER, construct_kind="class"),
+        *_apache_same_method("handed", [(0, _HANDED_TO_JDK)]),
+        *_apache_same_method("checked", [(0, _REQUIRE_NON_NULL)]),
+    ]
+    assert _apache_rows_by_caller(tmp_path, facts) == [
+        ("checked", "GET", "/checked", "resolved"),
+        ("handed", "GET", "/handed", "partial"),
+    ]
+
+
+@pytest.mark.pins("chains.a-hand-off-AFTER-the-first-execute-leaves-its-request-as-built")
+def test_a_hand_off_after_the_first_execute_leaves_that_request_as_built(tmp_path: Path):
+    """The re-review's minor on the held C3: `req = get("/twice").build(); http.execute(req);
+    List.of(req); http.execute(req)`. The first execute sends the request as built, before the
+    hand-off, and the one row of that identity keeps its most exact reading: `resolved`."""
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _HTTP_OWNER, construct_kind="class"),
+        *_apache_same_method("twice", [(1, _HANDED_TO_JDK)], executes=2),
+    ]
+    assert _apache_rows_by_caller(tmp_path, facts) == [("twice", "GET", "/twice", "resolved")]

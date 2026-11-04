@@ -61,7 +61,13 @@ def declared_identities() -> dict[str, list[dict[str, object]]]:
     found: dict[str, list[dict[str, object]]] = {}
     for path in sorted(VALUE_MODELS.glob("*.yml")):
         document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        found[path.stem] = document.get("identified_by") or []
+        # `hand_off_effects` (spec 2026-11-02 rule 7) states what a call DOES, measured the
+        # same way and read by every catalog at once the same way, so it is held to the
+        # same two rules.
+        found[path.stem] = [
+            *(document.get("identified_by") or []),
+            *(document.get("hand_off_effects") or []),
+        ]
     return found
 
 

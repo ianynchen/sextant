@@ -26,6 +26,7 @@ from test_values import (
     _writes,
 )
 
+from flow_facts import straight_line
 from sextant.application.ports.catalogs import CatalogError
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.dispatch import dispatch_of
@@ -369,7 +370,7 @@ def walked(tmp_path_factory: pytest.TempPathFactory):
     write_fact_file(
         facts / "routes.jsonl",
         _document(),
-        [*_facts(), *_anonymous_facts(), *_hierarchy_facts(), *_sibling_facts()],
+        straight_line([*_facts(), *_anonymous_facts(), *_hierarchy_facts(), *_sibling_facts()]),
     )
     write_fixture_module_fact(facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")

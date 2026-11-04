@@ -478,6 +478,26 @@ class CallSiteFact(BaseModel):
     # say which, and a reader writing the call as source needs to (`chain_text`).
     receiver_field_kind: Literal["instance"] | None = None
     result: int | None = None
+    # Rule 9 (spec 2026-11-02-per-path-truth, D00 §5): the `ordinal` of the nearest call site
+    # in this method that ran before this one on EVERY path from the entry, absent where none
+    # did; following it lists every call that always runs before this one.
+    dominator: int | None = None
+    # Rule 9: whether this call runs on every path from the entry to a normal return. Written
+    # on every site the extractor reaches, so None is "not computed" — never "every path".
+    on_every_exit: bool | None = None
+    # Rule 9 (ruled by the user 2026-11-03, "A: add post_dominator"): the `ordinal` of the
+    # nearest call site in this method that runs after this one on EVERY path from it to a
+    # normal return, absent where none does — including where no normal return is reachable.
+    post_dominator: int | None = None
+    # Rule 9 (ruled by the user 2026-11-03, option A): whether every path from this call's
+    # completion ends at a normal return — none in a throw, none looping forever. Written on
+    # every site the extractor reaches, so None is "not computed", never "reaches a return".
+    reaches_return: bool | None = None
+    # Rule 9 (ruled by the user 2026-11-03, option A for review 3's M1): the lowest call ordinal
+    # in the loop — the non-trivial strongly connected component of the control-flow graph —
+    # holding this call; absent where it is in none. Two calls with one group can each run
+    # again after the other.
+    loop_group: int | None = None
     # Capability 9.17: the function this site's dispatch will run, where
     # `target` names the mechanism instead of the code — a JVM
     # `invokedynamic` bootstrapped by `LambdaMetafactory`, whose second

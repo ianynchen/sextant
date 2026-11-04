@@ -1864,6 +1864,11 @@ def assemble_module_document(
 
 
 _SCHEDULED_HEADERS = ("Handler", "Trigger", "Name", "Expression", "Resolution")
+# What a refused schedule's Resolution cell adds (`scheduled_work.refused`, spec 2026-11-02
+# rule 7): the read stays as sure as it was, and the cell says the framework refuses it, so
+# a reader of the table alone never takes the row for work that runs. The reason is in the
+# job's detail block.
+_REFUSED_RESOLUTION = ", refused by the framework"
 _ERROR_HEADERS = ("Exception", "Status", "Handler", "Declared by", "Scope", "Response")
 # Never a bare blank cell, the `_MEDIA_NONE_RECORDED` precedent: an empty cell
 # reads as a formatting slip, while an em dash reads as "nothing recorded",
@@ -1933,7 +1938,10 @@ def _scheduled_work_sections(
                 True,
                 _untied(row, "expression"),
             ),
-            _text(str(row["resolution"])),
+            _text(
+                str(row["resolution"])
+                + (_REFUSED_RESOLUTION if row.get("refused") is not None else "")
+            ),
         )
         for row in rows
     )
@@ -1966,6 +1974,20 @@ def _scheduled_work_sections(
         if values:
             body = _runs(_configured_values(values, redactor))
             entries = [DetailEntry(_text("as configured in this repository"), body, None)] + entries
+        if row.get("refused") is not None:
+            # Spec 2026-11-02 rule 7, the `refused` column ruled by the user 2026-11-02: the
+            # framework throws on the call that schedules this job, so it never runs on this
+            # schedule. First, because it outweighs every other line about the job.
+            entries = [
+                DetailEntry(
+                    _text(
+                        "refused by the framework, so this job never runs on this schedule: "
+                        + redactor.redact_text(str(row["refused"]))
+                    ),
+                    None,
+                    None,
+                )
+            ] + entries
         if entries:
             sections.append(
                 MachineDetail((DetailEntry(_job_header(row, redactor), None, None), *entries))

@@ -287,6 +287,20 @@ class Catalog:
     # entry are passed over and where the reason for each is stated.
     value_model: list[dict[str, Any]] = field(default_factory=list)
 
+    # The owner classes whose calls take a value WITHOUT handing it off (`value-models/`'s
+    # `not_hand_offs`): the value walk's `escapes` window reads a call to one as nothing.
+    # The user's ruling of 2026-11-02 on a compiler's null checks is the one entry shipped.
+    # The source reads it once and hands every catalog the same tuple, as `value_model`.
+    not_hand_offs: tuple[str, ...] = ()
+
+    # What a DECLARED call does to a value handed to it, per argument, as measured
+    # (`value-models/`'s `hand_off_effects`, spec 2026-11-02 rule 7, ruled by the user that
+    # day): `{owner, method, descriptor, arg, binds, refuses, by}`, the owner a type symbol
+    # and each argument an index. The value walk reads a hand-off one of these states as a
+    # step of its path rather than `escapes`, and a reader of the part it binds applies the
+    # statement. The source reads it once and hands every catalog the same tuple.
+    hand_off_effects: tuple[dict[str, Any], ...] = ()
+
     # Which types may stand where another is declared (`type-models/*.yml`), as
     # `{subtype, supertype, by}`. The source reads it once and hands every catalog the
     # same list, exactly as `value_model` above.

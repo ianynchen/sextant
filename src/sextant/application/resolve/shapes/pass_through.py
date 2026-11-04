@@ -38,7 +38,7 @@ from sextant.application.ports.catalogs import CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import Dispatch
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
-from sextant.application.resolve.values import RECEIVER, ValueIndex, producers_of
+from sextant.application.resolve.values import RECEIVER, ValueIndex, producer_paths, producers_of
 from sextant.domain.symbols import (
     bare_descriptor,
     dotted_package,
@@ -421,7 +421,12 @@ def handler_outcomes(
     for (method, _), site in sorted(index.sites.items(), key=lambda item: item[0][1]):
         by_method.setdefault(method, []).append(site)
         if (str(site.get("owner")), str(site["name"])) in calls:
-            for end in producers_of(index, site, RECEIVER, frozenset(), stop_at_parameters_of=stop):
+            # WHICH OBJECT the context is (`which_object`): a call made on it before `next()` —
+            # `ctx.put(k, v); ctx.next()` — does not make it another context (spec 2026-11-02
+            # fix round 1, C1, which reads a parameter's own window).
+            for end, _ in producer_paths(
+                index, site, RECEIVER, frozenset(), stop_at_parameters_of=stop, which_object=True
+            ):
                 if end.parameter is not None:
                     ended.add(end.parameter)
     handed: dict[tuple[str, int], list[tuple[tuple[str, int], int]]] = {}

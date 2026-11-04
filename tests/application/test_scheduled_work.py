@@ -159,6 +159,7 @@ def test_a_cron_schedule_derives_one_row_carrying_the_expression_verbatim(tmp_pa
             "evidence": "compiler",
             "catalog_id": "spring-scheduling",
             "untied": None,
+            "refused": None,
         }
     ]
 

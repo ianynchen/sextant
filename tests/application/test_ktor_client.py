@@ -24,6 +24,7 @@ import pytest
 import yaml
 from test_call_engines import CATALOGS_DIR, FLUENT_CAPABILITIES, _document, _resolve_fluent
 
+from flow_facts import straight_line
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.return_flow import record_return_flows
@@ -390,7 +391,7 @@ def test_a_branched_assembled_address_keeps_the_template_it_published_before(tmp
 
 def _resolve_walked_fluent(tmp_path: Path, facts: list[CallSiteFact]):
     """`_resolve_fluent` with the derived tables the walk's edges read built first."""
-    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
     record_return_flows(workspace)

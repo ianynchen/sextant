@@ -11,6 +11,35 @@ precedent for a uniquely-named shared helper here.
 
 from pathlib import Path
 
+from sextant.domain.facts import Parameter, TypeRef
+from sextant.domain.symbols import descriptor_slots
+
+_PRIMITIVES = {
+    "Z": "boolean",
+    "B": "byte",
+    "C": "char",
+    "S": "short",
+    "I": "int",
+    "J": "long",
+    "F": "float",
+    "D": "double",
+}
+
+
+def declared_parameters(jvm: str) -> list[Parameter]:
+    """The parameters a real scan declares for a method of descriptor `jvm`: one per slot,
+    each with the erased type the slot names (`int#`, `x/Y#`, `x/Y#[]`) — the type the value
+    walk reads a parameter value as (spec 2026-11-02 rule 3). A hand-built declaration with no
+    parameters says nothing about their types, which no scan ever writes."""
+    parameters = []
+    for slot in descriptor_slots(jvm)[0]:
+        element = slot.lstrip("[")
+        name = _PRIMITIVES[element] if element in _PRIMITIVES else element[1:-1]
+        erased = name + "#" + "[]" * (len(slot) - len(element))
+        parameters.append(Parameter(type=TypeRef(symbol=erased), erased_symbol=erased))
+    return parameters
+
+
 # The capabilities the fixture harnesses grant, in one place for the same reason
 # this module exists: `tests/application/conftest.py` defines the set that
 # `resolved_fixture` uses, and a test importing it as `from conftest import ...`

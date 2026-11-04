@@ -123,6 +123,9 @@ def run(workspace: Workspace, catalog: Catalog, catalogs: Sequence[Catalog] | No
                     "evidence": "compiler",
                     "catalog_id": catalog.id,
                     "untied": None,
+                    # Nothing in an annotation's own reading refuses it (spec 2026-11-02
+                    # rule 7 marks a refused call; this pass reads no call).
+                    "refused": None,
                 }
             )
     workspace.derive("scheduled_work_insert", rows=rows)

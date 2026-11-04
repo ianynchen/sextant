@@ -40,8 +40,8 @@ _MODULE = {
 }
 _PROVENANCE = {"commit": "630906a7", "sextant_version": "0.1.0", "fact_schema_version": 2}
 _METADATA = {
-    "schema_version": 13,
-    "boundary_vocabulary_version": 3,
+    "schema_version": 14,
+    "boundary_vocabulary_version": 4,
     "catalog_hash": "sha256:catalogs",
     "module": _MODULE,
     "provenance": _PROVENANCE,
@@ -787,7 +787,7 @@ def test_two_analyses_older_than_this_build_refuse_and_allowed_hide_a_split_peer
     a = sources(_built(tmp_path / "a", lambda w: None, schema_version=4))
     b = sources(_built(tmp_path / "b", build, schema_version=4))
     with pytest.raises(
-        DiffRefused, match="both sides are graph_schema_version 4 and this build is 13"
+        DiffRefused, match="both sides are graph_schema_version 4 and this build is 14"
     ):
         diff_sources(a, b, REDACTOR, REDACTOR)
     allowed = diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)
@@ -874,7 +874,7 @@ def _stamped(root: Path, **metadata: object) -> BoundarySource:
 
 def test_different_graph_schema_versions_refuse_by_name(tmp_path: Path):
     a, b = _stamped(tmp_path / "a", schema_version=2), _stamped(tmp_path / "b")
-    with pytest.raises(DiffRefused, match="graph_schema_version 2 vs 13") as refused:
+    with pytest.raises(DiffRefused, match="graph_schema_version 2 vs 14") as refused:
         diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)  # no flag overrides this
     assert refused.value.stamps == ("graph_schema_version",)
 
@@ -886,7 +886,7 @@ def test_different_fact_schema_and_vocabulary_versions_refuse_by_name(tmp_path: 
     with pytest.raises(DiffRefused) as refused:
         diff_sources(a, b, REDACTOR, REDACTOR)
     assert "fact_schema_version 1 vs 2" in str(refused.value)
-    assert "boundary_vocabulary_version 1 vs 3" in str(refused.value)
+    assert "boundary_vocabulary_version 1 vs 4" in str(refused.value)
     assert set(refused.value.stamps) == {"fact_schema_version", "boundary_vocabulary_version"}
 
 
@@ -1062,7 +1062,7 @@ def test_to_json_has_exactly_the_spec_keys(
     assert list(document) == [
         "boundary_vocabulary_version", "a", "b", "producer_changed", "entries", "summary",
     ]  # fmt: skip
-    assert document["boundary_vocabulary_version"] == 3
+    assert document["boundary_vocabulary_version"] == 4
     assert document["a"]["commit"] == "630906a7" and document["b"]["commit"] == "778285e8"  # type: ignore[index]
     assert set(document["a"]) == {"module", "commit", "producer"}  # type: ignore[arg-type]
     assert document["a"]["module"] == "com.acme:orders-service"  # type: ignore[index]

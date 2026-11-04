@@ -30,6 +30,7 @@ merges the two (`ingress/catalogs/yaml_source._with_client_model`).
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -49,9 +50,12 @@ from sextant.application.resolve.values import (
     RECEIVER,
     STRING,
     UNRESOLVED,
+    Path,
     ValueIndex,
+    inexact,
     producer_paths,
     producers_of,
+    read_through_hand_off,
     resolve_positions,
 )
 from sextant.domain.closed_sets import Resolution
@@ -88,6 +92,11 @@ _PARTS = ("host", "port", "uri")
 # object escaping (ruling 4, spec 2026-10-30).
 _CONFIGURES = "configures"
 _CONFIGURES_KEYS = {"owner", "returns"}
+# Optional beside the setters: the framework's own value of each part an options object leaves
+# unset (`{part: value}`, spec 2026-11-02 rule 5) — Vert.x's `localhost` and 80, CP-56 row 132.
+# Used only on a path whose object the no-argument constructor built and every call on which
+# was read; anywhere else an unset part is unknown.
+_UNSET = "unset"
 # Where the client sits, besides an argument index of the call executing the request: the
 # RECEIVER of the chain's root call — `client.get("/q")` is called on the client itself.
 CLIENT_IS_RECEIVER = "receiver"
@@ -184,14 +193,14 @@ def _validated(declared: Any, source: object) -> Mapping[str, Any] | None:
 
 def _validated_options(declared: dict[str, Any], where: str) -> Mapping[str, Any]:
     """An options-object `client_base`: every rung an options rung, the setters naming the part
-    each sets, `fill_authority`, and the optional `configures` — refused unless every part is
-    readable."""
-    unknown = sorted(set(declared) - _OPTIONS_KEYS - {_CONFIGURES})
+    each sets, `fill_authority`, and the optional `configures` and `unset` — refused unless every
+    part is readable."""
+    unknown = sorted(set(declared) - _OPTIONS_KEYS - {_CONFIGURES, _UNSET})
     missing = sorted(_OPTIONS_KEYS - set(declared))
     if unknown or missing:
         raise CatalogError(
             f"{where} of options rungs declares {sorted(_OPTIONS_KEYS)} and optionally "
-            f"`{_CONFIGURES}`; unknown {unknown}, missing {missing}"
+            f"`{_CONFIGURES}` and `{_UNSET}`; unknown {unknown}, missing {missing}"
         )
     if declared["client_arg"] != CLIENT_IS_RECEIVER:
         _index(declared["client_arg"], f"{where}'s `client_arg` (or `{CLIENT_IS_RECEIVER}`)")
@@ -229,6 +238,16 @@ def _validated_options(declared: dict[str, Any], where: str) -> Mapping[str, Any
                 f"{where}'s `{_CONFIGURES}` entry {entry!r} is `{{owner, returns}}`: the options "
                 f"type and the declared return types that hand back that same object"
             )
+    unset = declared.get(_UNSET, {})
+    if not isinstance(unset, dict) or not all(
+        part in _PARTS
+        and (_is_port(value) if part == "port" else isinstance(value, str) and bool(value))
+        for part, value in unset.items()
+    ):
+        raise CatalogError(
+            f"{where}'s `{_UNSET}` maps a part ({list(_PARTS)}) to the framework's own value of "
+            f"it — a port a port number, any other part a non-empty string — got {unset!r}"
+        )
     return MappingProxyType(declared)
 
 
@@ -667,16 +686,38 @@ def _has_host(address: str) -> bool:
     return bool(split.scheme) and bool(split.hostname)
 
 
-# What an options object sets, part by part (`host`, `port`, `uri`): the text a setter
-# was handed, or `None` where a setter for that part was called with a value not read here. A
-# part no setter reached is absent — not "unset", which cannot be proven (spec §2a).
+# What an options object sets on ONE path, part by part (`host`, `port`, `uri`): the text a
+# setter was handed, or `None` where the part was set with a value not read here or is not
+# known on that path. A part ABSENT is proven unset on that path (spec 2026-11-02 rule 5): the
+# object was built by the no-argument constructor and every call on it was read.
 Parts = Mapping[str, str | None]
+# The parts the options reader's rows SHOW (the user's ruling of 2026-11-03, option A, as
+# `fluent.PUBLISHED_PARTS` states its own): a call on a branch that sets none of them is no
+# split for the several-splits rule. Each is read into the row: `host` and `port` the peer,
+# `uri` the path. `tests/architecture/test_published_parts_are_complete.py` holds every part a
+# client model's setter declares to this set.
+PUBLISHED_PARTS = frozenset({"host", "port", "uri"})
 # One reader per declared ladder per workspace for one resolve, tied to the value index it
 # reads, as `_BUILT` is: the calls that configure an options object are read off the module
-# once, and each options object's parts once, however many requests its client sends.
+# once, and each options object's paths once, however many requests its client sends.
 _READERS: "WeakKeyDictionary[Workspace, tuple[ValueIndex, dict[str, _Options]]]" = (
     WeakKeyDictionary()
 )
+
+
+@dataclass(frozen=True)
+class PathParts:
+    """What one path through an options object (or a client's factory and its options) sets
+    (spec 2026-11-02 rule 4): `parts` as `Parts` says, and whether the path is exact — False
+    where rule 9 makes it inexact (a side of a split no fact proves, several splits setting a
+    published part) or a branch was passed through, so a row read off it is no surer than
+    `partial`."""
+
+    parts: Parts
+    exact: bool = True
+
+    def __hash__(self) -> int:
+        return hash((tuple(sorted(self.parts.items())), self.exact))
 
 
 def client_defaults(
@@ -684,21 +725,25 @@ def client_defaults(
     values: ValueIndex | None,
     client_value: Mapping[str, Any],
     declared: Mapping[str, Any],
-) -> Parts:
-    """The defaults the client in `client_value` fills into a request, read off the options
-    object its factory was handed (an options-object `client_base`, Vert.x spec §3d).
+    within: Path | None = None,
+) -> tuple[PathParts, ...]:
+    """The defaults the client in `client_value` fills into a request, ONE per path (spec
+    2026-11-02 rules 4-5), read off the options object its factory was handed (an options-object
+    `client_base`, Vert.x spec §3d). Never merged: two paths that differ are two answers.
 
-    `client_value` is stamped as `client_base` says (`captured_at`). The client is found by the
-    producer reader with every rung a stop, as the block ladder's is; the rung's
-    `options_arg` is then read by `options_parts`. Every path must agree on a part: one they
-    disagree on is set and not read (None), and one a path does not reach, or an unreached
-    client or options object, is absent. A default that cannot be read is never published
-    (spec §2a)."""
+    `client_value` is stamped as `client_base` says (`captured_at`); `within` is the path the
+    request was read on, which every answer agrees with. The client is found by the producer
+    reader with every rung a stop, as the block ladder's is; the rung's `options_arg` is then
+    read per path (`_Options.paths_of`). On each path a part is the text read, None where it was
+    set and not read or is not known, and the framework's own default (`unset`, the client
+    model's) where it is proven unset. A client not reached, a factory under an overload no
+    rung declares, and an options object not read are every part unknown. Every part is
+    present in every answer."""
     reader = _options_reader(workspace, values, declared)
-    if reader is None:
-        return {}
-    site, slot = reader.position(client_value)
-    return {} if site is None else reader.defaults_of(site, slot)
+    site, slot = (None, 0) if reader is None else reader.position(client_value)
+    if reader is None or site is None:
+        return (PathParts(_UNKNOWN),)
+    return reader.defaults_of(site, slot, within)
 
 
 def options_parts(
@@ -706,15 +751,42 @@ def options_parts(
     values: ValueIndex | None,
     options_value: Mapping[str, Any],
     declared: Mapping[str, Any],
-) -> Parts:
-    """What the options object in `options_value` sets, read by the declared `setters` — the
-    reader `client_defaults` reads a client's options with, for an options object a REQUEST is
-    made from (Vert.x's `request(m, RequestOptions)`). Stamped as `client_base` says."""
+    within: Path | None = None,
+) -> tuple[PathParts, ...]:
+    """What the options object in `options_value` sets, ONE per path — the reader
+    `client_defaults` reads a client's options with, for an options object a REQUEST is made from
+    (Vert.x's `request(m, RequestOptions)`). Stamped as `client_base` says. A part proven unset is
+    absent (the request then takes the client's), so no framework default is applied here; an
+    object not read is every part unknown."""
     reader = _options_reader(workspace, values, declared)
-    if reader is None:
-        return {}
-    site, slot = reader.position(options_value)
-    return {} if site is None else reader.parts_of(site, slot)
+    site, slot = (None, 0) if reader is None else reader.position(options_value)
+    if reader is None or site is None:
+        return (PathParts(_UNKNOWN),)
+    return tuple(
+        dict.fromkeys(
+            PathParts(read.parts if read.proven else {**_UNKNOWN, **read.parts}, read.exact)
+            for read, path in reader.paths_of(site, slot)
+            if within is None or path.joined(within) is not None
+        )
+    ) or (PathParts(_UNKNOWN),)
+
+
+# Every part not known: an options object, a client or a factory the reader cannot read.
+_UNKNOWN: Parts = MappingProxyType(dict.fromkeys(_PARTS))
+
+
+@dataclass(frozen=True)
+class _Read:
+    """One path's reading of an options object: the parts its setters set, whether a part no
+    setter set is proven unset (`proven`: the no-argument constructor built it and every call on
+    it was read), and whether the path is exact."""
+
+    parts: Parts
+    proven: bool
+    exact: bool
+
+    def __hash__(self) -> int:
+        return hash((tuple(sorted(self.parts.items())), self.proven, self.exact))
 
 
 def _options_reader(
@@ -743,7 +815,7 @@ class _Options:
     ) -> None:
         self._workspace = workspace
         self._values = values
-        self._read: dict[tuple[str, int, int | str], Parts] = {}
+        self._read: dict[tuple[str, int, int | str], tuple[tuple[_Read, Path], ...]] = {}
         self._rungs = [
             {**rung, "owner": type_descriptor(str(rung["owner"]))} for rung in declared["ladder"]
         ]
@@ -751,6 +823,8 @@ class _Options:
             {**setter, "owner": type_descriptor(str(setter["owner"]))}
             for setter in declared["setters"]
         ]
+        # The framework's own value of each part an options object leaves unset (rule 5).
+        self._unset = {str(part): str(value) for part, value in declared.get(_UNSET, {}).items()}
         self._stops = frozenset((rung["owner"], str(rung["method"])) for rung in self._rungs)
         owners = {setter["owner"] for setter in self._setters}
         returns = {
@@ -760,6 +834,16 @@ class _Options:
             for entry in declared.get(_CONFIGURES, ())
         }
         owners |= set(returns)
+        self._owners = frozenset(owners)
+        # The methods that make a call on an options type THROUGH A FIELD (`receiver_field`):
+        # the field may hold the object a chain in that method built, and D00 §5 records no
+        # store from a local (`this.held = o; this.held.setDefaultPort(5)`), so the walk cannot
+        # rule it out (item 2 review, C1). One pass over the call sites.
+        self._configured_through_fields = frozenset(
+            str(site["caller"])
+            for site in values.sites.values()
+            if site.get("receiver_field") and str(site.get("owner")) in owners
+        )
         # The calls that configure an options object, as the walk names one — `(owner, name,
         # descriptor)` exactly — read off the module's own calls: a setter, and every call on an
         # options type returning a type `configures` says is that same object. Once per reading,
@@ -787,62 +871,156 @@ class _Options:
         caller, ordinal, slot = read_at
         return self._values.sites.get((str(caller), int(str(ordinal)))), slot
 
-    def defaults_of(self, site: Mapping[str, Any], slot: int | str) -> Parts:
-        """The parts of the options every factory call reaching the client at `slot` of `site`
-        was handed; a part on which two paths disagree is set and not read (None), and one that
-        one path does not reach is absent."""
-        each: list[Parts] = []
+    def defaults_of(
+        self, site: Mapping[str, Any], slot: int | str, within: Path | None = None
+    ) -> tuple[PathParts, ...]:
+        """The defaults of the client at `slot` of `site`, one per path (rule 4): each factory
+        call reaching it, and each path through the options that factory was handed that agrees
+        with the path to the factory (and with `within`). A part proven unset takes the
+        framework's own value (`unset`, rule 5); a factory the reader cannot read is every part
+        unknown on its path."""
+        found: list[PathParts] = []
         # WHICH factory made the client is the question, so the calls made on it in between
         # — every request it sends, `client.get(…)` — do not make it another client
         # (`which_object`, the object reader's switch): a client used twice in one method is
         # still the one its factory built.
-        for producer, _ in producer_paths(self._values, site, slot, self._stops, which_object=True):
-            if producer.caller is None or producer.ordinal is None:
-                return {}
-            built = self._values.sites[(producer.caller, producer.ordinal)]
-            rung = next((rung for rung in self._rungs if _matches(built, rung)), None)
-            if rung is None:
-                # The factory under an overload no rung declares: what it does with its
-                # arguments is not measured.
-                return {}
-            each.append(self.parts_of(built, int(rung["options_arg"])))
-        return _agreed(each)
+        for producer, path in producer_paths(
+            self._values, site, slot, self._stops, which_object=True
+        ):
+            if within is not None and path.joined(within) is None:
+                continue
+            exact = not producer.inexact and not inexact(path)
+            built = (
+                None
+                if producer.caller is None or producer.ordinal is None
+                else self._values.sites[(producer.caller, producer.ordinal)]
+            )
+            rung = (
+                None
+                if built is None
+                else next((r for r in self._rungs if _matches(built, r)), None)
+            )
+            # The factory under an overload no rung declares: what it does with its arguments
+            # is not measured, so every part is unknown on this path — as for a client the walk
+            # did not reach.
+            reads = (
+                []
+                if built is None or rung is None
+                else [
+                    read
+                    for read, options_path in self.paths_of(built, int(rung["options_arg"]))
+                    if options_path.joined(path) is not None
+                ]
+            )
+            if not reads:
+                found.append(PathParts(_UNKNOWN, exact))
+                continue
+            found.extend(
+                PathParts(
+                    {
+                        part: read.parts[part]
+                        if part in read.parts
+                        else self._unset.get(part)
+                        if read.proven
+                        else None
+                        for part in _PARTS
+                    },
+                    exact and read.exact,
+                )
+                for read in reads
+            )
+        return tuple(dict.fromkeys(found)) or (PathParts(_UNKNOWN),)
 
-    def parts_of(self, site: Mapping[str, Any], slot: int | str) -> Parts:
-        """What the setters made on the options object at `slot` of `site` set, read once per
-        position per resolve (`_READERS`): every path to the object's construction, each reading
-        its chain's setters in call order, the last call to a part winning."""
+    def paths_of(self, site: Mapping[str, Any], slot: int | str) -> tuple[tuple[_Read, Path], ...]:
+        """What the setters made on the options object at `slot` of `site` set, ONE per path to
+        its construction (rule 4), with the path — read once per position per resolve
+        (`_READERS`): each path's chain of calls in run order, the last call to a part winning,
+        each setter's argument read on that path (`_value`). A path that ends anywhere but a
+        chain rooted at a construction — `escapes`, an unrooted chain, a parameter nothing
+        binds — is every part unknown (rule 2)."""
         key = (str(site["caller"]), int(str(site["ordinal"])), slot)
         if key in self._read:
             return self._read[key]
-        each: list[Parts] = []
-        for producer in producers_of(
+        found: list[tuple[_Read, Path]] = []
+        for producer, path in producer_paths(
             self._values,
             site,
             slot,
             self._chain,
             along_receivers=True,
             configuring=self._configuring,
+            counting=self._counts,
         ):
-            if not producer.rooted or not producer.chain:
-                each = []
-                break
+            exact = not producer.inexact and not inexact(path)
+            # An object stored in a field (rule 2; item 2 review, C1): once there anything can
+            # change it — a call through the field, here or in another method — and the walk
+            # reads none of those calls on the object it reaches, so nothing about it is known.
+            if not producer.rooted or not producer.chain or self._stored(producer.chain):
+                found.append((_Read(_UNKNOWN, False, exact), path))
+                continue
             parts: dict[str, str | None] = {}
             for caller, ordinal in producer.chain:
                 call = self._values.sites[(caller, ordinal)]
                 setter = next((one for one in self._setters if _matches(call, one)), None)
                 if setter is not None:
-                    parts[str(setter["part"])] = self._value(call, int(setter["value_arg"]))
-            each.append(parts)
-        agreed = _agreed(each)
-        self._read[key] = agreed
-        return agreed
+                    parts[str(setter["part"])] = self._value(call, int(setter["value_arg"]), path)
+            found.append((_Read(parts, self._built_bare(producer.chain[0]), exact), path))
+        read = tuple(dict.fromkeys(found))
+        self._read[key] = read
+        return read
 
-    def _value(self, site: Mapping[str, Any], slot: int) -> str | None:
-        """The text a setter was handed, traced by the value walk: a string or integer literal,
-        or a configuration expression; None where the paths give anything else or disagree."""
+    def _stored(self, chain: tuple[tuple[str, int], ...]) -> bool:
+        """Whether the object a chain built may be held in a field, where anything can change it
+        (`ValueIndex.stored`, `stored_parameters`: "once in a field, anything can change it"):
+        the value a construction made or a call of the chain handed back was stored, or a
+        parameter a call of the chain is made on was; or a method of the chain configures an object
+        of the options type through a field (`_configured_through_fields`), which may be this
+        one."""
+        for caller, ordinal in chain:
+            if caller in self._configured_through_fields:
+                return True
+            row = self._values.sites[(caller, ordinal)]
+            made = row.get("receiver") if row.get("name") == "<init>" else row.get("result")
+            if made is not None and (caller, int(str(made))) in self._values.stored:
+                return True
+            on = row.get("receiver_parameter")
+            if on is not None and (caller, int(str(on))) in self._values.stored_parameters:
+                return True
+        return False
+
+    def _built_bare(self, root: tuple[str, int]) -> bool:
+        """Whether a chain's first call is an options type's NO-ARGUMENT constructor (rule 5):
+        only then does a part no later call sets hold the framework's own default. A constructor
+        handed anything (`new WebClientOptions(json)`, a copy) sets what it is handed."""
+        row = self._values.sites[root]
+        return (
+            row.get("name") == "<init>"
+            and row.get("descriptor") == "()V"
+            and row.get("owner") in self._owners
+        )
+
+    def _counts(self, method: str, ordinal: int) -> bool:
+        """Whether a call this reader gathered sets a part its rows publish (`PUBLISHED_PARTS`):
+        a split on a call that sets none (`setSsl`) is no split for the several-splits rule."""
+        call = self._values.sites.get((method, ordinal))
+        return call is not None and any(
+            _matches(call, setter) and setter["part"] in PUBLISHED_PARTS for setter in self._setters
+        )
+
+    def _value(self, site: Mapping[str, Any], slot: int, path: Path) -> str | None:
+        """The text a setter was handed on `path`, traced by the value walk: a string or integer
+        literal, or a configuration expression; None where the path gives anything else or
+        several values (rule 6: pairing two setters' candidates would publish combinations no
+        path makes). A setter gathered inside a body a hand-off entered reads a parameter of
+        that body at the call that entered it on this path (`values.read_through_hand_off`), so a
+        helper called by two callers sets each caller's own value (item 1's review, concern 6)."""
+        position = read_through_hand_off(self._values, path, site, slot)
+        if position is None:
+            return None
         texts: set[str] = set()
-        for reached in resolve_positions(self._workspace, {"value": (site, slot)}, self._values):
+        for reached in resolve_positions(
+            self._workspace, {"value": position}, self._values, within=path
+        ):
             answer = reached["value"]
             stated = answer.kind == LITERAL and answer.literal_kind in (STRING, INT)
             keyed = answer.kind == EXPRESSION and carries_expression(str(answer.value))
@@ -850,20 +1028,6 @@ class _Options:
                 return None
             texts.add(str(answer.value))
         return texts.pop() if len(texts) == 1 else None
-
-
-def _agreed(each: list[Parts]) -> Parts:
-    """The parts every path agrees on; a part every path sets and two read otherwise is set
-    and not read (None, final review I3), a part one path lacks is absent, and no path at all
-    is no part."""
-    if not each:
-        return {}
-    first, *rest = each
-    return {
-        part: value if all(other[part] == value for other in rest) else None
-        for part, value in first.items()
-        if all(part in other for other in rest)
-    }
 
 
 def against_client_base(

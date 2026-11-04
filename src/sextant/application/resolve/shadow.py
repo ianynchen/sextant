@@ -534,7 +534,11 @@ def record_value_resolutions(
     by_site: dict[tuple[str, int], list[Position]] = {}
     for position in asked:
         by_site.setdefault((position.caller, position.ordinal), []).append(position)
-    index = value_index(workspace)
+    index = value_index(
+        workspace,
+        catalogs[0].not_hand_offs if catalogs else (),
+        catalogs[0].hand_off_effects if catalogs else (),
+    )
     rows: list[dict[str, object]] = []
     # Sorted so two runs over one workspace write one order whatever the catalogs' own
     # was (NFR-1); the bindings within a site arrive in the walk's own deterministic

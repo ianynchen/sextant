@@ -205,6 +205,55 @@ _LAST = "last"
 _UNREAD_ORDER = "unread"
 
 
+# The capture names this engine's rows SHOW (the user's ruling of 2026-11-03, option A: a call on
+# a branch that sets none of them is no split for the several-splits rule, `chain_ends`). Each is
+# read into a column of `endpoints` or `endpoint_metadata` in `_derive`: the verb (`method`), the
+# address (`path`, `peer`, `path_kind`, from the url, its parts, the options object a client was
+# built from and the channel a messaging chain names), the payloads (`request_shape`,
+# `response_shape`), the handler and its media (`consumes`, `produces`), whether and in which order
+# the chain derives a row at all (`serves`, `order`), and what a `collects` step gathers
+# (`collected`, the metadata). A column added to the row adds its capture here.
+PUBLISHED_PARTS = frozenset(
+    {
+        "http_method",
+        "url",
+        "url_is",
+        "base",
+        "host",
+        "port",
+        "destination",
+        "options",
+        "channel",
+        "channel_link",
+        "channel_source",
+        "routing_key",
+        "exchange",
+        "body",
+        "response",
+        "response_is",
+        "handler",
+        "consumes",
+        "produces",
+        "serves",
+        "order",
+        "collected",
+    }
+)
+# The capture names a fluent step may carry that are no part of a row (review 3 re-review 2,
+# m-3: every capture a step sets is in one set or the other, `tests/architecture/
+# test_published_parts_are_complete.py`). Each says why:
+UNPUBLISHED_PARTS = frozenset(
+    {
+        # The ladder a `url` capture is read through where its argument is a call
+        # (`chains._VIA_KEYS`): an instruction for reading the `url` part, which the same entry
+        # captures, never a value of its own.
+        "url_via",
+        # The same ladder for the `channel` part.
+        "channel_via",
+    }
+)
+
+
 def run(workspace: Workspace, catalog: Catalog) -> None:
     """Derives one endpoint row per chain reaching a terminal, via the same
     `call_endpoints` insert-if-absent every style uses (D02 §5). `caller` is
@@ -271,7 +320,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # A list, not a set — NFR-1, the same reason single_call's own
     # `referenced` accumulator is one.
     referenced: list[str] = []
-    walk_index = cached_value_index(workspace)
+    walk_index = cached_value_index(workspace, catalog.not_hand_offs, catalog.hand_off_effects)
     client_base = client_base_of(matches, catalog.source)
     _validate_options_capture([*roots, *bean_roots, *steps], client_base, catalog)
     rows: list[dict[str, Any]] = []
@@ -286,7 +335,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # derive_call_endpoints.sql's own contract — it only guards against what
     # is already in the table, not against duplicates arriving in the same
     # `$rows` batch.
-    seen: set[tuple[str, str, str, str, str | None, str | None, str | None]] = set()
+    seen: dict[tuple[str, str, str, str, str | None, str | None, str | None], _Kept] = {}
     # F5 §6.2 (W29). Accumulated across every caller and inserted once, the `rows`
     # discipline: a per-caller insert would be one statement per method in the module.
     caller_parameters = workspace.once(declared_parameters_of)
@@ -297,7 +346,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # Spec §3b: which handler on a chain answers, judged once for every handler the chains
     # name, before any row is derived — the chains are read whole first, because each
     # handler's outcome is one backward walk per `passes_on` call over the whole module.
-    ends: Iterable[ChainEnd] = chain_ends(workspace, catalog)
+    ends: Iterable[ChainEnd] = chain_ends(workspace, catalog, PUBLISHED_PARTS)
     judged: dict[Any, _Judged] | None = None
     candidates: list[_Candidate] | None = None
     unread: dict[tuple[str, str | None, str | None], dict[str, Any]] = {}
@@ -447,7 +496,7 @@ class _DeriveContext:
     carrier_rules: CarrierRules
     field_sources: FieldFacts | None
     rows: list[dict[str, Any]]
-    seen: set[tuple[str, str, str, str, str | None, str | None, str | None]]
+    seen: dict[tuple[str, str, str, str, str | None, str | None, str | None], "_Kept"]
     # F5 §6.2 (W29). One entry per metadata item the chains carried — a header, a query
     # parameter — already redacted. Separate from `rows` because it is per ENTRY and a
     # chain may carry any number, which is why D01 gives it a side table rather than
@@ -536,15 +585,25 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
     `evidence` is a closed set, so the reason stays in the walk, not the
     row."""
     captures = dict(end.captures)
+    if _COMPOSE in captures:
+        composed_field, halves, join = captures[_COMPOSE]
+        captures = {**captures, composed_field: _composed_field(halves, join, captures, context)}
+    if _OPTIONS not in captures:
+        _derive_captured(end, captures, context)
+        return
+    # A request made from an options object (spec 2026-11-02 rule 4): one reading per path the
+    # object is read on, each its own row, never one merged answer. An inexact path is no surer
+    # than `partial`, as a chain the walk back reached inexactly is.
+    for filled, exact in _with_request_options(captures, context):
+        _derive_captured(end if exact else replace(end, inexact=True), filled, context)
+
+
+def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveContext") -> None:
+    """`_derive`'s row for one reading of the chain's captures."""
     # Spec 2026-09-21 §4: the root's own direction where it declared one,
     # the catalog's otherwise — read once, because every column and key
     # below that names a direction names this one.
     direction = captures.get(_DIRECTION, context.catalog.direction)
-    if _COMPOSE in captures:
-        composed_field, halves, join = captures[_COMPOSE]
-        captures = {**captures, composed_field: _composed_field(halves, join, captures, context)}
-    if _OPTIONS in captures:
-        captures = _with_request_options(captures, context)
     # The consumer the chain captured, whatever the direction (read on the row
     # for an inbound one alone, below); and — fix round 1, finding 4 — a
     # channel-sourced chain (`from("ch")…`, spec §5), whose row is decided by
@@ -688,10 +747,17 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
         # (`pathless_serves`), read in full: the framework stores no path, and that is exact.
         destinations = [(None, context.pathless_serves, str(Resolution.RESOLVED))]
     else:
-        destinations = [
-            _composed_address(captures, context, url_argument)
-            for url_argument in (_url_arguments(captures, context) if "url" in captures else [None])
-        ]
+        # One per url argument, and per path the client's defaults are read on (rule 4): a
+        # destination two paths give alike is one.
+        destinations = list(
+            dict.fromkeys(
+                destination
+                for url_argument in (
+                    _url_arguments(captures, context) if "url" in captures else [None]
+                )
+                for destination in _composed_address(captures, context, url_argument)
+            )
+        )
     # Computed once, outside the destinations loop — the same
     # `single_call` reasoning: neither depends on peer/path/resolution, and
     # `argument_descriptor` appends to the shared `referenced` accumulator,
@@ -851,6 +917,10 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
         # A handler not readable here (spec §3b): its identity is read, whether it passes the
         # request on is decided in code this analysis does not read, so the row is `partial`
         # and a `handler_pass_through` question names that code.
+        # A chain the walk back reached on an inexact path (spec 2026-11-02 rule 9, review 3
+        # re-review M-B) is kept, never surer than `partial`.
+        if end.inexact and resolution == str(Resolution.RESOLVED):
+            resolution = str(Resolution.PARTIAL)
         read_resolution = resolution
         unreadable = answering.outcome == UNREADABLE
         if unreadable and resolution == str(Resolution.RESOLVED):
@@ -864,6 +934,30 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
             and path is not None
             and (verb is not None or verbless)
         )
+        # Through `_metadata_row` like every other entry this engine writes, so the value is
+        # masked by the same redactor on the same rule — a query parameter named
+        # `access_token` is exactly the shape that matters.
+        entries = [
+            *(
+                _metadata_row(entry, context, direction, verb, path)
+                for entry in captures.get(_COLLECTED) or ()
+            ),
+            *(
+                _metadata_row(
+                    {
+                        "kind": QUERY_KIND,
+                        "name": {"kind": "string", "value": name},
+                        "value": None if value is None else {"kind": "string", "value": value},
+                    },
+                    context,
+                    direction,
+                    verb,
+                    path,
+                )
+                for name, value in query
+            ),
+        ]
+        kept: _Kept | None = None
         if path is not None and (verb is not None or verbless) and not ranked:
             # `verb or ""` — single_call's own dedup key (`_matching_method`'s
             # caller): a verbless row has no method to distinguish it by, so
@@ -903,30 +997,32 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
                 None if inbound else peer,
                 handler if inbound else None,
             )
-            if key in context.seen:
-                continue
-            context.seen.add(key)
-        metadata: list[dict[str, Any]] = [] if ranked else context.metadata
-        for entry in captures.get(_COLLECTED) or ():
-            metadata.append(_metadata_row(entry, context, direction, verb, path))
-        # Below the dedup `continue` on purpose: a row the key already saw writes no second
-        # copy of its own query parameters either. Through `_metadata_row` like every other
-        # entry this engine writes, so the value is masked by the same redactor on the same
-        # rule — a query parameter named `access_token` is exactly the shape that matters.
-        for name, value in query:
-            metadata.append(
-                _metadata_row(
-                    {
-                        "kind": QUERY_KIND,
-                        "name": {"kind": "string", "value": name},
-                        "value": None if value is None else {"kind": "string", "value": value},
-                    },
-                    context,
-                    direction,
-                    verb,
-                    path,
-                )
+            # **Rule 4 for rows of one identity** (review 3 re-review 2, m-2). Every column this
+            # row publishes beside its identity, with its metadata: two chains equal in all of
+            # it are one request, and the row keeps the more exact resolution of the two; two
+            # that differ in any of it are two requests the table cannot hold apart (one row
+            # per identity, its metadata keyed to it), so the one row is true of neither alone
+            # and no surer than `partial`.
+            published = (
+                handler,
+                request_shape,
+                response_shape,
+                consumes,
+                produces,
+                path_kind,
+                method_kind,
+                entries,
             )
+            seen = context.seen.get(key)
+            if seen is not None:
+                seen.merged(published, resolution)
+                continue
+            kept = _Kept(published)
+            context.seen[key] = kept
+        metadata: list[dict[str, Any]] = [] if ranked else context.metadata
+        # Below the dedup `continue` on purpose: a row the key already saw writes no second
+        # copy of its own metadata either.
+        metadata.extend(entries)
         if source is not None:
             # Finding 4: the channel-sourced chain reached a wire — the source
             # channel's wire end is this row, an outbound `fed_by`.
@@ -1020,6 +1116,8 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
             if len(variants) > 1 and variant_row["resolution"] == str(Resolution.RESOLVED):
                 variant_row = {**variant_row, "resolution": str(Resolution.NARROWED)}
             context.rows.append(variant_row)
+            if kept is not None:
+                kept.rows.append(variant_row)
             if variant_unread is not None and context.unread is not None:
                 file_unread(context.unread, variant_row, variant_unread)
 
@@ -1051,6 +1149,32 @@ def _verb_of(argument: Any, context: "_DeriveContext") -> str | None:
     if isinstance(argument, str):
         return argument
     return _string_value(argument) or static_field_value(argument, context.verb_fields)
+
+
+class _Kept:
+    """The row(s) one identity published (`_derive`'s dedup key), with what the first chain to
+    reach it published beside the key: a later chain of the same identity changes their
+    resolution, never adds a row (review 3 re-review 2, m-2)."""
+
+    def __init__(self, published: tuple[Any, ...]) -> None:
+        self.published = published
+        self.differs = False
+        self.rows: list[dict[str, Any]] = []
+
+    def merged(self, published: tuple[Any, ...], resolution: str) -> None:
+        """Another chain of this identity: equal in every published column, a row keeps the
+        more exact resolution of the two (a row one of several handlers answers stays
+        `narrowed`); different in any, every row is no surer than `partial`."""
+        if published != self.published:
+            self.differs = True
+        for row in self.rows:
+            if self.differs:
+                row["resolution"] = weaker(row["resolution"], str(Resolution.PARTIAL))
+            elif (
+                row["resolution"] != str(Resolution.NARROWED)
+                and weaker(resolution, row["resolution"]) == row["resolution"]
+            ):
+                row["resolution"] = resolution
 
 
 @dataclass(frozen=True)
@@ -1590,7 +1714,7 @@ def _assembled_text(answer: "Answer | None") -> tuple[str | None, str | None, st
 
 def _composed_address(
     captures: dict[str, Any], context: _DeriveContext, url_argument: dict[str, Any] | None
-) -> tuple[str | None, str | None, str]:
+) -> list[tuple[str | None, str | None, str]]:
     """One chain's peer/path/resolution from its `base` and `url` captures
     together (2F design §4's base composition), `url_argument` being one of
     the addresses `_url_arguments` reads the `url` capture as (None without one).
@@ -1609,7 +1733,10 @@ def _composed_address(
 
     The composed string is then read by `_address_of`, so a composed absolute
     literal splits by CP-2 exactly as a written one does and a composition
-    carrying an expression stays whole."""
+    carrying an expression stays whole.
+
+    One answer, except where a client's defaults fill the address (`fill_authority`): one per
+    path the defaults are read on (spec 2026-11-02 rule 4, `_with_client_defaults`)."""
     if "base" not in captures:
         if context.workspace is None or context.values is None:
             read = url_of(url_argument)
@@ -1632,24 +1759,34 @@ def _composed_address(
         # rows 325-326) names no peer, whatever its URL's authority or a later host or port
         # step says, and no client base is joined to it. The path is the address's own.
         if captures.get(_DESTINATION) == _UNREAD_DESTINATION:
-            return None, read[1], read[2]
+            return [(None, read[1], read[2])]
         if context.client_base is not None and context.client_base["join"] == FILL_AUTHORITY:
-            filled = _with_client_defaults(read, captures, context)
-            composed = _with_stated_authority(read, captures if filled is None else filled, context)
-            # A default the request takes was set and not read: WHO is called is not known.
-            return composed if filled is not None else (None, composed[1], composed[2])
-        return _against_client_base(
-            _with_stated_authority(read, captures, context), captures, context
-        )
+            found = []
+            for filled, exact in _with_client_defaults(read, captures, context):
+                peer, path, resolution = _with_stated_authority(
+                    read, captures if filled is None else filled, context
+                )
+                # A default the request takes was set and not read, or is not known on this
+                # path: WHO is called is not known — peer NULL, the path kept, `partial` (rule 4).
+                if filled is None:
+                    peer, resolution = None, weaker(resolution, str(Resolution.PARTIAL))
+                # A path rule 9 cannot call exact is no surer than `partial`.
+                if not exact:
+                    resolution = weaker(resolution, str(Resolution.PARTIAL))
+                found.append((peer, path, resolution))
+            return found
+        return [
+            _against_client_base(_with_stated_authority(read, captures, context), captures, context)
+        ]
     base = _string_value(_address_read(captures.get("base"), context))
     if base is None:
-        return None, None, "unresolved"
+        return [(None, None, "unresolved")]
     if "url" not in captures:
-        return _address_of(base)
+        return [_address_of(base)]
     path = _string_value(url_argument)
     if path is None:
-        return None, None, "unresolved"
-    return _address_of(base + path)
+        return [(None, None, "unresolved")]
+    return [_address_of(base + path)]
 
 
 def _with_stated_authority(
@@ -1758,7 +1895,7 @@ def _with_client_defaults(
     address: tuple[str | None, str | None, str],
     captures: dict[str, Any],
     context: _DeriveContext,
-) -> dict[str, Any] | None:
+) -> list[tuple[dict[str, Any] | None, bool]]:
     """`captures` with the client's default host and port filling the parts the request does
     not name — the `fill_authority` join, Vert.x's (CP-56 row group (e)): `x(uri)` takes both,
     `x(host, uri)` the port only, `x(port, host, uri)` neither, and a `host(…)` or `port(…)`
@@ -1766,60 +1903,81 @@ def _with_client_defaults(
     url reader) takes neither, and neither does an address whose path was not read and which
     names no host of its own, since nothing then says it was not absolute.
 
-    The defaults are the client's options object's (`client_defaults`). A default that was set
-    and not read, or that the paths dispute, is one Vert.x sends to: None, and the row keeps its
-    path and its resolution with no peer (D02, final review I3), never the other part alone.
-    One no setter reached fills nothing, because Vert.x never rewrites the path and an unset
-    default (`localhost`, 80) cannot be proven (spec §2a). The filled parts are then composed
-    into one peer by `_with_stated_authority`, as a request's own parts are."""
+    **One reading per path** (spec 2026-11-02 rule 4), each `(captures, exact)`: the defaults
+    are the client's options object's, read per path (`client_defaults`), never merged — two
+    factories, one setting port 8080 and one setting none, are two readings. On a path a default
+    is the text a setter was handed, the framework's own value where the path proves the part
+    unset (`localhost`, 80; rule 5), or not known; a default the request takes that is not
+    known is None in place of the captures, and that row keeps its path with no peer, `partial`
+    (D02, final review I3), never the other part alone. The filled parts are then composed into
+    one peer by `_with_stated_authority`, as a request's own parts are. `exact` is False where
+    rule 9 makes the path inexact."""
     peer, path, _ = address
     if peer is not None or context.workspace is None:
-        return captures
+        return [(captures, True)]
     # An unread path may have been absolute, unless the request names its own host: the
     # `x(host, uri)` form is never absolute, so its port is still the default.
     if path is None and "host" not in captures:
-        return captures
+        return [(captures, True)]
     missing = [part for part in ("host", "port") if part not in captures]
-    client = _client_of(captures, context) if missing else None
+    if not missing:
+        return [(captures, True)]
+    client = _client_of(captures, context)
+    # A client the chain holds no executing call for is not reached: its defaults are unknown.
     if client is None:
-        return captures
-    defaults = client_defaults(context.workspace, context.values, client, context.client_base or {})
-    filled = dict(captures)
-    for part in missing:
-        if part not in defaults:
+        return [(None, True)]
+    readings: list[tuple[dict[str, Any] | None, bool]] = []
+    for defaults in client_defaults(
+        context.workspace, context.values, client, context.client_base or {}, context.path
+    ):
+        texts = [defaults.parts.get(part) for part in missing]
+        if any(text is None for text in texts):
+            readings.append((None, defaults.exact))
             continue
-        text = defaults[part]
-        if text is None:
-            return None
-        filled[part] = _part_argument(text)
-    return filled
+        readings.append(
+            (
+                {
+                    **captures,
+                    **{part: _part_argument(str(text)) for part, text in zip(missing, texts)},
+                },
+                defaults.exact,
+            )
+        )
+    return readings
 
 
-def _with_request_options(captures: dict[str, Any], context: _DeriveContext) -> dict[str, Any]:
+def _with_request_options(
+    captures: dict[str, Any], context: _DeriveContext
+) -> list[tuple[dict[str, Any], bool]]:
     """`captures` with the options object a request is made from read into the request's own
-    parts (Vert.x's `request(m, RequestOptions)`, spec §3d): its `uri` the address, its `host`
-    and `port` the request's own, each only where no step after the root captured that part
-    (a step on the request runs later, so it wins). The object is read by the catalog's
-    `client_base` setters, the reader of a client's own options. A part set to a value not read
-    here is captured unread, so the row says who is called went unread. A read uri makes the
-    chain a row (`serves`), where the root alone named no address, and so does a uri set and
-    not read: the row then carries the address reader's word for it."""
+    parts (Vert.x's `request(m, RequestOptions)`, spec §3d), ONE reading per path the object is
+    read on (spec 2026-11-02 rule 4), each `(captures, exact)`: its `uri` the address, its
+    `host` and `port` the request's own, each only where no step after the root captured that
+    part (a step on the request runs later, so it wins). The object is read by the catalog's
+    `client_base` setters, the reader of a client's own options. A part proven unset on a path is
+    left to the client's defaults (CP-56 row 126); one set to a value not read here, or not known
+    on that path (an object built from JSON, one the walk did not reach), is captured unread, so
+    the row says who is called went unread. A read uri makes the chain a row (`serves`), where
+    the root alone named no address, and so does a uri set and not read or not known: the row
+    then carries the address reader's word for it."""
     if context.workspace is None or context.client_base is None:
-        return captures
-    parts = options_parts(
-        context.workspace, context.values, captures[_OPTIONS], context.client_base
-    )
-    filled = dict(captures)
-    for part, field in _OPTION_CAPTURES.items():
-        if part not in parts or field in captures:
-            continue
-        text = parts[part]
-        filled[field] = _UNRESOLVED_ARGUMENT if text is None else _part_argument(text)
-        if field == "url":
-            # The object names an address whether or not it was read here: an unread one is a
-            # row the address reader marks, never a request dropped.
-            filled[_SERVES] = True
-    return filled
+        return [(captures, True)]
+    readings: list[tuple[dict[str, Any], bool]] = []
+    for each in options_parts(
+        context.workspace, context.values, captures[_OPTIONS], context.client_base, context.path
+    ):
+        filled = dict(captures)
+        for part, field in _OPTION_CAPTURES.items():
+            if part not in each.parts or field in captures:
+                continue
+            text = each.parts[part]
+            filled[field] = _UNRESOLVED_ARGUMENT if text is None else _part_argument(text)
+            if field == "url":
+                # The object names an address whether or not it was read here: an unread one is
+                # a row the address reader marks, never a request dropped.
+                filled[_SERVES] = True
+        readings.append((filled, each.exact))
+    return readings
 
 
 def _part_argument(text: str) -> dict[str, Any]:

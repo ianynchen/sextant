@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from test_call_engines import _MODULE, CATALOGS_DIR, _resolve_fluent_walked
 
+from flow_facts import straight_line
 from sextant.application.ports.catalogs import CatalogError
 from sextant.application.resolve.shapes.inbound_routes import (
     EXACT_MOUNT_PATH,
@@ -157,7 +158,7 @@ class _Module:
 
 
 def _rows(tmp_path: Path, module: _Module) -> tuple[set[tuple], list[dict]]:
-    workspace = _resolve_fluent_walked(tmp_path, module.facts, _vertx_web())
+    workspace = _resolve_fluent_walked(tmp_path, straight_line(module.facts), _vertx_web())
     rows = {
         (r["path"], str(r["handler"]).rsplit("#", 1)[-1].split("(")[0], r["resolution"])
         for r in workspace.query("endpoints")
@@ -576,7 +577,7 @@ def test_router_producers_are_derived_by_type(tmp_path: Path):
     )
     module.call(wire, APP, "wire", f"({VERTX})Lio/vertx/ext/web/Router;", [], kind="virtual")
     module.call(wire, "com/other/Lib#", "name", "()Ljava/lang/String;", [], kind="static")
-    workspace = _resolve_fluent_walked(tmp_path, module.facts, _vertx_web())
+    workspace = _resolve_fluent_walked(tmp_path, straight_line(module.facts), _vertx_web())
     index = value_index(workspace)
     ancestors = {"io/vertx/ext/web/impl/RouterImpl#": [(ROUTER, "implements", False)]}
     found = router_producers(index, frozenset({ROUTER}), ancestors)

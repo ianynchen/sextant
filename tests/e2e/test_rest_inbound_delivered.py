@@ -12,6 +12,8 @@ import pytest
 from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
+from sextant.application.resolve.effective_calls import effective_call_sites
+from sextant.application.resolve.values import producers_of, value_index
 from sextant.cli.app import cli
 from sextant.domain.closed_sets import ANY_METHOD, PATH_KIND_PATTERN
 from sextant.domain.symbols import bare_descriptor
@@ -1490,7 +1492,16 @@ def test_ktor_client_calls_derive_outbound_rows_joined_to_the_client_base(ktor_r
     "/feed")` sends with its own scheme and keeps the base's port, which Ktor writes because
     443 is not `ws`'s default — `ws://pricing.example.com:443/feed`, as CP-54's rows 94-113
     measured (`request_url: {scheme: ws}`); `client.sse("ticks")` joins as `get` does, `GET
-    pricing.example.com /ticks` (rows 114-123)."""
+    pricing.example.com /ticks` (rows 114-123).
+
+    **`placeOrder`'s `setBody("order")` is `partial`.** Ktor's `setBody` is `inline`, and
+    kotlinc compiles its `when (body)` into two calls of `setBody(Object)` on two branches of
+    the caller (sites 3 and 5 on this bytecode): two calls on branches (the ruling of
+    2026-11-03, "A: every row partial"). The body IS a part this row publishes — its
+    `request_shape`, `{"wire_type": "string"}` — so the ruling of 2026-11-03 that a split
+    setting no published part does not count (option A) leaves both counted. That is true: the
+    `null` branch sends `NullBody`, so the shape depends on the branch. Ruled 2026-11-03 (keep
+    `partial`); a separate resolution for the shape is OI-279."""
     http = {
         (r["method"], r["peer"], r["path"], r["resolution"])
         for r in ktor_rows
@@ -1498,7 +1509,7 @@ def test_ktor_client_calls_derive_outbound_rows_joined_to_the_client_base(ktor_r
     }
     assert http == {
         ("GET", "pricing.example.com", "/quotes", "resolved"),
-        ("POST", "orders.example.com", "/orders", "resolved"),
+        ("POST", "orders.example.com", "/orders", "partial"),
         ("GET", "stock.example.com", "/levels", "resolved"),
         ("PUT", "orders.example.com", "/orders/7", "resolved"),
         ("GET", "orders.example.com", "/prepared", "resolved"),
@@ -2071,6 +2082,7 @@ def vertx_tables(tmp_path_factory: pytest.TempPathFactory) -> dict[str, list[dic
     try:
         tables["open_questions"] = [dict(row) for row in workspace.query("open_questions")]
         tables["roots"] = [dict(row) for row in workspace.query("roots")]
+        tables["branched_options"] = _branched_options(workspace)
     finally:
         workspace.close()
     result = CliRunner().invoke(
@@ -2640,6 +2652,62 @@ def test_vertx_a_router_built_in_a_base_class_takes_the_prefix_a_third_method_mo
 # Task 12: outbound parts, absolute URLs and the Hono helper ---------------------------
 
 
+_WEB_CLIENT_OPTIONS = "io/vertx/ext/web/client/WebClientOptions#"
+
+
+def _branched_options(workspace: DuckDbWorkspace) -> list[dict]:
+    """The value walk's paths to the options object `BranchedSearchClient` hands
+    `WebClient.create` — the chain of calls each path ran on it, and whether it is exact —
+    read on the fixture's own javac bytecode (rule 9's fact as the extractor writes it)."""
+    sites = [
+        row
+        for row in effective_call_sites(workspace)
+        if "/BranchedSearchClient#<init>(" in str(row["caller"]) and row["name"] == "create"
+    ]
+    assert len(sites) == 1, "the fixture must build its client once"
+    setters = {
+        (str(row["owner"]), str(row["name"]), str(row["descriptor"]))
+        for row in effective_call_sites(workspace)
+        if row["owner"] == _WEB_CLIENT_OPTIONS and str(row["name"]).startswith("setDefault")
+    }
+    return [
+        {
+            "chain": [str(workspace_row_name(workspace, at)) for at in producer.chain],
+            "exact": not producer.inexact,
+        }
+        for producer in producers_of(
+            value_index(workspace),
+            sites[0],
+            1,
+            {(_WEB_CLIENT_OPTIONS, "<init>"), *((owner, name) for owner, name, _ in setters)},
+            along_receivers=True,
+            configuring=setters,
+        )
+    ]
+
+
+def workspace_row_name(workspace: DuckDbWorkspace, at: tuple[str, int]) -> str:
+    """The method a chain step `(caller, ordinal)` calls."""
+    [row] = [
+        row for row in effective_call_sites(workspace) if (row["caller"], row["ordinal"]) == at
+    ]
+    return str(row["name"])
+
+
+@pytest.mark.pins("values.a-call-NOT-on-every-path-to-the-use-SPLITS-the-path")
+def test_vertx_a_port_set_on_one_branch_is_two_paths_on_real_bytecode(vertx_tables):
+    """Spec 2026-11-02 rule 9, §4's fixture-level test (review 3, m1): `BranchedSearchClient`
+    sets the default port only `if (tls)`. On the extractor's own output for javac's bytecode,
+    the walk reaches the options object on two paths — one with `setDefaultPort` and one
+    without — both exact. Before rule 9 the facts carried no branch and the walk read one path,
+    with the port, as if every run set it. The published rows are one per path
+    (`test_vertx_a_port_set_on_one_branch_is_one_row_per_path`)."""
+    assert sorted((path["chain"], path["exact"]) for path in vertx_tables["branched_options"]) == [
+        (["<init>", "setDefaultHost"], True),
+        (["<init>", "setDefaultHost", "setDefaultPort"], True),
+    ]
+
+
 def _vertx_calls(rows: list[dict], caller_class: str) -> set[tuple]:
     """`(method, path, peer)` of every outbound row a client class sends."""
     return {
@@ -2708,16 +2776,18 @@ def test_vertx_the_options_object_gives_the_client_its_base(vertx_outbound):
 def test_vertx_a_url_parameter_is_one_row_per_callers_value(vertx_outbound):
     """Final review I2, ruled on enumerable-is-exact: a helper's url parameter is handed
     `"/param-known"`, `"/param-other"` and a value nobody reads. Each literal is its own row,
-    `resolved`, and the unread value is a row with `path` NULL, `unresolved`. Publishing one
-    literal alone, `resolved`, would claim it was the whole answer."""
+    and the unread value is a row with `path` NULL, `unresolved`. Publishing one literal alone
+    would claim it was the whole answer. The client is `WebClient.create(vertx)`, a factory
+    overload no rung of the client model declares, so its default host and port are not known
+    (spec 2026-11-02 rule 5): each literal row is `partial`, peer NULL, the path kept."""
     rows = [
         r
         for r in vertx_outbound
         if r["caller"] is not None and "/ParameterUrls#call(" in str(r["caller"])
     ]
     assert {(r["method"], r["path"], r["resolution"]) for r in rows} == {
-        ("GET", "/param-known", "resolved"),
-        ("GET", "/param-other", "resolved"),
+        ("GET", "/param-known", "partial"),
+        ("GET", "/param-other", "partial"),
         ("GET", None, "unresolved"),
     }
     # The review's own case: one literal caller and one unread. The literal was published
@@ -2728,7 +2798,7 @@ def test_vertx_a_url_parameter_is_one_row_per_callers_value(vertx_outbound):
         if r["caller"] is not None and "/ParameterUrls#single(" in str(r["caller"])
     ]
     assert {(r["method"], r["path"], r["resolution"]) for r in lone} == {
-        ("DELETE", "/param-lone", "resolved"),
+        ("DELETE", "/param-lone", "partial"),
         ("DELETE", None, "unresolved"),
     }
 
@@ -2737,16 +2807,130 @@ def test_vertx_a_configured_base_is_what_the_walk_reads_of_it(vertx_outbound):
     """Hono's shape: the options are configured statement by statement from a config object's
     getters (`config.getHost()`, `config.getPort()`), beside calls that set no address, and
     the config object is handed in by a framework, so where its host comes from is outside the
-    module. The host is unread: `GET /suggest` keeps its path with no peer — never a default
-    Vert.x would fill (coordinator ruling 2026-10-31, Q2 option B: no configuration-read table
-    exists, so a `Properties.getProperty` host is not read either). The port getter returns a
+    module. The host is unread: `GET /suggest` keeps its path with no peer, `partial` (spec
+    2026-11-02 rule 4) — never a default Vert.x would fill (coordinator ruling 2026-10-31, Q2
+    option B: no configuration-read table exists, so a `Properties.getProperty` host is not read
+    either). The port getter returns a
     constant, and `get("search-alt", "/alt")` goes to `search-alt:9200`: the 9200 is on the
     options object alone, so the reader did follow the factory to it, past the configuring
     calls, and through the getter."""
-    assert _vertx_calls(vertx_outbound, "ConfiguredSearchClient") == {
-        ("GET", "/suggest", None),
-        ("GET", "/alt", "search-alt:9200"),
+    assert _vertx_rows(vertx_outbound, "ConfiguredSearchClient") == {
+        ("GET", "/suggest", None, "partial"),
+        ("GET", "/alt", "search-alt:9200", "resolved"),
     }
+
+
+# Per-path truth, item 2: one answer per path, the framework default where it is proven -----
+
+
+def _vertx_rows(rows: list[dict], caller_class: str) -> set[tuple]:
+    """`(method, path, peer, resolution)` of every outbound row a client class sends."""
+    return {
+        (r["method"], r["path"], r["peer"], r["resolution"])
+        for r in rows
+        if r["caller"] is not None and f"/{caller_class}#" in str(r["caller"])
+    }
+
+
+def test_vertx_a_port_set_on_one_branch_is_one_row_per_path(vertx_outbound):
+    """Spec 2026-11-02 rules 4, 5 and 9 (review 2, M4): `BranchedSearchClient` sets the default
+    port only `if (tls)`. A run with `tls` sends to `branched:443`, a run without it to Vert.x's
+    own default port, 80 (CP-56 row 132): two rows, each true of the run it names, both
+    `resolved`. The merge published `branched` alone, `resolved`, as if no port were set."""
+    assert _vertx_rows(vertx_outbound, "BranchedSearchClient") == {
+        ("GET", "/b", "branched:443", "resolved"),
+        ("GET", "/b", "branched:80", "resolved"),
+    }
+
+
+@pytest.mark.pins("client_base.each-PATH-to-the-options-is-its-own-READING")
+def test_vertx_two_factories_one_setting_no_port_are_two_rows(vertx_outbound):
+    """Rule 4: one client field written by two factories, one setting port 8443 and one setting
+    none. Each factory is a path, and each path composes its own address: `two:8443` and
+    `two:80`. The merge read the port one path does not set as absent on every path and
+    published `two`, `resolved` — false for the first."""
+    assert _vertx_rows(vertx_outbound, "TwoFactoryClient") == {
+        ("GET", "/two", "two:8443", "resolved"),
+        ("GET", "/two", "two:80", "resolved"),
+    }
+
+
+@pytest.mark.pins("client_base.an-unset-part-is-the-default-only-where-PROVEN")
+def test_vertx_options_built_from_json_leave_the_peer_unknown(vertx_outbound):
+    """Rule 5: `new WebClientOptions(config)` reads its port from a JSON object that is not
+    here, so the port is not proven unset and who is called is unknown — peer NULL, the path
+    kept, `partial`. Reading the object as "nothing set" published `json`, `resolved`."""
+    assert _vertx_rows(vertx_outbound, "JsonOptionsClient") == {
+        ("GET", "/json", None, "partial"),
+    }
+
+
+@pytest.mark.pins("client_base.an-UNSET-part-takes-the-FRAMEWORKS-default")
+def test_vertx_options_that_set_no_default_send_to_localhost_80(vertx_outbound):
+    """Rule 5: options built by the no-argument constructor, every call on them read, none
+    setting an address part: Vert.x fills its own defaults, `localhost` and 80 (CP-56 row 132),
+    declared in the client model's `unset`."""
+    assert _vertx_rows(vertx_outbound, "DefaultOptionsClient") == {
+        ("GET", "/local", "localhost:80", "resolved"),
+    }
+
+
+def test_vertx_a_request_options_host_set_on_one_branch_is_one_row_per_path(vertx_outbound):
+    """Rules 4 and 9: `new RequestOptions().setURI("/ro")`, then `setHost("direct")` only
+    `if (direct)`. A run with it goes to `direct:9200`, the client's default port; a run without
+    it to the client's default host, `ro-default:9200` (CP-56 row 126). Two rows, `resolved`."""
+    assert _vertx_rows(vertx_outbound, "RequestOptionsClient") == {
+        ("GET", "/ro", "direct:9200", "resolved"),
+        ("GET", "/ro", "ro-default:9200", "resolved"),
+    }
+
+
+@pytest.mark.pins("client_base.a-setter-in-an-ENTERED-body-reads-its-argument-through-the-HAND-OFF")
+@pytest.mark.pins("values.a-GATHERED-call-names-the-hand-off-that-ENTERED-its-body")
+def test_vertx_a_setter_in_a_helper_reads_the_port_its_own_caller_hands_in(vertx_outbound):
+    """Concern 6 of item 1's review: `port(options, 1001)` and `port(options, 1002)` each hand
+    the options to one helper that calls `setDefaultPort(port)`. The setter's argument is the
+    helper's parameter, read on the path that handed the options in, so each caller pairs with
+    its own port — never both ports read across both callers, which disagree."""
+    assert _vertx_rows(vertx_outbound, "HelperConfiguredClient") == {
+        ("GET", "/first", "helper:1001", "resolved"),
+        ("GET", "/second", "helper:1002", "resolved"),
+    }
+
+
+@pytest.mark.pins("fluent.a-default-read-on-an-INEXACT-path-is-partial")
+def test_vertx_two_guarded_address_setters_make_every_row_partial(vertx_outbound):
+    """Rule 9's several-splits rule (ruled 2026-11-03, "A: every row partial"): `if (a)
+    setDefaultPort(1)` and `if (b) setDefaultHost("h")`. The facts say each call is on a
+    branch, never which, so the four combinations include ones no run may make: every row is
+    `partial`, none dropped."""
+    assert _vertx_rows(vertx_outbound, "GuardedOptionsClient") >= {
+        ("GET", "/two-parts", "g:1", "partial"),
+        ("GET", "/two-parts", "g:80", "partial"),
+        ("GET", "/two-parts", "h:1", "partial"),
+        ("GET", "/two-parts", "h:80", "partial"),
+    }
+
+
+@pytest.mark.pins("client_base.the-options-reader-counts-only-PUBLISHED-parts")
+def test_vertx_a_guarded_call_setting_no_address_part_is_no_split_for_the_row(vertx_outbound):
+    """The several-splits rule counts only calls setting a part the row publishes (ruled
+    2026-11-03, option A; `client_base.PUBLISHED_PARTS`): `if (a) setSsl(true)` sets none, so
+    `if (b) setDefaultPort(443)` is the one split, and its two rows are `resolved`."""
+    rows = {
+        r for r in _vertx_rows(vertx_outbound, "GuardedOptionsClient") if r[1] == "/ssl-and-port"
+    }
+    assert rows == {
+        ("GET", "/ssl-and-port", "s:443", "resolved"),
+        ("GET", "/ssl-and-port", "s:80", "resolved"),
+    }
+
+
+def test_vertx_options_past_the_path_cap_are_one_row_with_the_peer_unknown(vertx_outbound):
+    """Nine guarded ports are 512 paths, past the cap (rule 9, review 3 M2): one row, its parts
+    unknown (`non_enumerable`), peer NULL, the path kept, `partial` — never dropped."""
+    rows = {r for r in _vertx_rows(vertx_outbound, "GuardedOptionsClient") if r[1] == "/capped"}
+    assert rows == {("GET", "/capped", None, "partial")}
 
 
 # Task 14: Quarkus Reactive Routes, the same dispatcher -----------------------------------
@@ -2771,3 +2955,45 @@ def test_quarkus_reactive_routes_verbless_and_regex(quarkus_endpoints):
     assert len(files) == 1, sorted(str(r["path"]) for r in inbound)
     assert (files[0]["method"], files[0]["resolution"]) == ("GET", "resolved")
     assert _is_pattern(files[0]), files[0]
+
+
+# Per-path truth, item 2 fix round 1 ----------------------------------------------------------
+
+
+@pytest.mark.pins("client_base.an-object-STORED-in-a-field-is-not-known")
+@pytest.mark.pins("client_base.a-call-through-a-FIELD-of-the-options-type-may-be-on-the-object")
+def test_vertx_options_kept_in_a_field_are_not_proven_unset(vertx_outbound):
+    """Item 2 review, C1 (rules 2 and 5): options stored in a field are configured through it
+    (`opts.setDefaultHost("ctor")` in the constructor) or may be later (`init()` sets the
+    port), calls the walk does not read on the object it reaches. Once in a field anything can
+    change it, so no part is proven unset: peer NULL, `partial` — never Vert.x's `localhost:80`
+    or `held:80`, `resolved`, for a client whose host and port are set. `this.holder = o;
+    this.holder.setDefaultPort(5)` stores from a local, which D00 §5 records no fact for, so the
+    call through a field of the options type in the same method is taken to be on the object."""
+    assert _vertx_rows(vertx_outbound, "FieldOptionsClient") == {
+        ("GET", "/field-ctor", None, "partial"),
+        ("GET", "/field-held", None, "partial"),
+        ("GET", "/field-holder", None, "partial"),
+    }
+
+
+@pytest.mark.pins("client_base.an-object-STORED-in-a-field-is-not-known")
+def test_vertx_request_options_kept_in_a_field_are_not_read_as_unset(vertx_outbound):
+    """C1 for a request's own options: `init()` sets the host on the stored `RequestOptions`,
+    so the client's default host is not proven to be the one the request takes. The object is
+    not known whole (rule 2): its uri and host are unread, one row, never dropped."""
+    assert _vertx_rows(vertx_outbound, "StoredRequestOptionsClient") == {
+        ("GET", None, None, "unresolved"),
+    }
+
+
+@pytest.mark.pins("chains.a-step-in-an-ENTERED-body-reads-its-argument-through-the-HAND-OFF")
+def test_vertx_a_request_step_in_a_helper_reads_its_own_callers_argument(vertx_outbound):
+    """Item 2 review, C2 (concern 6 in the forward chain walk): `port(request, 61)` and
+    `port(request, 62)` hand each caller's request to one helper doing `request.port(port)`.
+    The step's argument is the helper's parameter, read at the call that entered the helper on
+    the chain's own path, so each request carries its caller's port: `fw:61` and `fw:62`."""
+    assert _vertx_rows(vertx_outbound, "HelperRequestPort") == {
+        ("GET", "/fw1", "fw:61", "resolved"),
+        ("GET", "/fw2", "fw:62", "resolved"),
+    }

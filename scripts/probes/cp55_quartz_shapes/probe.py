@@ -3,10 +3,12 @@ in bytecode — every static factory of the six builder classes with its descrip
 `Scheduler.scheduleJob` / `scheduleJobs` / `rescheduleJob` overload, the default group of a job and
 a trigger key, `QuartzJobBean.execute`'s call to `executeInternal`, what javac 21 emits for
 `onDaysOfTheWeek(Calendar.TUESDAY, Calendar.THURSDAY)` and `atHourAndMinuteOnGivenDaysOfWeek(3, 0,
-1, 2)`, the eight boxing methods, and the call each `Scheduler` overload compiles to. Every cell is
+1, 2)`, the eight boxing methods, the call each `Scheduler` overload compiles to, and (g) what each
+pairing call the Quartz catalog declares does to its arguments and when it refuses. Every cell is
 read off the jars and the probe module's class files with `javap`, except the default group of a
 key built without one, which `Main.java` takes from Quartz itself by running `JobKey` and
-`TriggerKey`. The version in each column is the jar's own manifest, and the JVM that loaded the
+`TriggerKey`, and (g)'s outcomes, which it takes from a scheduler over Quartz's in-memory store,
+created and never started. The version in each column is the jar's own manifest, and the JVM that loaded the
 classes has to report the same one. Prints the observation table `cp55_quartz_shapes.md` carries."""
 
 import re
@@ -15,7 +17,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _jvm_annotations import ProbeError, body, classes, identity, jar_at, javap
+from _jvm_annotations import ProbeError, body, class_names, classes, identity, jar_at, javap
 
 QUARTZ = ("org.quartz-scheduler", "quartz")
 SPRING = ("org.springframework", "spring-context-support")
@@ -35,6 +37,127 @@ SCHEDULER_METHODS = ["scheduleJob", "scheduleJobs", "rescheduleJob"]
 KEY = "org.quartz.utils.Key"
 JOB_BEAN = "org.springframework.scheduling.quartz.QuartzJobBean"
 FORMS = "probe.Forms"
+CORE = "org.quartz.core.QuartzScheduler"
+STD = "org.quartz.impl.StdScheduler"
+BUILDER_OF_JOBS = "org.quartz.JobBuilder"
+RAM_STORE = "org.quartz.simpl.RAMJobStore"
+JDBC_STORE = "org.quartz.impl.jdbcjobstore.JobStoreSupport"
+JDBC_DELEGATE = "org.quartz.impl.jdbcjobstore.StdJDBCDelegate"
+LISTENER = "org.quartz.SchedulerListener"
+# Read with `javap` only, never run: the version the user named when ruling on the job
+# argument (2026-11-02). Its manifest must state it, as every jar here must.
+OLD_QUARTZ = "2.3.2"
+# (owner, method, parameters as javap prints them, question): what reaches the JOB argument
+# of `scheduleJob(JobDetail, Trigger)` (h).
+JOB_BODIES = [
+    (
+        CORE,
+        "scheduleJob",
+        "org.quartz.JobDetail, org.quartz.Trigger",
+        (
+            "`QuartzScheduler.scheduleJob(JobDetail, Trigger)`: its calls, strings, exceptions "
+            "and throws (h)"
+        ),
+    ),
+    (
+        CORE,
+        "notifySchedulerListenersJobAdded",
+        "org.quartz.JobDetail",
+        (
+            "`QuartzScheduler.notifySchedulerListenersJobAdded(JobDetail)`, which "
+            "`scheduleJob` hands the job to (h)"
+        ),
+    ),
+    (RAM_STORE, "storeJob", None, "`RAMJobStore.storeJob(JobDetail, boolean)` (h)"),
+    (
+        JDBC_STORE,
+        "storeJob",
+        "java.sql.Connection, org.quartz.JobDetail, boolean",
+        "`JobStoreSupport.storeJob(Connection, JobDetail, boolean)` (h)",
+    ),
+    (
+        JDBC_DELEGATE,
+        "insertJobDetail",
+        "java.sql.Connection, org.quartz.JobDetail",
+        (
+            "`StdJDBCDelegate.insertJobDetail(Connection, JobDetail)`, what the JDBC store "
+            "reads off the job (h)"
+        ),
+    ),
+]
+# (owner, method, parameters as javap prints them, question): the three pairing calls the
+# catalog declares, as `StdScheduler` hands them on and `QuartzScheduler` runs them, and the
+# store calls they end in.
+PAIRING_BODIES = [
+    (
+        STD,
+        "scheduleJob",
+        "org.quartz.JobDetail, org.quartz.Trigger",
+        "`StdScheduler.scheduleJob(JobDetail, Trigger)`, the `Scheduler` a `StdSchedulerFactory` builds, as compiled (g)",
+    ),
+    (
+        STD,
+        "scheduleJob",
+        "org.quartz.JobDetail, java.util.Set<? extends org.quartz.Trigger>, boolean",
+        "`StdScheduler.scheduleJob(JobDetail, Set, boolean)` as compiled (g)",
+    ),
+    (
+        STD,
+        "scheduleJobs",
+        "java.util.Map<org.quartz.JobDetail, java.util.Set<? extends org.quartz.Trigger>>, boolean",
+        "`StdScheduler.scheduleJobs(Map, boolean)` as compiled (g)",
+    ),
+    (
+        CORE,
+        "scheduleJob",
+        "org.quartz.JobDetail, org.quartz.Trigger",
+        "`QuartzScheduler.scheduleJob(JobDetail, Trigger)`: its calls, strings, exceptions and throws (g)",
+    ),
+    (
+        CORE,
+        "scheduleJob",
+        "org.quartz.JobDetail, java.util.Set<? extends org.quartz.Trigger>, boolean",
+        "`QuartzScheduler.scheduleJob(JobDetail, Set, boolean)`: its calls, strings, exceptions and throws (g)",
+    ),
+    (
+        CORE,
+        "scheduleJobs",
+        "java.util.Map<org.quartz.JobDetail, java.util.Set<? extends org.quartz.Trigger>>, boolean",
+        "`QuartzScheduler.scheduleJobs(Map, boolean)`: its calls, strings, exceptions and throws (g)",
+    ),
+    (
+        BUILDER_OF_JOBS,
+        "build",
+        None,
+        "`JobBuilder.build()`: the key of a job built with no `withIdentity` (g)",
+    ),
+    (
+        RAM_STORE,
+        "storeJobAndTrigger",
+        None,
+        "`RAMJobStore.storeJobAndTrigger(JobDetail, OperableTrigger)` (g)",
+    ),
+    (RAM_STORE, "storeJob", None, "`RAMJobStore.storeJob(JobDetail, boolean)` (g)"),
+    (RAM_STORE, "storeTrigger", None, "`RAMJobStore.storeTrigger(OperableTrigger, boolean)` (g)"),
+    (
+        JDBC_STORE,
+        "storeJobAndTrigger",
+        None,
+        "`JobStoreSupport.storeJobAndTrigger(JobDetail, OperableTrigger)` (the JDBC stores) (g)",
+    ),
+    (
+        JDBC_STORE,
+        "storeJob",
+        "java.sql.Connection, org.quartz.JobDetail, boolean",
+        "`JobStoreSupport.storeJob(Connection, JobDetail, boolean)` (g)",
+    ),
+    (
+        JDBC_STORE,
+        "storeTrigger",
+        "java.sql.Connection, org.quartz.spi.OperableTrigger, org.quartz.JobDetail, boolean, java.lang.String, boolean, boolean",
+        "`JobStoreSupport.storeTrigger(Connection, OperableTrigger, JobDetail, boolean, String, boolean, boolean)` (g)",
+    ),
+]
 BOXES = ["Boolean", "Byte", "Character", "Short", "Integer", "Long", "Float", "Double"]
 
 
@@ -254,7 +377,126 @@ def main(argv: list[str]) -> int:
         "quartz",
         "<br>".join(calls),
     )
+
+    # (g) what each declared pairing call does to its arguments, and every refusal it throws
+    core = classes(quartz[0], [CORE, STD, BUILDER_OF_JOBS, RAM_STORE, JDBC_STORE])
+    for owner, name, parameters, question in PAIRING_BODIES:
+        steps = body(core[owner], name, parameters)
+        if not steps:
+            raise ProbeError(f"{owner} has no {name}({parameters})")
+        emit(question, "quartz", effects(steps))
+    emit(
+        "every class in the jar that implements `org.quartz.spi.JobStore` directly or through a superclass in the jar (g)",
+        "quartz",
+        "<br>".join(f"`{n}`" for n in job_stores(quartz[0])),
+    )
+    for entry in ran:
+        if entry[0] == "STORE":
+            emit(
+                "the job store of the probe's scheduler, as Quartz reports it (g)",
+                "quartz",
+                f"`{entry[1]}`",
+            )
+        elif entry[0] == "KEYS":
+            emit(
+                "the keys of two jobs built with no `withIdentity`, as Quartz compares them (g)",
+                "quartz",
+                entry[1],
+            )
+        elif entry[0] == "SCHEDULED":
+            emit(
+                f"on the probe's scheduler (in-memory store, never started): {entry[1]} (g)",
+                "quartz",
+                f"{entry[2]}; afterwards the trigger {entry[3]}",
+            )
+
+    # (h) what `scheduleJob(JobDetail, Trigger)` does to its JOB argument, in 2.5.1 and in
+    # 2.3.2 (the version the user named, 2026-11-02): the calls the job reaches, the store
+    # calls it is handed to, and the listeners Quartz hands it to.
+    old = jar_at(*QUARTZ, OLD_QUARTZ)
+    if old is None:
+        raise ProbeError(f"NOT IN THE LOCAL REPOSITORY: {QUARTZ[0]}:{QUARTZ[1]}:{OLD_QUARTZ}")
+    old_stated, _ = identity(old, OLD_QUARTZ)
+
+    def emit_at(question: str, version: str, observed: str) -> None:
+        nonlocal row
+        row += 1
+        print(f"| {row} | {question} | `{QUARTZ[0]}:{QUARTZ[1]}` | {version} | {observed} |")
+
+    for jar, version in ((quartz[0], quartz[1]), (old, old_stated)):
+        read = classes(jar, [CORE, RAM_STORE, JDBC_STORE, JDBC_DELEGATE])
+        for owner, name, parameters, question in JOB_BODIES:
+            if (
+                version == quartz[1]
+                and owner in (RAM_STORE, JDBC_STORE)
+                or (version == quartz[1] and name == "scheduleJob")
+            ):
+                continue  # 2.5.1's are rows 27, 32 and 35 above
+            steps = body(read[owner], name, parameters)
+            if not steps:
+                raise ProbeError(f"{owner} has no {name}({parameters}) in {version}")
+            emit_at(question, version, effects(steps))
+        listeners = implementers(jar, LISTENER)
+        emit_at(
+            "every class in the jar that implements `org.quartz.SchedulerListener` (h)",
+            version,
+            "<br>".join(f"`{n}`" for n in listeners),
+        )
+        bodies = classes(jar, listeners)
+        for name in listeners:
+            steps = body(bodies[name], "jobAdded", "org.quartz.JobDetail")
+            emit_at(
+                f"`{name.rsplit('.', 1)[-1]}.jobAdded(JobDetail)` as compiled (h)",
+                version,
+                render(steps) if steps else "declares no `jobAdded` of its own",
+            )
     return 0
+
+
+def effects(steps) -> str:
+    """The calls a body makes, the strings it loads, the exceptions it builds and every
+    `athrow`, in order: what it does to its arguments and when it refuses."""
+    kept = [
+        s
+        for s in steps
+        if s.opcode.startswith("invoke") or s.opcode in ("ldc", "ldc_w", "new", "athrow")
+    ]
+    return render(kept)
+
+
+def job_stores(jar: Path) -> list[str]:
+    """Every class in `jar` whose `javap` declaration implements `JobStore`, or extends one
+    that does, to a fixed point."""
+    return implementers(jar, "org.quartz.spi.JobStore", "-public")
+
+
+def implementers(jar: Path, interface: str, *flags: str) -> list[str]:
+    """Every class in `jar` whose `javap` declaration implements `interface`, or extends one
+    that does, to a fixed point. `flags` narrows the listing (`-public`)."""
+    names = [n for n in class_names(jar) if n.startswith("org.quartz.")]
+    declarations = {
+        m.group(1): m.group(0)
+        for m in re.finditer(
+            r"(?m)^(?:public |protected |private )?(?:abstract )?(?:final )?class ([\w.$]+)"
+            r"[^\n]*\{$",
+            javap(jar, *flags, *names),
+        )
+    }
+    found = {
+        n
+        for n, d in declarations.items()
+        if re.search(rf"implements [^{{]*{re.escape(interface)}(?![\w$])", d)
+    }
+    while True:
+        more = {
+            n
+            for n, d in declarations.items()
+            if n not in found
+            and any(re.search(rf"extends {re.escape(f)}(?![\w$])", d) for f in found)
+        }
+        if not more:
+            return sorted(found)
+        found |= more
 
 
 if __name__ == "__main__":

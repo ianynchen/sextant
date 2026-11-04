@@ -1152,6 +1152,57 @@ def test_call_sites_projects_the_receiver_parameter_and_keeps_captures_inside_ar
     assert row["arguments"][0]["captures"] == 2
 
 
+def test_call_sites_projects_the_dominator_and_on_every_exit(tmp_path: Path):
+    """Rule 9's two keys at the projection (spec 2026-11-02-per-path-truth): each its own
+    nullable column, NULL where the fact carries no such key."""
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/example/Routes.java",
+        module_id="com.example:routes",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    target = CallTarget(owner="o#", name="n", descriptor="()V")
+    sites = [
+        CallSiteFact(
+            document_id="doc_1", caller="c", target=target, invoke_kind="static", ordinal=0
+        ),
+        CallSiteFact(
+            document_id="doc_1",
+            caller="c",
+            target=target,
+            invoke_kind="static",
+            ordinal=1,
+            dominator=0,
+            on_every_exit=True,
+            post_dominator=2,
+            reaches_return=True,
+            loop_group=1,
+        ),
+    ]
+    write_fact_file(tmp_path / "facts" / "a.jsonl", document, sites)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    rows = workspace.query("call_sites")
+    workspace.close()
+    assert [
+        (
+            row["dominator"],
+            row["on_every_exit"],
+            row["post_dominator"],
+            row["reaches_return"],
+            row["loop_group"],
+        )
+        for row in rows
+    ] == [(None, None, None, None, None), (0, True, 2, True, 1)]
+
+
 def test_the_method_returns_view_keeps_a_void_return_distinct_from_an_unread_one(
     tmp_path: Path,
 ):
@@ -2447,7 +2498,7 @@ def test_a_schedule_expression_is_masked_on_export(tmp_path: Path):
     workspace._connection.execute(
         "INSERT INTO scheduled_work VALUES "
         "('mod com/acme/A#sweep(sig_1).', 'cron', NULL, ?, NULL, 'unresolved', 'compiler', "
-        "'spring-scheduling', NULL)",
+        "'spring-scheduling', NULL, NULL)",
         [expression],
     )
     workspace._connection.execute(
@@ -2484,7 +2535,7 @@ def test_a_schedule_name_is_masked_on_export(tmp_path: Path):
     workspace._connection.execute(
         "INSERT INTO scheduled_work VALUES "
         "('mod com/acme/A#sweep(sig_1).', 'cron', ?, '0 0 * * * *', NULL, 'resolved', "
-        "'compiler', 'quartz', NULL)",
+        "'compiler', 'quartz', NULL, NULL)",
         [name],
     )
     workspace._connection.execute(

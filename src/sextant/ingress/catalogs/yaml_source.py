@@ -6,6 +6,7 @@ implements the declared `style`: that is knowledge of `application/resolve`,
 which this layer must not import, so the style is checked where the engines
 are — carrying `Catalog.source` so the error still names the file."""
 
+import re
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -265,6 +266,87 @@ class YamlCatalogSource:
                 )
         return model
 
+    def not_hand_offs(self) -> tuple[str, ...]:
+        """Every call `value-models/*.yml` declares under `not_hand_offs` (spec 2026-11-02, the
+        user's rulings on compiler null checks, 2026-11-02, and on the JDK's, 2026-11-03): a call
+        to one takes a value without being a hand-off of it, so the value walk's `escapes` window
+        reads it as nothing. Each entry is `{owner, methods?, by}`, `by` required as
+        `identified_by`'s is. Without `methods` the entry is the whole owner, spelled as a type
+        symbol (`a/b/Owner#`); with it, each named method of that owner, spelled as the type
+        symbol followed by the name (`a/b/Owner#method`), every overload of the name included.
+        `methods` is a non-empty list of identifiers, refused otherwise. Sorted, so two runs
+        build one tuple (NFR-1)."""
+        declared_calls: set[str] = set()
+        for path in sorted((self._directory / "value-models").glob("*.yml")):
+            raw = _load(path.read_text(encoding="utf-8"))
+            declared = raw.get("not_hand_offs") if isinstance(raw, dict) else None
+            if declared is None:
+                continue
+            if not isinstance(declared, list):
+                raise CatalogError(f"loading value model {path}: `not_hand_offs` must be a list")
+            for entry in declared:
+                if not isinstance(entry, dict) or not entry.get("owner") or not entry.get("by"):
+                    raise CatalogError(
+                        f"loading value model {path}: a `not_hand_offs` entry needs an `owner` "
+                        f"and the `by` that justifies it, got {entry!r}"
+                    )
+                unknown = sorted(set(entry) - {"owner", "methods", "by"})
+                if unknown:
+                    raise CatalogError(
+                        f"loading value model {path}: a `not_hand_offs` entry declares "
+                        f"`owner`, `methods` and `by`; unknown {unknown}"
+                    )
+                # Dotted, as every catalog spells a type (2E-prep §1c); the facts' symbol
+                # form is what a call site's `owner` carries.
+                owner = type_descriptor(str(entry["owner"]))
+                if "methods" not in entry:
+                    declared_calls.add(owner)
+                    continue
+                methods = entry["methods"]
+                if (
+                    not isinstance(methods, list)
+                    or not methods
+                    or not all(isinstance(name, str) and name.isidentifier() for name in methods)
+                ):
+                    raise CatalogError(
+                        f"loading value model {path}: a `not_hand_offs` entry's `methods` is a "
+                        f"non-empty list of method names of `{entry['owner']}`, got {methods!r}"
+                    )
+                declared_calls.update(owner + str(name) for name in methods)
+        return tuple(sorted(declared_calls))
+
+    def hand_off_effects(self) -> tuple[dict[str, Any], ...]:
+        """Every entry `value-models/*.yml` declares under `hand_off_effects` (spec
+        2026-11-02 rule 7, ruled by the user that day; D02 §1f): what a DECLARED call does to
+        a value handed to it at one argument, as measured. Each entry is `{owner, method,
+        descriptor, arg, binds?, refuses?, by}`:
+
+        - `arg` — the argument the value is handed at, `argN`;
+        - `binds` — `{part, to}`: where the value's `part` is not yet bound, the call binds
+          it to the value at argument `to` (`argN`); no other part of the value changes;
+        - `refuses` — when the call throws instead: `bound_elsewhere`, the `binds` part
+          already bound to another value. The one condition shipped, a closed set;
+        - `hands_to` — `[{owner, method, descriptor, arg}]`, interface methods the call hands
+          the value on to, whose module bodies the walk reads as a lambda's capture;
+        - `by` — the probe row that measured it, required as `identified_by`'s is.
+
+        A call the value is handed to that no entry states is unknown (rule 2), so every key
+        is checked here and a malformed entry is refused, naming the file. Sorted, so two
+        runs build one tuple (NFR-1)."""
+        effects: list[dict[str, Any]] = []
+        for path in sorted((self._directory / "value-models").glob("*.yml")):
+            raw = _load(path.read_text(encoding="utf-8"))
+            declared = raw.get("hand_off_effects") if isinstance(raw, dict) else None
+            if declared is None:
+                continue
+            if not isinstance(declared, list):
+                raise CatalogError(f"loading value model {path}: `hand_off_effects` must be a list")
+            for entry in declared:
+                effects.append(_hand_off_effect(entry, path))
+        return tuple(
+            sorted(effects, key=lambda e: (e["owner"], e["method"], e["descriptor"], e["arg"]))
+        )
+
     def value_model(self) -> list[dict[str, Any]]:
         """The identity of every PRODUCING call this source knows (spec 2026-09-22 §2,
         D02 §1f): which argument of a call carries the value its result stands for.
@@ -351,6 +433,12 @@ class YamlCatalogSource:
         # 0.8 s — and that buys the two readings staying independent, which is what lets
         # Task 10 delete the hop keys from the catalogs without touching this loop.
         identities = self.value_model()
+        # The owners whose calls take a value without handing it off (`value-models/`'s
+        # `not_hand_offs`, the user's ruling of 2026-11-02), read once like the table above.
+        not_hand_offs = self.not_hand_offs()
+        # What a declared call does to a value handed to it (`value-models/`'s
+        # `hand_off_effects`, spec 2026-11-02 rule 7), read once like the table above.
+        hand_off_effects = self.hand_off_effects()
         # The conformance table, read once per source for the same reason: it is
         # knowledge about TYPES rather than about any one catalog, and the engines need
         # it to refuse a producer whose return type cannot be the declared parameter
@@ -454,6 +542,8 @@ class YamlCatalogSource:
                     bean_model=_named_model(raw, "bean_model", bean_models, path) or {},
                     # D02 §1f — the source's own identity table, built above.
                     value_model=identities,
+                    not_hand_offs=not_hand_offs,
+                    hand_off_effects=hand_off_effects,
                     # The source's own type-conformance table, built above.
                     type_model=conformance,
                     # The server's own prefix keys, built above.
@@ -1366,3 +1456,84 @@ def _terminals(raw: dict[str, Any], path: Path) -> list[dict[str, Any]]:
         if "target" in rule:
             _closed(rule, "target", TargetKind, path)
     return list(declared)
+
+
+# The conditions a `hand_off_effects` entry may say a call refuses on (spec 2026-11-02 rule
+# 7). A closed set: a condition the walk does not implement would read as never holding.
+_REFUSALS = ("bound_elsewhere",)
+
+
+def _hand_off_effect(entry: Any, path: Path) -> dict[str, Any]:
+    """One `hand_off_effects` entry, checked and converted: the owner as a type symbol (the
+    facts' spelling), each `argN` as its index."""
+    where = f"loading value model {path}: a `hand_off_effects` entry"
+    if not isinstance(entry, dict) or not all(
+        entry.get(key) for key in ("owner", "method", "descriptor", "arg", "by")
+    ):
+        raise CatalogError(
+            f"{where} needs `owner`, `method`, `descriptor`, `arg` and the `by` that measured "
+            f"it, got {entry!r}"
+        )
+    unknown = set(entry) - {
+        "owner",
+        "method",
+        "descriptor",
+        "arg",
+        "binds",
+        "refuses",
+        "hands_to",
+        "by",
+        "rows",
+    }
+    if unknown:
+        raise CatalogError(f"{where} declares keys this loader does not read: {sorted(unknown)}")
+    binds = entry.get("binds")
+    if binds is not None and (
+        not isinstance(binds, dict)
+        or set(binds) != {"part", "to"}
+        or not isinstance(binds["part"], str)
+    ):
+        raise CatalogError(f"{where}: `binds` is `{{part, to}}`, got {binds!r}")
+    refuses = entry.get("refuses")
+    if refuses is not None and (refuses not in _REFUSALS or binds is None):
+        raise CatalogError(
+            f"{where}: `refuses` is one of {list(_REFUSALS)} and needs `binds`, got {refuses!r}"
+        )
+    hands_to = entry.get("hands_to") or []
+    if not isinstance(hands_to, list) or not all(
+        isinstance(handed, dict)
+        and set(handed) == {"owner", "method", "descriptor", "arg"}
+        and all(handed.values())
+        for handed in hands_to
+    ):
+        raise CatalogError(
+            f"{where}: `hands_to` is a list of `{{owner, method, descriptor, arg}}`, "
+            f"got {hands_to!r}"
+        )
+    return {
+        "owner": type_descriptor(str(entry["owner"])),
+        "method": str(entry["method"]),
+        "descriptor": str(entry["descriptor"]),
+        "arg": _arg_index(entry["arg"], where),
+        "hands_to": [
+            {
+                "owner": type_descriptor(str(handed["owner"])),
+                "method": str(handed["method"]),
+                "descriptor": str(handed["descriptor"]),
+                "arg": _arg_index(handed["arg"], where),
+            }
+            for handed in hands_to
+        ],
+        "binds": None
+        if binds is None
+        else {"part": binds["part"], "to": _arg_index(binds["to"], where)},
+        "refuses": refuses,
+        "by": str(entry["by"]),
+    }
+
+
+def _arg_index(value: Any, where: str) -> int:
+    """`argN` as `N`, refused otherwise."""
+    if isinstance(value, str) and re.fullmatch(r"arg\d+", value):
+        return int(value[3:])
+    raise CatalogError(f"{where}: an argument is written `argN`, got {value!r}")
