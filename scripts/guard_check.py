@@ -1180,6 +1180,36 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "detect.a-GROUPED-gradle-project-keeps-its-maven-coordinates": Guard(
+        what="a Gradle project with a group is `group:name` at its own version, "
+        "`unspecified` included — only a project with NO group loses its coordinates",
+        why="Gradle publishes a grouped project with no version as `group/name/unspecified` "
+        "(OI-273, measured on 9.8.2). Without the branch every grouped project would be "
+        "named by its build path and its symbols would claim `. . .`, an unpublished "
+        "identity for an artifact Gradle does publish",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="        if group:\n            module_id = ",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            module_id = ",
+            ),
+        ),
+    ),
+    "detect.a-NESTED-no-group-gradle-project-is-root-name-plus-path": Guard(
+        what="a no-group Gradle project below the root is the root project's name followed "
+        "by its full project path; only the root itself is its name alone",
+        why="without it `:libs:core` would be `core` and `:core` would be `core` too — two "
+        "projects of one build under one module id — and neither would say which build "
+        "it belongs to (OI-273)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find='            if path_in_build == ":":\n',
+                replace="            if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "render.the-document-SAYS-how-many-named-types-the-header-read-found": Guard(
         what="the coverage section carries one line: dependency types named, headers read, "
         "in no archive, and who answered for the classpath",

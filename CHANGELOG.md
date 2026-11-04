@@ -17,6 +17,14 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A Gradle project with no group, or no version, is analysed** (OI-273). Detection refused
+  both, and applications often set neither: `kotlin-ktor-exposed-starter` and 21 of 36
+  ktor-samples projects declare no group. The identity is now the one Gradle itself gives
+  (user ruling, measured on Gradle 9.8.2): a group with no version is `group:name` at version
+  `unspecified`, which is what Gradle publishes; a project with no group cannot be published
+  at all, so its module id is the root project name and project path (`Noty:app`; a root
+  project is its name alone) and its symbols carry `. . .` (D00 §1). Grouped builds are
+  unchanged: the six field pins do not move.
 - **A value an instance lambda closes over is read as its own, not its neighbour's**
   (OI-266, Critical). javac's capture site for a lambda that reads `this` hands `this` first,
   and the value walk bound capture *i* to the site's argument *i*, so every captured value was

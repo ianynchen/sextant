@@ -16,10 +16,18 @@ import org.objectweb.asm.Type;
 
 /** Reads one class file and emits symbol facts as JSONL lines. */
 public final class ClassScanner {
+    /** D00 §1's "where a field has no meaning, write `.`". */
+    private static final String NOT_APPLICABLE = ".";
+
+    private final String packageManager;
     private final String coordinates;
     private final String version;
 
+    /** Coordinates of {@code .} mean the module is unpublished (a Gradle project with no
+     *  group, OI-273): no package manager publishes it, so its symbols write {@code .}
+     *  for the manager too, never {@code maven}. */
     public ClassScanner(String coordinates, String version) {
+        this.packageManager = NOT_APPLICABLE.equals(coordinates) ? NOT_APPLICABLE : "maven";
         this.coordinates = coordinates;
         this.version = version;
     }
@@ -123,7 +131,8 @@ public final class ClassScanner {
     }
 
     String symbolOf(String descriptorPath) {
-        return "sextant-jvm maven " + coordinates + " " + version + " " + descriptorPath;
+        return "sextant-jvm " + packageManager + " " + coordinates + " " + version + " "
+            + descriptorPath;
     }
 
     private final class Visitor extends ClassVisitor {

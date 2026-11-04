@@ -343,12 +343,13 @@ def test_a_single_module_build_never_gets_the_root_source_note():
     assert model.notes == ()
 
 
-# --- coordinates leaving loose: loud refusals (2M design §1) ---------------
+# --- a project's identity, formed the way Gradle itself forms it (OI-273) ---
 
 
 def _project(
     tmp_path: Path,
     *,
+    path: str = ":thing",
     group: str = "com.acme",
     name: str = "thing",
     version: str = "1.0.0",
@@ -370,7 +371,7 @@ def _project(
     if resource_roots is None:
         default_resource.mkdir(parents=True, exist_ok=True)
     return {
-        "path": ":thing",
+        "path": path,
         "group": group,
         "name": name,
         "version": version,
@@ -385,16 +386,53 @@ def _project(
     }
 
 
-def test_a_project_with_no_group_is_refused_by_name(tmp_path: Path):
-    project = _project(tmp_path, group="")
-    with pytest.raises(ValueError, match="gradle project thing declares no group"):
-        GradleDetector._module_of(tmp_path, project)
+def test_a_root_project_with_no_group_is_named_by_its_root_project_name_alone(tmp_path: Path):
+    """No group means no Maven coordinates at all — measured on Gradle 9.8.2,
+    `publishToMavenLocal` refuses with "groupId cannot be empty" — so nothing outside
+    the build can reference this project by coordinates, and the only identity it has
+    is its place in its build. A root project's place is its name: what Gradle
+    reports as `rootProject.name` (the folder name by default). Refusing it instead
+    left `kotlin-ktor-exposed-starter` and 21 of 36 ktor-samples unanalysable."""
+    project = _project(tmp_path, path=":", group="", name="kotlin-ktor-exposed-starter")
+    module = GradleDetector._module_of(tmp_path, project, [project])
+    assert module.module_id == "kotlin-ktor-exposed-starter"
 
 
-def test_a_project_with_version_unspecified_is_refused_by_name(tmp_path: Path):
+@pytest.mark.pins("detect.a-NESTED-no-group-gradle-project-is-root-name-plus-path")
+def test_a_nested_project_with_no_group_is_its_root_name_and_full_project_path(tmp_path: Path):
+    """The root project name comes from Gradle's own record of the root (path `:`),
+    never from parsing `settings.gradle`, and every segment of the project path is
+    kept: `:libs:core` and `:core` are different projects of one build, and dropping
+    the middle would give them one identity."""
+    root = _project(tmp_path, path=":", group="", name="Acme", classes_dirs=[])
+    core = _project(tmp_path, path=":libs:core", group="", name="core")
+    app = _project(tmp_path, path=":app", group="", name="app")
+    reactor = [root, core, app]
+    assert GradleDetector._module_of(tmp_path, core, reactor).module_id == "Acme:libs:core"
+    assert GradleDetector._module_of(tmp_path, app, reactor).module_id == "Acme:app"
+
+
+def test_a_project_with_no_group_writes_dot_for_manager_package_and_version(tmp_path: Path):
+    """D00 §1: "an unpublished service has no package manager, package or version".
+    The extractor writes `sextant-jvm . . . <descriptor>` for a module whose
+    coordinates and version are `.` — so a no-group project hands it exactly that,
+    whatever version it declares: a version names a release of a package, and
+    there is no package."""
+    project = _project(tmp_path, path=":", group="", name="app", version="1.4.0")
+    module = GradleDetector._module_of(tmp_path, project, [project])
+    assert (module.coordinates, module.version) == (".", ".")
+
+
+@pytest.mark.pins("detect.a-GROUPED-gradle-project-keeps-its-maven-coordinates")
+def test_a_project_with_a_group_and_no_version_is_published_as_unspecified(tmp_path: Path):
+    """Gradle publishes a grouped project with no version as
+    `com/acme/nogroup-app/unspecified/nogroup-app-unspecified.jar` (measured, Gradle
+    9.8.2): the version is literally `unspecified`, so that is the version its symbols
+    carry — not a refusal, and not an invented one."""
     project = _project(tmp_path, version="unspecified")
-    with pytest.raises(ValueError, match="gradle project thing declares no version"):
-        GradleDetector._module_of(tmp_path, project)
+    module = GradleDetector._module_of(tmp_path, project)
+    assert module.module_id == "com.acme:thing"
+    assert (module.coordinates, module.version) == ("com.acme/thing", "unspecified")
 
 
 # --- source/resource roots Gradle names but does not promise exist (fix

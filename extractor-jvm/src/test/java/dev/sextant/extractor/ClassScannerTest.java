@@ -38,6 +38,23 @@ class ClassScannerTest {
             line.contains("\"construct_kind\":\"class\"") && line.contains("Sample#")));
     }
 
+    /** D00 §1: "an unpublished service has no package manager, package or version".
+     *  A module with no coordinates (a Gradle project with no group, OI-273) is handed
+     *  over as `.` for both, and its symbols must say `. . .` — never `maven`, which
+     *  would claim a package manager publishes something it cannot. */
+    @Test
+    void an_unpublished_module_writes_dot_for_manager_package_and_version() throws Exception {
+        try (InputStream in =
+                getClass().getResourceAsStream("/dev/sextant/extractor/Sample.class")) {
+            List<String> lines = new ClassScanner(".", ".").scan(in.readAllBytes(), "doc-sample");
+            assertTrue(lines.stream().anyMatch(line ->
+                line.contains("\"symbol\":\"sextant-jvm . . . dev/sextant/extractor/Sample#\"")),
+                String.join("\n", lines));
+            assertFalse(lines.stream().anyMatch(line -> line.contains("sextant-jvm maven")),
+                String.join("\n", lines));
+        }
+    }
+
     @Test
     void emits_a_method_symbol_with_its_return_type_when_a_method_is_scanned() throws Exception {
         assertTrue(scanSelf().stream().anyMatch(line ->

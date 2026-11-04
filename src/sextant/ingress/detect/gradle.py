@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any
 
 from sextant.application.ports.detector import LibraryRoot, ModuleModel, RepositoryModel
+from sextant.domain.symbols import NOT_APPLICABLE
 from sextant.ingress.detect.conventions import (
     CONTAINER_FILES,
     RESOURCE_SCHEMA_SUFFIXES,
@@ -349,18 +350,27 @@ class GradleDetector:
         # pre-W55 behaviour, which is what they are about.
         name = project["name"]
         group = project["group"]
-        version = project["version"]
-        # Coordinates Gradle leaves loose are a loud refusal naming the
-        # missing one (2M design §1) — the same discipline `MavenDetector`
-        # applies to a POM missing `<groupId>`/`<version>`, never a
-        # `:name`-shaped module id.
-        if not group:
-            raise ValueError(f"gradle project {name} declares no group — cannot form a module id")
-        if version == "unspecified":
-            raise ValueError(
-                f"gradle project {name} declares no version (Gradle's own `unspecified` "
-                "default) — cannot form a module id"
-            )
+        # The identity Gradle itself gives the project (OI-273, ruled 2026-11-03 from
+        # Gradle 9.8.2's measured behaviour). A group with no version publishes as
+        # `<group>/<name>/unspecified`, so `unspecified` IS the version and is kept. No
+        # group publishes as nothing at all — `publishToMavenLocal` refuses with "groupId
+        # cannot be empty" — so the project has no coordinates, its symbols carry `. . .`
+        # (D00 §1), and its only identity is its place in its build: the root project's
+        # name, then the project path with every segment kept (`Acme:libs:core`); the
+        # root project itself is its name alone. Both come from Gradle's own records, the
+        # root's being the reactor entry at path `:`.
+        if group:
+            module_id = f"{group}:{name}"
+            coordinates = f"{group}/{name}"
+            version = project["version"]
+        else:
+            path_in_build = project["path"]
+            if path_in_build == ":":
+                module_id = name
+            else:
+                root = {p["path"]: p for p in reactor}[":"]
+                module_id = f"{root['name']}{path_in_build}"
+            coordinates = version = NOT_APPLICABLE
         # Gradle NAMES a source/resource root as a build convention; it does
         # not promise the directory exists on disk (2M Task 3 fix round 1,
         # M1) — the same "no guess" discipline `MavenDetector`'s own
@@ -383,8 +393,8 @@ class GradleDetector:
         siblings = GradleDetector._sibling_roots(project, reactor)
         library_roots = library_roots + siblings
         return ModuleModel(
-            module_id=f"{group}:{name}",
-            coordinates=f"{group}/{name}",
+            module_id=module_id,
+            coordinates=coordinates,
             version=version,
             root=path,
             kind=GradleDetector._classify(path, project),

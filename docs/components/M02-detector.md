@@ -122,6 +122,24 @@ output, never a partial model assembled by guessing.
 | Node | `pnpm-workspace.yaml`, or `workspaces` |
 | Cargo | `members` in the workspace manifest |
 
+### A module's identity is the one its build tool gives it
+
+The module id and the symbol's `<package-manager> <package> <version>` ([D00](D00-fact-schema.md)
+§1) are formed from what the build tool itself does with the project, never from a guess
+(OI-273, user ruling 2026-11-03, measured on Gradle 9.8.2):
+
+| Gradle project | `module_id` | symbol manager, package, version |
+|---|---|---|
+| group and version set | `group:name` | `maven group/name version` |
+| group set, no version | `group:name` | `maven group/name unspecified` — Gradle publishes it as `unspecified` |
+| no group | the root project's name, then the project path: `Noty:app`, `Acme:libs:core`; a root project is its name alone | `. . .` — Gradle refuses to publish it ("groupId cannot be empty"), so it has no coordinates |
+
+Both names in the no-group row are Gradle's own records — the root project name and every
+project's path arrive in the init script's document (the root is the entry at path `:`),
+never parsed from `settings.gradle`. Every path segment is kept, so `:libs:core` and
+`:core` stay distinct. A reactor sibling with no group is not yet read as a library root:
+`_sibling_roots` skips it, because a library root's coordinate is a `group:artifact`.
+
 A repository holding three services produces three modules, **each with its own
 workspace**. A sibling module enters a dependent's analysis as a first-party dependency
 through its build output — **by build declaration, no group pattern needed** — so
