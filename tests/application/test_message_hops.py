@@ -89,13 +89,23 @@ def _from(hops: set[tuple], caller: str) -> set[tuple]:
     return {(path, handler) for at, _, path, handler, _ in hops if at == caller}
 
 
-@pytest.mark.pins(
-    "message-hops.the-hops-are-WRITTEN",
-    "message-hops.the-message-is-at-its-DECLARED-argument",
-)
+@pytest.mark.pins("message-hops.the-hops-are-WRITTEN")
 def test_a_tell_reaches_the_first_matching_handler(hops):
-    """`Frontend`'s `context.ask(…, r -> new Stock.Reserve(…), …)` builds a `Reserve`;
-    `Stock`'s first case for it is `onReserve`, and nothing else takes it."""
+    """`stock.tell(new Stock.Release(sku, false))`: `Stock`'s cases for `Release` are a
+    predicated one (`p -> p.urgent()`) and then an unpredicated one. The predicate may decline,
+    so it never shadows (spec §3d item 2): both are reached, and the search stops at the
+    unpredicated one."""
+    assert _from(hops, "Counter#release") == {
+        ("Stock$Release", "Stock#onUrgentRelease"),
+        ("Stock$Release", "Stock#onRelease"),
+    }
+
+
+@pytest.mark.pins("message-hops.the-message-is-at-its-DECLARED-argument")
+def test_an_actor_ask_sends_what_its_request_returns(hops):
+    """`context.ask(Stock.Reply.class, stock, timeout, r -> new Stock.Reserve(…), mapper)`:
+    the message is argument 3's request, a `Reserve`, which `Stock`'s first case takes; argument
+    0 is the reply's class literal, never the message."""
     assert [hop for hop in hops if hop[2] == "Stock$Reserve"] == [
         ("Frontend#onStart", 4, "Stock$Reserve", "Stock#onReserve", "compiler")
     ]

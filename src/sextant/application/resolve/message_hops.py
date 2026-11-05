@@ -43,16 +43,19 @@ field, `fields`. Rows are written once.
 """
 
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
-from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.message_handlers import reachable_handlers
-from sextant.application.resolve.shapes.arguments import _arg_at, call_site_index
-from sextant.domain.symbols import bare_descriptor, member_name, owner_of, parameter_types
+from sextant.application.resolve.shapes.arguments import (
+    _arg_at,
+    call_site_index,
+    declared_call_sites,
+)
+from sextant.domain.symbols import bare_descriptor, member_name, owner_of
 
 # The constructor name D00 §5 normalises every language's to.
 _CONSTRUCTOR = "<init>"
@@ -83,7 +86,7 @@ def record_message_hops(workspace: Workspace, catalogs: list[Catalog]) -> None:
     reading = _Reading(workspace)
     rows: dict[tuple[Any, ...], dict[str, Any]] = {}
     for catalog in sending:
-        for site, send in _send_sites(workspace, catalog):
+        for site, send in declared_call_sites(workspace, catalog.message_sends):
             argument = _arg_at(site["arguments"], send["message_arg"])
             for message in reading.sent(argument):
                 for row in reading.hops(site["caller"], site["ordinal"], message, catalog.protocol):
@@ -101,28 +104,6 @@ def record_message_hops(workspace: Workspace, catalogs: list[Catalog]) -> None:
                 rows.setdefault(tuple(row.values()), row)
     if rows:
         workspace.derive("rpc_hops_insert", rows=list(rows.values()))
-
-
-def _send_sites(
-    workspace: Workspace, catalog: Catalog
-) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
-    """Each call site of a declared send, by owner, name and parameter types; a call made
-    through a type inheriting the declared owner is matched by `Dispatch.heirs`."""
-    index = workspace.once(call_site_index)
-    dispatch = workspace.once(dispatch_of)
-    sites = effective_call_sites(workspace)
-    for send in catalog.message_sends:
-        owner, method = send["owner"], send["method"]
-        for called in (owner, *dispatch.heirs(owner, method)):
-            for position in index.positions_by_owner.get(called, ()):
-                site = sites[position]
-                if (
-                    site["name"] == method
-                    and site.get("descriptor") is not None
-                    and parameter_types(str(site["descriptor"]))
-                    == parameter_types(send["descriptor"])
-                ):
-                    yield site, send
 
 
 class _Reading:

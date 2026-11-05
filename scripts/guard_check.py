@@ -7370,6 +7370,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "calls.a-declared-call-is-matched-by-its-PARAMETER-TYPES": Guard(
+        what="a catalog entry's call sites are those of its name AND parameter types",
+        why="GUIDELINES §8.1: Java names a method by name and parameter types. Matched by name "
+        "alone, the key-less `startTimerWithFixedDelay(msg, delay)` is also read as the keyed "
+        "`(key, msg, delay)` overload, whose message is argument 1: its `Duration` becomes a "
+        "second, unread message",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/arguments.py",
+                find="                    and parameter_types(str(recorded)) == declared\n",
+                replace="                    and True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "message-hops.ONE-reset-before-both-writers": Guard(
         what="the pipeline clears `rpc_hops` once per resolve, before its two writers",
         why="spec 2026-11-04 §3d item 7: both writers only insert. Without the reset a second "

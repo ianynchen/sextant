@@ -57,9 +57,13 @@ from typing import Any
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
-from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.engines.combinator import _handler_of
-from sextant.application.resolve.shapes.arguments import _CAPTURED_AT, _arg_at, call_site_index
+from sextant.application.resolve.shapes.arguments import (
+    _CAPTURED_AT,
+    _arg_at,
+    call_site_index,
+    declared_call_sites,
+)
 from sextant.application.resolve.shapes.chains import _method_symbols, chain_ends
 from sextant.application.resolve.shapes.rooting import catalog_symbols
 from sextant.domain.symbols import bare_descriptor, parameter_types
@@ -190,23 +194,10 @@ def _standalone_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dict[st
     ]
     if not standalone:
         return
-    index = workspace.once(call_site_index)
-    dispatch = workspace.once(dispatch_of)
     method_symbols = workspace.once(_handler_symbols)
-    sites = effective_call_sites(workspace)
-    for registration in standalone:
-        owner, method = registration["owner"], registration["method"]
-        for called in (owner, *dispatch.heirs(owner, method)):
-            for position in index.positions_by_owner.get(called, ()):
-                site = sites[position]
-                if (
-                    site["name"] == method
-                    and site.get("descriptor") is not None
-                    and parameter_types(str(site["descriptor"]))
-                    == parameter_types(registration["descriptor"])
-                ):
-                    behavior = f"{site['caller']}#{site['ordinal']}"
-                    yield _case(behavior, 0, site, registration, method_symbols)
+    for site, registration in declared_call_sites(workspace, standalone):
+        behavior = f"{site['caller']}#{site['ordinal']}"
+        yield _case(behavior, 0, site, dict(registration), method_symbols)
 
 
 def _handler_symbols(workspace: Workspace) -> dict[str, str]:

@@ -278,6 +278,7 @@ def actor_hops(analyzed: Path) -> set[tuple]:
     }
 
 
+@pytest.mark.pins("calls.a-declared-call-is-matched-by-its-PARAMETER-TYPES")
 def test_every_actor_hop_the_fixture_gives(actor_hops):
     """The whole set (spec §3c), so a hop too many is a failure too. Each send's message is
     read by its class, by identity (`Tick.INSTANCE`) or through the `new` a function returns;
@@ -296,6 +297,8 @@ def test_every_actor_hop_the_fixture_gives(actor_hops):
         ("ClassicBroker#preStart", 3, "DistributedPubSubMediator$Subscribe", None, "compiler"),
         ("ClassicBroker#preStart", 7, "DistributedPubSubMediator$Put", None, "compiler"),
         ("Counter#onReport", 2, None, None, unread_call),
+        ("Counter#release", 1, "Stock$Release", "Stock#onUrgentRelease", "compiler"),
+        ("Counter#release", 1, "Stock$Release", "Stock#onRelease", "compiler"),
         ("Counter#report", 2, "Counter$Report", "Counter#onReport", "compiler"),
         ("Counter$Counted#<init>", 0, "Counter$Counted", "Counter#onCounted", "compiler"),
         ("Frontend#<init>", 6, None, None, unread_call),

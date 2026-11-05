@@ -317,7 +317,10 @@ def test_a_stub_method_that_never_reaches_the_client_call_api_gets_no_hop(
     assert _hops(workspace) == []
 
 
-def test_a_second_run_replaces_the_rows(tmp_path: Path) -> None:
+def test_the_pass_only_inserts(tmp_path: Path) -> None:
+    """`rpc_hops` has two writers (spec 2026-11-04 §3d item 7), so neither clears it: a row
+    the other wrote survives this pass. The pipeline resets the table once before both, which
+    `test_message_hops.py::test_a_second_analysis_replaces_the_hops` pins."""
     workspace = _workspace(
         tmp_path,
         facts=_GREETER_FACTS,
@@ -325,12 +328,19 @@ def test_a_second_run_replaces_the_rows(tmp_path: Path) -> None:
         hierarchy=_STUB_HIERARCHY,
         handled=[(f"{SERVICE}/SayHello", HANDLER)],
     )
+    other = {
+        "caller": "sender",
+        "ordinal": 0,
+        "protocol": "actor",
+        "path": "com/acme/Message#",
+        "handler": None,
+        "evidence": "compiler",
+    }
+    workspace.derive("rpc_hops_insert", rows=[other])
     record_rpc_hops(workspace, [_catalog()])
-    # The table has two writers, so the pipeline resets it once before both (spec
-    # 2026-11-04 §3d item 7); a second resolve runs that reset again.
-    workspace.derive("rpc_hops_reset")
-    record_rpc_hops(workspace, [_catalog()])
-    assert len(_hops(workspace)) == 1
+    rows = _hops(workspace)
+    assert tuple(other.values()) in rows
+    assert len(rows) == 2
 
 
 def test_two_catalogs_declaring_the_stub_keys_are_refused(tmp_path: Path) -> None:

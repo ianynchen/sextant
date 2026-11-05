@@ -10,7 +10,10 @@ import org.apache.pekko.actor.typed.javadsl.ActorContext;
 import org.apache.pekko.actor.typed.javadsl.AskPattern;
 import org.apache.pekko.actor.typed.javadsl.Receive;
 
-/** Constructor references where a function is expected: an adapter and an ask's request. */
+/**
+ * Constructor references where a function is expected (an adapter and an ask's request), and a
+ * plain tell of a message whose first case is predicated.
+ */
 public final class Counter extends AbstractBehavior<Counter.Command> {
 
   public interface Command {}
@@ -28,6 +31,10 @@ public final class Counter extends AbstractBehavior<Counter.Command> {
 
   public static CompletionStage<Integer> report(ActorRef<Command> counter, Scheduler scheduler) {
     return AskPattern.ask(counter, Report::new, Duration.ofSeconds(1), scheduler);
+  }
+
+  public static void release(ActorRef<Stock.Command> stock, String sku) {
+    stock.tell(new Stock.Release(sku, false));
   }
 
   @Override
