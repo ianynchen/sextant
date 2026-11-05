@@ -70,6 +70,8 @@ from typing import Any
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
+from sextant.application.resolve.effective_annotations import _synthesis_target
+from sextant.application.resolve.engines import annotation_driven
 from sextant.application.resolve.engines.combinator import _handler_of
 from sextant.application.resolve.shapes.arguments import (
     _CAPTURED_AT,
@@ -79,7 +81,7 @@ from sextant.application.resolve.shapes.arguments import (
 )
 from sextant.application.resolve.shapes.chains import _method_symbols, chain_ends
 from sextant.application.resolve.shapes.rooting import catalog_symbols
-from sextant.domain.symbols import bare_descriptor, parameter_types
+from sextant.domain.symbols import bare_descriptor, method_descriptor, parameter_types
 
 # The capture each registration step carries its own call in (the catalog's `case: argN`).
 _CASE = "case"
@@ -88,13 +90,22 @@ _FIRST = "first"
 # The argument kinds that name a constant by identity (D00 §5): a named constant of its own
 # type, and any other static field.
 _CONSTANT_KINDS = ("enum", "field")
+# The style whose mapping a catalog declaring `dispatch` reads as registrations
+# (`annotation_driven.registrations`): each annotated method one registration per key.
+_ANNOTATION_STYLE = "annotation_driven"
 
 
 def record_dispatch_registrations(workspace: Workspace, catalogs: list[Catalog]) -> None:
     """Replaces `dispatch_registrations` whole, from every catalog declaring
     `dispatch_registrations`."""
     workspace.derive("dispatch_registrations_reset")
-    declaring = [catalog for catalog in catalogs if catalog.dispatch_registrations]
+    declaring = [
+        catalog
+        for catalog in catalogs
+        if catalog.dispatch_registrations
+        or catalog.dispatch_implementations
+        or _reads_annotations(catalog)
+    ]
     if not declaring:
         return
     rows: list[dict[str, Any]] = []
@@ -102,13 +113,29 @@ def record_dispatch_registrations(workspace: Workspace, catalogs: list[Catalog])
     # are one group's rows once.
     seen: set[tuple[Any, ...]] = set()
     for catalog in declaring:
-        for row in (*_rows_of(workspace, catalog), *_standalone_rows(workspace, catalog)):
+        for row in (
+            *_rows_of(workspace, catalog),
+            *_standalone_rows(workspace, catalog),
+            *(
+                annotation_driven.registrations(workspace, catalog)
+                if _reads_annotations(catalog)
+                else ()
+            ),
+            *_implementation_rows(workspace, catalog),
+        ):
             key = tuple(row.values())
             if key not in seen:
                 seen.add(key)
                 rows.append(row)
     if rows:
         workspace.derive("dispatch_registrations_insert", rows=rows)
+
+
+def _reads_annotations(catalog: Catalog) -> bool:
+    """Whether `catalog`'s mapping is read as registrations: an annotation catalog declaring
+    `dispatch` (spec 2026-11-05 §2), which the endpoint loop leaves out for the same reason
+    (`endpoints._reads_by_a_later_pass`)."""
+    return catalog.style == _ANNOTATION_STYLE and catalog.dispatch is not None
 
 
 def reachable_handlers(
@@ -232,6 +259,8 @@ def _matches(registration: Mapping[str, Any], assignable: set[str], key_value: s
 def _rows_of(workspace: Workspace, catalog: Catalog) -> Iterator[dict[str, Any]]:
     """One catalog's registrations, group by group, in the walk's order."""
     registrations = catalog.dispatch_registrations
+    if not registrations:
+        return
     match = _match_of(catalog)
     _check_steps(catalog)
     index = workspace.once(call_site_index)
@@ -287,6 +316,79 @@ def _standalone_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dict[st
     for site, registration in declared_call_sites(workspace, standalone):
         group = f"{site['caller']}#{site['ordinal']}"
         yield _case(group, 0, site, dict(registration), method_symbols, match)
+
+
+def _implementation_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dict[str, Any]]:
+    """The registrations made by implementing an interface (`dispatch_implementations`, spec
+    2026-11-05 §4 item 5): each module type below the declared `owner` (`Dispatch.subtypes`,
+    transitively, through types the workspace has headers for) that declares the method
+    itself registers it, keyed by the type of its parameter at `value_arg`, in a group of
+    its own (the handler), at position 0.
+
+    The method is joined by name AND the declared descriptor — the interface's, erased — so
+    for a generic implementation (`ApplicationListener<OrderPlaced>`) what the join finds is
+    the compiler's synthetic bridge, which keys `ApplicationEvent` and names a method nobody
+    wrote. It is carried to the method it forwards to by the rule the inheritance walk
+    applies to a mapping found through a bridge (`effective_annotations._synthesis_target`,
+    OI-47: the same class's one same-name, same-arity method not synthetic); where that is
+    not exactly one method the row is not written, per §8. A type inheriting the method
+    rather than declaring it writes nothing: the type declaring it is below `owner` too.
+
+    Cost (GUIDELINES §8.7): one read of `method_declarations` per resolve (cached), then a
+    dictionary lookup per subtype of each declared interface."""
+    if not catalog.dispatch_implementations:
+        return
+    match = _match_of(catalog)
+    dispatch = workspace.once(dispatch_of)
+    declared = workspace.once(_declarations)
+    for entry in catalog.dispatch_implementations:
+        for implementer in dispatch.subtypes.get(entry["owner"], ()):
+            joined = method_descriptor(implementer, entry["method"], entry["descriptor"])
+            siblings = declared.by_type.get(implementer, [])
+            if joined not in declared.symbols:
+                continue
+            target = _synthesis_target(joined, siblings, declared.signatures, declared.modifiers)
+            if target is None:
+                continue
+            parameters = (declared.signatures.get(target) or {}).get("parameters") or []
+            if entry["value_arg"] >= len(parameters):
+                continue
+            parameter = parameters[entry["value_arg"]]
+            key = parameter.get("erased_symbol") or (parameter.get("type") or {}).get("symbol")
+            handler = declared.symbols[target]
+            yield {
+                "group": handler,
+                "position": 0,
+                "key_type": None if not key else bare_descriptor(str(key)),
+                "key_value": None,
+                "key_object": None,
+                "predicated": False,
+                "handler": handler,
+                "delivers": False,
+                "match": match,
+            }
+
+
+class _Declarations:
+    """The module's declared methods, read once per resolve: each bare symbol's own symbol
+    as the fact wrote it, signature and modifiers, and each bare type's methods, bare."""
+
+    def __init__(self, workspace: Workspace) -> None:
+        self.symbols: dict[str, str] = {}
+        self.signatures: dict[str, dict[str, Any] | None] = {}
+        self.modifiers: dict[str, dict[str, Any] | None] = {}
+        self.by_type: dict[str, list[str]] = {}
+        for row in workspace.query("method_declarations"):
+            bare = bare_descriptor(str(row["symbol"]))
+            self.symbols[bare] = str(row["symbol"])
+            self.signatures[bare] = row["signature"]  # type: ignore[assignment]
+            self.modifiers[bare] = row["modifiers"]  # type: ignore[assignment]
+            if row["enclosing"] is not None:
+                self.by_type.setdefault(bare_descriptor(str(row["enclosing"])), []).append(bare)
+
+
+def _declarations(workspace: Workspace) -> _Declarations:
+    return _Declarations(workspace)
 
 
 def _handler_symbols(workspace: Workspace) -> dict[str, str]:

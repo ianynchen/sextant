@@ -72,3 +72,13 @@ conformance:
   - subtype: org.apache.pekko.kafka.AutoSubscription
     supertype: org.apache.pekko.kafka.Subscription
     by: javap -cp pekko-connectors-kafka_2.13-1.1.0.jar org.apache.pekko.kafka.AutoSubscription
+
+  # MEASURED with `javap -v` on JDK 21 (CP-59, `scripts/probes/cp59_dispatch.md` finding 6):
+  # `java.util.EventObject`'s `super_class` is `java/lang/Object`. Spring's
+  # `ApplicationEvent` extends it (the spring-context header the workspace reads says so),
+  # and a listener of `Object` receives every event; without this link an event's ancestry
+  # stops at the JDK class nothing scans. Read by the dispatch hop pass's assignability
+  # (`dispatch_hops._Reading`), beside the scanned and headered supertypes.
+  - subtype: java.util.EventObject
+    supertype: java.lang.Object
+    by: javap -v java.util.EventObject (JDK 21.0.13), super_class java/lang/Object

@@ -795,7 +795,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**110 of 124 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**111 of 125 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -907,6 +907,8 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `spring-data-rest` | `org.springframework.data:spring-data-commons` | 3.2.5, 4.0.1, 4.1.1 |
 |  | `org.springframework.data:spring-data-jpa` | 4.1.1 |
 |  | `org.springframework.data:spring-data-rest-core` | 5.0.1 |
+| `spring-events` | `org.springframework:spring-context` | 7.0.1 |
+|  | `org.springframework:spring-tx` | 7.0.1 |
 | `spring-http-interface` | `org.springframework:spring-aop` | 6.1.6 |
 |  | `org.springframework:spring-core` | 6.2.15 |
 |  | `org.springframework:spring-web` | 6.1.6, 6.2.15 |

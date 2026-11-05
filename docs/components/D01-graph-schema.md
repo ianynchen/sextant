@@ -178,11 +178,13 @@ site, or no row.
   §1, `resolve/dispatch_hops.py`): code hands a value to a framework or a channel, which calls
   the handler(s) registered for it — never an endpoint row. `(caller, ordinal)` is the send's
   own call site (a `dispatch_sends` entry, D02); `protocol` the declaring catalog's (`actor`
-  for Akka and Pekko); `path` the value's class symbol, or a constant's own symbol where the
+  for Akka and Pekko, `in_process` for Spring application events, which have no wire); `path`
+  the value's class symbol, or a constant's own symbol where the
   value is one (`com/acme/actors/Stock$Tick#INSTANCE.`); `handler` each handler the class
   reaches under its registrations' match rule (`dispatch_registrations` below), one row per
   handler. A class no registration takes is one row with `handler` NULL. A class not read (a
-  parameter, a factory call's result) is one row with `path` and `handler` NULL: the two
+  parameter, an instance or library call's result; a static module factory's result is read
+  through its body's returns) is one row with `path` and `handler` NULL: the two
   NULLs are what say so, and never a fan-out. `evidence` is `compiler` on every dispatch hop
   row, as on every gRPC one, inside [D00](D00-fact-schema.md) §4's closed set: the send site
   is a compiler fact. A handler whose registration `delivers` continues: each class it
@@ -199,11 +201,16 @@ is tried, under the declaring catalog's match rule. One row per registration.
 - **`group`** is the chain that made it, `<caller>#<root ordinal>`, the caller
   module-prefixed: one executable chain end of a `fluent` catalog carrying
   `dispatch_registrations` ([D02](D02-catalog-schema.md) §2) — for Akka and Pekko, a
-  behavior. **`position`** is the registration's 0-based place in it. Two ends of one root (a
+  behavior. A registration read off an annotated method (an `annotation_driven` catalog
+  declaring `dispatch`, D02 §2m: `@EventListener`) or off a class implementing a declared
+  interface (`dispatch_implementations`: `ApplicationListener`) has the handler method itself
+  as its group; an annotation naming several classes gives one position per class. **`position`** is the registration's 0-based place in it. Two ends of one root (a
   builder forked, or a registration on one branch) share the id; the rows are written once
   where they are equal and are otherwise not ordered against each other.
 - **`key_type`** is the class literal's symbol; NULL for a value registration, a
-  predicate-only one, or a class argument that is not a literal. **`key_value`** is the
+  predicate-only one, or a class argument that is not a literal. For an annotated method,
+  each class its annotation names, else its payload parameter's erased type; for an
+  implementation, its own method's parameter's erased type (past the compiler's bridge). **`key_value`** is the
   constant's own argument symbol (`<owner>#<field>.`, an `enum` or `field` argument), NULL
   for a class registration. **`key_object`** is the channel object an object key names, its
   producing call `<caller>#<ordinal>`; NULL for a type key. A registration the walk could not
@@ -217,7 +224,9 @@ is tried, under the declaring catalog's match rule. One row per registration.
   `first`, per group, the first unpredicated registration the value matches (its class or a
   supertype of it, transitively; a value registration by identity), and every predicated one
   before it that matches; `all` and `one`, every registration it matches. Each row is asked
-  under its own `match` (`reached_by`).
+  under its own `match` (`reached_by`). A value's supertypes are the scanned and headered
+  ones (`Dispatch.ancestors`) and the declared `type-models/` conformance past a JDK class
+  nothing scans (`EventObject` to `Object`).
 - **An inbound key row's handlers come from these rows too** (spec
   `2026-11-04-akka-pekko-actors-design.md` §3d item 6, `resolve/dispatch_hops.record_key_handlers`):
   the key's class (`ServiceKey.create` / `EntityTypeKey.create` argument 0, named by the
@@ -875,7 +884,7 @@ helloworld.Greeter/SayHello`, and the step table's `Reaches` reads `via` and the
 `2026-11-04-akka-pekko-actors-design.md` §3c, `2026-11-05-in-process-dispatch-design.md` §1):
 at a send whose `hops` rows name handlers, the step goes to each, `via` the value's class (`actor com/acme/actors/OrderEntity$Get#`); a class nobody here handles stays
 `boundary` with its class; a class not read (the hop's `path` NULL) stays `boundary` with
-`via` saying so (`actor (message class not read)`), never `actor None`.
+`via` saying so (`actor (value class not read)`), never `actor None`.
 
 **This is deliberately not [D00](D00-fact-schema.md) §4's `terminal_kind`.** That set
 CLASSIFIES what a call reaches — `persistence`, `async_handoff`, an `outbound_call` in the

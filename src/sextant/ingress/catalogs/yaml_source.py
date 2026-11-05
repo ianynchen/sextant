@@ -555,6 +555,7 @@ class YamlCatalogSource:
                     dispatch_registrations=_dispatch_registrations(raw["matches"], path),
                     dispatch_sends=_dispatch_sends(raw["matches"], path),
                     dispatch_receives=_dispatch_receives(raw["matches"], path),
+                    dispatch_implementations=_dispatch_implementations(raw["matches"], path),
                 )
             )
         return catalogs
@@ -1729,11 +1730,50 @@ def _dispatch_receives(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
     return tuple(entries)
 
 
+def _dispatch_implementations(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
+    """`matches.dispatch_implementations` (spec 2026-11-05 §4 item 5), checked and converted:
+    each entry `{owner, method, descriptor, value_arg}`, the owner (the interface) as a type
+    symbol and `value_arg` the index of the parameter whose type keys the registration, one
+    the descriptor has. Every key is checked, because a position that reads the wrong
+    parameter keys a listener by the wrong class. Empty for a catalog declaring none."""
+    where, declared = _declared_calls(matches, "dispatch_implementations", path)
+    entries: list[dict[str, Any]] = []
+    for entry in declared:
+        unknown = sorted(set(entry) - {"owner", "method", "descriptor", "value_arg"})
+        if unknown:
+            raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
+        descriptor = str(entry["descriptor"])
+        value_arg = entry.get("value_arg")
+        if (
+            not isinstance(value_arg, int)
+            or isinstance(value_arg, bool)
+            or not 0 <= value_arg < len(descriptor_slots(descriptor)[0])
+        ):
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares `value_arg: {value_arg!r}`, which "
+                f"is not a parameter of `{descriptor}`"
+            )
+        entries.append(
+            {
+                "owner": type_descriptor(str(entry["owner"])),
+                "method": str(entry["method"]),
+                "descriptor": descriptor,
+                "value_arg": value_arg,
+            }
+        )
+    return tuple(entries)
+
+
 # The `dispatch` setting's two closed words (spec 2026-11-05 §1): what picks the receiver,
 # and how many receive.
 _DISPATCH_KEYS = ("type", "object")
 _DISPATCH_MATCHES = ("first", "all", "one")
-_DISPATCH_BLOCKS = ("dispatch_registrations", "dispatch_sends", "dispatch_receives")
+_DISPATCH_BLOCKS = (
+    "dispatch_registrations",
+    "dispatch_sends",
+    "dispatch_receives",
+    "dispatch_implementations",
+)
 
 
 def _dispatch(raw: dict[str, Any], path: Path) -> dict[str, str] | None:

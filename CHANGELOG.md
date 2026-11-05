@@ -32,6 +32,26 @@ here would restate those documents rather than add anything.
   rows and hops are unchanged on both fixtures and on the two Pekko samples (5 rows, 28 hops,
   23 registrations, identical). No catalog word or table starts with `message_`, and no code
   names Akka or Pekko (architecture tests).
+- **Spring application events are in-process dispatch** (spec 2026-11-05 §4 item 5, probe
+  CP-59, spring-context and spring-tx 7.0.1): the second user of the mechanism, and nothing in
+  the code is written for it. `spring-events.yml` is an `annotation_driven` catalog declaring
+  `dispatch: {key: type, match: all}`, so its mapping is read as registrations: each
+  `@EventListener` / `@TransactionalEventListener` method keyed by the classes its annotation
+  names (`path_from: [classes, value]`) or else its one parameter's type (`path_fallback:
+  payload_type`, the parameter `request_body` picks); each class implementing
+  `ApplicationListener<E>` keyed by its own `onApplicationEvent(E)`, the compiler's bridge
+  carried to the method it forwards to (a new block, `dispatch_implementations`). The two
+  `publishEvent` overloads on `ApplicationEventPublisher`, `ApplicationContext` and
+  `ConfigurableApplicationContext` are sends, each publish a hop to every listener its class
+  is assignable to, under a new `Protocol` member, `in_process` (D00 §4). A catalog declaring
+  `dispatch` mints no endpoint row, whatever its style. A sent value that is a static module
+  factory's result (`ConfigPublishEvent.instance()`) is read through the factory's returns,
+  for actors too (their rows and hops unchanged: 5 rows, 28 hops on the two Pekko samples).
+  `type-models/conformance.yml` gains `EventObject` → `Object`, so a listener of `Object`
+  receives an event extending `ApplicationEvent`. On apollo-portal all 17 publish sites hop to
+  their listener (17 hops, each checked by hand); no endpoint row moved on apollo-portal,
+  apollo-biz or dolphinscheduler-api, and the six field pins hold. A trace's unread hop now
+  reads `(value class not read)` rather than `(message class not read)`.
 - **Akka and Pekko actors: a trace crosses actors** (spec 2026-11-04, SEXTANT-178, the user's
   ruling B "I want it complete"; probe CP-57, Akka 2.6.21 and Pekko 1.1.3). Three parts, each
   pinned on `fixtures/orders-actors-pekko` and `-akka`, then the measurement:

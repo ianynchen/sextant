@@ -32,3 +32,9 @@ def test_the_two_group_d_protocols_are_members():
 
 def test_actor_is_a_protocol():
     assert Protocol.ACTOR.value == "actor"
+
+
+def test_in_process_is_a_protocol():
+    """Spec 2026-11-05 §3: a dispatch catalog with no wire (Spring application events) writes
+    its hops under `in_process`, named for the kind of hand-over, never a framework."""
+    assert Protocol.IN_PROCESS.value == "in_process"

@@ -7513,15 +7513,150 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "endpoints.a-REGISTRATION-catalog-runs-no-engine": Guard(
-        what="a chain catalog carrying `dispatch_registrations` is left out of the endpoint loop",
+        what="a catalog declaring `dispatch` (a chain or annotation catalog of registrations) is "
+        "left out of the endpoint loop",
         why="spec 2026-11-05 §2: its chain ends are registrations, read by their own pass. Run "
         "as a `fluent` catalog it is reported skipped for capabilities it never needs, or, "
         "where they are met, its chains are validated and read as endpoint rows",
         edits=(
             Edit(
                 path="sextant/application/resolve/endpoints.py",
-                find="    return bool(catalog.dispatch_registrations)\n",
+                find="    return catalog.dispatch is not None\n",
                 replace="    return False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-registrations.each-row-is-asked-under-its-OWN-match": Guard(
+        what="`reached_by` asks each registration under its own row's `match`",
+        why="spec 2026-11-05 §1: one table holds behaviors (`first`) beside listeners (`all`). "
+        "Asked under one rule, a behavior's shadowed case becomes a hop target, or every "
+        "listener but the first in a group is lost",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        for registration in reachable_handlers(matching, key_type, key_value, "
+                "supertypes, match)\n",
+                replace="        for registration in reachable_handlers(matching, key_type, key_value, "
+                'supertypes, "all")\n',
+            ),
+        ),
+    ),
+    "annotation-registrations.an-annotation-catalog-READS-registrations": Guard(
+        what="an annotation catalog declaring `dispatch` has its mapping read as registrations",
+        why="spec 2026-11-05 §2, §4 item 5: left out of the endpoint loop and read by no pass, "
+        "its listeners are nowhere and every publish is a stop naming no handler",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="                annotation_driven.registrations(workspace, catalog)\n",
+                replace="                []  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.ONLY-a-named-annotation-registers": Guard(
+        what="only a method carrying one of the catalog's `mapping.annotations` is a registration",
+        why="spec 2026-11-05 §4 item 5: a method taking an event and carrying no listener "
+        "annotation is called by no framework; read as a listener, every publish of its "
+        "parameter's class hops to it",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='        use = next((use for use in uses if use["annotation"] in fqns), None)\n',
+                replace="        use = next(iter(uses), None)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.the-PAYLOAD-parameter-keys-the-listener": Guard(
+        what="where the annotation names no class, the payload parameter's type is the key",
+        why="CP-59 finding 3: Spring registers a listener method for its one parameter's type. "
+        "Without it every `@EventListener on(E e)` is an unread registration and no publish "
+        "reaches it",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find="            keys = [_payload_type(declaration, catalog)]\n",
+                replace="            keys = [None]  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.the-CLASSES-attribute-wins": Guard(
+        what="the classes the annotation names key the listener, one row each, over its parameter",
+        why="CP-59 finding 3: `classes()` non-empty is returned before the parameter is read. "
+        "Read off the parameter instead, `@EventListener(classes = A.class) on()` keys "
+        "nothing, and `classes = {A, B}` loses B",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='        keys = _named_classes(use["args"], path_from)\n',
+                replace="        keys = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.only-PAYLOAD_TYPE-names-a-registration": Guard(
+        what="a registration catalog's name fallback must be `payload_type`",
+        why="spec 2026-11-05 §2: every other fallback word composes an ADDRESS from a name. "
+        "Accepted silently, `construct_name` is ignored and a catalog author believes a rule "
+        "nothing applies",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find="    if fallback is not None and fallback != _PAYLOAD_TYPE:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-implementations.the-BRIDGE-is-carried-to-the-method-it-forwards-to": Guard(
+        what="an implementation's method joined by the interface descriptor is carried past a "
+        "compiler bridge to the method the class wrote",
+        why="CP-59 finding 5: for `ApplicationListener<OrderPlaced>` the join finds the synthetic "
+        "bridge, keyed `ApplicationEvent`; kept, the listener receives every event the context "
+        "publishes and its handler is a method nobody wrote",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="            target = _synthesis_target(joined, siblings, declared.signatures, "
+                "declared.modifiers)\n",
+                replace="            target = joined  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-implementations.ONLY-an-implementing-class-registers": Guard(
+        what="only a type below the declared interface registers its method",
+        why="spec 2026-11-05 §4 item 5: a class declaring a same-named method without "
+        "implementing the interface is never called by the framework; read as a listener it "
+        "is a hop to code no event reaches",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='        for implementer in dispatch.subtypes.get(entry["owner"], ()):\n',
+                replace="        for implementer in declared.by_type:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.the-declared-CONFORMANCE-extends-a-values-ancestry": Guard(
+        what="the declared type conformance joins the scanned supertypes a value is matched by",
+        why="CP-59 finding 6: an event extends `ApplicationEvent` extends the JDK's "
+        "`EventObject`, which nothing scans. Without the declared link its ancestry stops "
+        "there and a listener of `Object` never receives it",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="        for entry in conformance:\n",
+                replace="        for entry in ():  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-value-a-MODULE-FACTORY-returns-is-read-through-it": Guard(
+        what="a sent value that is a static module call's result is read through that "
+        "method's returns",
+        why="ruled 2026-11-02 (follow the code we have): `ConfigPublishEvent.instance()` "
+        "builds seven of apollo-portal's seventeen published events. Without the follow each "
+        "is a stop saying the class was not read, while the class is in the module",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find='        if kind == "unresolved" and argument.get("source") is not None:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -7544,7 +7679,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/query/trace.py",
-                find='            where = hop["path"] if hop["path"] is not None else "(message class not read)"\n',
+                find='            where = hop["path"] if hop["path"] is not None else "(value class not read)"\n',
                 replace='            where = hop["path"]  # guard disabled by scripts/guard_check.py\n',
             ),
         ),
@@ -11206,6 +11341,10 @@ def copy_tree(destination: Path) -> Path:
         # the two compiled modules, one per family.
         "orders-actors-pekko",
         "orders-actors-akka",
+        # Spring application events (spec 2026-11-05 §4 item 5): the listener annotations,
+        # the `ApplicationListener` bridge javac writes and a factory's returns are read off
+        # real facts, so their guards are pinned on the e2e test of this module.
+        "orders-events",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

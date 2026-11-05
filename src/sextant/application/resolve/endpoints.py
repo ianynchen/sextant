@@ -343,14 +343,17 @@ _NON_WIRE = frozenset({"scheduled_work", "scheduled_chain", "error_advice"})
 
 
 def _reads_by_a_later_pass(catalog: Catalog) -> bool:
-    """Whether no engine here runs `catalog`: a chain catalog carrying
-    `dispatch_registrations` (spec 2026-11-05 §2) is an ordinary `fluent` catalog whose chain
-    ends are registrations, not endpoint rows. It mints no row, stamps none and feeds no
-    boundary kind, so it is left out of the engine loop whole — no endpoint validation, and
-    no skip or run reported for it — and read by its own pass,
-    `resolve/dispatch_registrations.py`, after every engine. Decided by the block rather
-    than by a style of its own, so the chain words stay the one `fluent` vocabulary."""
-    return bool(catalog.dispatch_registrations)
+    """Whether no engine here runs `catalog`: a catalog declaring in-process `dispatch` (spec
+    2026-11-05 §1-§2) describes registrations, sends and receives, never endpoint rows — a
+    dispatch is a hop. A `fluent` chain catalog carrying `dispatch_registrations` is one
+    whose chain ends are registrations; an `annotation_driven` catalog is one whose mapping
+    reads each annotated method as a registration (`annotation_driven.registrations`). It
+    mints no row, stamps none and feeds no boundary kind, so it is left out of the engine
+    loop whole — no endpoint validation, and no skip or run reported for it — and read by
+    its own passes, `resolve/dispatch_registrations.py` and `dispatch_hops.py`, after every
+    engine. Decided by the setting rather than by a style of its own, so each style keeps
+    its one vocabulary."""
+    return catalog.dispatch is not None
 
 
 def _derives_endpoint_rows(catalog: Catalog) -> bool:

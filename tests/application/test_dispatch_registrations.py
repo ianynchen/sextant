@@ -18,6 +18,7 @@ from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.dispatch_registrations import (
     reachable_handlers,
+    reached_by,
     record_dispatch_registrations,
     served_cases,
 )
@@ -383,6 +384,23 @@ def test_match_all_reaches_every_matching_registration(match: str):
         for row in reachable_handlers(rows, "Reserve#", None, _SUPERTYPES, match)
     ] == [("a", 0), ("a", 1), ("c", 0)]
     assert reachable_handlers(rows, None, None, _SUPERTYPES, match) == []
+
+
+@pytest.mark.pins("dispatch-registrations.each-row-is-asked-under-its-OWN-match")
+def test_reached_by_asks_each_row_under_its_own_match():
+    """One table holds every catalog's registrations: a behavior's cases (`first`) beside
+    listeners (`all`). Each is asked under its own rule, so the behavior's `Command` case
+    still hides its `Reserve` case after it, while both listeners of `Reserve`'s supertypes
+    receive it (spec 2026-11-05 §1)."""
+    rows = [
+        _row("behavior", 0, "Command#"),
+        _row("behavior", 1, "Reserve#"),
+        _row("listener-a", 0, "Command#", match="all"),
+        _row("listener-b", 0, "Reserve#", match="all"),
+    ]
+    assert sorted(
+        (row["group"], row["position"]) for row in reached_by(rows, "Reserve#", None, _SUPERTYPES)
+    ) == [("behavior", 0), ("listener-a", 0), ("listener-b", 0)]
 
 
 _CONSTANTS = {"Tick#INSTANCE.": "Tick#", "Other#INSTANCE.": "Other#"}

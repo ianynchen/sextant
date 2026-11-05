@@ -223,7 +223,7 @@ def test_an_unread_message_class_reaches_not_even_a_predicate_only_case(tmp_path
             "('m Entity#create(sig_1).#0', 0, NULL, NULL, NULL, true, 'm Entity#onAny(sig_2).', "
             "false, 'first')"
         )
-        reading = _Reading(workspace)
+        reading = _Reading(workspace, [])
         unread = reading.hops(
             "m Relay#forward(sig_3).", 0, (None, None, None, "parameter"), "actor"
         )
@@ -274,7 +274,7 @@ def test_a_trace_names_an_unread_class(analyzed: Path):
     finally:
         workspace.close()
     assert [(step.via, step.stop) for step in trace.steps] == [
-        ("actor (message class not read)", TraceStop.BOUNDARY)
+        ("actor (value class not read)", TraceStop.BOUNDARY)
     ]
 
 

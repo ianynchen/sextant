@@ -824,7 +824,7 @@ genuinely new shape needs a new engine. (Nine as of Phase 2H; `supertype_derived
 is the twelfth; `supertype_dispatch`, Task 7b, is the thirteenth; `scheduled_work` and
 `error_advice`, Task 8, are the fourteenth and fifteenth; `scheduled_chain`, the Quartz
 design of 2026-10-28, is the sixteenth. In-process dispatch (the design of 2026-11-05) is
-**no style**: it is a setting and three blocks a catalog of an existing style carries, in its
+**no style**: it is a setting and four blocks a catalog of an existing style carries, in its
 own section, §2m. The
 Akka and Pekko design of 2026-11-04 had built a seventeenth style, `message_handlers`, for
 it; the user ruled it framework-specific, and it is gone.)
@@ -6211,8 +6211,11 @@ before the catalog line, and where it disagrees the list changes, not the probe.
 Spec `2026-11-05-in-process-dispatch-design.md`: code hands a value to a framework or a
 channel, and the framework calls the handler(s) that receive it. No address goes on a wire, so
 it is a trace **hop** (D01 §3 `hops`), never an endpoint row; messaging, which names an address
-a broker routes on, keeps its rows. **It is no style**: a setting and three blocks under
-`matches` that a catalog of an existing style carries, read by passes after the engines.
+a broker routes on, keeps its rows. **It is no style**: a setting and four blocks under
+`matches` that a catalog of an existing style carries, read by passes after the engines. **A
+catalog declaring `dispatch` mints no endpoint row**: `derive_endpoints` leaves it out of the
+engine loop whole (`endpoints._reads_by_a_later_pass`: no endpoint validation, no run or skip
+reported), whatever its style.
 
 ```yaml
 # pekko-actor-handlers.yml
@@ -6287,7 +6290,34 @@ matches:
   (refused at resolve otherwise) although it mints no endpoint row. The value at `value_arg`
   is read by its kind: an `instance`'s class; an `enum` constant or a static `field` by
   identity (its class and its own symbol); a `lambda` through each class its body returns (a
-  constructor reference: its owner). Anything else is not read, and the row says so.
+  constructor reference: its owner); a static call's result (`Event.instance()`, an
+  `unresolved` argument whose `source` is that call's `result`) through each class the
+  module's own body of that method returns. Anything else is not read, and the row says so.
+  A value's class reaches a registration of any of its supertypes: the scanned and headered
+  ones, and the `type-models/` conformance past a JDK class nothing scans.
+- **An `annotation_driven` catalog declaring `dispatch`** (`spring-events.yml`) reads its
+  `mapping` as registrations, not routes (`annotation_driven.registrations`): each method
+  carrying one of `mapping.annotations`, in the annotation set the endpoint derivation itself
+  matches on (folded containers, module-local composed annotations), is one registration per
+  key, its group the method itself and its handler the method. The key is each class named
+  under the first present `mapping.path_from` attribute (`@EventListener(classes = {A.class,
+  B.class})`: two rows, in the order written); where none is present, `mapping.path_fallback:
+  payload_type` keys it by the type of the parameter the catalog's `request_body` rule picks
+  (its erasure, the class a value is dispatched by). `payload_type` is the one fallback a
+  registration takes — every other word composes an address — and any other is refused when
+  the catalog is read. A method giving no class keeps one row with no key: it matches nothing.
+  `match` is the catalog's. `protocol` names the hops its `dispatch_sends` give: `in_process`
+  ([D00](D00-fact-schema.md) §4) for a framework with no wire.
+- **`dispatch_implementations`** entries are `{owner, method, descriptor, value_arg}`, checked
+  at load (`yaml_source._dispatch_implementations`): a registration made by IMPLEMENTING the
+  interface `owner` (`ApplicationListener`). Each module type below it (`Dispatch.subtypes`,
+  transitively, through headered library types) that declares the method itself — joined by
+  name and the declared, erased descriptor — registers it, keyed by the type of its parameter
+  at `value_arg`, a group of its own at position 0. For a generic implementation the join finds
+  the compiler's synthetic bridge (`modifiers.synthetic`, D00 §5a; javac writes no
+  `bridge_of`), which is carried to the method it forwards to by the rule the annotation
+  inheritance walk applies (`effective_annotations._synthesis_target`: the same class's one
+  same-name, same-arity method not synthetic); where that is not exactly one method, no row.
 - **`dispatch_receives`** entries are `{owner, method, descriptor, object: receiver,
   handler: enclosing | lambda_arg}`, checked at load (`yaml_source._dispatch_receives`): a
   call that takes a value from an object key's channel (`take`, `receive`), the object it

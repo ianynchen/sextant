@@ -75,6 +75,8 @@ PRIMED_FIXTURES = (
     "orders-pekko",
     "orders-actors-pekko",
     "orders-actors-akka",
+    # Spring application events (spec 2026-11-05 §4 item 5).
+    "orders-events",
     "orders-ktor",
     "orders-ktor-classlambdas",
     "orders-gateway",

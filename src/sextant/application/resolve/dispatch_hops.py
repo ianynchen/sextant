@@ -21,6 +21,10 @@ catalog's (`Catalog.dispatch_sends`), and every row carries that catalog's `prot
 - `lambda` — a function that builds the value (an ask's request): each class its body
   returns, one per return (a `merge` of several `new`s, javac's ternary, is one per
   candidate); a constructor reference (`Get::new`) returns its own owner.
+- `unresolved` with a `source` — a call's result (a static factory, `Event.instance()`): where
+  the call is static and the module declares the method, each class its body returns, read
+  as a lambda's are (ruled 2026-11-02: follow the code we have). An instance call or a
+  library method is not read.
 - anything else — **not read**: one row with no `path` and no `handler`. Never a hop to
   every handler.
 
@@ -74,10 +78,19 @@ from sextant.application.resolve.shapes.arguments import (
 )
 from sextant.application.resolve.values import cached_value_index, resolve_site
 from sextant.domain.closed_sets import Direction
-from sextant.domain.symbols import bare_descriptor, member_name, owner_of, type_descriptor
+from sextant.domain.symbols import (
+    bare_descriptor,
+    member_name,
+    method_descriptor,
+    owner_of,
+    type_descriptor,
+)
 
 # The constructor name D00 §5 normalises every language's to.
 _CONSTRUCTOR = "<init>"
+# The call form that names exactly the method it runs (`dispatch.py`): no override can run
+# in its place, so its body is the value's producer.
+_STATIC = "static"
 # The `single_call` row word whose entries name the producer of an inbound key, and the
 # entry word naming which of that producer's arguments holds the key's class.
 _CHANNEL_VIA = "channel_via"
@@ -106,12 +119,12 @@ def record_dispatch_hops(workspace: Workspace, catalogs: list[Catalog]) -> None:
                 f"handlers and no `protocol`, which every hop it gives is written under "
                 f"(spec 2026-11-04 §3c)"
             )
-    reading = _Reading(workspace)
+    reading = _Reading(workspace, catalogs[0].type_model)
     rows: dict[tuple[Any, ...], dict[str, Any]] = {}
     for catalog in sending:
         for site, send in declared_call_sites(workspace, catalog.dispatch_sends):
             argument = _arg_at(site["arguments"], send["value_arg"])
-            for value in reading.sent(argument):
+            for value in reading.sent(argument, str(site["caller"])):
                 for row in reading.hops(site["caller"], site["ordinal"], value, catalog.protocol):
                     rows.setdefault(tuple(row.values()), row)
     protocols = sorted({catalog.protocol for catalog in delivering})
@@ -142,7 +155,7 @@ def record_key_handlers(workspace: Workspace, catalogs: list[Catalog]) -> None:
     keyed = [catalog for catalog in catalogs if _keyed_methods(catalog)]
     if not keyed:
         return
-    reading = _Reading(workspace)
+    reading = _Reading(workspace, keyed[0].type_model)
     dropped: list[dict[str, Any]] = []
     rows: dict[tuple[Any, ...], dict[str, Any]] = {}
     for catalog in keyed:
@@ -269,7 +282,7 @@ def _key_classes(
 class _Reading:
     """The reads a send's value and a handler's return need, taken once per resolve."""
 
-    def __init__(self, workspace: Workspace) -> None:
+    def __init__(self, workspace: Workspace, conformance: list[dict[str, Any]]) -> None:
         self._workspace = workspace
         self._cases = workspace.query("dispatch_registrations")
         dispatch = workspace.once(dispatch_of)
@@ -277,6 +290,14 @@ class _Reading:
             child: {ancestor for ancestor, _, _ in ancestors}
             for child, ancestors in dispatch.ancestors.items()
         }
+        # The declared conformance of types nothing scans (`type-models/`, the same table
+        # every catalog carries as `type_model`): a value's ancestry reaches past a JDK
+        # class to a registration of its supertype (an event extending a headered library
+        # class extending `EventObject`, received by a listener of the root type).
+        for entry in conformance:
+            self._supertypes.setdefault(type_descriptor(entry["subtype"]), set()).add(
+                type_descriptor(entry["supertype"])
+            )
         self._returns: dict[str, list[Any]] = {}
         for row in workspace.query("method_returns"):
             value = None if row["value"] is None else json.loads(str(row["value"]))
@@ -318,12 +339,15 @@ class _Reading:
             {str(case["handler"]) for case in self._cases if case["delivers"] and case["handler"]}
         )
 
-    def sent(self, argument: Mapping[str, Any] | None) -> list[_Value]:
-        """What a send's value argument is, one entry per class it can be."""
+    def sent(self, argument: Mapping[str, Any] | None, caller: str) -> list[_Value]:
+        """What a send's value argument is, one entry per class it can be. `caller` is the
+        method making the send, whose call sites an `unresolved` value's `source` names."""
         kind = None if argument is None else argument.get("kind")
         if argument is None or kind is None:
             return [(None, None, None, "absent")]
         symbol = argument.get("symbol")
+        if kind == "unresolved" and argument.get("source") is not None:
+            return self._made_by_a_call(caller, int(argument["source"]))
         if kind == "instance" and symbol is not None:
             return [(str(symbol), None, None, None)]
         if kind == "enum" and symbol is not None:
@@ -341,6 +365,36 @@ class _Reading:
                 return [(None, None, None, kind)]
             return [(type_, value, None, unread) for type_, value, _, unread in self.returned(body)]
         return [(None, None, None, str(kind))]
+
+    def _made_by_a_call(self, caller: str, source: int) -> list[_Value]:
+        """A value a call in `caller` returned (D00 §5: an `unresolved` argument's `source` is
+        the producing call's `result`), read through that call's body where the call names
+        the method it runs and the module declares its body: a static call (no override can
+        run instead, `dispatch.py`), each class the method returns (`returned`). Anything
+        else — an instance call, a library method — is not read (spec 2026-11-02 rule 2:
+        unknown only where the code is absent)."""
+        made = next(
+            (
+                site
+                for site in self._sites.get(caller, ())
+                if site.get("result") == source and site.get("invoke_kind") == _STATIC
+            ),
+            None,
+        )
+        body = (
+            None
+            if made is None or made.get("name") is None or made.get("descriptor") is None
+            else self._by_bare.get(
+                method_descriptor(
+                    bare_descriptor(str(made["owner"])),
+                    str(made["name"]),
+                    str(made["descriptor"]),
+                )
+            )
+        )
+        if body is None:
+            return [(None, None, None, "unresolved")]
+        return [(type_, value, None, unread) for type_, value, _, unread in self.returned(body)]
 
     def returned(self, method: str) -> list[_Value]:
         """Each value `method` returns, with the call site in it the value is made at:

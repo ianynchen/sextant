@@ -56,6 +56,7 @@ PROTOCOLS = {
     "temporal",
     "eventbus",
     "actor",
+    "in_process",
 }
 LANGUAGES = {"java", "kotlin", "golang", "rust", "typescript", "javascript", "swift", "scala"}
 JVM_NAMES = {"jvm", "java", "kotlin", "bytecode", "asm", "classfile", "classpath"}

@@ -367,6 +367,14 @@ class Catalog:
     # handler}`, the owner a type symbol. Checked by the loader.
     dispatch_receives: tuple[dict[str, Any], ...] = ()
 
+    # The registrations made by IMPLEMENTING an interface, under
+    # `matches.dispatch_implementations` (spec 2026-11-05 §4 item 5): each module class
+    # implementing `owner` registers its own `method` of that descriptor (the method its
+    # compiler bridge forwards to, where it wrote one), keyed by the type of that method's
+    # parameter at `value_arg`. `{owner, method, descriptor, value_arg}`, the owner a type
+    # symbol. Checked by the loader; read by `resolve/dispatch_registrations.py`.
+    dispatch_implementations: tuple[dict[str, Any], ...] = ()
+
 
 class CatalogError(ValueError):
     """A catalog that cannot be trusted. An unchecked value does not stay in

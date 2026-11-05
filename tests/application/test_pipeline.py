@@ -4610,7 +4610,9 @@ def test_the_endpoints_statement_runs_once_per_resolve_and_every_catalog_takes_i
     the whole `resolve()` with every shipped catalog, so a driver that went back to
     staging per contiguous run — or per catalog — fails here rather than being found
     by the next profile. The turn count is every annotation-driven catalog that ran
-    minus the corroboration-only one, which stages nothing and takes no turn."""
+    minus the corroboration-only one, which stages nothing and takes no turn, and minus
+    any declaring `dispatch`, whose mapping is read as registrations by their own pass
+    (spec 2026-11-05 §2) and never enters the endpoint loop."""
     executions: dict[str, int] = {}
     real_derive = DuckDbWorkspace.derive
 
@@ -4632,6 +4634,7 @@ def test_the_endpoints_statement_runs_once_per_resolve_and_every_catalog_takes_i
         if catalog.style == "annotation_driven"
         and catalog.id not in skipped_ids
         and "mapping" in catalog.matches
+        and catalog.dispatch is None
     ]
 
     assert executions["endpoints"] == 1
