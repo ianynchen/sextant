@@ -20,13 +20,13 @@ detect:
 
 # CP-59 read every descriptor and annotation below with `javap` on the jars
 # `fixtures/orders-cdi-events` resolves (Quarkus 3.17.5's managed versions) and on
-# `javax.enterprise:cdi-api` 1.0, each version from the jar's own manifest (the Jakarta jar
+# `javax.enterprise:cdi-api` 1.0 and 2.0, each version from the jar's own manifest (the Jakarta jar
 # states only `Bundle-Version`). ArC is where finding 10 (which observers a `fire` notifies)
 # was read out of.
 measured:
   - { artifact: jakarta.enterprise:jakarta.enterprise.cdi-api, versions: ["4.1.0"],
       identity: reported, by: scripts/probes/cp59_dispatch.md }
-  - { artifact: javax.enterprise:cdi-api, versions: ["1.0.0"],
+  - { artifact: javax.enterprise:cdi-api, versions: ["1.0.0", "2.0.0"],
       identity: reported, by: scripts/probes/cp59_dispatch.md }
   - { artifact: io.quarkus.arc:arc, versions: ["3.17.5"],
       identity: reported, by: scripts/probes/cp59_dispatch.md }
@@ -42,6 +42,14 @@ matches:
     selected_by_parameter:
       - jakarta.enterprise.event.Observes
       - javax.enterprise.event.Observes
+    # An observer whose event parameter also carries a QUALIFIER (an annotation meta-annotated
+    # `@Qualifier`: `@Named("x")`, an application's own `@Express`) is notified only of events
+    # fired with that qualifier. The fire sites' qualifiers (`@Inject @Express Event<E>`,
+    # `select(...)`) are not read, so such an observer is kept with no key: a missing hop,
+    # never a false one. `@Any` is a qualifier too and is kept keyless the same way.
+    keyless_when_meta_annotated:
+      - jakarta.inject.Qualifier
+      - javax.inject.Qualifier
     path_from: []
     prefix_from: []
     method_from: method

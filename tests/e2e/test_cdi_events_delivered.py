@@ -69,19 +69,51 @@ def _hops_from(tables: dict, caller: str) -> set[tuple]:
 
 
 @pytest.mark.pins("annotation-registrations.a-PARAMETER-annotation-selects-the-observer")
-def test_a_fired_event_hops_to_every_observer(tables):
-    """`shipped.fire(new Shipped(id))` reaches every synchronous observer of a supertype of
-    `Shipped` (`match: all`): `on(@Observes Shipped)` and `on(@Observes Object)`.
-    `shipped.fireAsync(new Shipped(id))` reaches the asynchronous one, `on(@ObservesAsync
+@pytest.mark.pins("annotation-registrations.ONLY-a-QUALIFIER-makes-an-observer-KEYLESS")
+def test_fire_reaches_the_synchronous_observers_and_fire_async_the_asynchronous(tables):
+    """`shipped.fire(new Shipped(id))` reaches every synchronous, unqualified observer of a
+    supertype of `Shipped` (`match: all`): `on(@Observes Shipped)`, `on(@Observes Object)` and
+    `on(@Observes @Priority(10) Shipped)` (`@Priority` orders observers, it qualifies nothing).
+    `shipped.fireAsync(new Shipped(id))` reaches only the asynchronous one, `on(@ObservesAsync
     Shipped)`. Neither crosses to the other kind: ArC filters observers by `isAsync()` against
     the call that fired (CP-59 finding 10)."""
     assert _hops_from(tables, "ShippingService#ship") == {
         ("in_process", "Shipped", "AuditObserver#on"),
         ("in_process", "Shipped", "AnyObserver#on"),
+        ("in_process", "Shipped", "PriorityObserver#on"),
     }
     assert _hops_from(tables, "ShippingService#shipLater") == {
         ("in_process", "Shipped", "AsyncObserver#on"),
     }
+
+
+@pytest.mark.pins("annotation-registrations.a-QUALIFIED-observer-is-KEYLESS")
+def test_a_qualified_observer_is_kept_keyless_and_gets_no_hop(tables):
+    """`on(@Observes @Express Shipped)` (a module `@Qualifier`) and `on(@Observes @Named("audit")
+    Shipped)` (a library one, read off its type header) are notified only of events fired with
+    that qualifier, which this module's fire sites are not read for. Each keeps its
+    registration with no key: no hop, a missing one at worst, never a false one."""
+    keys = {
+        _short(row["handler"]): row["key_type"]
+        for row in tables["registrations"]
+        if _short(row["handler"]) in ("ExpressObserver#on", "NamedObserver#on")
+    }
+    assert keys == {"ExpressObserver#on": None, "NamedObserver#on": None}
+    assert not any(
+        _short(row["handler"]) in ("ExpressObserver#on", "NamedObserver#on")
+        for row in tables["hops"]
+    )
+
+
+@pytest.mark.pins("annotation-registrations.a-PARAMETERIZED-observed-type-is-KEYLESS")
+def test_a_parameterized_observed_type_is_kept_keyless(tables):
+    """`on(@Observes List<String>)`: CDI matches the parameterized type, so its erasure `List`
+    would reach a `List<Integer>` too. The registration is kept with no key."""
+    assert {
+        _short(row["handler"]): row["key_type"]
+        for row in tables["registrations"]
+        if _short(row["handler"]) == "ListObserver#on"
+    } == {"ListObserver#on": None}
 
 
 @pytest.mark.pins("annotation-registrations.a-PARAMETER-annotation-selects-the-observer")
@@ -118,6 +150,10 @@ def test_each_observer_belongs_to_the_mechanism_of_its_annotation(tables):
     } == {
         "AuditObserver#on": "cdi-events",
         "AnyObserver#on": "cdi-events",
+        "PriorityObserver#on": "cdi-events",
+        "ExpressObserver#on": "cdi-events",
+        "NamedObserver#on": "cdi-events",
+        "ListObserver#on": "cdi-events",
         "StartupObserver#onStart": "cdi-events",
         "AsyncObserver#on": "cdi-async-events",
     }

@@ -7626,21 +7626,59 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_ANNOTATION_DRIVEN,
-                find="                selected.append((declaration, [_erased_type(parameter)]))\n",
+                find="                selected.append((declaration, [_parameter_key(parameter, marked)]))\n",
                 replace="                selected.append((declaration, [_erased_type("
                 'declaration["signature"]["parameters"][0])]))  # guard disabled\n',
             ),
         ),
     ),
-    "annotation-registrations.a-NON-LIST-selector-is-refused": Guard(
-        what="`selected_by_parameter` that is not a list of annotation names is refused",
-        why="a bare string iterates as its characters, which select nothing: the catalog's "
-        "observers would be silently absent",
+    "annotation-registrations.a-NON-LIST-annotation-word-is-refused": Guard(
+        what="`selected_by_parameter` or `keyless_when_meta_annotated` that is not a list of "
+        "annotation names is refused",
+        why="a bare string iterates as its characters, which name nothing: the catalog's "
+        "observers would be silently absent, or its qualified observers silently keyed",
         edits=(
             Edit(
                 path=_ANNOTATION_DRIVEN,
                 find="    if not isinstance(declared, list) or not all(\n",
                 replace="    if False and not all(  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.a-QUALIFIED-observer-is-KEYLESS": Guard(
+        what="an observed parameter also carrying a qualifier keeps its row with no key",
+        why="review M1: CDI notifies a qualified observer only of events fired with its "
+        "qualifiers, which the fire sites are not read for. Keyed, every unqualified fire of "
+        "its class is a false hop",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='        bare_descriptor(str(use["annotation"])) in marked\n',
+                replace="        False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.ONLY-a-QUALIFIER-makes-an-observer-KEYLESS": Guard(
+        what="only an annotation type meta-annotated by a declared marker makes an observer keyless",
+        why="review M1: `@Observes @Priority(10) E` is common and `@Priority` qualifies nothing. "
+        "Read as a qualifier, the observer loses every hop it really has",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='        if bare_descriptor(str(row["annotation"])) in markers\n',
+                replace="        if True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.a-PARAMETERIZED-observed-type-is-KEYLESS": Guard(
+        what="an observed parameter whose type carries type arguments keeps its row with no key",
+        why="review m2: CDI matches the parameterized observed type; keyed by the erasure, "
+        "`@Observes List<String>` is reached by a `List<Integer>`, a false hop",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='    if (parameter.get("type") or {}).get("arguments"):\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

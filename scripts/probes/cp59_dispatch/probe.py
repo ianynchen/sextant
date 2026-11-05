@@ -13,6 +13,7 @@ CLASSPATH = (FIX / "target/probe.cp").read_text().strip()
 CLASSES = str(FIX / "target/classes")
 CDI_FIX = Path(ARGS["CDI_FIX"])
 [JAVAX_JAR] = [str(jar) for jar in (CDI_FIX / "target/probe-javax").glob("cdi-api-*.jar")]
+[JAVAX2_JAR] = [str(jar) for jar in (CDI_FIX / "target/probe-javax2").glob("cdi-api-*.jar")]
 CDI_CLASSPATH = f"{CDI_FIX / 'target/classes'}:{(CDI_FIX / 'target/probe.cp').read_text().strip()}"
 
 # The artifacts whose types the catalog names, by jar file-name stem.
@@ -281,22 +282,29 @@ def cdi(spring_versions: dict[str, str]) -> None:
         f"- `jakarta.enterprise.cdi-api`: `{manifest_version(jakarta_api, ('Implementation-Version', 'Bundle-Version'))}`"
     )
     print(f"- `javax.enterprise:cdi-api`: `{manifest_version(javax, ('Implementation-Version',))}`")
+    # cdi-api 2.0's `Implementation-Version` is an unexpanded `${parsedVersion.osgiVersion}`;
+    # its `Bundle-Version` is the version it states.
+    print(
+        f"- `javax.enterprise:cdi-api` (2.x): `{manifest_version(JAVAX2_JAR, ('Bundle-Version',))}`"
+    )
     print(f"- `arc`: `{manifest_version(arc, ('Implementation-Version',))}`")
     print()
     print("### 8. Sends: `Event`\n")
     for name in ("fire", "fireAsync"):
         for row in methods("jakarta.enterprise.event.Event", name, cp=cp):
             print(f"- `jakarta.enterprise.event.Event.{name}` {row}")
-    for name in ("fire", "fireAsync"):
-        rows = methods("javax.enterprise.event.Event", name, cp=javax)
-        for row in rows or ["none"]:
-            print(f"- `javax.enterprise.event.Event.{name}` {row}")
+    for label, path in (("1.0.0", javax), ("2.0.0", JAVAX2_JAR)):
+        for name in ("fire", "fireAsync"):
+            rows = methods("javax.enterprise.event.Event", name, cp=path)
+            for row in rows or ["none"]:
+                print(f"- `javax.enterprise.event.Event.{name}` ({label}) {row}")
     print()
     print("### 9. The observer annotations, and where javac writes them\n")
     for cls, path in (
         ("jakarta.enterprise.event.Observes", cp),
         ("jakarta.enterprise.event.ObservesAsync", cp),
         ("javax.enterprise.event.Observes", javax),
+        ("javax.enterprise.event.ObservesAsync", JAVAX2_JAR),
     ):
         print(f"#### `{cls}`\n")
         for line in class_annotations(cls, cp=path):

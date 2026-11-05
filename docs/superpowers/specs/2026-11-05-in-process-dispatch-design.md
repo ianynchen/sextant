@@ -93,11 +93,18 @@ No `message_*` word remains. No word names a framework.
    `@Observes`/`@ObservesAsync` is a registration keyed by that parameter's type, `match: all`.
    Checked on the Quarkus examples. **As built (Task 3):** two catalogs, two mechanisms —
    `cdi-events` (`@Observes`, `fire`; Jakarta and javax) and `cdi-async-events`
-   (`@ObservesAsync`, both `fireAsync` overloads; Jakarta only, javax CDI 1.0 has neither) —
+   (`@ObservesAsync`, both `fireAsync` overloads; Jakarta and javax CDI 2.x, javax CDI 1.x has
+   neither) —
    because ArC's `fire` notifies only synchronous observers and `fireAsync` only asynchronous
    ones (CP-59 finding 10). No example under `examples/` fires a CDI event (every observer there
    observes a framework event), so the Quarkus check covers registrations only; the hops are
-   pinned on `fixtures/orders-cdi-events`. Event qualifiers are not read (stated bound).
+   pinned on `fixtures/orders-cdi-events`. **Fix round 1 (review M1, m2; the user's rule: a
+   wrong value is a lie, worse than unknown):** an observer whose event parameter also carries
+   a qualifier (an annotation meta-annotated by a `mapping.keyless_when_meta_annotated` marker:
+   `jakarta.inject.Qualifier`, `javax.inject.Qualifier`), or whose observed type carries type
+   arguments, keeps its registration with no key — a missing hop, never a false one. Reading the
+   fire sites' qualifiers (receiver to field, `select(…)`) is deferred until a corpus has a fire
+   site.
 7. **Object keys: Kotlin `Channel`, Kotlin `SharedFlow`/`StateFlow`, Java `BlockingQueue`.**
    Sends: `send`/`trySend`, `emit`/`tryEmit`/`value =`, `put`/`offer`/`add`. Receives: `receive`/
    `tryReceive`/`for (x in ch)` (an `iterator()` call), `collect`, `take`/`poll`. A send hops to

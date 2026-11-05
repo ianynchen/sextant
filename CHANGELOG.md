@@ -64,7 +64,8 @@ here would restate those documents rather than add anything.
   a method by a PARAMETER annotation and keys it by that parameter's type, whatever other
   parameters the container injects beside it. `cdi-events.yml` reads `@Observes` observers
   (Jakarta and javax) and declares `Event.fire` as its send; `cdi-async-events.yml` reads
-  `@ObservesAsync` observers and declares both `Event.fireAsync` overloads. They are two
+  `@ObservesAsync` observers (Jakarta and javax CDI 2.x) and declares both `Event.fireAsync`
+  overloads. They are two
   mechanisms because ArC notifies only synchronous observers from `fire` and only asynchronous
   ones from `fireAsync` (CP-59 finding 10), so neither reaches the other's observers. Each fire
   is a hop under `in_process` to every observer its class is assignable to; an observer of a
@@ -73,7 +74,11 @@ here would restate those documents rather than add anything.
   `quarkus-quickstarts`' `stork-quickstart` and `reactive-routes-quickstart` the five observers
   are registrations keyed by their framework event, with no hop and no endpoint row moved; the
   Pekko samples (5 rows, 28 hops, 23 registrations) and apollo-portal (17 hops) are identical.
-  Event qualifiers are not read (a stated bound).
+  A qualified observer (its event parameter also carries an annotation meta-annotated by a
+  `mapping.keyless_when_meta_annotated` marker, `@Qualifier`: `@Named("x")`, an application's
+  own qualifier) and an observer of a parameterized type (`List<String>`) keep their
+  registration with no key: the fire sites' qualifiers and type arguments are not read, so such
+  an observer gets no hop (missing, never false); `@Observes @Priority(10) E` keeps its key.
 - **Akka and Pekko actors: a trace crosses actors** (spec 2026-11-04, SEXTANT-178, the user's
   ruling B "I want it complete"; probe CP-57, Akka 2.6.21 and Pekko 1.1.3). Three parts, each
   pinned on `fixtures/orders-actors-pekko` and `-akka`, then the measurement:

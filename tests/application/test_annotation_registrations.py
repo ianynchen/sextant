@@ -43,6 +43,9 @@ _APPLICATION_LISTENER = "org/springframework/context/ApplicationListener#"
 _APPLICATION_EVENT = "org/springframework/context/ApplicationEvent#"
 _OBSERVES = "jakarta/enterprise/event/Observes#"
 _OBSERVES_ASYNC = "jakarta/enterprise/event/ObservesAsync#"
+_QUALIFIER = "jakarta/inject/Qualifier#"
+_EXPRESS = "com/acme/shop/Express#"
+_PRIORITY = "jakarta/annotation/Priority#"
 
 
 def _catalog(catalog_id: str = "spring-events") -> Catalog:
@@ -212,6 +215,87 @@ def test_an_observer_is_keyed_by_its_annotated_parameter(tmp_path: Path):
     ]
 
 
+def _observer(
+    name: str, annotations: tuple[str, ...], arguments: tuple[str, ...] = ()
+) -> SymbolFact:
+    """`void <name>(@Observes <annotations> OrderPlaced<arguments> e)` on the listener class."""
+    return SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE + method_descriptor(_LISTENER, name, f"(L{_PLACED[:-1]};)V"),
+        construct_kind="method",
+        enclosing=_MODULE + _LISTENER,
+        signature=Signature(
+            parameters=[
+                Parameter(
+                    name="e",
+                    type=TypeRef(symbol=_PLACED, arguments=[TypeRef(symbol=a) for a in arguments]),
+                    erased_symbol=_PLACED,
+                    annotations=[
+                        AnnotationUse(annotation=a, args={}) for a in (_OBSERVES, *annotations)
+                    ],
+                )
+            ],
+            returns=TypeRef(symbol="void"),
+        ),
+        modifiers={"static": False, "synthetic": False},
+    )
+
+
+def _qualifier_type() -> list:
+    """`@Qualifier @interface Express`, a module annotation type."""
+    express = _class(_EXPRESS)
+    return [
+        express,
+        AnnotationFact(
+            document_id="doc_1",
+            target=express.symbol,
+            use=AnnotationUse(annotation=_QUALIFIER, args={}),
+            retention="RUNTIME",
+        ),
+    ]
+
+
+@pytest.mark.pins("annotation-registrations.a-QUALIFIED-observer-is-KEYLESS")
+def test_a_qualified_observer_is_kept_keyless(tmp_path: Path):
+    """`on(@Observes @Express OrderPlaced e)`, `Express` meta-annotated `@Qualifier`: the
+    observer is notified only of events fired with that qualifier, which the fire sites are not
+    read for, so its registration is kept with no key (matches nothing: missing, never false)."""
+    facts = [_class(_LISTENER), *_qualifier_type(), _observer("on", (_EXPRESS,))]
+    assert _rows(tmp_path, facts, "cdi-events") == [("on", 0, None, "all", True)]
+
+
+@pytest.mark.pins("annotation-registrations.ONLY-a-QUALIFIER-makes-an-observer-KEYLESS")
+def test_an_observer_with_an_annotation_that_qualifies_nothing_keeps_its_key(tmp_path: Path):
+    """`on(@Observes @Priority(10) OrderPlaced e)`: `@Priority` orders observers and is no
+    qualifier, and an annotation type meta-annotated only by something else (`@Documented`) is
+    none either. Both keep their key."""
+    express = _class(_EXPRESS)
+    facts = [
+        _class(_LISTENER),
+        express,
+        AnnotationFact(
+            document_id="doc_1",
+            target=express.symbol,
+            use=AnnotationUse(annotation="java/lang/annotation/Documented#", args={}),
+            retention="RUNTIME",
+        ),
+        _observer("onPriority", (_PRIORITY,)),
+        _observer("onExpress", (_EXPRESS,)),
+    ]
+    assert _rows(tmp_path, facts, "cdi-events") == [
+        ("onExpress", 0, _PLACED, "all", True),
+        ("onPriority", 0, _PLACED, "all", True),
+    ]
+
+
+@pytest.mark.pins("annotation-registrations.a-PARAMETERIZED-observed-type-is-KEYLESS")
+def test_a_parameterized_observed_type_is_kept_keyless(tmp_path: Path):
+    """`on(@Observes OrderPlaced<String> e)`: the framework matches the parameterized type, so
+    the erasure would reach every `OrderPlaced` whatever its arguments. Kept with no key."""
+    facts = [_class(_LISTENER), _observer("on", (), ("java/lang/String#",))]
+    assert _rows(tmp_path, facts, "cdi-events") == [("on", 0, None, "all", True)]
+
+
 @pytest.mark.declines("cdi-events")
 @pytest.mark.pins("annotation-registrations.ONLY-a-named-PARAMETER-annotation-registers")
 def test_a_method_no_named_parameter_annotation_marks_registers_nothing(tmp_path: Path):
@@ -364,7 +448,7 @@ def test_a_registration_fallback_other_than_payload_type_is_refused(tmp_path: Pa
         workspace.close()
 
 
-@pytest.mark.pins("annotation-registrations.a-NON-LIST-selector-is-refused")
+@pytest.mark.pins("annotation-registrations.a-NON-LIST-annotation-word-is-refused")
 def test_a_parameter_selector_that_is_not_a_list_of_names_is_refused(tmp_path: Path):
     """`selected_by_parameter` is a list of annotation names. A bare string read as a list is
     a list of its characters, which select nothing: the catalog's observers would be silently
@@ -379,6 +463,26 @@ def test_a_parameter_selector_that_is_not_a_list_of_names_is_refused(tmp_path: P
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     try:
         with pytest.raises(CatalogError, match="selected_by_parameter"):
+            record_dispatch_registrations(workspace, [catalog])
+    finally:
+        workspace.close()
+
+
+@pytest.mark.pins("annotation-registrations.a-NON-LIST-annotation-word-is-refused")
+def test_a_keyless_marker_that_is_not_a_list_of_names_is_refused(tmp_path: Path):
+    """`keyless_when_meta_annotated` is a list of annotation names, refused otherwise: a bare
+    string would mark nothing, and every qualified observer would keep a false key."""
+    directory = _catalog_file(
+        tmp_path,
+        "matches:\n  mapping: { selected_by_parameter: [a.Observes],\n"
+        "             keyless_when_meta_annotated: a.Qualifier,\n"
+        "             prefix_from: [], all_methods: [], prefix_annotation: null,\n"
+        "             annotations: [] }\n",
+    )
+    [catalog] = YamlCatalogSource(directory).load()
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        with pytest.raises(CatalogError, match="keyless_when_meta_annotated"):
             record_dispatch_registrations(workspace, [catalog])
     finally:
         workspace.close()

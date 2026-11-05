@@ -9,13 +9,15 @@ direction: inbound
 # observer, nor a `fireAsync` an `@Observes` one.
 dispatch: { key: type, match: all, mechanism: cdi-async-events }
 
-# CDI 2.0 added the asynchronous half; the javax CDI 1.0 API has neither `fireAsync` nor
-# `@ObservesAsync` (finding 8), so only the Jakarta name is declared.
+# CDI 2.0 added the asynchronous half: the javax CDI 2.x API (Java EE 8) and the Jakarta API
+# declare it, the javax CDI 1.x API has neither `fireAsync` nor `@ObservesAsync` (finding 8).
 detect:
-  coordinates: ["jakarta.enterprise:jakarta.enterprise.cdi-api"]
+  coordinates: ["jakarta.enterprise:jakarta.enterprise.cdi-api", "javax.enterprise:cdi-api"]
 
 measured:
   - { artifact: jakarta.enterprise:jakarta.enterprise.cdi-api, versions: ["4.1.0"],
+      identity: reported, by: scripts/probes/cp59_dispatch.md }
+  - { artifact: javax.enterprise:cdi-api, versions: ["2.0.0"],
       identity: reported, by: scripts/probes/cp59_dispatch.md }
   - { artifact: io.quarkus.arc:arc, versions: ["3.17.5"],
       identity: reported, by: scripts/probes/cp59_dispatch.md }
@@ -28,6 +30,11 @@ matches:
     # parameter's type.
     selected_by_parameter:
       - jakarta.enterprise.event.ObservesAsync
+      - javax.enterprise.event.ObservesAsync
+    # A qualified observer is kept with no key, for the reason `cdi-events.yml` gives.
+    keyless_when_meta_annotated:
+      - jakarta.inject.Qualifier
+      - javax.inject.Qualifier
     path_from: []
     prefix_from: []
     method_from: method
@@ -43,4 +50,10 @@ matches:
         value_arg: 0 }
     - { owner: jakarta.enterprise.event.Event, method: fireAsync,
         descriptor: "(Ljava/lang/Object;Ljakarta/enterprise/event/NotificationOptions;)Ljava/util/concurrent/CompletionStage;",
+        value_arg: 0 }
+    - { owner: javax.enterprise.event.Event, method: fireAsync,
+        descriptor: "(Ljava/lang/Object;)Ljava/util/concurrent/CompletionStage;",
+        value_arg: 0 }
+    - { owner: javax.enterprise.event.Event, method: fireAsync,
+        descriptor: "(Ljava/lang/Object;Ljavax/enterprise/event/NotificationOptions;)Ljava/util/concurrent/CompletionStage;",
         value_arg: 0 }

@@ -6332,9 +6332,19 @@ matches:
   mechanism each: CDI's `fire` notifies only `@Observes` observers and `fireAsync` only
   `@ObservesAsync` ones (CP-59 finding 10, ArC 3.17.5), so `cdi-events` and `cdi-async-events`
   never reach each other's registrations. An observer of an event nothing in the module fires
-  (`@Observes StartupEvent`) is a registration no hop reaches, and no endpoint row. Event
-  qualifiers (`@Observes @Named("x") E`) are not read: a fire reaches every observer of its
-  class's supertypes whatever qualifiers either names (a stated bound).
+  (`@Observes StartupEvent`) is a registration no hop reaches, and no endpoint row.
+- **Two shapes keep a parameter-selected registration with no key** (it matches nothing:
+  missing, never false), because the framework matches more than the erased type: a parameter
+  whose type carries type arguments (`@Observes List<String>`, which a `List<Integer>` does not
+  reach), and a parameter also carrying an annotation whose type is meta-annotated by one of
+  **`mapping.keyless_when_meta_annotated: [<annotation fqn>, …]`** (`jakarta.inject.Qualifier`,
+  `javax.inject.Qualifier`: `@Observes @Named("x") E`, an application's `@Express`). A
+  qualifier is decided by that meta-annotation — a module annotation type's own annotation
+  facts, a library type's `type_header` class-level annotations — never by "any other
+  annotation": `@Observes @Priority(10) E` keeps its key. The fire sites' qualifiers
+  (`@Inject @Express Event<E>`, `select(…)`) are not read, so a qualified observer is reached
+  by no hop even where a matching qualified fire exists (a missing hop; `@Observes @Any E` too,
+  `@Any` being a qualifier). Refused unless a list of names, as `selected_by_parameter` is.
 - **`dispatch_implementations`** entries are `{owner, method, descriptor, value_arg}`, checked
   at load (`yaml_source._dispatch_implementations`): a registration made by IMPLEMENTING the
   interface `owner` (`ApplicationListener`). Each module type below it (`Dispatch.subtypes`,

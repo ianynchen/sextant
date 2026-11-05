@@ -112,7 +112,12 @@ def registrations(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]
     A method may instead be selected by a PARAMETER annotation (`mapping.selected_by_parameter`,
     a list of annotation names: `@Observes`): each method with a parameter carrying one of them
     is a registration keyed by that parameter's type (its erasure), whatever other parameters
-    it declares — the framework injects those. The handler is the method; its group is the
+    it declares — the framework injects those. Two shapes keep the row with no key, because
+    the framework matches more than the erased type and a key would reach observers it never
+    notifies: a parameter whose type carries type arguments (`List<String>`), and one also
+    carrying an annotation whose type is meta-annotated by one of
+    `mapping.keyless_when_meta_annotated` (a qualifier: `@Named("x")`). The handler is the
+    method; its group is the
     method itself, so its keys are one group's positions. Read by
     `record_dispatch_registrations`, which owns the table.
 
@@ -134,7 +139,8 @@ def registrations(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]
         )
     match = catalog.dispatch["match"]
     fqns = {_catalog_symbol(entry["fqn"]) for entry in mapping["annotations"]}
-    by_parameter = _parameter_selectors(mapping, catalog)
+    by_parameter = _annotation_names(mapping, "selected_by_parameter", catalog)
+    keyless_marks = _annotation_names(mapping, "keyless_when_meta_annotated", catalog)
     path_from = list(mapping.get("path_from") or [])
     methods = {
         bare_descriptor(str(row["symbol"])): row for row in workspace.query("method_declarations")
@@ -150,10 +156,11 @@ def registrations(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]
             keys = [_payload_type(declaration, catalog)]
         selected.append((declaration, keys))
     if by_parameter:
+        marked = _meta_annotated_types(workspace, keyless_marks) if keyless_marks else frozenset()
         for _, declaration in sorted(methods.items()):
             parameter = _annotated_parameter(declaration, by_parameter)
             if parameter is not None:
-                selected.append((declaration, [_erased_type(parameter)]))
+                selected.append((declaration, [_parameter_key(parameter, marked)]))
     rows: list[dict[str, Any]] = []
     for declaration, keys in selected:
         handler = str(declaration["symbol"])
@@ -193,21 +200,50 @@ def _named_classes(args: dict[str, Any], path_from: list[str]) -> list[str | Non
     return None
 
 
-def _parameter_selectors(mapping: dict[str, Any], catalog: Catalog) -> frozenset[str]:
-    """`mapping.selected_by_parameter`'s annotation names as symbols; empty where the word is
-    absent. Refused unless a list of names: a bare string would be read as its characters and
-    select nothing, every observer of the catalog silently absent."""
-    declared = mapping.get("selected_by_parameter")
+def _annotation_names(mapping: dict[str, Any], word: str, catalog: Catalog) -> frozenset[str]:
+    """`mapping.<word>`'s annotation names as symbols (`selected_by_parameter`,
+    `keyless_when_meta_annotated`); empty where the word is absent. Refused unless a list of
+    names: a bare string would be read as its characters and name nothing — every observer of
+    the catalog silently absent, or every qualified one silently keyed."""
+    declared = mapping.get(word)
     if declared is None:
         return frozenset()
     if not isinstance(declared, list) or not all(
         isinstance(name, str) and name for name in declared
     ):
         raise CatalogError(
-            f"loading catalog {catalog.source}: `mapping.selected_by_parameter` must be a list "
+            f"loading catalog {catalog.source}: `mapping.{word}` must be a list "
             f"of annotation names, got {declared!r} (spec 2026-11-05 §2)"
         )
     return frozenset(_catalog_symbol(name) for name in declared)
+
+
+def _meta_annotated_types(workspace: Workspace, markers: frozenset[str]) -> frozenset[str]:
+    """Every annotation type carrying one of `markers` as a class-level annotation: module
+    types through their own annotation facts, library types (`@Named`) through the class-level
+    annotations their type header recorded. One level, the marker on the type itself, which is
+    where a qualifier is declared. Two reads per declaring catalog (GUIDELINES §8.7)."""
+    return frozenset(
+        bare_descriptor(str(row["target"]))
+        for query in ("annotations", "type_header_annotations")
+        for row in workspace.query(query)
+        if bare_descriptor(str(row["annotation"])) in markers
+    )
+
+
+def _parameter_key(parameter: dict[str, Any], marked: frozenset[str]) -> str | None:
+    """The key a selected parameter gives: its erased type, or None where the type carries type
+    arguments or the parameter carries an annotation of a `marked` type — the framework then
+    matches more than the erasure, and a key would reach what it never notifies (missing,
+    never false)."""
+    if (parameter.get("type") or {}).get("arguments"):
+        return None
+    if any(
+        bare_descriptor(str(use["annotation"])) in marked
+        for use in parameter.get("annotations", [])
+    ):
+        return None
+    return _erased_type(parameter)
 
 
 def _annotated_parameter(

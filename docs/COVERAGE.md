@@ -814,9 +814,10 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |  | `org.apache.httpcomponents.core5:httpcore5` | 5.2.4 |
 | `cdi-async-events` | `io.quarkus.arc:arc` | 3.17.5 |
 |  | `jakarta.enterprise:jakarta.enterprise.cdi-api` | 4.1.0 |
+|  | `javax.enterprise:cdi-api` | 2.0.0 |
 | `cdi-events` | `io.quarkus.arc:arc` | 3.17.5 |
 |  | `jakarta.enterprise:jakarta.enterprise.cdi-api` | 4.1.0 |
-|  | `javax.enterprise:cdi-api` | 1.0.0 |
+|  | `javax.enterprise:cdi-api` | 1.0.0, 2.0.0 |
 | `google-pubsub-client` | `com.google.cloud:google-cloud-pubsub` | 1.129.3 |
 | `google-pubsub-subscriber` | `com.google.cloud:google-cloud-pubsub` | 1.127.3 |
 | `grpc-java` | `io.grpc:protoc-gen-grpc-java` | 1.62.2, 1.81.0 |

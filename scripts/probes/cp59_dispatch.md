@@ -1,4 +1,4 @@
-# CP-59 — Spring application events (spring-context, spring-tx 7.0.1) and CDI events (CDI API 4.1.0 and 1.0.0, ArC 3.17.5), measured
+# CP-59 — Spring application events (spring-context, spring-tx 7.0.1) and CDI events (CDI API 4.1.0, 2.0.0 and 1.0.0, ArC 3.17.5), measured
 
 **Number.** The in-process dispatch plan (2026-11-05) names this probe CP-58; that number was
 already taken by `scripts/probes/cp58-inherited-mappings/` (cited by four HTTP catalogs), so it
@@ -13,10 +13,12 @@ here. The fixture is compiled by javac 21 (`--release 21`). For CDI events (find
 `jakarta.enterprise:jakarta.enterprise.cdi-api`
 **4.1.0** and `io.quarkus.arc:arc` **3.17.5**, the versions Quarkus 3.17.5 manages, as
 `fixtures/orders-cdi-events` resolves them, and `javax.enterprise:cdi-api` **1.0.0** (coordinate
-version `1.0`, the javax name `examples/camelinaction2` compiles against). Each version is read
-from the jar's own `MANIFEST.MF`: `Implementation-Version` for ArC and the javax API, the OSGi
-`Bundle-Version` for the Jakarta API, which states no `Implementation-Version`; the harness aborts
-if a jar or its key is missing. CDI 2.0-4.0 and other CDI containers (Weld) are outside this
+version `1.0`, the javax name `examples/camelinaction2` compiles against) and **2.0.0** (coordinate
+`2.0`, Java EE 8). Each version is read from the jar's own `MANIFEST.MF`: `Implementation-Version`
+for ArC and the javax 1.0 API, the OSGi `Bundle-Version` for the Jakarta API, which states no
+`Implementation-Version`, and for javax 2.0, whose `Implementation-Version` is an unexpanded
+`${parsedVersion.osgiVersion}`; the harness aborts if a jar or its key is missing. Jakarta CDI
+3.x-4.0, javax 1.1-1.2, and other CDI containers (Weld) are outside this
 measurement: which observers a `fire` notifies is read from ArC's bytecode; neither the CDI
 specification's text nor Weld's code is read here.
 
@@ -87,9 +89,12 @@ both fixtures, prints every table below).
 8. **CDI sends.** The Jakarta `Event<T>` declares `fire(T)`, erased `(Ljava/lang/Object;)V`, and
    two `fireAsync` overloads, `(Object)` and `(Object, NotificationOptions)`, each returning a
    `CompletionStage`; each hands argument 0 to the container (the options choose an executor).
-   The javax `Event` 1.0.0 declares `fire` only: no `fireAsync` (and no `@ObservesAsync`), so the
-   asynchronous catalog names the Jakarta API alone.
-9. **Observer annotations.** `@Observes` (Jakarta and javax) and `@ObservesAsync` are
+   The javax `Event` 1.0.0 declares `fire` only: no `fireAsync` and no `@ObservesAsync` (CDI 1.x).
+   The javax 2.0.0 API declares both `fireAsync` overloads (`NotificationOptions` under
+   `javax.enterprise.event`) and `@ObservesAsync`, so the asynchronous catalog names the Jakarta
+   API and javax 2.x.
+9. **Observer annotations.** `@Observes` (Jakarta and javax) and `@ObservesAsync` (Jakarta and
+   javax 2.0) are
    `@Target(PARAMETER)`, `@Retention(RUNTIME)`: javac writes them in the method's
    `RuntimeVisibleParameterAnnotations`, on the one parameter carrying them, and the method has
    no annotation of its own. The fixture's `onStart(@Observes StartupEvent, ShippingService)`
@@ -212,6 +217,7 @@ aborts without, not the version the fixture's pom asked for.
 
 - `jakarta.enterprise.cdi-api`: `Bundle-Version: 4.1.0`
 - `javax.enterprise:cdi-api`: `Implementation-Version: 1.0.0`
+- `javax.enterprise:cdi-api` (2.x): `Bundle-Version: 2.0.0`
 - `arc`: `Implementation-Version: 3.17.5`
 
 ### 8. Sends: `Event`
@@ -219,8 +225,11 @@ aborts without, not the version the fixture's pom asked for.
 - `jakarta.enterprise.event.Event.fire` `(Ljava/lang/Object;)V` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
 - `jakarta.enterprise.event.Event.fireAsync` `(Ljava/lang/Object;)Ljava/util/concurrent/CompletionStage;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
 - `jakarta.enterprise.event.Event.fireAsync` `(Ljava/lang/Object;Ljakarta/enterprise/event/NotificationOptions;)Ljava/util/concurrent/CompletionStage;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
-- `javax.enterprise.event.Event.fire` `(Ljava/lang/Object;)V` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
-- `javax.enterprise.event.Event.fireAsync` none
+- `javax.enterprise.event.Event.fire` (1.0.0) `(Ljava/lang/Object;)V` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- `javax.enterprise.event.Event.fireAsync` (1.0.0) none
+- `javax.enterprise.event.Event.fire` (2.0.0) `(Ljava/lang/Object;)V` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- `javax.enterprise.event.Event.fireAsync` (2.0.0) `(Ljava/lang/Object;)Ljava/util/concurrent/CompletionStage;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- `javax.enterprise.event.Event.fireAsync` (2.0.0) `(Ljava/lang/Object;Ljavax/enterprise/event/NotificationOptions;)Ljava/util/concurrent/CompletionStage;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
 
 ### 9. The observer annotations, and where javac writes them
 
@@ -241,6 +250,14 @@ aborts without, not the version the fixture's pom asked for.
 - on the type: `java.lang.annotation.Documented`
 
 #### `javax.enterprise.event.Observes`
+
+- on the type: `java.lang.annotation.Target(`
+- on the type: `value=[Ljava/lang/annotation/ElementType;.PARAMETER]`
+- on the type: `java.lang.annotation.Retention(`
+- on the type: `value=Ljava/lang/annotation/RetentionPolicy;.RUNTIME`
+- on the type: `java.lang.annotation.Documented`
+
+#### `javax.enterprise.event.ObservesAsync`
 
 - on the type: `java.lang.annotation.Target(`
 - on the type: `value=[Ljava/lang/annotation/ElementType;.PARAMETER]`
