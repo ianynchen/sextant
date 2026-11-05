@@ -247,8 +247,14 @@ Rulings of the final review's fix wave (2026-11-05, the controller's, under ruli
     classes, or a value case whose constant's class is not such a class (`[Loggable, Command]`
     with a `Command` that is also `Loggable`). The first build applied the strict-subtype test
     whatever the case's position; a case after the first certain one is never reached, so
-    position now counts. Finality is not read (a final declared type is treated as
-    subclassable). Cost if wrong: a declared-type send's hops are incomplete, which the
+    position now counts. **Second correction (re-review of `42cfc95f`):** `all` and `one` use
+    the same test as `first`: any registration that may take a subtype (a strict subtype, or
+    an unrelated type unless both are known classes, or a value whose constant's class is not
+    such a class) adds the not-read row, so a listener of an unrelated interface
+    (`publish(DomainEvent e)`, `on(Auditable e)`, an event implementing both) never leaves a
+    stop saying nobody handles it. A known class is a type the module declares that is no
+    interface, or a type some class extends; a dependency's header never counts. Finality is
+    not read (a final declared type is treated as subclassable). Cost if wrong: a declared-type send's hops are incomplete, which the
     not-read row says.
 15. **Qualifier-ness comes from the DI bean model** (final review I-2): `bean-models/cdi.yml`
     declares `qualifier_meta_annotations`, the CDI catalogs name it, and the catalog word
@@ -311,7 +317,7 @@ hop, except the three over-linking object-key bounds, which merge two objects in
   `on(Envelope<X> e)`) is kept with no key (ruling 16), so it gets no hop; a value read by its
   declared type (ruling 14: a parameter, a field, an instance call's result, a static factory
   called through a subclass) reaches the listeners of that type and its supertypes only, and
-  writes the not-read row beside them where a subtype has a listener.
+  writes the not-read row beside them where a subtype or an unrelated interface has a listener.
 - **CDI:** the fire sites' qualifiers and type arguments are not read, so a qualified,
   parameterized or type-variable observer has a registration and no hop; `BeanManager.fireEvent` is not
   declared; `@Observes` and `@ObservesAsync` on one catalog's parameters would register twice
@@ -331,8 +337,9 @@ hop, except the three over-linking object-key bounds, which merge two objects in
   compiled by javac to an indy lambda (not a kotlinc class) has no handler read. Views are
   scoped per catalog, not per mechanism.
 - **Every kind:** a class key no `new`, constant or module factory names is read by its
-  declared type (ruling 14): its certain hops, plus the not-read row where a subtype's
-  registration may also take it or, under `first`, an earlier case may; a key still not read
+  declared type (ruling 14): its certain hops, plus the not-read row where another
+  registration may take a subtype of it (a subtype's, an unrelated interface's) or, under
+  `first`, an earlier case may; a key still not read
   (an array element, an injected object) is a stop that says so, `(key not read)`, never a fan-out. One class named by `class_arg` anywhere in a catalog makes all
   its inbound rows key rows (D02, `channel_via`).
 

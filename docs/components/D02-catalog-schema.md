@@ -6314,16 +6314,16 @@ matches:
   declared parameter type; an instance `field` by the field's declared type. The value is
   that type or a subtype, so every registration of the type or a supertype is certainly
   reached, and those hops are true under every `match` (`dispatch_registrations.certain_cases`,
-  ruling 14 as corrected 2026-11-05). What the type cannot say is said by the not-read row:
-  under `all` and `one`, where any registration of the mechanism names a strict subtype (a
-  class registration below the type, or a value registration whose constant is of the type,
-  below it or not read), the send writes the not-read row beside its certain hops, never a
-  stop naming the type as if nobody handled it. Under `first`, a group is not read (and the
-  send writes the not-read row) where a case before the group's first certain unpredicated
-  case may take a subtype: a case naming a strict subtype, a type unrelated to the declared
-  one unless both are known classes (a module type that is no interface, or a type some class
-  extends: a subclass extends no unrelated class), or a value case whose constant's class is
-  not such a class. Finality is not read, so a final declared type is treated as subclassable
+  ruling 14 as corrected 2026-11-05). What the type cannot say is said by the not-read row. A
+  registration MAY TAKE some subtype of the value where it names a strict subtype, or a type
+  unrelated to the declared one unless both are known classes (a type the module itself
+  declares that is no interface, never a dependency's header, or a type some class extends: a
+  subclass extends no unrelated class, but may implement any interface), or where it is a value
+  registration whose constant's class is not such a class or not read. Under `all` and `one`,
+  any such registration of the mechanism makes the send write the not-read row beside its
+  certain hops, never a stop naming the type as if nobody handled it (`publish(DomainEvent e)`
+  with a listener of an unrelated `Auditable`). Under `first`, such a case before the group's
+  first certain unpredicated case leaves the group not read. Finality is not read, so a final declared type is treated as subclassable
   (not read where it could have been, never false). Anything else (an
   array element, a `merge`, a primitive or array declared type) is not read, and the row says
   so (`(key not read)`).

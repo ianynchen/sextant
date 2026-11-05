@@ -19,6 +19,12 @@ public class DomainEvents {
         publisher.publishEvent(event);
     }
 
+    /** Declared `Tracked`, which no listener names; at run time a `Stamped`, also `Auditable`,
+     * whose listener runs. */
+    public void track(Tracked event) {
+        publisher.publishEvent(event);
+    }
+
     /** Each element read by `Iterator.next()`, declared `Object`. */
     public void publishAll(List<Object> events) {
         for (Object event : events) {

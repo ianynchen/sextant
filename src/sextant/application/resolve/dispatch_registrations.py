@@ -272,16 +272,16 @@ def certain_cases(
     supertype of it is certainly reached, and those hops are true under every `match`
     (ruling 14 as corrected by the re-review, 2026-11-05). What the declared type cannot say:
 
-    - **Under `all` and `one`, a registration naming a strict subtype** (a class registration
-      of a type below it, or a value registration whose constant is of `key_type` or below, or
-      of a class not read) may take the value too: the certain hops are kept and the send is
-      also not read, never a stop naming `key_type` as if nobody handled it.
-    - **Under `first`, a case before the group's first certain unpredicated case** that may
-      take some subtype of `key_type` leaves the group out (not read there): a case naming a
-      strict subtype, or a type unrelated to `key_type` (neither above nor below it) unless
-      both are classes (`known_classes`: a subtype of a class extends no unrelated class), and
-      a value case whose constant's class is not such an unrelated class. A case after the
-      first certain one is never reached. Finality is not read, so a final declared type is
+    A registration not certainly reached may still take some subtype of the value: a class
+    registration naming a strict subtype, or a type unrelated to `key_type` (neither above nor
+    below it) unless both are classes (`known_classes`: a subtype of a class extends no
+    unrelated class, and an interface-typed value's subtype may implement any interface), and
+    a value registration whose constant's class is not such an unrelated class.
+
+    - **Under `all` and `one`**, any such registration keeps the certain hops and makes the
+      send also not read, never a stop naming `key_type` as if nobody handled it.
+    - **Under `first`**, such a case before the group's first certain unpredicated case leaves
+      the group out (not read there); a case after the first certain one is never reached. Finality is not read, so a final declared type is
       treated as one a subclass may extend (not read where it could have been, never false).
 
     Returns the registrations to ask (every row but the left-out groups) and whether the send
@@ -299,21 +299,23 @@ def certain_cases(
             and key_type in known_classes
         )
 
+    def may_take(row: Mapping[str, Any]) -> bool:
+        """Whether a registration not certainly reached may still take some subtype of the
+        value: a class key not above `key_type` and not a class unrelated to it, or a value
+        key whose constant's class is not such a class."""
+        if row["key_type"] is not None:
+            return str(row["key_type"]) not in above and not unrelated_class(str(row["key_type"]))
+        if row["key_value"] is not None:
+            constant_class = constant_classes.get(str(row["key_value"]))
+            return constant_class is None or not unrelated_class(constant_class)
+        return False
+
     narrower = False
     groups: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
-        if row["key_type"] is not None:
-            names_below = below(str(row["key_type"]))
-        elif row["key_value"] is not None:
-            constant_class = constant_classes.get(str(row["key_value"]))
-            names_below = constant_class is None or key_type in _ancestry(
-                constant_class, supertypes
-            )
-        else:
-            names_below = False
         if row["match"] == _FIRST:
             groups.setdefault(str(row["group"]), []).append(row)
-        elif names_below:
+        elif may_take(row):
             narrower = True
     undecided: set[str] = set()
     for group, registrations in groups.items():
@@ -323,14 +325,7 @@ def certain_cases(
                 if not registration["predicated"]:
                     break
                 continue
-            if case_type is not None:
-                may_take = not unrelated_class(str(case_type))
-            elif registration["key_value"] is not None:
-                constant_class = constant_classes.get(str(registration["key_value"]))
-                may_take = constant_class is None or not unrelated_class(constant_class)
-            else:
-                may_take = False
-            if may_take:
+            if may_take(registration):
                 undecided.add(group)
                 break
     kept = [row for row in rows if row["match"] != _FIRST or str(row["group"]) not in undecided]

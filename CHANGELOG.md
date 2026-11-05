@@ -37,8 +37,9 @@ here would restate those documents rather than add anything.
   registration. A sent value no `new`, constant or module factory names (an instance call's
   result such as `new E().setA(a)`, a parameter, a field) is read by its DECLARED type: every
   registration of that type or a supertype is certainly reached, under every `match`; where a
-  registration names a strict subtype (it may run too), or under `first` an earlier case may
-  take a subtype, the send also writes the not-read row, never a stop saying nobody handles
+  registration may take some subtype of it (a strict subtype, or an unrelated type unless both
+  are known classes, so an interface listener counts), under `first` only a case before the
+  first certain one, the send also writes the not-read row, never a stop saying nobody handles
   the type. A key that is still not
   read is a stop that says so (`(key not read)`), never a fan-out. A registration whose
   parameter is generic (a type variable, type arguments) is kept with no key, for every

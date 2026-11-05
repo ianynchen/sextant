@@ -17,13 +17,16 @@ import pytest
 from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
+from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.query.trace import trace_of
 from sextant.application.resolve.dispatch_hops import _keyed_methods, _Reading
 from sextant.application.resolve.dispatch_registrations import dispatch_mechanism
 from sextant.application.resolve.roots import Root
 from sextant.cli.app import cli
-from sextant.domain.closed_sets import RootKind, TraceStop
+from sextant.domain.closed_sets import ConstructKind, OriginTier, RootKind, TraceStop
+from sextant.domain.factfile import write_fact_file
+from sextant.domain.facts import Document, SymbolFact, TypeHeaderFact
 from sextant.domain.symbols import bare_descriptor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
@@ -343,6 +346,80 @@ def test_under_all_a_declared_type_with_subtype_listeners_adds_the_unread_row(tm
         (None, None),
     ]
     assert [(row["path"], row["handler"]) for row in only_below] == [(None, None)]
+
+
+@pytest.mark.pins("dispatch-hops.an-UNRELATED-interface-registration-leaves-ALL-NOT-READ")
+def test_under_all_an_unrelated_interface_listener_adds_the_unread_row(tmp_path: Path):
+    """Under `all`, a value declared `Command` and the one listener of `Loggable`, unrelated:
+    a `Command` that is also `Loggable` reaches it, so the send is the not-read row, never a
+    stop naming `Command` as handled by nobody. Both known classes, the stop is true."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace._connection.execute(
+            "INSERT INTO dispatch_registrations VALUES "
+            "('m A#on(sig_1).', 0, 'Loggable#', NULL, NULL, false, 'm A#on(sig_1).', "
+            "false, 'all', 'events')"
+        )
+        reading = _Reading(workspace, [])
+        unrelated = reading.hops(
+            "m P#send(sig_3).", 0, ("Command#", None, None, None, True), "in_process", "events"
+        )
+        reading._known_classes = frozenset({"Command#", "Loggable#"})
+        classes = reading.hops(
+            "m P#send(sig_3).", 0, ("Command#", None, None, None, True), "in_process", "events"
+        )
+    finally:
+        workspace.close()
+    assert [(row["path"], row["handler"]) for row in unrelated] == [(None, None)]
+    assert [(row["path"], row["handler"]) for row in classes] == [("Command#", None)]
+
+
+@pytest.mark.pins("dispatch-hops.only-a-MODULE-type-or-a-SUPERCLASS-is-a-KNOWN-class")
+def test_a_library_interface_with_super_interfaces_is_no_known_class(tmp_path: Path):
+    """A dependency's interface whose header names super-interfaces is in the module's
+    ancestry, but it is no class: only module types that are no interface, and types some
+    class extends, are known classes."""
+    module = "sextant-jvm maven com.acme/shop 1.0.0 "
+    document = Document(
+        document_id="doc_1",
+        relative_path="com/acme/shop/Order.java",
+        module_id="com.acme:shop",
+        language="java",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="asm",
+        content_hash="sha256:a",
+        origin_entry="target/classes",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:b",
+    )
+    facts = [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=module + "com/acme/shop/Order#",
+            construct_kind="class",
+            superclass="com/acme/shop/Base#",
+            interfaces=["lib/Auditable#"],
+        ),
+        TypeHeaderFact(
+            document_id="doc_1",
+            symbol="sextant-jvm maven org.lib/lib 1.0.0 lib/Auditable#",
+            construct_kind=ConstructKind.INTERFACE,
+            interfaces=["lib/Marker#"],
+            origin="org.lib:lib",
+            version="1.0.0",
+        ),
+    ]
+    write_fact_file(tmp_path / "facts" / "Order.jsonl", document, straight_line(facts))
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace.load_facts(tmp_path / "facts")
+        known = _Reading(workspace, [])._classes()
+    finally:
+        workspace.close()
+    assert "com/acme/shop/Order#" in known
+    assert "com/acme/shop/Base#" in known
+    assert "lib/Auditable#" not in known
 
 
 # The shipped root-type conformance (`type-models/conformance.yml`): every class is an

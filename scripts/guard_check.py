@@ -8142,44 +8142,57 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "dispatch-hops.under-FIRST-a-DECLARED-type-reads-only-where-no-SUBTYPE-case": Guard(
-        what="under `first`, a value read by its declared type is not read in a group where an "
-        "earlier case names a strict subtype of it",
-        why="final review I-1 ruling: the value may be the subtype the earlier case takes. "
-        "Asked as if exactly the declared type, a `tell(cmd)` hops to `onCommand` while the "
-        "`Reserve` it carries runs `onReserve`: a false hop",
+        what="under `first`, a value read by its declared type is not read in a group where an earlier case names a strict subtype of it",
+        why="final review I-1 ruling: the value may be the subtype the earlier case takes; asked as if exactly the declared type, a `tell(cmd)` hops to `onCommand` while the `Reserve` it carries runs `onReserve`",
         edits=(
             Edit(
                 path=_DISPATCH_REGISTRATIONS,
-                find="                may_take = not unrelated_class(str(case_type))\n",
-                replace="                may_take = not unrelated_class(str(case_type)) and not "
-                "below(str(case_type))  # guard disabled\n",
+                find='            return str(row["key_type"]) not in above and not unrelated_class(str(row["key_type"]))\n',
+                replace='            return str(row["key_type"]) not in above and not unrelated_class(str(row["key_type"])) and not below(str(row["key_type"]))  # guard disabled\n',
             ),
         ),
     ),
     "dispatch-hops.under-FIRST-an-EARLIER-UNRELATED-case-leaves-the-group-NOT-READ": Guard(
-        what="under `first`, an earlier case naming a type unrelated to the declared type, not "
-        "both known classes, leaves the group not read",
-        why="re-review: `[Loggable, Command]` and a `Command` that also implements `Loggable` "
-        "runs `onLoggable`; a hop to `onCommand` would be false",
+        what="under `first`, an earlier case naming a type unrelated to the declared type, not both known classes, leaves the group not read",
+        why="re-review: `[Loggable, Command]` and a `Command` that also implements `Loggable` runs `onLoggable`; a hop to `onCommand` would be false",
         edits=(
             Edit(
                 path=_DISPATCH_REGISTRATIONS,
-                find="                may_take = not unrelated_class(str(case_type))\n",
-                replace="                may_take = below(str(case_type))  # guard disabled\n",
+                find='            return str(row["key_type"]) not in above and not unrelated_class(str(row["key_type"]))\n',
+                replace='            return below(str(row["key_type"]))  # guard disabled\n',
             ),
         ),
     ),
     "dispatch-hops.a-DECLARED-type-with-SUBTYPE-registrations-is-NOT-READ": Guard(
-        what="under `all`/`one`, a value read by its declared type with registrations of a "
-        "strict subtype also writes the not-read row",
-        why="re-review: `publish(DomainEvent e)` with only `Parcel` listeners wrote a stop "
-        "naming `DomainEvent` with no handler, which says nobody handles it while the "
-        "`Parcel` listener runs",
+        what="under `all`/`one`, a value read by its declared type with registrations of a strict subtype also writes the not-read row",
+        why="re-review: `publish(DomainEvent e)` with only `Parcel` listeners wrote a stop naming `DomainEvent` with no handler, saying nobody handles it while the `Parcel` listener runs",
         edits=(
             Edit(
                 path=_DISPATCH_REGISTRATIONS,
-                find="        elif names_below:\n            narrower = True\n",
-                replace="        elif False:  # guard disabled\n            narrower = True\n",
+                find='            return str(row["key_type"]) not in above and not unrelated_class(str(row["key_type"]))\n',
+                replace='            return str(row["key_type"]) not in above and not unrelated_class(str(row["key_type"])) and not below(str(row["key_type"]))  # guard disabled\n',
+            ),
+        ),
+    ),
+    "dispatch-hops.an-UNRELATED-interface-registration-leaves-ALL-NOT-READ": Guard(
+        what="under `all`/`one`, a registration of a type unrelated to the declared type, not both known classes, also writes the not-read row",
+        why="re-review of 42cfc95f: `publishEvent(DomainEvent e)` with `@EventListener on(Auditable e)` and an event implementing both wrote a stop saying nobody handles it while the `Auditable` listener runs",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='            return str(row["key_type"]) not in above and not unrelated_class(str(row["key_type"]))\n',
+                replace='            return below(str(row["key_type"]))  # guard disabled\n',
+            ),
+        ),
+    ),
+    "dispatch-hops.only-a-MODULE-type-or-a-SUPERCLASS-is-a-KNOWN-class": Guard(
+        what="the known classes are module types that are no interface and types some class extends",
+        why="re-review of 42cfc95f: a dependency's interface with super-interfaces is in the ancestry; counted a class, an unrelated interface listener would decide nothing and a stop would say nobody handles a value it may take",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="            self._known_classes = frozenset((dispatch.scanned - interfaces) | extended)\n",
+                replace="            self._known_classes = frozenset((set(dispatch.ancestors) - interfaces) | extended)  # disabled\n",
             ),
         ),
     ),

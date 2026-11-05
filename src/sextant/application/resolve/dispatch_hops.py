@@ -396,9 +396,11 @@ class _Reading:
         return self._key_handlers[(key_class, mechanism)]
 
     def _classes(self) -> frozenset[str]:
-        """The types known to be classes, not interfaces, read once per resolve: each module
-        type that is no interface (`interface_symbols`), and each type some class extends (a
-        superclass, D00 §5a). Any other type may be an interface; `certain_cases` treats it so."""
+        """The types known to be classes, not interfaces, read once per resolve: each type the
+        module declares (`Dispatch.scanned`, its own class files, never a dependency's header)
+        that is no interface (`interface_symbols`), and each type some class extends (a
+        superclass, D00 §5a; only a class is extended). Any other type, a dependency's
+        interface among them, may be an interface; `certain_cases` treats it so."""
         if self._known_classes is None:
             dispatch = self._workspace.once(dispatch_of)
             interfaces = {
@@ -411,9 +413,7 @@ class _Reading:
                 for ancestor, kind, _ in ancestors
                 if kind == _EXTENDS
             }
-            self._known_classes = frozenset(
-                (set(dispatch.ancestors) - interfaces) | (extended - interfaces)
-            )
+            self._known_classes = frozenset((dispatch.scanned - interfaces) | extended)
         return self._known_classes
 
     def _constant_classes(self) -> dict[str, str | None]:

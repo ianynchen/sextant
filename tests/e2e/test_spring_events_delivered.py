@@ -161,10 +161,13 @@ def test_an_event_built_with_chained_setters_reaches_its_listeners(tables):
     builds every event in: the value is an instance call's result, whose body is not followed,
     but whose descriptor declares it a `MailQueued`. The runtime class is that or a subtype, so
     every listener of `MailQueued` or a supertype of it is certainly reached (`match: all`).
-    Held in a local and finished statement by statement, the same."""
+    Held in a local and finished statement by statement, the same. A subclass of `MailQueued`
+    may also implement `Auditable`, whose listener this module has (a class does not rule an
+    interface out), so the not-read row stands beside the certain hops."""
     reached = {
         ("in_process", "MailQueued", "MailQueuedListener#on"),
         ("in_process", "MailQueued", "AnyListener#on"),
+        ("in_process", None, None),
     }
     assert _hops_from(tables, "OrderService#queueMail") == reached
     assert _hops_from(tables, "OrderService#queueMailHeld") == reached
@@ -175,8 +178,8 @@ def test_a_parameter_or_a_field_is_read_as_its_declared_type(tables):
     """`republish(Object event)` publishes a parameter declared `Object`: only the listener of
     `Object` is certainly reached, and since listeners of its subtypes exist (they may run
     too), the not-read row stands beside that hop, never a guess at them. `publishEvent(
-    lastShipped)` publishes an instance field declared `OrderShipped`, which nothing below it
-    is registered for: its listeners are the whole answer."""
+    lastShipped)` publishes an instance field declared `OrderShipped`: its listeners are certain,
+    and the `Auditable` listener (a subclass may implement it) adds the not-read row."""
     assert _hops_from(tables, "OrderService#republish") == {
         ("in_process", "Object", "AnyListener#on"),
         ("in_process", None, None),
@@ -184,6 +187,7 @@ def test_a_parameter_or_a_field_is_read_as_its_declared_type(tables):
     assert _hops_from(tables, "OrderService#publishLast") == {
         ("in_process", "OrderShipped", "ShippingListener#on"),
         ("in_process", "OrderShipped", "AnyListener#on"),
+        ("in_process", None, None),
     }
 
 
@@ -204,6 +208,17 @@ def test_a_declared_type_whose_subtypes_have_listeners_is_never_a_nobody_handles
         ("in_process", "Object", "AnyListener#on"),
         ("in_process", None, None),
     }
+
+
+@pytest.mark.pins("dispatch-hops.an-UNRELATED-interface-registration-leaves-ALL-NOT-READ")
+def test_a_listener_of_an_unrelated_interface_leaves_a_declared_type_unread(tables):
+    """`track(Tracked e) { publishEvent(e); }` and `@EventListener on(Auditable e)`: no
+    listener names `Tracked` or a type below it, and `Auditable` is neither above nor below it,
+    but `Stamped` implements both, so the `Auditable` listener may run. The send never says
+    nobody handles it: beside the certain hop to the listener of `Object` it writes the
+    not-read row."""
+    hops = _hops_from(tables, "DomainEvents#track")
+    assert hops == {("in_process", "Tracked", "AnyListener#on"), ("in_process", None, None)}
 
 
 @pytest.mark.pins("dispatch-implementations.the-BRIDGE-is-carried-to-the-method-it-forwards-to")
