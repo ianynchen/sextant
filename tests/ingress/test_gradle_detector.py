@@ -1799,6 +1799,32 @@ def test_a_two_module_part_with_no_label_is_a_named_gap(tmp_path: Path, platform
     )
 
 
+@pytest.mark.pins("detect.a-ONE-PROJECT-build-with-two-records-is-walked-as-a-reactor")
+def test_a_one_project_build_with_two_versions_gives_both_modules_to_the_reactor_walk(
+    tmp_path: Path,
+):
+    """A build with no other project whose root project is built in two versions (a
+    one-project Kotlin Multiplatform library with `jvm()` and an Android version, or a
+    one-project app with two editions) gives two modules. A single-module analysis reads
+    only the first one, so the build is a reactor and the walk analyses both."""
+    records = []
+    for target, platform in (("android", "androidJvm"), ("jvm", "jvm")):
+        classes = tmp_path / "build" / "classes" / "kotlin" / target / "main"
+        classes.mkdir(parents=True)
+        record = _project(tmp_path, path=":", name="shared", classes_dirs=[str(classes)])
+        records.append({**record, "target": target, "platform": platform})
+    model = GradleDetector._repository_model(
+        tmp_path, {"projects": records, "includedBuilds": []}, None
+    )
+    assert model.multi_module is True
+    assert [(m.module_id, m.results_name) for m in model.modules] == [
+        ("com.acme:shared-android", "android"),
+        ("com.acme:shared-jvm", "jvm"),
+    ]
+    # The root project IS the modules here, so no note says it was dropped.
+    assert model.notes == ()
+
+
 def test_a_one_version_part_keeps_its_name(tmp_path: Path):
     """A part built once keeps today's name and its results stay where they were (M2),
     and a sibling built once is joined by its path alone, whatever its label."""

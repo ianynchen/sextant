@@ -1,5 +1,6 @@
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -1444,6 +1445,74 @@ def test_two_modules_after_one_remove_the_one_module_results(tmp_path: Path):
     result = CliRunner().invoke(cli, ["module", "render", str(core)])
     assert result.exit_code != 0
     assert f"{core} holds 2 modules: com.acme:core-android" in result.output
+
+
+def test_two_modules_of_the_root_folder_are_both_analyzed_and_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A one-project build built in two versions gives two modules whose folder is the
+    repository root: `dir` is `.` and each result is in a sub-folder of the root's
+    `.sextant`, beside `modules.json`. Both are analysed and `system analyze` reads both."""
+    compile_fixture(_SHARED_FOLDER_FIXTURE)
+    core = tmp_path / "core"
+    shutil.copytree(_SHARED_FOLDER_FIXTURE, core, ignore=shutil.ignore_patterns(".sextant"))
+    modules = (_shared_folder_module(core, "jvm"), _shared_folder_module(core, "android"))
+
+    class _OneProject:
+        def accepts(self, path: Path) -> bool:
+            return True
+
+        def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
+            return RepositoryModel(root=path, modules=modules, multi_module=True)
+
+    monkeypatch.setattr(api, "_DETECTORS", [_OneProject()])
+
+    analyzed = CliRunner().invoke(cli, ["module", "analyze", str(core)])
+    assert analyzed.exit_code == 0, analyzed.output
+    rows = json.loads((core / ".sextant" / "modules.json").read_text())["modules"]
+    assert sorted((row["dir"], row["results"]) for row in rows) == [
+        (".", ".sextant/android"),
+        (".", ".sextant/jvm"),
+    ]
+    result = CliRunner().invoke(cli, ["system", "analyze", str(core)])
+    assert result.exit_code == 0, result.output
+    document = (core / ".sextant" / "render" / "system.md").read_text()
+    assert "| `core-jvm` | — | yes |" in document
+    assert "| `core-android` | — | yes |" in document
+
+
+@pytest.mark.pins("api.a-SKIPPED-module-REMOVES-its-own-old-results")
+def test_a_module_skipped_after_it_was_analyzed_is_absent_not_read_as_current(tmp_path: Path):
+    """A part that fails to build on a later run is skipped (Android design M5). The
+    results of the earlier run are not this run's, so they are removed: `system analyze`
+    gives the module as absent with the reason it was skipped, and `render` finds no
+    analysis. The repository root's own files stay."""
+    compile_fixture(_SHARED_FOLDER_FIXTURE)
+    repo = tmp_path / "repo"
+    core = repo / "core"
+    shutil.copytree(_SHARED_FOLDER_FIXTURE, core, ignore=shutil.ignore_patterns(".sextant"))
+    module = _reactor_one_module(core)
+    _analyze_in_place(repo, (module,))
+    assert (core / ".sextant" / "workspace.duckdb").is_file()
+    rendered = CliRunner().invoke(cli, ["module", "render", str(core)])
+    assert rendered.exit_code == 0, rendered.output
+
+    failed = replace(module, build_failure="Compilation failed; see the compiler output below.")
+    _analyze_in_place(repo, (failed,))
+
+    for name in ("workspace.duckdb", "metadata.json", "facts", "render/architecture.md"):
+        assert not (core / ".sextant" / name).exists(), name
+    result = CliRunner().invoke(cli, ["system", "analyze", str(repo)])
+    assert result.exit_code == 0, result.output
+    document = (repo / ".sextant" / "render" / "system.md").read_text()
+    assert (
+        "the module was skip-listed when the reactor was analyzed: "
+        "Compilation failed; see the compiler output below." in document
+    )
+    assert (repo / ".sextant" / "modules.json").is_file()
+    refused = CliRunner().invoke(cli, ["module", "render", str(core)])
+    assert refused.exit_code != 0
+    assert "no analysis" in refused.output.lower()
 
 
 def test_one_module_after_two_removes_the_sub_folders(tmp_path: Path):

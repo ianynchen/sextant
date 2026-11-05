@@ -385,12 +385,16 @@ class GradleDetector:
         `ModuleModel`, the same way an aggregation-only POM's own element
         never becomes one (2M design §2) — only when it names no OTHER
         project is it the sole module, exactly as a single-module Gradle
-        build (no settings file) has none to name."""
+        build (no settings file) has none to name. A root project with more than one
+        record is then more than one module, and the build is walked as a reactor."""
         try:
             projects = data["projects"]
             subprojects = [project for project in projects if project["path"] != ":"]
-            multi_module = len(subprojects) > 0
-            selected = subprojects if multi_module else [p for p in projects if p["path"] == ":"]
+            selected = subprojects or [p for p in projects if p["path"] == ":"]
+            # A root project built in more than one version or edition gives more than one
+            # module (Android design M1, M3). A single-module analysis reads only one of
+            # them, so this build is walked as a reactor too.
+            multi_module = bool(subprojects) or len(selected) > 1
             by_path = _records_by_path(projects)
             modules = tuple(
                 GradleDetector._module_of(Path(project["dir"]), project, by_path)
@@ -400,7 +404,7 @@ class GradleDetector:
             notes.extend(GradleDetector._composite_build_notes(data))
             notes.extend(GradleDetector._project_jars_notes(selected, by_path))
             notes.extend(data.get("notes", []))
-            if multi_module:
+            if subprojects:
                 notes.extend(GradleDetector._root_sources_notes(projects))
                 notes.extend(GradleDetector._root_not_built_notes(projects))
         except KeyError as missing:

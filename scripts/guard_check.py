@@ -1534,6 +1534,34 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "api.a-SKIPPED-module-REMOVES-its-own-old-results": Guard(
+        what="a module the reactor walk skips has the results of an earlier run removed "
+        "from its results folder",
+        why="a part that now fails to build kept last run's results, and `system analyze` "
+        "and `render` read them as current, with the wrong commit (Android design M5, "
+        "final review I2)",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find="            _remove_module_results(workspace_dir)\n",
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-ONE-PROJECT-build-with-two-records-is-walked-as-a-reactor": Guard(
+        what="a Gradle build whose only project gives more than one record is a reactor",
+        why="a one-project Kotlin Multiplatform library or flavored app gave two modules, "
+        "and the single-module analysis read only the first; the other was dropped with "
+        "nothing said (Android design M1, M3, final review I1)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="            multi_module = bool(subprojects) or len(selected) > 1\n",
+                replace="            multi_module = bool(subprojects)"
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "render.the-document-SAYS-how-many-named-types-the-header-read-found": Guard(
         what="the coverage section carries one line: dependency types named, headers read, "
         "in no archive, and who answered for the classpath",

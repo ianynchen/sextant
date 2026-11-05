@@ -127,7 +127,8 @@ output, never a partial model assembled by guessing.
 `build.json` was written, each project with no file of its own was not built: it is skipped,
 and its reason is Gradle's own message for its failed task (javac's error lines included), or
 `not built: a part it needs failed to build (failed: <paths>)` for a project that needs one
-that failed. The other projects are analysed. A root project that was not built is never a
+that failed. The other projects are analysed. A skipped project's results from an earlier
+run are removed, so `system analyze` and `render` never read them as current. A root project that was not built is never a
 module in a build with subprojects, so its reason becomes the note "gradle root project at
 <dir> was not built: <reason>". Without `--allow-resolve`, a part the cache could not serve has
 "(--allow-resolve lets Gradle download it)" after its reason, and the run gets the note "some
@@ -190,7 +191,9 @@ is `jvm`, with its own source, classes and compile classpath. A part that also a
 with more than one record has one module per version: a dash and the version name from the
 build file are added to the last part of the name (`com.acme:shared-jvm`, `ShopApp:shared-jvm`),
 the spelling Kotlin uses when it uploads each version, and the results go in
-`<folder>/.sextant/<version name>`. A part with one record keeps its name.
+`<folder>/.sextant/<version name>`. A part with one record keeps its name. A build whose only
+project gives more than one record (a one-project Kotlin Multiplatform library, or a one-project
+app with editions) is walked as a reactor, so each of its modules is analysed.
 
 **A sibling with more than one version is joined by Gradle's label.** For each inter-project
 classpath entry, the init script records the label Gradle put on the version it picked: the

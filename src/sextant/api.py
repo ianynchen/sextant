@@ -657,13 +657,20 @@ def _remove_other_layout(path: Path, results_name: str | None) -> None:
             if child.is_dir() and (child / "workspace.duckdb").is_file():
                 shutil.rmtree(child)
         return
+    _remove_module_results(sextant)
+
+
+def _remove_module_results(folder: Path) -> None:
+    """Removes the results of one module from `folder`: the named files and folders above,
+    and nothing else. A repository root's `modules.json`, `system.duckdb` and system
+    document stay."""
     for name in _MODULE_RESULT_FILES:
-        (sextant / name).unlink(missing_ok=True)
+        (folder / name).unlink(missing_ok=True)
     for name in _MODULE_RESULT_FOLDERS:
-        if (sextant / name).is_dir():
-            shutil.rmtree(sextant / name)
+        if (folder / name).is_dir():
+            shutil.rmtree(folder / name)
     for name in _MODULE_RENDERED:
-        (sextant / "render" / name).unlink(missing_ok=True)
+        (folder / "render" / name).unlink(missing_ok=True)
 
 
 def _results_of(root: Path, entry: Mapping[str, object]) -> Path:
@@ -963,7 +970,8 @@ def _analyze_reactor(
     names every module found, analyzed or not. One failing module fails
     loudly and stops the walk: `modules.json` is written only once every
     module that was going to be analyzed has been, and any STALE inventory
-    from a PRIOR run is removed at the start."""
+    from a PRIOR run is removed at the start. A skipped module's own results
+    from a PRIOR run are removed too, so nothing reads them as current."""
     modules_path = _modules_json_path(path)
     modules_path.unlink(missing_ok=True)
 
@@ -976,6 +984,9 @@ def _analyze_reactor(
         results = Path(_root_relative(path, workspace_dir)).as_posix()
         reason = _skip_reason(module)
         if reason is not None:
+            # The results an earlier run left are not this run's (Android design M5): a
+            # part that now fails to build must not be read as analysed.
+            _remove_module_results(workspace_dir)
             if on_module is not None:
                 on_module(f"skipped {relative_dir} ({module.module_id}): {reason}")
             outcomes.append(
