@@ -789,8 +789,9 @@ def _check_class_arg(entry: dict[str, Any], key: str, path: Path) -> None:
         )
 
 
-# `made_by`'s keys (D02 §2's `annotation_driven`, Android outbound spec M8). Their meaning and
-# the steps' own shape are checked where the word is read (`resolve/shapes/made_by.py`).
+# `made_by`'s keys (D02 §2's `annotation_driven`, Android outbound spec M8). This load check is
+# the one rule for the word and its keys; only the steps' own shape is checked where the word is
+# read (`resolve/shapes/made_by.py`).
 _MADE_BY_KEYS = frozenset({"owner", "method", "class_arg", "steps"})
 
 
@@ -798,7 +799,8 @@ def _check_made_by(raw: dict[str, Any], path: Path) -> None:
     """`matches.made_by` (Android outbound spec M8), refused at load anywhere but an outbound
     `annotation_driven` catalog: the word says where an annotation-declared CLIENT gets its
     server address, and on any other catalog it would load and be read by nothing. Its keys
-    are the four the word has, `class_arg` an argument index as on `channel_via`."""
+    are the four the word has, `owner` and `method` names, `class_arg` an argument index as on
+    `channel_via`."""
     matches = raw.get("matches")
     if not isinstance(matches, dict) or "made_by" not in matches:
         return
@@ -813,6 +815,11 @@ def _check_made_by(raw: dict[str, Any], path: Path) -> None:
             f"loading catalog {path}: `made_by` declares {sorted(_MADE_BY_KEYS)} exactly, "
             f"got {declared!r}"
         )
+    for key in ("owner", "method"):
+        if not isinstance(declared[key], str) or not declared[key]:
+            raise CatalogError(
+                f"loading catalog {path}: `made_by`'s `{key}` must be a name, got {declared[key]!r}"
+            )
     class_arg = declared["class_arg"]
     if not isinstance(class_arg, int) or isinstance(class_arg, bool) or class_arg < 0:
         raise CatalogError(

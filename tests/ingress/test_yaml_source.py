@@ -667,6 +667,33 @@ def test_made_by_outside_an_outbound_annotation_catalog_is_refused_at_load(
     assert "invented-made-by.yml" in str(raised.value)
 
 
+@pytest.mark.parametrize(
+    ("change", "says"),
+    [
+        (("    method: create\n", "    method: create\n    extra: 1\n"), "exactly"),
+        (("    owner: com.acme.Retrofit\n", "    owner: 3\n"), "`owner` must be a name"),
+        (("    method: create\n", "    method: ''\n"), "`method` must be a name"),
+        (("    class_arg: 0\n", "    class_arg: -1\n"), "argument index"),
+    ],
+)
+def test_a_made_by_of_the_wrong_shape_is_refused_at_load(
+    tmp_path: Path, change: tuple[str, str], says: str
+):
+    """The load check is the one rule for `made_by`'s keys (Android final review m3): a key
+    the word does not have, an owner or method that is not a name, or a `class_arg` that is
+    not an argument index is refused when the file loads, naming the file."""
+    (tmp_path / "invented-made-by.yml").write_text(
+        "id: invented\nstyle: annotation_driven\nprotocol: http\ndirection: outbound\n"
+        + _MADE_BY.replace(*change),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).load()
+
+    assert says in str(raised.value) and "invented-made-by.yml" in str(raised.value)
+
+
 def test_made_by_on_an_outbound_annotation_catalog_loads(tmp_path: Path):
     """The paired positive: the same word where it means something."""
     (tmp_path / "invented-made-by.yml").write_text(

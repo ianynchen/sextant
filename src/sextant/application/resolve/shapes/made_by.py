@@ -59,7 +59,6 @@ from sextant.domain.symbols import (
 )
 
 MADE_BY = "made_by"
-_KEYS = frozenset({"owner", "method", "class_arg", "steps"})
 # The one capture a `made_by` step may declare: the server address the object is made with.
 _BASE = "base"
 _PARTIAL = str(Resolution.PARTIAL)
@@ -72,38 +71,20 @@ _CONSTRUCTOR = "<init>"
 
 
 def validated_made_by(catalog: Catalog) -> Mapping[str, Any] | None:
-    """`matches.made_by`, its shape checked, or None where the catalog declares none.
+    """`matches.made_by`, its steps checked, or None where the catalog declares none.
 
-    Only on an `annotation_driven` catalog that derives outbound rows: the address is the
-    address a CLIENT calls, and only an annotation-declared client has no call of its own to
-    read it from. The keys are `owner` and `method` (the call that makes the client object),
-    `class_arg` (the argument of that call holding the interface's class literal) and
-    `steps` (the `fluent` engine's own step words, folded on the object that call is made
-    on). Every step captures `base` and nothing else: a step capturing anything else would
-    load and be read by nothing."""
-    declared = catalog.matches.get(MADE_BY)
+    The catalog load is the one rule for the word itself (`yaml_source._check_made_by`): an
+    outbound `annotation_driven` catalog only, the keys `owner` and `method` (the call that
+    makes the client object), `class_arg` (the argument of that call holding the
+    interface's class literal) and `steps`. Only the steps are checked here: they are the
+    `fluent` engine's own step words, folded on the object that call is made on. Every step
+    captures `base` and nothing else: a step capturing anything else would load and be read
+    by nothing."""
+    # A mapping: the catalog load refuses any other (`yaml_source._check_made_by`).
+    declared: Mapping[str, Any] | None = catalog.matches.get(MADE_BY)
     if declared is None:
         return None
     where = f"loading catalog {catalog.source}: `{MADE_BY}`"
-    if catalog.style != "annotation_driven" or catalog.direction != "outbound":
-        raise CatalogError(
-            f"{where} is a word of an outbound `annotation_driven` catalog only: it says where "
-            f"an annotation-declared client gets its server address"
-        )
-    if not isinstance(declared, dict):
-        raise CatalogError(f"{where} must be a mapping, got {declared!r}")
-    unknown = sorted(set(declared) - _KEYS)
-    missing = sorted(_KEYS - set(declared))
-    if unknown or missing:
-        raise CatalogError(
-            f"{where} declares {sorted(_KEYS)} exactly; unknown {unknown}, missing {missing}"
-        )
-    for key in ("owner", "method"):
-        if not isinstance(declared[key], str) or not declared[key]:
-            raise CatalogError(f"{where}'s `{key}` must be a name, got {declared[key]!r}")
-    class_arg = declared["class_arg"]
-    if not isinstance(class_arg, int) or isinstance(class_arg, bool) or class_arg < 0:
-        raise CatalogError(f"{where}'s `class_arg` is an argument index, got {class_arg!r}")
     steps = declared["steps"]
     if not isinstance(steps, list) or not steps:
         raise CatalogError(f"{where}'s `steps` must be a non-empty list of steps")

@@ -278,19 +278,11 @@ def test_a_base_retrofit_refuses_makes_no_client_and_is_not_read(tmp_path: Path)
     assert _rows(tmp_path, facts) == {("GET", None, "orders/{id}", "partial")}
 
 
-def test_made_by_is_refused_on_a_catalog_that_is_not_an_outbound_annotation_catalog():
-    """The word says where an annotation-declared CLIENT gets its address: on any other
-    catalog it would load and be read by nothing."""
+def test_a_made_by_step_that_captures_anything_but_base_is_refused():
+    """The word itself and its keys are checked when the catalog loads
+    (`test_yaml_source`); a step is checked where it is read. A step that captures anything
+    but `base` would load and be read by nothing."""
     catalog = _catalog()
-    with pytest.raises(CatalogError, match="outbound `annotation_driven`"):
-        validated_made_by(replace(catalog, direction="inbound"))
-    with pytest.raises(CatalogError, match="unknown"):
-        validated_made_by(
-            replace(
-                catalog,
-                matches={**catalog.matches, "made_by": {**catalog.matches["made_by"], "x": 1}},
-            )
-        )
     with pytest.raises(CatalogError, match="capture `base`"):
         steps = [{"method": "baseUrl", "owner": "a.B", "captures": {"url": "arg0"}}]
         validated_made_by(

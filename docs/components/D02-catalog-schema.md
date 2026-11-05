@@ -1069,7 +1069,8 @@ matches:
 
   `class_arg` has PR #91's meaning (the argument holding a class literal). Refused at load
   (`yaml_source._check_made_by`) anywhere but an outbound `annotation_driven` catalog, and
-  unless it declares exactly the four keys with `class_arg` an argument index; the steps are
+  unless it declares exactly the four keys with `owner` and `method` names and `class_arg` an
+  argument index (the one rule for the word and its keys); only the steps are
   checked where the word is read (`made_by.validated_made_by`): every step names an `owner`
   (only an owner-declared step folds backward) and captures `base` and nothing else. Declared today by `retrofit.yml`
   only; `@HttpExchange`'s `HttpServiceProxyFactory` and MicroProfile's `RestClientBuilder`
