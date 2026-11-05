@@ -1291,7 +1291,7 @@ def _sends(
     The method's exit stays the reference (`None`) only where there is no send and no hand-off
     in this method: a terminal reached by name (it executes itself, and steps fold past it, D02
     §4), a value that leaves this method by a return toward its send (the return is the use),
-    and a send paired only by identity (`identified`, its window not read). It is also the
+    and a send paired only by identity whose path names no call out of this method. It is also the
     reference for a reader that reads every executing call of one end itself
     (`pairs_every_send`, Quartz's `scheduleJob` pairings) where the value is sent from more than
     one place: that reader takes one end, as before."""
@@ -2988,11 +2988,12 @@ def _joined_through_values(
     where the path leaves the method by a return. It is where that method's steps are
     decided (`_sends`).
 
-    **A call the chain walk reads by a step is read** (controller ruling I-1 of the 2026-11-05
-    fix review): the walks below take the module's step calls as `read_sites`, so a step made
-    on the value between its construction and the send (`p.setUri(u)`, Ktor's `url(b, u)`)
-    opens no `escapes` window. The forward walk folds each one, and a hand-off into a body we
-    have folds what that body does (rule 1), so nothing on the way is unread."""
+    **A step the chain walk folds is read** (controller ruling I-1 of the 2026-11-05 fix
+    review, and review round 2's N-1): a pairing whose window a step call opened
+    (`p.setUri(u)`, Ktor's `url(b, u)`) is read again with the steps of the producer's own
+    method as `read_sites` (`_read_in`), and joins where nothing else opens it. A step in any
+    other method on the way is not folded by the forward walk, so it keeps the pairing by
+    identity, its row `partial`."""
     declared = {
         name: join_filter
         for name, join_filter in via_argument_names.items()
@@ -3018,23 +3019,29 @@ def _joined_through_values(
     joined: dict[tuple[str, int], list[dict[str, Any]]] = {}
     identified: dict[tuple[str, int], list[dict[str, Any]]] = {}
     handed: dict[tuple[tuple[str, int], tuple[str, int]], list[int | None]] = {}
-    read_sites = frozenset(
-        key for key, site in values.sites.items() if _matching_step(dict(site), steps) is not None
-    )
+    # The module's step calls by method: a step the forward walk folds is one in the chain's
+    # own method, before its reference, so only those are read (`_read_in`).
+    read_by_method: dict[str, set[tuple[str, int]]] = {}
+    for key, site in values.sites.items():
+        if _matching_step(dict(site), steps) is not None:
+            read_by_method.setdefault(key[0], set()).add(key)
     for consumer in executing:
         for slot in range(len(consumer["arguments"] or [])):
-            producers = producers_of(
-                values, consumer, slot, terminals, past_accessors=ancestors, read_sites=read_sites
-            )
+            producers = producers_of(values, consumer, slot, terminals, past_accessors=ancestors)
             identity_paths: tuple[tuple[Producer, Path], ...] = ()
             if any(producer.reason in (ESCAPES, CYCLE) for producer in producers):
                 identity_paths = producer_paths(
-                    values, consumer, slot, terminals, which_object=True, read_sites=read_sites
+                    values, consumer, slot, terminals, which_object=True
                 )
             by_identity = tuple(dict.fromkeys(producer for producer, _ in identity_paths))
+            read = tuple(
+                producer
+                for producer in by_identity
+                if _read_in(values, consumer, slot, terminals, ancestors, producer, read_by_method)
+            )
             for producer, into in (
-                *((producer, joined) for producer in producers),
-                *((producer, identified) for producer in by_identity),
+                *((producer, joined) for producer in (*producers, *read)),
+                *((producer, identified) for producer in by_identity if producer not in read),
             ):
                 if producer.caller is None or producer.ordinal is None or producer.identity is None:
                     continue
@@ -3052,14 +3059,7 @@ def _joined_through_values(
                 producer.caller is not None and producer.caller != consumer["caller"]
                 for producer in producers
             ):
-                paths += producer_paths(
-                    values,
-                    consumer,
-                    slot,
-                    terminals,
-                    past_accessors=ancestors,
-                    read_sites=read_sites,
-                )
+                paths += producer_paths(values, consumer, slot, terminals, past_accessors=ancestors)
             for producer, path in paths:
                 if producer.caller is None or producer.ordinal is None:
                     continue
@@ -3076,6 +3076,37 @@ def _joined_through_values(
         {key: tuple(pairs) for key, pairs in identified.items()},
         {key: tuple(toward) for key, toward in handed.items()},
     )
+
+
+def _read_in(
+    values: ValueIndex,
+    consumer: Mapping[str, Any],
+    slot: int,
+    terminals: set[tuple[str, str]],
+    ancestors: Any,
+    producer: Producer,
+    read_by_method: Mapping[str, set[tuple[str, int]]],
+) -> bool:
+    """Whether a pairing the producer walk read only by identity (`escapes` on the way) is
+    read after all because every call that opened the window is a step the forward walk folds
+    (controller ruling I-1 of the 2026-11-05 fix review): the walk again, with the steps of the
+    producer's own method as `read_sites`, reaches `producer` and nothing it cannot read. The
+    forward walk folds a step only in the chain's own method, before its reference (the send,
+    or the hand-off toward it); a step in a method on the way (a send helper's `r.setUri(c)`)
+    is not folded, so it still opens the window and the row stays `partial`."""
+    if producer.caller is None or producer.caller not in read_by_method:
+        return False
+    again = producers_of(
+        values,
+        consumer,
+        slot,
+        terminals,
+        past_accessors=ancestors,
+        read_sites=frozenset(read_by_method[producer.caller]),
+    )
+    return any(
+        found.caller == producer.caller and found.ordinal == producer.ordinal for found in again
+    ) and not any(found.reason in (ESCAPES, CYCLE) for found in again)
 
 
 def _joins(site: Mapping[str, Any], join_filter: _JoinFilter) -> bool:

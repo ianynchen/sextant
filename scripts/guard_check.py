@@ -9903,11 +9903,37 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="                direction,\n                verb,\n                "
-                "context.caller,\n                peer,\n                source,\n",
+                find="                direction,\n                verb,\n                path,\n",
                 replace="                direction,\n                None,  # guard disabled by "
-                "scripts/guard_check.py\n                context.caller,\n                peer,\n"
-                "                source,\n",
+                "scripts/guard_check.py\n                path,\n",
+            ),
+        ),
+    ),
+    "fluent.an-ADDRESS-on-a-branch-of-one-call-stays-a-row-per-address": Guard(
+        what="the merge of one call's rows that the identity key does not hold keys on the "
+        "path, so an address set on a branch stays a row per address",
+        why="with a verb no table names, `if (x) url(a) else url(b)` merged into one row and "
+        "dropped one of the two addresses the call may send to",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                verb,\n                path,\n                context.caller,\n",
+                replace="                verb,\n                None,  # guard disabled by "
+                "scripts/guard_check.py\n                context.caller,\n",
+            ),
+        ),
+    ),
+    "chains.a-STEP-on-the-way-to-the-send-is-not-read-as-folded": Guard(
+        what="a step call opens no `escapes` window only in the producer's own method, where "
+        "the forward walk folds it; one in a method on the way to the send still does",
+        why="`send(r) { r.setUri(c); execute(r) }`, decided at the hand-off `send(p)`, published "
+        "`POST /b resolved` while the request goes to `/c`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        read_sites=frozenset(read_by_method[producer.caller]),\n",
+                replace="        read_sites=frozenset().union(*read_by_method.values()),  # guard "
+                "disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

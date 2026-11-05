@@ -434,8 +434,11 @@ def _raw_rows(tmp_path: Path, facts: list) -> list[tuple]:
     rows = workspace.query("endpoints")
     workspace.close()
     return sorted(
-        (r["method"], r["peer"], r["path"], r["resolution"], r["request_shape"] is not None)
-        for r in rows
+        (
+            (r["method"], r["peer"], r["path"], r["resolution"], r["request_shape"] is not None)
+            for r in rows
+        ),
+        key=str,
     )
 
 
@@ -488,6 +491,37 @@ def test_a_verb_set_on_a_branch_of_one_call_with_no_path_is_a_row_per_verb(tmp_p
         ("GET", None, None, "unresolved"),
         ("PUT", None, None, "unresolved"),
     ], rows
+
+
+@pytest.mark.pins("fluent.an-ADDRESS-on-a-branch-of-one-call-stays-a-row-per-address")
+def test_two_addresses_on_branches_of_one_call_with_an_unread_verb_stay_two_rows(
+    tmp_path: Path,
+):
+    """Review round 2, N-2: `if (x) url(a) else url(b)` with a verb no table names (so the
+    row has no verb and the identity key does not hold it). The path identifies a row, so the
+    merge of one call's paths keeps a row per address and never drops one."""
+    facts = _inlined_call(_caller("either"), "https://a.example.com/x", verbs=(None, "Bogus"))
+    url = next(site for site in facts if site.target.name == "url")
+    second = url.model_copy(
+        update={
+            "arguments": [
+                url.arguments[0],
+                CallArgument(kind="string", value="https://a.example.com/y"),
+            ]
+        }
+    )
+    placed = [
+        *(site for site in facts if site.ordinal <= url.ordinal),
+        second.model_copy(update={"ordinal": url.ordinal + 1}),
+        *(
+            site.model_copy(update={"ordinal": site.ordinal + 1})
+            for site in facts
+            if site.ordinal > url.ordinal
+        ),
+    ]
+    rows = _raw_rows(tmp_path, _in_a_coroutine(placed, frozenset({url.ordinal, url.ordinal + 1})))
+    paths = sorted(str(row[2]) for row in rows)
+    assert "/x" in paths and "/y" in paths, rows
 
 
 def _second_call(facts: list[CallSiteFact]) -> list[CallSiteFact]:

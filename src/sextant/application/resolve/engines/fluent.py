@@ -1031,10 +1031,10 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
             # that reads the same: two requests whose address is not read are two rows. The
             # paths of ONE chain (rule 9) are one request, so the key is the call itself (its
             # root, its terminal, the call that sends it) with what identifies a row (verb,
-            # caller, peer) and the channels its edges name, so no edge is dropped. Paths that
-            # differ only in a published part (a body, a header) are one `partial` row, the
-            # rule for rows of one identity above (round 4, ruled by the user 2026-11-03); a
-            # verb read on a branch stays a row per verb.
+            # path, caller, peer) and the channels its edges name, so no edge is dropped.
+            # Paths that differ only in a published part (a body, a header) are one `partial`
+            # row, the rule for rows of one identity above (round 4, ruled by the user
+            # 2026-11-03); a verb or an address read on a branch stays a row of its own.
             one_call = (
                 _site_key(end.root) if end.root else None,
                 None if end.terminal is None else _site_key(end.terminal),
@@ -1042,6 +1042,7 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                 context.catalog.protocol,
                 direction,
                 verb,
+                path,
                 context.caller,
                 peer,
                 source,
