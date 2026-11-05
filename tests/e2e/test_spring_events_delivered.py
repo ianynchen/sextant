@@ -126,25 +126,26 @@ def test_a_listener_of_a_supertype_receives(tables):
 
 @pytest.mark.pins("dispatch-hops.a-value-a-MODULE-FACTORY-returns-is-read-through-it")
 def test_an_event_a_module_factory_returns_is_read_through_it(tables):
-    """`OrderPlaced event = OrderPlaced.of(this, id); publisher.publishEvent(event)`: the
-    value is a static call's result, and the module declares that method's body, which
+    """`ApplicationEvent event = OrderPlaced.of(this, id); publisher.publishEvent(event)`:
+    the value is a static call's result, and the module declares that method's body, which
     returns `new OrderPlaced(…)` (the shape apollo-portal's `ConfigPublishEvent.instance()`
     takes, seven of its seventeen publish sites). The code is here, so the class is read
-    through it (ruled 2026-11-02: unknown only where code is absent)."""
+    through it (ruled 2026-11-02: unknown only where code is absent), not by the factory's
+    declared `ApplicationEvent`, which would reach only the listener of `Object`."""
     assert _hops_from(tables, "OrderService#placeThroughFactory") == _EVERY_LISTENER
 
 
 def test_an_unread_event_class_is_a_stop(tables, analyzed: Path):
-    """`publishEvent(event)` with `event` a parameter: its class is not read here, so the hop
-    is one stop with no path and no handler, never a hop to every listener. The trace says
-    why in its step."""
-    assert _hops_from(tables, "OrderService#republish") == {("in_process", None, None)}
+    """`publishEvent(events[0])`: no call, parameter or field produces the value, so its class
+    is not read here, and the hop is one stop with no path and no handler, never a hop to every
+    listener. The trace says why in its step."""
+    assert _hops_from(tables, "OrderService#republishFirst") == {("in_process", None, None)}
     workspace = DuckDbWorkspace(analyzed)
     try:
         [republish] = [
             str(row["method"])
             for row in workspace.query("method_returns")
-            if "OrderService#republish(" in str(row["method"])
+            if "OrderService#republishFirst(" in str(row["method"])
         ]
         trace = trace_of(workspace, Root(handler=republish, kind=RootKind.INBOUND_ENDPOINT))
     finally:
@@ -152,6 +153,35 @@ def test_an_unread_event_class_is_a_stop(tables, analyzed: Path):
     assert [(step.via, step.stop) for step in trace.steps] == [
         ("in_process (key not read)", TraceStop.BOUNDARY)
     ]
+
+
+@pytest.mark.pins("dispatch-hops.a-CALL-RESULT-is-its-DECLARED-return-type")
+def test_an_event_built_with_chained_setters_reaches_its_listeners(tables):
+    """`publishEvent(new MailQueued().setTo(to).setSubject("order"))`, the shape ruoyi-vue-pro
+    builds every event in: the value is an instance call's result, whose body is not followed,
+    but whose descriptor declares it a `MailQueued`. The runtime class is that or a subtype, so
+    every listener of `MailQueued` or a supertype of it is certainly reached (`match: all`).
+    Held in a local and finished statement by statement, the same."""
+    reached = {
+        ("in_process", "MailQueued", "MailQueuedListener#on"),
+        ("in_process", "MailQueued", "AnyListener#on"),
+    }
+    assert _hops_from(tables, "OrderService#queueMail") == reached
+    assert _hops_from(tables, "OrderService#queueMailHeld") == reached
+
+
+@pytest.mark.pins("dispatch-hops.a-PARAMETER-or-FIELD-is-its-DECLARED-type")
+def test_a_parameter_or_a_field_is_read_as_its_declared_type(tables):
+    """`republish(Object event)` publishes a parameter declared `Object`: only the listener of
+    `Object` is certainly reached (the others would be guesses, missing hops rather than false
+    ones). `publishEvent(lastShipped)` publishes an instance field declared `OrderShipped`."""
+    assert _hops_from(tables, "OrderService#republish") == {
+        ("in_process", "Object", "AnyListener#on")
+    }
+    assert _hops_from(tables, "OrderService#publishLast") == {
+        ("in_process", "OrderShipped", "ShippingListener#on"),
+        ("in_process", "OrderShipped", "AnyListener#on"),
+    }
 
 
 @pytest.mark.pins("dispatch-implementations.the-BRIDGE-is-carried-to-the-method-it-forwards-to")

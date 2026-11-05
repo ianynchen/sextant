@@ -259,6 +259,40 @@ def reached_by(
     ]
 
 
+def certain_cases(
+    rows: list[dict[str, Any]],
+    key_type: str,
+    supertypes: Mapping[str, set[str]],
+    constant_classes: Mapping[str, str | None],
+) -> tuple[list[dict[str, Any]], bool]:
+    """The registrations a value read only by its DECLARED type (a call's declared return, a
+    parameter's or a field's type) is asked of, and whether any group was left out. Such a
+    value is `key_type` or any subtype of it, so every registration of `key_type` or a
+    supertype of it is certainly reached under `all` and `one`. Under `first` that holds only
+    in a group where no case names a strict subtype of `key_type` — a class registration of a
+    type below it, or a value registration whose constant is of `key_type` or below (or of a
+    class not read): the value may be one, and that case would take it first. Such a group is
+    left out (the value is not read there), never asked as if the value were exactly
+    `key_type`."""
+    undecided: set[str] = set()
+    for row in rows:
+        if row["match"] != _FIRST:
+            continue
+        if row["key_type"] is not None:
+            narrower = row["key_type"] != key_type and key_type in _ancestry(
+                str(row["key_type"]), supertypes
+            )
+        elif row["key_value"] is not None:
+            constant_class = constant_classes.get(str(row["key_value"]))
+            narrower = constant_class is None or key_type in _ancestry(constant_class, supertypes)
+        else:
+            narrower = False
+        if narrower:
+            undecided.add(str(row["group"]))
+    kept = [row for row in rows if row["match"] != _FIRST or str(row["group"]) not in undecided]
+    return kept, bool(undecided)
+
+
 def served_cases(
     rows: list[dict[str, Any]],
     key_class: str | None,

@@ -23,10 +23,21 @@ catalog's (`Catalog.dispatch_sends`), and every row carries that catalog's `prot
   candidate); a constructor reference (`Get::new`) returns its own owner.
 - `unresolved` with a `source` — a call's result (a static factory, `Event.instance()`): where
   the call is static and the module declares the method, each class its body returns, read
-  as a lambda's are (ruled 2026-11-02: follow the code we have). An instance call or a
-  library method is not read.
-- anything else — **not read**: one row with no `path` and no `handler`. Never a hop to
-  every handler.
+  as a lambda's are (ruled 2026-11-02: follow the code we have). Any other call (an instance
+  call, `new E().setA(a)`, a library method), and a return the body does not name, is read
+  by the call's DECLARED return type (its descriptor's).
+- `parameter`, or an instance `field` — the parameter's or the field's declared type.
+- anything else (an array element, a `merge`, a primitive or array declared type) — **not
+  read**: one row with no `path` and no `handler`. Never a hop to every handler.
+
+## A value read by its declared type (ruled 2026-11-05, final review I-1)
+
+A declared type `T` says the value is a `T` or a subtype of one, never which. So every
+registration of `T` or a supertype of it is certainly reached under `match: all` and `one`,
+and the hop is true; a registration of a subtype only is missed, never invented. Under
+`first` it holds only in a group where no case names a strict subtype of `T`
+(`dispatch_registrations.certain_cases`): elsewhere the value may be the subtype a case before
+takes, so that group gives the send's one not-read row instead of a guessed hop.
 
 A value no registration takes (a reply its asker reads off a future, a command told to a
 system actor) is one row with its class and no `handler`: the trace stops there, naming it.
@@ -82,6 +93,7 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.dispatch_registrations import (
     ObjectKeys,
+    certain_cases,
     dispatch_mechanism,
     reached_by,
     served_cases,
@@ -99,6 +111,8 @@ from sextant.domain.symbols import (
     member_name,
     method_descriptor,
     owner_of,
+    returned_type,
+    slot_of_type,
     type_descriptor,
 )
 
@@ -107,6 +121,9 @@ _CONSTRUCTOR = "<init>"
 # A conformance entry's subtype meaning every type (`type-models/conformance.yml`): its
 # supertype is the root type, a supertype of every class.
 _EVERY_TYPE = "*"
+# A JVM descriptor slot naming a class or interface type (JVMS 4.3.2): the only declared type
+# a value is read by.
+_REFERENCE = "L"
 # The call form that names exactly the method it runs (`dispatch.py`): no override can run
 # in its place, so its body is the value's producer.
 _STATIC = "static"
@@ -116,9 +133,10 @@ _CHANNEL_VIA = "channel_via"
 _CLASS_ARG = "class_arg"
 # The `dispatch.key` naming a channel object rather than the value's class.
 _OBJECT_KEY = "object"
-# A value read, as `(class, constant, call site in its method, what was not read)`: the
-# class and the constant's own symbol where read, else `unread` names the argument kind.
-_Value = tuple[str | None, str | None, int | None, str | None]
+# A value read, as `(class, constant, call site in its method, what was not read, declared)`:
+# the class and the constant's own symbol where read, else `unread` names the argument kind;
+# `declared` where the class is a declared type, the value that class or any subtype of it.
+_Value = tuple[str | None, str | None, int | None, str | None, bool]
 
 
 def record_dispatch_hops(workspace: Workspace, catalogs: list[Catalog]) -> None:
@@ -352,6 +370,7 @@ class _Reading:
         }
         self._sites = workspace.once(call_site_index).by_caller
         self._field_types: dict[str, tuple[str | None, bool]] | None = None
+        self._parameter_types: dict[str, list[str | None]] | None = None
         # `key_handlers`' per-run inputs (GUIDELINES §8.7): each value registration's constant's
         # class, read once, and each key class's answer, so a key class many inbound rows
         # share walks the module's types once rather than once per row.
@@ -368,23 +387,27 @@ class _Reading:
         (`dispatch_registrations.served_cases`); a registration whose handler was not read
         gives None, as for a hop. Nothing for a class not read."""
         if (key_class, mechanism) not in self._key_handlers:
-            if self._constants is None:
-                self._constants = {
-                    str(case["key_value"]): self._constant_class(str(case["key_value"]))
-                    for case in self._cases
-                    if case["key_value"] is not None
-                }
             self._rooted(key_class)
             reached = served_cases(
                 self._by_mechanism.get(mechanism, []),
                 key_class,
                 self._supertypes,
-                self._constants,
+                self._constant_classes(),
             )
             self._key_handlers[(key_class, mechanism)] = list(
                 dict.fromkeys(case["handler"] for case in reached)
             )
         return self._key_handlers[(key_class, mechanism)]
+
+    def _constant_classes(self) -> dict[str, str | None]:
+        """Each value registration's constant's class, read once per resolve."""
+        if self._constants is None:
+            self._constants = {
+                str(case["key_value"]): self._constant_class(str(case["key_value"]))
+                for case in self._cases
+                if case["key_value"] is not None
+            }
+        return self._constants
 
     def _constant_class(self, symbol: str) -> str | None:
         """A value registration's constant's class: the static field's declared type (an enum
@@ -413,35 +436,40 @@ class _Reading:
         method making the send, whose call sites an `unresolved` value's `source` names."""
         kind = None if argument is None else argument.get("kind")
         if argument is None or kind is None:
-            return [(None, None, None, "absent")]
+            return [(None, None, None, "absent", False)]
         symbol = argument.get("symbol")
         if kind == "unresolved" and argument.get("source") is not None:
-            return self._made_by_a_call(caller, int(argument["source"]))
+            return self._made_by_a_call(caller, argument)
         if kind == "instance" and symbol is not None:
-            return [(str(symbol), None, None, None)]
+            return [(str(symbol), None, None, None, False)]
         if kind == "enum" and symbol is not None:
-            return [(owner_of(str(symbol)), str(symbol), None, None)]
+            return [(owner_of(str(symbol)), str(symbol), None, None, False)]
         if kind == "field" and symbol is not None:
             declared, static = self._field_type(str(symbol))
             if declared is not None and static:
-                return [(declared, str(symbol), None, None)]
-            return [(None, None, None, kind)]
+                return [(declared, str(symbol), None, None, False)]
         if kind == "lambda" and symbol is not None:
             if member_name(str(symbol)).startswith(f"{_CONSTRUCTOR}("):
-                return [(owner_of(str(symbol)), None, None, None)]
+                return [(owner_of(str(symbol)), None, None, None, False)]
             body = self._by_bare.get(str(symbol))
             if body is None:
-                return [(None, None, None, kind)]
-            return [(type_, value, None, unread) for type_, value, _, unread in self.returned(body)]
-        return [(None, None, None, str(kind))]
+                return [(None, None, None, kind, False)]
+            return [(*one[:2], None, *one[3:]) for one in self.returned(body)]
+        declared_type = self._declared(caller, argument)
+        if declared_type is not None:
+            return [(declared_type, None, None, None, True)]
+        return [(None, None, None, str(kind), False)]
 
-    def _made_by_a_call(self, caller: str, source: int) -> list[_Value]:
+    def _made_by_a_call(self, caller: str, argument: Mapping[str, Any]) -> list[_Value]:
         """A value a call in `caller` returned (D00 §5: an `unresolved` argument's `source` is
         the producing call's `result`), read through that call's body where the call names
         the method it runs and the module declares its body: a static call (no override can
         run instead, `dispatch.py`), each class the method returns (`returned`). Anything
-        else — an instance call, a library method — is not read (spec 2026-11-02 rule 2:
-        unknown only where the code is absent)."""
+        else — an instance call (`new E().setA(a)`), a library method — and a return the body
+        does not name is read by the call's declared return type (`_declared`); not read
+        where that is no class either (spec 2026-11-02 rule 2: unknown only where the code is
+        absent)."""
+        source = argument["source"]
         made = next(
             (
                 site
@@ -461,9 +489,58 @@ class _Reading:
                 )
             )
         )
+        declared_type = self._declared(caller, argument)
+        by_type: _Value = (
+            (None, None, None, "unresolved", False)
+            if declared_type is None
+            else (declared_type, None, None, None, True)
+        )
         if body is None:
-            return [(None, None, None, "unresolved")]
-        return [(type_, value, None, unread) for type_, value, _, unread in self.returned(body)]
+            return [by_type]
+        return [
+            by_type if one[3] is not None else (*one[:2], None, *one[3:])
+            for one in self.returned(body)
+        ]
+
+    def _declared(self, method: str, value: Mapping[str, Any]) -> str | None:
+        """The declared type of a value `method` holds (ruled 2026-11-05, final review I-1): a
+        call's result, its descriptor's return type; a `parameter`, the method's own declared
+        parameter type; a `field`, the field's declared type. None for any other kind, and
+        for a declared type that is not a class or interface (a primitive, an array)."""
+        kind = value.get("kind")
+        declared: str | None = None
+        if kind == "unresolved" and value.get("source") is not None:
+            made = next(
+                (
+                    site
+                    for site in self._sites.get(method, ())
+                    if site.get("result") == value["source"]
+                ),
+                None,
+            )
+            descriptor = None if made is None else made.get("descriptor")
+            declared = None if descriptor is None else returned_type(str(descriptor))
+        elif kind == "parameter" and value.get("value") is not None:
+            parameters = self._parameters(method)
+            index = int(value["value"])
+            declared = parameters[index] if 0 <= index < len(parameters) else None
+        elif kind == "field" and value.get("symbol") is not None:
+            declared = self._field_type(str(value["symbol"]))[0]
+        if declared is None or not slot_of_type(declared).startswith(_REFERENCE):
+            return None
+        return declared
+
+    def _parameters(self, method: str) -> list[str | None]:
+        """`method`'s declared parameter types, erased (`method_declarations`, read once)."""
+        if self._parameter_types is None:
+            self._parameter_types = {}
+            for row in self._workspace.query("method_declarations"):
+                signature: dict[str, Any] = row["signature"] or {}  # type: ignore[assignment]
+                self._parameter_types[bare_descriptor(str(row["symbol"]))] = [
+                    (parameter.get("erased_symbol") or (parameter.get("type") or {}).get("symbol"))
+                    for parameter in signature.get("parameters") or []
+                ]
+        return self._parameter_types.get(bare_descriptor(method), [])
 
     def returned(self, method: str) -> list[_Value]:
         """Each value `method` returns, with the call site in it the value is made at:
@@ -471,7 +548,9 @@ class _Reading:
         site where none produced it). A constructor returns its own class, made at its
         super-constructor call."""
         if member_name(method).startswith(f"{_CONSTRUCTOR}("):
-            return [(owner_of(bare_descriptor(method)), None, self._super_call(method), None)]
+            return [
+                (owner_of(bare_descriptor(method)), None, self._super_call(method), None, False)
+            ]
         returned: list[_Value] = []
         for value in self._returns.get(method, []):
             returned.extend(self._returned_value(method, value))
@@ -480,7 +559,7 @@ class _Reading:
     def _returned_value(self, method: str, value: Mapping[str, Any] | None) -> list[_Value]:
         kind = None if value is None else value.get("kind")
         if value is None or kind is None:
-            return [(None, None, None, "void")]
+            return [(None, None, None, "void", False)]
         if kind == "merge":
             return [
                 one
@@ -490,9 +569,12 @@ class _Reading:
         source = value.get("source")
         if kind == "instance" and value.get("symbol") is not None:
             made = self._site(method, lambda site: site.get("receiver") == source, _CONSTRUCTOR)
-            return [(str(value["symbol"]), None, made, None)]
+            return [(str(value["symbol"]), None, made, None, False)]
         made = self._site(method, lambda site: source is not None and site.get("result") == source)
-        return [(None, None, made, f"returned {kind}")]
+        declared_type = self._declared(method, value)
+        if declared_type is not None:
+            return [(declared_type, None, made, None, True)]
+        return [(None, None, made, f"returned {kind}", False)]
 
     def _site(self, method: str, test: Any, name: str | None = None) -> int | None:
         return next(
@@ -563,22 +645,31 @@ class _Reading:
         """The rows one value gives at one call site, asked of `mechanism`'s registrations
         only (the sending catalog's): one per handler it reaches, one with
         no handler where it reaches none, one with no path and no handler where its class was
-        not read. Nothing where the value was made at no call site the trace could step
+        not read. A class read by its declared type is asked only of the groups it certainly
+        reaches (`certain_cases`); a group it may not, under `first`, adds the not-read row. Nothing where the value was made at no call site the trace could step
         through. Every row's `evidence` is `compiler`, D00 §4's closed set: the send site is a
         compiler fact, and a class not read is said by the NULL `path`, not by the evidence."""
         if ordinal is None:
             return []
-        key_type, key_value, _, unread = value
+        key_type, key_value, _, unread, declared = value
         row = {"caller": caller, "ordinal": ordinal, "protocol": protocol}
+        unread_row = row | {"path": None, "handler": None, "evidence": "compiler"}
         if unread is not None:
-            return [row | {"path": None, "handler": None, "evidence": "compiler"}]
+            return [unread_row]
         path = key_value or key_type
         self._rooted(key_type)
-        reached = reached_by(
-            self._by_mechanism.get(mechanism, []), key_type, key_value, self._supertypes
-        )
+        cases = self._by_mechanism.get(mechanism, [])
+        undecided = False
+        if declared and key_type is not None:
+            for case in cases:
+                self._rooted(case["key_type"])
+            cases, undecided = certain_cases(
+                cases, key_type, self._supertypes, self._constant_classes()
+            )
+        reached = reached_by(cases, key_type, key_value, self._supertypes)
         handlers = sorted({case["handler"] for case in reached}, key=lambda h: (h is None, h))
-        return [
+        rows = [
             row | {"path": path, "handler": handler, "evidence": "compiler"}
-            for handler in handlers or [None]
+            for handler in handlers or ([] if undecided else [None])
         ]
+        return rows + [unread_row] if undecided else rows

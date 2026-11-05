@@ -7552,8 +7552,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_DISPATCH_HOPS,
-                find="            return [(owner_of(str(symbol)), str(symbol), None, None)]\n",
-                replace="            return [(owner_of(str(symbol)), None, None, None)]  # guard disabled\n",
+                find="            return [(owner_of(str(symbol)), str(symbol), None, None, False)]\n",
+                replace="            return [(owner_of(str(symbol)), None, None, None, False)]  # disabled\n",
             ),
         ),
     ),
@@ -7577,7 +7577,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_DISPATCH_HOPS,
-                find="            for handler in handlers or [None]\n",
+                find="            for handler in handlers or ([] if undecided else [None])\n",
                 replace="            for handler in handlers  # guard disabled\n",
             ),
         ),
@@ -7615,12 +7615,14 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_DISPATCH_HOPS,
-                find="            return [(owner_of(bare_descriptor(method)), None, self._super_call(method), None)]\n",
+                find="            return [\n"
+                "                (owner_of(bare_descriptor(method)), None, self._super_call(method), None, False)\n"
+                "            ]\n",
                 replace="            return []  # guard disabled by scripts/guard_check.py\n",
             ),
             Edit(
                 path=_DISPATCH_HOPS,
-                find="                return [(owner_of(str(symbol)), None, None, None)]\n",
+                find="                return [(owner_of(str(symbol)), None, None, None, False)]\n",
                 replace="                return []  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -8043,6 +8045,52 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "dispatch-hops.a-CALL-RESULT-is-its-DECLARED-return-type": Guard(
+        what="a sent value that is a call's result the body is not followed for is read by the "
+        "call's declared return type",
+        why="final review I-1: ruoyi-vue-pro builds every event as `new E().setA(a)` (chained "
+        "setters), an instance call's result. Not read, each of its publishes is a stop while "
+        "the class is in the descriptor",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="            declared = None if descriptor is None else "
+                "returned_type(str(descriptor))\n",
+                replace="            declared = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-PARAMETER-or-FIELD-is-its-DECLARED-type": Guard(
+        what="a sent parameter or instance field is read by its declared type",
+        why="final review I-1: a parameter's or a field's declared type says the value is that "
+        "class or a subtype, so a listener of it is certainly reached; not read, the send is "
+        "a stop while the type is in the signature",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="        declared_type = self._declared(caller, argument)\n"
+                "        if declared_type is not None:\n"
+                "            return [(declared_type, None, None, None, True)]\n",
+                replace="        declared_type = None  # guard disabled by scripts/guard_check.py\n"
+                "        if declared_type is not None:\n"
+                "            return [(declared_type, None, None, None, True)]\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.under-FIRST-a-DECLARED-type-reads-only-where-no-SUBTYPE-case": Guard(
+        what="under `first`, a value read by its declared type is not read in a group where a "
+        "case names a strict subtype of it",
+        why="final review I-1 ruling: the value may be the subtype the earlier case takes. "
+        "Asked as if exactly the declared type, a `tell(cmd)` hops to `onCommand` while the "
+        "`Reserve` it carries runs `onReserve`: a false hop",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='            undecided.add(str(row["group"]))\n',
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "dispatch-hops.a-send-reaches-only-its-OWN-mechanism": Guard(
         what="a send's value is asked only of its own catalog's mechanism's registrations",
         why="review m1: one table holds every framework's registrations. Asked of all of them, "
@@ -8051,9 +8099,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_DISPATCH_HOPS,
-                find="            self._by_mechanism.get(mechanism, []), key_type, key_value, "
-                "self._supertypes\n",
-                replace="            self._cases, key_type, key_value, self._supertypes  # disabled\n",
+                find="        cases = self._by_mechanism.get(mechanism, [])\n",
+                replace="        cases = self._cases  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

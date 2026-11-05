@@ -12,8 +12,9 @@ public class OrderPlaced extends ApplicationEvent {
         this.id = id;
     }
 
-    /** A static factory, the shape apollo-portal's `ConfigPublishEvent.instance()` takes. */
-    public static OrderPlaced of(Object source, String id) {
+    /** A static factory, the shape apollo-portal's `ConfigPublishEvent.instance()` takes,
+     * declared to return a supertype: only its body says the event is an `OrderPlaced`. */
+    public static ApplicationEvent of(Object source, String id) {
         return new OrderPlaced(source, id);
     }
 

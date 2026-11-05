@@ -227,10 +227,10 @@ def test_an_unread_message_class_reaches_not_even_a_predicate_only_case(tmp_path
         )
         reading = _Reading(workspace, [])
         unread = reading.hops(
-            "m Relay#forward(sig_3).", 0, (None, None, None, "parameter"), "actor", "pekko"
+            "m Relay#forward(sig_3).", 0, (None, None, None, "parameter", False), "actor", "pekko"
         )
         read = reading.hops(
-            "m Relay#forward(sig_3).", 0, ("Get#", None, None, None), "actor", "pekko"
+            "m Relay#forward(sig_3).", 0, ("Get#", None, None, None, False), "actor", "pekko"
         )
     finally:
         workspace.close()
@@ -238,6 +238,47 @@ def test_an_unread_message_class_reaches_not_even_a_predicate_only_case(tmp_path
         (None, None, "compiler")
     ]
     assert [row["handler"] for row in read] == ["m Entity#onAny(sig_2)."]
+
+
+# `Reserve` implements `Command`, declared as the conformance table declares a JDK type's.
+_RESERVE_IS_A_COMMAND = [{"subtype": "Reserve", "supertype": "Command", "by": "test"}]
+
+
+@pytest.mark.pins("dispatch-hops.under-FIRST-a-DECLARED-type-reads-only-where-no-SUBTYPE-case")
+def test_under_first_a_declared_type_is_read_only_where_no_case_names_a_subtype(tmp_path: Path):
+    """A value read by its DECLARED type (`tell(cmd)`, `cmd` a `Command` parameter) is a
+    `Command` or any subtype. Under `first` its handler is certain only in a group where no
+    case names a strict subtype: in `Stock`'s `[Reserve, Command]` the value may be a `Reserve`
+    the first case takes, so that group is not read (one stop, no path, no handler), never a
+    guessed hop to `onCommand`. In `Audit`'s `[Command]` alone, it is a hop. The same class
+    read EXACTLY (`new Command()`) reaches both groups' `Command` cases."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace._connection.execute(
+            "INSERT INTO dispatch_registrations VALUES "
+            "('m Stock#create(sig_1).#0', 0, 'Reserve#', NULL, NULL, false, "
+            "'m Stock#onReserve(sig_2).', false, 'first', 'pekko'), "
+            "('m Stock#create(sig_1).#0', 1, 'Command#', NULL, NULL, false, "
+            "'m Stock#onCommand(sig_3).', false, 'first', 'pekko'), "
+            "('m Audit#create(sig_4).#0', 0, 'Command#', NULL, NULL, false, "
+            "'m Audit#onCommand(sig_5).', false, 'first', 'pekko')"
+        )
+        reading = _Reading(workspace, _RESERVE_IS_A_COMMAND)
+        declared = reading.hops(
+            "m Relay#forward(sig_6).", 0, ("Command#", None, None, None, True), "actor", "pekko"
+        )
+        exact = reading.hops(
+            "m Relay#forward(sig_6).", 0, ("Command#", None, None, None, False), "actor", "pekko"
+        )
+    finally:
+        workspace.close()
+    assert sorted(
+        [(row["path"], row["handler"]) for row in declared], key=lambda pair: str(pair)
+    ) == [("Command#", "m Audit#onCommand(sig_5)."), (None, None)]
+    assert sorted(row["handler"] for row in exact) == [
+        "m Audit#onCommand(sig_5).",
+        "m Stock#onCommand(sig_3).",
+    ]
 
 
 # The shipped root-type conformance (`type-models/conformance.yml`): every class is an
@@ -273,7 +314,7 @@ def test_a_tell_never_reaches_a_listener_of_object(tmp_path: Path):
         actor, _ = _two_mechanisms(workspace)
         reading = _Reading(workspace, _ROOT)
         rows = reading.hops(
-            "m Relay#forward(sig_3).", 0, ("Get#", None, None, None), "actor", actor
+            "m Relay#forward(sig_3).", 0, ("Get#", None, None, None, False), "actor", actor
         )
     finally:
         workspace.close()
@@ -289,7 +330,7 @@ def test_a_published_event_never_reaches_an_actor_case(tmp_path: Path):
         _, events = _two_mechanisms(workspace)
         reading = _Reading(workspace, _ROOT)
         rows = reading.hops(
-            "m Publisher#place(sig_5).", 0, ("Get#", None, None, None), "in_process", events
+            "m Publisher#place(sig_5).", 0, ("Get#", None, None, None, False), "in_process", events
         )
     finally:
         workspace.close()
