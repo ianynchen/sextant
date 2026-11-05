@@ -589,7 +589,10 @@ class ObjectKeys:
     returns null instead: the compiler's write of null into a spilled slot it read the value
     from (`nullOutSpilledVariable`, CP-59 finding 21). Followed into its argument, the walk
     comes back to that slot, a cycle adding no object, so it is never named as the object's
-    maker either; it adds no object it was not already given.
+    maker either; it adds no object it was not already given. **Where every path past a null
+    check ends at an object not read** (`this.q = Objects.requireNonNull(q)`, `q` a parameter
+    a container fills), the check's own call is the key: every reference it hands back is the
+    one object, so a put and a take through it still meet (final review, deferred minor).
 
     **A view is the object it views.** A call the catalog declares under `dispatch_views`
     (CP-59 finding 22: a read-only wrapper of a flow, a flow reading a channel) hands back
@@ -652,12 +655,22 @@ class ObjectKeys:
                 # Back at a null check this walk passed through: a cycle, adding no object.
                 continue
             made = self._index.sites.get(at)
-            through = () if made is None else self._viewed(made) or self._checked_arguments(made)
-            if made is None or not through:
+            viewed = () if made is None else self._viewed(made)
+            checked = () if made is None or viewed else self._checked_arguments(made)
+            if made is None or not (viewed or checked):
                 yield f"{producer.caller}#{producer.ordinal}"
                 continue
-            for argument in through:
-                yield from self._ends(made, argument, passed | {at})
+            ends = [
+                end
+                for argument in viewed or checked
+                for end in self._ends(made, argument, passed | {at})
+            ]
+            # A null check over an object read on no path (a parameter a container fills) is
+            # still one object on every reference it hands back: its own call is the key.
+            if checked and ends and all(end is None for end in ends):
+                yield f"{producer.caller}#{producer.ordinal}"
+                continue
+            yield from ends
 
     def _viewed(self, site: Mapping[str, Any]) -> tuple[int | str, ...]:
         """The position of the object a declared view call hands back a view of (class

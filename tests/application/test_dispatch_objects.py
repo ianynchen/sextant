@@ -211,6 +211,18 @@ def test_a_queue_kept_through_a_null_check_is_one_object(tables):
     assert _hops_from(tables, "Dispatcher#send") == {("in_process", "Guarded#next")}
 
 
+@pytest.mark.pins("dispatch-objects.a-NULL-CHECK-over-an-UNREAD-object-keeps-its-OWN-key")
+def test_a_null_check_over_an_unread_queue_keeps_its_own_key(tables):
+    """`Injected(BlockingQueue q) { this.queue = Objects.requireNonNull(q); }`, and nothing in
+    the module constructs an `Injected`: where the queue was made is not read, but every
+    reference the check hands back is the one object, so the check's own call is its key and
+    `submit`'s put reaches `poll`'s take. Followed past the check to the parameter alone, both
+    sides would be keyless, a missing hop."""
+    assert _hops_from(tables, "Injected#submit") == {("in_process", "Injected#poll")}
+    [made] = _paths_from(tables, "Injected#submit")
+    assert _short(str(made).rsplit("#", 1)[0]) == "Injected#<init>"
+
+
 @pytest.mark.declines("jdk-blocking-queue")
 @pytest.mark.pins("calls.a-declared-call-is-matched-on-its-OWNER")
 def test_a_plain_queue_is_no_dispatch(tables):

@@ -7265,6 +7265,19 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "dispatch-objects.a-NULL-CHECK-over-an-UNREAD-object-keeps-its-OWN-key": Guard(
+        what="a null check every path past which ends at an object not read is the object's key",
+        why="final review deferred minor: `this.q = Objects.requireNonNull(q)` with `q` injected "
+        "used to key both sides at the check; followed past it to the parameter alone, the put "
+        "and the take are both keyless, a missing hop this branch introduced",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="            if checked and ends and all(end is None for end in ends):\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "dispatch-objects.a-RECEIVE-site-registers-keyed-by-its-OBJECT": Guard(
         what="each declared receive site is a registration keyed by its object",
         why="spec 2026-11-05 §1, §3: a value put on a queue is handled where it is taken off "
@@ -7456,10 +7469,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_DISPATCH_REGISTRATIONS,
-                find="            through = () if made is None else self._viewed(made) or "
-                "self._checked_arguments(made)\n",
-                replace="            through = () if made is None else self._checked_arguments(made)"
-                "  # guard disabled\n",
+                find="            viewed = () if made is None else self._viewed(made)\n",
+                replace="            viewed = ()  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
