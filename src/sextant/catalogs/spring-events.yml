@@ -10,7 +10,7 @@ direction: inbound
 # class is assignable to receiving it (spec 2026-11-05 §1). Declaring `dispatch` is what makes
 # this annotation catalog's mapping read as registrations rather than endpoint rows
 # (`endpoints._reads_by_a_later_pass`, `annotation_driven.registrations`).
-dispatch: { key: type, match: all }
+dispatch: { key: type, match: all, mechanism: spring-events }
 
 detect:
   coordinates: ["org.springframework:spring-context"]

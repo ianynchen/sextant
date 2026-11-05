@@ -3,6 +3,10 @@ displayName: Akka Cluster Sharding (typed entity types)
 style: single_call
 protocol: actor
 direction: inbound
+# Whose registrations serve this file's keys (spec 2026-11-05 §2): a key carries a class
+# (`class_arg` on the producer's `channel_via` entries), and its inbound row's handlers are
+# the registrations of the `akka-actors` mechanism, declared by `akka-actor-handlers.yml`.
+dispatch: { mechanism: akka-actors }
 
 # Spec 2026-11-04 §3a. A sharded entity type is the name its entities are reached by across
 # the cluster: `init` serves it, `entityRefFor` calls it. The address is the type key's

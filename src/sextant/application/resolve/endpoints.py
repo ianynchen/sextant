@@ -352,8 +352,9 @@ def _reads_by_a_later_pass(catalog: Catalog) -> bool:
     loop whole — no endpoint validation, and no skip or run reported for it — and read by
     its own passes, `resolve/dispatch_registrations.py` and `dispatch_hops.py`, after every
     engine. Decided by the setting rather than by a style of its own, so each style keeps
-    its one vocabulary."""
-    return catalog.dispatch is not None
+    its one vocabulary. A catalog of KEY rows declares `dispatch: {mechanism}` alone (no
+    `key`): its rows are endpoint rows, and it runs as any catalog of its style."""
+    return catalog.dispatch is not None and "key" in catalog.dispatch
 
 
 def _derives_endpoint_rows(catalog: Catalog) -> bool:

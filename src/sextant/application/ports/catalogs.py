@@ -337,7 +337,8 @@ class Catalog:
     dispatcher: str | None = None
 
     # How this catalog's in-process dispatch works (spec 2026-11-05 §1-§2), the `dispatch`
-    # setting: `{key, match}`, `key` `type` (the handed value's class picks the handler) or
+    # setting: `{key, match, mechanism}` (`{mechanism}` alone on a catalog of key rows whose
+    # handlers are registrations), `key` `type` (the handed value's class picks the handler) or
     # `object` (receivers of the same channel object take it), `match` `first` (the first
     # matching registration in its group), `all` (every matching one) or `one` (each value
     # to one receiver, decided at run time). None for a catalog declaring no dispatch.

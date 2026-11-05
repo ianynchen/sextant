@@ -6221,7 +6221,7 @@ reported), whatever its style.
 # pekko-actor-handlers.yml
 style: fluent                     # an ordinary chain catalog
 protocol: actor                   # every hop it gives is written under it
-dispatch: { key: type, match: first }
+dispatch: { key: type, match: first, mechanism: pekko-actors }
 requires: [call_site, chain_reconstruction]
 matches:
   roots:                          # the chain walk's own words, one per builder
@@ -6241,8 +6241,17 @@ matches:
         descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
 ```
 
-- **`dispatch: {key, match}`** — how the catalog's dispatch works, required beside any block
-  below (checked at load, `yaml_source._dispatch`). `key`: `type`, the handed value's class
+- **`dispatch: {key, match, mechanism}`** — how the catalog's dispatch works, required beside
+  any block below (checked at load, `yaml_source._dispatch`). `mechanism` names the dispatch
+  mechanism the catalog belongs to (`akka-actors`, `pekko-actors`, `spring-events`: data, a
+  name of the author's choosing): a send, a delivering handler and an inbound key reach only
+  the registrations of catalogs naming the same one, so one framework's value never lands on
+  another's handler. A catalog whose inbound rows are KEYS carrying a class (a `channel_via`
+  entry naming `class_arg`: `pekko-receptionist`, `pekko-cluster-sharding`) declares
+  `dispatch: {mechanism}` alone, saying whose registrations serve its keys; its rows stay
+  endpoint rows. The loader requires the setting on every such catalog and refuses a send or
+  key catalog's mechanism that no registering catalog (registrations, implementations,
+  receives, or an annotation mapping) names (`yaml_source._check_mechanisms`). `key`: `type`, the handed value's class
   picks the handler (Akka and Pekko, Spring and CDI events), or `object`, the receivers of
   the same channel object take it (a queue, a channel). `match`: `first`, the first
   registration in its group the value matches (a behavior tries its cases in order); `all`,
@@ -6296,9 +6305,8 @@ matches:
   A value's class reaches a registration of any of its supertypes: the scanned and headered
   ones, the `type-models/` conformance past a JDK class nothing scans, and the root type (the
   `subtype: "*"` entry). It is asked only of the registrations of the sending catalog's
-  **mechanism**, its id's family (`pekko-actor-handlers` and `pekko-receptionist` are one;
-  `spring-events` another), and an inbound key's class likewise: a dispatch never crosses
-  frameworks. A catalog's id family is therefore part of its dispatch contract.
+  `dispatch.mechanism`, and an inbound key's class likewise: a dispatch never crosses
+  frameworks.
 - **An `annotation_driven` catalog declaring `dispatch`** (`spring-events.yml`) reads its
   `mapping` as registrations, not routes (`annotation_driven.registrations`): each method
   carrying one of `mapping.annotations`, in the annotation set the endpoint derivation itself

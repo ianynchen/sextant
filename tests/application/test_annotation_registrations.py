@@ -252,7 +252,7 @@ def _catalog_file(tmp_path: Path, body: str) -> Path:
     directory.mkdir()
     (directory / "events.yml").write_text(
         "id: events\nstyle: annotation_driven\nprotocol: in_process\ndirection: inbound\n"
-        "dispatch: { key: type, match: all }\n" + body,
+        "dispatch: { key: type, match: all, mechanism: events }\n" + body,
         encoding="utf-8",
     )
     return directory

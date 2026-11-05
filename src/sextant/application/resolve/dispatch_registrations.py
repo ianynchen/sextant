@@ -51,7 +51,7 @@ root's owners with `Dispatch.heirs` (JVMS 5.4.3.3), for every chain catalog alik
   body), module-prefixed; NULL if not read.
 - `delivers` — `returns_value`: the handler's return is a value handed to its own receiver.
 - `match` — the catalog's `dispatch.match`.
-- `mechanism` — the catalog's dispatch mechanism (`dispatch_mechanism`); the hop pass asks a
+- `mechanism` — the catalog's `dispatch.mechanism` (`dispatch_mechanism`); the hop pass asks a
   send's value only of its own mechanism's rows.
 
 A registration the walk could not read (the builder handed to code we do not have, spec
@@ -135,22 +135,28 @@ def record_dispatch_registrations(workspace: Workspace, catalogs: list[Catalog])
 
 
 def dispatch_mechanism(catalog: Catalog) -> str:
-    """The dispatch mechanism `catalog` belongs to: its id's family, the word before the first
-    hyphen (`<family>-<part>`, the catalog naming convention). A send reaches, and an inbound
-    key is served by, only the registrations of its own catalog's mechanism, so one
-    framework's value never lands on another's handler in a module running both: an actor's
-    tell on a listener of `Object`, an application event on an actor case of its class.
-    Neither the protocol (two frameworks share `in_process`) nor the catalog itself (a key's
-    catalog is not the one registering its handlers: `<family>-receptionist` beside
-    `<family>-actor-handlers`) draws that line; the family does."""
-    return catalog.id.split("-", 1)[0]
+    """The dispatch mechanism `catalog` names (`dispatch.mechanism`, D02 §2m): a send, a
+    delivering handler and an inbound key reach only the registrations of catalogs naming the
+    same one, so one framework's value never lands on another's handler in a module running
+    both. Declared, never derived: the loader requires it beside every dispatch block and on
+    every key catalog, and refuses one no registering catalog names."""
+    if catalog.dispatch is None:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: it reads dispatch registrations and declares "
+            f"no `dispatch.mechanism` saying whose (spec 2026-11-05 §2)"
+        )
+    return catalog.dispatch["mechanism"]
 
 
 def _reads_annotations(catalog: Catalog) -> bool:
     """Whether `catalog`'s mapping is read as registrations: an annotation catalog declaring
     `dispatch` (spec 2026-11-05 §2), which the endpoint loop leaves out for the same reason
     (`endpoints._reads_by_a_later_pass`)."""
-    return catalog.style == _ANNOTATION_STYLE and catalog.dispatch is not None
+    return (
+        catalog.style == _ANNOTATION_STYLE
+        and catalog.dispatch is not None
+        and "key" in catalog.dispatch
+    )
 
 
 def reachable_handlers(

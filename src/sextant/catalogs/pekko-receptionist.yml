@@ -3,6 +3,10 @@ displayName: Apache Pekko Receptionist (typed service keys)
 style: single_call
 protocol: actor
 direction: inbound
+# Whose registrations serve this file's keys (spec 2026-11-05 §2): a key carries a class
+# (`class_arg` on the producer's `channel_via` entries), and its inbound row's handlers are
+# the registrations of the `pekko-actors` mechanism, declared by `pekko-actor-handlers.yml`.
+dispatch: { mechanism: pekko-actors }
 
 # Spec 2026-11-04 §3a. A Receptionist service key is the name a typed actor is found by
 # across the cluster: `register` serves it, `subscribe`/`find` call it. The address is the

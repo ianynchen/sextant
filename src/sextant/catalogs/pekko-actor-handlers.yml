@@ -6,7 +6,7 @@ style: fluent
 protocol: actor
 # In-process dispatch keyed by the value's TYPE, the first matching registration in its
 # behavior taking it (spec 2026-11-05 §1): a behavior tries its cases in order.
-dispatch: { key: type, match: first }
+dispatch: { key: type, match: first, mechanism: pekko-actors }
 
 # Spec 2026-11-04 §3b and §3d items 1-2, in the words of spec 2026-11-05 §2. A behavior binds
 # each message class (or an equal value) to a handler, in order, and the first case a message

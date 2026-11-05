@@ -7521,7 +7521,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/endpoints.py",
-                find="    return catalog.dispatch is not None\n",
+                find='    return catalog.dispatch is not None and "key" in catalog.dispatch\n',
                 replace="    return False  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -7697,6 +7697,31 @@ GUARDS: dict[str, Guard] = {
                 find="            key = None\n",
                 replace="            key = None\n            if target is None:\n"
                 "                continue  # guard disabled\n",
+            ),
+        ),
+    ),
+    "catalogs.a-KEY-catalog-names-its-mechanism": Guard(
+        what="a catalog whose keys carry a class (`class_arg`) must name its dispatch mechanism",
+        why="spec 2026-11-05 §2: its inbound rows' handlers are read from registrations. With "
+        "no mechanism there is nothing saying whose, and a key would be served by any "
+        "framework's handlers, or by none",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find="        if keyed:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "catalogs.a-mechanism-NOBODY-registers-for-is-refused": Guard(
+        what="a send or key catalog's mechanism must be named by a registering catalog",
+        why="a misspelt mechanism asks its values of no registration: every hop and every "
+        "key handler becomes a silent stop, published as `no handler`",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find='        if catalog.dispatch is None or catalog.dispatch["mechanism"] in registering:\n',
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

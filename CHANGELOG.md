@@ -49,7 +49,10 @@ here would restate those documents rather than add anything.
   for actors too (their rows and hops unchanged: 5 rows, 28 hops on the two Pekko samples).
   `type-models/conformance.yml` declares the root type every class conforms to (`subtype: "*"`),
   so a listener of `Object` receives every event. Each registration carries its catalog's
-  `mechanism` (the id family, a new `dispatch_registrations` column, schema 15 unreleased): a
+  `mechanism` (a new `dispatch_registrations` column, schema 15 unreleased), declared as
+  `dispatch: {key, match, mechanism}` — `{mechanism}` alone on a key catalog, which the actor
+  receptionist and sharding catalogs now carry — and checked at load (required; a send or key
+  catalog's mechanism must be named by a registering catalog): a
   send or an inbound key reaches only its own mechanism's registrations, never another
   framework's. On apollo-portal all 17 publish sites hop to
   their listener (17 hops, each checked by hand); no endpoint row moved on apollo-portal,

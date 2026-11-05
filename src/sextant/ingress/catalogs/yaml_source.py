@@ -558,6 +558,7 @@ class YamlCatalogSource:
                     dispatch_implementations=_dispatch_implementations(raw["matches"], path),
                 )
             )
+        _check_mechanisms(catalogs)
         return catalogs
 
 
@@ -1777,24 +1778,53 @@ _DISPATCH_BLOCKS = (
 
 
 def _dispatch(raw: dict[str, Any], path: Path) -> dict[str, str] | None:
-    """The catalog's `dispatch: {key, match}` setting (spec 2026-11-05 §1-§2), checked: both
-    words from their closed sets and nothing else. Required where the catalog declares any
-    dispatch block, since every one of them is read by it; None for a catalog declaring
-    neither."""
+    """The catalog's `dispatch: {key, match, mechanism}` setting (spec 2026-11-05 §1-§2),
+    checked: `key` and `match` from their closed sets, `mechanism` a name. Required, all
+    three, where the catalog declares any dispatch block, since every one of them is read by
+    it. A catalog whose inbound rows are KEYS carrying a class (a `channel_via` entry naming
+    `class_arg`, the actor keys) declares `dispatch: {mechanism}` alone: its rows are endpoint
+    rows, and the mechanism says whose registrations serve them. None for a catalog declaring
+    neither.
+
+    `mechanism` names which registrations a send, a delivering handler or an inbound key is
+    asked of: those of catalogs naming the same mechanism, never another's — so an actor
+    `tell` never lands on an application-event listener, nor a published event on an actor
+    case. Explicit rather than derived from anything else, because nothing else draws the
+    line: two frameworks share `in_process`, and a key's catalog is not the one registering
+    its handlers."""
     declared = raw.get("dispatch")
     matches = raw.get("matches")
     blocks = [block for block in _DISPATCH_BLOCKS if isinstance(matches, dict) and block in matches]
+    keyed = _names_a_key_class(matches)
     where = f"loading catalog {path}"
     if declared is None:
         if blocks:
             raise CatalogError(
                 f"{where}: it declares a dispatch block and no `dispatch` ({blocks}); "
-                f"`dispatch: {{key, match}}` says how they are read (spec 2026-11-05 §2)"
+                f"`dispatch: {{key, match, mechanism}}` says how they are read (spec "
+                f"2026-11-05 §2)"
+            )
+        if keyed:
+            raise CatalogError(
+                f"{where}: a `channel_via` entry names `class_arg`, so its inbound rows are "
+                f"keys whose handlers are registrations, and it declares no `dispatch: "
+                f"{{mechanism}}` saying whose (spec 2026-11-05 §2)"
             )
         return None
-    if not isinstance(declared, dict) or set(declared) != {"key", "match"}:
+    if not isinstance(declared, dict):
+        raise CatalogError(f"{where}: `dispatch` must be a mapping, got {declared!r}")
+    mechanism = declared.get("mechanism")
+    if not isinstance(mechanism, str) or not mechanism:
         raise CatalogError(
-            f"{where}: `dispatch` must be `{{key, match}}`, got {declared!r} (spec 2026-11-05 §2)"
+            f"{where}: `dispatch` names no `mechanism`; a send, a registration or a key is "
+            f"matched only within its mechanism (spec 2026-11-05 §2), got {declared!r}"
+        )
+    if set(declared) == {"mechanism"} and keyed and not blocks:
+        return {"mechanism": mechanism}
+    if set(declared) != {"key", "match", "mechanism"}:
+        raise CatalogError(
+            f"{where}: `dispatch` must be `{{key, match, mechanism}}` (or `{{mechanism}}` "
+            f"alone on a catalog of key rows), got {declared!r} (spec 2026-11-05 §2)"
         )
     if declared["key"] not in _DISPATCH_KEYS:
         raise CatalogError(
@@ -1806,7 +1836,58 @@ def _dispatch(raw: dict[str, Any], path: Path) -> dict[str, str] | None:
             f"{where}: `dispatch` declares `match: {declared['match']}`; `match` is one of "
             f"{list(_DISPATCH_MATCHES)}"
         )
-    return {"key": str(declared["key"]), "match": str(declared["match"])}
+    return {"key": str(declared["key"]), "match": str(declared["match"]), "mechanism": mechanism}
+
+
+def _names_a_key_class(node: object) -> bool:
+    """Whether any `channel_via` entry under `node` names `class_arg`: the catalog's inbound
+    rows are keys carrying a class, served by registrations (`dispatch_hops.record_key_handlers`)."""
+    if isinstance(node, dict):
+        via = node.get("channel_via")
+        if isinstance(via, list) and any(
+            isinstance(entry, dict) and "class_arg" in entry for entry in via
+        ):
+            return True
+        return any(_names_a_key_class(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_names_a_key_class(value) for value in node)
+    return False
+
+
+def _registers(catalog: Catalog) -> bool:
+    """Whether `catalog` writes registrations for its mechanism: a registration, an
+    implementation or a receive block, or an annotation mapping read as registrations (an
+    `annotation_driven` catalog whose `dispatch` names a `key`)."""
+    return bool(
+        catalog.dispatch_registrations
+        or catalog.dispatch_implementations
+        or catalog.dispatch_receives
+        or (
+            catalog.style == "annotation_driven"
+            and catalog.dispatch is not None
+            and "key" in catalog.dispatch
+        )
+    )
+
+
+def _check_mechanisms(catalogs: list[Catalog]) -> None:
+    """Refuses a send or key catalog whose `dispatch.mechanism` no registering catalog names:
+    its values would be asked of no registration and every hop and key would be a silent stop,
+    the shape a misspelt mechanism takes."""
+    registering = {
+        catalog.dispatch["mechanism"]
+        for catalog in catalogs
+        if catalog.dispatch is not None and _registers(catalog)
+    }
+    for catalog in catalogs:
+        if catalog.dispatch is None or catalog.dispatch["mechanism"] in registering:
+            continue
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `dispatch.mechanism: "
+            f"{catalog.dispatch['mechanism']}` is named by no catalog registering handlers "
+            f"(registrations, implementations, receives or an annotation mapping); its sends "
+            f"or keys would reach nothing. Registering mechanisms: {sorted(registering)}"
+        )
 
 
 def _arg_index(value: Any, where: str) -> int:

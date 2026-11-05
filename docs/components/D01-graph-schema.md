@@ -220,8 +220,8 @@ is tried, under the declaring catalog's match rule. One row per registration.
   method, a lambda its synthetic body), module-prefixed, NULL where none is read.
   **`delivers`** — the catalog's `returns_value`: the handler's return is a value handed to
   its own receiver. **`match`** — the catalog's `dispatch.match`, `first`, `all` or `one`.
-  **`mechanism`** — the declaring catalog's id family (`dispatch_registrations.dispatch_mechanism`:
-  `pekko`, `spring`): a send's value, and an inbound key's class, is asked only of its own
+  **`mechanism`** — the declaring catalog's `dispatch.mechanism` ([D02](D02-catalog-schema.md)
+  §2m: `pekko-actors`, `spring-events`): a send's value, and an inbound key's class, is asked only of its own
   catalog's mechanism's rows, so one framework's value never reaches another's handler.
 - The match rule over these rows is `resolve/dispatch_registrations.reachable_handlers`:
   `first`, per group, the first unpredicated registration the value matches (its class or a

@@ -891,7 +891,8 @@ def test_a_malformed_registration_is_refused_at_load(tmp_path: Path, entry: dict
     from sextant.application.ports.catalogs import CatalogError
 
     (tmp_path / "c.yml").write_text(
-        "id: c\nstyle: fluent\ndispatch: {key: type, match: first}\nmatches:\n  dispatch_registrations:\n"
+        "id: c\nstyle: fluent\ndispatch: {key: type, match: first, mechanism: m}\nmatches:\n"
+        "  dispatch_registrations:\n"
         "    - { owner: a.B, method: handle, descriptor: '(Ljava/lang/Class;Ljava/lang/Object;)V', "
         + ", ".join(
             f"{key}: {value!r}" if not isinstance(value, str) else f"{key}: {value}"
@@ -908,18 +909,21 @@ def test_a_malformed_registration_is_refused_at_load(tmp_path: Path, entry: dict
     "header, refused",
     [
         ("", "declares a dispatch block and no `dispatch`"),
-        ("dispatch: {key: type}\n", "`dispatch` must be"),
-        ("dispatch: {key: name, match: first}\n", "`key: name`"),
-        ("dispatch: {key: type, match: some}\n", "`match: some`"),
-        ("dispatch: {key: type, match: first, order: 1}\n", "`dispatch` must be"),
+        ("dispatch: {key: type, mechanism: m}\n", "`dispatch` must be"),
+        ("dispatch: {key: name, match: first, mechanism: m}\n", "`key: name`"),
+        ("dispatch: {key: type, match: some, mechanism: m}\n", "`match: some`"),
+        ("dispatch: {key: type, match: first, mechanism: m, order: 1}\n", "`dispatch` must be"),
+        ("dispatch: {key: type, match: first}\n", "names no `mechanism`"),
+        ("dispatch: {mechanism: m}\n", "`dispatch` must be"),
     ],
 )
 def test_a_dispatch_block_needs_a_well_formed_dispatch_setting(
     tmp_path: Path, header: str, refused: str
 ):
     """Every catalog declaring a dispatch block says how its dispatch works (spec 2026-11-05
-    §2): `key` one of `type` or `object`, `match` one of `first`, `all` or `one`, nothing
-    else."""
+    §2): `key` one of `type` or `object`, `match` one of `first`, `all` or `one`, and the
+    `mechanism` it belongs to, nothing else; `{mechanism}` alone is a key catalog's, never a
+    block's."""
     from sextant.application.ports.catalogs import CatalogError
 
     (tmp_path / "c.yml").write_text(
@@ -932,18 +936,66 @@ def test_a_dispatch_block_needs_a_well_formed_dispatch_setting(
         YamlCatalogSource(tmp_path).load()
 
 
+_KEY_CATALOG = (
+    "id: keys\nstyle: single_call\nprotocol: actor\ndirection: inbound\n{header}"
+    "matches:\n  owner: a.Registry\n  methods:\n"
+    "    - {{ name: register, descriptor: '(La/Key;)V', channel_arg: 0,\n"
+    "        channel_via: [{{ owner: a.Key, method: create, arg: 1, class_arg: 0 }}] }}\n"
+)
+_REGISTERING = (
+    "id: handlers\nstyle: fluent\ndispatch: {{key: type, match: first, mechanism: {mechanism}}}\n"
+    "matches:\n  dispatch_registrations:\n"
+    "    - {{ owner: a.B, method: handle, descriptor: '(Ljava/lang/Class;Ljava/lang/Object;)V', "
+    "class_arg: 0, handler_arg: 1 }}\n"
+)
+
+
+@pytest.mark.pins("catalogs.a-KEY-catalog-names-its-mechanism")
+def test_a_key_catalog_names_its_mechanism(tmp_path: Path):
+    """A catalog whose keys carry a class (`class_arg` on a `channel_via` entry) has its
+    inbound rows' handlers read from registrations, so it says whose: refused without
+    `dispatch: {mechanism}`, loaded with it, its rows still endpoint rows (no `key`)."""
+    from sextant.application.ports.catalogs import CatalogError
+
+    (tmp_path / "keys.yml").write_text(_KEY_CATALOG.format(header=""), encoding="utf-8")
+    (tmp_path / "handlers.yml").write_text(_REGISTERING.format(mechanism="m"), encoding="utf-8")
+    with pytest.raises(CatalogError, match="declares no `dispatch: \\{mechanism\\}`"):
+        YamlCatalogSource(tmp_path).load()
+    (tmp_path / "keys.yml").write_text(
+        _KEY_CATALOG.format(header="dispatch: {mechanism: m}\n"), encoding="utf-8"
+    )
+    keys = next(c for c in YamlCatalogSource(tmp_path).load() if c.id == "keys")
+    assert keys.dispatch == {"mechanism": "m"}
+
+
+@pytest.mark.pins("catalogs.a-mechanism-NOBODY-registers-for-is-refused")
+def test_a_mechanism_no_registering_catalog_names_is_refused(tmp_path: Path):
+    """A key or send catalog naming a mechanism no registering catalog names would ask its
+    values of no registration — every hop a silent stop. A misspelling is refused at load."""
+    from sextant.application.ports.catalogs import CatalogError
+
+    (tmp_path / "keys.yml").write_text(
+        _KEY_CATALOG.format(header="dispatch: {mechanism: pekko-actor}\n"), encoding="utf-8"
+    )
+    (tmp_path / "handlers.yml").write_text(
+        _REGISTERING.format(mechanism="pekko-actors"), encoding="utf-8"
+    )
+    with pytest.raises(CatalogError, match="`dispatch.mechanism: pekko-actor` is named by no"):
+        YamlCatalogSource(tmp_path).load()
+
+
 def test_a_receive_is_loaded_with_its_object_and_handler(tmp_path: Path):
     """`dispatch_receives` (read by the object-key pass): the receive call, the object it
     takes from (`receiver`) and where its handler is (`enclosing`, or `lambda_arg`)."""
     (tmp_path / "c.yml").write_text(
-        "id: c\nstyle: fluent\ndispatch: {key: object, match: one}\nmatches:\n"
+        "id: c\nstyle: fluent\ndispatch: {key: object, match: one, mechanism: m}\nmatches:\n"
         "  dispatch_receives:\n"
         "    - { owner: a.Queue, method: take, descriptor: '()Ljava/lang/Object;', "
         "object: receiver, handler: enclosing }\n",
         encoding="utf-8",
     )
     [catalog] = YamlCatalogSource(tmp_path).load()
-    assert catalog.dispatch == {"key": "object", "match": "one"}
+    assert catalog.dispatch == {"key": "object", "match": "one", "mechanism": "m"}
     assert catalog.dispatch_receives == (
         {
             "owner": "a/Queue#",
@@ -968,7 +1020,7 @@ def test_a_malformed_receive_is_refused_at_load(tmp_path: Path, entry: str, refu
     from sextant.application.ports.catalogs import CatalogError
 
     (tmp_path / "c.yml").write_text(
-        "id: c\nstyle: fluent\ndispatch: {key: object, match: one}\nmatches:\n"
+        "id: c\nstyle: fluent\ndispatch: {key: object, match: one, mechanism: m}\nmatches:\n"
         "  dispatch_receives:\n"
         f"    - {{ owner: a.Queue, method: take, descriptor: '()Ljava/lang/Object;', {entry} }}\n",
         encoding="utf-8",
@@ -979,7 +1031,7 @@ def test_a_malformed_receive_is_refused_at_load(tmp_path: Path, entry: str, refu
 
 def test_a_registration_is_loaded_with_its_positions(tmp_path: Path):
     (tmp_path / "c.yml").write_text(
-        "id: c\nstyle: fluent\ndispatch: {key: type, match: first}\nmatches:\n  dispatch_registrations:\n"
+        "id: c\nstyle: fluent\ndispatch: {key: type, match: first, mechanism: m}\nmatches:\n  dispatch_registrations:\n"
         "    - { owner: a.B, method: handle, descriptor: '(Ljava/lang/Class;Ljava/lang/Object;)V', "
         "class_arg: 0, handler_arg: 1, returns_value: true }\n",
         encoding="utf-8",

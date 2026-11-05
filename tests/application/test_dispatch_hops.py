@@ -373,10 +373,22 @@ def test_a_second_analysis_replaces_the_hops(tmp_path: Path):
     assert rows and len(rows) == len(set(rows))
 
 
+def _registering(tmp_path: Path) -> None:
+    """A catalog registering handlers for mechanism `m`, beside a send or key catalog naming
+    it: the loader refuses a mechanism no registering catalog names."""
+    (tmp_path / "handlers.yml").write_text(
+        "id: handlers\nstyle: fluent\ndispatch: {key: type, match: first, mechanism: m}\n"
+        "matches:\n  dispatch_registrations:\n"
+        "    - { owner: a.B, method: handle, descriptor: '(Ljava/lang/Class;Ljava/lang/Object;)V', "
+        "class_arg: 0, handler_arg: 1 }\n",
+        encoding="utf-8",
+    )
+
+
 def _catalog_file(tmp_path: Path, sends: str) -> Path:
     (tmp_path / "sends.yml").write_text(
         "id: sends\ndisplayName: sends\nstyle: fluent\nprotocol: actor\n"
-        "dispatch: {key: type, match: first}\n"
+        "dispatch: {key: type, match: first, mechanism: m}\n"
         "requires: [call_site, chain_reconstruction]\n"
         f"matches:\n  roots: []\n  steps: []\n  terminal: [build]\n  dispatch_sends:\n{sends}"
     )
@@ -410,12 +422,18 @@ def test_a_malformed_send_is_refused_at_load(tmp_path: Path, entry: str, refused
 
 
 def test_a_send_is_loaded_with_its_value_position(tmp_path: Path):
-    [catalog] = YamlCatalogSource(
-        _catalog_file(
-            tmp_path,
-            "    - { owner: a.Ref, method: tell, descriptor: '(Ljava/lang/Object;)V', value_arg: 0 }\n",
-        )
-    ).load()
+    _registering(tmp_path)
+    [catalog] = [
+        catalog
+        for catalog in YamlCatalogSource(
+            _catalog_file(
+                tmp_path,
+                "    - { owner: a.Ref, method: tell, descriptor: '(Ljava/lang/Object;)V', "
+                "value_arg: 0 }\n",
+            )
+        ).load()
+        if catalog.id == "sends"
+    ]
     assert catalog.dispatch_sends == (
         {
             "owner": "a/Ref#",
@@ -429,11 +447,11 @@ def test_a_send_is_loaded_with_its_value_position(tmp_path: Path):
 def _keyed_catalog(tmp_path: Path, methods: str) -> Catalog:
     (tmp_path / "keys.yml").write_text(
         "id: keys\ndisplayName: keys\nstyle: single_call\nprotocol: actor\ndirection: inbound\n"
-        "requires: [call_site, string_constants]\n"
+        "dispatch: {mechanism: m}\nrequires: [call_site, string_constants]\n"
         f"matches:\n  owner: a.Registry\n  methods:\n{methods}"
     )
-    [catalog] = YamlCatalogSource(tmp_path).load()
-    return catalog
+    _registering(tmp_path)
+    return next(catalog for catalog in YamlCatalogSource(tmp_path).load() if catalog.id == "keys")
 
 
 _REGISTER = (

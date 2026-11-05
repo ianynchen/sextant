@@ -121,7 +121,7 @@ def registrations(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]
             f"catalog declaring `dispatch`; a registration's key is a class, so its one "
             f"fallback is `{_PAYLOAD_TYPE}` (spec 2026-11-05 §2)"
         )
-    if catalog.dispatch is None:
+    if catalog.dispatch is None or "match" not in catalog.dispatch:
         raise CatalogError(
             f"loading catalog {catalog.source}: registrations are read only from a catalog "
             f"declaring `dispatch` (spec 2026-11-05 §2)"

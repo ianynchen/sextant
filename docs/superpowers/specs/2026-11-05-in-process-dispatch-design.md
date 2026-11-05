@@ -39,7 +39,7 @@ And one rule says how many receive:
 | An annotation-style registration (Spring, CDI) | the `annotation_driven` style with three additions: select a method by a **parameter** annotation (`@Observes`); key = the payload parameter's type (`path_fallback: payload_type`); output = a dispatch registration, not an endpoint | `annotation_driven`, `request_body` (picks the parameter), `path_from` (reads `@EventListener(classes=…)`) |
 | A registration made by implementing an interface (Spring `ApplicationListener<E>`; Micronaut's `ApplicationEventListener<E>` has the same shape) | `dispatch_implementations: [{owner, method, descriptor, value_arg}]` — each module type below the interface `owner` declaring the method registers it, keyed by its parameter at `value_arg` (added in Task 2, fix round 1 recorded it here) | the entry matching `dispatch_sends` uses; the bridge rule of the annotation inheritance walk (`effective_annotations._synthesis_target`, OI-47) |
 | A receive site, object key | `dispatch_receives: [{owner, method, descriptor, object: receiver, handler: enclosing \| lambda_arg}]` | the same entry matching |
-| How dispatch works for the catalog | `dispatch: { key: type \| object, match: first \| all \| one }` | — (the one genuinely new setting) |
+| How dispatch works for the catalog | `dispatch: { key: type \| object, match: first \| all \| one, mechanism: <name> }` — `mechanism` (Task 2 fix round 2) names the dispatch mechanism; a key catalog declares `{mechanism}` alone | — (the one genuinely new setting) |
 | The class a key carries (Akka service key) | `channel_via` entries may also name `class_arg`, read from the same producing call in the same walk | `channel_via` (replaces `message_class_via` and its second walk) |
 
 No `message_*` word remains. No word names a framework.
@@ -55,9 +55,11 @@ No `message_*` word remains. No word names a framework.
 - `dispatch_registrations` also carries **`key_object`**: for an object key, the producing call
   `caller#ordinal` of the channel object, from `values.producer_paths(…, which_object=True)` (the
   object-following the Vert.x client reader already uses). NULL for a type key. Still schema 15.
-- …and **`mechanism`** (Task 2 fix round 1): the dispatch mechanism the registration belongs to,
-  the declaring catalog's id family (the word before the first hyphen: `pekko-actor-handlers` and
-  `pekko-receptionist` are `pekko`, `spring-events` is `spring`). A send reaches, and an inbound
+- …and **`mechanism`** (Task 2 fix rounds 1-2): the dispatch mechanism the registration belongs
+  to, the declaring catalog's `dispatch.mechanism` (`pekko-actors`, `akka-actors`,
+  `spring-events`), declared in YAML and never derived: a key catalog (`pekko-receptionist`)
+  declares `dispatch: {mechanism: pekko-actors}`, and the loader refuses a send or key
+  catalog's mechanism no registering catalog names. A send reaches, and an inbound
   key is served by, only registrations of its own catalog's mechanism, so a module running two
   frameworks never has an actor `tell` land on an application-event listener of `Object`, or a
   published event on an actor case. The protocol cannot draw that line (Spring and CDI are both
