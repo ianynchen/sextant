@@ -174,6 +174,10 @@ class ModuleModel:
     # a module it needs failed. None when it was built. A module with a value is skipped
     # with it as the reason, and the other modules go on.
     build_failure: str | None = None
+    # The version or edition name of this module when its folder holds more than one
+    # module (Android design M6): its results go to `<root>/.sextant/<results_name>`.
+    # None when the folder holds only this module, and its results go to `<root>/.sextant`.
+    results_name: str | None = None
 
 
 @dataclass(frozen=True)

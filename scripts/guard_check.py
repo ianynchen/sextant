@@ -1415,6 +1415,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "api.modules-sharing-a-FOLDER-keep-results-in-SUB-FOLDERS": Guard(
+        what="a module whose folder holds more than one module keeps its results in "
+        "`<folder>/.sextant/<results_name>`",
+        why="two modules from one folder (a Kotlin Multiplatform part's versions, an Android "
+        "app's editions) wrote into one `.sextant` and the second overwrote the first "
+        "(Android design M6, Android outbound Task 3)",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find='    if results_name is not None:\n        return path / ".sextant" / results_name\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n        pass\n",
+            ),
+        ),
+    ),
     "render.the-document-SAYS-how-many-named-types-the-header-read-found": Guard(
         what="the coverage section carries one line: dependency types named, headers read, "
         "in no archive, and who answered for the classpath",
@@ -3668,7 +3682,7 @@ GUARDS: dict[str, Guard] = {
             Edit(
                 path="sextant/api.py",
                 find="            redactor = redactor.union("
-                "_redactor_for(participant.location.parent.parent))\n",
+                "_redactor_for(module_roots[participant.location]))\n",
                 replace="            redactor = redactor  # guard disabled\n",
             ),
         ),

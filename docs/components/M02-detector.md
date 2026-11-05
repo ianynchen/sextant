@@ -28,7 +28,8 @@ Two forms of the same conclusions.
 **The `RepositoryModel`**, in memory, for [M03](M03-scanner.md) in the same run.
 
 **`<repo-root>/.sextant/modules.json`** — the module inventory: ids, paths, kinds,
-languages, workspace locations, per-module commits ([D05](D05-manifest-and-state.md)).
+languages, workspace locations (`results`, Android design M6), per-module commits
+([D05](D05-manifest-and-state.md)).
 Written once per invocation; read by `module list`, by `--refresh-stale` orchestration, and
 by anything needing to find every workspace in one hop.
 

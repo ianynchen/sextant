@@ -278,11 +278,18 @@ class AnalyzeOptions:
 class ModuleOutcome:
     """One module's own row in an `AnalyzeResult` — the same information
     `modules.json` records for a reactor's own walk (`dir`, `module_id`,
-    `kind`, `analyzed`, `skip_reason`), plus `endpoints`: the count
+    `kind`, `analyzed`, `skip_reason`, `results`), plus `endpoints`: the count
     `analyze` found, or `None` for a module that was skip-listed rather than
     analyzed. A true single-module `analyze` (no `<modules>` reactor at
     `path`) still returns exactly one of these — the facade never special-
-    cases "one module" the way the CLI's own JSON-only line does."""
+    cases "one module" the way the CLI's own JSON-only line does.
+
+    `results` is the module's results folder, relative to the reactor root
+    (Android design M6): `core/.sextant`, or `core/.sextant/jvm` where the
+    folder holds more than one module. A reactor walk sets it on every row,
+    because `modules.json` records it. A single-module run writes no
+    `modules.json` and leaves it `None`. Last and defaulted, so a caller that
+    builds one by position keeps working."""
 
     dir: str
     module_id: str
@@ -290,6 +297,7 @@ class ModuleOutcome:
     analyzed: bool
     skip_reason: str | None
     endpoints: int | None
+    results: str | None = None
 
 
 @dataclass(frozen=True)
@@ -483,16 +491,17 @@ def _scanners() -> list[AsmScanner]:
 
 
 def _module_json_row(outcome: ModuleOutcome) -> dict[str, object]:
-    """One `modules.json` row — the same five keys the CLI's own
-    `_module_row` wrote before this task, unchanged: `endpoints` is not one
-    of them, since it never was (a committed, read-back artifact stays
-    byte-compatible across this refactor)."""
+    """One `modules.json` row — the five keys the CLI's own `_module_row`
+    wrote, and `results`, the one key the user approved adding (Android
+    design M6): the module's results folder, relative to the repository root,
+    on every row. `endpoints` is not one of them, since it never was."""
     return {
         "dir": outcome.dir,
         "module_id": outcome.module_id,
         "kind": outcome.kind,
         "analyzed": outcome.analyzed,
         "skip_reason": outcome.skip_reason,
+        "results": outcome.results,
     }
 
 
@@ -599,8 +608,69 @@ def _catalog_hash(catalogs: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def _workspace_dir_of(path: Path, workspace_dir: Path | None) -> Path:
-    return workspace_dir or (path / ".sextant")
+def _workspace_dir_of(
+    path: Path, workspace_dir: Path | None, results_name: str | None = None
+) -> Path:
+    """Where the results of the module at `path` go — the one place that states the
+    layout (Android design M6). `workspace_dir` when the caller gives one
+    (`--workspace`). Else `<path>/.sextant/<results_name>` for a module whose folder
+    holds more than one module, and `<path>/.sextant` for a module alone in its folder."""
+    if workspace_dir is not None:
+        return workspace_dir
+    if results_name is not None:
+        return path / ".sextant" / results_name
+    return path / ".sextant"
+
+
+def _results_of(root: Path, entry: Mapping[str, object]) -> Path:
+    """The results folder of one `modules.json` row, for the repository at `root`
+    (Android design M6): the row's `results`, which is relative to `root`. A row
+    without it was written before the key existed, and means `<dir>/.sextant`."""
+    results = entry.get("results")
+    if results:
+        return root / str(results)
+    return _workspace_dir_of(root / str(entry.get("dir") or ""), None)
+
+
+def _modules_sharing(workspace_dir: Path) -> list[tuple[str, Path]]:
+    """The modules whose results are in sub-folders of `workspace_dir`, as
+    `(module id, results folder)` sorted by id — empty where `workspace_dir`
+    holds one module's results itself, or none (Android design M6). A
+    single-module command at a folder of several modules uses this to name each
+    one; it never picks one."""
+    if (workspace_dir / "workspace.duckdb").is_file() or not workspace_dir.is_dir():
+        return []
+    found = []
+    for results in sorted(workspace_dir.iterdir()):
+        if not (results / "workspace.duckdb").is_file():
+            continue
+        try:
+            metadata = json.loads((results / "metadata.json").read_text(encoding="utf-8"))
+            module_id = str(metadata["module"]["id"])
+        except (OSError, ValueError, KeyError, TypeError):
+            # An analysis that did not finish writing: its folder name identifies it.
+            module_id = results.name
+        found.append((module_id, results))
+    return sorted(found)
+
+
+def _refuse_if_shared(
+    path: Path, workspace_dir: Path, how: Callable[[Path], str], then: str = ""
+) -> None:
+    """Refuses a single-module command at a folder that holds several modules'
+    results (Android design M6). It names each module with `how(results folder)`,
+    the way to give that module to this command, and adds `then` after the list."""
+    sharing = _modules_sharing(workspace_dir)
+    if sharing:
+        listed = ", ".join(f"{module_id} ({how(results)})" for module_id, results in sharing)
+        raise NotAnalyzedError(f"{path} holds {len(sharing)} modules: {listed}{then}")
+
+
+def _refuse_if_shared_folder(path: Path) -> None:
+    """The refusal of `_refuse_if_shared` for a command that takes a results folder
+    itself (`diff`, `observability`): `path` is the module folder or its `.sextant`."""
+    for folder in (path, _workspace_dir_of(path, None)):
+        _refuse_if_shared(path, folder, str, " — pass the results folder itself")
 
 
 def _stale_stamps(metadata: dict[str, Any]) -> tuple[str, ...]:
@@ -671,6 +741,7 @@ def _refuse_if_unanalyzed(path: Path, workspace_dir: Path) -> None:
                 f"vintage from this one — re-run `sextant module analyze {path}`."
             )
         return
+    _refuse_if_shared(path, workspace_dir, lambda results: f"--workspace {results}")
     modules_path = _modules_json_path(path)
     if modules_path.is_file():
         modules = json.loads(modules_path.read_text(encoding="utf-8"))["modules"]
@@ -840,15 +911,20 @@ def _analyze_reactor(
     outcomes: list[ModuleOutcome] = []
     for module in model.modules:
         relative_dir = _root_relative(path, module.root)
+        # Several modules can come from one folder (Android design M6), so each row names
+        # its results folder, a skipped module's too.
+        workspace_dir = _workspace_dir_of(module.root, None, module.results_name)
+        results = Path(_root_relative(path, workspace_dir)).as_posix()
         reason = _skip_reason(module)
         if reason is not None:
             if on_module is not None:
                 on_module(f"skipped {relative_dir} ({module.module_id}): {reason}")
             outcomes.append(
-                ModuleOutcome(relative_dir, module.module_id, module.kind, False, reason, None)
+                ModuleOutcome(
+                    relative_dir, module.module_id, module.kind, False, reason, None, results
+                )
             )
             continue
-        workspace_dir = _workspace_dir_of(module.root, None)
         try:
             stage_result = _run_analyze(
                 module.root,
@@ -885,7 +961,9 @@ def _analyze_reactor(
                 f"analyzed {relative_dir} ({module.module_id}): {endpoints} endpoints{recorded}"
             )
         outcomes.append(
-            ModuleOutcome(relative_dir, module.module_id, module.kind, True, None, endpoints)
+            ModuleOutcome(
+                relative_dir, module.module_id, module.kind, True, None, endpoints, results
+            )
         )
 
     outcomes.sort(key=lambda outcome: outcome.dir)
@@ -950,7 +1028,7 @@ def _analyze(
     reason = _skip_reason(module)
     if reason is not None:
         raise DetectionError(f"{path} ({module.module_id}) is not analyzed: {reason}")
-    resolved_workspace_dir = _workspace_dir_of(path, workspace_dir)
+    resolved_workspace_dir = _workspace_dir_of(path, workspace_dir, module.results_name)
     stage_result = _run_analyze(
         path,
         module,
@@ -1766,11 +1844,17 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
     entries = cast(
         list[dict[str, Any]], json.loads(modules_json.read_text(encoding="utf-8"))["modules"]
     )
+    # The module folder of each participant that has a workspace, by workspace: its
+    # `.sextant.yml` names that participant's redaction rules. Kept apart from the
+    # workspace path because a results folder can be a sub-folder of `.sextant` (M6).
+    module_roots: dict[Path, Path] = {}
     for entry in entries:
         module_root = root / str(entry.get("dir") or "")
-        candidate = module_root / ".sextant" / "workspace.duckdb"
+        candidate = _results_of(root, entry) / "workspace.duckdb"
         entry["location"] = candidate if candidate.exists() else None
         entry["commit_id"] = _module_commit_of(module_root) if candidate.exists() else None
+        if candidate.exists():
+            module_roots[candidate] = module_root
     participants = _participants_of(entries)
     # A participant's workspace written by a different build is refused, by the stamps
     # `render` refuses a module's own by (`_stale_stamps`, OI-24): its derived rows are
@@ -1804,7 +1888,7 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
     redactor = _redactor_for(root)
     for participant in participants:
         if participant.present and participant.location is not None:
-            redactor = redactor.union(_redactor_for(participant.location.parent.parent))
+            redactor = redactor.union(_redactor_for(module_roots[participant.location]))
 
     system_dir = root / ".sextant"
     system_dir.mkdir(parents=True, exist_ok=True)
@@ -1951,14 +2035,19 @@ def _side_redactor(path: Path, side: BoundarySource) -> Redactor:
     if side.is_bundle:
         return Redactor.from_rules()
     root = side.module_root
-    if root is None or _workspace_dir_of(root, None).resolve() not in (
-        path.resolve(),
-        (path / ".sextant").resolve(),
+    # A results sub-folder (`<module>/.sextant/<name>`, Android design M6) is one level
+    # deeper: its module is the folder that holds that `.sextant`.
+    if root is not None and root.name == ".sextant":
+        root = root.parent
+    if root is None or path.resolve() not in (
+        root.resolve(),
+        _workspace_dir_of(root, None).resolve(),
+        _workspace_dir_of(root, None, path.name).resolve(),
     ):
         raise DiffRefusedError(
             f"cannot diff {path}: it is a workspace outside its module's `.sextant` "
             "directory, so which `.sextant.yml` names its redaction rules is unknown — "
-            "diff `<module>` or `<module>/.sextant`"
+            "diff `<module>`, `<module>/.sextant` or `<module>/.sextant/<name>`"
         )
     return _redactor_for(root)
 
@@ -1993,6 +2082,9 @@ def diff(
             try:
                 sources.append(BoundarySource.open(path, open_read_only))
             except NotABoundarySource as refused:
+                # `diff` takes a results folder, not `--workspace`, so a folder of several
+                # modules names each results folder to give it (Android design M6).
+                _refuse_if_shared_folder(path)
                 raise NotAnalyzedError(
                     f"cannot diff {path}: {refused.looked_for} — analyze the module "
                     f"(`sextant module analyze`), or export the bundle again with this Sextant."
@@ -2033,11 +2125,14 @@ def observability(path: Path) -> ObservabilityMap:
     if (path / "manifest.json").is_file():
         document = path / "manifest.json"
     else:
-        found = [one / "metadata.json" for one in (path, path / ".sextant")]
+        found = [one / "metadata.json" for one in (path, _workspace_dir_of(path, None))]
         document = next((one for one in found if one.is_file()), found[0])
     try:
         recorded = json.loads(document.read_text(encoding="utf-8"))
     except (OSError, ValueError) as refused:
+        # Like `diff`, this takes a results folder: a folder of several modules names
+        # each one (Android design M6).
+        _refuse_if_shared_folder(path)
         raise NotAnalyzedError(
             f"no analysis found at {path} — run `sextant module analyze {path}` first."
         ) from refused
