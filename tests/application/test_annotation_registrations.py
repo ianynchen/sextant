@@ -77,9 +77,11 @@ def _method(
     *,
     synthetic: bool = False,
     annotated: dict[int, str] | None = None,
+    typed: dict[int, TypeRef] | None = None,
 ) -> SymbolFact:
-    """A `void` method of `owner` taking `parameters` (type symbols), as javac declares it;
-    `annotated` maps a parameter's index to the annotation it carries."""
+    """A `void` method of `owner` taking `parameters` (type symbols, the erasures), as javac
+    declares it; `annotated` maps a parameter's index to the annotation it carries, `typed` to
+    the signature's type where it is not the erasure (a type variable, type arguments)."""
     descriptor = "(" + "".join(f"L{p.removesuffix('#')};" for p in parameters) + ")V"
     return SymbolFact(
         document_id="doc_1",
@@ -90,7 +92,7 @@ def _method(
             parameters=[
                 Parameter(
                     name=f"p{i}",
-                    type=TypeRef(symbol=p),
+                    type=(typed or {}).get(i, TypeRef(symbol=p)),
                     erased_symbol=p,
                     annotations=[AnnotationUse(annotation=(annotated or {})[i], args={})]
                     if i in (annotated or {})
@@ -337,6 +339,58 @@ def test_an_implementation_is_keyed_by_the_method_its_bridge_forwards_to(tmp_pat
         _method(_LISTENER, "onApplicationEvent", (_APPLICATION_EVENT,), synthetic=True),
     ]
     assert _rows(tmp_path, facts) == [("onApplicationEvent", 0, _PLACED, "all", True)]
+
+
+_BASE = "com/acme/shop/Base#"
+_GENERIC = "com/acme/shop/Envelope#"
+_OBJECT = "java/lang/Object#"
+
+
+@pytest.mark.pins("dispatch-registrations.a-GENERIC-parameter-is-KEYLESS")
+def test_a_generic_base_implementation_is_kept_keyless(tmp_path: Path):
+    """`abstract class Base<E extends ApplicationEvent> implements ApplicationListener<E>` with
+    `onApplicationEvent(E)`: javac writes the bound, `ApplicationEvent`, and no bridge, but the
+    framework dispatches by the type each subclass binds `E` to. Keyed by the erasure it would
+    receive every event, false hops; kept with no key (missing, never false)."""
+    facts = [
+        _class(_BASE, (_APPLICATION_LISTENER,)),
+        _method(_BASE, "onApplicationEvent", (_APPLICATION_EVENT,), typed={0: TypeRef(symbol="E")}),
+    ]
+    assert _rows(tmp_path, facts) == [("onApplicationEvent", 0, None, "all", True)]
+
+
+@pytest.mark.pins("dispatch-registrations.a-GENERIC-parameter-is-KEYLESS")
+def test_a_type_variable_or_parameterized_listener_is_kept_keyless(tmp_path: Path):
+    """`@EventListener on(T e)` erases to `Object` and `@EventListener on(Envelope<OrderPlaced>
+    e)` to `Envelope`; the framework matches the resolved or parameterized type, so either
+    erasure would reach events it never delivers. Both kept with no key, as CDI's are; a plain
+    `on(OrderPlaced e)` beside them keeps its key."""
+    variable = _method(_LISTENER, "onVariable", (_OBJECT,), typed={0: TypeRef(symbol="T")})
+    parameterized = _method(
+        _LISTENER,
+        "onEnvelope",
+        (_GENERIC,),
+        typed={0: TypeRef(symbol=_GENERIC, arguments=[TypeRef(symbol=_PLACED)])},
+    )
+    plain = _method(_LISTENER, "onPlaced", (_PLACED,))
+    facts = [_class(_LISTENER)]
+    for method in (variable, parameterized, plain):
+        facts += [method, _annotated(method, _EVENT_LISTENER)]
+    assert _rows(tmp_path, facts) == [
+        ("onEnvelope", 0, None, "all", True),
+        ("onPlaced", 0, _PLACED, "all", True),
+        ("onVariable", 0, None, "all", True),
+    ]
+
+
+@pytest.mark.pins("dispatch-registrations.a-GENERIC-parameter-is-KEYLESS")
+def test_a_type_variable_observed_type_is_kept_keyless(tmp_path: Path):
+    """`on(@Observes T e)` in a generic class: CDI resolves the observed type per bean, so its
+    erasure, `Object`, would reach every event. Kept with no key."""
+    on = _method(
+        _LISTENER, "on", (_OBJECT,), annotated={0: _OBSERVES}, typed={0: TypeRef(symbol="T")}
+    )
+    assert _rows(tmp_path, [_class(_LISTENER), on], "cdi-events") == [("on", 0, None, "all", True)]
 
 
 @pytest.mark.pins("dispatch-implementations.an-UNREAD-implementation-is-KEPT")

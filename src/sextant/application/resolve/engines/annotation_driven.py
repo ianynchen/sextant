@@ -7,6 +7,7 @@ parameters. No framework name appears in this module's code.
 """
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -235,12 +236,26 @@ def _meta_annotated_types(workspace: Workspace, markers: frozenset[str]) -> froz
     )
 
 
+def generic_parameter(parameter: Mapping[str, Any]) -> bool:
+    """Whether a parameter's declared type is generic: it carries type ARGUMENTS
+    (`List<String>`), or it is a type VARIABLE (`T`, whose signature symbol is not its erasure,
+    D00 §5a). A framework dispatching to it matches the parameterized or the bound type, never
+    the erasure, so a registration keyed by the erasure would reach values it never receives:
+    every registration reader keeps such a parameter with no key (missing, never false; ruled
+    2026-11-05, final review m-1)."""
+    declared = parameter.get("type") or {}
+    erased = parameter.get("erased_symbol")
+    return bool(declared.get("arguments")) or (
+        erased is not None and declared.get("symbol") not in (None, erased)
+    )
+
+
 def _parameter_key(parameter: dict[str, Any], marked: frozenset[str]) -> str | None:
-    """The key a selected parameter gives: its erased type, or None where the type carries type
-    arguments or the parameter carries an annotation of a `marked` type — the framework then
-    matches more than the erasure, and a key would reach what it never notifies (missing,
-    never false)."""
-    if (parameter.get("type") or {}).get("arguments"):
+    """The key a selected parameter gives: its erased type, or None where the type is generic
+    (`generic_parameter`) or the parameter carries an annotation of a `marked` type — the
+    framework then matches more than the erasure, and a key would reach what it never notifies
+    (missing, never false)."""
+    if generic_parameter(parameter):
         return None
     if any(
         bare_descriptor(str(use["annotation"])) in marked
@@ -269,7 +284,8 @@ def _erased_type(parameter: dict[str, Any]) -> str | None:
 
 def _payload_type(declaration: dict[str, Any], catalog: Catalog) -> str | None:
     """The type of the parameter the catalog's `request_body` rule picks (D02 §2), the
-    descriptor's answer (the class a value is dispatched by), or None where it picks none."""
+    descriptor's answer (the class a value is dispatched by), or None where it picks none or
+    the type is generic (`generic_parameter`)."""
     signature = declaration["signature"] or {}
     found = _body_parameter(
         signature,
@@ -279,7 +295,7 @@ def _payload_type(declaration: dict[str, Any], catalog: Catalog) -> str | None:
         index={},
         members={},
     )
-    if found is None:
+    if found is None or generic_parameter(found[1]):
         return None
     return _erased_type(found[1])
 

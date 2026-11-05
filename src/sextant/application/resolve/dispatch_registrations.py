@@ -430,7 +430,10 @@ def _implementation_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dic
     applies to a mapping found through a bridge (`effective_annotations._synthesis_target`,
     OI-47: the same class's one same-name, same-arity method not synthetic); where that is
     not exactly one method, or the method has no parameter at `value_arg`, the row is kept
-    with no key (it matches nothing, never every value), as an unread annotated method is. A type inheriting the method
+    with no key (it matches nothing, never every value), as an unread annotated method is; so
+    is a method whose parameter is generic (`annotation_driven.generic_parameter`: a base
+    class's `onApplicationEvent(E)`, which the framework dispatches by each subclass's binding
+    of `E`, never by its erasure). A type inheriting the method
     rather than declaring it writes nothing: the type declaring it is below `owner` too.
 
     Cost (GUIDELINES §8.7): one read of `method_declarations` per resolve (cached), then a
@@ -453,7 +456,10 @@ def _implementation_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dic
             key = None
             if entry["value_arg"] < len(parameters):
                 parameter = parameters[entry["value_arg"]]
-                key = parameter.get("erased_symbol") or (parameter.get("type") or {}).get("symbol")
+                if not annotation_driven.generic_parameter(parameter):
+                    key = parameter.get("erased_symbol") or (parameter.get("type") or {}).get(
+                        "symbol"
+                    )
             # A bridge forwarding to no ONE method, or a method with no parameter at
             # `value_arg`, is still a registration: kept with no key, so it matches nothing,
             # its handler the method the join found (the one the framework calls).

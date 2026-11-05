@@ -8011,8 +8011,22 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_ANNOTATION_DRIVEN,
-                find='    if (parameter.get("type") or {}).get("arguments"):\n',
-                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+                find='    return bool(declared.get("arguments")) or (\n',
+                replace="    return (  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-registrations.a-GENERIC-parameter-is-KEYLESS": Guard(
+        what="a registration parameter whose type is a type variable or carries type arguments "
+        "keeps its row with no key, for every registration kind",
+        why="final review m-1: `Base<E> implements ApplicationListener<E>` erases to "
+        "`ApplicationEvent` and `@EventListener on(T e)` to `Object`; keyed by the erasure each "
+        "receives every event, false hops",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='    return bool(declared.get("arguments")) or (\n',
+                replace="    return False and (  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
