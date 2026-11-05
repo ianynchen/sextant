@@ -455,9 +455,14 @@ def test_a_parameter_selector_that_is_not_a_list_of_names_is_refused(tmp_path: P
     absent."""
     directory = _catalog_file(
         tmp_path,
+        "bean_model: di\n"
         "matches:\n  mapping: { selected_by_parameter: a.Observes,\n"
         "             prefix_from: [], all_methods: [], prefix_annotation: null,\n"
         "             annotations: [] }\n",
+    )
+    (directory / "bean-models").mkdir()
+    (directory / "bean-models" / "di.yml").write_text(
+        "id: di\nqualifier_meta_annotations: [a.Qualifier]\n", encoding="utf-8"
     )
     [catalog] = YamlCatalogSource(directory).load()
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
@@ -468,21 +473,52 @@ def test_a_parameter_selector_that_is_not_a_list_of_names_is_refused(tmp_path: P
         workspace.close()
 
 
-@pytest.mark.pins("annotation-registrations.a-NON-LIST-annotation-word-is-refused")
-def test_a_keyless_marker_that_is_not_a_list_of_names_is_refused(tmp_path: Path):
-    """`keyless_when_meta_annotated` is a list of annotation names, refused otherwise: a bare
-    string would mark nothing, and every qualified observer would keep a false key."""
+@pytest.mark.pins("bean-models.a-MALFORMED-qualifier-marker-is-refused-at-LOAD")
+def test_a_qualifier_marker_that_is_not_a_list_of_names_is_refused(tmp_path: Path):
+    """The DI bean model's `qualifier_meta_annotations` is a list of annotation names, refused
+    at load otherwise, naming the model's file: a bare string would mark nothing, and every
+    qualified observer would keep a false key."""
     directory = _catalog_file(
         tmp_path,
+        "bean_model: di\n"
         "matches:\n  mapping: { selected_by_parameter: [a.Observes],\n"
-        "             keyless_when_meta_annotated: a.Qualifier,\n"
         "             prefix_from: [], all_methods: [], prefix_annotation: null,\n"
         "             annotations: [] }\n",
     )
-    [catalog] = YamlCatalogSource(directory).load()
-    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
-    try:
-        with pytest.raises(CatalogError, match="keyless_when_meta_annotated"):
-            record_dispatch_registrations(workspace, [catalog])
-    finally:
-        workspace.close()
+    (directory / "bean-models").mkdir()
+    (directory / "bean-models" / "di.yml").write_text(
+        "id: di\nqualifier_meta_annotations: a.Qualifier\n", encoding="utf-8"
+    )
+    with pytest.raises(CatalogError, match="di.yml.*qualifier_meta_annotations"):
+        YamlCatalogSource(directory).load()
+
+
+@pytest.mark.pins(
+    "annotation-registrations.a-PARAMETER-selector-NAMES-a-bean-model-with-QUALIFIERS"
+)
+def test_a_parameter_selector_naming_no_qualifiers_is_refused_at_load(tmp_path: Path):
+    """Which annotations qualify an observed parameter is the container's knowledge (D02 §1c),
+    so a catalog selecting observers by a parameter annotation names a bean model declaring its
+    qualifiers. One naming none is refused at load: without them every qualified observer
+    would be keyed, a false hop for each unqualified send of its class."""
+    directory = _catalog_file(
+        tmp_path,
+        "matches:\n  mapping: { selected_by_parameter: [a.Observes],\n"
+        "             prefix_from: [], all_methods: [], prefix_annotation: null,\n"
+        "             annotations: [] }\n",
+    )
+    with pytest.raises(CatalogError, match="events.yml.*bean_model"):
+        YamlCatalogSource(directory).load()
+
+
+def test_the_cdi_catalogs_read_their_qualifiers_from_the_cdi_bean_model():
+    """The qualifier marker is declared once, in the DI bean model the CDI catalogs name, and
+    no catalog spells it."""
+    catalogs = {catalog.id: catalog for catalog in YamlCatalogSource(catalogs_dir()).load()}
+    for catalog_id in ("cdi-events", "cdi-async-events"):
+        catalog = catalogs[catalog_id]
+        assert catalog.bean_model["qualifier_meta_annotations"] == [
+            "jakarta.inject.Qualifier",
+            "javax.inject.Qualifier",
+        ]
+        assert "keyless_when_meta_annotated" not in catalog.matches["mapping"]

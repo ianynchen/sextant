@@ -7928,10 +7928,9 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "annotation-registrations.a-NON-LIST-annotation-word-is-refused": Guard(
-        what="`selected_by_parameter` or `keyless_when_meta_annotated` that is not a list of "
-        "annotation names is refused",
+        what="`selected_by_parameter` that is not a list of annotation names is refused",
         why="a bare string iterates as its characters, which name nothing: the catalog's "
-        "observers would be silently absent, or its qualified observers silently keyed",
+        "observers would be silently absent",
         edits=(
             Edit(
                 path=_ANNOTATION_DRIVEN,
@@ -7953,8 +7952,48 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "annotation-registrations.a-PARAMETER-selector-NAMES-a-bean-model-with-QUALIFIERS": Guard(
+        what="a catalog selecting observers by a parameter annotation and naming no bean model "
+        "declaring `qualifier_meta_annotations` is refused at load",
+        why="final review I-2: qualifier-ness is the container's (D02 §1c). A CDI catalog that "
+        "forgot its bean model would key every qualified observer, a false hop for each "
+        "unqualified fire of its class",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find='        and not model.get("qualifier_meta_annotations")\n',
+                replace="        and False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "bean-models.a-MALFORMED-qualifier-marker-is-refused-at-LOAD": Guard(
+        what="a bean model's `qualifier_meta_annotations` that is not a non-empty list of names "
+        "is refused at load",
+        why="a bare string iterates as its characters and marks nothing: every qualified "
+        "observer would be silently keyed",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find="            not isinstance(markers, list)\n",
+                replace="            False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-dispatch-catalog-with-NO-PROTOCOL-is-refused-at-LOAD": Guard(
+        what="a catalog declaring `dispatch` and no `protocol` is refused at load",
+        why="final review m-12: every hop and key row is written under the protocol; refused "
+        "only when the hops are written, a catalog typo surfaces as a resolve failure",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find='    if ("dispatch_sends" in blocks or delivering) and not raw.get("protocol"):\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "annotation-registrations.ONLY-a-QUALIFIER-makes-an-observer-KEYLESS": Guard(
-        what="only an annotation type meta-annotated by a declared marker makes an observer keyless",
+        what="only an annotation type meta-annotated by the bean model's qualifier marker makes "
+        "an observer keyless",
         why="review M1: `@Observes @Priority(10) E` is common and `@Priority` qualifies nothing. "
         "Read as a qualifier, the observer loses every hop it really has",
         edits=(

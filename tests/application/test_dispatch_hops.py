@@ -462,6 +462,22 @@ def test_a_malformed_send_is_refused_at_load(tmp_path: Path, entry: str, refused
         YamlCatalogSource(_catalog_file(tmp_path, entry)).load()
 
 
+@pytest.mark.pins("dispatch-hops.a-dispatch-catalog-with-NO-PROTOCOL-is-refused-at-LOAD")
+def test_a_dispatch_catalog_with_no_protocol_is_refused_at_load(tmp_path: Path):
+    """Every hop a catalog's sends give is written under its `protocol`: one declaring sends and
+    no protocol is refused when it is loaded, naming the file, never later by the pass that
+    writes the hops."""
+    (tmp_path / "sends.yml").write_text(
+        "id: sends\ndisplayName: sends\nstyle: fluent\n"
+        "dispatch: {key: type, match: first, mechanism: m}\n"
+        "requires: [call_site, chain_reconstruction]\n"
+        "matches:\n  roots: []\n  steps: []\n  terminal: [build]\n  dispatch_sends:\n"
+        "    - { owner: a.Ref, method: tell, descriptor: '(Ljava/lang/Object;)V', value_arg: 0 }\n"
+    )
+    with pytest.raises(CatalogError, match="sends.yml.*protocol"):
+        YamlCatalogSource(tmp_path).load()
+
+
 def test_a_send_is_loaded_with_its_value_position(tmp_path: Path):
     _registering(tmp_path)
     [catalog] = [

@@ -160,15 +160,20 @@ def test_each_observer_belongs_to_the_mechanism_of_its_annotation(tables):
 
 
 def test_an_unread_event_class_is_a_stop(tables, analyzed: Path):
-    """`events.fire(event)` with `event` a parameter: its class is not read here, so the hop is
-    one stop with no path and no handler, never a hop to every observer."""
-    assert _hops_from(tables, "ShippingService#refire") == {("in_process", None, None)}
+    """`events.fire(pending[0])`: no call, parameter or field produces the value, so its class
+    is not read here, and the hop is one stop with no path and no handler, never a hop to every
+    observer. `events.fire(event)`, `event` a parameter declared `Object`, is read by that
+    declared type: the observer of `Object` is certainly notified, and only it."""
+    assert _hops_from(tables, "ShippingService#refireFirst") == {("in_process", None, None)}
+    assert _hops_from(tables, "ShippingService#refire") == {
+        ("in_process", "Object", "AnyObserver#on")
+    }
     workspace = DuckDbWorkspace(analyzed)
     try:
         [refire] = [
             str(row["method"])
             for row in workspace.query("method_returns")
-            if "ShippingService#refire(" in str(row["method"])
+            if "ShippingService#refireFirst(" in str(row["method"])
         ]
         trace = trace_of(workspace, Root(handler=refire, kind=RootKind.INBOUND_ENDPOINT))
     finally:

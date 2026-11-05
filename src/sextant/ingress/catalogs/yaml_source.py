@@ -539,7 +539,7 @@ class YamlCatalogSource:
                     resolves=raw.get("resolves", {}),
                     # D02 §1c — the bean model's mapping, resolved above the
                     # way `shape_model` is; `{}` for a catalog naming none.
-                    bean_model=_named_model(raw, "bean_model", bean_models, path) or {},
+                    bean_model=_bean_model_of(raw, bean_models, path),
                     # D02 §1f — the source's own identity table, built above.
                     value_model=identities,
                     not_hand_offs=not_hand_offs,
@@ -1032,13 +1032,38 @@ def _named_model(
     return models[named]
 
 
+def _bean_model_of(
+    raw: dict[str, Any], models: dict[str, dict[str, Any]], path: Path
+) -> dict[str, Any]:
+    """The bean model the catalog names (`{}` for none), refused where the catalog selects
+    observers by a parameter annotation (`mapping.selected_by_parameter`, spec 2026-11-05 §2)
+    and the model declares no `qualifier_meta_annotations`: which annotations qualify an
+    observed parameter is the container's knowledge (D02 §1c), and without it every qualified
+    observer would be keyed, a false hop for each unqualified send of its class."""
+    model = _named_model(raw, "bean_model", models, path) or {}
+    matches = raw.get("matches")
+    mapping = matches.get("mapping") if isinstance(matches, dict) else None
+    if (
+        isinstance(mapping, dict)
+        and mapping.get("selected_by_parameter") is not None
+        and not model.get("qualifier_meta_annotations")
+    ):
+        raise CatalogError(
+            f"loading catalog {path}: it selects observers by a parameter annotation "
+            f"(`mapping.selected_by_parameter`) and names no `bean_model` declaring "
+            f"`qualifier_meta_annotations`; a qualified observer is kept with no key, and "
+            f"which annotations qualify is the container's (D02 §1c)"
+        )
+    return model
+
+
 _CONDITION_KINDS = ("profile", "property", "other")
 
 
 def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
     """Refuses a malformed `conditions` or `presence` block of a bean model — or a malformed
     `stereotypes` / `configuration_annotation` / `stereotype_name_attrs` /
-    `interface_registrations` — naming the file
+    `interface_registrations` / `qualifier_meta_annotations` — naming the file
     (spec 2026-10-22 conditional-beans §2a). What the resolve pass reads from them is a
     framework rule, so every entry carries the probe that measured it (`by:`): a rule nobody
     measured is a guess, and a typo here would silently strip every bean of its condition."""
@@ -1122,6 +1147,19 @@ def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
             raise CatalogError(
                 f"{where}: `stereotype_name_attrs` must map each annotation name to one "
                 f"attribute, got {naming!r}"
+            )
+    # Which annotations make another a qualifier (spec 2026-11-05 §4 item 6): a bare string would
+    # iterate as its characters and mark nothing, every qualified observer silently keyed.
+    if "qualifier_meta_annotations" in raw:
+        markers = raw["qualifier_meta_annotations"]
+        if (
+            not isinstance(markers, list)
+            or not markers
+            or not all(isinstance(name, str) and name for name in markers)
+        ):
+            raise CatalogError(
+                f"{where}: `qualifier_meta_annotations` must be a non-empty list of annotation "
+                f"names, got {markers!r}"
             )
     # Interfaces the framework registers and implements at run time (CP-46): a malformed entry
     # would leave every such interface without a route, its calls reading as unanswered.
@@ -1919,6 +1957,17 @@ def _dispatch(raw: dict[str, Any], path: Path) -> dict[str, str] | None:
         raise CatalogError(
             f"{where}: `dispatch` names no `mechanism`; a send, a registration or a key is "
             f"matched only within its mechanism (spec 2026-11-05 §2), got {declared!r}"
+        )
+    # Every hop a send or a delivering handler gives is written under the catalog's protocol:
+    # refused here, by file, rather than by the pass that writes the hops.
+    registrations = matches.get("dispatch_registrations") if isinstance(matches, dict) else None
+    delivering = isinstance(registrations, list) and any(
+        isinstance(entry, dict) and entry.get("returns_value") is True for entry in registrations
+    )
+    if ("dispatch_sends" in blocks or delivering) and not raw.get("protocol"):
+        raise CatalogError(
+            f"{where}: it declares dispatch sends or delivering handlers and no `protocol`, "
+            f"which every hop it gives is written under (spec 2026-11-04 §3c)"
         )
     if set(declared) == {"mechanism"} and keyed and not blocks:
         return {"mechanism": mechanism}

@@ -1156,7 +1156,7 @@ def test_a_dispatch_block_under_the_other_key_is_refused(
 def test_receives_and_sends_load_under_an_object_key(tmp_path: Path):
     """The paired positive: `key: object` with sends and receives loads."""
     (tmp_path / "c.yml").write_text(
-        "id: c\nstyle: fluent\ndispatch: {key: object, match: one, mechanism: m}\nmatches:\n"
+        "id: c\nstyle: fluent\nprotocol: in_process\ndispatch: {key: object, match: one, mechanism: m}\nmatches:\n"
         + _RECEIVE
         + "  dispatch_sends:\n"
         "    - { owner: a.Queue, method: put, descriptor: '(Ljava/lang/Object;)V', value_arg: 0 }\n",
@@ -1168,7 +1168,7 @@ def test_receives_and_sends_load_under_an_object_key(tmp_path: Path):
 
 def test_a_registration_is_loaded_with_its_positions(tmp_path: Path):
     (tmp_path / "c.yml").write_text(
-        "id: c\nstyle: fluent\ndispatch: {key: type, match: first, mechanism: m}\nmatches:\n  dispatch_registrations:\n"
+        "id: c\nstyle: fluent\nprotocol: actor\ndispatch: {key: type, match: first, mechanism: m}\nmatches:\n  dispatch_registrations:\n"
         "    - { owner: a.B, method: handle, descriptor: '(Ljava/lang/Class;Ljava/lang/Object;)V', "
         "class_arg: 0, handler_arg: 1, returns_value: true }\n",
         encoding="utf-8",

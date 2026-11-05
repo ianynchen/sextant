@@ -457,8 +457,9 @@ channel_types:                               # exact membership — the channel 
 annotations Spring consults when it registers one, and how a bean is named. It is the
 container's knowledge and not any one catalog's, so it sits beside `@Bean` and `@Qualifier`
 and is read by ONE resolve pass (`resolve/bean_conditions.py`) for every bean, naming no
-framework in code. The keys, all in `catalogs/bean-models/spring.yml`, each with the probe
-that read the framework's rule off its jar (`by:`):
+framework in code. The keys, all in `catalogs/bean-models/spring.yml` but the last (CDI's,
+in `catalogs/bean-models/cdi.yml`), each with the probe that read the framework's rule off its
+jar (`by:`):
 
 | Key | Holds | Probe |
 |---|---|---|
@@ -467,6 +468,7 @@ that read the framework's rule off its jar (`by:`):
 | `stereotype_name_attrs` | for each stereotype, the attribute that names the bean — `value` on six, `name` on the two advice annotations, whose `value` aliases `basePackages`. A scanned class naming none is called by its simple name uncapitalised | CP-44 row 6 |
 | `conditions` | `profile: {annotation, expressions, by}`, `property: {annotation, prefix, names, having_value, match_if_missing, by}` and `other: {annotations, by}` — the conditions evaluated against configuration, and the ones the analysis names and never evaluates (`@Conditional` and the autoconfigure conditions) | CP-42, CP-43 |
 | `presence` | `@ConditionalOnMissingBean` / `@ConditionalOnBean`: `missing`, `present`, `type_attrs` (`value` and `type`, one set), `name_attrs`, `annotation_attrs` (a separate criterion), `order_reason` (what a loop holding a `missing` condition says), `present_cycle_reason` (what a loop of `present` conditions alone says) | CP-44 rows 1-3 |
+| `qualifier_meta_annotations` | the annotations that make another annotation a QUALIFIER (JSR-330's `@Qualifier`, Jakarta and javax). Read by the dispatch registration reader: an observer whose event parameter also carries a qualifier is kept with no key (§2m). Declared in `catalogs/bean-models/cdi.yml`, which the two CDI event catalogs name; a non-empty list of names, refused at load otherwise | CDI's observer resolution (stated, not probed: CP-59 bounds it) |
 | `interface_registrations` | a list of `{supertypes, annotation, excluded_by, by}`: an interface assignable to a listed supertype, or carrying `annotation` (itself, a meta-annotation, or an interface it extends), and not carrying `excluded_by` itself, is a bean the framework implements at run time (Spring Data repositories) | CP-46 |
 
 The loader (`yaml_source._check_bean_model`) refuses a malformed block, naming the file
@@ -6338,15 +6340,18 @@ matches:
 - **Two shapes keep a parameter-selected registration with no key** (it matches nothing:
   missing, never false), because the framework matches more than the erased type: a parameter
   whose type carries type arguments (`@Observes List<String>`, which a `List<Integer>` does not
-  reach), and a parameter also carrying an annotation whose type is meta-annotated by one of
-  **`mapping.keyless_when_meta_annotated: [<annotation fqn>, …]`** (`jakarta.inject.Qualifier`,
-  `javax.inject.Qualifier`: `@Observes @Named("x") E`, an application's `@Express`). A
-  qualifier is decided by that meta-annotation — a module annotation type's own annotation
-  facts, a library type's `type_header` class-level annotations — never by "any other
-  annotation": `@Observes @Priority(10) E` keeps its key. The fire sites' qualifiers
-  (`@Inject @Express Event<E>`, `select(…)`) are not read, so a qualified observer is reached
-  by no hop even where a matching qualified fire exists (a missing hop; `@Observes @Any E` too,
-  `@Any` being a qualifier). Refused unless a list of names, as `selected_by_parameter` is.
+  reach), and a parameter also carrying a QUALIFIER: an annotation whose type is
+  meta-annotated by one of the catalog's DI bean model's `qualifier_meta_annotations` (§1c;
+  `bean-models/cdi.yml` names `jakarta.inject.Qualifier` and `javax.inject.Qualifier`:
+  `@Observes @Named("x") E`, an application's `@Express`). Qualifier-ness is the container's
+  knowledge, declared once in its bean model, so a catalog declaring `selected_by_parameter`
+  must name a `bean_model` declaring `qualifier_meta_annotations` and is refused at load
+  otherwise (`yaml_source._bean_model_of`). A qualifier is decided by that meta-annotation — a
+  module annotation type's own annotation facts, a library type's `type_header` class-level
+  annotations — never by "any other annotation": `@Observes @Priority(10) E` keeps its key. The
+  fire sites' qualifiers (`@Inject @Express Event<E>`, `select(…)`) are not read, so a qualified
+  observer is reached by no hop even where a matching qualified fire exists (a missing hop;
+  `@Observes @Any E` too, `@Any` being a qualifier).
 - **`dispatch_implementations`** entries are `{owner, method, descriptor, value_arg}`, checked
   at load (`yaml_source._dispatch_implementations`): a registration made by IMPLEMENTING the
   interface `owner` (`ApplicationListener`). Each module type below it (`Dispatch.subtypes`,

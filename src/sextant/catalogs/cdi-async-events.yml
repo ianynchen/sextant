@@ -22,6 +22,11 @@ measured:
   - { artifact: io.quarkus.arc:arc, versions: ["3.17.5"],
       identity: reported, by: scripts/probes/cp59_dispatch.md }
 
+# The container's qualifier vocabulary (D02 §1c): an observer whose event parameter also
+# carries a qualifier is kept with no key, because the fire sites' qualifiers are not read
+# (`bean-models/cdi.yml`).
+bean_model: cdi
+
 requires: [typed_signatures, call_site]
 
 matches:
@@ -31,10 +36,6 @@ matches:
     selected_by_parameter:
       - jakarta.enterprise.event.ObservesAsync
       - javax.enterprise.event.ObservesAsync
-    # A qualified observer is kept with no key, for the reason `cdi-events.yml` gives.
-    keyless_when_meta_annotated:
-      - jakarta.inject.Qualifier
-      - javax.inject.Qualifier
     path_from: []
     prefix_from: []
     method_from: method

@@ -151,13 +151,6 @@ def record_dispatch_hops(workspace: Workspace, catalogs: list[Catalog]) -> None:
     ]
     if not sending and not delivering:
         return
-    for catalog in (*sending, *delivering):
-        if not catalog.protocol:
-            raise CatalogError(
-                f"loading catalog {catalog.source}: it declares dispatch sends or delivering "
-                f"handlers and no `protocol`, which every hop it gives is written under "
-                f"(spec 2026-11-04 §3c)"
-            )
     reading = _Reading(workspace, catalogs[0].type_model)
     rows: dict[tuple[Any, ...], dict[str, Any]] = {}
     for catalog in sending:

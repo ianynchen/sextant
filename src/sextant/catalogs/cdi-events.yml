@@ -31,6 +31,11 @@ measured:
   - { artifact: io.quarkus.arc:arc, versions: ["3.17.5"],
       identity: reported, by: scripts/probes/cp59_dispatch.md }
 
+# The container's qualifier vocabulary (D02 §1c): an observer whose event parameter also
+# carries a qualifier is kept with no key, because the fire sites' qualifiers are not read
+# (`bean-models/cdi.yml`).
+bean_model: cdi
+
 requires: [typed_signatures, call_site]
 
 matches:
@@ -42,14 +47,6 @@ matches:
     selected_by_parameter:
       - jakarta.enterprise.event.Observes
       - javax.enterprise.event.Observes
-    # An observer whose event parameter also carries a QUALIFIER (an annotation meta-annotated
-    # `@Qualifier`: `@Named("x")`, an application's own `@Express`) is notified only of events
-    # fired with that qualifier. The fire sites' qualifiers (`@Inject @Express Event<E>`,
-    # `select(...)`) are not read, so such an observer is kept with no key: a missing hop,
-    # never a false one. `@Any` is a qualifier too and is kept keyless the same way.
-    keyless_when_meta_annotated:
-      - jakarta.inject.Qualifier
-      - javax.inject.Qualifier
     path_from: []
     prefix_from: []
     method_from: method

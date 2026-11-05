@@ -27,8 +27,15 @@ public class ShippingService {
         events.fire(new Note());
     }
 
-    /** The value's class is not known here. */
+    /** The value is a parameter declared `Object`: only an observer of `Object` is certainly
+     * notified. */
     public void refire(Object event) {
         events.fire(event);
+    }
+
+    /** The value is an array element: no call, parameter or field produces it, so its class
+     * is not known here. */
+    public void refireFirst(Object[] pending) {
+        events.fire(pending[0]);
     }
 }

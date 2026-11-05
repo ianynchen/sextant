@@ -115,9 +115,9 @@ def registrations(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]
     it declares — the framework injects those. Two shapes keep the row with no key, because
     the framework matches more than the erased type and a key would reach observers it never
     notifies: a parameter whose type carries type arguments (`List<String>`), and one also
-    carrying an annotation whose type is meta-annotated by one of
-    `mapping.keyless_when_meta_annotated` (a qualifier: `@Named("x")`). The handler is the
-    method; its group is the
+    carrying a QUALIFIER, an annotation whose type is meta-annotated by one of the catalog's
+    DI bean model's `qualifier_meta_annotations` (D02 §1c: `@Named("x")`), which the loader
+    requires such a catalog to name. The handler is the method; its group is the
     method itself, so its keys are one group's positions. Read by
     `record_dispatch_registrations`, which owns the table.
 
@@ -140,7 +140,10 @@ def registrations(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]
     match = catalog.dispatch["match"]
     fqns = {_catalog_symbol(entry["fqn"]) for entry in mapping["annotations"]}
     by_parameter = _annotation_names(mapping, "selected_by_parameter", catalog)
-    keyless_marks = _annotation_names(mapping, "keyless_when_meta_annotated", catalog)
+    qualifier_marks = frozenset(
+        _catalog_symbol(str(name))
+        for name in catalog.bean_model.get("qualifier_meta_annotations") or []
+    )
     path_from = list(mapping.get("path_from") or [])
     methods = {
         bare_descriptor(str(row["symbol"])): row for row in workspace.query("method_declarations")
@@ -156,7 +159,9 @@ def registrations(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]
             keys = [_payload_type(declaration, catalog)]
         selected.append((declaration, keys))
     if by_parameter:
-        marked = _meta_annotated_types(workspace, keyless_marks) if keyless_marks else frozenset()
+        marked = (
+            _meta_annotated_types(workspace, qualifier_marks) if qualifier_marks else frozenset()
+        )
         for _, declaration in sorted(methods.items()):
             parameter = _annotated_parameter(declaration, by_parameter)
             if parameter is not None:
@@ -201,10 +206,9 @@ def _named_classes(args: dict[str, Any], path_from: list[str]) -> list[str | Non
 
 
 def _annotation_names(mapping: dict[str, Any], word: str, catalog: Catalog) -> frozenset[str]:
-    """`mapping.<word>`'s annotation names as symbols (`selected_by_parameter`,
-    `keyless_when_meta_annotated`); empty where the word is absent. Refused unless a list of
-    names: a bare string would be read as its characters and name nothing — every observer of
-    the catalog silently absent, or every qualified one silently keyed."""
+    """`mapping.<word>`'s annotation names as symbols (`selected_by_parameter`); empty where the
+    word is absent. Refused unless a list of names: a bare string would be read as its
+    characters and name nothing — every observer of the catalog silently absent."""
     declared = mapping.get(word)
     if declared is None:
         return frozenset()
