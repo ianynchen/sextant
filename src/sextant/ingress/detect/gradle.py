@@ -488,14 +488,20 @@ class GradleDetector:
     def _partial(out_dir: Path, output: str, notes: list[str]) -> dict[str, Any]:
         """A failed run's result: the projects that built, and a reason for each that did
         not, when Gradle got as far as writing `build.json`; Gradle's own error verbatim
-        when it did not. When NO project was built, it is also Gradle's own error verbatim
-        (controller ruling, Task 2 fix round 1): a reactor in which every module is skipped
-        would end the command with success, and a build that is broken everywhere must not
-        look like one that worked."""
+        when it did not. When no project that was built has anything to read, it is also
+        Gradle's own error verbatim (controller ruling, Task 2 fix rounds 1 and 2): a
+        reactor in which every module is skipped would end the command with success, and a
+        build that is broken everywhere must not look like one that worked. A project with
+        no source root and no classes directory does not count as read: a root project or a
+        folder-only project that applies no compiling plugin writes its record whatever
+        happens to the parts that hold the code."""
         if not (out_dir / "build.json").is_file():
             raise ValueError(output.strip())
         assembled = _assemble(out_dir, output)
-        if all("buildFailure" in record for record in assembled["projects"]):
+        if not any(
+            "buildFailure" not in record and (record["sourceRoots"] or record["classesDirs"])
+            for record in assembled["projects"]
+        ):
             raise ValueError(output.strip())
         return {**assembled, "notes": notes}
 

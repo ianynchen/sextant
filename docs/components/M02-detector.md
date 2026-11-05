@@ -133,8 +133,10 @@ module in a build with subprojects, so its reason becomes the note "gradle root 
 parts need dependencies that are not in the local Gradle cache; --allow-resolve lets Gradle
 download them"; with it, the whole run is retried online once, into an empty folder, so no file
 from the offline attempt is read. A failed run that wrote no `build.json` (a build script that
-does not evaluate, a missing distribution), or in which no project was built at all, is still a
-refusal with Gradle's own words: a build broken everywhere must not end with success.
+does not evaluate, a missing distribution), or in which no project that was built has a source
+root or a classes directory (a root or folder-only project with no compiling plugin writes its
+record anyway), is still a refusal with Gradle's own words: a build broken everywhere must not
+end with success.
 
 ### Discovery reads the build, never a convention
 

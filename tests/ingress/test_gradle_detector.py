@@ -1252,11 +1252,13 @@ def test_a_part_that_uses_a_failed_part_is_skipped_with_that_reason(
 ):
     """`--continue` lets every part that can build finish, and the run still exits 1. A part
     whose own task failed gets Gradle's text as its reason; a part that never ran because a
-    part it needs failed is named as such. The repository is not refused (Android design M5)."""
+    part it needs failed is named as such. The repository is not refused (Android design M5):
+    `:other` was built and has code to read."""
     root, lib, app = _root_record(), _project_record(":lib", "lib"), _project_record(":app", "app")
+    other = _project_record(":other", "other")
 
     def fake_run_once(gradle_command, path, out_dir, offline):
-        _write_build(out_dir, [root, app, lib], written=[root])
+        _write_build(out_dir, [root, app, lib, other], written=[root, other])
         return _completed(1, _REAL_ONE_PART_FAILS)
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
@@ -1306,11 +1308,12 @@ def test_an_offline_refusal_in_one_part_names_allow_resolve(
     serve are skipped with Gradle's reason, the others are read, and a note says how to let
     Gradle download what is missing."""
     root, a, b = _root_record(), _project_record(":a", "a"), _project_record(":b", "b")
+    other = _project_record(":other", "other")
     calls: list[bool] = []
 
     def fake_run_once(gradle_command, path, out_dir, offline):
         calls.append(offline)
-        _write_build(out_dir, [root, a, b], written=[root])
+        _write_build(out_dir, [root, a, b, other], written=[root, other])
         return _completed(1, _REAL_DOWNLOAD_THEN_TWO_OFFLINE_FAILURES)
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
@@ -1332,9 +1335,10 @@ def test_a_part_skipped_for_an_offline_refusal_names_allow_resolve_in_its_reason
     """Detect notes reach only the `metadata.json` of a module that is analysed, so a person
     who reads the skip row of a part the cache could not serve must find the flag there."""
     root, a, b = _root_record(), _project_record(":a", "a"), _project_record(":b", "b")
+    other = _project_record(":other", "other")
 
     def fake_run_once(gradle_command, path, out_dir, offline):
-        _write_build(out_dir, [root, a, b], written=[root])
+        _write_build(out_dir, [root, a, b, other], written=[root, other])
         return _completed(1, _REAL_DOWNLOAD_THEN_TWO_OFFLINE_FAILURES)
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
@@ -1413,6 +1417,45 @@ def test_a_build_in_which_no_part_was_built_is_refused_with_gradles_own_words(
     assert str(failure.value) == _REAL_TWO_PARTS_FAIL.strip()
 
 
+def test_a_build_whose_only_built_project_has_nothing_to_read_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Controller ruling (Task 2 fix round 2), the shape of the real run behind
+    `_REAL_ONE_PART_FAILS`: the root project applies no plugin, so its `sextantModel` writes
+    its record whatever happens; `:lib` fails and `:app` needs it. The only record written has
+    no source and no classes, so nothing can be read, and the run is refused as before M5
+    rather than ending with every module skipped and success."""
+    root, lib, app = _root_record(), _project_record(":lib", "lib"), _project_record(":app", "app")
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        _write_build(out_dir, [root, app, lib], written=[root])
+        return _completed(1, _REAL_ONE_PART_FAILS)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    with pytest.raises(ValueError) as failure:
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    assert str(failure.value) == _REAL_ONE_PART_FAILS.strip()
+
+
+def test_a_folder_only_project_and_a_root_with_no_plugin_do_not_count_as_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The same with the real two-parts-fail capture: `:` and `:lib` fail, `:app` needs
+    `:lib`, and `:services` is a folder that applies no compiling plugin and writes an empty
+    record."""
+    root, lib, app = _root_record(), _project_record(":lib", "lib"), _project_record(":app", "app")
+    services = {**_project_record(":services", "services"), "sourceRoots": [], "classesDirs": []}
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        _write_build(out_dir, [root, app, lib, services], written=[services])
+        return _completed(1, _REAL_TWO_PARTS_FAIL)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    with pytest.raises(ValueError) as failure:
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    assert str(failure.value) == _REAL_TWO_PARTS_FAIL.strip()
+
+
 def test_a_build_in_which_no_part_was_built_offline_is_still_retried_online(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -1438,23 +1481,27 @@ def test_the_online_retry_does_not_read_a_file_the_offline_attempt_left(
 ):
     """The offline attempt wrote `:lib`'s file; on the online retry `:lib` failed. The file
     left from the first attempt must not stand in for the part that failed on the second."""
-    root, lib = _root_record(), _project_record(":lib", "lib")
+    root, lib, other = (
+        _root_record(),
+        _project_record(":lib", "lib"),
+        _project_record(":other", "other"),
+    )
 
     def fake_run_once(gradle_command, path, out_dir, offline):
         if offline:
-            _write_build(out_dir, [root, lib], written=[root, lib])
+            _write_build(out_dir, [root, lib, other], written=[root, lib, other])
             return _completed(
                 1,
                 "FAILURE: Build failed with an exception.\n"
                 "> No cached version of org.springframework:spring-web:6.1.6 available for "
                 "offline mode.\n",
             )
-        _write_build(out_dir, [root, lib], written=[root])
+        _write_build(out_dir, [root, lib, other], written=[root, other])
         return _completed(1, _REAL_ONE_PART_FAILS)
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
     data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, True)
-    [module] = _repository_model(data).modules
+    [module] = [m for m in _repository_model(data).modules if m.module_id == "com.acme:lib"]
 
     assert module.build_failure is not None
     assert "illegal start of expression" in module.build_failure
