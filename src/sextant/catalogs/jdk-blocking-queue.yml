@@ -1,0 +1,125 @@
+id: jdk-blocking-queue
+displayName: Java blocking queues (put/offer/add, take/poll)
+style: fluent
+# No wire: a value put on a queue is taken off it by code in the same process (spec 2026-11-05
+# §1, §4 item 7). Every hop this file's sends give is written under `in_process`; this catalog
+# mints no endpoint row. `fluent` names no engine here: a catalog declaring `dispatch` with a
+# `key` is left out of the endpoint loop whole (`endpoints._reads_by_a_later_pass`) and read
+# by the dispatch passes, so it declares no roots.
+protocol: in_process
+direction: inbound
+# In-process dispatch keyed by the queue OBJECT: a value put on a queue reaches the code that
+# takes from that same queue, whatever the value's class (spec 2026-11-05 §1). Each value is
+# taken by ONE consumer, which one decided at run time, so each send is a hop to every receive
+# on the object (`match: one`).
+dispatch: { key: object, match: one, mechanism: jdk-blocking-queue }
+
+# EMPTY on purpose, `jdk-httpclient.yml`'s precedent: `java.util.concurrent` is in the JDK's
+# `java.base` and has no dependency coordinate a build could declare. `fluent` is not a style
+# `resolve/dependencies.py` gates on, so this catalog applies module-wide.
+detect:
+  coordinates: []
+
+# CP-59 findings 12-15 (`javap` on the JDK and on `fixtures/orders-queues`, and a generated class
+# calling each declared method through each owner below). `jmod:java.base` is the JDK module
+# the types were read out of, in the `group:artifact` shape this block requires; it is NOT a
+# Maven coordinate and nothing resolves it. The version is the `java.version` the running JDK
+# reported.
+measured:
+  - { artifact: jmod:java.base, versions: ["21.0.13.0.3"],
+      identity: reported, by: scripts/probes/cp59_dispatch.md }
+
+requires: [call_site]
+
+matches:
+  # Every call below is made ON the queue (`object: receiver`), and javac writes the
+  # receiver's STATIC type as the call's owner (finding 14): `BlockingQueue.poll()` through a
+  # field typed `BlockingQueue` though `Queue` declares it, `LinkedBlockingQueue.put` through
+  # a field typed by the class (`dolphinscheduler-alert`'s shape). `Dispatch.heirs` widens an
+  # owner only by types that do not declare the method, and every JDK class here declares
+  # each one, so each interface and class of `java.util.concurrent` implementing
+  # `BlockingQueue` is listed (finding 13). `DelayQueue<E extends Delayed>` erases its element
+  # to `Delayed`, so its descriptors name it.
+  #
+  # Not declared, and read as nothing (a stated bound): a `Queue`- or `Collection`-typed
+  # receiver (a plain `Queue` is as often a local data structure, `ArrayDeque`), the deque
+  # ends (`putFirst`, `offerLast`, `takeLast`, `pollFirst`, …), `transfer`/`tryTransfer`,
+  # `drainTo`, and Guava's `Queues.drain(queue, …)`, which takes the queue as an argument.
+  #
+  # `value_arg` is the value handed over; the KEY is the object the call is made on, followed
+  # to the call that made it (`values.producer_paths`, `which_object`).
+  dispatch_sends:
+    - { owner: &bq java.util.concurrent.BlockingQueue, method: put, descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
+    - { owner: *bq, method: offer, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: *bq, method: offer, descriptor: "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z", value_arg: 0 }
+    - { owner: *bq, method: add, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: &bd java.util.concurrent.BlockingDeque, method: put, descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
+    - { owner: *bd, method: offer, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: *bd, method: offer, descriptor: "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z", value_arg: 0 }
+    - { owner: *bd, method: add, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: &tq java.util.concurrent.TransferQueue, method: put, descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
+    - { owner: *tq, method: offer, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: *tq, method: offer, descriptor: "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z", value_arg: 0 }
+    - { owner: *tq, method: add, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: &lbq java.util.concurrent.LinkedBlockingQueue, method: put, descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
+    - { owner: *lbq, method: offer, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: *lbq, method: offer, descriptor: "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z", value_arg: 0 }
+    - { owner: *lbq, method: add, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: &abq java.util.concurrent.ArrayBlockingQueue, method: put, descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
+    - { owner: *abq, method: offer, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: *abq, method: offer, descriptor: "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z", value_arg: 0 }
+    - { owner: *abq, method: add, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: &pbq java.util.concurrent.PriorityBlockingQueue, method: put, descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
+    - { owner: *pbq, method: offer, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: *pbq, method: offer, descriptor: "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z", value_arg: 0 }
+    - { owner: *pbq, method: add, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: &lbd java.util.concurrent.LinkedBlockingDeque, method: put, descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
+    - { owner: *lbd, method: offer, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: *lbd, method: offer, descriptor: "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z", value_arg: 0 }
+    - { owner: *lbd, method: add, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: &ltq java.util.concurrent.LinkedTransferQueue, method: put, descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
+    - { owner: *ltq, method: offer, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: *ltq, method: offer, descriptor: "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z", value_arg: 0 }
+    - { owner: *ltq, method: add, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: &sq java.util.concurrent.SynchronousQueue, method: put, descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
+    - { owner: *sq, method: offer, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: *sq, method: offer, descriptor: "(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z", value_arg: 0 }
+    - { owner: *sq, method: add, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: &dq java.util.concurrent.DelayQueue, method: put, descriptor: "(Ljava/util/concurrent/Delayed;)V", value_arg: 0 }
+    - { owner: *dq, method: offer, descriptor: "(Ljava/util/concurrent/Delayed;)Z", value_arg: 0 }
+    - { owner: *dq, method: offer, descriptor: "(Ljava/util/concurrent/Delayed;JLjava/util/concurrent/TimeUnit;)Z", value_arg: 0 }
+    - { owner: *dq, method: add, descriptor: "(Ljava/util/concurrent/Delayed;)Z", value_arg: 0 }
+
+  # The code handling a taken value is the method making the take (`handler: enclosing`): a
+  # take returns the value to its caller, which handles it.
+  dispatch_receives:
+    - { owner: *bq, method: take, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *bq, method: poll, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *bq, method: poll, descriptor: "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *bd, method: take, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *bd, method: poll, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *bd, method: poll, descriptor: "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *tq, method: take, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *tq, method: poll, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *tq, method: poll, descriptor: "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *lbq, method: take, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *lbq, method: poll, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *lbq, method: poll, descriptor: "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *abq, method: take, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *abq, method: poll, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *abq, method: poll, descriptor: "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *pbq, method: take, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *pbq, method: poll, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *pbq, method: poll, descriptor: "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *lbd, method: take, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *lbd, method: poll, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *lbd, method: poll, descriptor: "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *ltq, method: take, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *ltq, method: poll, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *ltq, method: poll, descriptor: "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *sq, method: take, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *sq, method: poll, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *sq, method: poll, descriptor: "(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *dq, method: take, descriptor: "()Ljava/util/concurrent/Delayed;", object: receiver, handler: enclosing }
+    - { owner: *dq, method: poll, descriptor: "()Ljava/util/concurrent/Delayed;", object: receiver, handler: enclosing }
+    - { owner: *dq, method: poll, descriptor: "(JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/Delayed;", object: receiver, handler: enclosing }

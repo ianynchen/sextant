@@ -79,6 +79,20 @@ here would restate those documents rather than add anything.
   own qualifier) and an observer of a parameterized type (`List<String>`) keep their
   registration with no key: the fire sites' qualifiers and type arguments are not read, so such
   an observer gets no hop (missing, never false); `@Observes @Priority(10) E` keeps its key.
+- **Java blocking queues are object-keyed in-process dispatch** (spec 2026-11-05 §4 item 7, probe
+  CP-59 findings 12-15, JDK 21.0.13): the mechanism's second key kind. A catalog declaring
+  `dispatch: {key: object}` keys each `dispatch_receives` site by the object it takes from — its
+  receiver followed through locals, parameters, helper returns and fields to the call that made
+  it (a construction, or a call whose body is not here, such as Guava's
+  `Queues.newLinkedBlockingQueue`) — written as `dispatch_registrations.key_object`; each send is
+  a hop to every receive on the same object, whatever the value's class. A queue from outside
+  the module (a parameter nothing calls) is a stop, never a fan-out. `jdk-blocking-queue.yml`
+  declares `put`/`offer`/`add` and `take`/`poll` on the ten JDK blocking-queue types (javac
+  writes the receiver's static type as the owner). Two queues of one type stay apart; a field
+  read is answered by every write of that field, so two instances of one class sharing a field
+  are one object (a stated bound). The loader refuses a receive block under `key: type` and a
+  class-keyed block under `key: object`. A trace's unread hop now reads `(key not read)`, for a
+  class and an object alike.
 - **Akka and Pekko actors: a trace crosses actors** (spec 2026-11-04, SEXTANT-178, the user's
   ruling B "I want it complete"; probe CP-57, Akka 2.6.21 and Pekko 1.1.3). Three parts, each
   pinned on `fixtures/orders-actors-pekko` and `-akka`, then the measurement:

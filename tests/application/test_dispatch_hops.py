@@ -350,7 +350,7 @@ def test_a_trace_names_an_unread_class(analyzed: Path):
     finally:
         workspace.close()
     assert [(step.via, step.stop) for step in trace.steps] == [
-        ("actor (value class not read)", TraceStop.BOUNDARY)
+        ("actor (key not read)", TraceStop.BOUNDARY)
     ]
 
 

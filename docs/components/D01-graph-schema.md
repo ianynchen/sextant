@@ -178,8 +178,8 @@ site, or no row.
   §1, `resolve/dispatch_hops.py`): code hands a value to a framework or a channel, which calls
   the handler(s) registered for it — never an endpoint row. `(caller, ordinal)` is the send's
   own call site (a `dispatch_sends` entry, D02); `protocol` the declaring catalog's (`actor`
-  for Akka and Pekko, `in_process` for Spring application events and CDI events, which have no
-  wire); `path`
+  for Akka and Pekko, `in_process` for Spring application events, CDI events and Java blocking
+  queues, which have no wire); `path`
   the value's class symbol, or a constant's own symbol where the
   value is one (`com/acme/actors/Stock$Tick#INSTANCE.`); `handler` each handler the class
   reaches under its registrations' match rule (`dispatch_registrations` below), one row per
@@ -191,6 +191,16 @@ site, or no row.
   is a compiler fact. A handler whose registration `delivers` continues: each class it
   returns is a row whose `caller` is that handler and whose `ordinal` is the return's own
   constructor call (a constructor reference's: its super-constructor call).
+- **An object-keyed send** (a catalog declaring `dispatch: {key: object}`, D02 §2m: a
+  `BlockingQueue.put`) is keyed by the object it is called on, not by the value's class: its
+  receiver is followed to the call that made the object (`<caller>#<ordinal>` of a
+  construction, or of a call whose body is not here, such as a library factory), and `path` is
+  that call; `handler` is each receive registration with the same `key_object`, one row each (a
+  queue's several consumers each a row, one of them taking each value at run time). An object
+  nothing takes from is one row with that `path` and `handler` NULL; a path on which the object
+  was not read (a parameter nothing in the module calls, an object a container injects) is one
+  row with `path` and `handler` NULL. Stated bound: a field read is answered by every write of
+  that field, so two instances of one class each holding a queue in that field are one object.
 
 **`dispatch_registrations`** (named `message_handlers` until spec
 `2026-11-05-in-process-dispatch-design.md` §3; schema 15 unreleased, so no version step)
@@ -215,8 +225,11 @@ is tried, under the declaring catalog's match rule. One row per registration.
   selected by a parameter annotation, that parameter's erased type; for an
   implementation, its own method's parameter's erased type (past the compiler's bridge). **`key_value`** is the
   constant's own argument symbol (`<owner>#<field>.`, an `enum` or `field` argument), NULL
-  for a class registration. **`key_object`** is the channel object an object key names, its
-  producing call `<caller>#<ordinal>`; NULL for a type key. A registration the walk could not
+  for a class registration. **`key_object`** is the channel object a receive site
+  (`dispatch_receives`, D02 §2m) takes from, as the call that made it, `<caller>#<ordinal>`: one
+  row per object its receiver can be, each a group of its own (`<caller>#<ordinal>` of the
+  receive call) at position 0, its `handler` the method making the call; NULL for a type key,
+  and on the one row of a receive whose object was not read. A registration the walk could not
   read keeps its position with every key column NULL.
 - **`predicated`** — the registration carries a predicate; it never shadows a later one.
   **`handler`** — the method the handler argument names (a method reference names the
@@ -224,7 +237,7 @@ is tried, under the declaring catalog's match rule. One row per registration.
   **`delivers`** — the catalog's `returns_value`: the handler's return is a value handed to
   its own receiver. **`match`** — the catalog's `dispatch.match`, `first`, `all` or `one`.
   **`mechanism`** — the declaring catalog's `dispatch.mechanism` ([D02](D02-catalog-schema.md)
-  §2m: `pekko-actors`, `spring-events`, `cdi-events`, `cdi-async-events`): a send's value, and an inbound key's class, is asked only of its own
+  §2m: `pekko-actors`, `spring-events`, `cdi-events`, `cdi-async-events`, `jdk-blocking-queue`): a send's value, and an inbound key's class, is asked only of its own
   catalog's mechanism's rows, so one framework's value never reaches another's handler.
 - The match rule over these rows is `resolve/dispatch_registrations.reachable_handlers`:
   `first`, per group, the first unpredicated registration the value matches (its class or a
@@ -891,9 +904,10 @@ helloworld.Greeter/SayHello`, and the step table's `Reaches` reads `via` and the
 
 **An in-process dispatch send is walked the same way** (spec
 `2026-11-04-akka-pekko-actors-design.md` §3c, `2026-11-05-in-process-dispatch-design.md` §1):
-at a send whose `hops` rows name handlers, the step goes to each, `via` the value's class (`actor com/acme/actors/OrderEntity$Get#`); a class nobody here handles stays
-`boundary` with its class; a class not read (the hop's `path` NULL) stays `boundary` with
-`via` saying so (`actor (value class not read)`), never `actor None`.
+at a send whose `hops` rows name handlers, the step goes to each, `via` the hop's key (`actor com/acme/actors/OrderEntity$Get#`, or for an object-keyed send the call that made the
+object); a key nobody here handles stays `boundary` with its key; a key not read (the hop's
+`path` NULL: the value's class, or the channel object) stays `boundary` with `via` saying so
+(`actor (key not read)`), never `actor None`.
 
 **This is deliberately not [D00](D00-fact-schema.md) §4's `terminal_kind`.** That set
 CLASSIFIES what a call reaches — `persistence`, `async_handoff`, an `outbound_call` in the

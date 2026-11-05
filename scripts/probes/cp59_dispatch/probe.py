@@ -1,5 +1,5 @@
-"""CP-59: javap readings of Spring's application-event API, the CDI event API and ArC, and the
-two fixtures' bytecode. See run.sh."""
+"""CP-59: javap readings of Spring's application-event API, the CDI event API and ArC, the JDK's
+blocking queues, and the three fixtures' bytecode. See run.sh."""
 
 import re
 import subprocess
@@ -14,6 +14,10 @@ CLASSES = str(FIX / "target/classes")
 CDI_FIX = Path(ARGS["CDI_FIX"])
 [JAVAX_JAR] = [str(jar) for jar in (CDI_FIX / "target/probe-javax").glob("cdi-api-*.jar")]
 [JAVAX2_JAR] = [str(jar) for jar in (CDI_FIX / "target/probe-javax2").glob("cdi-api-*.jar")]
+QUEUES_FIX = Path(ARGS["QUEUES_FIX"])
+QUEUES_CLASSPATH = (
+    f"{QUEUES_FIX / 'target/classes'}:{(QUEUES_FIX / 'target/probe.cp').read_text().strip()}"
+)
 CDI_CLASSPATH = f"{CDI_FIX / 'target/classes'}:{(CDI_FIX / 'target/probe.cp').read_text().strip()}"
 
 # The artifacts whose types the catalog names, by jar file-name stem.
@@ -95,7 +99,7 @@ def methods(cls: str, name: str, cp: str = "") -> list[str]:
     text = javap("-v", "-p", cls, cp=cp)
     rows, current = [], None
     for line in text.splitlines():
-        m = re.match(r"^  (?:[\w$<>\[\]., ]+ )?([\w$<>]+)\(.*\);$", line)
+        m = re.match(r"^  (?:[\w$<>\[\]., ]+ )?([\w$<>]+)\(.*\)(?: throws [\w.$, ]+)?;$", line)
         if m:
             current = {"name": m.group(1), "desc": "", "flags": ""}
             continue
@@ -339,4 +343,105 @@ def cdi(spring_versions: dict[str, str]) -> None:
             print(f"- `ShippingService`: {row}")
 
 
+# The `jdk-blocking-queue` catalog's owners: the blocking-queue interfaces and every
+# `java.util.concurrent` class implementing one, each with the element type its `E` erases to.
+QUEUE_OWNERS = (
+    ("java.util.concurrent.BlockingQueue", "Object"),
+    ("java.util.concurrent.BlockingDeque", "Object"),
+    ("java.util.concurrent.TransferQueue", "Object"),
+    ("java.util.concurrent.LinkedBlockingQueue", "Object"),
+    ("java.util.concurrent.ArrayBlockingQueue", "Object"),
+    ("java.util.concurrent.PriorityBlockingQueue", "Object"),
+    ("java.util.concurrent.LinkedBlockingDeque", "Object"),
+    ("java.util.concurrent.LinkedTransferQueue", "Object"),
+    ("java.util.concurrent.SynchronousQueue", "Object"),
+    ("java.util.concurrent.DelayQueue", "java.util.concurrent.Delayed"),
+)
+# Each call the catalog declares, as Java source on a queue `q` and a value `v`.
+QUEUE_CALLS = (
+    "q.put(v)",
+    "q.offer(v)",
+    "q.offer(v, 1, TimeUnit.SECONDS)",
+    "q.add(v)",
+    "q.take()",
+    "q.poll()",
+    "q.poll(1, TimeUnit.SECONDS)",
+)
+QUEUE_METHODS = ("put", "offer", "add", "take", "poll")
+
+
+def java_version() -> str:
+    """`java.version` as the running JDK reports it (`-XshowSettings:properties`): the JDK is
+    no jar with a manifest, so this is its own statement of what it is. Aborts without it."""
+    out = subprocess.run(
+        [f"{JAVA_HOME}/bin/java", "-XshowSettings:properties", "-version"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    found = re.search(r"^\s+java\.version = (\S+)$", out.stderr, flags=re.MULTILINE)
+    if not found:
+        sys.exit(f"{JAVA_HOME}/bin/java reported no java.version")
+    return found.group(1)
+
+
+def owners_class() -> str:
+    """Compiles a class calling each declared method through each declared owner (`--release
+    21`, into the queue fixture's `target/probe-owners`) and returns its class path: what javac
+    writes for each is then read off its bytecode rather than assumed."""
+    out_dir = QUEUES_FIX / "target/probe-owners"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bodies = []
+    for index, (owner, element) in enumerate(QUEUE_OWNERS):
+        calls = " ".join(f"{call};" for call in QUEUE_CALLS)
+        bodies.append(
+            f"  void m{index}({owner}<{element}> q, {element} v) throws Exception {{ {calls} }}"
+        )
+    source = out_dir / "QueueOwners.java"
+    source.write_text(
+        "import java.util.concurrent.TimeUnit;\nclass QueueOwners {\n" + "\n".join(bodies) + "\n}\n"
+    )
+    compiled = subprocess.run(
+        [f"{JAVA_HOME}/bin/javac", "--release", "21", "-d", str(out_dir), str(source)],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if compiled.returncode != 0:
+        sys.exit(f"javac failed on {source}: {compiled.stderr}")
+    return str(out_dir)
+
+
+def queues() -> None:
+    """Tables 12-15: Java blocking queues (`jdk-blocking-queue`)."""
+    cp = QUEUES_CLASSPATH
+    print("### Identity, blocking queues (from the running JDK)\n")
+    print(f"- `java.version`: `{java_version()}`")
+    print()
+    print("### 12. What `BlockingQueue` declares\n")
+    print(f"- {header('java.util.concurrent.BlockingQueue')}")
+    for name in QUEUE_METHODS:
+        for row in methods("java.util.concurrent.BlockingQueue", name, cp=cp):
+            print(f"- `BlockingQueue.{name}` {row}")
+    for row in methods("java.util.Queue", "poll", cp=cp):
+        print(f"- `Queue.poll` {row}")
+    print()
+    print("### 13. The JDK's blocking-queue types\n")
+    for owner, _ in QUEUE_OWNERS[1:]:
+        print(f"- {header(owner)}")
+    print()
+    print("### 14. What javac writes for each declared call through each owner\n")
+    generated = owners_class()
+    for name in QUEUE_METHODS:
+        for row in dict.fromkeys(invokes("QueueOwners", name, cp=generated)):
+            print(f"- {row}")
+    print()
+    print("### 15. What javac writes at the fixture's queue sites\n")
+    for cls in ("Pipeline", "Worker", "Alerts", "Cleaner", "Batch", "Relay", "Scratch"):
+        for name in (*QUEUE_METHODS, "newLinkedBlockingQueue"):
+            for row in invokes(f"com.acme.queues.{cls}", name, cp=cp):
+                print(f"- `{cls}`: {row}")
+
+
 main()
+queues()

@@ -79,6 +79,8 @@ PRIMED_FIXTURES = (
     "orders-events",
     # CDI events (spec 2026-11-05 §4 item 6).
     "orders-cdi-events",
+    # Java blocking queues, object-keyed dispatch (spec 2026-11-05 §4 item 7).
+    "orders-queues",
     "orders-ktor",
     "orders-ktor-classlambdas",
     "orders-gateway",

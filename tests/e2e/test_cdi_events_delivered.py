@@ -174,5 +174,5 @@ def test_an_unread_event_class_is_a_stop(tables, analyzed: Path):
     finally:
         workspace.close()
     assert [(step.via, step.stop) for step in trace.steps] == [
-        ("in_process (value class not read)", TraceStop.BOUNDARY)
+        ("in_process (key not read)", TraceStop.BOUNDARY)
     ]

@@ -1,4 +1,4 @@
-# CP-59 — Spring application events (spring-context, spring-tx 7.0.1) and CDI events (CDI API 4.1.0, 2.0.0 and 1.0.0, ArC 3.17.5), measured
+# CP-59 — Spring application events (spring-context, spring-tx 7.0.1), CDI events (CDI API 4.1.0, 2.0.0 and 1.0.0, ArC 3.17.5) and Java blocking queues (JDK 21.0.13), measured
 
 **Number.** The in-process dispatch plan (2026-11-05) names this probe CP-58; that number was
 already taken by `scripts/probes/cp58-inherited-mappings/` (cited by four HTTP catalogs), so it
@@ -7,7 +7,8 @@ is CP-59. Later tasks of the plan add their rows here.
 **Version scope.** `org.springframework:spring-context` **7.0.1** and `spring-tx` **7.0.1**, the
 versions Spring Boot 4.0.0 manages, as `fixtures/orders-events` resolves them; each version below
 is read from the jar's own `MANIFEST.MF` by the harness, which aborts if a jar or the key is
-missing. JDK 21.0.13 for `java.util.EventObject`. Spring 5.x and 6.x are outside this measurement:
+missing. JDK 21.0.13 for `java.util.EventObject`, and the same JDK's `java.base` (`java.version`
+`21.0.13.0.3`) for the blocking queues, findings 12-15, scoped below. Spring 5.x and 6.x are outside this measurement:
 the descriptors below have been stable since 4.2 (`publishEvent(Object)`), but that is not read
 here. The fixture is compiled by javac 21 (`--release 21`). For CDI events (findings 8-11):
 `jakarta.enterprise:jakarta.enterprise.cdi-api`
@@ -39,8 +40,22 @@ parameter's erased type and matches by assignability, so a listener of a generic
 each word cites. No container starts: event QUALIFIERS (`@Observes @Named("x") E`), which narrow
 which observers a fire reaches at run time, are not read (a stated bound of the catalogs).
 
+**Version scope, queues (findings 12-15).** `java.util.concurrent` of the JDK the harness runs,
+**21.0.13** (`java.version` `21.0.13.0.3`, as the running `java` reports it with
+`-XshowSettings:properties`; the JDK is no jar with a manifest, and the harness aborts if it
+reports none). `fixtures/orders-queues` and a generated class are compiled by that javac
+(`--release 21`); Guava's `Queues` (32.0.0-jre, the version `examples/apollo` pins) is on the
+fixture's class path only as a factory the fixture calls, and nothing of it is measured. Other
+JDKs are outside this measurement: the `BlockingQueue` descriptors have been stable since Java 5,
+but that is not read here.
+
+**Why it was measured, queues.** The `jdk-blocking-queue` catalog (spec 2026-11-05 §4 item 7)
+declares `put`/`offer`/`add` as sends and `take`/`poll` as receives keyed by the queue
+object; which OWNER javac writes at a call decides which entries match it, so findings 12-15 read
+it off bytecode rather than off the javadoc.
+
 Reproduce: `JAVA_HOME=/opt/homebrew/opt/openjdk@21 scripts/probes/cp59_dispatch/run.sh` (rebuilds
-both fixtures, prints every table below).
+the three fixtures, prints every table below).
 
 ## Findings (the facts the catalog uses)
 
@@ -111,6 +126,28 @@ both fixtures, prints every table below).
    jakarta/enterprise/event/Event.fire:(Ljava/lang/Object;)V` and `Event.fireAsync:
    (Ljava/lang/Object;)Ljava/util/concurrent/CompletionStage;` through fields typed `Event<…>`:
    the owner is `Event` itself, so no other owner is declared.
+12. **What `BlockingQueue` declares.** `put(E)`, `offer(E)`, `offer(E, long, TimeUnit)`,
+   `add(E)`, `take()` and `poll(long, TimeUnit)`, each erased to `Object`; the no-argument
+   `poll()` is declared by `Queue`, which `BlockingQueue` extends, not by `BlockingQueue`.
+13. **The JDK's blocking-queue types.** Two interfaces extend `BlockingQueue` (`BlockingDeque`,
+   `TransferQueue`) and seven `java.util.concurrent` classes implement one of the three
+   (`LinkedBlockingQueue`, `ArrayBlockingQueue`, `PriorityBlockingQueue`, `LinkedBlockingDeque`,
+   `LinkedTransferQueue`, `SynchronousQueue`, `DelayQueue`). `DelayQueue<E extends Delayed>`
+   bounds its element, so its methods erase to `Delayed`.
+14. **javac writes the receiver's static type as the owner, for every declared call.** A generated
+   class calling each of the seven calls through each of the ten types: `invokeinterface` on the
+   interface, `invokevirtual` on the class, the owner always the type the receiver is declared
+   as — `BlockingQueue.poll:()` though `Queue` declares it, `LinkedBlockingQueue.add` though
+   `AbstractQueue` declares it — and `DelayQueue`'s descriptors naming `Delayed`. So the
+   catalog lists every call on every one of the ten owners (`Dispatch.heirs` widens an owner only
+   by types that do not declare the method, and each JDK class declares or is the owner of each).
+   A receiver typed `Queue` writes `Queue` (the fixture's `Scratch`, table 15), which the
+   catalog does not declare.
+15. **What javac writes at the fixture's sites.** Fields typed `BlockingQueue` give
+   `BlockingQueue` owners (`Pipeline`, `Worker`, `Cleaner`, `Relay`, `Batch`); the field
+   typed `LinkedBlockingQueue` (`Alerts`, `dolphinscheduler-alert`'s shape) gives
+   `LinkedBlockingQueue`; Guava's factory is an `invokestatic` of
+   `Queues.newLinkedBlockingQueue`, the call the object walk ends at.
 
 ## Observations (generated by `run.sh`; not edited)
 
@@ -305,3 +342,126 @@ aborts without, not the version the fixture's pom asked for.
 - `ShippingService`: `invokeinterface` `jakarta/enterprise/event/Event.fire:(Ljava/lang/Object;)V`
 - `ShippingService`: `invokeinterface` `jakarta/enterprise/event/Event.fire:(Ljava/lang/Object;)V`
 - `ShippingService`: `invokeinterface` `jakarta/enterprise/event/Event.fireAsync:(Ljava/lang/Object;)Ljava/util/concurrent/CompletionStage;`
+
+### Identity, blocking queues (from the running JDK)
+
+- `java.version`: `21.0.13.0.3`
+
+### 12. What `BlockingQueue` declares
+
+- public interface java.util.concurrent.BlockingQueue<E> extends java.util.Queue<E> {
+- `BlockingQueue.put` `(Ljava/lang/Object;)V` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- `BlockingQueue.offer` `(Ljava/lang/Object;)Z` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- `BlockingQueue.offer` `(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- `BlockingQueue.add` `(Ljava/lang/Object;)Z` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- `BlockingQueue.take` `()Ljava/lang/Object;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- `BlockingQueue.poll` `(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- `Queue.poll` `()Ljava/lang/Object;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+
+### 13. The JDK's blocking-queue types
+
+- public interface java.util.concurrent.BlockingDeque<E> extends java.util.concurrent.BlockingQueue<E>, java.util.Deque<E> {
+- public interface java.util.concurrent.TransferQueue<E> extends java.util.concurrent.BlockingQueue<E> {
+- public class java.util.concurrent.LinkedBlockingQueue<E> extends java.util.AbstractQueue<E> implements java.util.concurrent.BlockingQueue<E>, java.io.Serializable {
+- public class java.util.concurrent.ArrayBlockingQueue<E> extends java.util.AbstractQueue<E> implements java.util.concurrent.BlockingQueue<E>, java.io.Serializable {
+- public class java.util.concurrent.PriorityBlockingQueue<E> extends java.util.AbstractQueue<E> implements java.util.concurrent.BlockingQueue<E>, java.io.Serializable {
+- public class java.util.concurrent.LinkedBlockingDeque<E> extends java.util.AbstractQueue<E> implements java.util.concurrent.BlockingDeque<E>, java.io.Serializable {
+- public class java.util.concurrent.LinkedTransferQueue<E> extends java.util.AbstractQueue<E> implements java.util.concurrent.TransferQueue<E>, java.io.Serializable {
+- public class java.util.concurrent.SynchronousQueue<E> extends java.util.AbstractQueue<E> implements java.util.concurrent.BlockingQueue<E>, java.io.Serializable {
+- public class java.util.concurrent.DelayQueue<E extends java.util.concurrent.Delayed> extends java.util.AbstractQueue<E> implements java.util.concurrent.BlockingQueue<E> {
+
+### 14. What javac writes for each declared call through each owner
+
+- `invokeinterface` `java/util/concurrent/BlockingQueue.put:(Ljava/lang/Object;)V`
+- `invokeinterface` `java/util/concurrent/BlockingDeque.put:(Ljava/lang/Object;)V`
+- `invokeinterface` `java/util/concurrent/TransferQueue.put:(Ljava/lang/Object;)V`
+- `invokevirtual` `java/util/concurrent/LinkedBlockingQueue.put:(Ljava/lang/Object;)V`
+- `invokevirtual` `java/util/concurrent/ArrayBlockingQueue.put:(Ljava/lang/Object;)V`
+- `invokevirtual` `java/util/concurrent/PriorityBlockingQueue.put:(Ljava/lang/Object;)V`
+- `invokevirtual` `java/util/concurrent/LinkedBlockingDeque.put:(Ljava/lang/Object;)V`
+- `invokevirtual` `java/util/concurrent/LinkedTransferQueue.put:(Ljava/lang/Object;)V`
+- `invokevirtual` `java/util/concurrent/SynchronousQueue.put:(Ljava/lang/Object;)V`
+- `invokevirtual` `java/util/concurrent/DelayQueue.put:(Ljava/util/concurrent/Delayed;)V`
+- `invokeinterface` `java/util/concurrent/BlockingQueue.offer:(Ljava/lang/Object;)Z`
+- `invokeinterface` `java/util/concurrent/BlockingQueue.offer:(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z`
+- `invokeinterface` `java/util/concurrent/BlockingDeque.offer:(Ljava/lang/Object;)Z`
+- `invokeinterface` `java/util/concurrent/BlockingDeque.offer:(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z`
+- `invokeinterface` `java/util/concurrent/TransferQueue.offer:(Ljava/lang/Object;)Z`
+- `invokeinterface` `java/util/concurrent/TransferQueue.offer:(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z`
+- `invokevirtual` `java/util/concurrent/LinkedBlockingQueue.offer:(Ljava/lang/Object;)Z`
+- `invokevirtual` `java/util/concurrent/LinkedBlockingQueue.offer:(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z`
+- `invokevirtual` `java/util/concurrent/ArrayBlockingQueue.offer:(Ljava/lang/Object;)Z`
+- `invokevirtual` `java/util/concurrent/ArrayBlockingQueue.offer:(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z`
+- `invokevirtual` `java/util/concurrent/PriorityBlockingQueue.offer:(Ljava/lang/Object;)Z`
+- `invokevirtual` `java/util/concurrent/PriorityBlockingQueue.offer:(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z`
+- `invokevirtual` `java/util/concurrent/LinkedBlockingDeque.offer:(Ljava/lang/Object;)Z`
+- `invokevirtual` `java/util/concurrent/LinkedBlockingDeque.offer:(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z`
+- `invokevirtual` `java/util/concurrent/LinkedTransferQueue.offer:(Ljava/lang/Object;)Z`
+- `invokevirtual` `java/util/concurrent/LinkedTransferQueue.offer:(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z`
+- `invokevirtual` `java/util/concurrent/SynchronousQueue.offer:(Ljava/lang/Object;)Z`
+- `invokevirtual` `java/util/concurrent/SynchronousQueue.offer:(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z`
+- `invokevirtual` `java/util/concurrent/DelayQueue.offer:(Ljava/util/concurrent/Delayed;)Z`
+- `invokevirtual` `java/util/concurrent/DelayQueue.offer:(Ljava/util/concurrent/Delayed;JLjava/util/concurrent/TimeUnit;)Z`
+- `invokeinterface` `java/util/concurrent/BlockingQueue.add:(Ljava/lang/Object;)Z`
+- `invokeinterface` `java/util/concurrent/BlockingDeque.add:(Ljava/lang/Object;)Z`
+- `invokeinterface` `java/util/concurrent/TransferQueue.add:(Ljava/lang/Object;)Z`
+- `invokevirtual` `java/util/concurrent/LinkedBlockingQueue.add:(Ljava/lang/Object;)Z`
+- `invokevirtual` `java/util/concurrent/ArrayBlockingQueue.add:(Ljava/lang/Object;)Z`
+- `invokevirtual` `java/util/concurrent/PriorityBlockingQueue.add:(Ljava/lang/Object;)Z`
+- `invokevirtual` `java/util/concurrent/LinkedBlockingDeque.add:(Ljava/lang/Object;)Z`
+- `invokevirtual` `java/util/concurrent/LinkedTransferQueue.add:(Ljava/lang/Object;)Z`
+- `invokevirtual` `java/util/concurrent/SynchronousQueue.add:(Ljava/lang/Object;)Z`
+- `invokevirtual` `java/util/concurrent/DelayQueue.add:(Ljava/util/concurrent/Delayed;)Z`
+- `invokeinterface` `java/util/concurrent/BlockingQueue.take:()Ljava/lang/Object;`
+- `invokeinterface` `java/util/concurrent/BlockingDeque.take:()Ljava/lang/Object;`
+- `invokeinterface` `java/util/concurrent/TransferQueue.take:()Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/LinkedBlockingQueue.take:()Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/ArrayBlockingQueue.take:()Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/PriorityBlockingQueue.take:()Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/LinkedBlockingDeque.take:()Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/LinkedTransferQueue.take:()Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/SynchronousQueue.take:()Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/DelayQueue.take:()Ljava/util/concurrent/Delayed;`
+- `invokeinterface` `java/util/concurrent/BlockingQueue.poll:()Ljava/lang/Object;`
+- `invokeinterface` `java/util/concurrent/BlockingQueue.poll:(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;`
+- `invokeinterface` `java/util/concurrent/BlockingDeque.poll:()Ljava/lang/Object;`
+- `invokeinterface` `java/util/concurrent/BlockingDeque.poll:(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;`
+- `invokeinterface` `java/util/concurrent/TransferQueue.poll:()Ljava/lang/Object;`
+- `invokeinterface` `java/util/concurrent/TransferQueue.poll:(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/LinkedBlockingQueue.poll:()Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/LinkedBlockingQueue.poll:(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/ArrayBlockingQueue.poll:()Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/ArrayBlockingQueue.poll:(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/PriorityBlockingQueue.poll:()Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/PriorityBlockingQueue.poll:(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/LinkedBlockingDeque.poll:()Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/LinkedBlockingDeque.poll:(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/LinkedTransferQueue.poll:()Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/LinkedTransferQueue.poll:(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/SynchronousQueue.poll:()Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/SynchronousQueue.poll:(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;`
+- `invokevirtual` `java/util/concurrent/DelayQueue.poll:()Ljava/util/concurrent/Delayed;`
+- `invokevirtual` `java/util/concurrent/DelayQueue.poll:(JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/Delayed;`
+
+### 15. What javac writes at the fixture's queue sites
+
+- `Pipeline`: `invokeinterface` `java/util/concurrent/BlockingQueue.put:(Ljava/lang/Object;)V`
+- `Pipeline`: `invokeinterface` `java/util/concurrent/BlockingQueue.offer:(Ljava/lang/Object;JLjava/util/concurrent/TimeUnit;)Z`
+- `Pipeline`: `invokeinterface` `java/util/concurrent/BlockingQueue.offer:(Ljava/lang/Object;)Z`
+- `Pipeline`: `invokeinterface` `java/util/concurrent/BlockingQueue.add:(Ljava/lang/Object;)Z`
+- `Pipeline`: `invokeinterface` `java/util/concurrent/BlockingQueue.take:()Ljava/lang/Object;`
+- `Pipeline`: `invokeinterface` `java/util/concurrent/BlockingQueue.poll:()Ljava/lang/Object;`
+- `Worker`: `invokeinterface` `java/util/concurrent/BlockingQueue.take:()Ljava/lang/Object;`
+- `Worker`: `invokeinterface` `java/util/concurrent/BlockingQueue.poll:(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;`
+- `Alerts`: `invokevirtual` `java/util/concurrent/LinkedBlockingQueue.put:(Ljava/lang/Object;)V`
+- `Alerts`: `invokevirtual` `java/util/concurrent/LinkedBlockingQueue.take:()Ljava/lang/Object;`
+- `Cleaner`: `invokeinterface` `java/util/concurrent/BlockingQueue.offer:(Ljava/lang/Object;)Z`
+- `Cleaner`: `invokeinterface` `java/util/concurrent/BlockingQueue.poll:(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;`
+- `Cleaner`: `invokestatic` `com/google/common/collect/Queues.newLinkedBlockingQueue:(I)Ljava/util/concurrent/LinkedBlockingQueue;`
+- `Batch`: `invokeinterface` `java/util/concurrent/BlockingQueue.put:(Ljava/lang/Object;)V`
+- `Batch`: `invokeinterface` `java/util/List.add:(Ljava/lang/Object;)Z`
+- `Batch`: `invokeinterface` `java/util/concurrent/BlockingQueue.take:()Ljava/lang/Object;`
+- `Relay`: `invokeinterface` `java/util/concurrent/BlockingQueue.put:(Ljava/lang/Object;)V`
+- `Relay`: `invokeinterface` `java/util/concurrent/BlockingQueue.take:()Ljava/lang/Object;`
+- `Scratch`: `invokeinterface` `java/util/Queue.offer:(Ljava/lang/Object;)Z`
+- `Scratch`: `invokeinterface` `java/util/Queue.poll:()Ljava/lang/Object;`

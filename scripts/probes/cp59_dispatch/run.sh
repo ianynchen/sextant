@@ -7,6 +7,10 @@
 # versions), reads the Jakarta CDI API and ArC jars it resolves and the javax CDI API 1.0 and 2.0
 # jars (copied into that fixture's `target/`), for the `cdi-events` and `cdi-async-events`
 # catalogs.
+# Then Java blocking queues: compiles `fixtures/orders-queues` and a generated class calling each
+# declared method through each declared owner, and runs `javap` on the JDK's queue types, for the
+# `jdk-blocking-queue` catalog (the JDK is no jar with a manifest: its version is the one the
+# running `java` reports as `java.version`).
 # Needs a JDK 21 at $JAVA_HOME, Maven, and network on the first run only. Starts no context.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -27,5 +31,9 @@ copy() {  # copy <coordinate> <directory>: offline first, online once
  mvn -q -B -o dependency:build-classpath -Dmdep.outputFile="$PWD/target/probe.cp" >&2
  copy javax.enterprise:cdi-api:1.0 probe-javax
  copy javax.enterprise:cdi-api:2.0 probe-javax2)
+QUEUES=../../../fixtures/orders-queues
+(cd "$QUEUES" && { mvn -q -B -o clean compile >&2 || mvn -q -B clean compile >&2; }
+ mvn -q -B -o dependency:build-classpath -Dmdep.outputFile="$PWD/target/probe.cp" >&2)
 if [ -x ../../../.venv/bin/python ]; then PY=../../../.venv/bin/python; else PY=python3; fi
-exec "$PY" probe.py "FIX=$(cd "$FIX" && pwd)" "CDI_FIX=$(cd "$CDI" && pwd)" "JAVA_HOME=$JAVA_HOME"
+exec "$PY" probe.py "FIX=$(cd "$FIX" && pwd)" "CDI_FIX=$(cd "$CDI" && pwd)" \
+  "QUEUES_FIX=$(cd "$QUEUES" && pwd)" "JAVA_HOME=$JAVA_HOME"

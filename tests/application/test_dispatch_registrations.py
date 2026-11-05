@@ -1029,6 +1029,62 @@ def test_a_malformed_receive_is_refused_at_load(tmp_path: Path, entry: str, refu
         YamlCatalogSource(tmp_path).load()
 
 
+_RECEIVE = (
+    "  dispatch_receives:\n"
+    "    - { owner: a.Queue, method: take, descriptor: '()Ljava/lang/Object;', "
+    "object: receiver, handler: enclosing }\n"
+)
+_REGISTRATION = (
+    "  dispatch_registrations:\n"
+    "    - { owner: a.B, method: handle, descriptor: '(Ljava/lang/Class;Ljava/lang/Object;)V', "
+    "class_arg: 0, handler_arg: 1 }\n"
+)
+_IMPLEMENTATION = (
+    "  dispatch_implementations:\n"
+    "    - { owner: a.Listener, method: on, descriptor: '(Ljava/lang/Object;)V', value_arg: 0 }\n"
+)
+
+
+@pytest.mark.pins("catalogs.a-dispatch-block-is-read-under-ITS-key")
+@pytest.mark.parametrize(
+    "style, key, blocks, refused",
+    [
+        ("fluent", "type", _RECEIVE, "`key: type` beside `dispatch_receives`"),
+        ("fluent", "object", _REGISTRATION, "`key: object` beside \\['dispatch_registrations'\\]"),
+        ("fluent", "object", _IMPLEMENTATION, "`key: object` beside"),
+        ("annotation_driven", "object", _RECEIVE, "an annotation mapping"),
+    ],
+)
+def test_a_dispatch_block_under_the_other_key_is_refused(
+    tmp_path: Path, style: str, key: str, blocks: str, refused: str
+):
+    """A receive site is keyed by the object it takes from, a registration by the value's
+    class (spec 2026-11-05 §1-§2). Read under the other key each matches nothing and every
+    hop is a silent stop, so the pairing is refused at load."""
+    from sextant.application.ports.catalogs import CatalogError
+
+    (tmp_path / "c.yml").write_text(
+        f"id: c\nstyle: {style}\ndispatch: {{key: {key}, match: one, mechanism: m}}\n"
+        f"matches:\n{blocks}",
+        encoding="utf-8",
+    )
+    with pytest.raises(CatalogError, match=refused):
+        YamlCatalogSource(tmp_path).load()
+
+
+def test_receives_and_sends_load_under_an_object_key(tmp_path: Path):
+    """The paired positive: `key: object` with sends and receives loads."""
+    (tmp_path / "c.yml").write_text(
+        "id: c\nstyle: fluent\ndispatch: {key: object, match: one, mechanism: m}\nmatches:\n"
+        + _RECEIVE
+        + "  dispatch_sends:\n"
+        "    - { owner: a.Queue, method: put, descriptor: '(Ljava/lang/Object;)V', value_arg: 0 }\n",
+        encoding="utf-8",
+    )
+    [catalog] = YamlCatalogSource(tmp_path).load()
+    assert (len(catalog.dispatch_sends), len(catalog.dispatch_receives)) == (1, 1)
+
+
 def test_a_registration_is_loaded_with_its_positions(tmp_path: Path):
     (tmp_path / "c.yml").write_text(
         "id: c\nstyle: fluent\ndispatch: {key: type, match: first, mechanism: m}\nmatches:\n  dispatch_registrations:\n"

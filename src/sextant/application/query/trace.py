@@ -334,9 +334,10 @@ def _rows(method: str, index: _Index) -> list[dict[str, object]]:
             rows.append(row)
             continue
         for hop in hops:
-            # A hop with no path is a dispatched value whose class was not read: the NULL says so, as
-            # the row's evidence is `compiler` like every other's (D00 §4's closed set).
-            where = hop["path"] if hop["path"] is not None else "(value class not read)"
+            # A hop with no path is a dispatched value whose key was not read (its class, or the
+            # channel object it was handed to): the NULL says so, as the row's evidence is
+            # `compiler` like every other's (D00 §4's closed set).
+            where = hop["path"] if hop["path"] is not None else "(key not read)"
             landed = {"callee": hop["handler"], "via": f"{hop['protocol']} {where}"}
             if hop["handler"] is not None:
                 landed |= {"terminal_kind": None, "target_kind": None}

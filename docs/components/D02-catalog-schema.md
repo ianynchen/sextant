@@ -6361,8 +6361,22 @@ matches:
   handler: enclosing | lambda_arg}`, checked at load (`yaml_source._dispatch_receives`): a
   call that takes a value from an object key's channel (`take`, `receive`), the object it
   takes from, and where the code handling the value is — the method making the call, or the
-  function it is given. Loaded and checked now; the object-key pass that reads them is the
-  2026-11-05 plan's Task 4.
+  function it is given. Read by `dispatch_registrations._receive_rows`: each call site is a
+  registration (a group of its own at position 0) keyed by the object its receiver reaches
+  (`ObjectKeys`, the value walk's object reader: through locals, parameters across callers,
+  helper returns and fields, to a construction or a call whose body is not here), its handler
+  the method making the call. `handler: lambda_arg` is refused where it is read: a function
+  argument's body is not yet read as a handler, and the enclosing method is not one.
+- **`dispatch: {key: object}`** pairs with `dispatch_sends` and `dispatch_receives` only: the
+  loader refuses `dispatch_receives` under `key: type` and a class-keyed block
+  (`dispatch_registrations`, `dispatch_implementations`, an annotation mapping) under `key:
+  object`, since read under the other key either matches nothing. An object-keyed send is a hop
+  to every receive registration of its mechanism on the same object (D01 `hops`), the value's
+  class never asked; `match: one` (each value to one consumer, decided at run time) and `all`
+  give the same rows, every receive on the object. First user: `jdk-blocking-queue.yml` (CP-59
+  findings 12-15): `put`, both `offer`s and `add` as sends, `take` and both `poll`s as receives,
+  on `BlockingQueue`, `BlockingDeque`, `TransferQueue` and the seven `java.util.concurrent`
+  classes, since javac writes the receiver's static type as every call's owner.
 
 **Ordering (§3):** not in the engine loop at all; the registration pass runs right after the
 gRPC hop pass, and the dispatch hop pass right after it.

@@ -1775,6 +1775,10 @@ _DISPATCH_BLOCKS = (
     "dispatch_receives",
     "dispatch_implementations",
 )
+# The blocks registering a handler by the value's class (or an equal value), never by an
+# object; and the `dispatch.key` naming a channel object.
+_CLASS_KEYED_BLOCKS = ("dispatch_registrations", "dispatch_implementations")
+_OBJECT_KEY = "object"
 
 
 def _dispatch(raw: dict[str, Any], path: Path) -> dict[str, str] | None:
@@ -1835,6 +1839,23 @@ def _dispatch(raw: dict[str, Any], path: Path) -> dict[str, str] | None:
         raise CatalogError(
             f"{where}: `dispatch` declares `match: {declared['match']}`; `match` is one of "
             f"{list(_DISPATCH_MATCHES)}"
+        )
+    # A receive site is keyed by its object and a registration by a class: read under the
+    # other key, each would match nothing, every hop a silent stop.
+    by_class = [block for block in blocks if block in _CLASS_KEYED_BLOCKS] + (
+        ["an annotation mapping"] if raw.get("style") == "annotation_driven" else []
+    )
+    if declared["key"] == _OBJECT_KEY and by_class:
+        raise CatalogError(
+            f"{where}: `dispatch` declares `key: object` beside {by_class}, which register "
+            f"handlers by the value's class; an object key's handlers are `dispatch_receives` "
+            f"(spec 2026-11-05 §2)"
+        )
+    if declared["key"] != _OBJECT_KEY and "dispatch_receives" in blocks:
+        raise CatalogError(
+            f"{where}: `dispatch` declares `key: {declared['key']}` beside `dispatch_receives`, "
+            f"whose sites are keyed by the object they take from; it needs `key: object` "
+            f"(spec 2026-11-05 §2)"
         )
     return {"key": str(declared["key"]), "match": str(declared["match"]), "mechanism": mechanism}
 

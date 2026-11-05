@@ -111,6 +111,22 @@ No `message_*` word remains. No word names a framework.
    every receive site on the same object: `match: one` for a channel or queue (one consumer takes
    each value, decided at run time, so a hop to each), `all` for a shared flow. Checked on the
    koog/kotlinconf and apollo/dolphinscheduler examples.
+   **As built (Task 4, Java blocking queues):** `jdk-blocking-queue.yml` (CP-59 findings 12-15).
+   A receive site's key is the call that MADE the object its receiver reaches
+   (`dispatch_registrations.ObjectKeys`, the value walk's object reader with `which_object`):
+   a construction (the module's or a library's) or a call whose body is not here
+   (`ValueIndex.unscanned`, the unseen-object rule's producers — Guava's
+   `Queues.newLinkedBlockingQueue`, which makes all four of apollo's queues). A path ending
+   anywhere else (a parameter nothing calls, an injected object) is "key not read": a send's
+   stop row, a receive's keyless row. javac writes the receiver's static type as the owner of
+   every call, so all ten JDK blocking-queue types are listed (`Dispatch.heirs` does not reach a
+   JDK class that declares the method). The loader refuses `dispatch_receives` under `key: type`
+   and a class-keyed block under `key: object`; a receive's `handler: lambda_arg` is refused
+   where read until a catalog needs it (Task 5). A trace's unread hop now reads `(key not
+   read)` for both key kinds. **Stated bounds:** a field read is answered by every write of the
+   field, so two instances of one class each holding a queue in it are one object
+   (over-linking); `drainTo`, Guava's `Queues.drain(queue, …)`, `peek`/`removeIf`, the deque
+   ends and `Queue`-typed receivers are not read (missing hops, never false ones).
 
 ## 5. Later
 

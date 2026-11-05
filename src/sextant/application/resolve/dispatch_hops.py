@@ -31,6 +31,17 @@ catalog's (`Catalog.dispatch_sends`), and every row carries that catalog's `prot
 A value no registration takes (a reply its asker reads off a future, a command told to a
 system actor) is one row with its class and no `handler`: the trace stops there, naming it.
 
+## A send keyed by its object (`dispatch: {key: object}`, spec 2026-11-05 §1, §3)
+
+A catalog whose key is the OBJECT (a queue, a channel) hands the value to whatever takes from
+the same object: the send's receiver is followed to the call that made it
+(`dispatch_registrations.ObjectKeys`, the walk the receive sites' keys came from), and the send
+is one row per receive registration of its mechanism with that same `key_object`, the value's
+class never asked. `path` is the object, `<caller>#<ordinal>` of the call that made it. An
+object nothing takes from is one row with that path and no handler; a path on which the object
+was not read (a queue from outside the module) is one row with no path and no handler —
+never a hop to every receive site.
+
 ## A handler that delivers continues
 
 A registration declared with `returns_value` (`messageAdapter`'s function, an ask's reply
@@ -70,6 +81,7 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.dispatch_registrations import (
+    ObjectKeys,
     dispatch_mechanism,
     reached_by,
     served_cases,
@@ -102,6 +114,8 @@ _STATIC = "static"
 # entry word naming which of that producer's arguments holds the key's class.
 _CHANNEL_VIA = "channel_via"
 _CLASS_ARG = "class_arg"
+# The `dispatch.key` naming a channel object rather than the value's class.
+_OBJECT_KEY = "object"
 # A value read, as `(class, constant, call site in its method, what was not read)`: the
 # class and the constant's own symbol where read, else `unread` names the argument kind.
 _Value = tuple[str | None, str | None, int | None, str | None]
@@ -129,6 +143,14 @@ def record_dispatch_hops(workspace: Workspace, catalogs: list[Catalog]) -> None:
     reading = _Reading(workspace, catalogs[0].type_model)
     rows: dict[tuple[Any, ...], dict[str, Any]] = {}
     for catalog in sending:
+        if (catalog.dispatch or {}).get("key") == _OBJECT_KEY:
+            objects = ObjectKeys(workspace, catalog)
+            for site, _ in declared_call_sites(workspace, catalog.dispatch_sends):
+                for row in reading.object_hops(
+                    site, objects.of(site), catalog.protocol, dispatch_mechanism(catalog)
+                ):
+                    rows.setdefault(tuple(row.values()), row)
+            continue
         for site, send in declared_call_sites(workspace, catalog.dispatch_sends):
             argument = _arg_at(site["arguments"], send["value_arg"])
             for value in reading.sent(argument, str(site["caller"])):
@@ -503,6 +525,37 @@ class _Reading:
                     bool(row["static"]),
                 )
         return self._field_types.get(symbol, (None, False))
+
+    def object_hops(
+        self,
+        site: Mapping[str, Any],
+        objects: tuple[str | None, ...],
+        protocol: str,
+        mechanism: str,
+    ) -> list[dict[str, Any]]:
+        """The rows one object-keyed send gives (module docstring): for each object its
+        receiver can be, one per receive registration of `mechanism` on that object, or one
+        with no handler where none takes from it; one with no path and no handler for a path
+        on which the object was not read. `evidence` is `compiler`, as for every hop."""
+        row = {"caller": site["caller"], "ordinal": site["ordinal"], "protocol": protocol}
+        rows: list[dict[str, Any]] = []
+        for key in objects:
+            if key is None:
+                rows.append(row | {"path": None, "handler": None, "evidence": "compiler"})
+                continue
+            takers = sorted(
+                {
+                    case["handler"]
+                    for case in self._by_mechanism.get(mechanism, [])
+                    if case["key_object"] == key
+                },
+                key=lambda handler: (handler is None, handler),
+            )
+            rows.extend(
+                row | {"path": key, "handler": taker, "evidence": "compiler"}
+                for taker in takers or [None]
+            )
+        return rows
 
     def hops(
         self, caller: str, ordinal: int | None, value: _Value, protocol: str, mechanism: str

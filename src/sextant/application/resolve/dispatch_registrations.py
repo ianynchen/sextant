@@ -43,8 +43,9 @@ root's owners with `Dispatch.heirs` (JVMS 5.4.3.3), for every chain catalog alik
   value registration, a predicate-only one, or a class argument that is not a literal.
 - `key_value` — the constant at `value_arg`, by identity (rule 8): the symbol of the `enum`
   or `field` argument the call reads. NULL for anything else.
-- `key_object` — the channel object an object key names (spec 2026-11-05 §3); NULL for a type
-  key, which is every registration this pass reads.
+- `key_object` — the channel object a receive site takes from (spec 2026-11-05 §3), as the call
+  that made it, `<caller>#<ordinal>` (`ObjectKeys`); NULL for a type key, and for a receive
+  whose object was not read.
 - `predicated` — the registration declares a `predicate_arg`.
 - `handler` — the method the handler argument names (`combinator._handler_of`: a method
   reference names the method, a constructor reference the constructor, a lambda its synthetic
@@ -58,9 +59,20 @@ A registration the walk could not read (the builder handed to code we do not hav
 2026-11-02 rule 2) keeps its position with every key column NULL: its class is unknown, so it
 matches nothing and shadows nothing.
 
+## A receive site is keyed by its object (`dispatch_receives`, spec 2026-11-05 §1, §3)
+
+Under `dispatch: {key: object}` the code that receives a value is the code that takes from the
+same channel object it was handed to, whatever the value's class. Each call site of a declared
+receive is a group of its own, `<caller>#<ordinal>`, at position 0, its handler the method
+making the call (`handler: enclosing`). Its key is the object it is called on (`object:
+receiver`), followed to the call that MADE it (`ObjectKeys`): two sites act on one object
+exactly when their receivers reach the same such call. One row per distinct object the walk
+reaches; one row with `key_object` NULL where it reaches none, which matches nothing.
+
 ## Cost (GUIDELINES §8.7)
 
-One `chain_ends` walk per declaring catalog, only where the module calls one of its roots'
+One object walk per receive site (`ObjectKeys`, on the resolve's shared value index, each
+site's answer kept). One `chain_ends` walk per declaring catalog, only where the module calls one of its roots'
 owners or a type inheriting one (a module calling none pays one index lookup per owner each).
 The heirs come from the resolve's one `Dispatch` (`Workspace.once`). A registration no step
 names costs one index lookup per declared owner and heir.
@@ -83,6 +95,7 @@ from sextant.application.resolve.shapes.arguments import (
 )
 from sextant.application.resolve.shapes.chains import _method_symbols, chain_ends
 from sextant.application.resolve.shapes.rooting import catalog_symbols
+from sextant.application.resolve.values import RECEIVER, cached_value_index, producer_paths
 from sextant.domain.symbols import bare_descriptor, method_descriptor, parameter_types
 
 # The capture each registration step carries its own call in (the catalog's `case: argN`).
@@ -95,6 +108,10 @@ _CONSTANT_KINDS = ("enum", "field")
 # The style whose mapping a catalog declaring `dispatch` reads as registrations
 # (`annotation_driven.registrations`): each annotated method one registration per key.
 _ANNOTATION_STYLE = "annotation_driven"
+# A receive site's handler word naming the method making the call (`dispatch_receives`).
+_ENCLOSING = "enclosing"
+# The constructor name D00 §5 normalises every language's to: a construction makes an object.
+_CONSTRUCTOR = "<init>"
 
 
 def record_dispatch_registrations(workspace: Workspace, catalogs: list[Catalog]) -> None:
@@ -106,6 +123,7 @@ def record_dispatch_registrations(workspace: Workspace, catalogs: list[Catalog])
         for catalog in catalogs
         if catalog.dispatch_registrations
         or catalog.dispatch_implementations
+        or catalog.dispatch_receives
         or _reads_annotations(catalog)
     ]
     if not declaring:
@@ -124,6 +142,7 @@ def record_dispatch_registrations(workspace: Workspace, catalogs: list[Catalog])
                 else ()
             ),
             *_implementation_rows(workspace, catalog),
+            *_receive_rows(workspace, catalog),
         ):
             row = row | {"mechanism": dispatch_mechanism(catalog)}
             key = tuple(row.values())
@@ -392,6 +411,89 @@ def _implementation_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dic
                 "delivers": False,
                 "match": match,
             }
+
+
+def _receive_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dict[str, Any]]:
+    """The registrations made by taking from a channel object (`dispatch_receives`, spec
+    2026-11-05 §1, §3): each call site of a declared receive is a group of its own,
+    `<caller>#<ordinal>`, at position 0, keyed by each object its receiver reaches
+    (`ObjectKeys`), its handler the method making the call. One row with `key_object` NULL
+    where no object was read: it matches nothing, never every send.
+
+    Only `handler: enclosing` is read here: a receive handing its value to a function argument
+    (`lambda_arg`) is refused rather than read as its enclosing method, which is not the code
+    that handles the value."""
+    if not catalog.dispatch_receives:
+        return
+    match = _match_of(catalog)
+    objects = ObjectKeys(workspace, catalog)
+    for site, receive in declared_call_sites(workspace, catalog.dispatch_receives):
+        if receive["handler"] != _ENCLOSING:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `{receive['method']}` declares "
+                f"`handler: {receive['handler']}`; a receive site's handler is read only as the "
+                f"method making the call (`{_ENCLOSING}`) (spec 2026-11-05 §2)"
+            )
+        group = f"{site['caller']}#{site['ordinal']}"
+        made: list[str | None] = [key for key in objects.of(site) if key is not None]
+        for key in made or [None]:
+            yield {
+                "group": group,
+                "position": 0,
+                "key_type": None,
+                "key_value": None,
+                "key_object": key,
+                "predicated": False,
+                "handler": str(site["caller"]),
+                "delivers": False,
+                "match": match,
+            }
+
+
+class ObjectKeys:
+    """Which channel object a call site acts on, as the call that made it (spec 2026-11-05 §3):
+    `<caller>#<ordinal>` of each producer the site's receiver reaches, None for each path that
+    reaches none. Two sites act on one object exactly when they reach the same producer.
+
+    The receiver is followed by the value walk's object reader (`values.producer_paths`,
+    `which_object`: a call made ON the object does not make it another), through locals,
+    parameters across callers, helper returns and fields (a field read answered by each write
+    of that field, in its writer's frame). Where it ends is any call that makes an object: a
+    construction (`<init>`, the module's or a library's), or a call whose body is not here
+    (`ValueIndex.unscanned`, the unseen-object rule's producers: a library factory such as
+    `Queues.newLinkedBlockingQueue()`, or a getter handing back an object we cannot follow
+    further). A path ending anywhere else — a parameter nothing in the module calls, the
+    object a container injects — is None: the object is not read.
+
+    **Stated bounds.** A field read is answered by every write of that field, so two instances
+    of one class each holding its own queue in that field are one object here (over-linking);
+    so are two objects one helper makes, and two a library call hands back at one site.
+
+    Cost (GUIDELINES §8.7): the resolve's one shared value index, one walk per site asked,
+    each answer kept."""
+
+    def __init__(self, workspace: Workspace, catalog: Catalog) -> None:
+        self._index = cached_value_index(workspace, catalog.not_hand_offs, catalog.hand_off_effects)
+        self._made = self._index.unscanned | frozenset(
+            (built, _CONSTRUCTOR) for built in self._index.constructed
+        )
+        self._keys: dict[tuple[str, int], tuple[str | None, ...]] = {}
+
+    def of(self, site: Mapping[str, Any]) -> tuple[str | None, ...]:
+        """Each object the receiver of `site` can be, once each, in the walk's order."""
+        at = (str(site["caller"]), int(site["ordinal"]))
+        if at not in self._keys:
+            self._keys[at] = tuple(
+                dict.fromkeys(
+                    None
+                    if producer.caller is None or producer.ordinal is None
+                    else f"{producer.caller}#{producer.ordinal}"
+                    for producer, _ in producer_paths(
+                        self._index, site, RECEIVER, self._made, which_object=True
+                    )
+                )
+            ) or (None,)
+        return self._keys[at]
 
 
 class _Declarations:

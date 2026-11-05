@@ -7225,6 +7225,123 @@ GUARDS: dict[str, Guard] = {
             for family, prefix in (("pekko", "org/apache/pekko"), ("akka", "akka"))
         ),
     ),
+    "dispatch-objects.a-RECEIVE-site-registers-keyed-by-its-OBJECT": Guard(
+        what="each declared receive site is a registration keyed by its object",
+        why="spec 2026-11-05 §1, §3: a value put on a queue is handled where it is taken off "
+        "that queue. Unread, every put is a hop to no handler and a trace stops at the queue",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="            *_receive_rows(workspace, catalog),\n",
+                replace="            # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-SEND-hops-to-the-receives-on-its-OBJECT": Guard(
+        what="an object-keyed send hops only to receives on the SAME object",
+        why="spec 2026-11-05 Review Focus 4: two queues of one type in one module; a put on "
+        "one reaching the other's takes is a false hop",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find='                    if case["key_object"] == key\n',
+                replace='                    if case["key_object"] is not None  # guard disabled\n',
+            ),
+        ),
+    ),
+    "dispatch-objects.an-OBJECT-key-is-not-asked-for-a-CLASS": Guard(
+        what="a send under `dispatch: {key: object}` is keyed by its receiver, not its value",
+        why="spec 2026-11-05 §1: a queue takes values of any class. Read as a type key, a put "
+        "of a parameter is a stop and a put of `new Job()` reaches no take",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find='        if (catalog.dispatch or {}).get("key") == _OBJECT_KEY:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.an-UNREAD-object-is-a-STOP-that-says-so": Guard(
+        what="a send whose object is not read is one row with no path and no handler",
+        why="spec 2026-11-05 Global Constraints: an unread key is a stop that says so, never "
+        "a fan-out. Without the row the trace reads the put as a plain library call",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find='                rows.append(row | {"path": None, "handler": None, '
+                '"evidence": "compiler"})\n                continue\n',
+                replace="                continue  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.an-UNREAD-receive-is-KEPT-keyless": Guard(
+        what="a receive whose object is not read keeps one registration with no key",
+        why="spec 2026-11-05 §3: a registration the walk could not read keeps its row, its "
+        "key NULL, matching nothing; dropped, the take is nowhere in the table",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        for key in made or [None]:\n",
+                replace="        for key in made:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-LIBRARY-call-that-makes-the-object-is-its-producer": Guard(
+        what="a library call handing back the object is where the object walk ends",
+        why="`examples/apollo` makes all four of its queues with `Queues.newLinkedBlockingQueue`"
+        ", a static call whose body is not here. Not a producer, each is an object not read and "
+        "every put on it a stop",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        self._made = self._index.unscanned | frozenset(\n",
+                replace="        self._made = frozenset() | frozenset(  # guard disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.the-object-walk-lets-calls-ON-the-object-PAST": Guard(
+        what="the object walk asks which object, so calls made on the object do not end it",
+        why="spec 2026-10-30 §3c (`which_object`): a queue offered to and polled in between "
+        "is still the queue its constructor made",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="                        self._index, site, RECEIVER, self._made, "
+                "which_object=True\n",
+                replace="                        self._index, site, RECEIVER, self._made, "
+                "which_object=False\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-LAMBDA-ARG-handler-is-refused-not-guessed": Guard(
+        what="a receive declaring `handler: lambda_arg` is refused, not read as its method",
+        why="spec 2026-11-05 §2: the enclosing method is not the code a function argument "
+        "handles the value in; read so, every hop would land on the wrong method",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='        if receive["handler"] != _ENCLOSING:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "catalogs.a-dispatch-block-is-read-under-ITS-key": Guard(
+        what="a receive block needs `key: object`, a class-keyed block refuses it",
+        why="spec 2026-11-05 §1-§2: read under the other key a block matches nothing and every "
+        "hop is a silent stop",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find='    if declared["key"] == _OBJECT_KEY and by_class:\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find='    if declared["key"] != _OBJECT_KEY and "dispatch_receives" in blocks:\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "dispatch-hops.the-hops-are-WRITTEN": Guard(
         what="each declared send's hops are written into `hops`",
         why="spec 2026-11-04 §3c: the trace reads hops from that table. Without them every "
@@ -7367,6 +7484,19 @@ GUARDS: dict[str, Guard] = {
                 path=_DISPATCH_REGISTRATIONS,
                 find='    for row in workspace.query("constructor_declarations"):\n',
                 replace="    for row in []:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "calls.a-declared-call-is-matched-on-its-OWNER": Guard(
+        what="a catalog entry's call sites are those made on its owner or a type inheriting it",
+        why="CP-59 finding 14: javac writes the receiver's static type as the owner. Matched "
+        "on name and parameter types alone, a plain `Queue.offer` on a local `ArrayDeque` is "
+        "read as a blocking queue's send",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/arguments.py",
+                find="        for called in (owner, *dispatch.heirs(owner, method)):\n",
+                replace="        for called in list(index.positions_by_owner):  # guard disabled\n",
             ),
         ),
     ),
@@ -7828,13 +7958,13 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "trace.an-UNREAD-hop-says-why-in-its-via": Guard(
-        what="a hop with no path says in the step's `via` that its message class was not read",
-        why="spec 2026-11-04 §3c: the stop says the message class was not read. Without it "
-        "the step reads `actor None`",
+        what="a hop with no path says in the step's `via` that its key was not read",
+        why="spec 2026-11-04 §3c, 2026-11-05 §1: the stop says the key (the value's class, or "
+        "the channel object) was not read. Without it the step reads `actor None`",
         edits=(
             Edit(
                 path="sextant/application/query/trace.py",
-                find='            where = hop["path"] if hop["path"] is not None else "(value class not read)"\n',
+                find='            where = hop["path"] if hop["path"] is not None else "(key not read)"\n',
                 replace='            where = hop["path"]  # guard disabled by scripts/guard_check.py\n',
             ),
         ),
@@ -11503,6 +11633,10 @@ def copy_tree(destination: Path) -> Path:
         # CDI events (spec 2026-11-05 §4 item 6): observers are selected by the parameter
         # annotations javac writes, read off real facts by the e2e test of this module.
         "orders-cdi-events",
+        # Java blocking queues (spec 2026-11-05 §4 item 7): which queue object a call acts
+        # on is followed through javac's fields, constructors and factory calls, read off
+        # real facts.
+        "orders-queues",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

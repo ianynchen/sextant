@@ -795,7 +795,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**113 of 127 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**114 of 128 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -843,6 +843,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `javax-jaxrs` | `javax.ws.rs:javax.ws.rs-api` | 2.1.1 |
 | `javax-jms` | `javax.jms:javax.jms-api` | 2.0.1 |
 | `javax-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 9.0.121 |
+| `jdk-blocking-queue` | `jmod:java.base` | 21.0.13.0.3 |
 | `jdk-httpclient` | `jmod:java.net.http` | 21.0.12.1 |
 | `kafka-clients` | `org.apache.kafka:kafka-clients` | 3.6.2 |
 | `kafka-consumer` | `org.apache.kafka:kafka-clients` | 3.6.2 |

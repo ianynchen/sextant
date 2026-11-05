@@ -1,0 +1,24 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-queues</artifactId>
+  <version>1.0.0</version>
+  <!-- Java blocking queues (spec 2026-11-05 §4 item 7): object-keyed in-process dispatch. A
+       value put on a queue is taken by whatever takes from THAT queue object; two queues of
+       one type stay apart. JDK 21 and Guava's `Queues` factory (the shape apollo uses);
+       never run. In its own module so that no other fixture's pinned row counts move. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <!-- `Queues.newLinkedBlockingQueue`, a library static factory making the queue
+         (`examples/apollo`'s four queues are made so). All transitives excluded. -->
+    <dependency>
+      <groupId>com.google.guava</groupId>
+      <artifactId>guava</artifactId>
+      <version>32.0.0-jre</version>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+  </dependencies>
+</project>
