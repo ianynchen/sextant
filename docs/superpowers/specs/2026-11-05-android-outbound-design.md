@@ -190,3 +190,6 @@ Five Major findings (no Critical), each ruled by the user 2026-11-05. Minor find
   rules, and join the address to the path. Where the address is not in code Sextant can follow, the
   line is marked partial ("server address not read"), never complete. A new setup-file (catalog)
   word, if one is needed, is shown to the user before use.
+  **Catalog word approved 2026-11-05:** `made_by` (under `matches` of an `annotation_driven`
+  catalog: the call that makes the client object for an interface; its address comes from the
+  object that call is made on), reusing `class_arg` from PR #91 and the existing `steps` words.
