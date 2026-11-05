@@ -66,7 +66,11 @@ here would restate those documents rather than add anything.
   a chain root, and a `single_call` row, also match a call naming a subtype of the declared
   owner, through library types the workspace has headers for, unless a type the module
   declares answers the call with its own body (`Dispatch.heirs`). `this.newReceiveBuilder()`
-  names the subclass, and was read as nothing before. The six field pins are unchanged.
+  names the subclass, and was read as nothing before. The six field pins are unchanged, but
+  the rule is shared by every `single_call` and fluent catalog, so it changes non-actor rows
+  too: on 20 built non-actor modules, `vertx-examples/web-client-examples` has 2 `vertx-webclient`
+  rows go from `unresolved` to `resolved` (`GET localhost:8081 protected/path`), both true:
+  `OAuth2WebClient` inherits `get` from `WebClient`. The other 19 are unchanged.
 
 ### Fixed
 

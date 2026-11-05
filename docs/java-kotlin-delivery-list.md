@@ -586,17 +586,14 @@ the name is out of ```intention-test-missing.
 
 ### Async and internal boundaries — DELIVERED, CI run pending (2026-11-04: `quartz` closed 2026-10-29 and `akka-pekko-actors` 2026-11-04, the last two blockers; was NOT DELIVERED after both of the row's own blockers closed 2026-09-22 and two uncatalogued frameworks surfaced in their place)
 
-**Read the first two rows and the last two together.** Group D closed everything this row
-was waiting on — Temporal and the Vert.x event bus both ship, with seven catalogs, two
-fixtures and exact e2e pins between them. The row did NOT close, and the reason is the
-definition at the top of this file rather than anything Group D left undone: §5.12 carries a
-Quartz row and an Akka/Pekko actors row that no catalog reads, and *"every Java/Kotlin
-library catalogued"* is the first clause of delivered. Both were there before Group D
-started and neither was in its scope; they were invisible while two other ids held the row
-open. Naming them is what the Kafka row did when `kafka-batch-generics` closed. *2026-11-04:
-both are now catalogued and their register rows below are closed, `quartz` on 2026-10-29 and
-`akka-pekko-actors` on 2026-11-04, so the row's ```delivery entry is empty; the closure
-stands once CI runs the pins.*
+**Every row below is closed, and the row's ```delivery entry is empty; the closure stands
+once CI runs the pins.** Group D closed the row's own two blockers on 2026-09-22 — Temporal
+and the Vert.x event bus, seven catalogs and two fixtures between them. The row stayed open
+because §5.12 then carried two Java/Kotlin libraries no catalog read, Quartz and Akka/Pekko
+actors, and *"every Java/Kotlin library catalogued"* is the first clause of delivered; naming
+them is what the Kafka row did when `kafka-batch-generics` closed. Both are now built:
+`quartz` closed 2026-10-29 and `akka-pekko-actors` 2026-11-04, each with its own spec, probe
+and e2e pins, recorded in its row below.
 
 | # | issue |
 |---|---|

@@ -130,7 +130,8 @@ give several hops, as virtual dispatch gives several callees.
 - Unknown class: a stop that says the message class was not read. Never a fan-out.
 
 `rpc_hops` keeps its name and columns; the code that fills it gains a second producer.
-`record_self_calls` is unchanged (gRPC only).
+`record_self_calls` gains `actor` beside `grpc` (§3d item 5), matching a served identity
+within its own protocol only.
 
 ### 3d. Calls made after the builder check (2026-11-04, my calls under the user's rulings)
 
@@ -235,7 +236,10 @@ with its cost if wrong.
    plan's `predicate_arg` for `onCommand` had nothing to declare; it is declared only for
    `onMessage(Class, Predicate, Function)`. The persistence form `onCommand(Predicate, h)` is a
    predicate-only case: `message_type` NULL, reached by any message, never shadowing. Cost if
-   wrong: a few extra hops in persistence actors with predicate-only commands.
+   wrong: such a case gets a hop from EVERY send in the module, whichever actor the send is
+   told to, because a hop goes by class and never by which actor a ref holds (§4), not a few
+   hops in its own actor. 0 such cases in akka-samples and pekko-samples (a grep of
+   `onCommand(` with a lambda or method reference as its first argument).
 3. **`RecipientRef.ask` does not exist.** The sends are `EntityRef.ask(Function, Duration)` and
    the static `AskPattern.ask(RecipientRef, Function, Duration, Scheduler)`; the plan text was
    corrected before Task 5.
@@ -262,6 +266,14 @@ with its cost if wrong.
     branch (GUIDELINES §13.9).
 11. **The missing `setReceiveTimeout` hop is fixed now, not logged**: it is real sample code and
     a catalog declaration (`message_sends`, message at argument 1). Cost: one fix round.
+12. **`rpc_hops.evidence` stays inside D00 §4's closed set** (final review): every actor hop
+    row writes `compiler`, the send site being a compiler fact. A send whose message class was
+    not read is told by `path` and `handler` NULL, and the trace step says `actor (message
+    class not read)`; which argument kind it was (a parameter, a call's result) is not kept.
+13. **`rpc_hops`' gRPC writer reads only gRPC-served services** (final review):
+    `self_calls.served_handlers` takes the protocol it is asked for, and `record_rpc_hops`
+    passes its stub catalog's, so an actor key spelled like a gRPC service serves no RPC.
+    `record_self_calls` already matched within one protocol and is unchanged by this.
 
 ### Departures from the plan
 
@@ -271,7 +283,11 @@ with its cost if wrong.
 - **The inherited-root case is general, not the handler reader's.** `this.newReceiveBuilder()`
   names the subclass; the first build widened roots inside `message_handlers.py`, and review
   moved it to `Dispatch.heirs` (JVMS 5.4.3.3), which `single_call` now uses too. The six field
-  pins did not move. `ReceiveBuilder.create()` was added as a root in the same round.
+  pins did not move, but the rule is shared by every `single_call` and fluent catalog, so it
+  changes non-actor rows: measured by the final review on 20 built non-actor modules, 19 are
+  unchanged and `vertx-examples/web-client-examples` has 2 rows go from unresolved to resolved
+  (`GET localhost:8081 protected/path`), both true: `OAuth2WebClient` inherits `get` from
+  `WebClient`. `ReceiveBuilder.create()` was added as a root in the same round.
 - **`message_type` is the class argument's symbol, and `message_value` the constant's symbol
   verbatim** (`…$Tick#INSTANCE.`), so a send compares its own argument symbol unchanged.
 - **A new `single_call` word, `message_class_via`** (Task 6), for §3d item 6: the key's class
@@ -339,4 +355,9 @@ predicate-only; `matchAny`/`onAnyCommand`/`onSignal` not declared; a static non-
 message read by its declared type; a delivering handler's return made at no call site writing
 no row; a continuation hop replacing the constructor step it is keyed on in a trace; classic
 `ClassicBroker`-style `Send` to a `Put` path staying outbound (the `Put` path is unread);
-`Dispatch.heirs` uncached; `message_class_via` validated at resolve rather than load.
+`message_class_via` validated at resolve rather than load; a `forAnyState()` case registered
+before a `forState(..)` case for the same command class gives a hop to a handler that never
+runs (the persistence builder tries its state builders in declaration order, first match
+wins, and each state builder is read as its own behavior), 0 in the samples, which put
+`forAnyState` last (`ShoppingCart`, `AuctionEntity`). `Dispatch.heirs` was uncached here
+until the final fix wave built its type → declared-names map once per `Dispatch`.
