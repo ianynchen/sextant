@@ -80,10 +80,13 @@ Measured against the AGP 9.3.3 API (javap) and init-script probes on kotlinconf-
 1. **The variant read:** the release build type; **or the only variant, where the project has no
    build types** — a KMP Android library (`com.android.kotlin.multiplatform.library`) has exactly one
    variant, `androidMain`, `buildType=null` (kotlinconf `:core`, `:app:shared`, `:app:ui-components`).
-2. **Detection runs Gradle with `--no-parallel`.** With `org.gradle.parallel=true` (kotlinconf, koog)
+2. **Each part answers for itself (M4, ruled B).** With `org.gradle.parallel=true` (kotlinconf, koog)
    the root task's `doLast` cannot resolve another project's configuration ("without an exclusive
-   lock") — this already breaks detection of kotlinconf's plain JVM `:backend` today. The probe is a
-   one-shot read; correctness over speed. M02 and the pinned argv change.
+   lock") — this already breaks detection of kotlinconf's plain JVM `:backend` today. So every
+   project, `java`, Android and KMP alike, gets one task of its own that resolves only its own
+   configurations and writes its record; the root task only assembles the records. Parallel builds
+   stay parallel. Guard: every Gradle build in examples/ and `fixtures/gradle-orders` give the same
+   detection before and after.
 3. **AGP 7.4 and newer** (where `ScopedArtifacts` and `androidComponents` both exist): AGP 8.12/8.13
    (koog, ktor-samples client-mpp) and 9.x (kotlinconf, NotyKT). An older AGP is skipped with its
    reason. `ScopedArtifact.CLASSES` is every project class whichever plugin compiled it (built-in
@@ -154,13 +157,8 @@ Five Major findings (no Critical). Minor findings are fixed above, marked "self-
   `Noty.app-free`, `Noty.app-freeStaging`. Code shared by every edition appears once per edition,
   which is true: each shipped app makes the call. Checked on a test app only (0 flavored builds in
   the corpus), stated as such.
-- **M4. Two collection paths, and `--no-parallel` on every Gradle build.** The `java` branch reads
-  every project from the root task's `doLast`; the Android branch reads from a per-project task.
-  Reading another project's configuration from the root is what breaks under
-  `org.gradle.parallel=true`, and `--no-parallel` fixes it by compiling every Gradle build serially.
-  Recommendation: one per-project task for every project (each resolves its own configurations,
-  which Gradle permits in parallel), the root task only assembles the records. One path, parallel
-  kept.
+- **M4. One way to collect, parallel kept.** **Ruled 2026-11-05: B** (see 2e.2). Replaces the
+  `--no-parallel` call.
 - **M5. An Android compile failure refuses detection of the whole repository.** Today Android
   modules are not compiled, so a mixed repository (backend plus app) is detected. After this design
   any failure in the Android release compile refuses all of it. Realistic causes: a gitignored
