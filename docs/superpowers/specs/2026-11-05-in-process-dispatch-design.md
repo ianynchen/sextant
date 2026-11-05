@@ -1,6 +1,6 @@
 # In-process dispatch — design note
 
-**Status: DRAFT 2026-11-05, for the user's approval.** Amends the Akka/Pekko actors design
+**Status: APPROVED 2026-11-05** ("Yes, but why kotlin later? We said we want to achieve Java and kotlin complete"): every JVM kind is built on this branch; only Go waits for a Go scanner. Amends the Akka/Pekko actors design
 (`2026-11-04-akka-pekko-actors-design.md`, built on `cov/akka-actors`). The user ruled **A** on
 2026-11-05: the catalog pieces built for actors (`message_handlers` style, `message_sends`,
 `message_class_via`) were *"invented just for one framework"* and read too close to
@@ -51,10 +51,9 @@ No `message_*` word remains. No word names a framework.
 - Hops stay in `rpc_hops`, renamed **`hops`** (it already has two writers: gRPC stubs and
   dispatch). `protocol` = the catalog's protocol (`grpc`, `actor`) or `in_process` for a
   catalog with none.
-- **Object keys are designed here and built later** (§5): they add a `key_object` column (the
-  producing call `caller#ordinal`, from `values.producer_paths(…, which_object=True)` — the
-  object-following the Vert.x client reader already uses). That later step bumps the schema
-  once more; adding the column now would be a column nothing writes.
+- `dispatch_registrations` also carries **`key_object`**: for an object key, the producing call
+  `caller#ordinal` of the channel object, from `values.producer_paths(…, which_object=True)` (the
+  object-following the Vert.x client reader already uses). NULL for a type key. Still schema 15.
 
 ## 4. What changes in this branch
 
@@ -64,27 +63,33 @@ No `message_*` word remains. No word names a framework.
    identical (the 33 checked on the Pekko samples, the fixture pins).
 3. `channel_via` gains `class_arg`; `message_class_via` and its second walk go.
 4. `reachable_handlers` gains `match: all` (and `one`).
-5. **Second user, built here: Spring application events.** `publishEvent(Object)` and
-   `publishEvent(ApplicationEvent)` on `ApplicationEventPublisher` (and `ApplicationContext`,
-   which inherits it) are sends; `@EventListener` and `@TransactionalEventListener` methods are
-   registrations keyed by their parameter's type (or the annotation's `classes`), `match: all`.
-   Done when apollo-portal's and dolphinscheduler's publish sites hop to their listeners,
-   each checked by hand, and the six field pins still pass (apollo-portal is one: any moved
-   row is checked true or false).
+5. **Spring application events.** `publishEvent(Object)` and `publishEvent(ApplicationEvent)` on
+   `ApplicationEventPublisher` (and `ApplicationContext`, which inherits it) are sends;
+   `@EventListener` and `@TransactionalEventListener` methods are registrations keyed by their
+   parameter's type (or the annotation's `classes`), `match: all`. **`ApplicationListener<E>`
+   implementations** are registrations keyed by the parameter type of their own
+   `onApplicationEvent(E)` — the non-bridge method (a compiler bridge carries `bridge_of`, D00) —
+   so no fact change is needed. Done when apollo-portal's and dolphinscheduler's publish sites
+   hop to their listeners, each checked by hand, and the six field pins still pass (apollo-portal
+   is one: any moved row is checked true or false).
+6. **CDI events (Quarkus).** `Event.fire`/`fireAsync` are sends; a method whose parameter carries
+   `@Observes`/`@ObservesAsync` is a registration keyed by that parameter's type, `match: all`.
+   Checked on the Quarkus examples.
+7. **Object keys: Kotlin `Channel`, Kotlin `SharedFlow`/`StateFlow`, Java `BlockingQueue`.**
+   Sends: `send`/`trySend`, `emit`/`tryEmit`/`value =`, `put`/`offer`/`add`. Receives: `receive`/
+   `tryReceive`/`for (x in ch)` (an `iterator()` call), `collect`, `take`/`poll`. A send hops to
+   every receive site on the same object: `match: one` for a channel or queue (one consumer takes
+   each value, decided at run time, so a hop to each), `all` for a shared flow. Checked on the
+   koog/kotlinconf and apollo/dolphinscheduler examples.
 
-## 5. Designed now, built later (each its own item)
+## 5. Later
 
-- **`ApplicationListener<E>` implementations** (3 files): need the generic type argument of an
-  implemented interface, which no fact carries today — a fact-schema change, its own ruling.
-- **CDI/Quarkus `@Observes`** (30 files): the parameter-annotation selection word is in §2; built
-  with Quarkus next.
-- **Object keys:** Kotlin `Channel`, `BlockingQueue`, Kotlin `SharedFlow`, and Go channels when
-  Go lands. Same tables, `key: object`, `match: one` (queue) or `all` (shared flow).
-- **Vert.x event-bus local consumers**: keep their endpoint rows (they have an address); a
-  send to an address the module consumes becomes a hop by the existing self-call rule.
+- **Go channels**, when the Go scanner lands: same tables, `key: object`.
+- **Vert.x event-bus local consumers** keep their endpoint rows (they have an address); a send to
+  an address the module consumes becomes a hop by the existing self-call rule.
 
 ## 6. Cost
 
-Same as built: one chain walk per registration catalog, one value read per send. Spring adds
-one annotation pass (the one `annotation_driven` already runs per catalog). Object keys, later,
-add one cached object walk per send and receive site.
+Same as built: one chain walk per registration catalog, one value read per send. Spring and CDI
+add one annotation pass each (the one `annotation_driven` already runs per catalog). Object keys
+add one cached object walk per send and receive site, then a dictionary join on the producer.
