@@ -1269,7 +1269,7 @@ def test_a_part_that_uses_a_failed_part_is_skipped_with_that_reason(
         "/repo/lib/src/main/java/l/L.java:2: error: illegal start of expression"
     )
     assert modules["com.acme:app"].build_failure == (
-        "not built: a part it needs failed to build (:lib)"
+        "not built: a part it needs failed to build (failed: :lib)"
     )
 
 
@@ -1324,6 +1324,113 @@ def test_an_offline_refusal_in_one_part_names_allow_resolve(
     ) in model.notes
     modules = {module.module_id: module for module in model.modules}
     assert "available for offline mode" in str(modules["com.acme:a"].build_failure)
+
+
+def test_a_part_skipped_for_an_offline_refusal_names_allow_resolve_in_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Detect notes reach only the `metadata.json` of a module that is analysed, so a person
+    who reads the skip row of a part the cache could not serve must find the flag there."""
+    root, a, b = _root_record(), _project_record(":a", "a"), _project_record(":b", "b")
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        _write_build(out_dir, [root, a, b], written=[root])
+        return _completed(1, _REAL_DOWNLOAD_THEN_TWO_OFFLINE_FAILURES)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    modules = {module.module_id: module for module in _repository_model(data).modules}
+
+    reason = str(modules["com.acme:a"].build_failure)
+    assert reason.endswith(
+        "No cached version of org.example.sextant:not-cached-a:1.0.0 available for offline "
+        "mode. (--allow-resolve lets Gradle download it)"
+    )
+
+
+def test_a_compile_failure_does_not_name_allow_resolve(tmp_path: Path):
+    root, lib = _root_record(), _project_record(":lib", "lib")
+    _write_build(tmp_path, [root, lib], written=[root])
+    records = gradle_module._assemble(tmp_path, _REAL_ONE_PART_FAILS)["projects"]
+    [reason] = [record["buildFailure"] for record in records if record["path"] == ":lib"]
+    assert reason.startswith("Compilation failed")
+    assert "--allow-resolve" not in reason
+
+
+def test_a_root_project_that_was_not_built_is_a_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The root project is never a module in a build with subprojects, so it has no skip row.
+    When Gradle could not build it, its reason is a note: silent before this fix."""
+    root = {**_root_record(), "dir": "/repo"}
+    lib, app = _project_record(":lib", "lib"), _project_record(":app", "app")
+    other = _project_record(":other", "other")
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        _write_build(out_dir, [root, app, lib, other], written=[other])
+        return _completed(1, _REAL_TWO_PARTS_FAIL)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    model = _repository_model(data)
+
+    [note] = [note for note in model.notes if note.startswith("gradle root project at /repo")]
+    assert note.startswith(
+        "gradle root project at /repo was not built: "
+        "Compilation failed; see the compiler output below.\n"
+        "/repo/src/main/java/r/R.java:2: error: illegal start of expression"
+    )
+    # Still not a module: the modules are the same three subprojects.
+    assert sorted(m.module_id for m in model.modules) == [
+        "com.acme:app",
+        "com.acme:lib",
+        "com.acme:other",
+    ]
+
+
+def test_a_built_root_project_gives_no_not_built_note():
+    model = _repository_model(
+        {"projects": [_minimal_project(path=":"), _minimal_project()], "includedBuilds": []}
+    )
+    assert not [note for note in model.notes if "was not built" in note]
+
+
+def test_a_build_in_which_no_part_was_built_is_refused_with_gradles_own_words(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Controller ruling (Task 2 fix round 1): `build.json` was written but no project wrote
+    its file. A reactor in which every module is skipped would end with success; a build that
+    is broken everywhere is refused as before."""
+    root, lib = _root_record(), _project_record(":lib", "lib")
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        _write_build(out_dir, [root, lib], written=[])
+        return _completed(1, _REAL_TWO_PARTS_FAIL)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    with pytest.raises(ValueError) as failure:
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    assert str(failure.value) == _REAL_TWO_PARTS_FAIL.strip()
+
+
+def test_a_build_in_which_no_part_was_built_offline_is_still_retried_online(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    root, a = _root_record(), _project_record(":a", "a")
+    calls: list[bool] = []
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        calls.append(offline)
+        if offline:
+            _write_build(out_dir, [root, a], written=[])
+            return _completed(1, _REAL_DOWNLOAD_THEN_TWO_OFFLINE_FAILURES)
+        _write_build(out_dir, [root, a], written=[root, a])
+        return _completed(0, "")
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, True)
+    assert calls == [True, False]
+    assert not any("buildFailure" in record for record in data["projects"])
 
 
 def test_the_online_retry_does_not_read_a_file_the_offline_attempt_left(

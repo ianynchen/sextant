@@ -125,13 +125,16 @@ output, never a partial model assembled by guessing.
 2026-11-05). `--continue` lets every project that can build finish. When the run fails but
 `build.json` was written, each project with no file of its own was not built: it is skipped,
 and its reason is Gradle's own message for its failed task (javac's error lines included), or
-`not built: a part it needs failed to build (<paths>)` for a project that needs one that
-failed. The other projects are analysed. Without `--allow-resolve`, a part the cache could not
-serve gives the note "some parts need dependencies that are not in the local Gradle cache;
---allow-resolve lets Gradle download them"; with it, the whole run is retried online once, into
-an empty folder, so no file from the offline attempt is read. A failed run that wrote no
-`build.json` (a build script that does not evaluate, a missing distribution) is still a refusal
-with Gradle's own words.
+`not built: a part it needs failed to build (failed: <paths>)` for a project that needs one
+that failed. The other projects are analysed. A root project that was not built is never a
+module in a build with subprojects, so its reason becomes the note "gradle root project at
+<dir> was not built: <reason>". Without `--allow-resolve`, a part the cache could not serve has
+"(--allow-resolve lets Gradle download it)" after its reason, and the run gets the note "some
+parts need dependencies that are not in the local Gradle cache; --allow-resolve lets Gradle
+download them"; with it, the whole run is retried online once, into an empty folder, so no file
+from the offline attempt is read. A failed run that wrote no `build.json` (a build script that
+does not evaluate, a missing distribution), or in which no project was built at all, is still a
+refusal with Gradle's own words: a build broken everywhere must not end with success.
 
 ### Discovery reads the build, never a convention
 

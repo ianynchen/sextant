@@ -286,7 +286,9 @@ def _assemble(out_dir: Path, output: str = "") -> dict[str, Any]:
     file, so a project with no file was not built, and its record gets `buildFailure`: its
     own failed task's message, or else a statement that a project it needs failed, naming
     the projects that did. Where Gradle's output names no failed task at all, the reason
-    is that output itself, as Gradle wrote it."""
+    is that output itself, as Gradle wrote it. A message that is an offline refusal also
+    names `--allow-resolve`: the reason is the one place a person sees for a skipped
+    project, because detect notes reach only the modules that are analysed."""
     build = _read_json(out_dir / "build.json")
     failures = _failures_by_project(output)
     failed_paths = ", ".join(failures)
@@ -312,11 +314,13 @@ def _assemble(out_dir: Path, output: str = "") -> dict[str, Any]:
                 }
             )
             if output:
-                records[-1]["buildFailure"] = failures.get(
-                    str(project["path"]),
-                    f"not built: a part it needs failed to build ({failed_paths})"
+                own = failures.get(str(project["path"]))
+                if own is not None and _is_offline_refusal(own):
+                    own = f"{own} (--allow-resolve lets Gradle download it)"
+                records[-1]["buildFailure"] = own or (
+                    f"not built: a part it needs failed to build (failed: {failed_paths})"
                     if failures
-                    else output.strip(),
+                    else output.strip()
                 )
         included_builds = build["includedBuilds"]
     except KeyError as missing:
@@ -382,6 +386,7 @@ class GradleDetector:
             notes.extend(data.get("notes", []))
             if multi_module:
                 notes.extend(GradleDetector._root_sources_notes(projects))
+                notes.extend(GradleDetector._root_not_built_notes(projects))
         except KeyError as missing:
             raise ValueError(
                 f"gradle's own model JSON is missing the {missing} key — the init script "
@@ -416,6 +421,16 @@ class GradleDetector:
             "analyzed — it aggregates subprojects (2M design §2's aggregation-only convention)"
         )
         return (message,)
+
+    @staticmethod
+    def _root_not_built_notes(projects: list[dict[str, Any]]) -> tuple[str, ...]:
+        """A root project that Gradle did not build is never a module in a build with
+        subprojects (2M design §2), so it has no skip row to carry its reason. The reason
+        becomes a note, so the failure is stated, not silent (Android design M5)."""
+        root = next((project for project in projects if project["path"] == ":"), None)
+        if root is None or root.get("buildFailure") is None:
+            return ()
+        return (f"gradle root project at {root['dir']} was not built: {root['buildFailure']}",)
 
     @staticmethod
     def _gradle_command(path: Path) -> tuple[list[str], str | None]:
@@ -473,10 +488,16 @@ class GradleDetector:
     def _partial(out_dir: Path, output: str, notes: list[str]) -> dict[str, Any]:
         """A failed run's result: the projects that built, and a reason for each that did
         not, when Gradle got as far as writing `build.json`; Gradle's own error verbatim
-        when it did not."""
+        when it did not. When NO project was built, it is also Gradle's own error verbatim
+        (controller ruling, Task 2 fix round 1): a reactor in which every module is skipped
+        would end the command with success, and a build that is broken everywhere must not
+        look like one that worked."""
         if not (out_dir / "build.json").is_file():
             raise ValueError(output.strip())
-        return {**_assemble(out_dir, output), "notes": notes}
+        assembled = _assemble(out_dir, output)
+        if all("buildFailure" in record for record in assembled["projects"]):
+            raise ValueError(output.strip())
+        return {**assembled, "notes": notes}
 
     # A cap, not a guess at how long a real build takes (2M Task 3 fix round
     # 1, M3): the init script's own `sextantModel` task compiles the whole
