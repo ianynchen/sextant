@@ -19,13 +19,9 @@ chain. Each registration step carries its own call in the `case` capture, and `r
 the calls in chain order, so a case's position is its place in that capture. Each executable
 chain's end is one behavior, named `<root's caller>#<root's ordinal>`.
 
-**A root inherited by the module's own class** is a call naming that class, because javac
-writes the class a call is made through (`this.newReceiveBuilder()` is a call on the
-subclass). The language resolves it up the class's ancestry to the declaration (JVMS
-5.4.3.3), so a declared root owner matches a call on any class whose `type_hierarchy` ancestry
-reaches it. A class of the module that declares the same method itself would answer the call
-with its own body; that is not checked, which holds as long as no module overrides a builder's
-factory method.
+**A root inherited by the module's own class** (`this.newReceiveBuilder()`, which javac writes
+as a call on the subclass) is matched by the shared walk itself: `chain_ends` widens every
+root's owners with `Dispatch.heirs` (JVMS 5.4.3.3), for every chain catalog alike.
 
 ## What a row says
 
@@ -45,21 +41,21 @@ and shadows nothing.
 ## Cost (GUIDELINES §8.7)
 
 One `chain_ends` walk per declaring catalog, only where the module calls one of its roots'
-owners (two catalogs; a module calling neither pays one index lookup each), and one read of
-`type_hierarchy` per resolve that has a declaring catalog.
+owners or a type inheriting one (two catalogs; a module calling neither pays one index lookup
+per owner each). The heirs come from the resolve's one `Dispatch` (`Workspace.once`).
 """
 
 from collections.abc import Iterator, Mapping
-from dataclasses import replace
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.engines.combinator import _handler_of
 from sextant.application.resolve.shapes.arguments import _CAPTURED_AT, _arg_at, call_site_index
 from sextant.application.resolve.shapes.chains import _method_symbols, chain_ends
 from sextant.application.resolve.shapes.rooting import catalog_symbols
-from sextant.domain.symbols import parameter_types, without_type_marker
+from sextant.domain.symbols import parameter_types
 
 # The capture each registration step carries its own call in (the catalog's `case: argN`).
 _CASE = "case"
@@ -74,13 +70,12 @@ def record_message_handlers(workspace: Workspace, catalogs: list[Catalog]) -> No
     declaring = [catalog for catalog in catalogs if catalog.message_handlers]
     if not declaring:
         return
-    ancestors = _ancestors(workspace)
     rows: list[dict[str, Any]] = []
     # Two ends of one chain that read the same cases (two paths through one builder) are one
     # behavior's rows once.
     seen: set[tuple[Any, ...]] = set()
     for catalog in declaring:
-        for row in _rows_of(workspace, catalog, ancestors):
+        for row in _rows_of(workspace, catalog):
             key = tuple(row.values())
             if key not in seen:
                 seen.add(key)
@@ -98,16 +93,26 @@ def reachable_handlers(
     """The cases a message reaches, per behavior in `rows`' order: the first unpredicated case
     it matches, and every predicated case before it that matches (a predicate may decline, so
     it never shadows, spec §3d item 2). A class case matches when the message's class is that
-    class or one of `supertypes[message_type]`; a value case when `message_value` is its
-    constant; a predicate-only case (no class, no value, predicated) matches every message.
-    A case whose class is unknown matches nothing. `rows` are `message_handlers` rows."""
+    class or any of its supertypes; a value case when `message_value` is its constant; a
+    predicate-only case (no class, no value, predicated) matches every message. A case whose
+    class is unknown matches nothing. `rows` are `message_handlers` rows.
+
+    `supertypes` maps a type to its supertypes, classes and interfaces alike; the closure is
+    computed HERE, transitively, so a map of direct supertypes (`type_hierarchy`'s rows, or
+    `Dispatch.ancestors` read as names) is enough, and a transitive one gives the same answer.
+    A constant message is passed with BOTH its class and its value: a class case takes it by
+    class, a value case by identity."""
     reached: list[dict[str, Any]] = []
     behaviors: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         behaviors.setdefault(str(row["behavior"]), []).append(row)
-    assignable = (
-        set() if message_type is None else {message_type, *supertypes.get(message_type, ())}
-    )
+    assignable = set[str]()
+    pending = [] if message_type is None else [message_type]
+    while pending:
+        current = pending.pop()
+        if current not in assignable:
+            assignable.add(current)
+            pending.extend(supertypes.get(current, ()))
     for cases in behaviors.values():
         for case in sorted(cases, key=lambda case: int(case["position"])):
             if not _matches(case, assignable, message_value):
@@ -126,23 +131,21 @@ def _matches(case: Mapping[str, Any], assignable: set[str], message_value: str |
     return bool(case["predicated"])
 
 
-def _rows_of(
-    workspace: Workspace, catalog: Catalog, ancestors: Mapping[str, tuple[str, ...]]
-) -> Iterator[dict[str, Any]]:
+def _rows_of(workspace: Workspace, catalog: Catalog) -> Iterator[dict[str, Any]]:
     """One catalog's cases, behavior by behavior, in the walk's order."""
     registrations = catalog.message_handlers
     _check_steps(catalog)
-    walked = _with_inherited_roots(catalog, ancestors)
     index = workspace.once(call_site_index)
-    roots = walked.matches.get("roots", [])
+    dispatch = workspace.once(dispatch_of)
     if not any(
-        owner in index.positions_by_owner
-        for root in roots
+        called in index.positions_by_owner
+        for root in catalog.matches.get("roots", [])
         for owner in catalog_symbols(root.get("owner"), f"{catalog.source}: roots[].owner")
+        for called in (owner, *dispatch.heirs(owner, str(root.get("method"))))
     ):
         return
     method_symbols = workspace.once(_method_symbols)
-    for end in chain_ends(workspace, walked):
+    for end in chain_ends(workspace, catalog):
         behavior = f"{end.root['caller']}#{end.root['ordinal']}"
         # A builder built with no case on it (an immutable builder whose registrations'
         # results were dropped) is a behavior with nothing to write.
@@ -256,44 +259,3 @@ def _check_steps(catalog: Catalog) -> None:
                 f"entries say how to read it on its {len(owners)} owner(s); each owner needs "
                 f"exactly one (spec 2026-11-04 §3b)"
             )
-
-
-def _ancestors(workspace: Workspace) -> dict[str, tuple[str, ...]]:
-    """Every class's direct ancestors in `type_hierarchy`, bare."""
-    ancestors: dict[str, list[str]] = {}
-    for row in workspace.query("type_hierarchy"):
-        ancestors.setdefault(str(row["child"]), []).append(str(row["ancestor"]))
-    return {child: tuple(parents) for child, parents in ancestors.items()}
-
-
-def _with_inherited_roots(catalog: Catalog, ancestors: Mapping[str, tuple[str, ...]]) -> Catalog:
-    """`catalog` with each root's owners widened by every class whose ancestry reaches one
-    of them, so a call made through a subclass (`this.newReceiveBuilder()`) is the root it
-    resolves to."""
-    roots = catalog.matches.get("roots", [])
-    widened = []
-    for root in roots:
-        owners = catalog_symbols(root.get("owner"), f"{catalog.source}: roots[].owner")
-        heirs = sorted(child for child in ancestors if _reaches(child, owners, ancestors))
-        if not heirs:
-            widened.append(root)
-            continue
-        declared = root["owner"] if isinstance(root["owner"], list) else [root["owner"]]
-        # A catalog names a type dotted and `catalog_symbols` converts it; a symbol without
-        # its type marker converts to itself, so a class the facts name is written that way.
-        widened.append({**root, "owner": [*declared, *map(without_type_marker, heirs)]})
-    return replace(catalog, matches={**catalog.matches, "roots": widened})
-
-
-def _reaches(child: str, owners: tuple[str, ...], ancestors: Mapping[str, tuple[str, ...]]) -> bool:
-    """Whether `child`'s ancestry, followed to its end, reaches one of `owners`."""
-    seen: set[str] = set()
-    pending = list(ancestors.get(child, ()))
-    while pending:
-        current = pending.pop()
-        if current in owners:
-            return True
-        if current not in seen:
-            seen.add(current)
-            pending.extend(ancestors.get(current, ()))
-    return False

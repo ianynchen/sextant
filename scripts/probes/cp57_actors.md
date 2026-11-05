@@ -40,7 +40,8 @@ descriptor = `org/apache/pekko`; Akka's rows are the same with `akka.` / `akka`.
    The brief's `onCommand` "3 args" row is therefore absent; the plan's `predicate_arg` for `onCommand` has nothing to
    declare. `onMessage(Class, Predicate, Function)` (typed `BehaviorBuilder` and `ReceiveBuilder`) does exist.
    `onCommandEquals` is absent too. The fixture's `Orders` therefore has no predicated `onCommand`.
-4. **Classic `japi.pf.ReceiveBuilder`** (`AbstractActor.receiveBuilder()`): `match`, `matchEquals`, `matchAny` all
+4. **Classic `japi.pf.ReceiveBuilder`** (`AbstractActor.receiveBuilder()`, or the static `ReceiveBuilder.create()`,
+   which returns a new builder): `match`, `matchEquals`, `matchAny` all
    return **`this`** (directly, or through a same-class call); `match(Class, UnitApply)` and
    `match(Class, TypedPredicate, UnitApply)` exist.
 5. **`RecipientRef.ask` does not exist.** `ask` on an entity is `EntityRef.ask(Function, Duration)`; the
@@ -142,6 +143,7 @@ own result is that verdict). Descriptors and verdicts agree in every row; the on
 | `persistence.typed.javadsl.CommandHandlerBuilder.forState` `(Ljava/lang/Class;Ljava/util/function/Predicate;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | new/other | new/other |
 | `persistence.typed.javadsl.CommandHandlerBuilder.forStateType` `(Ljava/lang/Class;)L~/persistence/typed/javadsl/CommandHandlerBuilderByState;` | new/other | new/other |
 | `persistence.typed.javadsl.CommandHandlerBuilder.build` `()L~/persistence/typed/javadsl/CommandHandler;` | new/other | new/other |
+| `japi.pf.ReceiveBuilder.create` `()L~/japi/pf/ReceiveBuilder;` | new/other | new/other |
 | `japi.pf.ReceiveBuilder.match` `(Ljava/lang/Class;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this (via same-class call) | this (via same-class call) |
 | `japi.pf.ReceiveBuilder.match` `(Ljava/lang/Class;L~/japi/pf/FI$TypedPredicate;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this (via same-class call) | this (via same-class call) |
 | `japi.pf.ReceiveBuilder.match` `(Ljava/lang/Class;Ljava/util/function/BooleanSupplier;L~/japi/pf/FI$UnitApply;)L~/japi/pf/ReceiveBuilder;` | this (via same-class call) | this (via same-class call) |

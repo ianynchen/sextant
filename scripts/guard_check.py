@@ -4582,10 +4582,32 @@ GUARDS: dict[str, Guard] = {
                 # A (`docs/performance.md`) turned the per-site test into a read of
                 # the owners' own positions in the shared `CallSiteIndex`; the guard
                 # is the same, and disabling it reads every position instead.
-                find="            index.positions_by_owner.get(owner, []) for owner in "
-                "dict.fromkeys(owners)",
+                find="            index.positions_by_owner.get(owner, [])\n"
+                "            for owner in dict.fromkeys((*owners, *sorted({heir for heir, _ in inherited})))",
                 replace="            range(len(call_sites)) for _ in [None]"
                 "  # guard disabled by scripts/guard_check.py",
+            ),
+            # A call through a type inheriting the owner's method is read too (JVMS
+            # 5.4.3.3, `Dispatch.heirs`); the per-site test that keeps it to such types is
+            # the same conjunct, so it is disabled with it.
+            Edit(
+                path=_SINGLE_CALL,
+                find='        if site["owner"] not in owners and (site["owner"], site["name"]) not in inherited:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "single_call.a-call-through-an-HEIR-is-the-owners": Guard(
+        what="a call made through a module type inheriting a declared owner's method is read "
+        "as that owner's call",
+        why="JVMS 5.4.3.3: javac writes the class a call is made through. Without the heirs, "
+        "a call through a subclass of a library type the catalog names derives nothing, "
+        "and the boundary it crosses is missing from the document",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find="        for heir in dispatch.heirs(owner, name)\n",
+                replace="        for heir in ()  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -7070,6 +7092,19 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "message-handlers.the-SUPERTYPE-closure-is-walked": Guard(
+        what="a class case is reached by a message of any subtype, however many levels down",
+        why="a behavior's `onMessage(Command.class)` takes every `Command`, an interface the "
+        "message class may implement through another. Read one level deep, a `Reserve "
+        "implements Stocked extends Command` send would reach no case and stop",
+        edits=(
+            Edit(
+                path=_MESSAGE_HANDLERS,
+                find="            pending.extend(supertypes.get(current, ()))\n",
+                replace="            pending.extend(())  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "message-handlers.a-PREDICATED-case-never-shadows": Guard(
         what="a case carrying a predicate does not stop the search for the case a message reaches",
         why="spec 2026-11-04 §3d item 2: a predicate may decline, so the case after it is "
@@ -7123,17 +7158,31 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
-    "message-handlers.an-inherited-root-needs-the-ANCESTRY": Guard(
-        what="a root call made through a module class is the declared root only where that "
-        "class's ancestry reaches the root's owner",
+    "dispatch.an-inherited-root-needs-the-ANCESTRY": Guard(
+        what="a call made through a type is read as a declared owner's method only where "
+        "that type's ancestry reaches the owner",
         why="JVMS 5.4.3.3: a call names the class it is made through and resolves up that "
         "class's ancestry. Without the ancestry test any class's own `newReceiveBuilder()` "
-        "would be read as the library's and its calls as message cases",
+        "would be read as the library's, and its calls as a chain or a call-site row",
         edits=(
             Edit(
-                path=_MESSAGE_HANDLERS,
-                find="        heirs = sorted(child for child in ancestors if _reaches(child, owners, ancestors))\n",
-                replace="        heirs = sorted(ancestors)  # guard disabled by scripts/guard_check.py\n",
+                path="sextant/application/resolve/dispatch.py",
+                find="        below = self.subtypes.get(owner, [])\n",
+                replace="        below = sorted(self.ancestors)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch.an-heir-DECLARING-the-method-runs-its-own": Guard(
+        what="a type that declares the method itself, or inherits it from a type the module "
+        "declares between it and the owner, is no heir",
+        why="JVMS 5.4.3.3: resolution stops at the first declaration. A module class "
+        "defining its own `receiveBuilder()` runs its own body, and reading the call as "
+        "the library's would publish a chain or a row the code does not make",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/dispatch.py",
+                find="            if not path & declaring:\n",
+                replace="            if True:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

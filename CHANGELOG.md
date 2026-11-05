@@ -15,6 +15,23 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Added
+
+- **Akka and Pekko message handlers are read per behavior** (spec 2026-11-04 §3b, §3d items 1-3;
+  `GRAPH_SCHEMA_VERSION` 15, approved with the design). A new catalog style and word,
+  `message_handlers` (D02 §2), declares the builders a behavior is made with — the immutable
+  `Behaviors.receive(C)`, the mutable `newReceiveBuilder()`, persistence `forAnyState`/
+  `forState`/`forStateType`, classic `receiveBuilder()` and `ReceiveBuilder.create()` — and what
+  each registration's arguments mean, every descriptor and "returns `this`" measured in CP-57.
+  The new `message_handlers` table holds each case in the order the behavior tries it, and
+  `reachable_handlers` is the first-match rule: the first unpredicated case a message's class
+  (or a supertype) or constant matches, and every predicated case before it. Exported.
+- **A call made through a type that inherits the method is that method's call** (JVMS 5.4.3.3):
+  a chain root, and a `single_call` row, also match a call naming a subtype of the declared
+  owner, through library types the workspace has headers for, unless a type the module
+  declares answers the call with its own body (`Dispatch.heirs`). `this.newReceiveBuilder()`
+  names the subclass, and was read as nothing before. The six field pins are unchanged.
+
 ### Fixed
 
 - **The JDK's null checks are not hand-offs, and a request handed to the JDK before its execute

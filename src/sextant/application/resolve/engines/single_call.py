@@ -20,6 +20,7 @@ from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.shapes.arguments import (
     QUERY_KIND,
@@ -447,9 +448,22 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # The sites on this catalog's owners, in `call_sites`' own order — the order
     # the rows are written in (NFR-1) — rather than a test of every site against
     # the owners. Deduplicated: a catalog naming one owner twice visits a site once.
+    #
+    # A call made THROUGH a type that inherits the method names that type, not the owner
+    # (javac writes the class the call is made through): such a call runs the owner's method
+    # where no type the module declares answers it first (`Dispatch.heirs`, JVMS 5.4.3.3), so
+    # its sites are read too, by method name.
+    dispatch = workspace.once(dispatch_of)
+    inherited = {
+        (heir, name)
+        for owner in owners
+        for name in dict.fromkeys(str(method["name"]) for method in methods)
+        for heir in dispatch.heirs(owner, name)
+    }
     positions = sorted(
         chain.from_iterable(
-            index.positions_by_owner.get(owner, []) for owner in dict.fromkeys(owners)
+            index.positions_by_owner.get(owner, [])
+            for owner in dict.fromkeys((*owners, *sorted({heir for heir, _ in inherited})))
         )
     )
     # The walk's index, built on the FIRST `channel_via` row that reaches it and not
@@ -460,6 +474,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     values: ValueIndex | None = None
     for position in positions:
         site = call_sites[position]
+        if site["owner"] not in owners and (site["owner"], site["name"]) not in inherited:
+            continue
         arguments = site["arguments"]
         method = _matching_method(methods, site["name"], site[_DESCRIPTOR], arguments)
         if method is None:

@@ -18,9 +18,8 @@ style: message_handlers
 #
 # Not declared, and read as nothing: `onSignal` (a lifecycle signal, not a message), classic
 # `matchAny` (a case with no class and no value, which this word cannot state; in the samples
-# only in test code), persistence `onAnyCommand` (it ends the builder in a `CommandHandler`,
-# no case of the chain), and `ReceiveBuilder.create()` (the classic static factory, absent
-# from the samples).
+# only in test code), and persistence `onAnyCommand` (it ends the builder in a `CommandHandler`,
+# no case of the chain).
 detect:
   coordinates: ["com.typesafe.akka:akka-actor-typed_2.13", "com.typesafe.akka:akka-actor-typed_3",
                 "com.typesafe.akka:akka-persistence-typed_2.13", "com.typesafe.akka:akka-persistence-typed_3",
@@ -59,6 +58,10 @@ matches:
     - { owner: *command_handler_builder, method: forStateType,
         descriptor: "(Ljava/lang/Class;)Lakka/persistence/typed/javadsl/CommandHandlerBuilderByState;" }
     - { owner: akka.actor.AbstractActor, method: receiveBuilder,
+        descriptor: "()Lakka/japi/pf/ReceiveBuilder;" }
+    # The classic builder's own static factory (`ReceiveBuilder.create()`, CP-57: a new
+    # builder), which `pekko-sample-cluster-client-grpc-java`'s `ClusterClient` uses.
+    - { owner: akka.japi.pf.ReceiveBuilder, method: create,
         descriptor: "()Lakka/japi/pf/ReceiveBuilder;" }
 
   # THE STEPS, one per registration overload, each named again under `message_handlers`

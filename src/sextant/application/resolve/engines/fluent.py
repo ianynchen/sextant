@@ -283,7 +283,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     `url`/`channel` exclusivity, `verb_values`, `client_base` — and derives from each
     end the walk yields."""
     matches = catalog.matches
-    roots, bean_roots, steps = _declared_entries(catalog)
+    roots, bean_roots, steps = _declared_entries(catalog, workspace.once(dispatch_of))
     for root in matches.get("roots", []):
         _validated_direction(root, catalog)
     _validate_url_channel_exclusivity([*roots, *bean_roots], steps, catalog)

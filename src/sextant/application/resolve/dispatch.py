@@ -141,6 +141,40 @@ class Dispatch:
         declaring, reason, _ = self._search(owner, name, descriptor)
         return declaring, reason
 
+    def heirs(self, owner: str, name: str) -> list[str]:
+        """The types a call naming `name` through them runs `owner`'s method for (JVMS
+        5.4.3.3): every subtype of `owner` — through library types the workspace has headers
+        for as well — that neither declares a method of that name itself nor inherits one
+        from a type the workspace read between it and `owner`. javac writes the class a call
+        is made through, so `this.newReceiveBuilder()` in a subclass names the subclass, and
+        the method it runs is still `owner`'s.
+
+        By NAME, every overload: a module type declaring any overload of `name` is read as
+        answering the call with its own body. That can lose a match, never invent one.
+        Sorted (NFR-1)."""
+        below = self.subtypes.get(owner, [])
+        if not below:
+            return []
+        between = set(below)
+        declaring = {
+            type_
+            for type_ in between
+            if any(symbol.startswith(f"{type_}{name}(") for symbol in self.declared)
+        }
+        found: list[str] = []
+        for heir in below:
+            path: set[str] = set()
+            pending = [heir]
+            while pending:
+                current = pending.pop()
+                if current in path or current not in between:
+                    continue
+                path.add(current)
+                pending.extend(ancestor for ancestor, _, _ in self.ancestors.get(current, ()))
+            if not path & declaring:
+                found.append(heir)
+        return found
+
     def boundary(self, owner: str, name: str, descriptor: str) -> str | None:
         """Where `resolve`'s search LEFT the workspace: the first type, in JVMS 5.4.3.3's
         order, that it reached and could not read — the owner itself, else the first

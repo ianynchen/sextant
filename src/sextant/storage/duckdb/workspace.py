@@ -1077,13 +1077,14 @@ _NAMED_QUERIES = {
         FROM rpc_hops
         ORDER BY caller, ordinal, handler
     """,
-    # Spec 2026-11-04 §3b: each behavior's cases, in the order the behavior tries them. Total
-    # (NFR-1): one (behavior, position) is one case.
+    # Spec 2026-11-04 §3b: each behavior's cases, in the order the behavior tries them. Every
+    # column orders it (NFR-1): two ends of one root share a behavior id and may each put a
+    # different case at one position, so (behavior, position) alone is not total.
     "message_handlers": """
         SELECT behavior, position, message_type, message_value, predicated, handler, delivers,
                evidence
         FROM message_handlers
-        ORDER BY behavior, position
+        ORDER BY behavior, position, message_type, message_value, predicated, handler, delivers
     """,
     # Spec 2026-10-22-boundary-vocabulary-and-diff §5 (FR-24): the six in-process questions
     # `application/query/questions.py` answers, each ONE read (GUIDELINES §8.7) and the walk

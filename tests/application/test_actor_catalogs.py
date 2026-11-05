@@ -15,7 +15,8 @@ from flow_facts import straight_line
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
-from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document
+from sextant.domain.facts import CallArgument, CallSiteFact, CallTarget, Document, SymbolFact
+from sextant.domain.symbols import method_descriptor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -270,3 +271,40 @@ def test_the_same_call_on_an_applications_own_type_derives_nothing(
     actor key at `resolved`."""
     p = _FAMILIES[family]
     assert _rows(tmp_path, family, catalog, build(p, _OWN, name)) == set()
+
+
+def _heir(declares: bool) -> list:
+    """`OwnRegistry extends ClusterSharding` (pekko), with or without its own `entityRefFor`."""
+    module = "sextant-jvm maven com.acme/actors 1.0.0 "
+    facts: list = [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=module + _OWN,
+            construct_kind="class",
+            superclass=module + "org/apache/pekko/cluster/sharding/typed/javadsl/ClusterSharding#",
+        )
+    ]
+    if declares:
+        facts.append(
+            SymbolFact(
+                document_id="doc_1",
+                symbol=module + method_descriptor(_OWN, "entityRefFor", "()V"),
+                construct_kind="method",
+                enclosing=module + _OWN,
+            )
+        )
+    return facts
+
+
+@pytest.mark.pins("single_call.a-call-through-an-HEIR-is-the-owners")
+def test_a_call_through_a_type_inheriting_the_owners_method_derives_its_row(tmp_path):
+    """JVMS 5.4.3.3: javac writes the class a call is made through, so a call through a
+    module type that inherits the method names that type; it runs the owner's method, and
+    derives the owner's row. A type that declares the method itself runs its own body and
+    derives nothing."""
+    p = _FAMILIES["pekko"]
+    calls = _entity_ref(p, _OWN, "entityRefFor")
+    assert _rows(tmp_path / "heir", "pekko", "cluster-sharding", [*calls, *_heir(False)]) == {
+        ("outbound", "stock", "resolved")
+    }
+    assert _rows(tmp_path / "own", "pekko", "cluster-sharding", [*calls, *_heir(True)]) == set()

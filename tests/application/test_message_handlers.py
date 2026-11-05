@@ -122,8 +122,9 @@ def _rows(
     hierarchy: tuple[tuple[str, str], ...] = (),
     catalog_id: str = "pekko-actor-handlers",
 ) -> list[dict]:
-    """The `message_handlers` rows `facts` give, `hierarchy` as `(child, ancestor)` rows of
-    `type_hierarchy`, each `extends`."""
+    """The `message_handlers` rows `facts` give, `hierarchy` as `(child, superclass)` pairs,
+    each written as the child's own symbol fact naming its superclass, as the extractor
+    writes one."""
     handlers = sorted(
         {
             str(argument.symbol).split("#")[1].split("(")[0]
@@ -136,15 +137,25 @@ def _rows(
     write_fact_file(
         tmp_path / "facts" / "Shop.jsonl",
         _document(),
-        straight_line([*facts, *(_handler_symbol(name) for name in handlers)]),
+        straight_line(
+            [
+                *facts,
+                *(_handler_symbol(name) for name in handlers),
+                *(
+                    SymbolFact(
+                        document_id="doc_1",
+                        symbol=_MODULE + child,
+                        construct_kind="class",
+                        superclass=_MODULE + parent,
+                    )
+                    for child, parent in hierarchy
+                ),
+            ]
+        ),
     )
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     try:
         workspace.load_facts(tmp_path / "facts")
-        for child, ancestor in hierarchy:
-            workspace._connection.execute(
-                "INSERT INTO type_hierarchy VALUES (?, ?, 'extends', 0, false)", [child, ancestor]
-            )
         record_message_handlers(workspace, [_handlers_catalog(catalog_id)])
         return workspace.query("message_handlers")
     finally:
@@ -386,6 +397,130 @@ def test_each_for_state_chain_is_its_own_behavior(tmp_path: Path):
     ]
 
 
+def test_a_state_chain_holds_every_case_it_is_given(tmp_path: Path):
+    """The persistence shape real code writes (`ShoppingCart`, `AuctionEntity`):
+    `b.forState(p).onCommand(A).onCommand(B).onCommand(C); b.forAnyState().onCommand(Get)`.
+    `onCommand` returns `this` and is also what makes a state builder a behavior, so reaching
+    the first one does not end the chain: one behavior with three cases, and one with one."""
+    caller = _caller("commandHandler")
+    on_command = f"{_ON_COMMAND}{_STATE}"
+    facts = [
+        _site(
+            caller, 0, _SHOP, "newCommandHandlerBuilder", f"()L{_COMMAND_BUILDER[:-1]};", result=1
+        ),
+        _site(
+            caller,
+            1,
+            _COMMAND_BUILDER,
+            "forState",
+            f"(Ljava/util/function/Predicate;){_STATE}",
+            receiver=1,
+            result=2,
+        ),
+        _site(
+            caller,
+            2,
+            _BY_STATE,
+            "onCommand",
+            on_command,
+            receiver=2,
+            result=3,
+            arguments=(_class("AddItem"), _handler("onAddItem")),
+        ),
+        _site(
+            caller,
+            3,
+            _BY_STATE,
+            "onCommand",
+            on_command,
+            receiver=3,
+            result=4,
+            arguments=(_class("RemoveItem"), _handler("onRemoveItem")),
+        ),
+        _site(
+            caller,
+            4,
+            _BY_STATE,
+            "onCommand",
+            on_command,
+            receiver=4,
+            result=5,
+            arguments=(_class("Checkout"), _handler("onCheckout")),
+        ),
+        _site(caller, 5, _COMMAND_BUILDER, "forAnyState", f"(){_STATE}", receiver=1, result=6),
+        _site(
+            caller,
+            6,
+            _BY_STATE,
+            "onCommand",
+            on_command,
+            receiver=6,
+            result=7,
+            arguments=(_class("Get"), _handler("onGet")),
+        ),
+        _site(
+            caller,
+            7,
+            _COMMAND_BUILDER,
+            "build",
+            f"()L{_P}/persistence/typed/javadsl/CommandHandler;",
+            receiver=1,
+            result=8,
+        ),
+    ]
+    assert _cases(_rows(tmp_path, facts)) == [
+        ("commandHandler#1", 0, "AddItem#", None, False, "onAddItem"),
+        ("commandHandler#1", 1, "RemoveItem#", None, False, "onRemoveItem"),
+        ("commandHandler#1", 2, "Checkout#", None, False, "onCheckout"),
+        ("commandHandler#5", 0, "Get#", None, False, "onGet"),
+    ]
+
+
+@pytest.mark.parametrize("catalog_id, prefix", _FAMILIES)
+def test_the_classic_builders_static_factory_starts_a_behavior(
+    tmp_path: Path, catalog_id: str, prefix: str
+):
+    """`ReceiveBuilder.create().match(Price.class, h).build()` (`ClusterClient` in the Pekko
+    samples): the static factory returns a new classic builder (CP-57), a root like
+    `receiveBuilder()`."""
+    caller = _caller("createReceive")
+    builder = f"{prefix}/japi/pf/ReceiveBuilder"
+    facts = [
+        _site(caller, 0, f"{builder}#", "create", f"()L{builder};", result=1),
+        _site(
+            caller,
+            1,
+            f"{builder}#",
+            "match",
+            f"(Ljava/lang/Class;L{prefix}/japi/pf/FI$UnitApply;)L{builder};",
+            receiver=1,
+            result=2,
+            arguments=(_class("Price"), _handler("onPrice")),
+        ),
+        _site(
+            caller,
+            2,
+            f"{builder}#",
+            "build",
+            f"()L{prefix}/actor/AbstractActor$Receive;",
+            receiver=2,
+            result=3,
+        ),
+    ]
+    assert _cases(_rows(tmp_path, facts, catalog_id=catalog_id)) == [
+        ("createReceive#0", 0, "Price#", None, False, "onPrice"),
+    ]
+
+
+@pytest.mark.pins("message-handlers.the-SUPERTYPE-closure-is-walked")
+def test_a_supertype_closure_is_walked_whole():
+    """`reachable_handlers` walks `supertypes` itself: a map of DIRECT supertypes reaches a
+    case two levels up, through an interface (`Reserve implements Stocked extends Command`)."""
+    rows = [_row("b", 0, "Command#")]
+    direct = {"Reserve#": {"Stocked#"}, "Stocked#": {"Command#"}}
+    assert [row["position"] for row in reachable_handlers(rows, "Reserve#", None, direct)] == [0]
+
+
 def _statement_builder(prefix: str, caller: str, mutable: bool) -> list[CallSiteFact]:
     """`b = <root>; b.onMessage(Reserve, r); b.onMessage(Release, s); return b.build();` on
     the typed builder of the family under `prefix`: each registration called on the local
@@ -487,7 +622,7 @@ def test_an_immutable_builder_whose_results_are_dropped_registers_nothing(
     )
 
 
-@pytest.mark.pins("message-handlers.an-inherited-root-needs-the-ANCESTRY")
+@pytest.mark.pins("dispatch.an-inherited-root-needs-the-ANCESTRY")
 def test_an_inherited_builder_method_is_a_root_only_on_a_class_that_inherits_it(
     tmp_path: Path,
 ):
@@ -508,6 +643,25 @@ def test_an_inherited_builder_method_is_a_root_only_on_a_class_that_inherits_it(
         ),
     )
     assert [row["position"] for row in through_a_base] == [0, 1]
+
+
+@pytest.mark.pins("dispatch.an-heir-DECLARING-the-method-runs-its-own")
+def test_a_class_declaring_the_builder_method_itself_runs_its_own(tmp_path: Path):
+    """A subclass that declares its own `newReceiveBuilder()` answers the call with its own
+    body (JVMS 5.4.3.3 stops at the first declaration), so the call is not the library's
+    root, and its chain is no behavior this catalog knows."""
+    prefix = "org/apache/pekko"
+    chain = _statement_builder(prefix, _caller("mutable"), mutable=True)
+    own = SymbolFact(
+        document_id="doc_1",
+        symbol=_MODULE
+        + method_descriptor(
+            _SHOP, "newReceiveBuilder", f"()L{prefix}/actor/typed/javadsl/ReceiveBuilder;"
+        ),
+        construct_kind="method",
+        enclosing=_MODULE + _SHOP,
+    )
+    assert _rows(tmp_path, [*chain, own], hierarchy=_behavior_heir(prefix)) == []
 
 
 def test_a_predicated_and_a_value_case_are_read_as_such(tmp_path: Path):

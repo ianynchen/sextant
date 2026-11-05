@@ -823,13 +823,18 @@ genuinely new shape needs a new engine. (Nine as of Phase 2H; `supertype_derived
 `injected_client`, Phase 2O Task 5, are the tenth and eleventh; `derived_resource`, Task 6,
 is the twelfth; `supertype_dispatch`, Task 7b, is the thirteenth; `scheduled_work` and
 `error_advice`, Task 8, are the fourteenth and fifteenth; `scheduled_chain`, the Quartz
-design of 2026-10-28, is the sixteenth.)
+design of 2026-10-28, is the sixteenth; `message_handlers`, the Akka and Pekko design of
+2026-11-04, is the seventeenth.)
 
-**Sixteen sections follow, and they are NOT sixteen engines** — §5.3 requires this document
-to say which is which rather than let a reader count headings. **Fourteen have an engine**,
-each registered in `application/resolve/endpoints.py`'s `_ENGINES`, which is the list a
-catalog's `style:` is resolved against and the only place the answer lives. The other two
+**Seventeen sections follow, and they are NOT seventeen engines** — §5.3 requires this
+document to say which is which rather than let a reader count headings. **Fourteen have an
+engine**, each registered in `application/resolve/endpoints.py`'s `_ENGINES`, which is the list
+a catalog's `style:` is resolved against and the only place the answer lives. The other three
 are:
+
+- **`message_handlers` is read by a resolve PASS, not an engine** — its catalogs declare facts
+  `resolve/message_handlers.py` reads after the engines; `derive_endpoints` leaves them out of
+  its loop (`_READ_BY_A_LATER_PASS`), so no run and no skip is reported for one.
 
 - **`protocol_hint` is a resolve PASS, not an engine** — no catalog declares it, and one
   that did would be refused by name. Its own section states this and gives its position in
@@ -842,8 +847,8 @@ are:
   reasoning; nothing in it describes behaviour that runs today. Its section says so again
   at the top, in the `default_produces` model §5.3 names.
 
-The count above therefore reads: fourteen shipped engine styles, one resolve pass, one
-design. *This heading read "The thirteen styles" and the two non-wire engines had no section
+The count above therefore reads: fourteen shipped engine styles, one style read by a resolve
+pass, one resolve pass, one design. *This heading read "The thirteen styles" and the two non-wire engines had no section
 at all until the 2O documentation sweep; the number counted headings, which is exactly the
 substitution §5.3 forbids.*
 
@@ -4615,6 +4620,57 @@ chain with neither a kind nor a job is not derived; a row with a NULL handler is
 trace root (`roots.py`).
 
 **Ordering (§3): NOT in the runs-last group**, on the same terms as `scheduled_work`.
+
+### `message_handlers`
+
+The seventeenth style (spec `2026-11-04-akka-pekko-actors-design.md` §3b, §3d items 1-3): a
+**behavior** built by a chain of registrations, each binding a message class — or a value
+equal to a constant — to a handler, tried in order. It mints no endpoint row and has no
+engine: `resolve/message_handlers.py` reads it into `message_handlers` (D01 §3) after the
+engines, and `reachable_handlers` applies the first-match rule.
+
+```yaml
+# pekko-actor-handlers.yml
+style: message_handlers
+requires: [call_site, chain_reconstruction]
+matches:
+  roots:                          # the chain walk's own words (`fluent`), one per builder
+    - { owner: org.apache.pekko.actor.typed.javadsl.Behaviors, method: receive,
+        descriptor: "(Ljava/lang/Class;)Lorg/apache/pekko/actor/typed/javadsl/BehaviorBuilder;" }
+  steps:                          # one per registration overload, each carrying its call
+    - { owner: org.apache.pekko.actor.typed.javadsl.BehaviorBuilder, method: onMessage,
+        descriptor: "(Ljava/lang/Class;Lorg/apache/pekko/japi/function/Function;)L…/BehaviorBuilder;",
+        captures: { case: arg0 }, repeats: [case] }
+  terminal: [build]
+  message_handlers:               # what each registration's arguments mean
+    - { owner: org.apache.pekko.actor.typed.javadsl.BehaviorBuilder, method: onMessage,
+        descriptor: "(Ljava/lang/Class;Lorg/apache/pekko/japi/function/Function;)L…/BehaviorBuilder;",
+        class_arg: 0, handler_arg: 1 }
+```
+
+- **The chain** is the shared walk (`shapes/chains.chain_ends`), receiver to result, in the
+  `fluent` words below. A registration that returns a NEW builder is followed through its
+  result; one returning `this` is a `returns_receiver: true` step, so a builder held in a
+  local and given its cases statement by statement is one chain. Each executable chain end
+  is one behavior. A root's owner also matches a call made through a type inheriting its
+  method (`Dispatch.heirs`, JVMS 5.4.3.3), as for every chain catalog.
+- **`case: argN`** with `repeats: [case]` on every registration step carries the call in
+  chain order; a case's position is its place in that capture. Each step capturing `case`
+  needs exactly one `message_handlers` entry per owner (refused at resolve otherwise).
+- **`message_handlers`** entries are `{owner, method, descriptor, class_arg | value_arg,
+  handler_arg, predicate_arg?, returns_message?}`, checked at load
+  (`yaml_source._message_handlers`): every position an argument the descriptor has, no
+  argument read for two meanings, never both `class_arg` and `value_arg`, and at least one of
+  `class_arg`, `value_arg`, `predicate_arg`.
+  - `class_arg` — the message class, a class literal (`message_type`);
+  - `value_arg` — a constant the message must equal, by identity (`message_value`);
+  - `predicate_arg` — a predicate the case also tests: the case never shadows a later one.
+    With no class and no value (`onCommand(Predicate, h)`) it tests every message;
+  - `handler_arg` — the handler, a method reference or lambda (`combinator._handler_of`);
+  - `returns_message` — the handler's return is a message delivered to its own receiver
+    (`delivers`). An entry that matches no step is not read by this pass today.
+
+**Ordering (§3):** not in the engine loop at all; the pass runs right after `rpc_hops`.
 
 ### `error_advice`
 

@@ -41,7 +41,7 @@ ROWS = [
     (
         "classic japi.pf.ReceiveBuilder",
         "japi.pf.ReceiveBuilder",
-        ["match", "matchEquals", "matchAny", "build"],
+        ["create", "match", "matchEquals", "matchAny", "build"],
     ),
     ("classic AbstractActor", "actor.AbstractActor", ["receiveBuilder", "getSender", "getSelf"]),
     ("typed ActorRef", T + ".ActorRef", ["tell"]),
