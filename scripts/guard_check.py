@@ -1358,6 +1358,49 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "detect.a-TWO-VERSION-gradle-part-is-named-with-a-dash-and-its-version": Guard(
+        what="a Gradle part with more than one record is one module per version, named "
+        "with a dash and the version name, its results in a folder of that name",
+        why="without it the JVM and Android versions of one Kotlin Multiplatform part get "
+        "one module id and one results folder, and one version's results replace the "
+        "other's (Android design M2, Android outbound Task 4)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="        if len(by_path.get(str(path_in_build), ())) > 1:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-part-uses-the-VERSION-gradle-labelled": Guard(
+        what="a sibling with more than one record is joined by the label Gradle put on "
+        "the version it picked",
+        why="without it `:server` is given the first record of `:shared` — the Android "
+        "version's classes — while Gradle compiled it against the JVM version (Android "
+        "design M1, Android outbound Task 4)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="            if len(candidates) > 1:\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-two-version-part-with-NO-LABEL-is-a-named-gap": Guard(
+        what="a sibling with more than one record and no label that matches one of them "
+        "is named in libraries_not_resolved, never joined",
+        why="without it a version is guessed and its classes are read as the ones this "
+        "part uses, which Gradle never said (Android design M1, Android outbound Task 4)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find='                    and candidate.get("platform") == entry.get("platform")\n'
+                "                ]\n",
+                replace='                    and candidate.get("platform") == entry.get("platform")\n'
+                "                ] or candidates[:1]  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "detect.an-OFFLINE-PLUGIN-refusal-is-retried-online-under-the-flag": Guard(
         what='an offline "could not resolve plugin artifact" is an offline refusal '
         "`--allow-resolve` retries online",

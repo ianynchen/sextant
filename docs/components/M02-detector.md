@@ -183,6 +183,22 @@ sibling is analysed as a module of its own. Its facts live under
 one no-group sibling Gradle produces by default, reached through `implementation project(':')` —
 has a module id with no `:` at all.
 
+**A Kotlin Multiplatform part gives one module per JVM version** (Android design M1 and M2, ruled
+2026-11-05). The init script writes one record per Kotlin version (target) whose platform type
+is `jvm`, with its own source, classes and compile classpath. A part that also applies `java`
+(`withJava()`) is read only as Kotlin Multiplatform, so its classes are not written twice. A part
+with more than one record has one module per version: a dash and the version name from the
+build file are added to the last part of the name (`com.acme:shared-jvm`, `ShopApp:shared-jvm`),
+the spelling Kotlin uses when it uploads each version, and the results go in
+`<folder>/.sextant/<version name>`. A part with one record keeps its name.
+
+**A sibling with more than one version is joined by Gradle's label.** For each inter-project
+classpath entry, the init script records the label Gradle put on the version it picked: the
+artifact variant attribute named `org.jetbrains.kotlin.platform.type` (measured on the
+`gradle-android` fixture: `jvm` for a Kotlin JVM part, `androidJvm` for an Android part). The
+record with that label is joined. No label, or a label that no record carries, is not guessed:
+`libraries_not_resolved` gets "could not tell which version of `<path>` this part uses".
+
 **Every compiled output directory the build reports is scanned, in one scan** (OI-273). Gradle's
 `classesDirs` is a set — one directory per compiling plugin — so a Kotlin JVM project reports
 `build/classes/java/main` and `build/classes/kotlin/main`. Every one that exists goes to the

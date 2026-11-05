@@ -1670,3 +1670,120 @@ def test_a_no_group_sibling_is_read_as_a_library_root_under_its_module_id(tmp_pa
     assert module.sibling_coordinates == (
         GradleDetector._module_of(tmp_path, root, [root, app]).module_id,
     )
+
+
+# --- a Kotlin Multiplatform part built in more than one version (Android M1, M2) ---
+
+
+def _two_version_part(tmp_path: Path, *, group: str) -> tuple[dict, dict, dict]:
+    """The root project and the two records a Kotlin Multiplatform part gives: one per
+    version, each with its own classes directory and the label Gradle puts on it."""
+    root = _project(tmp_path, path=":", group="", name="ShopApp", classes_dirs=[])
+    records = []
+    for target, platform in (("android", "androidJvm"), ("jvm", "jvm")):
+        classes = tmp_path / "shared" / "build" / "classes" / "kotlin" / target / "main"
+        classes.mkdir(parents=True)
+        record = _project(
+            tmp_path / "shared",
+            path=":shared",
+            group=group,
+            name="shared",
+            version="unspecified",
+            classes_dirs=[str(classes)],
+        )
+        records.append({**record, "target": target, "platform": platform})
+    return root, records[0], records[1]
+
+
+@pytest.mark.pins("detect.a-TWO-VERSION-gradle-part-is-named-with-a-dash-and-its-version")
+@pytest.mark.parametrize(
+    ("group", "jvm_id", "android_id"),
+    [
+        ("com.acme", "com.acme:shared-jvm", "com.acme:shared-android"),
+        ("", "ShopApp:shared-jvm", "ShopApp:shared-android"),
+    ],
+)
+def test_a_two_version_part_gives_one_module_per_version_named_with_a_dash(
+    tmp_path: Path, group: str, jvm_id: str, android_id: str
+):
+    """Android design M2 (ruled A): today's name with a dash and the version name the
+    build file gives added to the last part — the spelling Kotlin uses when it uploads
+    each version. Each version keeps its results in a folder of its own name, because
+    the two share the part's folder (M6)."""
+    root, android, jvm = _two_version_part(tmp_path, group=group)
+    reactor = [root, android, jvm]
+    jvm_module = GradleDetector._module_of(tmp_path / "shared", jvm, reactor)
+    android_module = GradleDetector._module_of(tmp_path / "shared", android, reactor)
+    assert (jvm_module.module_id, jvm_module.results_name) == (jvm_id, "jvm")
+    assert (android_module.module_id, android_module.results_name) == (android_id, "android")
+    if group:
+        assert jvm_module.coordinates == "com.acme/shared-jvm"
+
+
+@pytest.mark.pins("detect.a-part-uses-the-VERSION-gradle-labelled")
+def test_a_part_uses_the_version_gradle_labelled(tmp_path: Path):
+    """Android design M1 (ruled A): `:server` uses `:shared`, and Gradle picked the JVM
+    version for it. The label Gradle put on what it picked says which record to join,
+    so `:server` gets the JVM version's classes and never the Android version's."""
+    root, android, jvm = _two_version_part(tmp_path, group="com.acme")
+    jvm_classes = Path(jvm["classesDirs"][0])
+    server = _project(
+        tmp_path / "server",
+        path=":server",
+        name="server",
+        classpath=[
+            {
+                "path": str(tmp_path / "shared" / "build" / "libs" / "shared-jvm.jar"),
+                "internal": True,
+                "projectPath": ":shared",
+                "platform": "jvm",
+            }
+        ],
+    )
+    module = GradleDetector._module_of(tmp_path / "server", server, [root, android, jvm, server])
+    assert module.sibling_coordinates == ("com.acme:shared-jvm",)
+    assert [r.archive for r in module.library_roots] == [jvm_classes]
+    assert module.libraries_not_resolved == ()
+
+
+@pytest.mark.pins("detect.a-two-version-part-with-NO-LABEL-is-a-named-gap")
+@pytest.mark.parametrize("platform", [None, "wasm"])
+def test_a_two_module_part_with_no_label_is_a_named_gap(tmp_path: Path, platform: str | None):
+    """A label Sextant cannot match to one version — none at all, or one no version of
+    the part carries — is reported, never guessed (Android design M1)."""
+    root, android, jvm = _two_version_part(tmp_path, group="com.acme")
+    entry = {"path": "/elsewhere/shared.jar", "internal": True, "projectPath": ":shared"}
+    if platform is not None:
+        entry["platform"] = platform
+    server = _project(tmp_path / "server", path=":server", name="server", classpath=[entry])
+    module = GradleDetector._module_of(tmp_path / "server", server, [root, android, jvm, server])
+    assert module.library_roots == ()
+    assert module.sibling_coordinates == ()
+    assert module.libraries_not_resolved == (
+        "could not tell which version of :shared this part uses",
+    )
+
+
+def test_a_one_version_part_keeps_its_name(tmp_path: Path):
+    """A part built once keeps today's name and its results stay where they were (M2),
+    and a sibling built once is joined by its path alone, whatever its label."""
+    root = _project(tmp_path, path=":", group="", name="ShopApp", classes_dirs=[])
+    classes = tmp_path / "shared" / "build" / "classes" / "kotlin" / "jvm" / "main"
+    classes.mkdir(parents=True)
+    shared = {
+        **_project(tmp_path / "shared", path=":shared", name="shared", classes_dirs=[str(classes)]),
+        "target": "jvm",
+        "platform": "jvm",
+    }
+    server = _project(
+        tmp_path / "server",
+        path=":server",
+        name="server",
+        classpath=[{"path": str(classes), "internal": True, "projectPath": ":shared"}],
+    )
+    reactor = [root, shared, server]
+    shared_module = GradleDetector._module_of(tmp_path / "shared", shared, reactor)
+    assert (shared_module.module_id, shared_module.results_name) == ("com.acme:shared", None)
+    server_module = GradleDetector._module_of(tmp_path / "server", server, reactor)
+    assert server_module.sibling_coordinates == ("com.acme:shared",)
+    assert [r.archive for r in server_module.library_roots] == [classes]

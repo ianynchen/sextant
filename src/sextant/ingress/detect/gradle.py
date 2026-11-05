@@ -124,13 +124,15 @@ _WRAPPER_BOOTSTRAP_SUBSTRINGS = (
 
 
 class _Identity(NamedTuple):
-    """A project's module id, the `<package> <version>` its symbols carry, and whether
-    it has Maven coordinates at all (`GradleDetector._identity`)."""
+    """A project's module id, the `<package> <version>` its symbols carry, whether it
+    has Maven coordinates at all, and the name of the folder its results go in when the
+    part is built in more than one version (`GradleDetector._identity`)."""
 
     module_id: str
     coordinates: str
     version: str
     published: bool
+    results_name: str | None
 
 
 class MissingInitScriptError(FileNotFoundError):
@@ -330,6 +332,16 @@ def _assemble(out_dir: Path, output: str = "") -> dict[str, Any]:
         ) from missing
     records.sort(key=lambda record: (str(record["path"]), str(record.get("target") or "")))
     return {"projects": records, "includedBuilds": included_builds}
+
+
+def _records_by_path(reactor: Sequence[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """The reactor's records by project path. A path can hold more than one record: a
+    part built in more than one version writes one record per version (Android design
+    M1)."""
+    by_path: dict[str, list[dict[str, Any]]] = {}
+    for record in reactor:
+        by_path.setdefault(str(record["path"]), []).append(record)
+    return by_path
 
 
 class GradleDetector:
@@ -567,8 +579,9 @@ class GradleDetector:
         # sibling is a dependency in every sense that matters: it is on the
         # classpath, its types appear in this module's signatures, and the only
         # difference from a resolved jar is that it was built next door.
-        siblings = GradleDetector._sibling_roots(project, reactor)
+        siblings, siblings_not_resolved = GradleDetector._sibling_roots(project, reactor)
         library_roots = library_roots + siblings
+        libraries_not_resolved = libraries_not_resolved + siblings_not_resolved
         return ModuleModel(
             module_id=identity.module_id,
             coordinates=identity.coordinates,
@@ -654,6 +667,7 @@ class GradleDetector:
             # every record, not only from one `_assemble` made for a project with no file:
             # a record the init script writes may carry one too.
             build_failure=project.get("buildFailure"),
+            results_name=identity.results_name,
         )
 
     @staticmethod
@@ -690,25 +704,45 @@ class GradleDetector:
         name, then the project path with every segment kept (`Acme:libs:core`); the
         root project itself is its name alone. Both come from Gradle's own records, the
         root's being the reactor entry at path `:`. One rule for a module and for a
-        sibling read as its library root, so the two spell one project the same way."""
+        sibling read as its library root, so the two spell one project the same way.
+
+        A part built in more than one version (a multiplatform part, Android design M2) has one record per version under one path. Each version is its own module: a
+        dash and the version name the build file gives are added to the last part of the
+        name (`com.acme:shared-jvm`, `ShopApp:shared-jvm`), the spelling the multiplatform
+        plugin uses when it uploads each version, and that version name is the folder its results go in. A
+        part built once keeps its name."""
         name = project["name"]
         group = project["group"]
-        if group:
-            return _Identity(f"{group}:{name}", f"{group}/{name}", project["version"], True)
         path_in_build = project["path"]
+        by_path = _records_by_path(reactor)
+        results_name = None
+        suffix = ""
+        if len(by_path.get(str(path_in_build), ())) > 1:
+            results_name = str(project["target"])
+            suffix = f"-{results_name}"
+        if group:
+            return _Identity(
+                f"{group}:{name}{suffix}",
+                f"{group}/{name}{suffix}",
+                project["version"],
+                True,
+                results_name,
+            )
         if path_in_build == ":":
             module_id = name
         else:
-            root = {p["path"]: p for p in reactor}[":"]
+            root = by_path[":"][0]
             module_id = f"{root['name']}{path_in_build}"
-        return _Identity(module_id, NOT_APPLICABLE, NOT_APPLICABLE, False)
+        return _Identity(
+            f"{module_id}{suffix}", NOT_APPLICABLE, NOT_APPLICABLE, False, results_name
+        )
 
     @staticmethod
     def _sibling_roots(
         project: dict[str, Any], reactor: Sequence[dict[str, Any]]
-    ) -> tuple[LibraryRoot, ...]:
+    ) -> tuple[tuple[LibraryRoot, ...], tuple[str, ...]]:
         """The compiled output of every reactor sibling on this project's compile
-        classpath (W55), as library roots.
+        classpath (W55), as library roots, and the siblings it could not tell apart.
 
         **The design question this had to settle first, and its answer.** Gradle
         reports an inter-project dependency as a `ProjectComponentIdentifier`,
@@ -736,15 +770,37 @@ class GradleDetector:
         skipped rather than guessed at: `LibraryRoot` points at bytecode, and a
         root naming a directory that does not exist would be a scan target the
         scanner has to refuse later.
+
+        **A sibling built in more than one version (Android design M1).** A multiplatform
+        part has one record per version under one path, and Gradle picked
+        one of them for this project. The init script records the label Gradle put on
+        what it picked (`platform`: `jvm`, `androidJvm`), and the record with that label
+        is joined. A label no version carries, or no label, is not guessed at: it is
+        named in the second list, which joins `libraries_not_resolved`.
         """
-        by_path = {str(entry["path"]): entry for entry in reactor}
+        by_path = _records_by_path(reactor)
         found: dict[tuple[str, str], LibraryRoot] = {}
+        not_resolved: list[str] = []
         for entry in project["classpath"]:
             if not entry.get("internal"):
                 continue
-            sibling = by_path.get(str(entry.get("projectPath") or ""))
-            if sibling is None:
+            sibling_path = str(entry.get("projectPath") or "")
+            candidates = by_path.get(sibling_path, [])
+            if len(candidates) > 1:
+                candidates = [
+                    candidate
+                    for candidate in candidates
+                    if entry.get("platform") is not None
+                    and candidate.get("platform") == entry.get("platform")
+                ]
+                if len(candidates) != 1:
+                    not_resolved.append(
+                        f"could not tell which version of {sibling_path} this part uses"
+                    )
+                    continue
+            if not candidates:
                 continue
+            sibling = candidates[0]
             # A sibling with no group is read too (OI-273 round 2): it is on the
             # classpath like any other. It has no coordinates, so it is named by its module
             # id and marked unpublished — `.` for package and version — the identity its
@@ -772,7 +828,7 @@ class GradleDetector:
                         package=None if identity.published else NOT_APPLICABLE,
                     ),
                 )
-        return tuple(found[key] for key in sorted(found))
+        return tuple(found[key] for key in sorted(found)), tuple(sorted(set(not_resolved)))
 
     @staticmethod
     def _dependency_versions(classpath: list[dict[str, Any]]) -> dict[str, str]:

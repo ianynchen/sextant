@@ -41,8 +41,8 @@ import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.component.ProjectComponentIdentifier
 
 // One project record, built from what the caller read off the project's own
-// plugin (Android design M4). Every branch — today only `java` — calls this
-// closure, and only this closure, with the same input map:
+// plugin (Android design M4). Every branch — `java` and Kotlin Multiplatform —
+// calls this closure, and only this closure, with the same input map:
 //   sourceSets             language name -> the source directories that
 //                          language's source-directory set registered
 //   resourceDirs           the resource directories
@@ -50,7 +50,9 @@ import org.gradle.api.artifacts.component.ProjectComponentIdentifier
 //   classpathConfiguration the configuration to resolve as the compile
 //                          classpath, or null
 //   declaredRelease        the Java release the build declares, or null
-//   target, platform       null for a `java` project
+//   target, platform       the version's name and Gradle's label for it, for a
+//                          part built in more than one version; null for a
+//                          `java` project
 // A project with no compiling plugin passes an empty map and gets a record
 // with empty lists.
 def sextantRecord = { p, Map inputs ->
@@ -125,6 +127,14 @@ def sextantRecord = { p, Map inputs ->
                 // plus this path (OI-273) — the build's own
                 // declarations, the same on every machine.
                 entry.projectPath = id.projectPath
+                // Which version of that project Gradle picked (Android design
+                // M1): the label Gradle put on the artifact, read by the
+                // attribute's NAME because its type is a Kotlin enum this
+                // script cannot name. Null where the project carries no label.
+                def attributes = artifact.variant.attributes
+                def platformKey = attributes.keySet().find { it.name == "org.jetbrains.kotlin.platform.type" }
+                def platform = platformKey == null ? null : attributes.getAttribute(platformKey)
+                entry.platform = platform == null ? null : platform.toString()
             }
             classpath << entry
         }
@@ -146,6 +156,13 @@ def sextantRecord = { p, Map inputs ->
         target: inputs.target,
         platform: inputs.platform,
     ]
+}
+
+// The versions of a Kotlin Multiplatform part that compile to JVM bytecode, in
+// name order: Kotlin's own platform type `jvm`. The Android version
+// (`androidJvm`) is not one of them.
+def jvmTargets = { p ->
+    p.kotlin.targets.findAll { it.platformType.name() == "jvm" }.sort { it.name }
 }
 
 gradle.rootProject { rp ->
@@ -181,7 +198,27 @@ gradle.rootProject { rp ->
             doLast {
                 def outDir = new File(p.property("sextant.outDir").toString())
                 def inputs = [:]
-                if (p.plugins.hasPlugin("java")) {
+                def records = null
+                if (p.plugins.hasPlugin("org.jetbrains.kotlin.multiplatform")) {
+                    // A Kotlin Multiplatform part (Android design M1): one record per
+                    // version that compiles to JVM bytecode, each with its own name
+                    // and label. A part that also applies `java` (`withJava()`) is
+                    // read here only: its `java` main IS the JVM version, and its
+                    // classes must not be written twice. A part with no JVM version
+                    // gets the empty record below.
+                    records = jvmTargets(p).collect { target ->
+                        def main = target.compilations.getByName("main")
+                        sextantRecord(p, [
+                            sourceSets: [kotlin: main.allKotlinSourceSets.collectMany { it.kotlin.srcDirs as List }],
+                            resourceDirs: main.allKotlinSourceSets.collectMany { it.resources.srcDirs as List },
+                            classesDirs: main.output.classesDirs.files,
+                            classpathConfiguration: p.configurations.findByName(main.compileDependencyConfigurationName),
+                            declaredRelease: null,
+                            target: target.name,
+                            platform: "jvm",
+                        ])
+                    }
+                } else if (p.plugins.hasPlugin("java")) {
                     def main = p.sourceSets.main
                     // The Java release this project's BUILD declares (W3b). Asked of
                     // GRADLE rather than parsed out of a build script, because the
@@ -248,7 +285,7 @@ gradle.rootProject { rp ->
                 def projectsDir = new File(outDir, "projects")
                 projectsDir.mkdirs()
                 new File(projectsDir, p.path.replace("_", "__").replace(":", "_") + ".json").text = JsonOutput.toJson(
-                    [sextantRecord(p, inputs)]
+                    records ?: [sextantRecord(p, inputs)]
                 )
             }
         }
@@ -261,6 +298,16 @@ gradle.rootProject { rp ->
         // Java-plugin project regardless of configuration order.
         p.plugins.withId("java") {
             sextantModel.configure { dependsOn p.tasks.named("classes") }
+        }
+        // A Kotlin Multiplatform part: each JVM version's compiled classes, so the
+        // build compiles what the task reads. `all` reacts to a version the build
+        // adds after this line runs.
+        p.plugins.withId("org.jetbrains.kotlin.multiplatform") {
+            p.kotlin.targets.all { target ->
+                if (target.platformType.name() == "jvm") {
+                    sextantModel.configure { dependsOn target.compilations.getByName("main").output.classesDirs }
+                }
+            }
         }
     }
 }
