@@ -1318,6 +1318,7 @@ def producers_of(
     configuring: AbstractSet[tuple[str, str, str]] = frozenset(),
     stop_at_parameters_of: AbstractSet[str] = frozenset(),
     counting: Counting = None,
+    read_sites: AbstractSet[tuple[str, int]] = frozenset(),
 ) -> tuple[Producer, ...]:
     """The calls that produced one slot of one site: one `Producer` per distinct end.
 
@@ -1374,6 +1375,11 @@ def producers_of(
     from that parameter — a handler's context — rather than from where its callers got it.
     The stop is one set lookup per parameter crossing; empty, the default, stops nothing.
 
+    **`read_sites` names the calls the reader reads itself**, by `(method, ordinal)`: a call
+    made on the value, or handed it, that the reader folds by its own words (the forward
+    chain walk's declared steps) opens no `escapes` window. Empty, the default, keeps every
+    call in the window.
+
     `site` is projected first, for the reason `resolve_site` states. Identical ends are one
     record — two paths that reach the same call name the same call — and the record carries
     no path. The order is the walk's own (NFR-1).
@@ -1387,6 +1393,7 @@ def producers_of(
         stop_at_parameters_of=stop_at_parameters_of,
         parameters_apart=True,
         counting=counting,
+        read_sites=read_sites,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[Producer] = []
@@ -1511,6 +1518,19 @@ class Path:
                 )
         return _ran_before_use(index, point, use, entering, returned, set())
 
+    def calls_out_of(self, method: str) -> tuple[int, ...]:
+        """The ordinals of the calls in `method` that this path crossed into a callee through:
+        where `method` hands the value on toward the end of the path. Empty where the path
+        leaves `method` by no call (it reached the value through a return, or not at all)."""
+        found: list[int] = []
+        for step in self.trail:
+            if step.context[0] != _CALLER_OF:
+                continue
+            by, at = step.label.rsplit("@", 1)
+            if by == method and int(at) not in found:
+                found.append(int(at))
+        return tuple(found)
+
     def two_calls_of_one_helper(self, other: "Path") -> bool:
         """Whether the two paths disagree ONLY on which call entered a helper — each value
         handed back by its own call of one helper (`id(job)` beside `id(trigger)`), which one
@@ -1575,6 +1595,7 @@ def producer_paths(
     stop_at_parameters_of: AbstractSet[str] = frozenset(),
     which_object: bool = False,
     counting: Counting = None,
+    read_sites: AbstractSet[tuple[str, int]] = frozenset(),
 ) -> tuple[tuple[Producer, Path], ...]:
     """`producers_of`, with the PATH each producer was reached by, one pair per distinct
     path — for a reader that goes on to read other positions on that same path.
@@ -1607,6 +1628,7 @@ def producer_paths(
         stop_at_parameters_of=stop_at_parameters_of,
         parameters_apart=True,
         counting=counting,
+        read_sites=read_sites,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[tuple[Producer, Path]] = []
@@ -2250,8 +2272,14 @@ class _Walk:
         stop_at_parameters_of: AbstractSet[str] = frozenset(),
         parameters_apart: bool = False,
         counting: Counting = None,
+        read_sites: AbstractSet[tuple[str, int]] = frozenset(),
     ) -> None:
         self._index = index
+        # The calls the reader itself reads, by `(method, ordinal)` (the forward chain walk's
+        # declared steps, for the execute-join `chains._joined_through_values` reads): one made
+        # on the value, or handed the value, does not open `escapes`, since what it does is
+        # read where the reader reads it. Empty for every other reader.
+        self._read_sites = frozenset(read_sites)
         # False answers a branch between literals `non_enumerable`, as before ruling 7 — for
         # the one reader that can carry a single address and must not lose the one it had
         # (`fluent`'s assembled url, OI-134). Every other reader takes the default.
@@ -3269,6 +3297,8 @@ class _Walk:
                 continue
             if self._accessor((method, ordinal)):
                 continue
+            if (method, ordinal) in self._read_sites:
+                continue
             row = self._index.sites.get((method, ordinal))
             if row is None or _call_of(row) not in self._configuring:
                 events.append((ordinal, (((), ESCAPES),), None))
@@ -3312,7 +3342,7 @@ class _Walk:
                 continue
             events.append((ordinal, (((), ESCAPES),), None))
         for ordinal, slot in handed:
-            if not inside(ordinal):
+            if not inside(ordinal) or (method, ordinal) in self._read_sites:
                 continue
             events.append((ordinal, self._handed_to(method, ordinal, slot), None))
         return events

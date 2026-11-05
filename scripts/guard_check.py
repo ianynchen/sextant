@@ -5089,9 +5089,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="        elif terminal is not None:\n            context.ends.append(",
-                replace="        elif True:  # guard disabled by scripts/guard_check.py\n"
-                "            context.ends.append(",
+                find="    if terminal is None:\n        return\n    executing = ",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n"
+                "        return\n    executing = ",
             ),
         ),
     ),
@@ -9823,6 +9823,147 @@ GUARDS: dict[str, Guard] = {
                 path=_CHAINS,
                 find="    if len(executing) != 1:\n",
                 replace="    if not executing:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-chain-is-decided-at-the-call-that-SENDS-it": Guard(
+        what="a chain's end decides its folded calls against the call that sends its request, "
+        "not against the method's exit",
+        why="in a Kotlin coroutine body no call runs on every path to the exit, so every step "
+        "splits: kotlinconf's 11 Ktor calls gave 80 rows, with GET rows for POST calls (the "
+        "builder's default verb on paths that skip `setMethod`)",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    for send in _sends(terminal, executing, context):\n",
+                replace="    for send in [None]:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.each-SEND-of-one-request-is-measured-on-its-own": Guard(
+        what="where one built value is sent from several places in a method, each send is an "
+        "end of its own, decided against that send (M9)",
+        why="measured once, the second send's request is read as the first's: a failover to a "
+        "mirror address publishes the primary address twice and the mirror never",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    return found or [None]\n",
+                replace="    return found[:1] or [None]  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-reader-that-PAIRS-every-send-takes-one-end": Guard(
+        what="a reader that reads every executing call of an end itself (Quartz) takes one end "
+        "per path of a chain, never one per send",
+        why="Quartz pairs each `scheduleJob` on its own path and decides whether ANY call "
+        "stores the trigger; one end per send repeats every pairing and its rows",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    if len(found) > 1 and context.pairs_every_send:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-HAND-OFF-toward-the-send-is-the-reference": Guard(
+        what="where the request is sent in another method, the call in this method that hands "
+        "it on toward the send is where this method's steps are decided",
+        why="`if (order == null) return; p = new HttpPost(a); p.setUri(b); send(p)`: decided "
+        "at the method's exit, which no call reaches on every path, the steps split into a "
+        "row for `/a` that no run sends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find=" else by_ordinal.get(at)\n",
+                replace=" else None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-call-the-reader-READS-opens-no-escapes-window": Guard(
+        what="a call made on the value, or handed it, that the reader folds by its own words "
+        "(`read_sites`) opens no `escapes` window in the producer walk",
+        why="the execute-join's walk read `p.setUri(b)` before `send(p)` as code that may change "
+        "the request, so a request every part of which is read was paired only by identity "
+        "and published at `partial`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if (method, ordinal) in self._read_sites:\n"
+                "                continue\n",
+                replace="",
+            ),
+        ),
+    ),
+    "fluent.a-VERB-on-a-branch-of-one-call-stays-a-row-per-verb": Guard(
+        what="the merge of one call's path-less rows keys on the verb, so a verb set on a "
+        "branch stays a row per verb",
+        why="merged with no verb in the key, `if (x) method = Put` publishes one row with the "
+        "verb of whichever path came first, a request the other path never sends",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                direction,\n                verb,\n                path,\n",
+                replace="                direction,\n                None,  # guard disabled by "
+                "scripts/guard_check.py\n                path,\n",
+            ),
+        ),
+    ),
+    "fluent.an-ADDRESS-on-a-branch-of-one-call-stays-a-row-per-address": Guard(
+        what="the merge of one call's rows that the identity key does not hold keys on the "
+        "path, so an address set on a branch stays a row per address",
+        why="with a verb no table names, `if (x) url(a) else url(b)` merged into one row and "
+        "dropped one of the two addresses the call may send to",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                verb,\n                path,\n                context.caller,\n",
+                replace="                verb,\n                None,  # guard disabled by "
+                "scripts/guard_check.py\n                context.caller,\n",
+            ),
+        ),
+    ),
+    "chains.a-STEP-on-the-way-to-the-send-is-not-read-as-folded": Guard(
+        what="a step call opens no `escapes` window only in the producer's own method, where "
+        "the forward walk folds it; one in a method on the way to the send still does",
+        why="`send(r) { r.setUri(c); execute(r) }`, decided at the hand-off `send(p)`, published "
+        "`POST /b resolved` while the request goes to `/c`",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="        read_sites=frozenset(read_by_method[producer.caller]),\n",
+                replace="        read_sites=frozenset().union(*read_by_method.values()),  # guard "
+                "disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.the-PATHS-of-one-call-are-one-row": Guard(
+        what="the paths of one chain that give a row with no identity key give one row, "
+        "`partial` where they differ only in a published part (round 4)",
+        why="a Ktor POST whose address is not read and whose inline `setBody` is on branches "
+        "gave one `POST NULL NULL` row per path: kotlinconf's `sign` gave eight",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            seen = context.exact.get(one_call)\n",
+                replace="            seen = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.the-exact-merge-is-keyed-on-the-CALL": Guard(
+        what="the merge of identical rows holds only rows of one call: its root, its terminal "
+        "and the call that sends it are in the key",
+        why="two requests in one method whose addresses are not read show the same row; "
+        "merged, one real call has no row",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                _site_key(end.root) if end.root else None,\n"
+                "                None if end.terminal is None else _site_key(end.terminal),\n"
+                "                None if end.sent_at is None else _site_key(end.sent_at),\n",
+                replace="                None,  # guard disabled by scripts/guard_check.py\n"
+                "                None,\n"
+                "                None,\n",
             ),
         ),
     ),

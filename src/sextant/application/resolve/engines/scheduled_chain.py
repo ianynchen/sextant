@@ -211,7 +211,7 @@ def entries(
     kinds, literal, default_group, default_schedule = _validated(catalog)
     rules = _job_rules(catalog)
     trigger_walk, job_walk = _walks(catalog, rules)
-    ends = list(chain_ends(workspace, trigger_walk))
+    ends = list(chain_ends(workspace, trigger_walk, pairs_every_send=True))
     if not ends:
         # Most modules build no trigger: nothing below is read for them (GUIDELINES §8.7).
         return []
@@ -219,7 +219,7 @@ def entries(
         "open"
     ]
     index = cached_value_index(workspace, catalog.not_hand_offs, catalog.hand_off_effects)
-    job_ends = list(chain_ends(workspace, job_walk))
+    job_ends = list(chain_ends(workspace, job_walk, pairs_every_send=True))
     context = _Context(
         workspace=workspace,
         catalog=catalog,
