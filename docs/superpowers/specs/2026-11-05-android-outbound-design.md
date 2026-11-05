@@ -136,9 +136,9 @@ client, which already exist. Everything Android-specific is in the detector. The
 builds have no Volley, `HttpURLConnection` or Apollo call in app code (one koog test file uses
 `HttpURLConnection`), so no catalog gap is measured.
 
-## 4. Self-review 2026-11-05 — open for the user's decision
+## 4. Self-review 2026-11-05 — all five ruled by the user
 
-Five Major findings (no Critical). Minor findings are fixed above, marked "self-review, my call".
+Five Major findings (no Critical), each ruled by the user 2026-11-05. Minor findings are fixed above, marked "self-review, my call".
 
 - **M1. A KMP project gives two modules under one Gradle path.** kotlinconf `:core` has `jvm()` and
   `android`; `:backend` uses its JVM half, `:app:androidApp` uses `:app:shared`'s Android half. The
@@ -159,9 +159,8 @@ Five Major findings (no Critical). Minor findings are fixed above, marked "self-
   the corpus), stated as such.
 - **M4. One way to collect, parallel kept.** **Ruled 2026-11-05: B** (see 2e.2). Replaces the
   `--no-parallel` call.
-- **M5. An Android compile failure refuses detection of the whole repository.** Today Android
-  modules are not compiled, so a mixed repository (backend plus app) is detected. After this design
-  any failure in the Android release compile refuses all of it. Realistic causes: a gitignored
-  `google-services.json` (common in public Firebase apps), a missing JDK toolchain (NotyKT, koog).
-  Recommendation: with M4's per-project tasks, run with `--continue`; a project whose task failed is
-  skipped with Gradle's own error as its reason, and the others are read.
+- **M5. One part that fails to build no longer stops the others.** **Ruled 2026-11-05: B.** Gradle runs
+  with `--continue` (needs M4's one task per part). A part whose task failed is skipped with Gradle's
+  own error as its reason, through the existing skip reasons; a part that uses it is skipped with
+  Gradle's reason too. The output states every skipped part at the top. Plain `java` builds gain the
+  same: one broken part no longer blocks the rest.
