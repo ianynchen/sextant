@@ -9835,7 +9835,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="    for send in _sends(executing, context):\n",
+                find="    for send in _sends(terminal, executing, context):\n",
                 replace="    for send in [None]:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -9848,8 +9848,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="    return here or [None]\n",
-                replace="    return here[:1] or [None]  # guard disabled by scripts/guard_check.py\n",
+                find="    return found or [None]\n",
+                replace="    return found[:1] or [None]  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -9861,21 +9861,66 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="    if len(here) > 1 and context.pairs_every_send:\n",
+                find="    if len(found) > 1 and context.pairs_every_send:\n",
                 replace="    if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
-    "fluent.IDENTICAL-rows-of-one-call-are-one-row": Guard(
-        what="the paths of one chain that give the very same row with no identity key give "
-        "that row once",
-        why="a Ktor POST whose address is not read and whose inline `setBody` is on branches "
-        "gave one identical `POST NULL NULL` row per path: kotlinconf's `sign` gave eight",
+    "chains.a-HAND-OFF-toward-the-send-is-the-reference": Guard(
+        what="where the request is sent in another method, the call in this method that hands "
+        "it on toward the send is where this method's steps are decided",
+        why="`if (order == null) return; p = new HttpPost(a); p.setUri(b); send(p)`: decided "
+        "at the method's exit, which no call reaches on every path, the steps split into a "
+        "row for `/a` that no run sends",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find=" else by_ordinal.get(at)\n",
+                replace=" else None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-call-the-reader-READS-opens-no-escapes-window": Guard(
+        what="a call made on the value, or handed it, that the reader folds by its own words "
+        "(`read_sites`) opens no `escapes` window in the producer walk",
+        why="the execute-join's walk read `p.setUri(b)` before `send(p)` as code that may change "
+        "the request, so a request every part of which is read was paired only by identity "
+        "and published at `partial`",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="            if (method, ordinal) in self._read_sites:\n"
+                "                continue\n",
+                replace="",
+            ),
+        ),
+    ),
+    "fluent.a-VERB-on-a-branch-of-one-call-stays-a-row-per-verb": Guard(
+        what="the merge of one call's path-less rows keys on the verb, so a verb set on a "
+        "branch stays a row per verb",
+        why="merged with no verb in the key, `if (x) method = Put` publishes one row with the "
+        "verb of whichever path came first, a request the other path never sends",
         edits=(
             Edit(
                 path=_FLUENT,
-                find="            if exact in context.exact:\n",
-                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+                find="                direction,\n                verb,\n                "
+                "context.caller,\n                peer,\n                source,\n",
+                replace="                direction,\n                None,  # guard disabled by "
+                "scripts/guard_check.py\n                context.caller,\n                peer,\n"
+                "                source,\n",
+            ),
+        ),
+    ),
+    "fluent.the-PATHS-of-one-call-are-one-row": Guard(
+        what="the paths of one chain that give a row with no identity key give one row, "
+        "`partial` where they differ only in a published part (round 4)",
+        why="a Ktor POST whose address is not read and whose inline `setBody` is on branches "
+        "gave one `POST NULL NULL` row per path: kotlinconf's `sign` gave eight",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            seen = context.exact.get(one_call)\n",
+                replace="            seen = None  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

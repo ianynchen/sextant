@@ -458,13 +458,13 @@ def test_a_post_in_a_coroutine_body_is_one_post_row(tmp_path: Path):
     ]
 
 
-@pytest.mark.pins("fluent.IDENTICAL-rows-of-one-call-are-one-row")
-def test_identical_rows_of_one_call_with_no_path_are_one_row(tmp_path: Path):
+@pytest.mark.pins("fluent.the-PATHS-of-one-call-are-one-row")
+def test_the_paths_of_one_call_with_no_path_are_one_row(tmp_path: Path):
     """The same POST with its address not read (`path` NULL) and its two `setBody` calls on
-    branches: two counted splits, so four paths (neither, one, the other, both). Three of them
-    carry the body and give the very same row, and one call gives that row once (ruled by the
-    user 2026-11-05). The path with no body is a different row and stays its own (enumerable
-    is exact)."""
+    branches: two counted splits, so four paths (neither, one, the other, both), which differ
+    only in the body. One call is one row (ruled by the user 2026-11-05), and paths that differ
+    only in a published part are ONE row, no surer than `partial` (round 4, ruled by the user
+    2026-11-03). The address is not read, so the row is `unresolved`, which is weaker."""
     facts = _inlined_call(
         _caller("create"),
         "https",
@@ -472,10 +472,22 @@ def test_identical_rows_of_one_call_with_no_path_are_one_row(tmp_path: Path):
         body=CallArgument(kind="string", value="x"),
         url_descriptor=_URL_PARTS,
     )
-    assert _raw_rows(tmp_path, _in_a_coroutine(facts, frozenset({4, 5, 6, 7}))) == [
-        ("POST", None, None, "unresolved", False),
-        ("POST", None, None, "unresolved", True),
-    ]
+    rows = _raw_rows(tmp_path, _in_a_coroutine(facts, frozenset({4, 5, 6, 7})))
+    assert [row[:4] for row in rows] == [("POST", None, None, "unresolved")], rows
+
+
+@pytest.mark.pins("fluent.a-VERB-on-a-branch-of-one-call-stays-a-row-per-verb")
+def test_a_verb_set_on_a_branch_of_one_call_with_no_path_is_a_row_per_verb(tmp_path: Path):
+    """`client.request("…") { if (x) method = HttpMethod.Put }` with its address not read: the
+    one `setMethod(Put)` is on a branch, so one path sends PUT and the other the builder's
+    GET. The verb identifies a row, so the merge of one call's paths keeps a row per verb
+    (controller ruling I-2 of the 2026-11-05 fix review)."""
+    facts = _inlined_call(_caller("maybe"), "https", verbs=(None, "Put"), url_descriptor=_URL_PARTS)
+    rows = _raw_rows(tmp_path, _in_a_coroutine(facts, frozenset({2})))
+    assert [row[:4] for row in rows] == [
+        ("GET", None, None, "unresolved"),
+        ("PUT", None, None, "unresolved"),
+    ], rows
 
 
 def _second_call(facts: list[CallSiteFact]) -> list[CallSiteFact]:

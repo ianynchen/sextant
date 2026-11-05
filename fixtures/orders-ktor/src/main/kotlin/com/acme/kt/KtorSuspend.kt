@@ -8,7 +8,8 @@
 // (kotlinconf-app, ktor-samples' client-mpp).
 //
 // `failover` sends ONE builder from two places, `HttpStatement(builder, client)` twice, with
-// the address changed between the two sends.
+// the address changed between the two sends. `placeViaHelper` builds the request after an early
+// return and hands it to a suspend helper that sends it.
 package com.acme.kt
 
 import io.ktor.client.request.HttpRequestBuilder
@@ -16,6 +17,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.request.url
+import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.HttpStatement
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpMethod
@@ -39,3 +41,14 @@ suspend fun failover(): String {
     builder.url("https://mirror.example.com/failover")
     return HttpStatement(builder, client).execute().bodyAsText()
 }
+
+suspend fun placeViaHelper(order: String?): String? {
+    if (order == null) return null
+    val builder = HttpRequestBuilder()
+    builder.method = HttpMethod.Post
+    builder.url("https://orders.example.com/helped")
+    return send(builder).bodyAsText()
+}
+
+private suspend fun send(builder: HttpRequestBuilder): HttpResponse =
+    HttpStatement(builder, client).execute()

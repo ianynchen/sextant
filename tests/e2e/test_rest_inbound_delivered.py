@@ -1172,10 +1172,10 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
     # `KtorStreams.kt` and `KtorClient.kt` add thirteen rows of their own (three inbound,
     # ten outbound, pinned by the tests below), so the twenty-eight are counted on the file
     # they come from and the fixture's whole count is forty-one. No `KtorRoutes.kt` row moved.
-    # `KtorSuspend.kt` (2026-11-05) adds three outbound rows, pinned below: forty-four.
+    # `KtorSuspend.kt` (2026-11-05) adds four outbound rows, pinned below: forty-five.
     routes = [r for r in ktor_rows if "/KtorRoutesKt#" in str(r["caller"])]
     assert len(routes) == 28, sorted(rows, key=str)
-    assert len(ktor_rows) == 44, sorted(map(str, ktor_rows))
+    assert len(ktor_rows) == 45, sorted(map(str, ktor_rows))
     stray = [r for r in ktor_rows if "#elsewhere(" in str(r["caller"])]
     assert len(stray) == 1 and stray[0]["resolution"] == "unresolved", stray
     assert not any(str(r["path"]).startswith("/api") for r in stray), stray
@@ -1565,7 +1565,12 @@ def test_ktor_client_calls_in_a_coroutine_body_are_one_row_each_with_their_verb(
     by the user 2026-11-05); the first send's row is the primary address. The second send is
     after a suspension, where the builder is read back from the continuation's field, so its
     argument is a merge the chain walk does not follow: that send gives no row (a stated limit,
-    in the fix report of 2026-11-05)."""
+    in the fix report of 2026-11-05).
+
+    `placeViaHelper` returns early when its order is null, then builds the request and hands
+    it to a suspend helper, `send(builder)`, which sends it. The send is in another method, so
+    the hand-off `send(builder)` is where this method's steps are decided (controller ruling I-1
+    of the fix review): one POST row, `resolved`, as every part is read."""
     rows = sorted(
         (r["caller"].split("#", 1)[1].split("(", 1)[0], r["method"], r["peer"], r["path"])
         + (r["resolution"],)
@@ -1576,6 +1581,7 @@ def test_ktor_client_calls_in_a_coroutine_body_are_one_row_each_with_their_verb(
         ("createOrder", "POST", "orders.example.com", "/created", "partial"),
         ("failover", "POST", "orders.example.com", "/failover", "resolved"),
         ("orderStatus", "GET", "orders.example.com", "/status", "resolved"),
+        ("placeViaHelper", "POST", "orders.example.com", "/helped", "resolved"),
     ], rows
 
 
