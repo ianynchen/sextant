@@ -1298,6 +1298,62 @@ def test_a_modules_json_row_without_results_means_dir_sextant(tmp_path: Path):
     )
 
 
+def _component_claim(name: str) -> dict[str, object]:
+    return {
+        "kind": "component",
+        "evidence": "llm",
+        "anchor": "after-component-overview",
+        "name": name,
+        "purpose": "Everything this module exchanges with the billing system lives here.",
+        "members": [],
+    }
+
+
+def _enrich_with(core: Path, name: str, claim_name: str) -> None:
+    """Enriches the module `name` of the shared folder `core` with one canned claim."""
+    answers = core.parent / f"answers-{name}.json"
+    answers.write_text(json.dumps([_component_claim(claim_name)]), encoding="utf-8")
+    results = core / ".sextant" / name
+    rendered = CliRunner().invoke(cli, ["module", "render", str(core), "--workspace", str(results)])
+    assert rendered.exit_code == 0, rendered.output
+    enriched = CliRunner().invoke(
+        cli,
+        [
+            "module",
+            "enrich",
+            str(core),
+            "--workspace",
+            str(results),
+            "--ingest",
+            str(answers),
+            "--agent",
+            "a-agent",
+            "--model",
+            "a-model",
+        ],
+    )
+    assert enriched.exit_code == 0, enriched.output
+
+
+@pytest.mark.pins("enrich.a-module-in-a-SHARED-folder-writes-its-OWN-description-file")
+def test_two_modules_in_one_folder_keep_their_own_descriptions(shared_folder_repo: Path):
+    """Enrich A, enrich B, render A: A's document shows A's claims only (Android M7)."""
+    core = shared_folder_repo / "core"
+    _enrich_with(core, "jvm", "Jvm only claim")
+    _enrich_with(core, "android", "Android only claim")
+
+    assert (core / ".sextant-enrichment-jvm.json").is_file()
+    assert (core / ".sextant-enrichment-android.json").is_file()
+    assert not (core / ".sextant-enrichment.json").exists()
+    rendered = CliRunner().invoke(
+        cli, ["module", "render", str(core), "--workspace", str(core / ".sextant" / "jvm")]
+    )
+    assert rendered.exit_code == 0, rendered.output
+    document = (core / ".sextant" / "jvm" / "render" / "architecture.md").read_text()
+    assert "Jvm only claim" in document
+    assert "Android only claim" not in document
+
+
 def test_system_analyze_reads_results(shared_folder_repo: Path):
     """`system analyze` finds each participant through its row's `results`: both
     modules of the shared folder are read, neither is reported as gone."""
@@ -1693,3 +1749,27 @@ def test_a_reactor_module_no_scanner_reads_is_skipped_and_the_rest_analysed(
     assert "skipped actors (shop:actors): no scanner accepts scala" in result.output
     assert "analyzed billing (shop:billing)" in result.output
     assert not (tmp_path / "actors" / ".sextant").exists()
+
+
+def test_a_one_module_folder_keeps_the_old_file_name(tmp_path: Path):
+    """A module alone in its folder keeps `.sextant-enrichment.json` (Android M7)."""
+    compile_fixture(_SHARED_FOLDER_FIXTURE)
+    core = tmp_path / "core"
+    shutil.copytree(_SHARED_FOLDER_FIXTURE, core, ignore=shutil.ignore_patterns(".sextant"))
+    api._analyze_reactor(
+        tmp_path,
+        RepositoryModel(root=tmp_path, modules=(_reactor_one_module(core),)),
+        False,
+        None,
+        None,
+    )
+    answers = tmp_path / "answers.json"
+    answers.write_text(json.dumps([_component_claim("Alone claim")]), encoding="utf-8")
+    assert CliRunner().invoke(cli, ["module", "render", str(core)]).exit_code == 0
+    enriched = CliRunner().invoke(
+        cli,
+        ["module", "enrich", str(core), "--ingest", str(answers), "--agent", "a", "--model", "m"],
+    )
+    assert enriched.exit_code == 0, enriched.output
+    assert (core / ".sextant-enrichment.json").is_file()
+    assert list(core.glob(".sextant-enrichment-*.json")) == []

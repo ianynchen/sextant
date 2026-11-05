@@ -172,7 +172,7 @@ from sextant.application.stitch import (
     with_registered_names as _with_registered_names,
 )
 from sextant.application.stitch.links import Link
-from sextant.domain.enrichment import ENRICHMENT_FILE, EnrichmentOverlay, load_overlay
+from sextant.domain.enrichment import EnrichmentOverlay, enrichment_file, load_overlay
 from sextant.domain.facts import DeclaredShapeFact, EmbeddedDescriptorFact
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.redaction import RedactionError, Redactor
@@ -814,17 +814,28 @@ def _redactor_for(path: Path) -> Redactor:
         raise ConfigurationError(str(refused)) from refused
 
 
-def _overlay_for(path: Path) -> EnrichmentOverlay | None:
+def _results_name_of(path: Path, workspace_dir: Path | None) -> str | None:
+    """The `results_name` of the module whose results are in `workspace_dir` (Android
+    design M7): the folder name where `workspace_dir` is a sub-folder of
+    `<path>/.sextant`, else `None`. It picks the module's description file."""
+    if workspace_dir is None:
+        return None
+    if workspace_dir.resolve().parent == _workspace_dir_of(path, None).resolve():
+        return workspace_dir.name
+    return None
+
+
+def _overlay_for(path: Path, results_name: str | None = None) -> EnrichmentOverlay | None:
     """The module's enrichment overlay, or `None` where it has none (2K
     design §6). An overlay that is present and malformed becomes the message
     a caller reads, for the reason `_redactor_for` turns a bad `redact:`
     section into one: it is Sextant's own program artifact written wrong,
     and a stack trace would report it as a crash in the tool."""
     try:
-        return load_overlay(path)
+        return load_overlay(path, results_name)
     except ValidationError as refused:
         raise ConfigurationError(
-            f"{path / ENRICHMENT_FILE} is not a valid overlay: {refused}"
+            f"{enrichment_file(path, results_name)} is not a valid overlay: {refused}"
         ) from refused
 
 
@@ -1342,7 +1353,7 @@ def _render(path: Path, *, workspace_dir: Path | None) -> RenderResult:
 
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     redactor = _redactor_for(path)
-    overlay = _overlay_for(path)
+    overlay = _overlay_for(path, _results_name_of(path, workspace_dir))
 
     workspace = DuckDbWorkspace(db_path)
     try:
@@ -1637,7 +1648,7 @@ def _enrich(
         # Written BEFORE assembly, deliberately (2K Task 7 fix round 1): the
         # overlay IS the run's record — a later assembly failure must not
         # lose it.
-        overlay_path = path / ENRICHMENT_FILE
+        overlay_path = enrichment_file(path, _results_name_of(path, workspace_dir))
         overlay_path.write_text(
             result.overlay.model_dump_json(indent=2, exclude_none=True) + "\n", encoding="utf-8"
         )

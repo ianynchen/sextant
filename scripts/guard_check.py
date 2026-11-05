@@ -1414,6 +1414,19 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "enrich.a-module-in-a-SHARED-folder-writes-its-OWN-description-file": Guard(
+        what="`enrich` writes the description file named with the module's version name, so "
+        "two modules in one folder keep their own",
+        why="without it the second module's `enrich` overwrites the first's descriptions "
+        "(Android design M7, Android outbound Task 5b)",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find="        overlay_path = enrichment_file(path, _results_name_of(path, workspace_dir))\n",
+                replace="        overlay_path = enrichment_file(path, None)\n",
+            ),
+        ),
+    ),
     "detect.an-OFFLINE-PLUGIN-refusal-is-retried-online-under-the-flag": Guard(
         what='an offline "could not resolve plugin artifact" is an offline refusal '
         "`--allow-resolve` retries online",

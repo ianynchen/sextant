@@ -337,6 +337,21 @@ def test_the_enrichment_overlay_is_excluded_as_a_jail_specific_rule_not_a_sextan
     assert result == f"refused: {ENRICHMENT_FILE} is not available"
 
 
+def test_every_modules_own_description_file_is_excluded_from_the_jail(tmp_path: Path):
+    """Two modules in one folder keep one description file each (Android M7):
+    the jail hides every `.sextant-enrichment-<name>.json`, not only the
+    one-module name."""
+    (tmp_path / ".sextant-enrichment-jvm.json").write_text("prior claim", encoding="utf-8")
+    (tmp_path / "Real.java").write_text("class Real {}", encoding="utf-8")
+    executor = _executor((tmp_path,))
+    listing = executor.execute("list_dir", {"path": "."}).splitlines()
+    assert "Real.java" in listing
+    assert ".sextant-enrichment-jvm.json" not in listing
+    result = executor.execute("read_file", {"path": ".sextant-enrichment-jvm.json"})
+    assert result == "refused: .sextant-enrichment-jvm.json is not available"
+    assert executor.execute("grep", {"pattern": "prior claim"}) == ""
+
+
 def test_i3_excluded_and_missing_are_the_same_message_no_existence_oracle():
     """2K Task 5 fix round 1, I3: a model refused on `.env` (which
     exists, excluded) and a model refused on a name that plainly does not

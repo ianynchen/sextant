@@ -127,7 +127,9 @@ if `render/architecture.md` is absent (an unrendered analysis, or one whose rend
 stale after a re-analyze). Given one, it composes the brief, runs the requested `--agent`
 through the `EnrichmentAgent` port or takes the `--dry-run`/`--ingest` door instead
 ([D04](D04-config-and-exclusion.md) §4b), validates the answer by construction, writes
-`.sextant-enrichment.json` at the module root, and **assembles both rendered outputs
+`.sextant-enrichment.json` at the module root (`.sextant-enrichment-<version name>.json` for a
+module that shares its folder with others, the name of its `.sextant/<version name>` results
+folder), and **assembles both rendered outputs
 itself** — there is no second render command; `render`, run again later over a workspace
 that already carries an overlay, takes the identical assembly path and reproduces the same
 documents.

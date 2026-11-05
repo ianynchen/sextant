@@ -1856,3 +1856,17 @@ def test_a_record_with_no_class_jars_gives_no_note():
         {**_minimal_project(path=":lib", name="lib"), "projectJars": []},
     ]
     assert _repository_model({"projects": projects, "includedBuilds": []}).notes == ()
+
+
+def test_the_init_script_reads_every_android_plugin_that_ships_code():
+    """A dynamic feature module ships code, so the init script reads its build
+    like an application's (Android design 2a). Capture-free: the list is the
+    script's own text."""
+    script = Path(gradle_module.__file__).with_name("sextant-model.init.gradle").read_text()
+    for plugin_id in (
+        "com.android.application",
+        "com.android.library",
+        "com.android.kotlin.multiplatform.library",
+        "com.android.dynamic-feature",
+    ):
+        assert f'"{plugin_id}"' in script
