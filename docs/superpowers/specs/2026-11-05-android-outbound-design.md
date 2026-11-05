@@ -182,3 +182,11 @@ Five Major findings (no Critical), each ruled by the user 2026-11-05. Minor find
   per module, named with the version or edition name: `core/.sextant-enrichment-jvm.json`,
   `core/.sextant-enrichment-android.json`; a folder with one module keeps
   `.sextant-enrichment.json`. `enrich`, `render` and `export` read and write the module's own file.
+- **M8. Retrofit lines have no server address but are marked complete.** Found while building
+  Task 5; pre-existing for every Retrofit line (and `@HttpExchange` / MicroProfile clients whose
+  address is set where the client object is made). **Ruled 2026-11-05: A, in this pull request.**
+  Follow a call such as `api.order(id)` back through `api` to `create(OrdersApi::class.java)` and
+  the `baseUrl(...)` of the Retrofit object that made it, using the existing object-following
+  rules, and join the address to the path. Where the address is not in code Sextant can follow, the
+  line is marked partial ("server address not read"), never complete. A new setup-file (catalog)
+  word, if one is needed, is shown to the user before use.

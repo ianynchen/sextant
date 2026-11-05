@@ -295,3 +295,13 @@ from the results folder name when it is a sub-folder of `<root>/.sextant`).
 - [ ] Tests: `test_two_modules_in_one_folder_keep_their_own_descriptions` (enrich A, enrich B,
   render A shows A's claims only); `test_a_one_module_folder_keeps_the_old_file_name`.
 - [ ] Implement; covering tests and full gate; commit `feat(enrich): one description file per module in a shared folder (Android M7)`.
+
+### Task 8: A Retrofit call gets the address of the object that made it (M8)
+
+**Goal:** `api.order(id)` → row `GET https://free.api.example/orders/{id}` (complete) in `app-free`,
+`https://paid.api.example/...` in `app-paid`; where the address cannot be followed, the row is
+partial with "server address not read", never complete. Reuse the existing object-following and
+builder-capture rules (spring-webclient `baseUrl` steps, follow-the-object rulings, the dispatch
+object walk with `class_arg`). Phase 1 decides whether existing catalog words suffice; a new word
+stops the task for the user's approval. Turns Task 5's strict-xfail Retrofit test green. Apply the
+same link to `@HttpExchange` / MicroProfile REST client only where it needs no extra work; log the rest.
