@@ -10,6 +10,8 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.bean_conditions import record_bean_conditions
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.config import resolve_config
+from sextant.application.resolve.dispatch_hops import record_dispatch_hops, record_key_handlers
+from sextant.application.resolve.dispatch_registrations import record_dispatch_registrations
 from sextant.application.resolve.endpoint_attributes import record_endpoint_attributes
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints_with_runs
 from sextant.application.resolve.environment_divergence import record_environment_divergence
@@ -236,12 +238,31 @@ def resolve(
     # `apply_path_prefixes` and the passes that key on a row (shapes, service-identity gaps).
     with _timed("record_self_calls"):
         record_self_calls(workspace)
+    # `hops` has two writers, the gRPC pass and the dispatch pass below, and each only
+    # inserts: ONE reset, here, before both (spec 2026-11-04 §3d item 7), so a resolve with
+    # neither still leaves an empty table rather than the previous run's rows.
+    workspace.derive("hops_reset")
     # Spec 2026-10-25 §3d: where a stub call to a served RPC lands. Right after the pass
     # above, for the same reason: it reads the inbound rows every engine minted, and
-    # `record_call_edges`, far above. Nothing below changes a gRPC row's path, and it
-    # resets its own table, being its only writer.
+    # `record_call_edges`, far above. Nothing below changes a gRPC row's path.
     with _timed("record_rpc_hops"):
         record_rpc_hops(workspace, declared)
+    # Spec 2026-11-05 §3: each in-process dispatch registration, read off the call sites the
+    # catalogs declare. Before the dispatch hops, which read these rows; it reads no endpoint
+    # row and resets its own table, being its only writer.
+    with _timed("record_dispatch_registrations"):
+        record_dispatch_registrations(workspace, declared)
+    # Spec 2026-11-05 §1: each dispatch send's hops into `hops`, the table's second writer,
+    # from the registrations just read. Before `apply_path_prefixes`, with the other hop pass.
+    with _timed("record_dispatch_hops"):
+        record_dispatch_hops(workspace, declared)
+    # Spec 2026-11-04 §3d item 6: each inbound key row named by the handlers its key class
+    # reaches, from the same registrations. After `record_self_calls`, which reads a key as
+    # served off its row while every row still names its registering method: a key no
+    # handler serves becomes a row with no handler here, and is still served. Before
+    # `apply_path_prefixes` and the passes that key on a row.
+    with _timed("record_key_handlers"):
+        record_key_handlers(workspace, declared)
     # **The module's own server prefix, and it runs HERE for a reason** (spec 2026-10-18 §3,
     # `OI-148`): every row exists by now, and nothing has copied an address yet.
     # `record_roots`, `record_routing_conflicts` and `record_self_exchange` all key on the

@@ -146,6 +146,10 @@ _FLUENT = "sextant/application/resolve/engines/fluent.py"
 # The chain walk `fluent` derives from (Quartz spec 2026-10-28 §3d), moved out of `_FLUENT`
 # whole, with the guards on the walk's own rules.
 _CHAINS = "sextant/application/resolve/shapes/chains.py"
+# Dispatch registrations per group, and the match rule (spec 2026-11-05 §1-§3).
+_DISPATCH_REGISTRATIONS = "sextant/application/resolve/dispatch_registrations.py"
+# A dispatch send's hops into `hops` (spec 2026-11-05 §1).
+_DISPATCH_HOPS = "sextant/application/resolve/dispatch_hops.py"
 _CLIENT_BASE = "sextant/application/resolve/shapes/client_base.py"
 # Which handler on a route chain answers (Vert.x spec 2026-10-30 §3b, plan Task 10).
 _PASS_THROUGH = "sextant/application/resolve/shapes/pass_through.py"
@@ -4956,10 +4960,32 @@ GUARDS: dict[str, Guard] = {
                 # A (`docs/performance.md`) turned the per-site test into a read of
                 # the owners' own positions in the shared `CallSiteIndex`; the guard
                 # is the same, and disabling it reads every position instead.
-                find="            index.positions_by_owner.get(owner, []) for owner in "
-                "dict.fromkeys(owners)",
+                find="            index.positions_by_owner.get(owner, [])\n"
+                "            for owner in dict.fromkeys((*owners, *sorted({heir for heir, _ in inherited})))",
                 replace="            range(len(call_sites)) for _ in [None]"
                 "  # guard disabled by scripts/guard_check.py",
+            ),
+            # A call through a type inheriting the owner's method is read too (JVMS
+            # 5.4.3.3, `Dispatch.heirs`); the per-site test that keeps it to such types is
+            # the same conjunct, so it is disabled with it.
+            Edit(
+                path=_SINGLE_CALL,
+                find='        if site["owner"] not in owners and (site["owner"], site["name"]) not in inherited:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "single_call.a-call-through-an-HEIR-is-the-owners": Guard(
+        what="a call made through a module type inheriting a declared owner's method is read "
+        "as that owner's call",
+        why="JVMS 5.4.3.3: javac writes the class a call is made through. Without the heirs, "
+        "a call through a subclass of a library type the catalog names derives nothing, "
+        "and the boundary it crosses is missing from the document",
+        edits=(
+            Edit(
+                path=_SINGLE_CALL,
+                find="        for heir in dispatch.heirs(owner, name)\n",
+                replace="        for heir in ()  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -7382,14 +7408,1289 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/self_calls.py",
-                find='        and str(row["path"]) in served\n',
-                replace='        and any(str(row["path"]).startswith(k) for k in served)  # guard disabled by scripts/guard_check.py\n',
+                find='        and (str(row["protocol"]), str(row["path"])) in served\n',
+                replace='        and any(str(row["path"]).startswith(k) for _, k in served)  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "actor.a-SERVED-key-is-not-an-outbound-row": Guard(
+        what="an outbound `actor` row naming a key or topic this module registers, inits or "
+        "subscribes to is removed",
+        why="spec 2026-11-04 §3d item 5: a key the module serves itself is a hop, not an "
+        "outbound call. Without `actor` in the pass, `entityRefFor(TypeKey)` in a module "
+        "that inits `TypeKey` publishes a call to a far end that is itself",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find='_PROTOCOLS: dict[str, str | None] = {"grpc": "/", "actor": None}\n',
+                replace='_PROTOCOLS: dict[str, str | None] = {"grpc": "/"}  # guard disabled\n',
+            ),
+        ),
+    ),
+    "actor.a-SERVED-key-is-matched-WHOLE": Guard(
+        what="an `actor` inbound path is its identity whole; nothing before a `/` in it is "
+        "read as a served service",
+        why="spec 2026-11-04 §3a: an actor key or topic has no method part. Read the gRPC way, "
+        "a module subscribing to `orders/eu` would drop its real outbound call to `orders`, "
+        "another topic",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find='_PROTOCOLS: dict[str, str | None] = {"grpc": "/", "actor": None}\n',
+                replace='_PROTOCOLS: dict[str, str | None] = {"grpc": "/", "actor": "/"}  # guard disabled\n',
+            ),
+        ),
+    ),
+    "dispatch-registrations.the-registrations-are-WRITTEN": Guard(
+        what="each registration a group makes is written as a `dispatch_registrations` row",
+        why="spec 2026-11-05 §3: the rows are what a send's hop and an inbound key's handler "
+        "are found through. Without them every dispatched value stops at the library call "
+        "that sends it, and no inbound key row names a handler",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='    if rows:\n        workspace.derive("dispatch_registrations_insert", rows=rows)\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n"
+                '        workspace.derive("dispatch_registrations_insert", rows=rows)\n',
+            ),
+        ),
+    ),
+    "dispatch-registrations.the-FIRST-unpredicated-match-wins": Guard(
+        what="under `match: first` a value reaches the first unpredicated registration it "
+        "matches in a group, and none after it",
+        why="spec 2026-11-04 §3c: a behavior dispatches to the first case whose class the "
+        "message is assignable to. Without the stop, `onMessage(Command)` followed by "
+        "`onMessage(Reserve)` gives a `Reserve` send a hop to a handler that never runs",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='            if match == _FIRST and not registration["predicated"]:\n                break\n',
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n"
+                "                break\n",
+            ),
+        ),
+    ),
+    "dispatch-registrations.the-SUPERTYPE-closure-is-walked": Guard(
+        what="a class case is reached by a message of any subtype, however many levels down",
+        why="a behavior's `onMessage(Command.class)` takes every `Command`, an interface the "
+        "message class may implement through another. Read one level deep, a `Reserve "
+        "implements Stocked extends Command` send would reach no case and stop",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="            pending.extend(supertypes.get(current, ()))\n",
+                replace="            pending.extend(())  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-registrations.a-PREDICATED-case-never-shadows": Guard(
+        what="a case carrying a predicate does not stop the search for the case a message reaches",
+        why="spec 2026-11-04 §3d item 2: a predicate may decline, so the case after it is "
+        "reached too. Read as shadowing, `onMessage(Release, urgent)` before "
+        "`onMessage(Release)` hides the handler that runs for every non-urgent release",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='            if match == _FIRST and not registration["predicated"]:\n                break\n',
+                replace="            if match == _FIRST:  # guard disabled by scripts/guard_check.py\n"
+                "                break\n",
+            ),
+        ),
+    ),
+    "dispatch-registrations.a-PREDICATE-only-case-tests-every-message": Guard(
+        what="a case naming no class and no value but a predicate is reached by every message",
+        why="the controller's ruling on `onCommand(Predicate, h)`: the predicate tests any "
+        "command, so its handler may run for any of them. Read as matching nothing, the "
+        "handler is lost from every hop",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='    return bool(registration["predicated"])\n',
+                replace="    return False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-registrations.a-VALUE-case-matches-by-IDENTITY": Guard(
+        what="a value case is reached only by a message that is its constant",
+        why="spec 2026-11-04 §3d item 3: `onMessageEquals(Tick.INSTANCE)` tests equality with "
+        "that constant. Matched by anything else, a `new Tick()` send would land on it and "
+        "never reach the class case that takes it",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='        return key_value is not None and registration["key_value"] == key_value\n',
+                replace="        return True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-registrations.each-ROOT-is-its-own-group": Guard(
+        what="a behavior is named by its root call, so two chains in one method are two behaviors",
+        why="spec 2026-11-04 §3d item 1: each `forState` returns its own state builder, and "
+        "states are alternatives. Named by the method alone, three states would be one "
+        "behavior whose first `Cancel` case shadows the other state's",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        group = f\"{end.root['caller']}#{end.root['ordinal']}\"\n",
+                replace="        group = f\"{end.root['caller']}#0\"  # guard disabled\n",
+            ),
+        ),
+    ),
+    "dispatch.an-inherited-root-needs-the-ANCESTRY": Guard(
+        what="a call made through a type is read as a declared owner's method only where "
+        "that type's ancestry reaches the owner",
+        why="JVMS 5.4.3.3: a call names the class it is made through and resolves up that "
+        "class's ancestry. Without the ancestry test any class's own `newReceiveBuilder()` "
+        "would be read as the library's, and its calls as a chain or a call-site row",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/dispatch.py",
+                find="        below = self.subtypes.get(owner, [])\n",
+                replace="        below = sorted(self.ancestors)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch.an-heir-DECLARING-the-method-runs-its-own": Guard(
+        what="a type that declares the method itself, or inherits it from a type the module "
+        "declares between it and the owner, is no heir",
+        why="JVMS 5.4.3.3: resolution stops at the first declaration. A module class "
+        "defining its own `receiveBuilder()` runs its own body, and reading the call as "
+        "the library's would publish a chain or a row the code does not make",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/dispatch.py",
+                find="            if not path & declaring:\n",
+                replace="            if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "actor.a-builder-held-in-a-local-is-ONE-behavior-where-it-returns-this": Guard(
+        what="the typed `ReceiveBuilder.onMessage` step is `returns_receiver: true`, so its "
+        "statements on one local are one chain",
+        why="CP-57 finding 1: the mutable builder returns `this`. Read as returning a new "
+        "builder, `b.onMessage(A, h); b.onMessage(B, g); b.build()` registers nothing, and "
+        "both handlers are lost",
+        edits=tuple(
+            Edit(
+                path=f"sextant/catalogs/{family}-actor-handlers.yml",
+                find=f'"(Ljava/lang/Class;L{prefix}/japi/function/Function;)L{prefix}/actor/typed/'
+                'javadsl/ReceiveBuilder;",\n        captures: { case: arg0 }, repeats: [case], '
+                "returns_receiver: true }\n",
+                replace=f'"(Ljava/lang/Class;L{prefix}/japi/function/Function;)L{prefix}/actor/'
+                'typed/javadsl/ReceiveBuilder;",\n        captures: { case: arg0 }, repeats: '
+                "[case] }  # guard disabled\n",
+            )
+            for family, prefix in (("pekko", "org/apache/pekko"), ("akka", "akka"))
+        ),
+    ),
+    "actor.a-DROPPED-immutable-builder-registers-nothing": Guard(
+        what="the typed `BehaviorBuilder.onMessage` step is NOT `returns_receiver`, so a "
+        "registration whose new builder is dropped is on no chain",
+        why="CP-57 finding 1: the immutable builder returns a new builder. Read as `this`, "
+        "`b.onMessage(A, h); return b.build();` claims a case the built behavior does not "
+        "have, and a send of `A` gets a hop to a handler that never runs",
+        edits=tuple(
+            Edit(
+                path=f"sextant/catalogs/{family}-actor-handlers.yml",
+                find=f'"(Ljava/lang/Class;L{prefix}/japi/function/Function;)L{prefix}/actor/typed/'
+                'javadsl/BehaviorBuilder;",\n        captures: { case: arg0 }, repeats: [case] }\n',
+                replace=f'"(Ljava/lang/Class;L{prefix}/japi/function/Function;)L{prefix}/actor/'
+                'typed/javadsl/BehaviorBuilder;",\n        captures: { case: arg0 }, repeats: '
+                "[case], returns_receiver: true }  # guard disabled\n",
+            )
+            for family, prefix in (("pekko", "org/apache/pekko"), ("akka", "akka"))
+        ),
+    ),
+    "dispatch-objects.a-receive-reads-the-object-at-ITS-position": Guard(
+        what="a receive's key is read at the position its `object` names (receiver or `argN`)",
+        why="CP-59 finding 16: Guava's static `Queues.drain(queue, …)` is handed the queue at "
+        "argument 0. Walked on its (absent) receiver it is a keyless row, a silent miss on "
+        "apollo-portal's three audit drains",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        made: list[str | None] = [key for key in objects.of(site, slot) if key "
+                "is not None]\n",
+                replace="        made: list[str | None] = [key for key in objects.of(site) if key "
+                "is not None]  # guard disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.an-object-NOBODY-takes-from-is-a-STOP-naming-it": Guard(
+        what="a send on an object nothing takes from is one row naming it, with no handler",
+        why="spec 2026-11-05 §1: the trace stops at the put and says which queue; without the "
+        "row it reads the put as a plain library call",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="                for taker in takers or [None]\n",
+                replace="                for taker in takers  # guard disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-NULL-CHECK-hands-back-the-SAME-object": Guard(
+        what="a declared null check returning its argument's type is passed through",
+        why="`this.q = Objects.requireNonNull(q)` is the usual constructor: ending at the check "
+        "splits one queue into two keys, and the put never reaches the take",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        return tuple(index for index, slot in enumerate(slots) if slot == "
+                "returned)\n",
+                replace="        return ()  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-NULL-CHECK-over-an-UNREAD-object-keeps-its-OWN-key": Guard(
+        what="a null check every path past which ends at an object not read is the object's key",
+        why="final review deferred minor: `this.q = Objects.requireNonNull(q)` with `q` injected "
+        "used to key both sides at the check; followed past it to the parameter alone, the put "
+        "and the take are both keyless, a missing hop this branch introduced",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="            if checked and ends and all(end is None for end in ends):\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-RECEIVE-site-registers-keyed-by-its-OBJECT": Guard(
+        what="each declared receive site is a registration keyed by its object",
+        why="spec 2026-11-05 §1, §3: a value put on a queue is handled where it is taken off "
+        "that queue. Unread, every put is a hop to no handler and a trace stops at the queue",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="            *_receive_rows(workspace, catalog),\n",
+                replace="            # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-SEND-hops-to-the-receives-on-its-OBJECT": Guard(
+        what="an object-keyed send hops only to receives on the SAME object",
+        why="spec 2026-11-05 Review Focus 4: two queues of one type in one module; a put on "
+        "one reaching the other's takes is a false hop",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find='                    if case["key_object"] == key\n',
+                replace='                    if case["key_object"] is not None  # guard disabled\n',
+            ),
+        ),
+    ),
+    "dispatch-objects.an-OBJECT-key-is-not-asked-for-a-CLASS": Guard(
+        what="a send under `dispatch: {key: object}` is keyed by its receiver, not its value",
+        why="spec 2026-11-05 §1: a queue takes values of any class. Read as a type key, a put "
+        "of a parameter is a stop and a put of `new Job()` reaches no take",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find='        if (catalog.dispatch or {}).get("key") == _OBJECT_KEY:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.an-UNREAD-object-is-a-STOP-that-says-so": Guard(
+        what="a send whose object is not read is one row with no path and no handler",
+        why="spec 2026-11-05 Global Constraints: an unread key is a stop that says so, never "
+        "a fan-out. Without the row the trace reads the put as a plain library call",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find='                rows.append(row | {"path": None, "handler": None, '
+                '"evidence": "compiler"})\n                continue\n',
+                replace="                continue  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.an-UNREAD-receive-is-KEPT-keyless": Guard(
+        what="a receive whose object is not read keeps one registration with no key",
+        why="spec 2026-11-05 §3: a registration the walk could not read keeps its row, its "
+        "key NULL, matching nothing; dropped, the take is nowhere in the table",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        for key in made or [None]:\n",
+                replace="        for key in made:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-LIBRARY-call-that-makes-the-object-is-its-producer": Guard(
+        what="a library call handing back the object is where the object walk ends",
+        why="`examples/apollo` makes all four of its queues with `Queues.newLinkedBlockingQueue`"
+        ", a static call whose body is not here. Not a producer, each is an object not read and "
+        "every put on it a stop",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        self._made = self._index.unscanned | frozenset(\n",
+                replace="        self._made = frozenset() | frozenset(  # guard disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.the-object-walk-lets-calls-ON-the-object-PAST": Guard(
+        what="the object walk asks which object, so calls made on the object do not end it",
+        why="spec 2026-10-30 §3c (`which_object`): a queue offered to and polled in between "
+        "is still the queue its constructor made",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        for producer, _ in producer_paths(self._index, site, slot, self._made, "
+                "which_object=True):\n",
+                replace="        for producer, _ in producer_paths(self._index, site, slot, self._made, "
+                "which_object=False):\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-LAMBDA-ARG-handler-is-refused-not-guessed": Guard(
+        what="a receive declaring `handler: lambda_arg` is refused, not read as its method",
+        why="spec 2026-11-05 §2: the enclosing method is not the code a function argument "
+        "handles the value in; read so, every hop would land on the wrong method",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='        if receive["handler"] != _ENCLOSING:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-LAMBDA-ARG-receive-is-handled-by-its-FUNCTION": Guard(
+        what="a `handler: lambda_arg` receive's handler is the function it is given",
+        why="CP-59 finding 20: a `collect { }` lambda is a module class whose `emit` handles "
+        "each value; read as the enclosing method, every emit's hop lands on the method that "
+        "subscribed, not the code that handles the value",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="            handler = _function_handler(workspace, site, receive)\n",
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-SHARED-collector-instance-names-its-CLASS": Guard(
+        what="a closure's one shared instance, read as a constant of its own type, names its class",
+        why="CP-59 finding 20: a `collect { }` lambda capturing nothing is handed as its class's "
+        "`INSTANCE`; unread, every such collector has no handler and an emit reaches only the "
+        "capturing ones",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="    elif kind == _CONSTANT:\n",
+                replace="    elif False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-collector-BRIDGE-is-carried-to-its-BODY": Guard(
+        what="a function argument's method found as the compiler's bridge names the method it "
+        "forwards to",
+        why="CP-59 finding 20: `emit(Object, Continuation)` is `ACC_BRIDGE, ACC_SYNTHETIC`; a hop "
+        "to it names a method nobody wrote",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="    return declared.symbols[joined if target is None else target]\n",
+                replace="    return declared.symbols[joined]  # guard disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-CYCLE-adds-no-object": Guard(
+        what="an object-walk path that comes back to where it started is skipped",
+        why="a coroutine lambda's `create` copies `this.$ch` into the instance it runs: read as "
+        "an object not read, every send in a launched block capturing its channel keeps a "
+        "false stop beside its hop",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="            if producer.reason == CYCLE:\n                continue\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n"
+                "                continue\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-NULL-CHECK-met-again-adds-no-object": Guard(
+        what="an object walk back at a null check it passed through adds no object",
+        why="CP-59 finding 21: `L$0 = nullOutSpilledVariable(scope)` feeds the slot it was read "
+        "from; named as the object, a producer coroutine's send names a compiler call as its "
+        "channel",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="                # Back at a null check this walk passed through: a cycle, adding "
+                "no object.\n                continue\n",
+                replace='                yield f"{producer.caller}#{producer.ordinal}"  # guard disabled\n'
+                "                continue\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-SPILLED-variable-null-out-is-no-producer": Guard(
+        what="kotlinc's `nullOutSpilledVariable` is declared a call that takes a value without "
+        "handing it off",
+        why="CP-59 finding 21: its body is `aconst_null; areturn`. Read as a library call whose "
+        "body is not here, the object walk names it as the call that made a coroutine's channel",
+        edits=(
+            Edit(
+                path="sextant/catalogs/value-models/compiler-null-checks.yml",
+                find="  - owner: kotlin.coroutines.jvm.internal.SpillingKt\n"
+                "    methods: [nullOutSpilledVariable]\n",
+                replace="  - owner: kotlin.coroutines.jvm.internal.SpillingKt\n"
+                "    methods: [guardDisabled]\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-VIEW-hands-back-the-SAME-object": Guard(
+        what="a declared view call is passed through to the object it views",
+        why="CP-59 finding 22: `val events = _events.asSharedFlow()` is the usual way a flow is "
+        "exposed; ending at the view, every collector of it is keyed by another object and no "
+        "emit reaches it",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="            viewed = () if made is None else self._viewed(made)\n",
+                replace="            viewed = ()  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-LAMBDA-ARG-that-is-a-COMPILED-lambda-names-its-body": Guard(
+        what="a `lambda_arg` receive handed a compiled lambda is handled by the lambda's body",
+        why="CP-59 finding 23: `collectLatest { }`'s block is a compiled suspend lambda; unread, "
+        "every hop to it has no handler and the trace stops at the emit",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="    if kind == _LAMBDA:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "catalogs.a-LAMBDA-ARG-receive-NAMES-its-function": Guard(
+        what="a `lambda_arg` receive names its argument and the method called on it, an "
+        "`enclosing` one none",
+        why="spec 2026-11-05 §2: without them the handler is a guess at which method of which "
+        "argument runs; with them on an `enclosing` receive, words the reader ignores",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find="        _check_lambda_arg(entry, where)\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "catalogs.a-dispatch-block-is-read-under-ITS-key": Guard(
+        what="a receive block needs `key: object`, a class-keyed block refuses it",
+        why="spec 2026-11-05 §1-§2: read under the other key a block matches nothing and every "
+        "hop is a silent stop",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find='    if declared["key"] == _OBJECT_KEY and by_class:\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find='        if declared["key"] != _OBJECT_KEY and block in blocks:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.the-hops-are-WRITTEN": Guard(
+        what="each declared send's hops are written into `hops`",
+        why="spec 2026-11-04 §3c: the trace reads hops from that table. Without them every "
+        "actor send stops at the library method that sends it, and a trace from a route "
+        "never reaches the actor that answers",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find='    if rows:\n        workspace.derive("hops_insert", rows=list(rows.values()))\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n"
+                '        workspace.derive("hops_insert", rows=list(rows.values()))\n',
+            ),
+        ),
+    ),
+    "dispatch-hops.the-value-is-at-its-DECLARED-argument": Guard(
+        what="a send's value is read at the catalog's `value_arg`",
+        why="CP-57 finding 6: `context.ask(Class, ref, timeout, request, mapper)` carries "
+        "the message in its request at argument 3. Read at argument 0 it is a class literal, "
+        "and the ask's hop to the handler of what it sends is lost",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find='            argument = _arg_at(site["arguments"], send["value_arg"])\n',
+                replace='            argument = _arg_at(site["arguments"], 0)  # guard disabled\n',
+            ),
+        ),
+    ),
+    "dispatch-hops.a-LAMBDA-value-is-read-through-its-RETURNS": Guard(
+        what="a function passed as the message is read through the classes its body returns",
+        why="CP-57: `ask(replyTo -> new Get(id, replyTo), timeout)` compiles to a synthetic "
+        "body whose declared return is the erased `Command`; only its `new` says the class. "
+        "Unread, the ask from a route stops at `EntityRef#ask`",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="            body = self._by_bare.get(str(symbol))\n",
+                replace="            body = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-CONSTANT-is-sent-with-its-IDENTITY": Guard(
+        what="an `enum` constant sent is read with its own symbol as well as its class",
+        why="spec 2026-11-04 §3d item 3: `onMessageEquals(Tick.INSTANCE, …)` takes that "
+        "constant; sent by class alone, a timer's `Tick.INSTANCE` reaches no case",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="            return [(owner_of(str(symbol)), str(symbol), None, None, False)]\n",
+                replace="            return [(owner_of(str(symbol)), None, None, None, False)]  # disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.an-UNREAD-class-is-a-STOP-that-says-so": Guard(
+        what="a message whose class is not read is one row with no path and no handler",
+        why="the plan's global constraint: a hop is never guessed. Without the branch a "
+        "predicate-only case, which matches every message, takes one whose class nobody read",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="        if unread is not None:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-value-NOBODY-handles-is-a-STOP-naming-its-class": Guard(
+        what="a message no behavior handles is one row with its class and no handler",
+        why="spec 2026-11-04 §3c: a reply its asker reads off a future stays a stop, `via "
+        "actor <class>`. Without the row the trace shows the library's `tell` and never "
+        "the class it sent",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="            for handler in handlers or ([] if undecided else [None])\n",
+                replace="            for handler in handlers  # guard disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-DELIVERING-handler-CONTINUES": Guard(
+        what="each class a delivering handler returns is a hop from its return",
+        why="spec 2026-11-04 §3d item 4: an adapter or an ask's reply mapper maps a message "
+        "and delivers the result to its own actor. Without the continuation the trace stops "
+        "inside the mapper and never reaches the handler of `Reserved` or `Failed`",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="    for handler, mechanism in reading.delivering_handlers() if protocols else []:\n",
+                replace="    for handler, mechanism in []:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-MERGED-return-is-a-hop-per-CANDIDATE": Guard(
+        what="a return javac merged from two `new`s gives a hop per class",
+        why="CP-57: `res != null ? new Reserved(res) : new Failed(ex)` is one `areturn` with "
+        "two `new`s. Read as unread, the mapper's two outcomes are lost",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find='        if kind == "merge":\n',
+                replace='        if kind == "merge" and False:  # guard disabled\n',
+            ),
+        ),
+    ),
+    "dispatch-hops.a-CONSTRUCTOR-reference-returns-its-OWNER": Guard(
+        what="a constructor reference used as a message function returns its own class",
+        why="the samples' usual adapter is `messageAdapter(C, Wrapped::new)`, and an ask's "
+        "request may be `Report::new`. A constructor returns no value of its own, so read "
+        "through its returns it delivers nothing and the hop stops",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="            return [\n"
+                "                (owner_of(bare_descriptor(method)), None, self._super_call(method), None, False)\n"
+                "            ]\n",
+                replace="            return []  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="                return [(owner_of(str(symbol)), None, None, None, False)]\n",
+                replace="                return []  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-registrations.a-registration-no-chain-holds-is-its-OWN-group": Guard(
+        what="a registration no chain step names is read at each of its call sites",
+        why="spec 2026-11-04 §3d item 4: `messageAdapter` and an ask's reply mapper are no "
+        "step of a builder chain. Unread, a reply reaches no handler and the trace stops at "
+        "the `tell` that sent it",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="    if not standalone:\n        return\n",
+                replace="    if True:  # guard disabled by scripts/guard_check.py\n        return\n",
+            ),
+        ),
+    ),
+    "dispatch-registrations.a-CONSTRUCTOR-reference-is-a-handler": Guard(
+        what="a constructor reference as a handler argument is named by the constructor",
+        why="`messageAdapter(C, Wrapped::new)`: the module's method symbols hold no "
+        "constructor, so without them the adapter's handler is NULL and its delivery is lost",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='    for row in workspace.query("constructor_declarations"):\n',
+                replace="    for row in []:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "calls.a-declared-call-is-matched-on-its-OWNER": Guard(
+        what="a catalog entry's call sites are those made on its owner or a type inheriting it",
+        why="CP-59 finding 14: javac writes the receiver's static type as the owner. Matched "
+        "on name and parameter types alone, a plain `Queue.offer` on a local `ArrayDeque` is "
+        "read as a blocking queue's send",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/arguments.py",
+                find="        for called in (owner, *dispatch.heirs(owner, method)):\n",
+                replace="        for called in list(index.positions_by_owner):  # guard disabled\n",
+            ),
+        ),
+    ),
+    "calls.a-declared-call-is-matched-by-its-PARAMETER-TYPES": Guard(
+        what="a catalog entry's call sites are those of its name AND parameter types",
+        why="GUIDELINES §8.1: Java names a method by name and parameter types. Matched by name "
+        "alone, the key-less `startTimerWithFixedDelay(msg, delay)` is also read as the keyed "
+        "`(key, msg, delay)` overload, whose message is argument 1: its `Duration` becomes a "
+        "second, unread message",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/shapes/arguments.py",
+                find="                    and parameter_types(str(recorded)) == declared\n",
+                replace="                    and True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-registrations.a-key-reaches-the-cases-of-its-SUBTYPES": Guard(
+        what="an inbound key's handlers are the cases any subtype of its message class reaches",
+        why="spec 2026-11-04 §3d item 6: a key names its protocol's interface (`Command`) and "
+        "the cases name the classes implementing it. Asked for the key's class alone, the "
+        "key reaches no case, and every key row loses its handlers",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="    classes = {key_class} | {\n"
+                "        candidate for candidate in supertypes if key_class in _ancestry(candidate, supertypes)\n"
+                "    }\n",
+                replace="    classes = {key_class}  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-registrations.a-key-reaches-a-VALUE-case-of-its-class": Guard(
+        what="an inbound key reaches a value case whose constant is of its class",
+        why="spec 2026-11-04 §3d items 3 and 6: `onMessageEquals(Tick.INSTANCE, h)` handles a "
+        "`Command` the key carries. Without the constants the key row drops `h`, a handler a "
+        "sender reaches",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        if constant_class in classes:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "key-handlers.the-registering-method-is-REPLACED": Guard(
+        what="an inbound key row is replaced by one row per handler its class reaches",
+        why="spec 2026-11-04 §3a: registering a key is not handling its messages. Kept, the "
+        "row names the method that called `register` or `init` as the key's handler, and a "
+        "trace from the key starts in setup code",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find='            dropped.append({"row_id": row["row_id"]})\n',
+                replace="            continue  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "key-handlers.a-key-no-handler-serves-keeps-ONE-row": Guard(
+        what="a key whose class reaches no handler keeps one row, `handler` NULL",
+        why="spec 2026-11-04 §3d item 6: the key is still served here. Without the row it "
+        "vanishes from the module's inbound boundary",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="            for handler in handlers or [None]:\n                kept = ",
+                replace="            for handler in handlers:  # guard disabled by scripts/guard_check.py\n"
+                "                kept = ",
+            ),
+        ),
+    ),
+    "key-handlers.every-INBOUND-row-of-a-keyed-catalog-is-read": Guard(
+        what="every inbound row of a catalog whose producer entries name `class_arg` is a key "
+        "row, and no outbound row is",
+        why="spec 2026-11-05 §2: `class_arg` is the producer's, hoisted; `init(Entity.of(KEY, "
+        "…))` names only the key's first step. Keyed by its own entries, `init` would keep "
+        "its registering method as handler; keyed by direction alone, an outbound `find` "
+        "would be replaced by handler rows of a key it only calls",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find='        if method.get("direction", catalog.direction) != str(Direction.INBOUND):\n',
+                replace="        if not _reads_class(method):  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "key-handlers.the-class-is-read-at-the-producers-class_arg": Guard(
+        what="a key's class is read from the producing call's `class_arg`, beside its name",
+        why="spec 2026-11-05 §2: the producer's identity entry names the key's NAME; its "
+        "`class_arg` names the class literal of what the key addresses. Unread, every key "
+        "row loses its handlers",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="        class_slot = self._identified_class(site, slot)\n",
+                replace="        class_slot = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-CLASS-is-read-from-the-identifying-call-on-its-path": Guard(
+        what="the class an identity entry's `class_arg` names is read in the calling context "
+        "the value was read in",
+        why="spec 2026-11-05 §2: two keys one helper builds from its callers' arguments "
+        "(`create(c, name)`). Read outside the value's context, the class argument is every "
+        "caller's, and each key row names the other key's handlers",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="        classes = self._resolve((_SLOT, site[0], site[1], class_slot), trail, frames)\n",
+                replace="        classes = self._resolve((_SLOT, site[0], site[1], class_slot), (), ())  # guard disabled\n",
+            ),
+        ),
+    ),
+    "key-handlers.run-AFTER-self-calls": Guard(
+        what="the key-handler pass runs after the self-call pass",
+        why="spec 2026-11-04 §3d items 5-6: the self-call pass reads a key as served off its "
+        "inbound row's handler. Run after the key rows are named, a key no handler serves has "
+        "none, and a call naming it comes back as an outbound row to the module itself",
+        edits=(
+            Edit(
+                path=_PIPELINE,
+                find="        record_self_calls(workspace)\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_PIPELINE,
+                find="        record_key_handlers(workspace, declared)\n",
+                replace="        record_key_handlers(workspace, declared)\n"
+                "        record_self_calls(workspace)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-registrations.match-ALL-takes-every-matching-registration": Guard(
+        what="under `match: all` or `one` a value reaches every registration it matches",
+        why="spec 2026-11-05 §1: listeners all receive, and which consumer of a queue takes a "
+        "value is decided at run time. Read as `first`, a `Command` listener hides the "
+        "`Reserve` listener after it, and a send's hop names one of several handlers that run",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='            if match == _FIRST and not registration["predicated"]:\n',
+                replace='            if not registration["predicated"]:  # guard disabled\n',
+            ),
+        ),
+    ),
+    "endpoints.a-REGISTRATION-catalog-runs-no-engine": Guard(
+        what="a catalog declaring `dispatch` (a chain or annotation catalog of registrations) is "
+        "left out of the endpoint loop",
+        why="spec 2026-11-05 §2: its chain ends are registrations, read by their own pass. Run "
+        "as a `fluent` catalog it is reported skipped for capabilities it never needs, or, "
+        "where they are met, its chains are validated and read as endpoint rows",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/endpoints.py",
+                find='    return catalog.dispatch is not None and "key" in catalog.dispatch\n',
+                replace="    return False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-registrations.each-row-is-asked-under-its-OWN-match": Guard(
+        what="`reached_by` asks each registration under its own row's `match`",
+        why="spec 2026-11-05 §1: one table holds behaviors (`first`) beside listeners (`all`). "
+        "Asked under one rule, a behavior's shadowed case becomes a hop target, or every "
+        "listener but the first in a group is lost",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        for registration in reachable_handlers(matching, key_type, key_value, "
+                "supertypes, match)\n",
+                replace="        for registration in reachable_handlers(matching, key_type, key_value, "
+                'supertypes, "all")\n',
+            ),
+        ),
+    ),
+    "annotation-registrations.an-annotation-catalog-READS-registrations": Guard(
+        what="an annotation catalog declaring `dispatch` has its mapping read as registrations",
+        why="spec 2026-11-05 §2, §4 item 5: left out of the endpoint loop and read by no pass, "
+        "its listeners are nowhere and every publish is a stop naming no handler",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="                annotation_driven.registrations(workspace, catalog)\n",
+                replace="                []  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.ONLY-a-named-annotation-registers": Guard(
+        what="only a method carrying one of the catalog's `mapping.annotations` is a registration",
+        why="spec 2026-11-05 §4 item 5: a method taking an event and carrying no listener "
+        "annotation is called by no framework; read as a listener, every publish of its "
+        "parameter's class hops to it",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='        use = next((use for use in uses if use["annotation"] in fqns), None)\n',
+                replace="        use = next(iter(uses), None)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.the-PAYLOAD-parameter-keys-the-listener": Guard(
+        what="where the annotation names no class, the payload parameter's type is the key",
+        why="CP-59 finding 3: Spring registers a listener method for its one parameter's type. "
+        "Without it every `@EventListener on(E e)` is an unread registration and no publish "
+        "reaches it",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find="            keys = [_payload_type(declaration, catalog)]\n",
+                replace="            keys = [None]  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.the-CLASSES-attribute-wins": Guard(
+        what="the classes the annotation names key the listener, one row each, over its parameter",
+        why="CP-59 finding 3: `classes()` non-empty is returned before the parameter is read. "
+        "Read off the parameter instead, `@EventListener(classes = A.class) on()` keys "
+        "nothing, and `classes = {A, B}` loses B",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='        keys = _named_classes(use["args"], path_from)\n',
+                replace="        keys = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.a-PARAMETER-annotation-selects-the-observer": Guard(
+        what="a method with a parameter carrying a `selected_by_parameter` annotation registers",
+        why="CP-59 finding 9: an observer method carries no annotation of its own, only its "
+        "event parameter does. Unread, every `@Observes` observer is nowhere and every `fire` "
+        "is a hop to no handler",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find="            parameter = _annotated_parameter(declaration, by_parameter)\n",
+                replace="            parameter = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.ONLY-a-named-PARAMETER-annotation-registers": Guard(
+        what="only a parameter carrying one of `selected_by_parameter`'s annotations selects",
+        why="CP-59 findings 9-10: `@ObservesAsync` belongs to another mechanism and any other "
+        "parameter annotation to no observer. Selected by any annotation, a `fire` hops to "
+        "asynchronous observers ArC never notifies for it",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='        if any(use["annotation"] in annotations for use in '
+                'parameter.get("annotations", [])):\n',
+                replace='        if parameter.get("annotations"):  # guard disabled\n',
+            ),
+        ),
+    ),
+    "annotation-registrations.the-ANNOTATED-parameter-keys-the-observer": Guard(
+        what="an observer is keyed by its annotated parameter's type, wherever it sits",
+        why="CP-59 finding 9: the container injects the other parameters. Keyed by the first, "
+        "`record(Ledger l, @Observes Placed e)` is an observer of `Ledger`, which nobody fires",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find="                selected.append((declaration, [_parameter_key(parameter, marked)]))\n",
+                replace="                selected.append((declaration, [_erased_type("
+                'declaration["signature"]["parameters"][0])]))  # guard disabled\n',
+            ),
+        ),
+    ),
+    "annotation-registrations.a-NON-LIST-annotation-word-is-refused": Guard(
+        what="`selected_by_parameter` that is not a list of annotation names is refused",
+        why="a bare string iterates as its characters, which name nothing: the catalog's "
+        "observers would be silently absent",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find="    if not isinstance(declared, list) or not all(\n",
+                replace="    if False and not all(  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.a-QUALIFIED-observer-is-KEYLESS": Guard(
+        what="an observed parameter also carrying a qualifier keeps its row with no key",
+        why="review M1: CDI notifies a qualified observer only of events fired with its "
+        "qualifiers, which the fire sites are not read for. Keyed, every unqualified fire of "
+        "its class is a false hop",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='        bare_descriptor(str(use["annotation"])) in marked\n',
+                replace="        False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.a-PARAMETER-selector-NAMES-a-bean-model-with-QUALIFIERS": Guard(
+        what="a catalog selecting observers by a parameter annotation and naming no bean model "
+        "declaring `qualifier_meta_annotations` is refused at load",
+        why="final review I-2: qualifier-ness is the container's (D02 §1c). A CDI catalog that "
+        "forgot its bean model would key every qualified observer, a false hop for each "
+        "unqualified fire of its class",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find='        and not model.get("qualifier_meta_annotations")\n',
+                replace="        and False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "bean-models.a-MALFORMED-qualifier-marker-is-refused-at-LOAD": Guard(
+        what="a bean model's `qualifier_meta_annotations` that is not a non-empty list of names "
+        "is refused at load",
+        why="a bare string iterates as its characters and marks nothing: every qualified "
+        "observer would be silently keyed",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find="            not isinstance(markers, list)\n",
+                replace="            False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-dispatch-catalog-with-NO-PROTOCOL-is-refused-at-LOAD": Guard(
+        what="a catalog declaring `dispatch` and no `protocol` is refused at load",
+        why="final review m-12: every hop and key row is written under the protocol; refused "
+        "only when the hops are written, a catalog typo surfaces as a resolve failure",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find='    if ("dispatch_sends" in blocks or delivering) and not raw.get("protocol"):\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.ONLY-a-QUALIFIER-makes-an-observer-KEYLESS": Guard(
+        what="only an annotation type meta-annotated by the bean model's qualifier marker makes "
+        "an observer keyless",
+        why="review M1: `@Observes @Priority(10) E` is common and `@Priority` qualifies nothing. "
+        "Read as a qualifier, the observer loses every hop it really has",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='        if bare_descriptor(str(row["annotation"])) in markers\n',
+                replace="        if True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.a-PARAMETERIZED-observed-type-is-KEYLESS": Guard(
+        what="an observed parameter whose type carries type arguments keeps its row with no key",
+        why="review m2: CDI matches the parameterized observed type; keyed by the erasure, "
+        "`@Observes List<String>` is reached by a `List<Integer>`, a false hop",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='    return bool(declared.get("arguments")) or (\n',
+                replace="    return (  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-registrations.a-GENERIC-parameter-is-KEYLESS": Guard(
+        what="a registration parameter whose type is a type variable or carries type arguments "
+        "keeps its row with no key, for every registration kind",
+        why="final review m-1: `Base<E> implements ApplicationListener<E>` erases to "
+        "`ApplicationEvent` and `@EventListener on(T e)` to `Object`; keyed by the erasure each "
+        "receives every event, false hops",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='    return bool(declared.get("arguments")) or (\n',
+                replace="    return False and (  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.only-PAYLOAD_TYPE-names-a-registration": Guard(
+        what="a registration catalog's name fallback must be `payload_type`",
+        why="spec 2026-11-05 §2: every other fallback word composes an ADDRESS from a name. "
+        "Accepted silently, `construct_name` is ignored and a catalog author believes a rule "
+        "nothing applies",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find="    if fallback is not None and fallback != _PAYLOAD_TYPE:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-implementations.the-BRIDGE-is-carried-to-the-method-it-forwards-to": Guard(
+        what="an implementation's method joined by the interface descriptor is carried past a "
+        "compiler bridge to the method the class wrote",
+        why="CP-59 finding 5: for `ApplicationListener<OrderPlaced>` the join finds the synthetic "
+        "bridge, keyed `ApplicationEvent`; kept, the listener receives every event the context "
+        "publishes and its handler is a method nobody wrote",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="            target = _synthesis_target(joined, siblings, declared.signatures, "
+                "declared.modifiers)\n",
+                replace="            target = joined  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-implementations.ONLY-an-implementing-class-registers": Guard(
+        what="only a type below the declared interface registers its method",
+        why="spec 2026-11-05 §4 item 5: a class declaring a same-named method without "
+        "implementing the interface is never called by the framework; read as a listener it "
+        "is a hop to code no event reaches",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='        for implementer in dispatch.subtypes.get(entry["owner"], ()):\n',
+                replace="        for implementer in declared.by_type:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.the-declared-CONFORMANCE-extends-a-values-ancestry": Guard(
+        what="the declared type conformance joins the scanned supertypes a value is matched by",
+        why="CP-59 finding 6: no fact names the root type (a class extending it directly "
+        "carries no `superclass`; `EventObject` is in a JDK nothing scans). Without the "
+        "declared conformance a listener of `Object` never receives an event",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="        for entry in conformance:\n",
+                replace="        for entry in ():  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-value-a-MODULE-FACTORY-returns-is-read-through-it": Guard(
+        what="a sent value that is a static module call's result is read through that "
+        "method's returns",
+        why="ruled 2026-11-02 (follow the code we have): `ConfigPublishEvent.instance()` "
+        "builds seven of apollo-portal's seventeen published events. Without the follow each "
+        "is a stop saying the class was not read, while the class is in the module",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find='        if kind == "unresolved" and argument.get("source") is not None:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-CALL-RESULT-is-its-DECLARED-return-type": Guard(
+        what="a sent value that is a call's result the body is not followed for is read by the "
+        "call's declared return type",
+        why="final review I-1: ruoyi-vue-pro builds every event as `new E().setA(a)` (chained "
+        "setters), an instance call's result. Not read, each of its publishes is a stop while "
+        "the class is in the descriptor",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="            declared = None if descriptor is None else "
+                "returned_type(str(descriptor))\n",
+                replace="            declared = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-PARAMETER-or-FIELD-is-its-DECLARED-type": Guard(
+        what="a sent parameter or instance field is read by its declared type",
+        why="final review I-1: a parameter's or a field's declared type says the value is that "
+        "class or a subtype, so a listener of it is certainly reached; not read, the send is "
+        "a stop while the type is in the signature",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="        declared_type = self._declared(caller, argument)\n"
+                "        if declared_type is not None:\n"
+                "            return [(declared_type, None, None, None, True)]\n",
+                replace="        declared_type = None  # guard disabled by scripts/guard_check.py\n"
+                "        if declared_type is not None:\n"
+                "            return [(declared_type, None, None, None, True)]\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.under-FIRST-a-DECLARED-type-reads-only-where-no-SUBTYPE-case": Guard(
+        what="under `first`, a value read by its declared type is not read in a group where an earlier case names a strict subtype of it",
+        why="final review I-1 ruling: the value may be the subtype the earlier case takes; asked as if exactly the declared type, a `tell(cmd)` hops to `onCommand` while the `Reserve` it carries runs `onReserve`",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='            return str(row["key_type"]) not in above and not unrelated_class(str(row["key_type"]))\n',
+                replace='            return str(row["key_type"]) not in above and not unrelated_class(str(row["key_type"])) and not below(str(row["key_type"]))  # guard disabled\n',
+            ),
+        ),
+    ),
+    "dispatch-hops.under-FIRST-an-EARLIER-UNRELATED-case-leaves-the-group-NOT-READ": Guard(
+        what="under `first`, an earlier case naming a type unrelated to the declared type, not both known classes, leaves the group not read",
+        why="re-review: `[Loggable, Command]` and a `Command` that also implements `Loggable` runs `onLoggable`; a hop to `onCommand` would be false",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='            return str(row["key_type"]) not in above and not unrelated_class(str(row["key_type"]))\n',
+                replace='            return below(str(row["key_type"]))  # guard disabled\n',
+            ),
+        ),
+    ),
+    "dispatch-hops.a-DECLARED-type-with-SUBTYPE-registrations-is-NOT-READ": Guard(
+        what="under `all`/`one`, a value read by its declared type with registrations of a strict subtype also writes the not-read row",
+        why="re-review: `publish(DomainEvent e)` with only `Parcel` listeners wrote a stop naming `DomainEvent` with no handler, saying nobody handles it while the `Parcel` listener runs",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='            return str(row["key_type"]) not in above and not unrelated_class(str(row["key_type"]))\n',
+                replace='            return str(row["key_type"]) not in above and not unrelated_class(str(row["key_type"])) and not below(str(row["key_type"]))  # guard disabled\n',
+            ),
+        ),
+    ),
+    "dispatch-hops.an-UNRELATED-interface-registration-leaves-ALL-NOT-READ": Guard(
+        what="under `all`/`one`, a registration of a type unrelated to the declared type, not both known classes, also writes the not-read row",
+        why="re-review of 42cfc95f: `publishEvent(DomainEvent e)` with `@EventListener on(Auditable e)` and an event implementing both wrote a stop saying nobody handles it while the `Auditable` listener runs",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='            return str(row["key_type"]) not in above and not unrelated_class(str(row["key_type"]))\n',
+                replace='            return below(str(row["key_type"]))  # guard disabled\n',
+            ),
+        ),
+    ),
+    "dispatch-hops.only-a-MODULE-type-or-a-SUPERCLASS-is-a-KNOWN-class": Guard(
+        what="the known classes are module types that are no interface and types some class extends",
+        why="re-review of 42cfc95f: a dependency's interface with super-interfaces is in the ancestry; counted a class, an unrelated interface listener would decide nothing and a stop would say nobody handles a value it may take",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="            self._known_classes = frozenset((dispatch.scanned - interfaces) | extended)\n",
+                replace="            self._known_classes = frozenset((set(dispatch.ancestors) - interfaces) | extended)  # disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-KEYLESS-registration-may-take-ANY-value": Guard(
+        what="a keyless registration of the mechanism makes a send also not read, under every "
+        "match, never a stop saying nobody handles the value",
+        why="re-review of 7e7f7dc5: a generic `Base<E> implements ApplicationListener<E>` or a "
+        "qualified CDI observer is kept keyless and may receive any value; a stop with its "
+        "class and no handler would say nobody does",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        if keyless(row):\n            return True\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            return True\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-send-reaches-only-its-OWN-mechanism": Guard(
+        what="a send's value is asked only of its own catalog's mechanism's registrations",
+        why="review m1: one table holds every framework's registrations. Asked of all of them, "
+        "an actor `tell` lands on an application-event listener of `Object`, and a published "
+        "event on an actor case of its class: hops to code that value never reaches",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="        cases = self._by_mechanism.get(mechanism, [])\n",
+                replace="        cases = self._cases  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-KEY-is-served-only-by-its-OWN-mechanism": Guard(
+        what="an inbound key's handlers are its own mechanism's registrations only",
+        why="review m1: an actor key carrying a class would name an application-event "
+        "listener of a supertype as its handler, an endpoint row whose handler no message "
+        "to that key runs",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="                self._by_mechanism.get(mechanism, []),\n",
+                replace="                self._cases,  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-implementations.an-UNREAD-implementation-is-KEPT": Guard(
+        what="an implementation whose bridge names no one method is kept with no key",
+        why="never drop a row: a registration the reader cannot key still exists, and dropping "
+        "it hides a listener the framework registers",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="            key = None\n",
+                replace="            key = None\n            if target is None:\n"
+                "                continue  # guard disabled\n",
+            ),
+        ),
+    ),
+    "catalogs.a-KEY-catalog-names-its-mechanism": Guard(
+        what="a catalog whose keys carry a class (`class_arg`) must name its dispatch mechanism",
+        why="spec 2026-11-05 §2: its inbound rows' handlers are read from registrations. With "
+        "no mechanism there is nothing saying whose, and a key would be served by any "
+        "framework's handlers, or by none",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find="        if keyed:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "catalogs.a-mechanism-NOBODY-registers-for-is-refused": Guard(
+        what="a send or key catalog's mechanism must be named by a registering catalog",
+        why="a misspelt mechanism asks its values of no registration: every hop and every "
+        "key handler becomes a silent stop, published as `no handler`",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find='        if catalog.dispatch is None or catalog.dispatch["mechanism"] in registering:\n',
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.ONE-reset-before-both-writers": Guard(
+        what="the pipeline clears `hops` once per resolve, before its two writers",
+        why="spec 2026-11-04 §3d item 7: both writers only insert. Without the reset a second "
+        "analysis doubles every hop, and the trace walks each one twice",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/pipeline.py",
+                find='    workspace.derive("hops_reset")\n',
+                replace="    pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "trace.an-UNREAD-hop-says-why-in-its-via": Guard(
+        what="a hop with no path says in the step's `via` that its key was not read",
+        why="spec 2026-11-04 §3c, 2026-11-05 §1: the stop says the key (the value's class, or "
+        "the channel object) was not read. Without it the step reads `actor None`",
+        edits=(
+            Edit(
+                path="sextant/application/query/trace.py",
+                find='            where = hop["path"] if hop["path"] is not None else "(key not read)"\n',
+                replace='            where = hop["path"]  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "self-calls.a-served-identity-is-matched-within-ITS-protocol": Guard(
+        what="an outbound row is dropped only for a served identity of its own protocol",
+        why="linking is by protocol and address (D01): an actor key named like a gRPC service "
+        "this module serves is another far end, and matching across protocols would erase "
+        "a real outbound call",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find='        and (str(row["protocol"]), str(row["path"])) in served\n',
+                replace='        and str(row["path"]) in {k for _, k in served}  # guard disabled\n',
             ),
         ),
     ),
     "grpc.a-STUB-call-to-a-served-rpc-is-a-hop": Guard(
         what="a generated client stub's call to an RPC this module serves is written as an "
-        "`rpc_hops` row naming the handler it lands on",
+        "`hops` row naming the handler it lands on",
         why="spec 2026-10-25 ruling 2: a self-call is a traceable hop. Without the row the "
         "trace from a REST method through `GreeterBlockingStub#sayHello` stops at "
         "`ClientCalls#blockingUnaryCall`, and with the outbound row fenced the call is "
@@ -7397,9 +8698,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/rpc_hops.py",
-                find='    if rows:\n        workspace.derive("rpc_hops_insert", rows=rows)\n',
+                find='    if rows:\n        workspace.derive("hops_insert", rows=rows)\n',
                 replace="    if False:  # guard disabled by scripts/guard_check.py\n"
-                '        workspace.derive("rpc_hops_insert", rows=rows)\n',
+                '        workspace.derive("hops_insert", rows=rows)\n',
             ),
         ),
     ),
@@ -7427,6 +8728,19 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/application/resolve/rpc_hops.py",
                 find="        if len(named) != 1:\n",
                 replace="        if not named:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.an-ACTOR-key-spelled-like-a-service-serves-no-rpc": Guard(
+        what="a stub call gets a hop only for a service served in the stub catalog's own protocol",
+        why="linking is by protocol and address (D01): an inbound actor key spelled "
+        "`helloworld.Greeter` serves no RPC. Read across protocols, the stub's call to that "
+        "service is a hop with no handler, a gRPC call claimed served here",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find="        if row_protocol == protocol:\n",
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -7465,7 +8779,7 @@ GUARDS: dict[str, Guard] = {
     ),
     "grpc.an-UNHANDLED-rpc-of-a-served-service-gets-a-hop": Guard(
         what="a stub call to an RPC of a served service that has no handler here still gets "
-        "one `rpc_hops` row, its handler NULL",
+        "one `hops` row, its handler NULL",
         why="spec 2026-10-25 §3d: the outbound row of a served service is fenced, so without "
         "the row the step carries no wire path and the call's destination is nowhere in the "
         "document",
@@ -7795,7 +9109,7 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "trace.the-walk-CROSSES-a-hop-into-the-handler": Guard(
-        what="at a call site `rpc_hops` names, the walk steps into the hop's handler, with "
+        what="at a call site `hops` names, the walk steps into the hop's handler, with "
         "the wire path in `via`, instead of stopping at the client-call library",
         why="spec 2026-10-25 §3d, ruling 2: a call to the module's own service is a call hop "
         "that is traceable. Ignoring the hops ends every trace through a gRPC stub at "
@@ -11013,6 +12327,26 @@ def copy_tree(destination: Path) -> Path:
         # the base jar is read off real facts, so the guard keeping such a row `partial` is
         # pinned on the e2e test of this module.
         "orders-vertx-web",
+        # Akka and Pekko actors (spec 2026-11-04 §3c): a send's message is read through the
+        # lambda bodies and constructor calls javac emits, so the hop guards are pinned on
+        # the two compiled modules, one per family.
+        "orders-actors-pekko",
+        "orders-actors-akka",
+        # Spring application events (spec 2026-11-05 §4 item 5): the listener annotations,
+        # the `ApplicationListener` bridge javac writes and a factory's returns are read off
+        # real facts, so their guards are pinned on the e2e test of this module.
+        "orders-events",
+        # CDI events (spec 2026-11-05 §4 item 6): observers are selected by the parameter
+        # annotations javac writes, read off real facts by the e2e test of this module.
+        "orders-cdi-events",
+        # Java blocking queues (spec 2026-11-05 §4 item 7): which queue object a call acts
+        # on is followed through javac's fields, constructors and factory calls, read off
+        # real facts.
+        "orders-queues",
+        # Kotlin channels and flows (spec 2026-11-05 §4 item 7): the same object walk through
+        # kotlinc's coroutine classes, field accessors and collector classes, read off real
+        # facts.
+        "orders-kotlin-channels",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

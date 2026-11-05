@@ -1,0 +1,30 @@
+id: akka-pubsub-send
+displayName: Akka classic distributed pub-sub (Send)
+style: single_call
+protocol: actor
+direction: outbound
+
+# Spec 2026-11-04 §3a. `Send(path, msg)` told to the mediator reaches one actor registered
+# with `Put` under that path. The address is the path, constructor argument 0. One file per
+# message class (`akka-pubsub-subscribe.yml` says why).
+detect:
+  coordinates: ["com.typesafe.akka:akka-cluster-tools_2.13", "com.typesafe.akka:akka-cluster-tools_3"]
+
+# CP-57 read every descriptor below with `javap -c -p` on the jar the fixture resolves,
+# and the jar's own manifest reports `Implementation-Version: 2.6.21`.
+measured:
+  - { artifact: com.typesafe.akka:akka-cluster-tools_2.13, versions: ["2.6.21"],
+      identity: reported, by: scripts/probes/cp57_actors.md }
+
+requires: [call_site, string_constants]
+
+matches:
+  owner: akka.cluster.pubsub.DistributedPubSubMediator$Send
+  methods:
+    # `localAffinity` at argument 2; the path is still argument 0.
+    - { name: "<init>", arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Z)V",
+        channel_arg: 0 }
+    - { name: "<init>", arity: 2,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)V",
+        channel_arg: 0 }

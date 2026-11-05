@@ -15,6 +15,150 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Added
+
+- **In-process dispatch: one general mechanism, five kinds** (spec 2026-11-05, "As built"; the
+  user's ruling A on the actor words: "invented just for one framework"; probe CP-59). Code
+  that hands a value to a framework or a channel, which calls the handler(s) registered for it,
+  is a trace **hop** and never an endpoint row. A catalog says how with one setting,
+  `dispatch: {key: type | object, match: first | all | one, mechanism: <name>}` (`mechanism`
+  required and checked at load; a key catalog declares `{mechanism}` alone), and blocks any
+  style may carry (D02 §2m): `dispatch_registrations` (on an ordinary `fluent` chain catalog,
+  whose chain ends are then registrations), `dispatch_implementations`, `dispatch_sends`,
+  `dispatch_receives` and `dispatch_views`; `mapping.selected_by_parameter` serves annotation
+  catalogs, which then name a DI bean model declaring `qualifier_meta_annotations`
+  (`bean-models/cdi.yml`, D02 §1c; refused at load otherwise); a `channel_via` entry may
+  name `class_arg`, read from the same producing call in the same walk as its name. The graph
+  table is `dispatch_registrations` (`group`, `position`, `key_type`, `key_value`,
+  `key_object`, `predicated`, `handler`, `delivers`, `match`, `mechanism`; schema 15,
+  unreleased) and every hop is in `hops`, which `rpc_hops` was; `Protocol.IN_PROCESS`
+  (`in_process`, D00 §4) is the protocol of a hop whose catalog has no wire. A send reaches
+  only registrations of its own mechanism, `match: all` and `one` reach every matching
+  registration. A sent value no `new`, constant or module factory names (an instance call's
+  result such as `new E().setA(a)`, a parameter, a field) is read by its DECLARED type: every
+  registration of that type or a supertype is certainly reached, under every `match`; where a
+  registration may take some subtype of it (a strict subtype, or an unrelated type unless both
+  are known classes, so an interface listener counts), under `first` only a case before the
+  first certain one, the send also writes the not-read row, never a stop saying nobody handles
+  the type. A key that is still not
+  read is a stop that says so (`(key not read)`), never a fan-out. A registration whose
+  parameter is generic (a type variable, type arguments) is kept with no key, for every
+  registration kind; such a keyless registration may receive any value, so every send of its
+  mechanism also writes the not-read row. A catalog with sends or delivering handlers and no `protocol` is refused
+  at load. No catalog word or table starts with `message_` and no code names a framework
+  (architecture tests). Every kind below was checked hop by hop on the modules it names, and
+  only those: 0 false hops, no missing hop outside a stated bound, and no endpoint row moved
+  on any module; the six field pins hold.
+  - **Akka and Pekko** were re-expressed in the general words; their rows and hops are unchanged
+    on both fixtures and the two Pekko samples (5 rows, 28 hops, 23 registrations, identical).
+  - **Spring application events** (spring-context and spring-tx 7.0.1): `spring-events.yml`, an
+    `annotation_driven` catalog. Each `@EventListener` / `@TransactionalEventListener` method is
+    keyed by the classes its annotation names (`path_from: [classes, value]`) or its one
+    parameter's type (`path_fallback: payload_type`); each `ApplicationListener<E>` by its own
+    `onApplicationEvent(E)`, the compiler's bridge carried to the method it forwards to. The
+    two `publishEvent` overloads on `ApplicationEventPublisher`, `ApplicationContext` and
+    `ConfigurableApplicationContext` are sends; `type-models/conformance.yml` declares the root
+    type every class conforms to, so a listener of `Object` receives every event. A sent value
+    that is a static module factory's result (`ConfigPublishEvent.instance()`) is read through
+    the factory's returns. On apollo-portal all 17 publish sites hop to their listener; on
+    ruoyi-vue-pro's `yudao-module-system`, whose events are built with chained setters, 2 of 3
+    hop to their listener and the third is a stop naming its class (its listener is in another
+    module), all checked by hand. Stated bounds (missing, never false): `publishEvent(pojo)` is
+    wrapped by Spring in a `PayloadApplicationEvent`, so a listener of `ApplicationEvent` gets
+    no hop; a generic listener parameter (`Base<E> implements ApplicationListener<E>`,
+    `on(T e)`) has no key.
+  - **CDI events** (Jakarta CDI API 4.1.0, javax CDI API 1.0.0, ArC 3.17.5): `cdi-events.yml`
+    (`@Observes`, `Event.fire`) and `cdi-async-events.yml` (`@ObservesAsync`, both `fireAsync`
+    overloads) are two mechanisms, because ArC notifies only synchronous observers from `fire`
+    and only asynchronous ones from `fireAsync`. An observer is selected by its PARAMETER's
+    annotation and keyed by that parameter's type, whatever the container injects beside it. A
+    qualified observer (an annotation meta-annotated by the CDI bean model's
+    `qualifier_meta_annotations`, `@Qualifier`) and an observer of a parameterized type or a
+    type variable keep their registration with no key (a missing hop, never a false one).
+    No example under `examples/` fires a CDI event, so the check covers registrations only
+    (5 of 5 true on two Quarkus quickstarts); the hops are pinned on `fixtures/orders-cdi-events`.
+  - **Java blocking queues** (JDK 21.0.13), the mechanism's object key: each receive is keyed
+    by the call that made the queue it takes from (followed through locals, parameters, helper
+    returns and fields; Guava's `Queues.newLinkedBlockingQueue` too), written as
+    `dispatch_registrations.key_object`, and each send is a hop to every receive on that
+    object. `jdk-blocking-queue.yml` declares `put`/`offer`/`add` and `take`/`poll`/`drainTo`/
+    `remove()` on the ten JDK blocking-queue types; `guava-queues.yml` declares
+    `Queues.drain`/`drainUninterruptibly` through a new `object: argN` receive form;
+    `remove(Object)` and `removeIf` are not receives. A queue from outside the module is a
+    stop, and two queues of one type stay apart; a queue kept through a declared null check
+    (`Objects.requireNonNull(q)`) whose maker is not read (an injected queue) is keyed by the
+    check itself, the one object it hands back. 10 hops on apollo and dolphinscheduler. Stated
+    bounds, each over-linking: one field written by several instances, one helper making
+    several queues, one library call site handing back several.
+  - **Kotlin channels and flows** (kotlinx-coroutines 1.11.0, kotlinc 2.4.20): one mechanism,
+    `kotlinx-coroutines`, the object deciding. `kotlinx-channels.yml` (`match: one`) and
+    `kotlinx-flows.yml` (`match: all`) declare `send`/`trySend`, `emit`/`tryEmit`, `value =`
+    and `update { }` as sends and `receive`/`tryReceive`/`receiveCatching`, `for (x in ch)`
+    and `consumeEach` (`iterator()`), `collect`, `first`, `firstOrNull`, `single`, `toList`
+    and `collectLatest` as receives; `dispatch_views` passes `asSharedFlow`, `asStateFlow`,
+    `receiveAsFlow` and `consumeAsFlow` through. A send inside `scope.launch { }` is read
+    through the class kotlinc compiles the block to. A receive can hand its value to the
+    function it is given (`handler: lambda_arg`, with `handler_arg`, `handler_method`,
+    `handler_descriptor`, checked at load). The object walk now skips a path that comes back to
+    where it started, and kotlinc 2.4's `SpillingKt.nullOutSpilledVariable` is declared in
+    `value-models/compiler-null-checks.yml`. 7 hops on playport and kotlinconf. Stated bounds:
+    a flow made by an operator is another key; a channel used after a suspension point is a
+    stop; a send through a data class's property keeps one `(key not read)` stop beside its hops.
+- **Akka and Pekko actors: a trace crosses actors** (spec 2026-11-04, SEXTANT-178, the user's
+  ruling B "I want it complete"; probe CP-57, Akka 2.6.21 and Pekko 1.1.3). Three parts, each
+  pinned on `fixtures/orders-actors-pekko` and `-akka`, then the measurement:
+  - **Named cluster addresses are endpoint rows**, protocol `actor` (a new `Protocol` member,
+    D00 §4, D01's wire-identity table). A Receptionist service key the module registers, a
+    sharded entity type it inits, and a classic pub-sub topic it subscribes to are inbound rows
+    named by the key or topic (a `Put` is an inbound row whose path, the actor's own, is not
+    read: `unresolved`); `Receptionist.subscribe`/`find`,
+    `entityRefFor`, and pub-sub `Publish`/`Send` are outbound rows. A key or topic the module
+    serves itself gives no outbound row: `self_calls` now matches `actor` beside `grpc`.
+  - **An inbound key row names its handlers.** The key's `channel_via` entry names its class
+    (`class_arg`, D02 §2), read in the same walk as its name; the row becomes one row per
+    handler a message of that class (or a subtype) reaches, as a route with two handlers is two
+    rows. A class reaching none keeps one row with no handler. The class is read in the calling
+    context the name was read in, so two keys built by one helper stay apart.
+  - **Every message send is a trace hop.** The handler catalogs' `dispatch_sends` declare each
+    send and the argument holding its message: `tell`, `ask` (`EntityRef`, `AskPattern`,
+    `context.ask`, classic `Patterns.ask`), timers, `scheduleOnce`, `setReceiveTimeout`,
+    `pipeToSelf`. Each send
+    writes one `hops` row per handler its message's class reaches, first match per
+    behavior, so the trace walks from `ref.ask(r -> new Query(…))` into the handler. A
+    constant message (`Tick.INSTANCE`) is matched by identity; a `messageAdapter` function or
+    an ask's reply mapper continues to the handler of each class it returns. A class nobody
+    handles is a stop that names it; a class not read is a stop that says so, never a hop to
+    every handler. `hops` has one reset before its two writers.
+  - **Measured on the Pekko samples** `pekko-sample-sharding-java/killrweather` and
+    `pekko-sample-cluster-java`: 5 endpoint rows and 28 hops, all true by hand; the trace from
+    killrweather's `WeatherRoutes.query` reaches `WeatherStation#onQuery`. The one hop the first
+    count found missing, `setReceiveTimeout(d, msg)` telling the actor `msg`, is now a declared
+    send (message at argument 1, CP-57). The Akka 2.9 twins sit behind Akka's commercial
+    repository and were not built.
+  - **COVERAGE.** §5.12's actor rows read ✅ with four stated boundaries (which actor a ref
+    holds, a singleton's stop message, static-factory messages, routers/`actorSelection`/
+    singleton/Scala). `akka-pekko-actors` leaves the delivery register, so the Java/Kotlin
+    Async cell reads ✅. The Akka HTTP route DSL is still open (§5.1).
+
+- **Akka and Pekko message handlers are read per behavior** (spec 2026-11-04 §3b, §3d items 1-3;
+  `GRAPH_SCHEMA_VERSION` 15, approved with the design). The handler catalogs, `fluent` chain
+  catalogs carrying `dispatch_registrations` (D02 §2m), declare the builders a behavior is made with — the immutable
+  `Behaviors.receive(C)`, the mutable `newReceiveBuilder()`, persistence `forAnyState`/
+  `forState`/`forStateType`, classic `receiveBuilder()` and `ReceiveBuilder.create()` — and what
+  each registration's arguments mean, every descriptor and "returns `this`" measured in CP-57.
+  The new `dispatch_registrations` table holds each case in the order the behavior tries it, and
+  `reachable_handlers` is the first-match rule (`match: first`): the first unpredicated case a message's class
+  (or a supertype) or constant matches, and every predicated case before it. Exported.
+- **A call made through a type that inherits the method is that method's call** (JVMS 5.4.3.3):
+  a chain root, and a `single_call` row, also match a call naming a subtype of the declared
+  owner, through library types the workspace has headers for, unless a type the module
+  declares answers the call with its own body (`Dispatch.heirs`). `this.newReceiveBuilder()`
+  names the subclass, and was read as nothing before. The six field pins are unchanged, but
+  the rule is shared by every `single_call` and fluent catalog, so it changes non-actor rows
+  too: on 20 built non-actor modules, `vertx-examples/web-client-examples` has 2 `vertx-webclient`
+  rows go from `unresolved` to `resolved` (`GET localhost:8081 protected/path`), both true:
+  `OAuth2WebClient` inherits `get` from `WebClient`. The other 19 are unchanged.
+
 ### Fixed
 
 - **A Gradle project with no group, or no version, is analysed** (OI-273). Detection refused
@@ -481,8 +625,8 @@ here would restate those documents rather than add anything.
   to the service the generated classes delegate to (`grpc-quarkus-client.yml`): a generated
   wrapper's identity is the one marked class its own code calls into. The generated bean no
   longer fences a client. A gRPC client row for a service the module serves is dropped, and the
-  new derived table `rpc_hops` records where the stub's call into `ClientCalls` lands. The trace
-  follows it to the handler: the step carries `via grpc <path>`, and the document's arrow and
+  new derived table `rpc_hops` (now `hops`) records where the stub's call into `ClientCalls`
+  lands. The trace follows it to the handler: the step carries `via grpc <path>`, and the document's arrow and
   `Reaches` cell say so. **`GRAPH_SCHEMA_VERSION` moves 7 → 8** (a new table): re-analyse the
   workspace. Measured on both `quarkus-quickstarts` gRPC modules: `helloworld.Greeter/SayHello`
   is joined to its handler with no question, no gRPC outbound row is left, and both REST traces

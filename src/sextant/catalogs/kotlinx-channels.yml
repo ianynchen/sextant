@@ -1,0 +1,69 @@
+id: kotlinx-channels
+displayName: Kotlin coroutine channels (send/trySend, receive/tryReceive/receiveCatching, for loops)
+style: fluent
+# No wire: a value sent on a channel is received from it by code in the same process (spec
+# 2026-11-05 §1, §4 item 7). Every hop this file's sends give is written under `in_process`;
+# this catalog mints no endpoint row. `fluent` names no engine here: a catalog declaring
+# `dispatch` with a `key` is left out of the endpoint loop whole
+# (`endpoints._reads_by_a_later_pass`) and read by the dispatch passes, so it declares no roots.
+protocol: in_process
+direction: inbound
+# In-process dispatch keyed by the channel OBJECT: a value sent on a channel reaches the code
+# that receives from that same channel, whatever the value's class (spec 2026-11-05 §1). Each
+# value is received by ONE consumer, which one decided at run time, so each send is a hop to
+# every receive on the object (`match: one`). One mechanism with `kotlinx-flows.yml`: a channel
+# read as a flow (`receiveAsFlow()`, declared there as a view) is collected by that file's
+# receives, and what decides which send reaches which receive is the object, never the file.
+dispatch: { key: object, match: one, mechanism: kotlinx-coroutines }
+
+# Not gated (`fluent` is not a style `resolve/dependencies.py` gates on): the coordinates say
+# where the types live. A JVM build resolves the `-jvm` artifact; a Kotlin Multiplatform or
+# Gradle-metadata build declares the bare one.
+detect:
+  coordinates: ["org.jetbrains.kotlinx:kotlinx-coroutines-core", "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm"]
+
+# CP-59 findings 17-19 (`javap` on the kotlinx-coroutines-core-jvm jar, on a probe module calling
+# each declared method through each owner below, and on `fixtures/orders-kotlin-channels`, all
+# compiled by kotlinc 2.4.20), the version from the jar's own manifest.
+measured:
+  - { artifact: org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm, versions: ["1.11.0"],
+      identity: reported, by: scripts/probes/cp59_dispatch.md }
+
+requires: [call_site]
+
+matches:
+  # Every call below is made ON the channel (`object: receiver`), and kotlinc writes the
+  # receiver's STATIC type as the call's owner (finding 18): `Channel.send` through a property
+  # typed `Channel`, `SendChannel.send` through one typed `SendChannel`, so each of the three
+  # interfaces is listed. A `suspend` call carries the compiler's `Continuation` as its last
+  # argument. `trySend`, `tryReceive` and `receiveCatching` return the inline class
+  # `ChannelResult`, so kotlinc writes them under the MANGLED name the jar declares
+  # (`trySend-JP2dKIU`), which is the name every call site carries (finding 17).
+  #
+  # `value_arg` is the value handed over; the KEY is the object the call is made on, followed
+  # to the call that made it (`values.producer_paths`, `which_object`).
+  dispatch_sends:
+    - { owner: &ch kotlinx.coroutines.channels.Channel, method: send, descriptor: "(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", value_arg: 0 }
+    - { owner: *ch, method: trySend-JP2dKIU, descriptor: "(Ljava/lang/Object;)Ljava/lang/Object;", value_arg: 0 }
+    - { owner: &sc kotlinx.coroutines.channels.SendChannel, method: send, descriptor: "(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", value_arg: 0 }
+    - { owner: *sc, method: trySend-JP2dKIU, descriptor: "(Ljava/lang/Object;)Ljava/lang/Object;", value_arg: 0 }
+    # The scope `produce { }`, `channelFlow { }` and `callbackFlow { }` hand their block is a
+    # `SendChannel`, and kotlinc writes ITS type as the owner of the block's `send(x)`.
+    - { owner: &ps kotlinx.coroutines.channels.ProducerScope, method: send, descriptor: "(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", value_arg: 0 }
+    - { owner: *ps, method: trySend-JP2dKIU, descriptor: "(Ljava/lang/Object;)Ljava/lang/Object;", value_arg: 0 }
+  # A receive hands its value to the code after it in the method making the call
+  # (`handler: enclosing`). A `for (x in ch)` loop is an `iterator()` call on the channel, then
+  # `hasNext`/`next` on the iterator it returns (finding 19): the `iterator()` call is the one
+  # made ON the channel, so it is the receive. `consumeEach { }` is an inline function, so
+  # kotlinc writes its body in place: the same `iterator()` call, its owner `ReceiveChannel`
+  # (the extension's receiver type) whatever the property's type, and the lambda's body
+  # inlined into the enclosing method.
+  dispatch_receives:
+    - { owner: *ch, method: receive, descriptor: "(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *ch, method: tryReceive-PtdJZtk, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *ch, method: receiveCatching-JP2dKIU, descriptor: "(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *ch, method: iterator, descriptor: "()Lkotlinx/coroutines/channels/ChannelIterator;", object: receiver, handler: enclosing }
+    - { owner: &rc kotlinx.coroutines.channels.ReceiveChannel, method: receive, descriptor: "(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *rc, method: tryReceive-PtdJZtk, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *rc, method: receiveCatching-JP2dKIU, descriptor: "(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *rc, method: iterator, descriptor: "()Lkotlinx/coroutines/channels/ChannelIterator;", object: receiver, handler: enclosing }

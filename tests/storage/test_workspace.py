@@ -2560,15 +2560,15 @@ def test_a_schedule_name_is_masked_on_export(tmp_path: Path):
     assert kept == [name]
 
 
-def test_the_bundle_carries_rpc_hops_with_its_path_masked_as_the_endpoints_is(tmp_path: Path):
-    """Spec 2026-10-25 §3d/§3e: `rpc_hops` is exported, and its `path` is the inbound row's
-    wire path carried, so it takes the address map `endpoints.path` and `roots.path` take
+def test_the_bundle_carries_hops_with_its_path_masked_as_the_endpoints_is(tmp_path: Path):
+    """Spec 2026-10-25 §3d/§3e (the table renamed `hops` by spec 2026-11-05): it is exported,
+    and its `path` is the inbound row's wire path carried, so it takes the address map `endpoints.path` and `roots.path` take
     (D06 §3). A wire path is never a credential, which is why the case is a value no real
     stub produces: the rule, not the expected shape, is what masks."""
     workspace = _workspace_with_an_endpoint(tmp_path)
     secret = "https://u:hunter2@h/Greeter/SayHello"
     workspace._connection.execute(
-        "INSERT INTO rpc_hops VALUES "
+        "INSERT INTO hops VALUES "
         "('mod examples/GreeterGrpc$GreeterBlockingStub#sayHello(sig_1).', 3, 'grpc', "
         "'helloworld.Greeter/SayHello', 'mod examples/HelloWorldService#sayHello(sig_2).', "
         "'compiler'), "
@@ -2580,9 +2580,9 @@ def test_the_bundle_carries_rpc_hops_with_its_path_masked_as_the_endpoints_is(tm
     workspace.export_tables(bundle, Redactor.from_rules())
     rows = duckdb.sql(
         "SELECT ordinal, path, handler FROM "
-        f"read_parquet('{bundle / 'graph' / 'rpc_hops.parquet'}') ORDER BY ordinal"
+        f"read_parquet('{bundle / 'graph' / 'hops.parquet'}') ORDER BY ordinal"
     ).fetchall()
-    kept = [row["path"] for row in workspace.query("rpc_hops")]
+    kept = [row["path"] for row in workspace.query("hops")]
     workspace.close()
 
     assert rows == [

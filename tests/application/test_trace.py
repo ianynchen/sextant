@@ -229,7 +229,7 @@ def test_a_throw_with_no_target_stays_null_on_its_step():
 #
 # Spec 2026-10-25 §3d, ruling 2: a call to the module's own service is a call hop that is
 # traceable. `rest` calls the stub method, whose `ClientCalls` call (ordinal 1) is a
-# boundary in `call_edges`; an `rpc_hops` row at that site names where it lands.
+# boundary in `call_edges`; a `hops` row at that site names where it lands.
 
 _WIRE = "grpc helloworld.Greeter/SayHello"
 _CLIENT_CALL = "io/grpc/stub/ClientCalls#blockingUnaryCall()."

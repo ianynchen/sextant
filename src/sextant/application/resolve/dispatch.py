@@ -67,7 +67,7 @@ from typing import Any
 
 from sextant.application.ports.workspace import Workspace
 from sextant.domain.closed_sets import MethodResolution
-from sextant.domain.symbols import bare_descriptor, method_descriptor, method_name
+from sextant.domain.symbols import bare_descriptor, method_descriptor, method_name, owner_of
 
 # D00 §5's dispatch forms, as the extractor spells them (`MethodFlow.invokeKind`).
 # The two that dispatch on the receiver's RUNTIME class are the two that admit
@@ -114,6 +114,19 @@ class Dispatch:
     # for that method, see `candidates`. Defaulted so a `Dispatch` built by hand
     # carries none.
     default_bodies: dict[str, list[str]] = field(default_factory=dict)
+    # A bare type to the names of the methods it declares, every overload one name: `heirs`'
+    # question, built once from `declared` with the `Dispatch` rather than by scanning every
+    # declared symbol per type per call (GUIDELINES §8.7). Derived, so a `Dispatch` built by
+    # hand carries the same answer.
+    declared_names: dict[str, set[str]] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        names: dict[str, set[str]] = defaultdict(set)
+        for symbol in self.declared:
+            owner = owner_of(symbol)
+            if owner is not None:
+                names[owner].add(method_name(symbol))
+        object.__setattr__(self, "declared_names", dict(names))
 
     def resolve(self, owner: str, name: str, descriptor: str) -> tuple[str | None, str]:
         """Which type declares the method a site names, and — always — why (JVMS
@@ -140,6 +153,36 @@ class Dispatch:
         """
         declaring, reason, _ = self._search(owner, name, descriptor)
         return declaring, reason
+
+    def heirs(self, owner: str, name: str) -> list[str]:
+        """The types a call naming `name` through them runs `owner`'s method for (JVMS
+        5.4.3.3): every subtype of `owner` — through library types the workspace has headers
+        for as well — that neither declares a method of that name itself nor inherits one
+        from a type the workspace read between it and `owner`. javac writes the class a call
+        is made through, so `this.newReceiveBuilder()` in a subclass names the subclass, and
+        the method it runs is still `owner`'s.
+
+        By NAME, every overload: a module type declaring any overload of `name` is read as
+        answering the call with its own body. That can lose a match, never invent one.
+        Sorted (NFR-1)."""
+        below = self.subtypes.get(owner, [])
+        if not below:
+            return []
+        between = set(below)
+        declaring = {type_ for type_ in between if name in self.declared_names.get(type_, ())}
+        found: list[str] = []
+        for heir in below:
+            path: set[str] = set()
+            pending = [heir]
+            while pending:
+                current = pending.pop()
+                if current in path or current not in between:
+                    continue
+                path.add(current)
+                pending.extend(ancestor for ancestor, _, _ in self.ancestors.get(current, ()))
+            if not path & declaring:
+                found.append(heir)
+        return found
 
     def boundary(self, owner: str, name: str, descriptor: str) -> str | None:
         """Where `resolve`'s search LEFT the workspace: the first type, in JVMS 5.4.3.3's

@@ -15,7 +15,7 @@ import yaml
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.domain.closed_sets import Direction, Protocol, TargetKind, TerminalKind
-from sextant.domain.symbols import parameter_types, type_descriptor
+from sextant.domain.symbols import descriptor_slots, parameter_types, type_descriptor
 
 # The safe loader, compiled where the interpreter has the C library and pure
 # Python where it does not — the same YAML subset, the same Python objects
@@ -539,7 +539,7 @@ class YamlCatalogSource:
                     resolves=raw.get("resolves", {}),
                     # D02 §1c — the bean model's mapping, resolved above the
                     # way `shape_model` is; `{}` for a catalog naming none.
-                    bean_model=_named_model(raw, "bean_model", bean_models, path) or {},
+                    bean_model=_bean_model_of(raw, bean_models, path),
                     # D02 §1f — the source's own identity table, built above.
                     value_model=identities,
                     not_hand_offs=not_hand_offs,
@@ -548,8 +548,18 @@ class YamlCatalogSource:
                     type_model=conformance,
                     # The server's own prefix keys, built above.
                     server_model=servers,
+                    # Spec 2026-11-05 §1-§2: how this catalog's dispatch works, what each
+                    # declared registration call means, which calls hand a value over and
+                    # where it is, and which calls take one from an object.
+                    dispatch=_dispatch(raw, path),
+                    dispatch_registrations=_dispatch_registrations(raw["matches"], path),
+                    dispatch_sends=_dispatch_sends(raw["matches"], path),
+                    dispatch_receives=_dispatch_receives(raw["matches"], path),
+                    dispatch_views=_dispatch_views(raw["matches"], path),
+                    dispatch_implementations=_dispatch_implementations(raw["matches"], path),
                 )
             )
+        _check_mechanisms(catalogs)
         return catalogs
 
 
@@ -754,7 +764,28 @@ def _hoisted(node: Any, path: Path, into: list[dict[str, Any]]) -> None:
             if key in _WRAPPER_KEYS:
                 into.extend(_constructor_identities(entry, key, path))
             else:
+                _check_class_arg(entry, key, path)
                 into.append(_identity(entry, entry.get("owner")))
+
+
+def _check_class_arg(entry: dict[str, Any], key: str, path: Path) -> None:
+    """A `channel_via` entry's optional `class_arg` (spec 2026-11-05 §2): the argument of the
+    same producing call holding the class literal of what the value (a key) addresses, read
+    by the walk beside the value (`values.Answer.carried_class`). An argument index, and only
+    on `channel_via`, the one hop key whose value a key is."""
+    if "class_arg" not in entry:
+        return
+    class_arg = entry["class_arg"]
+    if key != "channel_via" or not isinstance(class_arg, int) or isinstance(class_arg, bool):
+        raise CatalogError(
+            f"loading catalog {path}: a `{key}` entry declares `class_arg: {class_arg!r}`; "
+            f"`class_arg` is an argument index, on a `channel_via` entry only"
+        )
+    if class_arg == entry.get("arg"):
+        raise CatalogError(
+            f"loading catalog {path}: a `{key}` entry reads argument {class_arg} as both the "
+            f"value and its class"
+        )
 
 
 def _constructor_identities(entry: dict[str, Any], key: str, path: Path) -> list[dict[str, Any]]:
@@ -1001,13 +1032,38 @@ def _named_model(
     return models[named]
 
 
+def _bean_model_of(
+    raw: dict[str, Any], models: dict[str, dict[str, Any]], path: Path
+) -> dict[str, Any]:
+    """The bean model the catalog names (`{}` for none), refused where the catalog selects
+    observers by a parameter annotation (`mapping.selected_by_parameter`, spec 2026-11-05 §2)
+    and the model declares no `qualifier_meta_annotations`: which annotations qualify an
+    observed parameter is the container's knowledge (D02 §1c), and without it every qualified
+    observer would be keyed, a false hop for each unqualified send of its class."""
+    model = _named_model(raw, "bean_model", models, path) or {}
+    matches = raw.get("matches")
+    mapping = matches.get("mapping") if isinstance(matches, dict) else None
+    if (
+        isinstance(mapping, dict)
+        and mapping.get("selected_by_parameter") is not None
+        and not model.get("qualifier_meta_annotations")
+    ):
+        raise CatalogError(
+            f"loading catalog {path}: it selects observers by a parameter annotation "
+            f"(`mapping.selected_by_parameter`) and names no `bean_model` declaring "
+            f"`qualifier_meta_annotations`; a qualified observer is kept with no key, and "
+            f"which annotations qualify is the container's (D02 §1c)"
+        )
+    return model
+
+
 _CONDITION_KINDS = ("profile", "property", "other")
 
 
 def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
     """Refuses a malformed `conditions` or `presence` block of a bean model — or a malformed
     `stereotypes` / `configuration_annotation` / `stereotype_name_attrs` /
-    `interface_registrations` — naming the file
+    `interface_registrations` / `qualifier_meta_annotations` — naming the file
     (spec 2026-10-22 conditional-beans §2a). What the resolve pass reads from them is a
     framework rule, so every entry carries the probe that measured it (`by:`): a rule nobody
     measured is a guess, and a typo here would silently strip every bean of its condition."""
@@ -1091,6 +1147,19 @@ def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
             raise CatalogError(
                 f"{where}: `stereotype_name_attrs` must map each annotation name to one "
                 f"attribute, got {naming!r}"
+            )
+    # Which annotations make another a qualifier (spec 2026-11-05 §4 item 6): a bare string would
+    # iterate as its characters and mark nothing, every qualified observer silently keyed.
+    if "qualifier_meta_annotations" in raw:
+        markers = raw["qualifier_meta_annotations"]
+        if (
+            not isinstance(markers, list)
+            or not markers
+            or not all(isinstance(name, str) and name for name in markers)
+        ):
+            raise CatalogError(
+                f"{where}: `qualifier_meta_annotations` must be a non-empty list of annotation "
+                f"names, got {markers!r}"
             )
     # Interfaces the framework registers and implements at run time (CP-46): a malformed entry
     # would leave every such interface without a route, its calls reading as unanswered.
@@ -1530,6 +1599,463 @@ def _hand_off_effect(entry: Any, path: Path) -> dict[str, Any]:
         "refuses": refuses,
         "by": str(entry["by"]),
     }
+
+
+_HANDLER_POSITIONS = ("class_arg", "value_arg", "predicate_arg", "handler_arg")
+
+
+def _declared_calls(matches: Any, key: str, path: Path) -> tuple[str, list[dict[str, Any]]]:
+    """A dispatch block's entries, each checked to name its call by `owner`, `method` and a
+    method `descriptor` (D02 §2): the `where` its errors start with, and the entries. Empty
+    for a catalog declaring none."""
+    declared = matches.get(key) if isinstance(matches, dict) else None
+    where = f"loading catalog {path}: `{key}`"
+    if declared is None:
+        return where, []
+    if not isinstance(declared, list):
+        raise CatalogError(f"{where} must be a list, got {declared!r}")
+    for entry in declared:
+        if not isinstance(entry, dict) or not all(
+            isinstance(entry.get(name), str) and entry.get(name)
+            for name in ("owner", "method", "descriptor")
+        ):
+            raise CatalogError(
+                f"{where}: each entry names its call by `owner`, `method` and `descriptor`, "
+                f"got {entry!r}"
+            )
+        descriptor = str(entry["descriptor"])
+        if not descriptor.startswith("(") or ")" not in descriptor:
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares `descriptor: {descriptor!r}`, which "
+                f"is not a method descriptor"
+            )
+    return where, declared
+
+
+def _dispatch_registrations(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
+    """`matches.dispatch_registrations` (spec 2026-11-05 §2), checked and converted: each
+    entry `{owner, method, descriptor, class_arg | value_arg, handler_arg, predicate_arg?,
+    returns_value?}`, the owner as a type symbol (the facts' spelling) and every position an
+    argument index the descriptor has. A registration names its key by class or by an equal
+    value, never both, and one with neither is a predicate-only registration, so it needs
+    `predicate_arg`. Every key is checked, because a position that reads the wrong argument
+    is a wrong row rather than a missing one. Empty for a catalog declaring none."""
+    where, declared = _declared_calls(matches, "dispatch_registrations", path)
+    entries: list[dict[str, Any]] = []
+    for entry in declared:
+        unknown = sorted(
+            set(entry) - {"owner", "method", "descriptor", "returns_value", *_HANDLER_POSITIONS}
+        )
+        if unknown:
+            raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
+        descriptor = str(entry["descriptor"])
+        arity = len(descriptor_slots(descriptor)[0])
+        positions: dict[str, int | None] = {}
+        for key in _HANDLER_POSITIONS:
+            value = entry.get(key)
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or not 0 <= value < arity
+            ):
+                raise CatalogError(
+                    f"{where}: `{entry['method']}` declares `{key}: {value!r}`, which is not "
+                    f"an argument of `{descriptor}`"
+                )
+            positions[key] = value
+        if positions["handler_arg"] is None:
+            raise CatalogError(f"{where}: `{entry['method']}` names no `handler_arg`")
+        if positions["class_arg"] is not None and positions["value_arg"] is not None:
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares both `class_arg` and `value_arg`; a "
+                f"registration matches a value by its class or by equality, never both"
+            )
+        if (
+            positions["class_arg"] is None
+            and positions["value_arg"] is None
+            and positions["predicate_arg"] is None
+        ):
+            raise CatalogError(
+                f"{where}: `{entry['method']}` names no `class_arg`, `value_arg` or "
+                f"`predicate_arg`; a registration with none of them is not one this word states"
+            )
+        used = [value for value in positions.values() if value is not None]
+        if len(used) != len(set(used)):
+            raise CatalogError(
+                f"{where}: `{entry['method']}` reads one argument for two meanings: {positions}"
+            )
+        returns_value = entry.get("returns_value", False)
+        if not isinstance(returns_value, bool):
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares `returns_value: {returns_value!r}`, "
+                f"which is not true or false"
+            )
+        entries.append(
+            {
+                "owner": type_descriptor(str(entry["owner"])),
+                "method": str(entry["method"]),
+                "descriptor": descriptor,
+                **positions,
+                "returns_value": returns_value,
+            }
+        )
+    return tuple(entries)
+
+
+def _dispatch_sends(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
+    """`matches.dispatch_sends` (spec 2026-11-05 §2), checked and converted: each entry
+    `{owner, method, descriptor, value_arg}`, the owner as a type symbol (the facts'
+    spelling) and `value_arg` the index of the argument holding the value handed over, one
+    the descriptor has. Every key is checked, because a position that reads the wrong
+    argument is a wrong hop rather than a missing one. Empty for a catalog declaring none."""
+    where, declared = _declared_calls(matches, "dispatch_sends", path)
+    entries: list[dict[str, Any]] = []
+    for entry in declared:
+        unknown = sorted(set(entry) - {"owner", "method", "descriptor", "value_arg"})
+        if unknown:
+            raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
+        descriptor = str(entry["descriptor"])
+        value_arg = entry.get("value_arg")
+        if (
+            not isinstance(value_arg, int)
+            or isinstance(value_arg, bool)
+            or not 0 <= value_arg < len(descriptor_slots(descriptor)[0])
+        ):
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares `value_arg: {value_arg!r}`, which "
+                f"is not an argument of `{descriptor}`"
+            )
+        entries.append(
+            {
+                "owner": type_descriptor(str(entry["owner"])),
+                "method": str(entry["method"]),
+                "descriptor": descriptor,
+                "value_arg": value_arg,
+            }
+        )
+    return tuple(entries)
+
+
+# A receive site's two words (spec 2026-11-05 §2): the object it takes a value from — the
+# one it is called on (`receiver`) or an argument (`argN`, a static helper handed the
+# channel) — and where the code handling that value is.
+_RECEIVER = "receiver"
+_RECEIVE_HANDLERS = ("enclosing", "lambda_arg")
+# The handler word naming a function argument, and the three words saying which argument it
+# is and which of its methods the library calls with the value (`handler_method` by name and
+# `handler_descriptor`, the interface's own, erased).
+_LAMBDA_ARG = "lambda_arg"
+_LAMBDA_ARG_WORDS = ("handler_arg", "handler_method", "handler_descriptor")
+
+
+def _dispatch_receives(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
+    """`matches.dispatch_receives` (spec 2026-11-05 §2), checked and converted: each entry
+    `{owner, method, descriptor, object, handler}`, the owner as a type symbol. `object` says
+    which object the call takes its value from (`receiver`, the one it is called on, or
+    `argN`, an argument the descriptor has: a static helper handed the channel); `handler`
+    where the code handling it is (`enclosing`, the method making the call, or `lambda_arg`,
+    the function it is given). A `lambda_arg` receive names that function's argument
+    (`handler_arg`, a reference-typed argument of the descriptor) and the method the library
+    calls on it (`handler_method`, `handler_descriptor`); an `enclosing` one names none of
+    them. Every key is checked, because a position that reads the wrong argument keys the
+    receive by the wrong object, or names the wrong handler. Empty for a catalog declaring
+    none."""
+    where, declared = _declared_calls(matches, "dispatch_receives", path)
+    entries: list[dict[str, Any]] = []
+    for entry in declared:
+        unknown = sorted(
+            set(entry) - {"owner", "method", "descriptor", "object", "handler", *_LAMBDA_ARG_WORDS}
+        )
+        if unknown:
+            raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
+        _check_object(entry, where)
+        if entry.get("handler") not in _RECEIVE_HANDLERS:
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares `handler: {entry.get('handler')}`; "
+                f"`handler` is one of {list(_RECEIVE_HANDLERS)}"
+            )
+        _check_lambda_arg(entry, where)
+        entries.append(
+            {
+                "owner": type_descriptor(str(entry["owner"])),
+                "method": str(entry["method"]),
+                "descriptor": str(entry["descriptor"]),
+                "object": str(entry["object"]),
+                "handler": str(entry["handler"]),
+                **{word: entry[word] for word in _LAMBDA_ARG_WORDS if word in entry},
+            }
+        )
+    return tuple(entries)
+
+
+def _dispatch_views(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
+    """`matches.dispatch_views` (spec 2026-11-05 §3), checked and converted: each entry
+    `{owner, method, descriptor, object}`, a call that hands back a VIEW of the object at
+    `object` (`receiver`, or `argN`, an argument of the descriptor): another reference to the
+    same object, so the object walk passes through it to that object rather than ending at it.
+    The owner as a type symbol. Empty for a catalog declaring none."""
+    where, declared = _declared_calls(matches, "dispatch_views", path)
+    entries: list[dict[str, Any]] = []
+    for entry in declared:
+        unknown = sorted(set(entry) - {"owner", "method", "descriptor", "object"})
+        if unknown:
+            raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
+        _check_object(entry, where)
+        entries.append(
+            {
+                "owner": type_descriptor(str(entry["owner"])),
+                "method": str(entry["method"]),
+                "descriptor": str(entry["descriptor"]),
+                "object": str(entry["object"]),
+            }
+        )
+    return tuple(entries)
+
+
+def _check_object(entry: dict[str, Any], where: str) -> None:
+    """Refuses an `object` that is neither `receiver` nor an argument of the descriptor."""
+    taken_from = entry.get("object")
+    arity = len(descriptor_slots(str(entry["descriptor"]))[0])
+    if taken_from != _RECEIVER and not (
+        isinstance(taken_from, str)
+        and re.fullmatch(r"arg\d+", taken_from)
+        and int(taken_from[3:]) < arity
+    ):
+        raise CatalogError(
+            f"{where}: `{entry['method']}` declares `object: {taken_from}`; `object` is "
+            f"`{_RECEIVER}` or `argN`, an argument of `{entry['descriptor']}`"
+        )
+
+
+def _check_lambda_arg(entry: dict[str, Any], where: str) -> None:
+    """Refuses a receive whose function-argument words disagree with its `handler`: a
+    `lambda_arg` receive names all three (`handler_arg` an argument of the descriptor holding
+    a reference, the method called on it by name and descriptor), an `enclosing` one none.
+    Without all three the handler would be a guess at which method of which argument runs."""
+    named = [word for word in _LAMBDA_ARG_WORDS if entry.get(word) is not None]
+    if entry["handler"] != _LAMBDA_ARG:
+        if named:
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares {named} beside `handler: "
+                f"{entry['handler']}`; only a `{_LAMBDA_ARG}` receive names its function"
+            )
+        return
+    if len(named) != len(_LAMBDA_ARG_WORDS):
+        raise CatalogError(
+            f"{where}: `{entry['method']}` declares `handler: {_LAMBDA_ARG}` and names "
+            f"{named}; it names all of {list(_LAMBDA_ARG_WORDS)}"
+        )
+    slots = descriptor_slots(str(entry["descriptor"]))[0]
+    position = entry["handler_arg"]
+    if (
+        not isinstance(position, int)
+        or isinstance(position, bool)
+        or not 0 <= position < len(slots)
+        or not slots[position].startswith("L")
+    ):
+        raise CatalogError(
+            f"{where}: `{entry['method']}` declares `handler_arg: {position}`; it is the "
+            f"index of an object argument of `{entry['descriptor']}`"
+        )
+    called = str(entry["handler_descriptor"])
+    if not isinstance(entry["handler_method"], str) or not (
+        called.startswith("(") and ")" in called
+    ):
+        raise CatalogError(
+            f"{where}: `{entry['method']}` names its handler as `{entry['handler_method']}` "
+            f"`{called}`; a method name and a method descriptor"
+        )
+
+
+def _dispatch_implementations(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
+    """`matches.dispatch_implementations` (spec 2026-11-05 §4 item 5), checked and converted:
+    each entry `{owner, method, descriptor, value_arg}`, the owner (the interface) as a type
+    symbol and `value_arg` the index of the parameter whose type keys the registration, one
+    the descriptor has. Every key is checked, because a position that reads the wrong
+    parameter keys a listener by the wrong class. Empty for a catalog declaring none."""
+    where, declared = _declared_calls(matches, "dispatch_implementations", path)
+    entries: list[dict[str, Any]] = []
+    for entry in declared:
+        unknown = sorted(set(entry) - {"owner", "method", "descriptor", "value_arg"})
+        if unknown:
+            raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
+        descriptor = str(entry["descriptor"])
+        value_arg = entry.get("value_arg")
+        if (
+            not isinstance(value_arg, int)
+            or isinstance(value_arg, bool)
+            or not 0 <= value_arg < len(descriptor_slots(descriptor)[0])
+        ):
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares `value_arg: {value_arg!r}`, which "
+                f"is not a parameter of `{descriptor}`"
+            )
+        entries.append(
+            {
+                "owner": type_descriptor(str(entry["owner"])),
+                "method": str(entry["method"]),
+                "descriptor": descriptor,
+                "value_arg": value_arg,
+            }
+        )
+    return tuple(entries)
+
+
+# The `dispatch` setting's two closed words (spec 2026-11-05 §1): what picks the receiver,
+# and how many receive.
+_DISPATCH_KEYS = ("type", "object")
+_DISPATCH_MATCHES = ("first", "all", "one")
+_DISPATCH_BLOCKS = (
+    "dispatch_registrations",
+    "dispatch_sends",
+    "dispatch_receives",
+    "dispatch_views",
+    "dispatch_implementations",
+)
+# The blocks registering a handler by the value's class (or an equal value), never by an
+# object; and the `dispatch.key` naming a channel object.
+_CLASS_KEYED_BLOCKS = ("dispatch_registrations", "dispatch_implementations")
+_OBJECT_KEY = "object"
+
+
+def _dispatch(raw: dict[str, Any], path: Path) -> dict[str, str] | None:
+    """The catalog's `dispatch: {key, match, mechanism}` setting (spec 2026-11-05 §1-§2),
+    checked: `key` and `match` from their closed sets, `mechanism` a name. Required, all
+    three, where the catalog declares any dispatch block, since every one of them is read by
+    it. A catalog whose inbound rows are KEYS carrying a class (a `channel_via` entry naming
+    `class_arg`, the actor keys) declares `dispatch: {mechanism}` alone: its rows are endpoint
+    rows, and the mechanism says whose registrations serve them. None for a catalog declaring
+    neither.
+
+    `mechanism` names which registrations a send, a delivering handler or an inbound key is
+    asked of: those of catalogs naming the same mechanism, never another's — so an actor
+    `tell` never lands on an application-event listener, nor a published event on an actor
+    case. Explicit rather than derived from anything else, because nothing else draws the
+    line: two frameworks share `in_process`, and a key's catalog is not the one registering
+    its handlers."""
+    declared = raw.get("dispatch")
+    matches = raw.get("matches")
+    blocks = [block for block in _DISPATCH_BLOCKS if isinstance(matches, dict) and block in matches]
+    keyed = _names_a_key_class(matches)
+    where = f"loading catalog {path}"
+    if declared is None:
+        if blocks:
+            raise CatalogError(
+                f"{where}: it declares a dispatch block and no `dispatch` ({blocks}); "
+                f"`dispatch: {{key, match, mechanism}}` says how they are read (spec "
+                f"2026-11-05 §2)"
+            )
+        if keyed:
+            raise CatalogError(
+                f"{where}: a `channel_via` entry names `class_arg`, so its inbound rows are "
+                f"keys whose handlers are registrations, and it declares no `dispatch: "
+                f"{{mechanism}}` saying whose (spec 2026-11-05 §2)"
+            )
+        return None
+    if not isinstance(declared, dict):
+        raise CatalogError(f"{where}: `dispatch` must be a mapping, got {declared!r}")
+    mechanism = declared.get("mechanism")
+    if not isinstance(mechanism, str) or not mechanism:
+        raise CatalogError(
+            f"{where}: `dispatch` names no `mechanism`; a send, a registration or a key is "
+            f"matched only within its mechanism (spec 2026-11-05 §2), got {declared!r}"
+        )
+    # Every hop a send or a delivering handler gives is written under the catalog's protocol:
+    # refused here, by file, rather than by the pass that writes the hops.
+    registrations = matches.get("dispatch_registrations") if isinstance(matches, dict) else None
+    delivering = isinstance(registrations, list) and any(
+        isinstance(entry, dict) and entry.get("returns_value") is True for entry in registrations
+    )
+    if ("dispatch_sends" in blocks or delivering) and not raw.get("protocol"):
+        raise CatalogError(
+            f"{where}: it declares dispatch sends or delivering handlers and no `protocol`, "
+            f"which every hop it gives is written under (spec 2026-11-04 §3c)"
+        )
+    if set(declared) == {"mechanism"} and keyed and not blocks:
+        return {"mechanism": mechanism}
+    if set(declared) != {"key", "match", "mechanism"}:
+        raise CatalogError(
+            f"{where}: `dispatch` must be `{{key, match, mechanism}}` (or `{{mechanism}}` "
+            f"alone on a catalog of key rows), got {declared!r} (spec 2026-11-05 §2)"
+        )
+    if declared["key"] not in _DISPATCH_KEYS:
+        raise CatalogError(
+            f"{where}: `dispatch` declares `key: {declared['key']}`; `key` is one of "
+            f"{list(_DISPATCH_KEYS)}"
+        )
+    if declared["match"] not in _DISPATCH_MATCHES:
+        raise CatalogError(
+            f"{where}: `dispatch` declares `match: {declared['match']}`; `match` is one of "
+            f"{list(_DISPATCH_MATCHES)}"
+        )
+    # A receive site is keyed by its object and a registration by a class: read under the
+    # other key, each would match nothing, every hop a silent stop.
+    by_class = [block for block in blocks if block in _CLASS_KEYED_BLOCKS] + (
+        ["an annotation mapping"] if raw.get("style") == "annotation_driven" else []
+    )
+    if declared["key"] == _OBJECT_KEY and by_class:
+        raise CatalogError(
+            f"{where}: `dispatch` declares `key: object` beside {by_class}, which register "
+            f"handlers by the value's class; an object key's handlers are `dispatch_receives` "
+            f"(spec 2026-11-05 §2)"
+        )
+    for block in ("dispatch_receives", "dispatch_views"):
+        if declared["key"] != _OBJECT_KEY and block in blocks:
+            raise CatalogError(
+                f"{where}: `dispatch` declares `key: {declared['key']}` beside `{block}`, "
+                f"which is read by the object a call acts on; it needs `key: object` "
+                f"(spec 2026-11-05 §2)"
+            )
+    return {"key": str(declared["key"]), "match": str(declared["match"]), "mechanism": mechanism}
+
+
+def _names_a_key_class(node: object) -> bool:
+    """Whether any `channel_via` entry under `node` names `class_arg`: the catalog's inbound
+    rows are keys carrying a class, served by registrations (`dispatch_hops.record_key_handlers`)."""
+    if isinstance(node, dict):
+        via = node.get("channel_via")
+        if isinstance(via, list) and any(
+            isinstance(entry, dict) and "class_arg" in entry for entry in via
+        ):
+            return True
+        return any(_names_a_key_class(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_names_a_key_class(value) for value in node)
+    return False
+
+
+def _registers(catalog: Catalog) -> bool:
+    """Whether `catalog` writes registrations for its mechanism: a registration, an
+    implementation or a receive block, or an annotation mapping read as registrations (an
+    `annotation_driven` catalog whose `dispatch` names a `key`)."""
+    return bool(
+        catalog.dispatch_registrations
+        or catalog.dispatch_implementations
+        or catalog.dispatch_receives
+        or (
+            catalog.style == "annotation_driven"
+            and catalog.dispatch is not None
+            and "key" in catalog.dispatch
+        )
+    )
+
+
+def _check_mechanisms(catalogs: list[Catalog]) -> None:
+    """Refuses a send or key catalog whose `dispatch.mechanism` no registering catalog names:
+    its values would be asked of no registration and every hop and key would be a silent stop,
+    the shape a misspelt mechanism takes."""
+    registering = {
+        catalog.dispatch["mechanism"]
+        for catalog in catalogs
+        if catalog.dispatch is not None and _registers(catalog)
+    }
+    for catalog in catalogs:
+        if catalog.dispatch is None or catalog.dispatch["mechanism"] in registering:
+            continue
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `dispatch.mechanism: "
+            f"{catalog.dispatch['mechanism']}` is named by no catalog registering handlers "
+            f"(registrations, implementations, receives or an annotation mapping); its sends "
+            f"or keys would reach nothing. Registering mechanisms: {sorted(registering)}"
+        )
 
 
 def _arg_index(value: Any, where: str) -> int:

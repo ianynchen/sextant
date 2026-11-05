@@ -176,6 +176,19 @@ class Protocol(StrEnum):
     # `amqp` is named for the protocol rather than for Rabbit.
     TEMPORAL = "temporal"
     EVENTBUS = "eventbus"
+    # Actor messaging (SEXTANT-178). A message to an actor is addressed by a
+    # name, not called by a verb: a registered service key, a sharded entity
+    # type, or a distributed pub-sub topic. Like `eventbus`, the member is named
+    # for the KIND of wire, because `tests/architecture/test_source_rules.py`
+    # forbids a framework's name in every source file here — and one member
+    # serves every toolkit speaking that wire, the original and its fork alike.
+    ACTOR = "actor"
+    # In-process dispatch with no wire at all (spec 2026-11-05 §1, §3): a value handed to
+    # the framework running in the same process, which calls the handlers registered for
+    # its class (an application event published to the context). No address a peer could
+    # reach, so it never links; it is the protocol of the hops such a catalog gives, never
+    # of an endpoint row. Named for the KIND of hand-over, for `eventbus`'s reason.
+    IN_PROCESS = "in_process"
 
 
 # The two markers an `endpoints` row can carry about its OWN address, stored as columns so the

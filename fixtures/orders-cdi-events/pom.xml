@@ -1,0 +1,48 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-cdi-events</artifactId>
+  <version>1.0.0</version>
+  <!-- CDI events (spec 2026-11-05 §4 item 6): a bean firing events through `Event<T>`,
+       synchronous and asynchronous observers, and an observer of a Quarkus lifecycle event
+       nothing in the module fires. Compiled against the versions Quarkus 3.17.5 manages
+       (the BOM `orders-quarkus` uses); never run. In its own module so that no other
+       fixture's pinned row counts move. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>io.quarkus</groupId>
+        <artifactId>quarkus-bom</artifactId>
+        <version>3.17.5</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <!-- `Event`, `@Observes`, `@ObservesAsync`, `@ApplicationScoped`, `@Inject`. -->
+    <dependency>
+      <groupId>jakarta.enterprise</groupId>
+      <artifactId>jakarta.enterprise.cdi-api</artifactId>
+    </dependency>
+    <!-- `StartupEvent` only: the API, all transitives excluded (the `orders-quarkus`
+         pattern). -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-core</artifactId>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+    <!-- ArC, Quarkus's CDI container: nothing here calls it; on the class path so CP-59 reads
+         which observers its `fire` and `fireAsync` notify from the version Quarkus 3.17.5
+         runs. -->
+    <dependency>
+      <groupId>io.quarkus.arc</groupId>
+      <artifactId>arc</artifactId>
+      <exclusions><exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion></exclusions>
+    </dependency>
+  </dependencies>
+</project>

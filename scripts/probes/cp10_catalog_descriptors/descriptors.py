@@ -251,6 +251,11 @@ def declared_descriptors(classpath: str, owner: str) -> dict[str, set[str]]:
                 continue
             declaration = _DECLARATION.search(line)
             name = declaration.group(1) if declaration is not None else None
+            # `javap` names a constructor by its class, where the bytecode and every
+            # catalog name it `<init>`. A constructor is not inherited, so only the
+            # owner's own is filed; a supertype's is skipped.
+            if name == current:
+                name = "<init>" if current == owner else None
         pending.extend(_supertypes(header))
     return found
 

@@ -62,7 +62,7 @@ and each protocol's own per-framework table opens its §5 section.
 
 | Language | [gRPC](#57-grpc) | [Kafka](#58-kafka) | [JMS / AMQP](#59-jms-and-amqp) | [SQS](#510-aws-sqs) | [Pub/Sub](#511-google-cloud-pubsub) | [Async](#512-async-and-internal-boundaries) |
 |---|---|---|---|---|---|---|
-| **Java / Kotlin** | ✅ | ✅ | ✅ | ✅ | ✅ | ◐ (1C, 1 open) |
+| **Java / Kotlin** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Go** | 1A | 2A | 1A | 1A | 1B | 2A |
 | **TypeScript** | 2B | 1A | 1A | 1A | 1B | 1A |
 | **JavaScript** | 2B | 1A | 1A | 1A | 1B | 1A |
@@ -93,9 +93,10 @@ register.
 | **Raw clients and SDKs (JDK/Apache HTTP, kafka-clients, grpc-java, AWS, GCP, graphql-java)** | — | ✅ | — | ✅ | — | — | ✅ | ✅ | — | ✅ | ✅ | — |
 | **Kafka Streams** | — | — | — | — | — | — | — | ✅ | — | — | — | — |
 | **Netflix DGS** | — | — | — | ✅ | — | — | — | — | — | — | — | — |
-| **Akka / Pekko (HTTP, Connectors, actors)** | ◐ (1 not shipped) | — | — | — | — | — | — | ✅ | — | — | — | ◐ (1 open, 1 not shipped) |
+| **Akka / Pekko (HTTP, Connectors, actors)** | ◐ (1 not shipped) | — | — | — | — | — | — | ✅ | — | — | — | ✅ |
 | **Temporal / Cadence** | — | — | — | — | — | — | — | — | — | — | — | ✅ |
 | **Quartz** | — | — | — | — | — | — | — | — | — | — | — | ✅ |
+| **JDK and Kotlin channels (BlockingQueue, Channel, Flow)** | — | — | — | — | — | — | — | — | — | — | — | ✅ |
 
 Everything below is the detail behind these three tables: how to read them (§1), what a run produces today (§2), the language and version gate (§3), wire formats (§4), and the per-protocol work list they are generated from (§5).
 
@@ -706,7 +707,7 @@ measurement it rests on is `docs/research/2026-10-26-adoption.md`. Work is taken
 | Scope | Order |
 |---|---|
 | **Languages** | 1. Java / Kotlin (finish) · 2. Python · 3. JavaScript / TypeScript · 4. Go · 5. Rust · 6. Swift · 7. C# / .NET |
-| **Java / Kotlin frameworks still open** | 1. Ktor (HTTP client, WebSocket, SSE): shipped 2026-10-26 (OI-206) · 2. Quartz: shipped 2026-10-29 · 3. Vert.x (Web row, WebClient): shipped 2026-10-31 · 4. Akka / Pekko (HTTP row, actors) |
+| **Java / Kotlin frameworks still open** | 1. Ktor (HTTP client, WebSocket, SSE): shipped 2026-10-26 (OI-206) · 2. Quartz: shipped 2026-10-29 · 3. Vert.x (Web row, WebClient): shipped 2026-10-31 · 4. Akka / Pekko (HTTP row, actors): actors shipped 2026-11-04, the HTTP row next |
 | **Python frameworks** | 1. FastAPI · 2. Flask · 3. Django |
 | **JavaScript / TypeScript frameworks** | 1. Node.js (core `http`) · 2. Express · 3. NestJS |
 
@@ -795,12 +796,29 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**96 of 110 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**117 of 131 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
+| `akka-actor-handlers` | `com.typesafe.akka:akka-actor-typed_2.13` | 2.6.21 |
+|  | `com.typesafe.akka:akka-actor_2.13` | 2.6.21 |
+|  | `com.typesafe.akka:akka-cluster-sharding-typed_2.13` | 2.6.21 |
+|  | `com.typesafe.akka:akka-cluster-tools_2.13` | 2.6.21 |
+|  | `com.typesafe.akka:akka-persistence-typed_2.13` | 2.6.21 |
+| `akka-cluster-sharding` | `com.typesafe.akka:akka-cluster-sharding-typed_2.13` | 2.6.21 |
+| `akka-pubsub-publish` | `com.typesafe.akka:akka-cluster-tools_2.13` | 2.6.21 |
+| `akka-pubsub-put` | `com.typesafe.akka:akka-cluster-tools_2.13` | 2.6.21 |
+| `akka-pubsub-send` | `com.typesafe.akka:akka-cluster-tools_2.13` | 2.6.21 |
+| `akka-pubsub-subscribe` | `com.typesafe.akka:akka-cluster-tools_2.13` | 2.6.21 |
+| `akka-receptionist` | `com.typesafe.akka:akka-actor-typed_2.13` | 2.6.21 |
 | `apache-httpclient` | `org.apache.httpcomponents.client5:httpclient5` | 5.2.3 |
 |  | `org.apache.httpcomponents.core5:httpcore5` | 5.2.4 |
+| `cdi-async-events` | `io.quarkus.arc:arc` | 3.17.5 |
+|  | `jakarta.enterprise:jakarta.enterprise.cdi-api` | 4.1.0 |
+|  | `javax.enterprise:cdi-api` | 2.0.0 |
+| `cdi-events` | `io.quarkus.arc:arc` | 3.17.5 |
+|  | `jakarta.enterprise:jakarta.enterprise.cdi-api` | 4.1.0 |
+|  | `javax.enterprise:cdi-api` | 1.0.0, 2.0.0 |
 | `google-pubsub-client` | `com.google.cloud:google-cloud-pubsub` | 1.129.3 |
 | `google-pubsub-subscriber` | `com.google.cloud:google-cloud-pubsub` | 1.127.3 |
 | `grpc-java` | `io.grpc:protoc-gen-grpc-java` | 1.62.2, 1.81.0 |
@@ -812,6 +830,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `grpc-spring` | `io.quarkus:quarkus-grpc-api` | 3.17.5 |
 |  | `net.devh:grpc-server-spring-boot-starter` | 3.1.0.RELEASE |
 |  | `org.springframework.grpc:spring-grpc-core` | 0.10.0 |
+| `guava-queues` | `com.google.guava:guava` | 32.0.0.jre |
 | `jakarta-jaxrs` | `jakarta.ws.rs:jakarta.ws.rs-api` | 3.1.0, 4.0.0 |
 | `jakarta-jms` | `jakarta.jms:jakarta.jms-api` | 3.1.0 |
 | `jakarta-jws` | `com.sun.xml.ws:jaxws-rt` | 4.0.2 |
@@ -826,12 +845,15 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `javax-jaxrs` | `javax.ws.rs:javax.ws.rs-api` | 2.1.1 |
 | `javax-jms` | `javax.jms:javax.jms-api` | 2.0.1 |
 | `javax-servlet` | `org.apache.tomcat.embed:tomcat-embed-core` | 9.0.121 |
+| `jdk-blocking-queue` | `jmod:java.base` | 21.0.13.0.3 |
 | `jdk-httpclient` | `jmod:java.net.http` | 21.0.12.1 |
 | `kafka-clients` | `org.apache.kafka:kafka-clients` | 3.6.2 |
 | `kafka-consumer` | `org.apache.kafka:kafka-clients` | 3.6.2 |
 | `kafka-streams-sink` | `org.apache.kafka:kafka-streams` | 3.6.2 |
 | `kafka-streams-topology` | `org.apache.kafka:kafka-streams` | 3.6.2 |
 | `kafka-streams` | `org.apache.kafka:kafka-streams` | 3.6.2 |
+| `kotlinx-channels` | `org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm` | 1.11.0 |
+| `kotlinx-flows` | `org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm` | 1.11.0 |
 | `ktor-client` | `io.ktor:ktor-client-core-jvm` | 3.6.0 |
 |  | `io.ktor:ktor-http-jvm` | 3.6.0 |
 | `ktor-routing` | `io.ktor:ktor-http-jvm` | 3.6.0 |
@@ -854,7 +876,18 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `microprofile-graphql` | `io.smallrye:smallrye-graphql-schema-builder` | 2.0.0, 2.18.5 |
 | `microprofile-rest-client` | `org.eclipse.microprofile.rest.client:microprofile-rest-client-api` | 3.0.1, 4.0.0 |
 | `okhttp` | `com.squareup.okhttp3:okhttp` | 3.14.9, 4.12.0 |
+| `pekko-actor-handlers` | `org.apache.pekko:pekko-actor-typed_2.13` | 1.1.3 |
+|  | `org.apache.pekko:pekko-actor_2.13` | 1.1.3 |
+|  | `org.apache.pekko:pekko-cluster-sharding-typed_2.13` | 1.1.3 |
+|  | `org.apache.pekko:pekko-cluster-tools_2.13` | 1.1.3 |
+|  | `org.apache.pekko:pekko-persistence-typed_2.13` | 1.1.3 |
+| `pekko-cluster-sharding` | `org.apache.pekko:pekko-cluster-sharding-typed_2.13` | 1.1.3 |
 | `pekko-connectors-kafka` | `org.apache.pekko:pekko-connectors-kafka_2.13` | 1.1.0 |
+| `pekko-pubsub-publish` | `org.apache.pekko:pekko-cluster-tools_2.13` | 1.1.3 |
+| `pekko-pubsub-put` | `org.apache.pekko:pekko-cluster-tools_2.13` | 1.1.3 |
+| `pekko-pubsub-send` | `org.apache.pekko:pekko-cluster-tools_2.13` | 1.1.3 |
+| `pekko-pubsub-subscribe` | `org.apache.pekko:pekko-cluster-tools_2.13` | 1.1.3 |
+| `pekko-receptionist` | `org.apache.pekko:pekko-actor-typed_2.13` | 1.1.3 |
 | `quarkus-consume-event` | `io.quarkus:quarkus-vertx` | 3.17.5 |
 |  | `io.quarkus:quarkus-vertx-deployment` | 3.17.5 |
 | `quarkus-reactive-routes` | `io.quarkus:quarkus-reactive-routes` | 3.17.5 |
@@ -885,6 +918,8 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `spring-data-rest` | `org.springframework.data:spring-data-commons` | 3.2.5, 4.0.1, 4.1.1 |
 |  | `org.springframework.data:spring-data-jpa` | 4.1.1 |
 |  | `org.springframework.data:spring-data-rest-core` | 5.0.1 |
+| `spring-events` | `org.springframework:spring-context` | 7.0.1 |
+|  | `org.springframework:spring-tx` | 7.0.1 |
 | `spring-http-interface` | `org.springframework:spring-aop` | 6.1.6 |
 |  | `org.springframework:spring-core` | 6.2.15 |
 |  | `org.springframework:spring-web` | 6.1.6, 6.2.15 |
@@ -3397,7 +3432,7 @@ reaches is filed as a question rather than dropped.
 | Java | net.devh grpc-spring-boot-starter | `net.devh.boot.grpc.client.inject.GrpcClient` (client stub injection) | field injection | `injected_client` | ✅ shipped (2O Task 5) — service-level only (`method` NULL); per-method outbound waits on 2Q's call graph |
 | Java | net.devh grpc-spring-boot-starter | `net.devh.boot.grpc.server.service.GrpcService` (server annotation) | class annotation, **no service name** | `annotation_driven` `corroborates` | ✅ shipped (2O Task 5, fix round 2) — derives NO row by design (`supertype_derived` above already derives it, and the annotation names no identity); it files a `service_identity` open question for a flagged class no gRPC endpoint names as a handler. Until 2026-10-24 that was every class on real generated code (`OI-193`) |
 | Java | Quarkus gRPC | Quarkus `io.quarkus.grpc.{GrpcService, GrpcClient}` on grpc-java's generated classes — a `@GrpcService` class extending `<Service>Grpc.<Service>ImplBase`, a `@GrpcClient` field or constructor/method parameter typed `<Service>Grpc.<Service>BlockingStub` (or another `…Stub`), value named or omitted | the service rides `supertype_derived` (framework-neutral) with `@GrpcService` as a third corroboration spelling in `grpc-spring.yml`; the client is `grpc-quarkus-client.yml` on `injected_client` | `supertype_derived` + `corroborates`, `injected_client` | ✅ **shipped** (2026-10-24, spec `docs/superpowers/specs/2026-10-24-quarkus-messaging-and-grpc-design.md` ruling 3; probe CP-52, `quarkus-grpc-api` 3.17.5). Service-level client rows only (`method` NULL), as net.devh's. Pinned by `tests/e2e/test_grpc_quarkus_delivered.py` on `fixtures/orders-quarkus` (the service's RPC, its handler the `sayHello` it inherits from the stand-in's `HelloGrpc$AsyncService` as protoc emits it (`OI-193`), with no `service_identity` question; and the value-omitted client at its stub's `SERVICE_NAME`, beside protoc's own nested descriptor-supplier classes, which no longer fence it: `OI-191`). Both stand-ins follow `fixtures/grpc-probe`'s real generated shape. **Measured on `quarkus-quickstarts` @ `81a5844`:** both gRPC modules' `GreeterGrpc.GreeterBlockingStub` client derived `helloworld.Greeter`, resolved, until 2026-10-25; both modules serve that service, so it is now a hop to the handler and no outbound row (next row). **Stated boundary:** the client's configured address is not its peer (`OI-186`) |
-| Java | Quarkus gRPC | **Quarkus's Mutiny forms** — a `@GrpcService` class that `implements <Service>` (the generated `io.quarkus.grpc.MutinyService` interface), a `@GrpcClient` field typed `<Service>`, and a `@GrpcClient` field typed by the generated `Mutiny<Service>Grpc.Mutiny<Service>Stub` | the interface carries no identity call: the identity is reached only through the generated `<Service>Client`/`<Service>Bean` → `Mutiny<Service>Grpc` → `<Service>Grpc.getServiceDescriptor()` | `supertype_derived` (`delegating_bean`, `service_supertype`), `injected_client` (`interface_client`), `identity_calls` (a wrapper's identity is the one marked class it delegates to) | ✅ **shipped** (2026-10-25, spec `docs/superpowers/specs/2026-10-25-quarkus-mutiny-grpc-design.md`; probe CP-53, `quarkus-grpc-deployment` 3.17.5, mirrored in `grpc-quarkus.yml` and `grpc-quarkus-client.yml`). The server: each generated `MutinyBean` implementor's `delegate` type, implemented by exactly one class carrying `@GrpcService` on itself, makes that class the handler of the RPCs its base delegates to; two such classes are neither, with one `service_identity` question naming both (CP-53). The clients: `@GrpcClient <Service>` resolves through the module class implementing `MutinyClient` keyed by its first other interface, and `@GrpcClient Mutiny<Service>Stub` through the one marked class its nest calls into; the generated bean no longer fences anything. **A call to a service the module serves is a hop, not an outbound row** (rulings 1–2): `rpc_hops` names the handler a stub's call into `ClientCalls` lands on, and the trace follows it (`via grpc <path>`). Pinned by `tests/e2e/test_grpc_quarkus_delivered.py` on `fixtures/orders-quarkus` (`QuotesService implements Quotes` the handler of `acme.quotes.Quotes/GetQuote` with no question; no outbound row for either served service; the not-served `acme.pricing.Pricing` resolved through both Mutiny client forms; the three self-call traces each crossing a hop to the handler; the document's arrow). **Measured on `quarkus-quickstarts` @ `81a5844`:** in `grpc-plain-text-quickstart` and `grpc-tls-quickstart`, `helloworld.Greeter/SayHello`'s handler is `HelloWorldService#sayHello` (`HelloWorldTlsService#sayHello`), no question, no gRPC outbound row, and both REST traces reach the handler. **Stated boundaries:** the narrowed call `Greeter#sayHello` still lists both bodies, the generated client and the handler (`OI-196`); a configured client address naming another host is not read, so every gRPC self-call is a hop (`OI-186`); streaming RPCs are not pinned; a delegated identity is read only where the marker call sits on the outer class (`OI-199`); a `MutinyBean` implementor with no `delegate` field is skipped without a question (`OI-200`); a contended gRPC identity, not an unreadable one, still files the "SERVICE_NAME unreadable" question (`OI-201`); a service reaching the generated `ImplBase` through an intermediate class, such as an abstract base of its own, is not named as its RPC's handler (`OI-202`) |
+| Java | Quarkus gRPC | **Quarkus's Mutiny forms** — a `@GrpcService` class that `implements <Service>` (the generated `io.quarkus.grpc.MutinyService` interface), a `@GrpcClient` field typed `<Service>`, and a `@GrpcClient` field typed by the generated `Mutiny<Service>Grpc.Mutiny<Service>Stub` | the interface carries no identity call: the identity is reached only through the generated `<Service>Client`/`<Service>Bean` → `Mutiny<Service>Grpc` → `<Service>Grpc.getServiceDescriptor()` | `supertype_derived` (`delegating_bean`, `service_supertype`), `injected_client` (`interface_client`), `identity_calls` (a wrapper's identity is the one marked class it delegates to) | ✅ **shipped** (2026-10-25, spec `docs/superpowers/specs/2026-10-25-quarkus-mutiny-grpc-design.md`; probe CP-53, `quarkus-grpc-deployment` 3.17.5, mirrored in `grpc-quarkus.yml` and `grpc-quarkus-client.yml`). The server: each generated `MutinyBean` implementor's `delegate` type, implemented by exactly one class carrying `@GrpcService` on itself, makes that class the handler of the RPCs its base delegates to; two such classes are neither, with one `service_identity` question naming both (CP-53). The clients: `@GrpcClient <Service>` resolves through the module class implementing `MutinyClient` keyed by its first other interface, and `@GrpcClient Mutiny<Service>Stub` through the one marked class its nest calls into; the generated bean no longer fences anything. **A call to a service the module serves is a hop, not an outbound row** (rulings 1–2): `hops` (then `rpc_hops`) names the handler a stub's call into `ClientCalls` lands on, and the trace follows it (`via grpc <path>`). Pinned by `tests/e2e/test_grpc_quarkus_delivered.py` on `fixtures/orders-quarkus` (`QuotesService implements Quotes` the handler of `acme.quotes.Quotes/GetQuote` with no question; no outbound row for either served service; the not-served `acme.pricing.Pricing` resolved through both Mutiny client forms; the three self-call traces each crossing a hop to the handler; the document's arrow). **Measured on `quarkus-quickstarts` @ `81a5844`:** in `grpc-plain-text-quickstart` and `grpc-tls-quickstart`, `helloworld.Greeter/SayHello`'s handler is `HelloWorldService#sayHello` (`HelloWorldTlsService#sayHello`), no question, no gRPC outbound row, and both REST traces reach the handler. **Stated boundaries:** the narrowed call `Greeter#sayHello` still lists both bodies, the generated client and the handler (`OI-196`); a configured client address naming another host is not read, so every gRPC self-call is a hop (`OI-186`); streaming RPCs are not pinned; a delegated identity is read only where the marker call sits on the outer class (`OI-199`); a `MutinyBean` implementor with no `delegate` field is skipped without a question (`OI-200`); a contended gRPC identity, not an unreadable one, still files the "SERVICE_NAME unreadable" question (`OI-201`); a service reaching the generated `ImplBase` through an intermediate class, such as an abstract base of its own, is not named as its RPC's handler (`OI-202`) |
 | Java | Spring gRPC | Spring gRPC `org.springframework.grpc.server.service.GrpcService` | **the annotation is optional** — Spring gRPC exposes *any* `BindableService` bean, so `supertype_derived` is the reliable match and the annotation only adds interceptors | `supertype_derived` + `corroborates` | ✅ shipped (2O Task 5) inbound via the framework-neutral supertype match, with the annotation's own corroboration shipped beside it (fix round 2) — a question where the supertype match saw nothing, never a row. Until 2026-10-24 the supertype match named no handler on real generated code (`OI-193`, the grpc-java row above), so an annotated service got a false `service_identity` question. That is corrected, and the corroboration now fires only where the base really is unread |
 | Go | grpc-go | `pb.RegisterFooServer(s, impl)`, `pb.NewFooClient(conn)` | **the generated function names the service** | `registration_call` | A |
 | Python | grpcio | `_pb2_grpc.py`: `FooServicer`, `add_FooServicer_to_server`, `FooStub(channel)` | — | `registration_call` | A |
@@ -3907,7 +3942,11 @@ a real `peer` today, the same way OkHttp's absolute `Request.Builder#url` does.
 | Quartz | ✅ full | 1/1 | 6 stated boundaries |
 | Temporal / Cadence | ✅ full | 1/1 | 2 stated boundaries |
 | Vert.x EventBus | ✅ full | 1/1 | 2 stated boundaries |
-| Akka / Pekko actors | ◐ partial | 0/1 | not shipped: 1 at C; `akka-pekko-actors` |
+| Akka / Pekko actors | ✅ full | 2/2 | 4 stated boundaries |
+| Spring application events | ✅ full | 1/1 | 1 stated boundary |
+| CDI events | ✅ full | 1/1 | 1 stated boundary |
+| Java blocking queues | ✅ full | 1/1 | 1 stated boundary |
+| Kotlin channels and flows | ✅ full | 1/1 | 1 stated boundary |
 <!-- END GENERATED: frameworks 5.12 -->
 
 Not protocols, but genuine entry points that would otherwise fall out of the checklist.
@@ -3941,7 +3980,20 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 | Java | Spring Integration | Spring Integration Java DSL flows — `IntegrationFlow.from(<source spec>)`, the flow's members (`transform`, `filter`, `channel`, `handle`, `route`, …), its consumer, and a flow sourced from a channel (`from("ch")`). The flow definition's 34 public members (CP-27 row 2; `IntegrationFlows` does not exist at 6.2.4, row 1) are classified once in `catalogs/step-models/spring-integration.yml` — pass-through, channel link, handler, discard (`nullChannel`), divert (`route`, `gateway`, `scatterGather`, `publishSubscribeChannel`, `controlBus`, `trigger`, `to` — each constructs a router or fan-out, row 4) — and merged into each broker catalog, on the owners javac names at the call sites (row 16) | `fluent_chain` | ✅ **shipped** (2026-09-21, spec 2026-09-21 §5). A source spec's chain continues into `from(…)` and along the flow to `handle(lambda)` — the lambda body is the row's `handler` — or to `.channel("x")`, which is the channel the flow feeds (the join mints the row against `x`'s readers); `handle(h).channel("y")` keeps `h` and records `y` as its output (`sends_to`, no reader yet — `OI-107`); a `divert` before `handle` leaves `handler` NULL with the row resolved (the message may leave the linear flow — never a guessed consumer); `from("ch").handle(lambda)` makes the flow `ch`'s READER (`from("ch").channel("b").handle(lambda)` makes it `b`'s — the handler reads the channel linked before it) and `from("ch").handle(<sink spec>)` the outbound row with `ch` fed outbound; `handleReactive` ends a flow without `get()` and is a terminal on every broker catalog. **Stated boundaries:** the lambda flow form's implicit `<beanName>.input` channel (its `handle(sink)` DOES derive, `caller` the lambda body); `from(Supplier)`/`from(MessageSource)`; `from(<adapter bean>)` (`OI-112`); a bridge (`from("a").channel("b")`, neither wire nor handler — nothing); `channel(MessageChannelSpec)`/`channel(Function)` (the link unreadable from there on); `handle(bean, "method")` where the bean is not the module's; `.channel("x").handle(h).channel("y")` loses `fed_by(x)` (`OI-115`); two-hop container sources (`OI-110`). The broker-specific boundaries — Kafka's `Pattern`/`TopicPartitionOffset` subscriptions and AMQP's `configureContainer(c -> c.addQueueNames(…))` — are stated on the broker rows, §5.8's "Spring Integration Kafka (DSL + adapters)" and §5.9's "Spring Integration AMQP (adapters + DSL)". Pinned by `tests/e2e/test_async_delivered.py::test_kafka_shapes_rows`, `test_amqp_shapes_rows` |
 | Java | Spring Integration | XML-configured flows — the flow's topology, and the anonymous channels inside it | `filesystem` | **Boundary — derives nothing.** An XML-configured flow contributes **zero** facts — the extractor reads `target/classes/**/*.class` and the XML is a resource sitting beside them — so it needs a resource reader of its own, the same category as the `.avsc` reader |
 | Java | Spring Integration | The `protocol` column on a `channel_destination` question — which broker, if any, a channel actually reaches | `config_join` | **Boundary — the column is EMPTY, and that is the answer.** It read `amqp` from Task 9 until OI-1's fix: a wire STYLE had to declare a protocol (`resolve/endpoints.py`) and D00's closed set has no "unknown" member (NFR-5), so `spring-integration.yml` declared the one value the probe measured a channel join against end to end (Q3) — and **every** question it filed was filed under it, a Kafka- or JMS-fed channel's included. The rule is now keyed on whether the CATALOG derives endpoint rows rather than on what its style is nominally called, so a catalog that mints none declares no wire identity and its questions carry none. What remains is an ABSENCE, stated as one: nothing here reads which broker feeds a channel, the ledger row says so, and the renderer prints the channel name alone. **Since 2026-09-21 the protocol DOES come from the adapter that feeds the channel** — for a channel some `@Bean` adapter or DSL flow feeds, the `fed_by` edge carries the broker catalog's protocol and the join mints a row under it, and no question is filed at all; the column is empty only on the questions that remain, which are exactly the channels nothing in the module feeds. **Falsified by** a question carrying a protocol nothing measured |
-| Java | Akka / Pekko actors | **Akka / Pekko actor messaging** `ref ! msg`, `ref.tell(msg)` — receiver comes from an `ActorRef` created elsewhere | — | **C, possibly permanent — see §7.** *Tier unchanged by the value walk, and now measured rather than assumed (2026-10-17): spec 2026-09-22 §4 claimed its sixth edge would close this row, and `scripts/probes/cp33_binding_writes.md` row 7 shows it would not. `ActorRef ref = system.actorOf(props, "worker")` assigns a CALL'S RESULT — `aload_0; aload_1; iconst_0; invokeinterface; checkcast; putfield` — so the `ALOAD 0; xLOAD k; PUTFIELD` triple a `field_write` fact needs never presents. A setter-injected reference would be read; the factory form the framework documents would not. `OI-136`* |
+| Java | Akka / Pekko actors | **Named cluster addresses** — `Receptionist.register(ServiceKey, ref)`, `ClusterSharding.init(Entity.of(EntityTypeKey, …))`, classic `new DistributedPubSubMediator.Subscribe(topic, ref)` / `Put(ref)` (inbound); `Receptionist.subscribe` / `find`, `ClusterSharding.entityRefFor`, classic `Publish(topic, msg)` / `Send(path, msg)` (outbound) | `single_call` | ✅ **shipped** (2026-11-04, spec `docs/superpowers/specs/2026-11-04-akka-pekko-actors-design.md`, SEXTANT-178; catalogs `akka-*.yml` and `pekko-*.yml`, Akka 2.6.21 and Pekko 1.1.3, every descriptor measured in probe CP-57). Protocol `actor`; the address is the key's name or the topic, read through `channel_via` from `ServiceKey.create` / `EntityTypeKey.create`; a `Put` row's path is the actor's own, named where it was started and not at the call, so it is `unresolved`. **An inbound key row names each handler the key's message class reaches**, one row per handler (the key's `channel_via` entry's `class_arg`, D02), as a route with two handlers is two rows; a class reaching none keeps one row with no handler. A key or topic the module itself registers, inits or subscribes to gives no outbound row (the self-call ruling of 2026-10-25). Pinned by `tests/e2e/test_actors_delivered.py` on `fixtures/orders-actors-pekko` and `-akka` |
+| Java | Akka / Pekko actors | **Actor messaging** — `ref.tell(msg)`, `EntityRef.tell/ask`, `AskPattern.ask`, `context.ask`, classic `tell(msg, sender)` and `Patterns.ask`, timers (`startTimerWithFixedDelay`, `startTimerAtFixedRate`, `startPeriodicTimer`, `startSingleTimer`, `ActorContext.scheduleOnce`, classic `Scheduler.scheduleOnce`), `ActorContext.setReceiveTimeout(d, msg)`, `pipeToSelf`; handlers registered by `Behaviors.receive(C)…`, `newReceiveBuilder()`, persistence `forAnyState`/`forState`/`forStateType`, classic `receiveBuilder()` and `ReceiveBuilder.create()`, `messageAdapter` and an ask's reply mapper | `fluent` + `dispatch_registrations` + `dispatch_sends` (in-process dispatch, D02 §2m) | ✅ **shipped** (2026-11-04, same spec). **A send is followed by its message's CLASS, not by the actor its `ActorRef` holds**, which no static reading can name (the old tier-C reason, `OI-136`, still true and now beside the point). Each behavior's cases are read in order into `dispatch_registrations` (graph schema 15, `match: first`); a send writes one `hops` row per handler its class reaches, the first unpredicated match per behavior and every predicated case before it, so the trace walks from `ref.ask(r -> new Query(…))` into the handler. A constant message (`Tick.INSTANCE`, an enum) is matched by identity; an adapter or reply mapper continues to the handler of each class it returns. A class nobody handles (a reply read off a future) is a stop naming it; a message no `new`, constant or module factory names (a parameter, a field, another call's result) is read by its DECLARED type, and under `match: first` only in a behavior where no case before the first certain one may take a subtype of it — elsewhere it is a stop, `(key not read)`, never a fan-out. Pinned by `tests/application/test_dispatch_hops.py`. Measured on two Pekko samples: 28 hops, all true (spec "As built") |
+| Java | Akka / Pekko actors | **Which actor a ref points at** — two behaviors handling one class both get a hop | `dispatch_sends` | **Boundary — over-reports where two actors share a message class.** Hops go by class (spec §4); exact where messages belong to one actor's protocol, the samples' style of a nested `Command` interface per actor |
+| Java | Akka / Pekko actors | **A cluster singleton's stop message** — `SingletonActor.of(…).withStopMessage(msg)` | — | **Boundary — derives nothing.** The singleton manager tells `msg` to the singleton when it hands over, and `withStopMessage` is not declared as a send, so the stop case is reached by no hop. Cluster singletons are out of the spec's scope (§4); found by the corpus check (`pekko-sample-cluster-java`'s `AppOneMaster`). A receive timeout, `setReceiveTimeout(d, msg)`, found missing by the same check, is a declared send |
+| Java | Akka / Pekko actors | **A message built by a static factory for a system actor** — `receptionist().tell(Receptionist.register(…))`, `cluster.subscriptions().tell(Subscribe.create(…))` | `dispatch_sends` | **Boundary — a stop, `(key not read)`.** The message is a library call's result, read by its declared type (`Receptionist$Command`, `Subscribe`); every behavior has an earlier case naming a type a subtype of it might also be, so no behavior is decided and the send is the not-read row. No module behavior handles these classes, so the stop costs no hop |
+| Java | Akka / Pekko actors | **Routers, `actorSelection` paths, cluster singleton and distributed data addresses**; actors written in **Scala** | — | **Boundary — derives nothing.** `Routers.group(key)` uses a key without an outbound row; `actorSelection("akka://…/user/x")` is 0 in the corpus; Scala has no scanner (spec §4) |
+| Java | Spring application events | **Spring application events** — `publishEvent(Object)` and `publishEvent(ApplicationEvent)` on `ApplicationEventPublisher`, `ApplicationContext` and `ConfigurableApplicationContext`; listeners `@EventListener` and `@TransactionalEventListener` (keyed by `classes`/`value` or the one parameter's type) and classes implementing `ApplicationListener<E>` (keyed by their own `onApplicationEvent(E)`, past the compiler's bridge) | `annotation_driven` + `dispatch_sends` + `dispatch_implementations` (in-process dispatch, D02 §2m) | ✅ **shipped** (2026-11-05, spec `docs/superpowers/specs/2026-11-05-in-process-dispatch-design.md`, `spring-events.yml`, spring-context and spring-tx 7.0.1, probe CP-59). Protocol `in_process`: a dispatch is a **hop**, never an endpoint row, under `match: all` (every listener whose parameter the event is assignable to, `Object` and supertypes included). A published value no `new` names is read by the module factory's returns (`ConfigPublishEvent.instance()`) or else by its declared type (an instance call's result such as Lombok's chained `new E().setA(a)`, a parameter, a field), which reaches every listener of that type or a supertype. Measured on two modules, each publish site read by hand: apollo-portal, **17 publish sites, 17 hops, all true**; ruoyi-vue-pro `yudao-module-system`, whose events are all built with chained setters, **3 publish sites: 2 hops true, 1 stop true** (its listener is in `yudao-module-im`, another module). 0 false and 0 missing on both; no endpoint row moved on apollo-portal, apollo-biz, dolphinscheduler-api or yudao-module-system. Pinned by `tests/e2e/test_spring_events_delivered.py` on `fixtures/orders-events` |
+| Java | Spring application events | `publishEvent(pojo)` — Spring wraps the POJO in a `PayloadApplicationEvent`; a generic listener parameter (`Base<E> implements ApplicationListener<E>`, `@EventListener on(T e)`, `on(Envelope<X> e)`); a value read by its declared type | `dispatch_sends` | **Boundary — a missing hop, never a false one.** A listener of `ApplicationEvent` also receives a wrapped POJO and gets no hop; a generic listener parameter keeps its registration with no key (keyed by the erasure it would receive every event), and since it may receive any event, every publish of the module also writes the not-read row beside its hops; a value read by its declared type (a parameter declared `Object`) reaches only the listeners of that type and its supertypes, and where a subtype or an unrelated interface (one a subtype may implement) has a listener the send also writes the not-read row, never a stop saying nobody handles it. A value no read names (an array element) is a stop, `(key not read)`, never a fan-out |
+| Java | CDI events | **CDI events** — `Event.fire` and `Event.fireAsync` (both overloads); observers: a method with a parameter annotated `@Observes` / `@ObservesAsync`, keyed by that parameter's type whatever other parameters the container injects (Jakarta CDI 4.1.0, javax CDI 1.0.0 and 2.x) | `annotation_driven` (`selected_by_parameter`) + `dispatch_sends` | ✅ **shipped** (2026-11-05, same spec, `cdi-events.yml` and `cdi-async-events.yml`, ArC 3.17.5, probe CP-59). Two mechanisms: ArC notifies only synchronous observers from `fire` and only asynchronous ones from `fireAsync`. `match: all`. **No example under `examples/` fires a CDI event** (every one of the 30 `@Observes` there observes a framework event), so the corpus check is registrations only: **5 of 5 true** on `stork-quickstart` and `reactive-routes-quickstart`, 0 hops, no endpoint row moved. The hops are pinned on `fixtures/orders-cdi-events` (`tests/e2e/test_cdi_events_delivered.py`) and have never been checked on real code |
+| Java | CDI events | A qualified observer (`@Named("x")`, any annotation meta-annotated by the CDI bean model's `qualifier_meta_annotations`, `@Qualifier`), an observer of a parameterized type or a type variable, `Event.select(…)` qualifiers, `BeanManager.fireEvent` | `dispatch_sends` | **Boundary — a missing hop, never a false one.** A qualified, parameterized or type-variable observer keeps its registration with no key, and since it may be notified of any event, every fire of its mechanism also writes the not-read row beside its hops (`@Observes @Priority(10) E` keeps its key); the fire sites' qualifiers and type arguments are not read; `BeanManager.fireEvent` is not declared |
+| Java | Java blocking queues | **`BlockingQueue` / `BlockingDeque` / `TransferQueue` and the seven `java.util.concurrent` queues** — sends `put`, both `offer`s, `add`; receives `take`, both `poll`s, both `drainTo`s, `remove()`; Guava's `Queues.drain` / `drainUninterruptibly` (receive of the queue at argument 0) | `dispatch_sends` + `dispatch_receives` + `dispatch_views` (object key, D02 §2m) | ✅ **shipped** (2026-11-05, `jdk-blocking-queue.yml`, `guava-queues.yml`, JDK 21.0.13, probe CP-59). The key is the object, not the value's class: a receive is keyed by the call that made the queue it takes from, followed through locals, parameters, helper returns and fields; a send hops to every receive on the same object (`match: one`, since which consumer takes each value is decided at run time). Measured on apollo (biz, configservice, portal) and dolphinscheduler (alert-server, task-executor): **10 hops true, 0 false, 0 missing** (5 found missing at the first count, now declared). Pinned by `tests/e2e/test_blocking_queues_delivered.py` on `fixtures/orders-queues` |
+| Java | Java blocking queues | Which instance a field holds; `peek`, the deque ends, `Queue`-typed receivers; `remove(Object)` and `removeIf` | `dispatch_receives` | **Boundary — three over-linking bounds and some missing hops.** A field read is answered by every write of that field (two instances of one class holding a queue are one object); two queues one module helper makes are one; two objects one library call site hands back are one. A queue from outside the module (a parameter nothing calls, an injected one) is a stop, `(key not read)`, never a fan-out; kept through a declared null check (`this.q = Objects.requireNonNull(q)`), the check's own call is its key, so a put and a take through it still meet. `remove(Object)` and `removeIf` discard values nothing handles, so they are not receives (ruled 2026-11-05) |
+| Java | Kotlin channels and flows | **kotlinx-coroutines `Channel` / `SendChannel` / `ReceiveChannel` / `ProducerScope` and `SharedFlow` / `StateFlow`** — sends `send`, `trySend`, `emit`, `tryEmit`, `value =`, `update { }`; receives `receive`, `tryReceive`, `receiveCatching`, `for (x in ch)` and `consumeEach` (`iterator()`), `collect { }`, `first`, `firstOrNull`, `single`, `toList`, `collectLatest`; views `asSharedFlow`, `asStateFlow`, `receiveAsFlow`, `consumeAsFlow` | `dispatch_sends` + `dispatch_receives` (`handler: lambda_arg`) + `dispatch_views` | ✅ **shipped** (2026-11-05, `kotlinx-channels.yml` `match: one`, `kotlinx-flows.yml` `match: all`, kotlinx-coroutines 1.11.0, kotlinc 2.4.20, probe CP-59). One mechanism, `kotlinx-coroutines`, the object deciding. A send inside `scope.launch { … }` is read through the class kotlinc compiles the block to; a `collect { }` lambda's handler is its `emit`. Measured on playport/server (6 hops) and kotlinconf-app/backend (1): **7 hops true, 0 false, 0 missing** (1 found missing at the first count, fixed). Not built: koog (JDK 17 toolchain and Android targets), ktor-samples `chat` and `reverse-proxy-ws`. Pinned by `tests/e2e/test_kotlin_channels_delivered.py` on `fixtures/orders-kotlin-channels` |
+| Java | Kotlin channels and flows | A flow made by an operator (`map`, `filter`, `onEach`); `launchIn`; a channel in a `suspend` function's local used after a suspension point; a send through a data class's property | `dispatch_receives` | **Boundary — a missing hop or a stop, never a false hop.** A derived flow is another key; `launchIn` and other terminal operators are not receives; the spilled local is a receiver the facts do not name, so its send is a stop; a data class's generated `copy(channel)` writes its field from a parameter nothing passes, so a send through the property keeps one `(key not read)` stop beside its hops |
 | Python | Celery | **Celery** `@app.task`, `task.delay(…)`, `.apply_async(queue=…)` — a real async boundary, easy to miss | `annotation` | A |
 | TS | bullmq | `bullmq` `new Queue("n")`, `new Worker("n", fn)` — string names, matchable like topics | `registration_call` | A |
 | Go | robfig/cron, Temporal Go SDK | `robfig/cron` `c.AddFunc("@hourly", fn)`; Temporal Go SDK `w.RegisterWorkflow(fn)` | `registration_call` | A |
@@ -4162,6 +4214,30 @@ is catalogs and an `AndroidManifest.xml` reader, not a scanner.
 
 ## 7. Cross-cutting findings
 
+### In-process dispatch: a hop, never a row
+
+Code that hands a value to a framework or a channel, which calls the handler registered for
+it, is a trace **hop** and never an endpoint row (the self-call ruling of 2026-10-25; spec
+`docs/superpowers/specs/2026-11-05-in-process-dispatch-design.md`, "As built"). It is one
+mechanism with two keys, so the five kinds in §5.12 (Akka / Pekko actors, Spring application
+events, CDI events, Java blocking queues, Kotlin channels and flows) are catalogs, not code:
+
+| Key | Who receives | Kinds | Corpus (every hop read against the source) |
+|---|---|---|---|
+| the value's **class** (`match: first` or `all`) | handlers registered for that class | Akka / Pekko; Spring events; CDI events | Pekko samples 5 rows, 28 hops; Spring: apollo-portal 17 of 17 publish sites, yudao-module-system 3 of 3; CDI: **no fire site in `examples/`**, registrations only (5 of 5) |
+| the **object** (`match: one` or `all`) | code that receives from the same object | Java blocking queues; Kotlin channels and flows | queues 10 hops; Kotlin 7 hops |
+
+**0 false hops on every corpus measured** (the modules above, no more). The same bounds apply to all
+five: a class key no `new` or constant names is read by its declared type (a call's declared
+return, a parameter's or a field's type): its hops to registrations of that type or a
+supertype are certain under every `match`, and where another registration may take a subtype
+of it (a subtype's, or an unrelated interface's) the send also writes the not-read row; a key that is still not read (an array element, an
+injected object) is a stop that says so, `(key not read)`, never a fan-out; what
+the facts do not name is a missing hop, never a false one; the object key over-links in three
+stated ways (one field written by several instances, one helper making several objects, one
+library call site handing back several) and never misses an object it can name. Go channels
+wait for a Go scanner. The bounds of each kind are in its §5.12 boundary row.
+
 ### What a trace can start from
 
 2Q's `I1` produces [D00](components/D00-fact-schema.md) §4's `root_kind` into
@@ -4311,6 +4387,13 @@ determined by an `ActorRef` created elsewhere, often from configuration or a rou
 cannot see through it, and neither can RTA or VTA. **In a heavily actor-based system most of
 the call graph is invisible to any static tool**, ours included. If we support Akka we must
 say so in the coverage report rather than presenting a confident but hollow graph.
+
+*2026-11-04: the receiver is still not read, and no longer needs to be.* A send is followed by
+its message's class to every handler that class reaches, first match first (spec
+`2026-11-04-akka-pekko-actors-design.md`, §5.12's actor rows), so the trace crosses actors
+without naming the ref. What stays invisible is stated in §5.12: two actors handling one class
+both get a hop, a message the code does not construct is a stop that says so, and Scala is not
+scanned.
 
 ### The typing problem in Python and JavaScript
 
@@ -4526,8 +4609,9 @@ when the two sides use different serialisation formats. §4.3 answers it — com
 only within a format or across a known projection, and proto3's lowerCamelCase JSON mapping is
 the concrete case that makes the projection non-identity.
 
-**Two limits belong in the product, not in a discovery by users.** Actor messaging is largely
-invisible to static analysis, and `runtime_dynamic` boundaries — `boto3`, DRF routers,
+**Two limits belong in the product, not in a discovery by users.** Which actor an `ActorRef`
+holds is invisible to static analysis (a send is followed by its message's class instead, §7's
+2026-11-04 note), and `runtime_dynamic` boundaries — `boto3`, DRF routers,
 `@grpc/proto-loader` — are not gaps we will close later. They are boundaries that do not exist
 statically, and the coverage report has to say so.
 

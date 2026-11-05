@@ -323,12 +323,49 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # and the fourteen `client_base` rungs for the wrappers' `create` and `wrap` (one slot each).
 # The roots the wrappers share with the core are the core's own entries with a longer `owner`
 # list, which adds no position.
+# **The Akka and Pekko actor catalogs joined on 2026-11-04** (spec 2026-11-04 §3a), twelve
+# new `single_call` catalogs: each row's `channel_arg` is one ask, and each `channel_via`
+# entry another (`receptionist` four rows with one entry each, `cluster-sharding` three, the
+# pub-sub constructor rows none).
+# **The two message handler catalogs joined the same day** (spec 2026-11-04 §3b), each with
+# seventeen registration steps capturing `case: arg0` (the carrier of the call's place in the
+# chain, read by `resolve/dispatch_registrations.py`, never as a value): 34 asks and 57 slots
+# per family as `asks_of` counts them, the same in both. **Their sends joined with the hop
+# pass** (spec 2026-11-04 §3c): thirty-two `dispatch_sends` entries, each a `value_arg`, and two
+# registrations no chain step names (`messageAdapter`, the ask's reply mapper): 68 asks and 93
+# slots per family as `asks_of` counts them.
+# **The key rows' `message_class_via` entries joined with the key-handler pass** (spec
+# 2026-11-04 §3d item 6): one more ask per entry, `receptionist` two (its two `register`
+# rows), `cluster-sharding` two (`init`'s two hops) — `asks_of` reads the `{owner, method,
+# arg}` shape wherever it is spelled. **Folded into `channel_via` on 2026-11-05** (spec
+# 2026-11-05 §2): the class is a `class_arg` on every entry naming the key's producer, one
+# ask with two slots, so `receptionist` goes to (8, 12) and `cluster-sharding` to (6, 8).
+# **`spring-events` joined with Spring application events** (spec 2026-11-05 §4 item 5): six
+# `dispatch_sends` entries and one `dispatch_implementations` entry, each a `value_arg`.
+# **`cdi-events` and `cdi-async-events` joined with CDI events** (spec 2026-11-05 §4 item 6):
+# two `dispatch_sends` entries each, each a `value_arg`; `cdi-async-events` +2 for the javax
+# CDI 2.x `fireAsync` overloads (Task 3 fix round 1).
+# **`jdk-blocking-queue` joined with Java blocking queues** (spec 2026-11-05 §4 item 7): forty
+# `dispatch_sends` entries (four calls on ten owners), each a `value_arg`; its receives read no
+# argument.
 _ASKS_PER_CATALOG = {
+    "akka-actor-handlers": (69, 94),
+    "akka-cluster-sharding": (6, 8),
+    "akka-pubsub-publish": (2, 2),
+    "akka-pubsub-put": (1, 1),
+    "akka-pubsub-send": (2, 2),
+    "akka-pubsub-subscribe": (3, 3),
+    "akka-receptionist": (8, 12),
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
+    "cdi-async-events": (4, 4),
+    "cdi-events": (2, 2),
     "google-pubsub-client": (1, 1),
     "google-pubsub-publisher": (2, 2),
     "google-pubsub-subscriber": (2, 3),
+    "jdk-blocking-queue": (40, 40),
+    "kotlinx-channels": (6, 6),
+    "kotlinx-flows": (12, 12),
     "jakarta-jms": (28, 28),
     "jakarta-servlet": (2, 2),
     "jakarta-websocket-client": (12, 12),
@@ -348,8 +385,16 @@ _ASKS_PER_CATALOG = {
     "ktor-sse-client": (39, 39),
     "ktor-websocket-client": (23, 23),
     "okhttp": (5, 6),
+    "pekko-actor-handlers": (69, 94),
+    "pekko-cluster-sharding": (6, 8),
     "pekko-connectors-kafka": (15, 15),
+    "pekko-pubsub-publish": (2, 2),
+    "pekko-pubsub-put": (1, 1),
+    "pekko-pubsub-send": (2, 2),
+    "pekko-pubsub-subscribe": (3, 3),
+    "pekko-receptionist": (8, 12),
     "quartz": (8, 11),
+    "spring-events": (7, 7),
     "spring-cloud-gateway": (14, 20),
     "spring-cloud-gateway-outbound": (4, 4),
     "spring-integration-amqp": (38, 38),
@@ -422,7 +467,20 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # review): the three `setSsl` setters, no longer read since a peer carries no scheme.
     # **+182 on 2026-10-31** (Task 15): the RxJava 3 and Mutiny wrappers' own roots, steps,
     # mounts and factory rungs, same comment (5 in `vertx-web`, 177 in `vertx-webclient`).
-    assert sum(asks for asks, _ in counted.values()) == 1232
+    # **+44 on 2026-11-04**: the twelve Akka and Pekko actor catalogs, same comment.
+    # **+68 on 2026-11-04**: the two message handler catalogs, same comment.
+    # **+68 on 2026-11-04** (hops): those two catalogs' sends and standalone registrations.
+    # **+8 on 2026-11-04** (key handlers): the four key catalogs' `message_class_via`.
+    # **+2 on 2026-11-04** (Task 7 fix round): each handler catalog's `setReceiveTimeout` send.
+    # **-8 on 2026-11-05**: the key class moved onto `channel_via` as `class_arg`, same comment.
+    # **+7 on 2026-11-05**: the new `spring-events` catalog, same comment.
+    # **+4 on 2026-11-05**: the new `cdi-events` and `cdi-async-events` catalogs, same comment.
+    # **+2 on 2026-11-05**: the javax CDI 2.x `fireAsync` overloads, same comment.
+    # **+40 on 2026-11-05**: the new `jdk-blocking-queue` catalog, same comment.
+    # **+17 on 2026-11-05**: the new `kotlinx-channels` (6 sends) and `kotlinx-flows` (6 sends,
+    # 5 collectors' function arguments) catalogs, same comment.
+    # **+1 on 2026-11-05** (Task 5 fix round): `collectLatest`'s `handler_arg`, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 1485
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

@@ -100,7 +100,7 @@ links:
 ```
 
 The pair must stay nameable under §1's rule even where the outbound row is not derived. The
-derived hop (`rpc_hops`, D01) is what such an entry names. As everywhere in this file, the
+derived hop (`hops`, D01) is what such an entry names. As everywhere in this file, the
 curated statement sits beside the derived one and never overwrites it (FR-16).
 
 ---

@@ -175,6 +175,12 @@ SEXTANT_VERSION = version("sextant")
 #             NULL where it accepts it. A refused row's handler is not a root. A workspace
 #             of the older vintage would read every refused schedule as one that runs, so it
 #             is refused and re-analysed.
+#     15      `dispatch_registrations`, a new table: every in-process dispatch registration,
+#             each group's in the order it is tried, under its catalog's match rule (spec
+#             2026-11-05 §3; built as `message_handlers` by spec 2026-11-04 §3b and renamed,
+#             with `rpc_hops` → `hops`, before 15 was released). A workspace of the older
+#             vintage has no such table, so a reader of the registrations would find none, and
+#             it is refused and re-analysed.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -197,5 +203,5 @@ SEXTANT_VERSION = version("sextant")
 #             consumer reading a schedule without it would take a refused one for work that
 #             runs.
 FACT_SCHEMA_VERSION = 6
-GRAPH_SCHEMA_VERSION = 14
+GRAPH_SCHEMA_VERSION = 15
 BOUNDARY_VOCABULARY_VERSION = 4

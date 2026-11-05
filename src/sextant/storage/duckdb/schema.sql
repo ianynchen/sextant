@@ -921,26 +921,77 @@ CREATE TABLE IF NOT EXISTS call_edges (
 --
 -- One row per (stub method, handler), written only for a service the module serves
 -- (§3c). A stub method naming no single wire method, or never reaching the client-call
--- API, has none. A derived TABLE because the rule is Python
--- (`resolve/rpc_hops.py`); replaced whole per resolve through reset_rpc_hops.sql +
--- insert_rpc_hops.sql, both run by that one writing pass, the `return_flows` pairing.
-CREATE TABLE IF NOT EXISTS rpc_hops (
+-- API, has none.
+--
+-- Spec 2026-11-05 §3: its SECOND writer, `resolve/dispatch_hops.py`, writes an in-process
+-- dispatch send's hops here (named `rpc_hops` until then, spec 2026-11-04 §3c): the send's
+-- call site, the value's class (or a constant's own symbol) as `path`, one row per handler it
+-- reaches; a class nobody handles has `handler` NULL, a key not read `path` NULL too;
+-- `evidence` stays `compiler`.
+--
+-- A derived TABLE because both rules are Python; replaced whole per resolve through ONE
+-- reset_hops.sql, run by the pipeline before both writers, each of which only runs
+-- insert_hops.sql (spec 2026-11-04 §3d item 7).
+CREATE TABLE IF NOT EXISTS hops (
     -- The stub method making the call, module-prefixed as `call_edges.caller` is.
     caller   TEXT,
     -- The call site in `caller` whose target belongs to the client-call API: where the
     -- call leaves for the wire. `caller` plus `ordinal` joins the `call_edges` row.
     ordinal  INTEGER,
-    -- The catalog's protocol (`grpc`).
+    -- The catalog's protocol (`grpc`, `actor`).
     protocol TEXT,
     -- The wire path `<service identity>/<wire method>`, spelled as the inbound
-    -- `endpoints.path` it names.
+    -- `endpoints.path` it names; for a dispatch send, the value's class symbol or the
+    -- constant's own, NULL where the class was not read.
     path     TEXT,
     -- That inbound row's handler, module-prefixed. NULL where the module serves the
     -- service but has no handler for this RPC: the trace still carries the wire path.
+    -- For a dispatch send, the handler its class reaches; NULL where none does.
     handler  TEXT,
-    -- D00 §4's evidence set. Always `compiler`, the convention endpoint rows follow: a
-    -- catalog's rule over compiled facts.
+    -- D00 §4's evidence set, `compiler`, the convention endpoint rows follow: a catalog's
+    -- rule over compiled facts. A dispatch send's rows too, its class read or not: the send
+    -- site is a compiler fact, and a class not read is said by `path` and `handler` NULL.
     evidence TEXT
+);
+
+-- Spec 2026-11-05 §3 (from the actor design's `message_handlers`, 2026-11-04 §3b): every
+-- in-process dispatch registration a module makes — which key (a class, or a constant) reaches
+-- which handler, in each group in the order it is tried, and under which match rule. The rule
+-- is `resolve/dispatch_registrations.reachable_handlers`, applied by the passes that read
+-- this table: `first`, the first matching registration in its group, a predicated one never
+-- shadowing a later one; `all` and `one`, every matching registration. One row per
+-- registration. A derived TABLE because the reading is Python (the chain walk); replaced
+-- whole per resolve through reset_dispatch_registrations.sql +
+-- insert_dispatch_registrations.sql, both run by that one writing pass, the `hops` pairing.
+CREATE TABLE IF NOT EXISTS dispatch_registrations (
+    -- The group: the chain that made it, `<caller>#<root ordinal>`, or a registration call
+    -- no chain holds, `<caller>#<ordinal>`; the caller module-prefixed as
+    -- `call_edges.caller` is.
+    "group"     TEXT,
+    -- The registration's 0-based place in its group, in the order the group tries them.
+    position    INTEGER,
+    -- The class the registration takes, the class literal's symbol. NULL for a value
+    -- registration, a predicate-only one, or a class the code does not state as a literal.
+    key_type    TEXT,
+    -- The constant the registration takes a value equal to, by identity: the constant's own
+    -- symbol (`<owner>#<field>.`). NULL for a class registration.
+    key_value   TEXT,
+    -- The channel object an object key names, its producing call `<caller>#<ordinal>`. NULL
+    -- for a type key.
+    key_object  TEXT,
+    -- Whether the registration also tests a predicate: it may decline, so it never shadows
+    -- a later one.
+    predicated  BOOLEAN,
+    -- The handler method, module-prefixed. NULL where the handler argument names none.
+    handler     TEXT,
+    -- Whether the handler's return is a value handed to its own receiver.
+    delivers    BOOLEAN,
+    -- The declaring catalog's `dispatch.match`: `first`, `all` or `one`.
+    match       TEXT,
+    -- The dispatch mechanism the registration belongs to: a send, or an inbound key, reaches
+    -- only registrations of its own catalog's mechanism (the catalog's declared
+    -- `dispatch.mechanism`, D02 §2m).
+    mechanism   TEXT
 );
 
 -- Spec 2026-09-22 §3d and §7a: what the backward value walk WOULD resolve, and

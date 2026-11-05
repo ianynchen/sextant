@@ -72,3 +72,17 @@ conformance:
   - subtype: org.apache.pekko.kafka.AutoSubscription
     supertype: org.apache.pekko.kafka.Subscription
     by: javap -cp pekko-connectors-kafka_2.13-1.1.0.jar org.apache.pekko.kafka.AutoSubscription
+
+  # THE ROOT TYPE, which every class conforms to (JLS 4.10.2: `Object` is a direct supertype
+  # of every class with no other superclass, and of every interface). `subtype: "*"` is that
+  # statement — every type — and nothing else may spell it. MEASURED (CP-59,
+  # `scripts/probes/cp59_dispatch.md` finding 6): the fixture's plain `OrderShipped` has
+  # `super_class: java/lang/Object` in its class file, and its symbol fact carries no
+  # `superclass` (D00 §5a writes none for the root); `java.util.EventObject`, under Spring's
+  # `ApplicationEvent`, also has `java/lang/Object`, in a JDK nothing scans. So no scanned or
+  # headered ancestry ever reaches the root. Read by the dispatch hop pass's assignability
+  # (`dispatch_hops._Reading`): a listener of `Object` receives every event, a plain one or
+  # one extending `ApplicationEvent`. A type-gated `single_call` row never names `*`.
+  - subtype: "*"
+    supertype: java.lang.Object
+    by: JLS 4.10.2; javap -v com.acme.events.OrderShipped and java.util.EventObject (JDK 21.0.13), super_class java/lang/Object

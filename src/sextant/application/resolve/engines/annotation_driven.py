@@ -7,6 +7,7 @@ parameters. No framework name appears in this module's code.
 """
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,13 +21,13 @@ from sextant.application.resolve.effective_annotations import (
     inherited_rows_over,
     type_hierarchy,
 )
-from sextant.application.resolve.shapes.contracts import _payload_descriptor
+from sextant.application.resolve.shapes.contracts import _body_parameter, _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.inbound_routes import validated_verbless_serves
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.domain.closed_sets import Direction
 from sextant.domain.paths import serves_urls
-from sextant.domain.symbols import bare_descriptor, member_name, owner_of
+from sextant.domain.symbols import bare_descriptor, is_type_descriptor, member_name, owner_of
 
 
 def run(workspace: Workspace, catalog: Catalog) -> None:
@@ -86,6 +87,217 @@ def insert(workspace: Workspace, catalog: Catalog) -> None:
     # second-row rule at all — the HTTP catalogs, which never see @SendTo.
     if "reply" in catalog.matches:
         _derive_replies(workspace, catalog)
+
+
+# The one name fallback a REGISTRATION reads (spec 2026-11-05 §2): where the annotation
+# names no class, the key is the type of the payload parameter `request_body` picks. Every
+# `_PATH_FALLBACKS` word composes an ADDRESS out of a name; a registration has a key, and a
+# method or type name keys nothing a value is dispatched by.
+_PAYLOAD_TYPE = "payload_type"
+
+
+def registrations(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]]:
+    """The dispatch registrations an annotation catalog declaring `dispatch` reads (spec
+    2026-11-05 §2, §4 item 5), as `dispatch_registrations` rows: one per key of each method
+    carrying one of `mapping.annotations`, in the annotation set the endpoint derivation
+    itself matches on (`effective_annotation_uses`: folded containers, module-local
+    composed annotations).
+
+    The key is each class the matched annotation names under the first present
+    `mapping.path_from` attribute (`@EventListener(classes = {A.class, B.class})`, one row
+    each, in the order written); where none is present and `mapping.path_fallback` is
+    `payload_type`, the type of the parameter the catalog's `request_body` rule picks. A
+    method neither gives a class keeps one row with no key, so it matches nothing and is
+    never a listener of every value.
+
+    A method may instead be selected by a PARAMETER annotation (`mapping.selected_by_parameter`,
+    a list of annotation names: `@Observes`): each method with a parameter carrying one of them
+    is a registration keyed by that parameter's type (its erasure), whatever other parameters
+    it declares — the framework injects those. Two shapes keep the row with no key, because
+    the framework matches more than the erased type and a key would reach observers it never
+    notifies: a parameter whose type carries type arguments (`List<String>`), and one also
+    carrying a QUALIFIER, an annotation whose type is meta-annotated by one of the catalog's
+    DI bean model's `qualifier_meta_annotations` (D02 §1c: `@Named("x")`), which the loader
+    requires such a catalog to name. The handler is the method; its group is the
+    method itself, so its keys are one group's positions. Read by
+    `record_dispatch_registrations`, which owns the table.
+
+    Cost (GUIDELINES §8.7): one `effective_annotation_uses` per declaring catalog (the read
+    the endpoint derivation makes per catalog) and one read of `method_declarations`; the
+    parameter selector walks the parameters of the methods that read already returned."""
+    mapping = catalog.matches["mapping"]
+    fallback = mapping.get("path_fallback")
+    if fallback is not None and fallback != _PAYLOAD_TYPE:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.path_fallback: {fallback}` on a "
+            f"catalog declaring `dispatch`; a registration's key is a class, so its one "
+            f"fallback is `{_PAYLOAD_TYPE}` (spec 2026-11-05 §2)"
+        )
+    if catalog.dispatch is None or "match" not in catalog.dispatch:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: registrations are read only from a catalog "
+            f"declaring `dispatch` (spec 2026-11-05 §2)"
+        )
+    match = catalog.dispatch["match"]
+    fqns = {_catalog_symbol(entry["fqn"]) for entry in mapping["annotations"]}
+    by_parameter = _annotation_names(mapping, "selected_by_parameter", catalog)
+    qualifier_marks = frozenset(
+        _catalog_symbol(str(name))
+        for name in catalog.bean_model.get("qualifier_meta_annotations") or []
+    )
+    path_from = list(mapping.get("path_from") or [])
+    methods = {
+        bare_descriptor(str(row["symbol"])): row for row in workspace.query("method_declarations")
+    }
+    selected: list[tuple[dict[str, Any], list[str | None] | None]] = []
+    for target, uses in sorted(effective_annotation_uses(workspace, catalog).items()):
+        declaration = methods.get(target)
+        use = next((use for use in uses if use["annotation"] in fqns), None)
+        if declaration is None or use is None:
+            continue
+        keys = _named_classes(use["args"], path_from)
+        if keys is None and fallback == _PAYLOAD_TYPE:
+            keys = [_payload_type(declaration, catalog)]
+        selected.append((declaration, keys))
+    if by_parameter:
+        marked = (
+            _meta_annotated_types(workspace, qualifier_marks) if qualifier_marks else frozenset()
+        )
+        for _, declaration in sorted(methods.items()):
+            parameter = _annotated_parameter(declaration, by_parameter)
+            if parameter is not None:
+                selected.append((declaration, [_parameter_key(parameter, marked)]))
+    rows: list[dict[str, Any]] = []
+    for declaration, keys in selected:
+        handler = str(declaration["symbol"])
+        for position, key in enumerate(keys or [None]):
+            rows.append(
+                {
+                    "group": handler,
+                    "position": position,
+                    "key_type": key,
+                    "key_value": None,
+                    "key_object": None,
+                    "predicated": False,
+                    "handler": handler,
+                    "delivers": False,
+                    "match": match,
+                }
+            )
+    return rows
+
+
+def _named_classes(args: dict[str, Any], path_from: list[str]) -> list[str | None] | None:
+    """The classes the first present `path_from` attribute names, one or an array (how the
+    same attribute arrives depending on how it was written); None where no such attribute is
+    present. A present attribute naming no class reference (D00 §5a: only a string ending
+    in the type marker is one) gives one unread key."""
+    for attribute in path_from:
+        raw = args.get(attribute)
+        if raw is None or raw == []:
+            continue
+        values = raw if isinstance(raw, list) else [raw]
+        named = [
+            bare_descriptor(value)
+            for value in values
+            if isinstance(value, str) and is_type_descriptor(value)
+        ]
+        return list(named) if named else [None]
+    return None
+
+
+def _annotation_names(mapping: dict[str, Any], word: str, catalog: Catalog) -> frozenset[str]:
+    """`mapping.<word>`'s annotation names as symbols (`selected_by_parameter`); empty where the
+    word is absent. Refused unless a list of names: a bare string would be read as its
+    characters and name nothing — every observer of the catalog silently absent."""
+    declared = mapping.get(word)
+    if declared is None:
+        return frozenset()
+    if not isinstance(declared, list) or not all(
+        isinstance(name, str) and name for name in declared
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.{word}` must be a list "
+            f"of annotation names, got {declared!r} (spec 2026-11-05 §2)"
+        )
+    return frozenset(_catalog_symbol(name) for name in declared)
+
+
+def _meta_annotated_types(workspace: Workspace, markers: frozenset[str]) -> frozenset[str]:
+    """Every annotation type carrying one of `markers` as a class-level annotation: module
+    types through their own annotation facts, library types (`@Named`) through the class-level
+    annotations their type header recorded. One level, the marker on the type itself, which is
+    where a qualifier is declared. Two reads per declaring catalog (GUIDELINES §8.7)."""
+    return frozenset(
+        bare_descriptor(str(row["target"]))
+        for query in ("annotations", "type_header_annotations")
+        for row in workspace.query(query)
+        if bare_descriptor(str(row["annotation"])) in markers
+    )
+
+
+def generic_parameter(parameter: Mapping[str, Any]) -> bool:
+    """Whether a parameter's declared type is generic: it carries type ARGUMENTS
+    (`List<String>`), or it is a type VARIABLE (`T`, whose signature symbol is not its erasure,
+    D00 §5a). A framework dispatching to it matches the parameterized or the bound type, never
+    the erasure, so a registration keyed by the erasure would reach values it never receives:
+    every registration reader keeps such a parameter with no key (missing, never false; ruled
+    2026-11-05, final review m-1)."""
+    declared = parameter.get("type") or {}
+    erased = parameter.get("erased_symbol")
+    return bool(declared.get("arguments")) or (
+        erased is not None and declared.get("symbol") not in (None, erased)
+    )
+
+
+def _parameter_key(parameter: dict[str, Any], marked: frozenset[str]) -> str | None:
+    """The key a selected parameter gives: its erased type, or None where the type is generic
+    (`generic_parameter`) or the parameter carries an annotation of a `marked` type — the
+    framework then matches more than the erasure, and a key would reach what it never notifies
+    (missing, never false)."""
+    if generic_parameter(parameter):
+        return None
+    if any(
+        bare_descriptor(str(use["annotation"])) in marked
+        for use in parameter.get("annotations", [])
+    ):
+        return None
+    return _erased_type(parameter)
+
+
+def _annotated_parameter(
+    declaration: dict[str, Any], annotations: frozenset[str]
+) -> dict[str, Any] | None:
+    """The first parameter of the method carrying one of `annotations`, or None."""
+    for parameter in (declaration["signature"] or {}).get("parameters", []):
+        if any(use["annotation"] in annotations for use in parameter.get("annotations", [])):
+            return dict(parameter)
+    return None
+
+
+def _erased_type(parameter: dict[str, Any]) -> str | None:
+    """A parameter's erased type, the descriptor's answer (the class a value is dispatched
+    by), or None where the fact carries none."""
+    symbol = parameter.get("erased_symbol") or (parameter.get("type") or {}).get("symbol")
+    return None if not symbol else bare_descriptor(str(symbol))
+
+
+def _payload_type(declaration: dict[str, Any], catalog: Catalog) -> str | None:
+    """The type of the parameter the catalog's `request_body` rule picks (D02 §2), the
+    descriptor's answer (the class a value is dispatched by), or None where it picks none or
+    the type is generic (`generic_parameter`)."""
+    signature = declaration["signature"] or {}
+    found = _body_parameter(
+        signature,
+        catalog,
+        owner=owner_of(bare_descriptor(str(declaration["symbol"]))) or "",
+        paths=frozenset(),
+        index={},
+        members={},
+    )
+    if found is None or generic_parameter(found[1]):
+        return None
+    return _erased_type(found[1])
 
 
 def _derives(catalog: Catalog) -> bool:
@@ -759,7 +971,11 @@ def _mapping_annotation(mapping: dict[str, Any], entry: dict[str, Any]) -> dict[
         # otherwise. Resolved here rather than coalesced in the query, so the
         # SQL reads one value and never has to know which level wrote it.
         "path_fallback": fallback,
-        "path_fallback_prefixes": list(_PATH_FALLBACKS[fallback]) if fallback else [],
+        # `.get`: a word outside `_PATH_FALLBACKS` is refused before any derivation
+        # (`_validate_naming`), but a registration catalog's `payload_type` reaches here
+        # through `effective_annotation_uses`, which reads the annotations and never the
+        # name rule — it strips no prefix.
+        "path_fallback_prefixes": list(_PATH_FALLBACKS.get(fallback, ())) if fallback else [],
     }
 
 

@@ -1,0 +1,27 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>probe</groupId>
+  <artifactId>cp59-kotlin-owners</artifactId>
+  <version>1.0.0</version>
+  <!-- CP-59 tables 17-20: what kotlinc writes for each channel and flow call the `kotlinx-channels`
+       and `kotlinx-flows` catalogs declare, called through each owner type. The same Kotlin and
+       kotlinx-coroutines versions as `fixtures/orders-kotlin-channels`. Compiled, never run. -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <kotlin.version>2.4.20</kotlin.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency><groupId>org.jetbrains.kotlin</groupId><artifactId>kotlin-stdlib</artifactId><version>${kotlin.version}</version></dependency>
+    <dependency><groupId>org.jetbrains.kotlinx</groupId><artifactId>kotlinx-coroutines-core-jvm</artifactId><version>1.11.0</version></dependency>
+  </dependencies>
+  <build>
+    <sourceDirectory>src/main/kotlin</sourceDirectory>
+    <plugins>
+      <plugin>
+        <groupId>org.jetbrains.kotlin</groupId><artifactId>kotlin-maven-plugin</artifactId><version>${kotlin.version}</version>
+        <executions><execution><id>compile</id><phase>compile</phase><goals><goal>compile</goal></goals></execution></executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

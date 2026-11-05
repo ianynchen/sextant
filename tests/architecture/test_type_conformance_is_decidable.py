@@ -32,7 +32,11 @@ CATALOGS = Path(__file__).resolve().parents[2] / "src" / "sextant" / "catalogs"
 # MEASURED with `javap`, one class per entry, against the JDK this repo builds with
 # (Temurin 21.0.12.1+1) and these jars from the local Maven repository:
 #   jakarta.jms-api-3.1.0.jar, javax.jms-api-2.0.jar,
-#   pekko-connectors-kafka_2.13-1.1.0.jar, vertx-core-5.0.0.jar
+#   pekko-connectors-kafka_2.13-1.1.0.jar, vertx-core-5.0.0.jar,
+#   pekko-actor-typed_2.13-1.1.3.jar, pekko-cluster-sharding-typed_2.13-1.1.3.jar,
+#   akka-actor-typed_2.13-2.6.21.jar, akka-cluster-sharding-typed_2.13-2.6.21.jar
+#   (the actor keys' factories, `javap -c -p` in probe CP-57 rows `ServiceKey.create`,
+#   `EntityTypeKey.create` and `Entity.of`)
 #
 # A constructor produces the type it constructs, which is why `java.net.URI.<init>` maps to
 # `java.net.URI` and not to the `void` its descriptor records.
@@ -43,6 +47,11 @@ CATALOGS = Path(__file__).resolve().parents[2] / "src" / "sextant" / "catalogs"
 # `java.util.List extends java.util.Collection`, which is FALSE on JDK 21 — `List` reaches
 # `Collection` through `SequencedCollection` (JEP 431). Measuring caught it.
 _PRODUCER_RETURNS = {
+    "akka.actor.typed.receptionist.ServiceKey.create": ("akka.actor.typed.receptionist.ServiceKey"),
+    "akka.cluster.sharding.typed.javadsl.Entity.of": "akka.cluster.sharding.typed.javadsl.Entity",
+    "akka.cluster.sharding.typed.javadsl.EntityTypeKey.create": (
+        "akka.cluster.sharding.typed.javadsl.EntityTypeKey"
+    ),
     "io.vertx.core.eventbus.MessageConsumerOptions.setAddress": (
         "io.vertx.core.eventbus.MessageConsumerOptions"
     ),
@@ -56,6 +65,15 @@ _PRODUCER_RETURNS = {
     "java.util.regex.Pattern.compile": "java.util.regex.Pattern",
     "javax.jms.Session.createQueue": "javax.jms.Queue",
     "javax.jms.Session.createTopic": "javax.jms.Topic",
+    "org.apache.pekko.actor.typed.receptionist.ServiceKey.create": (
+        "org.apache.pekko.actor.typed.receptionist.ServiceKey"
+    ),
+    "org.apache.pekko.cluster.sharding.typed.javadsl.Entity.of": (
+        "org.apache.pekko.cluster.sharding.typed.javadsl.Entity"
+    ),
+    "org.apache.pekko.cluster.sharding.typed.javadsl.EntityTypeKey.create": (
+        "org.apache.pekko.cluster.sharding.typed.javadsl.EntityTypeKey"
+    ),
     "org.apache.pekko.kafka.Subscriptions.topicPattern": (
         "org.apache.pekko.kafka.AutoSubscription"
     ),
@@ -166,10 +184,21 @@ def test_every_type_gated_pair_is_decided_by_the_conformance_table():
     )
 
 
+# The conformance the in-process dispatch hop pass reads (`dispatch_hops._Reading`, spec
+# 2026-11-05 §4 item 5) rather than a type gate: the root type every class conforms to
+# (`*`, JLS 4.10.2), which no fact names, so a listener of `Object` receives an event only
+# through this entry (CP-59 finding 6). Its row is
+# `spring-events`' listener of the root type, pinned by
+# `tests/e2e/test_spring_events_delivered.py::test_a_listener_of_a_supertype_receives` and
+# the guard `dispatch-hops.the-declared-CONFORMANCE-extends-a-values-ancestry`.
+_DISPATCH_ANCESTRY = frozenset({("*", "java.lang.Object")})
+
+
 def test_every_conformance_entry_is_reachable_from_a_catalog():
     """The allowlist shrinks from both ends. An entry no catalog needs is either dead
     weight or the trace of a declaration someone removed, and either way it should not sit
-    in a measured table implying it is load-bearing."""
+    in a measured table implying it is load-bearing. An entry the dispatch hop pass reads is
+    named in `_DISPATCH_ANCESTRY` with the row that needs it."""
     table = YamlCatalogSource(CATALOGS).type_model()
     needed = {
         (got, want)
@@ -185,6 +214,7 @@ def test_every_conformance_entry_is_reachable_from_a_catalog():
         f"{e['subtype']} -> {e['supertype']}"
         for e in table
         if (e["subtype"], e["supertype"]) not in reachable
+        and (e["subtype"], e["supertype"]) not in _DISPATCH_ANCESTRY
     )
     assert orphans == [], (
         "`type-models/` entries no catalog's type-gated row needs — remove them, or say "

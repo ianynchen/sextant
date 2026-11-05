@@ -148,8 +148,9 @@ rows, none picked.
   `return_flows`' reason: the bundle is a published surface, and freezing this shape into
   one before anything outside the workspace reads it makes every later change breaking.
 
-**`rpc_hops`** carries `caller`, `ordinal`, `protocol`, `path`, `handler` and `evidence`
-(spec `2026-10-25-quarkus-mutiny-grpc-design.md` §3d, ruling 2): where a gRPC client stub's
+**`hops`** (named `rpc_hops` until spec `2026-11-05-in-process-dispatch-design.md` §3, which
+made it every hop's table; columns unchanged) carries `caller`, `ordinal`, `protocol`, `path`,
+`handler` and `evidence` (spec `2026-10-25-quarkus-mutiny-grpc-design.md` §3d, ruling 2): where a gRPC client stub's
 call to an RPC this module serves lands. `call_edges` stops at the client-call API, a library
 whose body no workspace reads, so a trace through `GreeterBlockingStub#sayHello` ended at
 `ClientCalls#blockingUnaryCall` and never reached the module's own `HelloWorldService#sayHello`.
@@ -169,8 +170,125 @@ site, or no row.
   compiled facts. `call_edges` is untouched; the hop lives in its own table, which is also
   what a curation names (ruling 4).
 - **Exported**, `path` through the address map, as `roots.path` is ([D06](D06-bundle-format.md)
-  §3). A derived table rather than a view, because the rule is Python
-  (`resolve/rpc_hops.py`); replaced whole per resolve by that one writing pass.
+  §3). A derived table rather than a view, because the rule is Python.
+- **Two writers, one reset** (spec `2026-11-04-akka-pekko-actors-design.md` §3c, §3d item 7):
+  `resolve/rpc_hops.py` above and `resolve/dispatch_hops.py`, each only inserting; the
+  pipeline clears the table once per resolve, before both.
+- **An in-process dispatch send is a hop too** (spec `2026-11-05-in-process-dispatch-design.md`
+  §1, `resolve/dispatch_hops.py`): code hands a value to a framework or a channel, which calls
+  the handler(s) registered for it — never an endpoint row. `(caller, ordinal)` is the send's
+  own call site (a `dispatch_sends` entry, D02); `protocol` the declaring catalog's (`actor`
+  for Akka and Pekko, `in_process` for Spring application events, CDI events and Java blocking
+  queues, which have no wire); `path`
+  the value's class symbol, or a constant's own symbol where the
+  value is one (`com/acme/actors/Stock$Tick#INSTANCE.`); `handler` each handler the class
+  reaches under its registrations' match rule (`dispatch_registrations` below), one row per
+  handler. A class no registration takes is one row with `handler` NULL. A static module
+  factory's result is read through its body's returns; a value no `new`, constant or factory
+  names (an instance or library call's result, a parameter, an instance field) by its
+  DECLARED type: one row per registration of that type or a supertype, certain under every
+  `match`, plus the not-read row where a registration may take some subtype of it (a strict
+  subtype, or an unrelated type unless both are known classes) or, under `first`, where a
+  behavior's earlier case may (D02 §2m). Any value, exact or declared, also gets the not-read
+  row where a KEYLESS registration of its mechanism (a generic or qualified listener, an unread
+  case) may receive it. A key not
+  read (an array element, a `merge`; a declared type that does not decide every handler) is
+  one row with `path` and `handler` NULL: the two
+  NULLs are what say so, and never a fan-out. `evidence` is `compiler` on every dispatch hop
+  row, as on every gRPC one, inside [D00](D00-fact-schema.md) §4's closed set: the send site
+  is a compiler fact. A handler whose registration `delivers` continues: each class it
+  returns is a row whose `caller` is that handler and whose `ordinal` is the return's own
+  constructor call (a constructor reference's: its super-constructor call).
+- **An object-keyed send** (a catalog declaring `dispatch: {key: object}`, D02 §2m: a
+  `BlockingQueue.put`) is keyed by the object it is called on, not by the value's class: its
+  receiver is followed to the call that made the object (`<caller>#<ordinal>` of a
+  construction, or of a call whose body is not here, such as a library factory), and `path` is
+  that call; `handler` is each receive registration with the same `key_object`, one row each (a
+  queue's several consumers each a row, one of them taking each value at run time). An object
+  nothing takes from is one row with that `path` and `handler` NULL; a path on which the object
+  was not read (a parameter nothing in the module calls, an object a container injects) is one
+  row with `path` and `handler` NULL. A declared null check returning its argument's type
+  (`Objects.requireNonNull`, a `not_hand_offs` call, or kotlinc's `nullOutSpilledVariable`) is
+  passed through, not a producer, and a path that comes back to where it started (a cycle: a
+  coroutine lambda's `create` copying its captured `this.$ch`, a field copied into itself) adds
+  no object. A call the catalog declares as a view (`dispatch_views`, D02 §2m) is passed through
+  to the object it views. Kotlin channels (`Channel.send`, a `for` loop's `iterator()`) and
+  shared and state flows (`emit`, `value =`, `collect`, `first()`), one mechanism, are
+  object-keyed too (`kotlinx-channels`, `kotlinx-flows`; a read-only `asSharedFlow()` view or a
+  channel's `receiveAsFlow()` is the same object). A send through a data class's property keeps
+  one stop with `path` NULL beside its hops: the generated `copy(…)` writes the field from a
+  parameter nothing in the module passes (a public method, so not read, never dropped). The key has three stated bounds, each over-linking (two queues read as one, never one missed): a field read is answered by every write of that field, so two instances of one class each holding a queue in it are one object; two objects one module helper makes (`newQueue()` called twice) are one; and two objects one library call site hands back are one. A null check no catalog declares (Guava's `Preconditions.checkNotNull`) splits one queue into two keys instead, a missing hop.
+
+**`dispatch_registrations`** (named `message_handlers` until spec
+`2026-11-05-in-process-dispatch-design.md` §3; schema 15 unreleased, so no version step)
+carries `group`, `position`, `key_type`, `key_value`, `key_object`, `predicated`, `handler`,
+`delivers`, `match` and `mechanism`: every in-process dispatch registration a module makes — which key (a
+class, a constant, or a channel object) reaches which handler, in each group in the order it
+is tried, under the declaring catalog's match rule. One row per registration.
+
+- **`group`** is the chain that made it, `<caller>#<root ordinal>`, the caller
+  module-prefixed: one executable chain end of a `fluent` catalog carrying
+  `dispatch_registrations` ([D02](D02-catalog-schema.md) §2) — for Akka and Pekko, a
+  behavior. A registration read off an annotated method (an `annotation_driven` catalog
+  declaring `dispatch`, D02 §2m: `@EventListener`, or a method selected by an annotated
+  parameter, `@Observes`) or off a class implementing a declared
+  interface (`dispatch_implementations`: `ApplicationListener`) has the handler method itself
+  as its group; an annotation naming several classes gives one position per class. **`position`** is the registration's 0-based place in it. Two ends of one root (a
+  builder forked, or a registration on one branch) share the id; the rows are written once
+  where they are equal and are otherwise not ordered against each other.
+- **`key_type`** is the class literal's symbol; NULL for a value registration, a
+  predicate-only one, or a class argument that is not a literal. For an annotated method,
+  each class its annotation names, else its payload parameter's erased type; for a method
+  selected by a parameter annotation, that parameter's erased type; for an
+  implementation, its own method's parameter's erased type (past the compiler's bridge). **`key_value`** is the
+  constant's own argument symbol (`<owner>#<field>.`, an `enum` or `field` argument), NULL
+  for a class registration. **`key_object`** is the channel object a receive site
+  (`dispatch_receives`, D02 §2m) takes from, as the call that made it, `<caller>#<ordinal>`: one
+  row per object its receiver (or, for `object: argN`, that argument) can be, each a group of its own (`<caller>#<ordinal>` of the
+  receive call) at position 0, its `handler` the method making the call; NULL for a type key,
+  and on the one row of a receive whose object was not read. A registration the walk could not
+  read keeps its position with every key column NULL.
+- **`predicated`** — the registration carries a predicate; it never shadows a later one.
+  **`handler`** — the method the handler argument names (a method reference names the
+  method, a lambda its synthetic body), module-prefixed, NULL where none is read. For a receive
+  handing its value to a function (`handler: lambda_arg`, D02 §2m: a flow's `collect { }`), a
+  compiled lambda's body, or the method the library calls on that argument, joined on the
+  argument's class (a new instance, or a closure's shared instance read as a constant of its own
+  type) and carried past the compiler's bridge to the method it forwards to; NULL where the
+  argument is anything else.
+  **`delivers`** — the catalog's `returns_value`: the handler's return is a value handed to
+  its own receiver. **`match`** — the catalog's `dispatch.match`, `first`, `all` or `one`.
+  **`mechanism`** — the declaring catalog's `dispatch.mechanism` ([D02](D02-catalog-schema.md)
+  §2m: `pekko-actors`, `spring-events`, `cdi-events`, `cdi-async-events`, `jdk-blocking-queue`,
+  `kotlinx-coroutines`): a send's value, and an inbound key's class, is asked only of its own
+  catalog's mechanism's rows, so one framework's value never reaches another's handler.
+- The match rule over these rows is `resolve/dispatch_registrations.reachable_handlers`:
+  `first`, per group, the first unpredicated registration the value matches (its class or a
+  supertype of it, transitively; a value registration by identity), and every predicated one
+  before it that matches; `all` and `one`, every registration it matches. Each row is asked
+  under its own `match` (`reached_by`). A value's supertypes are the scanned and headered
+  ones (`Dispatch.ancestors`), the declared `type-models/` conformance past a JDK class
+  nothing scans, and the root type every class conforms to (the `subtype: "*"` entry, JLS
+  4.10.2), which no fact names. **Stated bound:** a POJO published through
+  `publishEvent(Object)` is wrapped in `PayloadApplicationEvent` by Spring, so a listener of
+  `ApplicationEvent` receives it too; matched on the POJO's own ancestry, that hop is missing.
+- **An inbound key row's handlers come from these rows too** (spec
+  `2026-11-04-akka-pekko-actors-design.md` §3d item 6, `resolve/dispatch_hops.record_key_handlers`):
+  the key's class (`ServiceKey.create` / `EntityTypeKey.create` argument 0, named by the
+  key's `channel_via` entry's `class_arg` and read in the same walk as its name, D02) reaches
+  every registration the rule above gives for it, for each subtype of it in the module, and
+  for each constant a value registration names whose declared type is one of those
+  (`served_cases`). The registering row is replaced by one `endpoints` row per handler,
+  differing only in `handler`; one row with `handler` NULL where no registration is reached
+  or the class was not read. It runs after `record_self_calls`, which therefore read the key
+  as served off the registering row.
+- **Exported whole**: every column is a symbol, an integer, a boolean or a closed-set word
+  ([D06](D06-bundle-format.md) §3). A derived table because the reading is Python
+  (`resolve/dispatch_registrations.py`, the shared chain walk); replaced whole per resolve by
+  that one writing pass, which runs right after the gRPC hop pass.
+- **A registration no chain holds** (a `dispatch_registrations` entry no step names:
+  `messageAdapter`, an ask's reply mapper) is a group of its own, `<caller>#<ordinal>` of its
+  call site, at position 0.
 
 Kinds deliberately **absent**: `imports` (restates references and containment),
 `field_read` and `field_write` (in JVM code, cross-object field access goes through
@@ -576,6 +694,7 @@ column with its own evidence, never this one.
 | GraphQL non-root resolver | `graphql` | NULL | `Type.field` (`Order.lines`) | the annotation catalogs |
 | WebSocket / STOMP | `websocket` | NULL | the connection path or destination (`/live`, `/orders/place`) | the WebSocket and STOMP catalogs |
 | RSocket route | `rsocket` | NULL | the route the handler answers (`/orders/place`), or the class-level prefix alone for a `@ConnectMapping` naming none | the Spring RSocket catalog (F2 §3.6). Verbless for STOMP's reason: an RSocket route declares no verb. It shares `@MessageMapping` with STOMP and is told apart by the build, or by a `@ConnectMapping` anywhere in the module |
+| Actor message | `actor` | NULL | the key name (a Receptionist service key, a sharded entity type) or the distributed pub-sub topic | the Akka and Pekko actor catalogs (SEXTANT-178). Verbless for the messaging protocols' reason: an actor is addressed by a name, not called by a verb. An inbound key row's `handler` is each handler its key class reaches, one row per handler, NULL where none does (`resolve/dispatch_hops.record_key_handlers`); a pub-sub row's is the method that subscribed |
 | SSE | `sse` | the HTTP verb (`GET`) | the route path (`/events/stream`) | an HTTP row, reclassified ([D02](D02-catalog-schema.md) §2's `protocol_hint`) |
 | SOAP operation | `soap` | NULL | the input element's QName in W3C notation (`{http://orders.example.com/ws}placeOrderRequest`) | the SOAP annotation catalogs, `single_call` off the payload type, and `schema_operations` from the WSDL |
 | SOAP action | `soap` | NULL | the action URI verbatim (`http://orders.example.com/action/cancelOrder`) | the Spring-WS catalog |
@@ -777,7 +896,7 @@ So the walk **is** the representation: `trace_of` (§5) computes it on demand, d
 scope. A trace can never disagree with the edges it came from, because it is them.
 
 **Built by 2Q's `G4`/`I3`** — `application/query/trace.py`, over `call_edges`, `roots`,
-`return_flows` and `rpc_hops`. Module scope only; the federation half is `Bundle`/`Link`
+`return_flows` and `hops`. Module scope only; the federation half is `Bundle`/`Link`
 work and unbuilt.
 
 **It takes a ROOT, not an endpoint** (`I3`, ruled by the user): a scheduled job contains
@@ -797,7 +916,7 @@ with no children is a method that calls nothing):
 
 **A gRPC call to this module's own service is a hop, not a stop** (spec
 `2026-10-25-quarkus-mutiny-grpc-design.md` §3d, ruling 2). At a `call_edges` row whose
-`(caller, ordinal)` has `rpc_hops` rows, the walk takes one step per hop instead of the
+`(caller, ordinal)` has `hops` rows, the walk takes one step per hop instead of the
 `boundary` step: the row's `target`, `invoke_kind` and `resolution`, `callee` the hop's
 `handler`, and `via` the wire path (`grpc helloworld.Greeter/SayHello`). The handler is then
 any callee, so it is expanded, `revisited` or a `cycle` by the table above, and a hop whose
@@ -805,6 +924,13 @@ any callee, so it is expanded, `revisited` or a `cycle` by the table above, and 
 `Trace.terminals`, so a trace through a stub has one terminal fewer. The document's arrow ends
 at the handler's lifeline, labelled `blockingUnaryCall (declared ClientCalls) via grpc
 helloworld.Greeter/SayHello`, and the step table's `Reaches` reads `via` and the wire path.
+
+**An in-process dispatch send is walked the same way** (spec
+`2026-11-04-akka-pekko-actors-design.md` §3c, `2026-11-05-in-process-dispatch-design.md` §1):
+at a send whose `hops` rows name handlers, the step goes to each, `via` the hop's key (`actor com/acme/actors/OrderEntity$Get#`, or for an object-keyed send the call that made the
+object); a key nobody here handles stays `boundary` with its key; a key not read (the hop's
+`path` NULL: the value's class, or the channel object) stays `boundary` with `via` saying so
+(`actor (key not read)`), never `actor None`.
 
 **This is deliberately not [D00](D00-fact-schema.md) §4's `terminal_kind`.** That set
 CLASSIFIES what a call reaches — `persistence`, `async_handoff`, an `outbound_call` in the
@@ -1442,6 +1568,7 @@ own cadence.
 | 12 | `endpoints` gains `served_by`, the class serving the row: the type its prefix and gate were composed with — the subclass, for a mapping a controller inherits without overriding and for an inherited exposed member. `endpoint_conditions` and the documents find the row's bean there (own symbol first), since Spring reads conditions off the registered class and `@Conditional` is not `@Inherited` (spec `2026-10-30-object-identity-design.md`, ruling 8). The export carries the column | refused by its stamp exactly as at 5 to 11, so an inherited row — whose conditions the older vintage read off the base — is re-derived rather than read beside rows that name their serving class |
 | 13 | `endpoints` gains `path_kind` (`pattern` where the path is a regular expression, not an address) and `method_kind` (`any` where the row serves every HTTP method) (spec `2026-10-30-vertx-web-design.md` §3a). The linker never links a pattern path by path and links a call of any verb to an any-method row; a NULL `method` without the marker still means no verb was read. `roots` and `open_questions` carry both markers from the endpoint row they name, so a trace heading or an open question on such a row reads as the row does. The export carries all of them | refused by its stamp exactly as at 5 to 12, so a pattern is never read as an address from an older vintage |
 | 14 | `scheduled_work` gains `refused`: why the framework refuses the call that schedules a job, NULL where it accepts it, read from the catalog's `hand_off_effects` (spec `2026-11-02-per-path-truth-design.md` rule 7, the column ruled by the user 2026-11-02). A refused row's handler is not a root. The export carries the column, and the boundary vocabulary moves to 4 (`schedule` gains the attribute) [ruled 2026-11-02 by the user] | refused by its stamp exactly as at 5 to 13, so a refused schedule is never read from an older vintage as one that runs |
+| 15 | `message_handlers`, a new derived table: each behavior's message handler cases in the order the behavior tries them (spec `2026-11-04-akka-pekko-actors-design.md` §3b, approved by the user with the design). The export carries it. Renamed before release (spec `2026-11-05-in-process-dispatch-design.md` §3): `dispatch_registrations`, columns `group`, `position`, `key_type`, `key_value`, `key_object`, `predicated`, `handler`, `delivers`, `match`, `mechanism`, and `rpc_hops` renamed `hops`; still 15, since no 15 was released | refused by its stamp exactly as at 5 to 14, so a workspace without the table is re-analysed rather than read as one that builds no behavior |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the
