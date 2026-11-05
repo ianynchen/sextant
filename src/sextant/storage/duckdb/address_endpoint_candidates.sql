@@ -16,9 +16,11 @@
 --
 -- Parameters:
 --   $catalog_id -- the catalog whose candidates are addressed.
---   $rows       -- {handler, method, was, peer, path, resolution}: `handler`, `method` and
---                  `was` (the candidate's own path) name the candidate; the other three
---                  replace its columns.
+--   $rows       -- {handler, served_by, caller, method, was, peer, path, resolution}:
+--                  `handler`, `served_by`, `caller`, `method` and `was` (the candidate's own
+--                  path) name the candidate; the other three replace its columns. `served_by`
+--                  is part of the name because one inherited method is one candidate per
+--                  interface that inherits it, and each interface has its own clients.
 CREATE OR REPLACE TEMP TABLE endpoint_candidates AS
 SELECT c.* FROM endpoint_candidates c WHERE c.catalog_id IS DISTINCT FROM $catalog_id
 UNION ALL BY NAME
@@ -27,7 +29,7 @@ FROM endpoint_candidates c
 JOIN (
     SELECT UNNEST(
         $rows::STRUCT(
-            handler VARCHAR, method VARCHAR, was VARCHAR,
+            handler VARCHAR, served_by VARCHAR, caller VARCHAR, method VARCHAR, was VARCHAR,
             peer VARCHAR, path VARCHAR, resolution VARCHAR
         )[],
         recursive := true
@@ -35,5 +37,7 @@ JOIN (
 ) a
   ON c.catalog_id = $catalog_id
  AND c.handler IS NOT DISTINCT FROM a.handler
+ AND c.served_by IS NOT DISTINCT FROM a.served_by
+ AND c.caller IS NOT DISTINCT FROM a.caller
  AND c.method IS NOT DISTINCT FROM a.method
  AND c.path IS NOT DISTINCT FROM a.was;

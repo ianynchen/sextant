@@ -632,3 +632,48 @@ def test_a_malformed_hand_off_effect_is_refused_naming_its_file(
 
     assert "hand_off_effects" in str(raised.value) and "invented.yml" in str(raised.value)
     assert says in str(raised.value)
+
+
+_MADE_BY = (
+    "matches:\n"
+    "  made_by:\n"
+    "    owner: com.acme.Retrofit\n"
+    "    method: create\n"
+    "    class_arg: 0\n"
+    "    steps:\n"
+    "      - { method: baseUrl, owner: com.acme.Builder, captures: { base: arg0 } }\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("style", "direction"),
+    [("fluent", "outbound"), ("annotation_driven", "inbound")],
+)
+def test_made_by_outside_an_outbound_annotation_catalog_is_refused_at_load(
+    tmp_path: Path, style: str, direction: str
+):
+    """Android outbound spec M8, review fix round 1: `made_by` says where an
+    annotation-declared CLIENT gets its server address. On a `fluent` catalog, or on an
+    inbound one, nothing reads it, so the file is refused when it loads, naming the word."""
+    (tmp_path / "invented-made-by.yml").write_text(
+        f"id: invented\nstyle: {style}\nprotocol: http\ndirection: {direction}\n" + _MADE_BY,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).load()
+
+    assert "made_by" in str(raised.value)
+    assert "invented-made-by.yml" in str(raised.value)
+
+
+def test_made_by_on_an_outbound_annotation_catalog_loads(tmp_path: Path):
+    """The paired positive: the same word where it means something."""
+    (tmp_path / "invented-made-by.yml").write_text(
+        "id: invented\nstyle: annotation_driven\nprotocol: http\ndirection: outbound\n" + _MADE_BY,
+        encoding="utf-8",
+    )
+
+    [catalog] = YamlCatalogSource(tmp_path).load()
+
+    assert catalog.matches["made_by"]["class_arg"] == 0

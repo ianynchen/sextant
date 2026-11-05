@@ -379,6 +379,63 @@ def test_a_partial_http_row_with_no_peer_says_its_server_address_is_not_read():
     assert "| `GET legacy/invoices/{id}` | server address not read | " in text
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        # A configured base and an unread piece of the path: `partial` for the piece.
+        "${orders.url}/orders/{}",
+        # A relative call read on a path the walk cannot call exact: `partial` for the path.
+        "/orders/{id}",
+    ],
+)
+def test_a_partial_call_whose_server_was_not_the_unread_part_says_none_recorded(path: str):
+    """Review fix round 1, Important 3: `server address not read` only where the row's own
+    evidence says the server was the unread part. A call row (a caller, no handler) that is
+    `partial` for any other reason keeps `none recorded`."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "GET",
+                "path": path,
+                "caller": "s maven c 1 com/acme/orders/clients/Orders#get(String).",
+                "peer": None,
+                "resolution": "partial",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "| none recorded | " in text
+    assert "server address not read" not in text
+
+
+def test_a_call_whose_host_was_not_read_says_its_server_address_is_not_read():
+    """The other side: the unread-host marker is the row's own evidence that the server
+    part of the call's address was not read."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "GET",
+                "path": "<host>/billing/ledger",
+                "caller": "s maven c 1 com/acme/orders/clients/Orders#get(String).",
+                "peer": None,
+                "resolution": "partial",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "| server address not read | " in text
+
+
 def test_kafka_inbound_row_renders_verbless_with_no_unresolved_marker():
     """A protocol in the verbless set (Task 9) defines no verb, so its wire
     identity is `protocol path` — never a bare `None` standing in for a verb

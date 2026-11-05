@@ -5,13 +5,16 @@ Facts are hand-built in the shape `fixtures/gradle-android`'s `Orders` compiles 
 its scan): `Retrofit.Builder().baseUrl(url).build().create(OrdersApi::class.java)`, the client
 held in a field."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from flow_facts import straight_line
-from sextant.application.ports.catalogs import CatalogError
+from sextant.application.ports.catalogs import Catalog, CatalogError
+from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.endpoints import derive_endpoints
+from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.shapes.made_by import validated_made_by
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -23,11 +26,14 @@ from sextant.domain.facts import (
     CallTarget,
     Document,
     FieldWriteFact,
+    MethodReturnFact,
     Signature,
     SymbolFact,
     TypeRef,
 )
+from sextant.domain.symbols import method_descriptor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 CATALOGS = Path(__file__).parents[2] / "src" / "sextant" / "catalogs"
 CAPABILITIES = {"annotation_args", "typed_signatures", "call_site", "string_constants"}
@@ -133,13 +139,16 @@ def _made_in_one_method(caller: str, base: CallArgument, interface: str = API) -
     ]
 
 
-def _rows(tmp_path: Path, facts: list) -> set[tuple]:
-    from sextant.storage.duckdb.workspace import DuckDbWorkspace
-
+def _rows(tmp_path: Path, facts: list, catalog: Catalog | None = None) -> set[tuple]:
+    """The retrofit rows the resolve derives, with the return flows and call edges the
+    pipeline records before it (`test_client_base._resolved`), so a helper's return and a
+    parameter's callers are followed as in a real run."""
     write_fact_file(tmp_path / "facts" / "App.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
-    derive_endpoints(workspace, [_catalog()], capabilities=CAPABILITIES)
+    record_return_flows(workspace)
+    record_call_edges(workspace)
+    derive_endpoints(workspace, [catalog or _catalog()], capabilities=CAPABILITIES)
     rows = {
         (r["method"], r["peer"], r["path"], r["resolution"])
         for r in workspace.query("endpoints")
@@ -272,8 +281,6 @@ def test_a_base_retrofit_refuses_makes_no_client_and_is_not_read(tmp_path: Path)
 def test_made_by_is_refused_on_a_catalog_that_is_not_an_outbound_annotation_catalog():
     """The word says where an annotation-declared CLIENT gets its address: on any other
     catalog it would load and be read by nothing."""
-    from dataclasses import replace
-
     catalog = _catalog()
     with pytest.raises(CatalogError, match="outbound `annotation_driven`"):
         validated_made_by(replace(catalog, direction="inbound"))
@@ -303,3 +310,105 @@ def test_an_absolute_url_on_the_annotation_is_the_address_whatever_the_base(tmp_
     assert _rows(tmp_path, _interface(API, "https://status.example/health")) == {
         ("GET", "status.example", "/health", "resolved")
     }
+
+
+_MAKE = "(Ljava/lang/String;)Lretrofit2/Retrofit;"
+
+
+def _helper_made(maker: str) -> list:
+    """`fun retrofit(base: String) = Retrofit.Builder().baseUrl(base).build()`."""
+    return [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + ORDERS,
+            construct_kind=ConstructKind.CLASS,
+        ),
+        SymbolFact(
+            document_id="doc_1",
+            symbol=maker,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + ORDERS,
+        ),
+        _call(maker, BUILDER, "<init>", "()V", 0, receiver=7, result=None),
+        _call(maker, BUILDER, "baseUrl", _BASE_URL, 1, receiver=7, result=13,
+              arguments=[CallArgument(kind="parameter", value=0)]),
+        _call(maker, BUILDER, "build", _BUILD, 2, receiver=13, result=16),
+        MethodReturnFact(
+            document_id="doc_1",
+            method=maker,
+            ordinal=0,
+            value=CallArgument(kind="unresolved", source=16),
+        ),
+    ]  # fmt: skip
+
+
+def _created_through(caller: str, base: str, interface: str) -> list:
+    """`retrofit(base).create(interface)` in `caller`."""
+    return [
+        _call(caller, ORDERS, "retrofit", _MAKE, 0, receiver=None, result=5,
+              arguments=[_url(base)]).model_copy(update={"invoke_kind": "static"}),
+        _call(caller, RETROFIT, "create", _CREATE, 1, receiver=5, result=6,
+              arguments=[CallArgument(kind="class", symbol=interface)]),
+    ]  # fmt: skip
+
+
+def test_a_helper_called_twice_gives_each_client_its_own_callers_base(tmp_path: Path):
+    """Review fix round 1, Critical 1. A helper takes the base as a parameter and is called
+    twice, once per interface. The object walk keeps the path through the helper, and the
+    base is read on that path, so each interface gets its own caller's base and never the
+    other's. Before the fix both interfaces took both bases, all `resolved`."""
+    maker = _MODULE + method_descriptor(ORDERS, "retrofit", _MAKE)
+    auth, public = _method(ORDERS, "auth"), _method(ORDERS, "pub")
+    facts = [
+        *_interface(API, "orders"),
+        *_interface(STATUS_API, "status"),
+        *_helper_made(maker),
+        _declared(ORDERS, "auth"),
+        _declared(ORDERS, "pub"),
+        *_created_through(auth, "https://auth.example/", API),
+        *_created_through(public, "https://public.example/", STATUS_API),
+    ]
+    assert _rows(tmp_path, facts) == {
+        ("GET", "auth.example", "/orders", "resolved"),
+        ("GET", "public.example", "/status", "resolved"),
+    }
+
+
+def test_an_inherited_candidate_takes_only_its_own_interfaces_address(tmp_path: Path):
+    """Review fix round 1, Important 2. One inherited method is one candidate per interface
+    that serves it (`served_by`), with the same handler, verb and path. Each takes the
+    address named for its own interface and never the other's, because `served_by` is part
+    of the key the addresses are joined on.
+
+    Pinned at the statement: no shipped catalog derives such a pair today. Retrofit has no
+    type gate, so its rows are served by the interface that declares them, and the SEI fence
+    drops a base interface another interface extends (logged in the fix report)."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace._connection.execute(
+        """
+        CREATE TEMP TABLE endpoint_candidates AS
+        SELECT * FROM (VALUES
+            ('retrofit', 'h#health().', 'a/AuthApi#', NULL, 'GET', 'health', NULL, 'resolved'),
+            ('retrofit', 'h#health().', 'a/PublicApi#', NULL, 'GET', 'health', NULL, 'resolved'),
+            ('other', 'h#health().', 'a/AuthApi#', NULL, 'GET', 'health', NULL, 'resolved')
+        ) t(catalog_id, handler, served_by, caller, method, path, peer, resolution)
+        """
+    )
+    workspace.derive(
+        "endpoint_candidates_address",
+        catalog_id="retrofit",
+        rows=[
+            {"handler": "h#health().", "served_by": served, "caller": None, "method": "GET",
+             "was": "health", "peer": peer, "path": "/health", "resolution": "resolved"}
+            for served, peer in (("a/AuthApi#", "auth.example"), ("a/PublicApi#", "public"))
+        ],
+    )  # fmt: skip
+    rows = workspace._connection.execute(
+        "SELECT catalog_id, served_by, peer, path FROM endpoint_candidates ORDER BY ALL"
+    ).fetchall()
+    workspace.close()
+    assert rows == [
+        ("other", "a/AuthApi#", None, "health"),
+        ("retrofit", "a/AuthApi#", "auth.example", "/health"),
+        ("retrofit", "a/PublicApi#", "public", "/health"),
+    ]

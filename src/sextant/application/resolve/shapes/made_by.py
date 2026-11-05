@@ -8,10 +8,12 @@ the interface's class literal; this module joins the three pieces that already e
 
 1. every call the catalog names whose class argument is the row's interface;
 2. the object each such call is made on, followed back to the call that made it, through
-   locals, fields, parameters and helper returns (`dispatch_registrations.ObjectKeys`, the
-   object walk built for in-process dispatch);
+   locals, fields, parameters and helper returns (`values.producer_paths` with
+   `which_object`, the object walk `ObjectKeys` reads for in-process dispatch), keeping the
+   path it took;
 3. the steps folded into that object before it was made (`chains.chain_ends`, the walk the
-   `fluent` engine folds `baseUrl` with, rooted at the call that made the object).
+   `fluent` engine folds `baseUrl` with, rooted at the call that made the object), their
+   argument read on the path of step 2.
 
 Each address read is joined to the row's own path, one row per address (the set of calls the
 module makes is closed: each address is exact, never a hedge). A row whose address is not
@@ -30,20 +32,20 @@ from urllib.parse import urljoin, urlsplit
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
-
-# The module, not the name: `dispatch_registrations` reads `annotation_driven`, which reads
-# this module, so the class is looked up when it is used, after every module has loaded.
-from sextant.application.resolve import dispatch_registrations
 from sextant.application.resolve.shapes.arguments import _string_value, _walked_with, split_url
 from sextant.application.resolve.shapes.chains import chain_ends
 from sextant.application.resolve.shapes.mounts import weaker
 from sextant.application.resolve.values import (
+    CYCLE,
     EXPRESSION,
     LITERAL,
+    RECEIVER,
     STRING,
     Answer,
+    Path,
     ValueIndex,
     cached_value_index,
+    producer_paths,
 )
 from sextant.domain.closed_sets import Resolution
 from sextant.domain.config_keys import carries_expression
@@ -63,6 +65,8 @@ _RESOLVED = str(Resolution.RESOLVED)
 _NARROWED = str(Resolution.NARROWED)
 # The schemes `okhttp3.HttpUrl` parses; it throws on any other (retrofit 2.11.0, `_joined`).
 _SCHEMES = ("http", "https")
+# The name the facts give a constructor: a construction makes an object (`ObjectKeys`).
+_CONSTRUCTOR = "<init>"
 
 
 def validated_made_by(catalog: Catalog) -> Mapping[str, Any] | None:
@@ -156,6 +160,8 @@ def addressed_candidates(workspace: Workspace, catalog: Catalog) -> None:
             rows.append(
                 {
                     "handler": candidate["handler"],
+                    "served_by": candidate.get("served_by"),
+                    "caller": candidate.get("caller"),
                     "method": candidate["method"],
                     "was": candidate["path"],
                     "peer": peer,
@@ -180,13 +186,24 @@ def _bases_by_interface(
     workspace: Workspace, catalog: Catalog, made_by: Mapping[str, Any]
 ) -> dict[str | None, tuple[_Base, ...]]:
     """Each interface a `made_by` call names, with every server address the objects those
-    calls are made on carry. An interface no call names is absent."""
+    calls are made on carry. An interface no call names is absent.
+
+    **The object is followed on its own path, and the address is read on that same path.**
+    The object walk (`values.producer_paths`, `which_object`: the reader `ObjectKeys` uses for
+    in-process dispatch) names the call that made the object and the path it took there,
+    with each descent into a helper written as the call that entered it. The `base` is then
+    read within that path (`resolve_positions(..., within=)`), so a helper
+    `retrofit(base) = Retrofit.Builder().baseUrl(base).build()` called twice gives each
+    `create` its own caller's base, never both: one object, one path, one address."""
     index = cached_value_index(workspace, catalog.not_hand_offs, catalog.hand_off_effects)
     owner = type_descriptor(str(made_by["owner"]))
     slot = int(made_by["class_arg"])
-    objects = dispatch_registrations.ObjectKeys(workspace, catalog)
-    # The calls that make the objects, per interface, in the order the walk names them.
-    makers: dict[str | None, list[str | None]] = {}
+    # Where an object is made, as `ObjectKeys` reads it: a construction, or a call whose body
+    # is not here.
+    made = index.unscanned | frozenset((built, _CONSTRUCTOR) for built in index.constructed)
+    # The calls that make the objects, per interface, each with the path the walk took to it
+    # and whether that path is exact. None where the path reaches no such call.
+    makers: dict[str | None, list[tuple[tuple[str, int] | None, Path | None, bool]]] = {}
     for site in index.sites.values():
         if str(site.get("owner")) != owner or str(site.get("name")) != made_by["method"]:
             continue
@@ -197,40 +214,46 @@ def _bases_by_interface(
         if not isinstance(argument, dict) or argument.get("kind") != "class":
             continue
         interface = bare_descriptor(str(argument.get("symbol")))
-        for key in objects.of(site):
-            makers.setdefault(interface, []).append(key)
-    made_at = {key for keys in makers.values() for key in keys if key is not None}
-    read = _bases_made_at(workspace, catalog, made_by, index, made_at)
-    return {
-        interface: tuple(
-            dict.fromkeys(
-                base
-                for key in keys
-                for base in ((read.get(key) or (_NOT_READ,)) if key is not None else (_NOT_READ,))
-            )
-        )
-        for interface, keys in makers.items()
-    }
+        found = makers.setdefault(interface, [])
+        for producer, path in producer_paths(index, site, RECEIVER, made, which_object=True):
+            # A path that comes back to where it started adds no object (`ObjectKeys`).
+            if producer.reason == CYCLE:
+                continue
+            if producer.caller is None or producer.ordinal is None:
+                found.append((None, None, False))
+                continue
+            found.append(((producer.caller, producer.ordinal), path, producer.inexact))
+    made_at = {key for entries in makers.values() for key, _, _ in entries if key is not None}
+    captured = _captured_at(workspace, catalog, made_by, index, made_at)
+    reads = _Reads(workspace=workspace, values=index)
+    bases: dict[str | None, tuple[_Base, ...]] = {}
+    for made_for, entries in makers.items():
+        read: list[_Base] = []
+        for key, taken, inexact in entries:
+            if key is None:
+                read.append(_NOT_READ)
+                continue
+            for captured_base, unsure in captured.get(key) or ((None, False),):
+                read.extend(_bases_of(captured_base, reads, taken, inexact or unsure))
+        bases[made_for] = tuple(dict.fromkeys(read or (_NOT_READ,)))
+    return bases
 
 
-def _object_key(site: Mapping[str, Any]) -> str:
-    """A site named as `ObjectKeys` names the call that made an object."""
-    return f"{site['caller']}#{site['ordinal']}"
-
-
-def _bases_made_at(
+def _captured_at(
     workspace: Workspace,
     catalog: Catalog,
     made_by: Mapping[str, Any],
     index: ValueIndex,
-    made_at: set[str],
-) -> dict[str, tuple[_Base, ...]]:
-    """The server addresses folded into each object made at `made_at`, read by the `fluent`
-    chain walk rooted at the call that made it: the catalog's steps fold backward onto it
-    exactly as `baseUrl` folds onto a WebClient built before its root (`_prefix_captures`)."""
+    made_at: set[tuple[str, int]],
+) -> dict[tuple[str, int], tuple[tuple[Any, bool], ...]]:
+    """The `base` argument folded into each object made at `made_at`, and whether the fold is
+    exact, read by the `fluent` chain walk rooted at the call that made it: the catalog's
+    steps fold backward onto it exactly as `baseUrl` folds onto a WebClient built before its
+    root (`_prefix_captures`). The argument is read later, on the path the object took."""
     roots: dict[tuple[str, str], dict[str, Any]] = {}
-    for site in index.sites.values():
-        if _object_key(site) not in made_at:
+    for key in sorted(made_at):
+        site = index.sites.get(key)
+        if site is None:
             continue
         owner, name = str(site["owner"]), str(site["name"])
         # The owner as the facts spell it, less its type marker: the catalog's converter
@@ -246,29 +269,28 @@ def _bases_made_at(
             "terminal": sorted({name for _, name in roots}),
         },
     )
-    reads = _Reads(workspace=workspace, values=index)
-    found: dict[str, list[_Base]] = {}
+    found: dict[tuple[str, int], list[tuple[Any, bool]]] = {}
     for end in chain_ends(workspace, chain, frozenset({_BASE})):
-        key = _object_key(end.root)
-        if key not in made_at:
-            continue
-        for base in _bases_of(end.captures.get(_BASE), reads, end):
-            found.setdefault(key, []).append(base)
-    return {key: tuple(dict.fromkeys(bases)) for key, bases in found.items()}
+        key = (str(end.root["caller"]), int(str(end.root["ordinal"])))
+        if key in made_at:
+            found.setdefault(key, []).append((end.captures.get(_BASE), end.inexact))
+    return {key: tuple(captures) for key, captures in found.items()}
 
 
-def _bases_of(argument: Any, reads: _Reads, end: Any) -> tuple[_Base, ...]:
+def _bases_of(
+    argument: Any, reads: _Reads, within: Path | None, inexact: bool
+) -> tuple[_Base, ...]:
     """The server addresses one captured `base` argument holds: its literal, else each value
-    the value walk reaches for it on the chain's own path (a parameter is the argument each
-    caller hands it). A configuration key the walk reaches is the address's own text, as a
-    `fluent` base is (`trace-the-value-to-its-source`)."""
+    the value walk reaches for it within `within`, the path the object took (a parameter is
+    the argument the caller on that path hands it). A configuration key the walk reaches is
+    the address's own text, as a `fluent` base is (`trace-the-value-to-its-source`)."""
     if not isinstance(argument, dict):
         return (_NOT_READ,)
-    cap = _PARTIAL if end.inexact else _RESOLVED
+    cap = _PARTIAL if inexact else _RESOLVED
     literal = _string_value(argument)
     if literal is not None:
         return (_Base(literal, cap),)
-    walked = _walked_with(argument, reads, (), reader=_base_answer, within=end.path)
+    walked = _walked_with(argument, reads, (), reader=_base_answer, within=within)
     return tuple(
         _Base(text, weaker(resolution, cap)) if text is not None else _NOT_READ
         for _, text, resolution in walked or ((None, None, _PARTIAL),)

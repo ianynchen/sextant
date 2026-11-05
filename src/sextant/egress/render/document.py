@@ -24,6 +24,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast, overload
+from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
@@ -50,6 +51,7 @@ from sextant.application.resolve.resolved_schedules import redact_schedule_value
 # addresses that reach it was made in `resolve/roots.py`, and re-making it here
 # is the derivation "Egress is read-only" exists to forbid.
 from sextant.application.resolve.roots import Root
+from sextant.application.resolve.shapes.arguments import _UNREADABLE_HOST
 from sextant.domain.closed_sets import (
     ANY_METHOD,
     PATH_KIND_PATTERN,
@@ -659,20 +661,37 @@ def _peer_cell(endpoint: dict[str, object], redactor: Redactor) -> str:
     kept rather than a bespoke word for this column: the claim is about what the
     evidence held, never that the callee does not exist.
 
-    **An HTTP row with a read path, no peer and `partial` did try** (Android outbound
-    spec M8): its server address is set somewhere the analysis looked and did not read —
-    a Retrofit client whose builder's `baseUrl` is not read, a client whose base address
-    is set and not read (`fluent`'s `client_base`). That row says so, because `none
-    recorded` would read as "the call names no server".
+    **Some rows did try** (Android outbound spec M8), and say so, because `none recorded`
+    would read as "the call names no server" (`_server_address_not_read`).
     """
     peer = endpoint.get("peer")
     if peer is not None:
         return redactor.redact_text(str(peer))
     if endpoint.get("path") is None:
         return "unresolved"
-    if endpoint.get("protocol") == "http" and endpoint.get("resolution") == "partial":
+    if _server_address_not_read(endpoint):
         return "server address not read"
     return "none recorded"
+
+
+def _server_address_not_read(endpoint: dict[str, object]) -> bool:
+    """Whether a `partial` HTTP row with a read path and no peer is `partial` BECAUSE its
+    server address was not read — said only where the row's own evidence shows that reason,
+    never for every `partial` row (review fix round 1, Important 3: a path with an unread
+    piece behind a configured base is `partial` for the piece, not the server):
+
+    - the path starts with the unread-host marker (`<host>`, `url_of`): the call's own
+      address has a server part, and that part was not read;
+    - the row is an annotation-declared client (a handler, no caller) with a relative path:
+      the declaration's path is read whole, so `partial` there says only that the address of
+      the object that made the client was not read (`made_by`)."""
+    if endpoint.get("protocol") != "http" or endpoint.get("resolution") != "partial":
+        return False
+    path = str(endpoint.get("path"))
+    if path.startswith(_UNREADABLE_HOST):
+        return True
+    declared = endpoint.get("handler") is not None and endpoint.get("caller") is None
+    return declared and not urlsplit(path).scheme and not path.startswith("//")
 
 
 def _short_handler(descriptor: str) -> str:
