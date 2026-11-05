@@ -1,0 +1,58 @@
+id: cdi-events
+displayName: CDI events, synchronous (Event.fire, @Observes)
+style: annotation_driven
+# No wire: an event is handed to the CDI container, which calls its observer methods in the
+# same process (spec 2026-11-05 §1, §4 item 6). Every hop this file's sends give is written
+# under `in_process`; this catalog mints no endpoint row.
+protocol: in_process
+direction: inbound
+# In-process dispatch keyed by the event's TYPE, every observer whose observed type the event's
+# class is assignable to receiving it. `fire` notifies the SYNCHRONOUS observers only (CP-59
+# finding 10), so this mechanism is `@Observes` and `fire`; `@ObservesAsync` and `fireAsync`
+# are `cdi-async-events.yml`'s, a mechanism of their own, and neither reaches the other.
+dispatch: { key: type, match: all, mechanism: cdi-events }
+
+# The CDI API, under its Jakarta name (Quarkus, CDI 3+) and its javax name (CDI 1.x/2.x, as
+# `examples/camelinaction2` uses it). Either is on the class path of a module whose code
+# names the types below, usually transitively (Quarkus's `quarkus-arc`).
+detect:
+  coordinates: ["jakarta.enterprise:jakarta.enterprise.cdi-api", "javax.enterprise:cdi-api"]
+
+# CP-59 read every descriptor and annotation below with `javap` on the jars
+# `fixtures/orders-cdi-events` resolves (Quarkus 3.17.5's managed versions) and on
+# `javax.enterprise:cdi-api` 1.0, each version from the jar's own manifest (the Jakarta jar
+# states only `Bundle-Version`). ArC is where finding 10 (which observers a `fire` notifies)
+# was read out of.
+measured:
+  - { artifact: jakarta.enterprise:jakarta.enterprise.cdi-api, versions: ["4.1.0"],
+      identity: reported, by: scripts/probes/cp59_dispatch.md }
+  - { artifact: javax.enterprise:cdi-api, versions: ["1.0.0"],
+      identity: reported, by: scripts/probes/cp59_dispatch.md }
+  - { artifact: io.quarkus.arc:arc, versions: ["3.17.5"],
+      identity: reported, by: scripts/probes/cp59_dispatch.md }
+
+requires: [typed_signatures, call_site]
+
+matches:
+  mapping:
+    # An observer method is a method with a parameter annotated `@Observes` (CP-59 finding 9:
+    # `@Target(PARAMETER)`, written in `RuntimeVisibleParameterAnnotations`); the method
+    # carries no annotation of its own. The key is that parameter's type, wherever it sits:
+    # the container injects the others (`init(@Observes StartupEvent ev, Vertx vertx)`).
+    selected_by_parameter:
+      - jakarta.enterprise.event.Observes
+      - javax.enterprise.event.Observes
+    path_from: []
+    prefix_from: []
+    method_from: method
+    all_methods: []
+    prefix_annotation: null
+    annotations: []
+
+  # `Event.fire(T)`, erased `(Object)` (finding 8). javac writes the field's static type,
+  # `Event`, as the owner (finding 11).
+  dispatch_sends:
+    - { owner: jakarta.enterprise.event.Event, method: fire,
+        descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
+    - { owner: javax.enterprise.event.Event, method: fire,
+        descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }

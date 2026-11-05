@@ -795,7 +795,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**111 of 125 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**113 of 127 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -812,6 +812,11 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `akka-receptionist` | `com.typesafe.akka:akka-actor-typed_2.13` | 2.6.21 |
 | `apache-httpclient` | `org.apache.httpcomponents.client5:httpclient5` | 5.2.3 |
 |  | `org.apache.httpcomponents.core5:httpcore5` | 5.2.4 |
+| `cdi-async-events` | `io.quarkus.arc:arc` | 3.17.5 |
+|  | `jakarta.enterprise:jakarta.enterprise.cdi-api` | 4.1.0 |
+| `cdi-events` | `io.quarkus.arc:arc` | 3.17.5 |
+|  | `jakarta.enterprise:jakarta.enterprise.cdi-api` | 4.1.0 |
+|  | `javax.enterprise:cdi-api` | 1.0.0 |
 | `google-pubsub-client` | `com.google.cloud:google-cloud-pubsub` | 1.129.3 |
 | `google-pubsub-subscriber` | `com.google.cloud:google-cloud-pubsub` | 1.127.3 |
 | `grpc-java` | `io.grpc:protoc-gen-grpc-java` | 1.62.2, 1.81.0 |

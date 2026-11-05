@@ -178,7 +178,8 @@ site, or no row.
   §1, `resolve/dispatch_hops.py`): code hands a value to a framework or a channel, which calls
   the handler(s) registered for it — never an endpoint row. `(caller, ordinal)` is the send's
   own call site (a `dispatch_sends` entry, D02); `protocol` the declaring catalog's (`actor`
-  for Akka and Pekko, `in_process` for Spring application events, which have no wire); `path`
+  for Akka and Pekko, `in_process` for Spring application events and CDI events, which have no
+  wire); `path`
   the value's class symbol, or a constant's own symbol where the
   value is one (`com/acme/actors/Stock$Tick#INSTANCE.`); `handler` each handler the class
   reaches under its registrations' match rule (`dispatch_registrations` below), one row per
@@ -202,14 +203,16 @@ is tried, under the declaring catalog's match rule. One row per registration.
   module-prefixed: one executable chain end of a `fluent` catalog carrying
   `dispatch_registrations` ([D02](D02-catalog-schema.md) §2) — for Akka and Pekko, a
   behavior. A registration read off an annotated method (an `annotation_driven` catalog
-  declaring `dispatch`, D02 §2m: `@EventListener`) or off a class implementing a declared
+  declaring `dispatch`, D02 §2m: `@EventListener`, or a method selected by an annotated
+  parameter, `@Observes`) or off a class implementing a declared
   interface (`dispatch_implementations`: `ApplicationListener`) has the handler method itself
   as its group; an annotation naming several classes gives one position per class. **`position`** is the registration's 0-based place in it. Two ends of one root (a
   builder forked, or a registration on one branch) share the id; the rows are written once
   where they are equal and are otherwise not ordered against each other.
 - **`key_type`** is the class literal's symbol; NULL for a value registration, a
   predicate-only one, or a class argument that is not a literal. For an annotated method,
-  each class its annotation names, else its payload parameter's erased type; for an
+  each class its annotation names, else its payload parameter's erased type; for a method
+  selected by a parameter annotation, that parameter's erased type; for an
   implementation, its own method's parameter's erased type (past the compiler's bridge). **`key_value`** is the
   constant's own argument symbol (`<owner>#<field>.`, an `enum` or `field` argument), NULL
   for a class registration. **`key_object`** is the channel object an object key names, its
@@ -221,7 +224,7 @@ is tried, under the declaring catalog's match rule. One row per registration.
   **`delivers`** — the catalog's `returns_value`: the handler's return is a value handed to
   its own receiver. **`match`** — the catalog's `dispatch.match`, `first`, `all` or `one`.
   **`mechanism`** — the declaring catalog's `dispatch.mechanism` ([D02](D02-catalog-schema.md)
-  §2m: `pekko-actors`, `spring-events`): a send's value, and an inbound key's class, is asked only of its own
+  §2m: `pekko-actors`, `spring-events`, `cdi-events`, `cdi-async-events`): a send's value, and an inbound key's class, is asked only of its own
   catalog's mechanism's rows, so one framework's value never reaches another's handler.
 - The match rule over these rows is `resolve/dispatch_registrations.reachable_handlers`:
   `first`, per group, the first unpredicated registration the value matches (its class or a

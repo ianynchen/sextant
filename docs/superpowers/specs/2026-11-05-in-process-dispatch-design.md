@@ -36,7 +36,7 @@ And one rule says how many receive:
 |---|---|---|
 | Where a value is handed over | `dispatch_sends: [{owner, method, descriptor, value_arg}]` — a catalog block any style may carry (replaces `message_sends`/`message_arg`) | the per-entry owner/method/descriptor matching `declared_call_sites` already does; `value_arg` is `body_arg`'s position |
 | A call-style registration (Akka) | `dispatch_registrations: [{owner, method, descriptor, class_arg \| value_arg, handler_arg, predicate_arg?, returns_value?}]` on an ordinary `fluent` chain (roots/steps/terminal, `case` capture) | `fluent` chains and `chain_ends`; `class_arg` is the existing name for a class literal |
-| An annotation-style registration (Spring, CDI) | the `annotation_driven` style with three additions: select a method by a **parameter** annotation (`@Observes`); key = the payload parameter's type (`path_fallback: payload_type`); output = a dispatch registration, not an endpoint | `annotation_driven`, `request_body` (picks the parameter), `path_from` (reads `@EventListener(classes=…)`) |
+| An annotation-style registration (Spring, CDI) | the `annotation_driven` style with three additions: select a method by a **parameter** annotation (`mapping.selected_by_parameter: [<annotation fqn>, …]`, built in Task 3: `@Observes`, keyed by that annotated parameter's type, wherever it sits); key = the payload parameter's type (`path_fallback: payload_type`); output = a dispatch registration, not an endpoint | `annotation_driven`, `request_body` (picks the parameter), `path_from` (reads `@EventListener(classes=…)`) |
 | A registration made by implementing an interface (Spring `ApplicationListener<E>`; Micronaut's `ApplicationEventListener<E>` has the same shape) | `dispatch_implementations: [{owner, method, descriptor, value_arg}]` — each module type below the interface `owner` declaring the method registers it, keyed by its parameter at `value_arg` (added in Task 2, fix round 1 recorded it here) | the entry matching `dispatch_sends` uses; the bridge rule of the annotation inheritance walk (`effective_annotations._synthesis_target`, OI-47) |
 | A receive site, object key | `dispatch_receives: [{owner, method, descriptor, object: receiver, handler: enclosing \| lambda_arg}]` | the same entry matching |
 | How dispatch works for the catalog | `dispatch: { key: type \| object, match: first \| all \| one, mechanism: <name> }` — `mechanism` (Task 2 fix round 2) names the dispatch mechanism; a key catalog declares `{mechanism}` alone | — (the one genuinely new setting) |
@@ -91,7 +91,13 @@ No `message_*` word remains. No word names a framework.
    ancestry, so those hops are missing: a missing hop, never a false one.
 6. **CDI events (Quarkus).** `Event.fire`/`fireAsync` are sends; a method whose parameter carries
    `@Observes`/`@ObservesAsync` is a registration keyed by that parameter's type, `match: all`.
-   Checked on the Quarkus examples.
+   Checked on the Quarkus examples. **As built (Task 3):** two catalogs, two mechanisms —
+   `cdi-events` (`@Observes`, `fire`; Jakarta and javax) and `cdi-async-events`
+   (`@ObservesAsync`, both `fireAsync` overloads; Jakarta only, javax CDI 1.0 has neither) —
+   because ArC's `fire` notifies only synchronous observers and `fireAsync` only asynchronous
+   ones (CP-59 finding 10). No example under `examples/` fires a CDI event (every observer there
+   observes a framework event), so the Quarkus check covers registrations only; the hops are
+   pinned on `fixtures/orders-cdi-events`. Event qualifiers are not read (stated bound).
 7. **Object keys: Kotlin `Channel`, Kotlin `SharedFlow`/`StateFlow`, Java `BlockingQueue`.**
    Sends: `send`/`trySend`, `emit`/`tryEmit`/`value =`, `put`/`offer`/`add`. Receives: `receive`/
    `tryReceive`/`for (x in ch)` (an `iterator()` call), `collect`, `take`/`poll`. A send hops to

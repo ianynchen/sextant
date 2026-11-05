@@ -6320,6 +6320,21 @@ matches:
   the catalog is read. A method giving no class keeps one row with no key: it matches nothing.
   `match` is the catalog's. `protocol` names the hops its `dispatch_sends` give: `in_process`
   ([D00](D00-fact-schema.md) §4) for a framework with no wire.
+- **`mapping.selected_by_parameter: [<annotation fqn>, …]`** (`cdi-events.yml`,
+  `cdi-async-events.yml`) selects a method by a PARAMETER annotation instead: each method with
+  a parameter carrying one of the names (`@Observes`, which javac writes in the method's
+  `RuntimeVisibleParameterAnnotations`, CP-59 finding 9) is one registration keyed by THAT
+  parameter's erased type, wherever it sits among the others (the framework injects those:
+  `init(@Observes StartupEvent ev, Vertx vertx)` is keyed `StartupEvent`). Read only on a
+  catalog declaring `dispatch`; anything but a list of names is refused when the registrations
+  are read (a bare string would select nothing). Such a catalog writes `annotations: []`. Two
+  kinds of observer one framework notifies from different sends are two catalogs, one
+  mechanism each: CDI's `fire` notifies only `@Observes` observers and `fireAsync` only
+  `@ObservesAsync` ones (CP-59 finding 10, ArC 3.17.5), so `cdi-events` and `cdi-async-events`
+  never reach each other's registrations. An observer of an event nothing in the module fires
+  (`@Observes StartupEvent`) is a registration no hop reaches, and no endpoint row. Event
+  qualifiers (`@Observes @Named("x") E`) are not read: a fire reaches every observer of its
+  class's supertypes whatever qualifiers either names (a stated bound).
 - **`dispatch_implementations`** entries are `{owner, method, descriptor, value_arg}`, checked
   at load (`yaml_source._dispatch_implementations`): a registration made by IMPLEMENTING the
   interface `owner` (`ApplicationListener`). Each module type below it (`Dispatch.subtypes`,

@@ -7592,6 +7592,58 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "annotation-registrations.a-PARAMETER-annotation-selects-the-observer": Guard(
+        what="a method with a parameter carrying a `selected_by_parameter` annotation registers",
+        why="CP-59 finding 9: an observer method carries no annotation of its own, only its "
+        "event parameter does. Unread, every `@Observes` observer is nowhere and every `fire` "
+        "is a hop to no handler",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find="            parameter = _annotated_parameter(declaration, by_parameter)\n",
+                replace="            parameter = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "annotation-registrations.ONLY-a-named-PARAMETER-annotation-registers": Guard(
+        what="only a parameter carrying one of `selected_by_parameter`'s annotations selects",
+        why="CP-59 findings 9-10: `@ObservesAsync` belongs to another mechanism and any other "
+        "parameter annotation to no observer. Selected by any annotation, a `fire` hops to "
+        "asynchronous observers ArC never notifies for it",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find='        if any(use["annotation"] in annotations for use in '
+                'parameter.get("annotations", [])):\n',
+                replace='        if parameter.get("annotations"):  # guard disabled\n',
+            ),
+        ),
+    ),
+    "annotation-registrations.the-ANNOTATED-parameter-keys-the-observer": Guard(
+        what="an observer is keyed by its annotated parameter's type, wherever it sits",
+        why="CP-59 finding 9: the container injects the other parameters. Keyed by the first, "
+        "`record(Ledger l, @Observes Placed e)` is an observer of `Ledger`, which nobody fires",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find="                selected.append((declaration, [_erased_type(parameter)]))\n",
+                replace="                selected.append((declaration, [_erased_type("
+                'declaration["signature"]["parameters"][0])]))  # guard disabled\n',
+            ),
+        ),
+    ),
+    "annotation-registrations.a-NON-LIST-selector-is-refused": Guard(
+        what="`selected_by_parameter` that is not a list of annotation names is refused",
+        why="a bare string iterates as its characters, which select nothing: the catalog's "
+        "observers would be silently absent",
+        edits=(
+            Edit(
+                path=_ANNOTATION_DRIVEN,
+                find="    if not isinstance(declared, list) or not all(\n",
+                replace="    if False and not all(  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "annotation-registrations.only-PAYLOAD_TYPE-names-a-registration": Guard(
         what="a registration catalog's name fallback must be `payload_type`",
         why="spec 2026-11-05 §2: every other fallback word composes an ADDRESS from a name. "
@@ -11410,6 +11462,9 @@ def copy_tree(destination: Path) -> Path:
         # the `ApplicationListener` bridge javac writes and a factory's returns are read off
         # real facts, so their guards are pinned on the e2e test of this module.
         "orders-events",
+        # CDI events (spec 2026-11-05 §4 item 6): observers are selected by the parameter
+        # annotations javac writes, read off real facts by the e2e test of this module.
+        "orders-cdi-events",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

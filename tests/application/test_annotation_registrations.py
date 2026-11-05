@@ -41,13 +41,13 @@ _SHIPPED = "com/acme/shop/OrderShipped#"
 _EVENT_LISTENER = "org/springframework/context/event/EventListener#"
 _APPLICATION_LISTENER = "org/springframework/context/ApplicationListener#"
 _APPLICATION_EVENT = "org/springframework/context/ApplicationEvent#"
+_OBSERVES = "jakarta/enterprise/event/Observes#"
+_OBSERVES_ASYNC = "jakarta/enterprise/event/ObservesAsync#"
 
 
-def _catalog() -> Catalog:
+def _catalog(catalog_id: str = "spring-events") -> Catalog:
     return next(
-        catalog
-        for catalog in YamlCatalogSource(catalogs_dir()).load()
-        if catalog.id == "spring-events"
+        catalog for catalog in YamlCatalogSource(catalogs_dir()).load() if catalog.id == catalog_id
     )
 
 
@@ -68,9 +68,15 @@ def _document() -> Document:
 
 
 def _method(
-    owner: str, name: str, parameters: tuple[str, ...], *, synthetic: bool = False
+    owner: str,
+    name: str,
+    parameters: tuple[str, ...],
+    *,
+    synthetic: bool = False,
+    annotated: dict[int, str] | None = None,
 ) -> SymbolFact:
-    """A `void` method of `owner` taking `parameters` (type symbols), as javac declares it."""
+    """A `void` method of `owner` taking `parameters` (type symbols), as javac declares it;
+    `annotated` maps a parameter's index to the annotation it carries."""
     descriptor = "(" + "".join(f"L{p.removesuffix('#')};" for p in parameters) + ")V"
     return SymbolFact(
         document_id="doc_1",
@@ -79,7 +85,14 @@ def _method(
         enclosing=_MODULE + owner,
         signature=Signature(
             parameters=[
-                Parameter(name=f"p{i}", type=TypeRef(symbol=p), erased_symbol=p)
+                Parameter(
+                    name=f"p{i}",
+                    type=TypeRef(symbol=p),
+                    erased_symbol=p,
+                    annotations=[AnnotationUse(annotation=(annotated or {})[i], args={})]
+                    if i in (annotated or {})
+                    else [],
+                )
                 for i, p in enumerate(parameters)
             ],
             returns=TypeRef(symbol="void"),
@@ -107,13 +120,13 @@ def _class(symbol: str, interfaces: tuple[str, ...] = ()) -> SymbolFact:
     )
 
 
-def _rows(tmp_path: Path, facts: list) -> list[tuple]:
+def _rows(tmp_path: Path, facts: list, catalog_id: str = "spring-events") -> list[tuple]:
     """`(handler's method name and parameter count, position, key_type, match)` per row."""
     write_fact_file(tmp_path / "facts" / "Listener.jsonl", _document(), straight_line(facts))
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     try:
         workspace.load_facts(tmp_path / "facts")
-        record_dispatch_registrations(workspace, [_catalog()])
+        record_dispatch_registrations(workspace, [_catalog(catalog_id)])
         rows = workspace.query("dispatch_registrations")
     finally:
         workspace.close()
@@ -184,6 +197,48 @@ def test_a_method_the_catalog_names_no_annotation_for_registers_nothing(tmp_path
         _annotated(other, "org/springframework/context/annotation/Bean#"),
     ]
     assert _rows(tmp_path, facts) == []
+
+
+@pytest.mark.pins("annotation-registrations.a-PARAMETER-annotation-selects-the-observer")
+@pytest.mark.pins("annotation-registrations.the-ANNOTATED-parameter-keys-the-observer")
+def test_an_observer_is_keyed_by_its_annotated_parameter(tmp_path: Path):
+    """`void record(Ledger ledger, @Observes OrderPlaced e)`: the method carries no annotation
+    of its own; the parameter annotation selects it (`mapping.selected_by_parameter`), and the
+    key is THAT parameter's type, wherever it sits among the injected ones (CP-59 finding 9:
+    javac writes the annotation on the one parameter carrying it)."""
+    observer = _method(_LISTENER, "record", (_SHIPPED, _PLACED), annotated={1: _OBSERVES})
+    assert _rows(tmp_path, [_class(_LISTENER), observer], "cdi-events") == [
+        ("record", 0, _PLACED, "all", True)
+    ]
+
+
+@pytest.mark.declines("cdi-events")
+@pytest.mark.pins("annotation-registrations.ONLY-a-named-PARAMETER-annotation-registers")
+def test_a_method_no_named_parameter_annotation_marks_registers_nothing(tmp_path: Path):
+    """A method taking an event with no annotated parameter, or a parameter carrying another
+    annotation (`@ObservesAsync` belongs to the other mechanism's catalog), is no observer of
+    this catalog."""
+    plain = _method(_LISTENER, "on", (_PLACED,))
+    other = _method(_LISTENER, "onAsync", (_PLACED,), annotated={0: _OBSERVES_ASYNC})
+    assert _rows(tmp_path, [_class(_LISTENER), plain, other], "cdi-events") == []
+
+
+def test_an_observes_async_parameter_is_an_async_observer(tmp_path: Path):
+    """`on(@ObservesAsync OrderPlaced e)` is the asynchronous catalog's registration, keyed by
+    the annotated parameter's type."""
+    asynchronous = _method(_LISTENER, "onAsync", (_PLACED,), annotated={0: _OBSERVES_ASYNC})
+    assert _rows(tmp_path, [_class(_LISTENER), asynchronous], "cdi-async-events") == [
+        ("onAsync", 0, _PLACED, "all", True)
+    ]
+
+
+@pytest.mark.declines("cdi-async-events")
+@pytest.mark.pins("annotation-registrations.ONLY-a-named-PARAMETER-annotation-registers")
+def test_an_observes_parameter_is_no_async_observer(tmp_path: Path):
+    """`on(@Observes OrderPlaced e)` is a synchronous observer, which no `fireAsync` notifies
+    (CP-59 finding 10): nothing in the asynchronous catalog."""
+    synchronous = _method(_LISTENER, "on", (_PLACED,), annotated={0: _OBSERVES})
+    assert _rows(tmp_path, [_class(_LISTENER), synchronous], "cdi-async-events") == []
 
 
 @pytest.mark.pins("dispatch-implementations.the-BRIDGE-is-carried-to-the-method-it-forwards-to")
@@ -304,6 +359,26 @@ def test_a_registration_fallback_other_than_payload_type_is_refused(tmp_path: Pa
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     try:
         with pytest.raises(CatalogError, match="payload_type"):
+            record_dispatch_registrations(workspace, [catalog])
+    finally:
+        workspace.close()
+
+
+@pytest.mark.pins("annotation-registrations.a-NON-LIST-selector-is-refused")
+def test_a_parameter_selector_that_is_not_a_list_of_names_is_refused(tmp_path: Path):
+    """`selected_by_parameter` is a list of annotation names. A bare string read as a list is
+    a list of its characters, which select nothing: the catalog's observers would be silently
+    absent."""
+    directory = _catalog_file(
+        tmp_path,
+        "matches:\n  mapping: { selected_by_parameter: a.Observes,\n"
+        "             prefix_from: [], all_methods: [], prefix_annotation: null,\n"
+        "             annotations: [] }\n",
+    )
+    [catalog] = YamlCatalogSource(directory).load()
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        with pytest.raises(CatalogError, match="selected_by_parameter"):
             record_dispatch_registrations(workspace, [catalog])
     finally:
         workspace.close()

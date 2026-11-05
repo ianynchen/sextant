@@ -1,4 +1,5 @@
-"""CP-59: javap readings of Spring's application-event API and the fixture's bytecode. See run.sh."""
+"""CP-59: javap readings of Spring's application-event API, the CDI event API and ArC, and the
+two fixtures' bytecode. See run.sh."""
 
 import re
 import subprocess
@@ -10,18 +11,21 @@ ARGS = dict(a.split("=", 1) for a in sys.argv[1:])
 FIX, JAVA_HOME = Path(ARGS["FIX"]), ARGS["JAVA_HOME"]
 CLASSPATH = (FIX / "target/probe.cp").read_text().strip()
 CLASSES = str(FIX / "target/classes")
+CDI_FIX = Path(ARGS["CDI_FIX"])
+[JAVAX_JAR] = [str(jar) for jar in (CDI_FIX / "target/probe-javax").glob("cdi-api-*.jar")]
+CDI_CLASSPATH = f"{CDI_FIX / 'target/classes'}:{(CDI_FIX / 'target/probe.cp').read_text().strip()}"
 
 # The artifacts whose types the catalog names, by jar file-name stem.
 ARTIFACTS = ("spring-context", "spring-tx")
 
 
-def javap(*flags_and_class: str) -> str:
+def javap(*flags_and_class: str, cp: str = "") -> str:
     out = subprocess.run(
         [
             f"{JAVA_HOME}/bin/javap",
             *flags_and_class[:-1],
             "-cp",
-            f"{CLASSES}:{CLASSPATH}",
+            cp or f"{CLASSES}:{CLASSPATH}",
             flags_and_class[-1],
         ],
         capture_output=True,
@@ -54,6 +58,30 @@ def reported_versions() -> dict[str, str]:
     return found
 
 
+def manifest_version(jar: str, keys: tuple[str, ...]) -> str:
+    """The first of `keys` the jar's own MANIFEST.MF states (GUIDELINES §5.4); aborts if it
+    states none. The Jakarta CDI API jar states only the OSGi `Bundle-Version`."""
+    with zipfile.ZipFile(jar) as archive:
+        manifest = archive.read("META-INF/MANIFEST.MF").decode()
+    for key in keys:
+        version = re.search(rf"^{key}: (\S+)", manifest, flags=re.MULTILINE)
+        if version:
+            return f"{key}: {version.group(1)}"
+    sys.exit(f"{jar}: none of {keys} in its manifest")
+
+
+def cdi_jar(artifact: str) -> str:
+    """The one `<artifact>-<version>.jar` on the CDI fixture's class path."""
+    jars = [
+        c
+        for c in CDI_CLASSPATH.split(":")
+        if re.fullmatch(rf"{artifact}-[\d.]+\.jar", Path(c).name)
+    ]
+    if len(jars) != 1:
+        sys.exit(f"expected one {artifact}-*.jar on the CDI class path, found {jars}")
+    return jars[0]
+
+
 def header(cls: str) -> str:
     """The class's declaration line as javap prints it (supertypes, type parameters)."""
     return next(
@@ -61,9 +89,9 @@ def header(cls: str) -> str:
     ).strip()
 
 
-def methods(cls: str, name: str) -> list[str]:
+def methods(cls: str, name: str, cp: str = "") -> list[str]:
     """`descriptor  flags` of every method named `name` (`javap -v`, so flags show bridges)."""
-    text = javap("-v", "-p", cls)
+    text = javap("-v", "-p", cls, cp=cp)
     rows, current = [], None
     for line in text.splitlines():
         m = re.match(r"^  (?:[\w$<>\[\]., ]+ )?([\w$<>]+)\(.*\);$", line)
@@ -94,9 +122,9 @@ def annotation_elements(cls: str) -> list[str]:
     ]
 
 
-def class_annotations(cls: str) -> list[str]:
+def class_annotations(cls: str, cp: str = "") -> list[str]:
     """The annotations on the type itself (`RuntimeVisibleAnnotations`), as javap decodes them."""
-    text = javap("-v", cls)
+    text = javap("-v", cls, cp=cp)
     block = (
         text.split("RuntimeVisibleAnnotations:")[-1] if "RuntimeVisibleAnnotations:" in text else ""
     )
@@ -112,13 +140,58 @@ def super_class(cls: str) -> str:
     return m.group(1) if m else "-"
 
 
-def invokes(cls: str, name: str) -> list[str]:
+def invokes(cls: str, name: str, cp: str = "") -> list[str]:
     """Each call to `name` in `cls`'s bytecode: the invoke instruction, owner and descriptor."""
     return [
         f"`{m.group(1)}` `{m.group(2)}.{name}:{m.group(3)}`"
         for m in re.finditer(
             rf"(invoke\w+)\s+#\d+(?:,\s+\d+)?\s+// (?:Interface)?Method ([\w/$]+)\.{name}:(\S+)",
-            javap("-c", "-p", cls),
+            javap("-c", "-p", cls, cp=cp),
+        )
+    ]
+
+
+def parameter_annotations(cls: str, cp: str) -> list[str]:
+    """Each method of `cls` with `RuntimeVisibleParameterAnnotations`: its descriptor and the
+    annotation on each parameter, as javap decodes them."""
+    rows, method = [], None
+    for line in javap("-v", "-p", cls, cp=cp).splitlines():
+        if line.startswith("    descriptor:"):
+            method = line.split(":", 1)[1].strip()
+        elif re.match(r"^      parameter \d+:", line):
+            rows.append([method, line.strip().rstrip(":"), "-"])
+        elif re.match(r"^          [a-z][\w.]*\.[A-Z]\w*$", line) and rows:
+            rows[-1][2] = line.strip()
+    return [f"`{m}` {p}: `{a}`" for m, p, a in rows]
+
+
+def lines_matching(cls: str, declared: str, pattern: str, cp: str) -> list[str]:
+    """The instructions matching `pattern`, in order, as javap prints them, of the one method of
+    `cls` whose declaration line contains `declared` (`notify(T, ` tells two overloads apart)."""
+    text = javap("-c", "-p", cls, cp=cp)
+    body = re.search(
+        rf"\n  [^\n]*{re.escape(declared)}[^\n]*\n(.*?)\n(?:\n|}})", text, flags=re.DOTALL
+    )
+    if not body:
+        return ["NOT FOUND"]
+    return [
+        re.sub(r"\s+", " ", line.strip())
+        for line in body.group(1).splitlines()
+        if re.search(pattern, line)
+    ]
+
+
+def bootstrap_handles(cls: str, cp: str) -> list[str]:
+    """The method handle each lambda bootstrap of `cls` names (`javap -v`)."""
+    text = javap("-v", "-p", cls, cp=cp)
+    block = text.split("BootstrapMethods:")[-1]
+    return [
+        f"{m.group(1)}: `{m.group(2)}`"
+        for m in re.finditer(
+            r"^  (\d+): #\d+ REF_invokeStatic java/lang/invoke/LambdaMetafactory"
+            r"[^\n]*\n    Method arguments:\n[^\n]*\n\s+#\d+ (REF_\w+ \S+)",
+            block,
+            flags=re.MULTILINE,
         )
     ]
 
@@ -194,6 +267,68 @@ def main() -> None:
     print("### 7. What javac writes at the fixture's publish sites\n")
     for row in invokes("com.acme.events.OrderService", "publishEvent"):
         print(f"- `OrderService`: {row}")
+    print()
+    cdi(versions)
+
+
+def cdi(spring_versions: dict[str, str]) -> None:
+    """Tables 8-11: CDI events (`cdi-events`, `cdi-async-events`)."""
+    del spring_versions
+    cp, javax = CDI_CLASSPATH, JAVAX_JAR
+    jakarta_api, arc = cdi_jar("jakarta.enterprise.cdi-api"), cdi_jar("arc")
+    print("### Identity, CDI (from each jar's own MANIFEST.MF)\n")
+    print(
+        f"- `jakarta.enterprise.cdi-api`: `{manifest_version(jakarta_api, ('Implementation-Version', 'Bundle-Version'))}`"
+    )
+    print(f"- `javax.enterprise:cdi-api`: `{manifest_version(javax, ('Implementation-Version',))}`")
+    print(f"- `arc`: `{manifest_version(arc, ('Implementation-Version',))}`")
+    print()
+    print("### 8. Sends: `Event`\n")
+    for name in ("fire", "fireAsync"):
+        for row in methods("jakarta.enterprise.event.Event", name, cp=cp):
+            print(f"- `jakarta.enterprise.event.Event.{name}` {row}")
+    for name in ("fire", "fireAsync"):
+        rows = methods("javax.enterprise.event.Event", name, cp=javax)
+        for row in rows or ["none"]:
+            print(f"- `javax.enterprise.event.Event.{name}` {row}")
+    print()
+    print("### 9. The observer annotations, and where javac writes them\n")
+    for cls, path in (
+        ("jakarta.enterprise.event.Observes", cp),
+        ("jakarta.enterprise.event.ObservesAsync", cp),
+        ("javax.enterprise.event.Observes", javax),
+    ):
+        print(f"#### `{cls}`\n")
+        for line in class_annotations(cls, cp=path):
+            print(f"- on the type: `{line}`")
+        print()
+    for cls in ("StartupObserver", "AsyncObserver"):
+        for row in parameter_annotations(f"com.acme.shipping.{cls}", cp):
+            print(f"- fixture `{cls}`: {row}")
+    print()
+    print("### 10. Which observers ArC notifies\n")
+    impl = "io.quarkus.arc.impl.EventImpl"
+    print("`EventImpl.fire(Object)`:\n")
+    for item in lines_matching(impl, " fire(", r"iconst|Notifier\.notify", cp):
+        print(f"- `{item}`")
+    print("\n`EventImpl$1.get()` (the supplier `fireAsync` runs):\n")
+    for item in lines_matching(f"{impl}$1", " get(", r"iconst|Notifier\.notify", cp):
+        print(f"- `{item}`")
+    print(
+        "\n`EventImpl$Notifier.notify(Object, ObserverExceptionHandler, boolean)`, up to the filter:\n"
+    )
+    for item in lines_matching(
+        f"{impl}$Notifier", " notify(T, ", r"^\s+(7|8|11|16|19|24|27): ", cp
+    ):
+        print(f"- `{item}`")
+    print("\n`EventImpl$Notifier` lambda bootstraps:\n")
+    for item in bootstrap_handles(f"{impl}$Notifier", cp):
+        print(f"- {item}")
+    print()
+    print("### 11. What javac writes at the fixture's fire sites\n")
+    for name in ("fire", "fireAsync"):
+        for row in invokes("com.acme.shipping.ShippingService", name, cp=cp):
+            print(f"- `ShippingService`: {row}")
 
 
 main()

@@ -1,4 +1,4 @@
-# CP-59 — Spring application events (spring-context, spring-tx 7.0.1), measured
+# CP-59 — Spring application events (spring-context, spring-tx 7.0.1) and CDI events (CDI API 4.1.0 and 1.0.0, ArC 3.17.5), measured
 
 **Number.** The in-process dispatch plan (2026-11-05) names this probe CP-58; that number was
 already taken by `scripts/probes/cp58-inherited-mappings/` (cited by four HTTP catalogs), so it
@@ -9,7 +9,16 @@ versions Spring Boot 4.0.0 manages, as `fixtures/orders-events` resolves them; e
 is read from the jar's own `MANIFEST.MF` by the harness, which aborts if a jar or the key is
 missing. JDK 21.0.13 for `java.util.EventObject`. Spring 5.x and 6.x are outside this measurement:
 the descriptors below have been stable since 4.2 (`publishEvent(Object)`), but that is not read
-here. The fixture is compiled by javac 21 (`--release 21`).
+here. The fixture is compiled by javac 21 (`--release 21`). For CDI events (findings 8-11):
+`jakarta.enterprise:jakarta.enterprise.cdi-api`
+**4.1.0** and `io.quarkus.arc:arc` **3.17.5**, the versions Quarkus 3.17.5 manages, as
+`fixtures/orders-cdi-events` resolves them, and `javax.enterprise:cdi-api` **1.0.0** (coordinate
+version `1.0`, the javax name `examples/camelinaction2` compiles against). Each version is read
+from the jar's own `MANIFEST.MF`: `Implementation-Version` for ArC and the javax API, the OSGi
+`Bundle-Version` for the Jakarta API, which states no `Implementation-Version`; the harness aborts
+if a jar or its key is missing. CDI 2.0-4.0 and other CDI containers (Weld) are outside this
+measurement: which observers a `fire` notifies is read from ArC's bytecode; neither the CDI
+specification's text nor Weld's code is read here.
 
 **Why it was measured.** The `spring-events` catalog (spec 2026-11-05 §4 item 5) declares the two
 `publishEvent` overloads as sends, `@EventListener` / `@TransactionalEventListener` methods and
@@ -22,8 +31,14 @@ resolved by `ResolvableType` at run time and is not read here: the catalog keys 
 parameter's erased type and matches by assignability, so a listener of a generic payload type
 (`PayloadApplicationEvent<Foo>`, `List<Foo>`) is matched by its erasure.
 
+**Why it was measured, CDI.** The `cdi-events` and `cdi-async-events` catalogs (spec 2026-11-05
+§4 item 6) declare `Event.fire` / `fireAsync` as sends and methods with an `@Observes` /
+`@ObservesAsync` parameter as registrations keyed by that parameter's type; findings 8-11 are what
+each word cites. No container starts: event QUALIFIERS (`@Observes @Named("x") E`), which narrow
+which observers a fire reaches at run time, are not read (a stated bound of the catalogs).
+
 Reproduce: `JAVA_HOME=/opt/homebrew/opt/openjdk@21 scripts/probes/cp59_dispatch/run.sh` (rebuilds
-the fixture, prints every table below).
+both fixtures, prints every table below).
 
 ## Findings (the facts the catalog uses)
 
@@ -68,6 +83,29 @@ the fixture, prints every table below).
    ApplicationEventPublisher.publishEvent(ApplicationEvent)` for `new OrderPlaced(…)`,
    `publishEvent(Object)` for an `Object` parameter, and
    `ApplicationContext.publishEvent(ApplicationEvent)` through a field typed `ApplicationContext`.
+
+8. **CDI sends.** The Jakarta `Event<T>` declares `fire(T)`, erased `(Ljava/lang/Object;)V`, and
+   two `fireAsync` overloads, `(Object)` and `(Object, NotificationOptions)`, each returning a
+   `CompletionStage`; each hands argument 0 to the container (the options choose an executor).
+   The javax `Event` 1.0.0 declares `fire` only: no `fireAsync` (and no `@ObservesAsync`), so the
+   asynchronous catalog names the Jakarta API alone.
+9. **Observer annotations.** `@Observes` (Jakarta and javax) and `@ObservesAsync` are
+   `@Target(PARAMETER)`, `@Retention(RUNTIME)`: javac writes them in the method's
+   `RuntimeVisibleParameterAnnotations`, on the one parameter carrying them, and the method has
+   no annotation of its own. The fixture's `onStart(@Observes StartupEvent, ShippingService)`
+   carries it on parameter 0 and nothing on the injected parameter 1. So an observer is
+   selected by a parameter annotation and keyed by that parameter's type
+   (`mapping.selected_by_parameter`).
+10. **`fire` and `fireAsync` reach different observers.** ArC's `EventImpl.fire` calls
+   `Notifier.notify(event, handler, false)` and the supplier `fireAsync` runs calls it with
+   `true`; `notify` filters the observers by `ObserverMethod::isAsync` when that flag is true and
+   by `Predicate.not(ObserverMethod::isAsync)` when false. So a `fire` notifies only `@Observes`
+   observers and a `fireAsync` only `@ObservesAsync` ones: two mechanisms, `cdi-events` and
+   `cdi-async-events`, so that neither's sends reach the other's registrations.
+11. **What javac writes at a fire site** (the fixture's `ShippingService`): `invokeinterface
+   jakarta/enterprise/event/Event.fire:(Ljava/lang/Object;)V` and `Event.fireAsync:
+   (Ljava/lang/Object;)Ljava/util/concurrent/CompletionStage;` through fields typed `Event<…>`:
+   the owner is `Event` itself, so no other owner is declared.
 
 ## Observations (generated by `run.sh`; not edited)
 
@@ -169,3 +207,84 @@ aborts without, not the version the fixture's pom asked for.
 - `OrderService`: `invokeinterface` `org/springframework/context/ApplicationEventPublisher.publishEvent:(Ljava/lang/Object;)V`
 - `OrderService`: `invokeinterface` `org/springframework/context/ApplicationEventPublisher.publishEvent:(Ljava/lang/Object;)V`
 - `OrderService`: `invokeinterface` `org/springframework/context/ApplicationContext.publishEvent:(Lorg/springframework/context/ApplicationEvent;)V`
+
+### Identity, CDI (from each jar's own MANIFEST.MF)
+
+- `jakarta.enterprise.cdi-api`: `Bundle-Version: 4.1.0`
+- `javax.enterprise:cdi-api`: `Implementation-Version: 1.0.0`
+- `arc`: `Implementation-Version: 3.17.5`
+
+### 8. Sends: `Event`
+
+- `jakarta.enterprise.event.Event.fire` `(Ljava/lang/Object;)V` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- `jakarta.enterprise.event.Event.fireAsync` `(Ljava/lang/Object;)Ljava/util/concurrent/CompletionStage;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- `jakarta.enterprise.event.Event.fireAsync` `(Ljava/lang/Object;Ljakarta/enterprise/event/NotificationOptions;)Ljava/util/concurrent/CompletionStage;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- `javax.enterprise.event.Event.fire` `(Ljava/lang/Object;)V` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- `javax.enterprise.event.Event.fireAsync` none
+
+### 9. The observer annotations, and where javac writes them
+
+#### `jakarta.enterprise.event.Observes`
+
+- on the type: `java.lang.annotation.Target(`
+- on the type: `value=[Ljava/lang/annotation/ElementType;.PARAMETER]`
+- on the type: `java.lang.annotation.Retention(`
+- on the type: `value=Ljava/lang/annotation/RetentionPolicy;.RUNTIME`
+- on the type: `java.lang.annotation.Documented`
+
+#### `jakarta.enterprise.event.ObservesAsync`
+
+- on the type: `java.lang.annotation.Target(`
+- on the type: `value=[Ljava/lang/annotation/ElementType;.PARAMETER]`
+- on the type: `java.lang.annotation.Retention(`
+- on the type: `value=Ljava/lang/annotation/RetentionPolicy;.RUNTIME`
+- on the type: `java.lang.annotation.Documented`
+
+#### `javax.enterprise.event.Observes`
+
+- on the type: `java.lang.annotation.Target(`
+- on the type: `value=[Ljava/lang/annotation/ElementType;.PARAMETER]`
+- on the type: `java.lang.annotation.Retention(`
+- on the type: `value=Ljava/lang/annotation/RetentionPolicy;.RUNTIME`
+- on the type: `java.lang.annotation.Documented`
+
+- fixture `StartupObserver`: `(Lio/quarkus/runtime/StartupEvent;Lcom/acme/shipping/ShippingService;)V` parameter 0: `jakarta.enterprise.event.Observes`
+- fixture `StartupObserver`: `(Lio/quarkus/runtime/StartupEvent;Lcom/acme/shipping/ShippingService;)V` parameter 1: `-`
+- fixture `AsyncObserver`: `(Lcom/acme/shipping/Shipped;)V` parameter 0: `jakarta.enterprise.event.ObservesAsync`
+
+### 10. Which observers ArC notifies
+
+`EventImpl.fire(Object)`:
+
+- `19: iconst_0`
+- `20: invokevirtual #142 // Method io/quarkus/arc/impl/EventImpl$Notifier.notify:(Ljava/lang/Object;Lio/quarkus/arc/impl/EventImpl$ObserverExceptionHandler;Z)V`
+
+`EventImpl$1.get()` (the supplier `fireAsync` runs):
+
+- `16: iconst_0`
+- `46: iconst_1`
+- `47: invokevirtual #74 // Method io/quarkus/arc/impl/EventImpl$Notifier.notify:(Ljava/lang/Object;Lio/quarkus/arc/impl/EventImpl$ObserverExceptionHandler;Z)V`
+
+`EventImpl$Notifier.notify(Object, ObserverExceptionHandler, boolean)`, up to the filter:
+
+- `7: iload_3`
+- `8: ifeq 19`
+- `11: invokedynamic #129, 0 // InvokeDynamic #1:test:()Ljava/util/function/Predicate;`
+- `16: goto 27`
+- `19: invokedynamic #129, 0 // InvokeDynamic #1:test:()Ljava/util/function/Predicate;`
+- `24: invokestatic #135 // InterfaceMethod java/util/function/Predicate.not:(Ljava/util/function/Predicate;)Ljava/util/function/Predicate;`
+- `27: astore 4`
+
+`EventImpl$Notifier` lambda bootstraps:
+
+- 0: `REF_invokeVirtual io/quarkus/arc/impl/EventImpl$Notifier.isTxObserver:(Ljakarta/enterprise/inject/spi/ObserverMethod;)Z`
+- 1: `REF_invokeInterface jakarta/enterprise/inject/spi/ObserverMethod.isAsync:()Z`
+- 2: `REF_invokeVirtual io/quarkus/arc/impl/EventImpl$Notifier.isNotTxObserver:(Ljakarta/enterprise/inject/spi/ObserverMethod;)Z`
+- 3: `REF_invokeVirtual io/quarkus/arc/impl/EventImpl$Notifier.isNotAfterSuccess:(Ljakarta/enterprise/inject/spi/ObserverMethod;)Z`
+
+### 11. What javac writes at the fixture's fire sites
+
+- `ShippingService`: `invokeinterface` `jakarta/enterprise/event/Event.fire:(Ljava/lang/Object;)V`
+- `ShippingService`: `invokeinterface` `jakarta/enterprise/event/Event.fire:(Ljava/lang/Object;)V`
+- `ShippingService`: `invokeinterface` `jakarta/enterprise/event/Event.fire:(Ljava/lang/Object;)V`
+- `ShippingService`: `invokeinterface` `jakarta/enterprise/event/Event.fireAsync:(Ljava/lang/Object;)Ljava/util/concurrent/CompletionStage;`

@@ -107,12 +107,18 @@ def registrations(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]
     each, in the order written); where none is present and `mapping.path_fallback` is
     `payload_type`, the type of the parameter the catalog's `request_body` rule picks. A
     method neither gives a class keeps one row with no key, so it matches nothing and is
-    never a listener of every value. The handler is the method; its group is the method
-    itself, so its keys are one group's positions. Read by `record_dispatch_registrations`,
-    which owns the table.
+    never a listener of every value.
+
+    A method may instead be selected by a PARAMETER annotation (`mapping.selected_by_parameter`,
+    a list of annotation names: `@Observes`): each method with a parameter carrying one of them
+    is a registration keyed by that parameter's type (its erasure), whatever other parameters
+    it declares — the framework injects those. The handler is the method; its group is the
+    method itself, so its keys are one group's positions. Read by
+    `record_dispatch_registrations`, which owns the table.
 
     Cost (GUIDELINES §8.7): one `effective_annotation_uses` per declaring catalog (the read
-    the endpoint derivation makes per catalog) and one read of `method_declarations`."""
+    the endpoint derivation makes per catalog) and one read of `method_declarations`; the
+    parameter selector walks the parameters of the methods that read already returned."""
     mapping = catalog.matches["mapping"]
     fallback = mapping.get("path_fallback")
     if fallback is not None and fallback != _PAYLOAD_TYPE:
@@ -128,11 +134,12 @@ def registrations(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]
         )
     match = catalog.dispatch["match"]
     fqns = {_catalog_symbol(entry["fqn"]) for entry in mapping["annotations"]}
+    by_parameter = _parameter_selectors(mapping, catalog)
     path_from = list(mapping.get("path_from") or [])
     methods = {
         bare_descriptor(str(row["symbol"])): row for row in workspace.query("method_declarations")
     }
-    rows: list[dict[str, Any]] = []
+    selected: list[tuple[dict[str, Any], list[str | None] | None]] = []
     for target, uses in sorted(effective_annotation_uses(workspace, catalog).items()):
         declaration = methods.get(target)
         use = next((use for use in uses if use["annotation"] in fqns), None)
@@ -141,6 +148,14 @@ def registrations(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]
         keys = _named_classes(use["args"], path_from)
         if keys is None and fallback == _PAYLOAD_TYPE:
             keys = [_payload_type(declaration, catalog)]
+        selected.append((declaration, keys))
+    if by_parameter:
+        for _, declaration in sorted(methods.items()):
+            parameter = _annotated_parameter(declaration, by_parameter)
+            if parameter is not None:
+                selected.append((declaration, [_erased_type(parameter)]))
+    rows: list[dict[str, Any]] = []
+    for declaration, keys in selected:
         handler = str(declaration["symbol"])
         for position, key in enumerate(keys or [None]):
             rows.append(
@@ -178,6 +193,40 @@ def _named_classes(args: dict[str, Any], path_from: list[str]) -> list[str | Non
     return None
 
 
+def _parameter_selectors(mapping: dict[str, Any], catalog: Catalog) -> frozenset[str]:
+    """`mapping.selected_by_parameter`'s annotation names as symbols; empty where the word is
+    absent. Refused unless a list of names: a bare string would be read as its characters and
+    select nothing, every observer of the catalog silently absent."""
+    declared = mapping.get("selected_by_parameter")
+    if declared is None:
+        return frozenset()
+    if not isinstance(declared, list) or not all(
+        isinstance(name, str) and name for name in declared
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `mapping.selected_by_parameter` must be a list "
+            f"of annotation names, got {declared!r} (spec 2026-11-05 §2)"
+        )
+    return frozenset(_catalog_symbol(name) for name in declared)
+
+
+def _annotated_parameter(
+    declaration: dict[str, Any], annotations: frozenset[str]
+) -> dict[str, Any] | None:
+    """The first parameter of the method carrying one of `annotations`, or None."""
+    for parameter in (declaration["signature"] or {}).get("parameters", []):
+        if any(use["annotation"] in annotations for use in parameter.get("annotations", [])):
+            return dict(parameter)
+    return None
+
+
+def _erased_type(parameter: dict[str, Any]) -> str | None:
+    """A parameter's erased type, the descriptor's answer (the class a value is dispatched
+    by), or None where the fact carries none."""
+    symbol = parameter.get("erased_symbol") or (parameter.get("type") or {}).get("symbol")
+    return None if not symbol else bare_descriptor(str(symbol))
+
+
 def _payload_type(declaration: dict[str, Any], catalog: Catalog) -> str | None:
     """The type of the parameter the catalog's `request_body` rule picks (D02 §2), the
     descriptor's answer (the class a value is dispatched by), or None where it picks none."""
@@ -192,9 +241,7 @@ def _payload_type(declaration: dict[str, Any], catalog: Catalog) -> str | None:
     )
     if found is None:
         return None
-    parameter = found[1]
-    symbol = parameter.get("erased_symbol") or (parameter.get("type") or {}).get("symbol")
-    return None if not symbol else bare_descriptor(str(symbol))
+    return _erased_type(found[1])
 
 
 def _derives(catalog: Catalog) -> bool:

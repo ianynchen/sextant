@@ -58,6 +58,22 @@ here would restate those documents rather than add anything.
   their listener (17 hops, each checked by hand); no endpoint row moved on apollo-portal,
   apollo-biz or dolphinscheduler-api, and the six field pins hold. A trace's unread hop now
   reads `(value class not read)` rather than `(message class not read)`.
+- **CDI events are in-process dispatch** (spec 2026-11-05 §4 item 6, probe CP-59, Jakarta CDI
+  API 4.1.0, javax CDI API 1.0.0, ArC 3.17.5): the third user of the mechanism, with one new
+  catalog word, `mapping.selected_by_parameter: [<annotation fqn>, …]` (D02 §2m), which selects
+  a method by a PARAMETER annotation and keys it by that parameter's type, whatever other
+  parameters the container injects beside it. `cdi-events.yml` reads `@Observes` observers
+  (Jakarta and javax) and declares `Event.fire` as its send; `cdi-async-events.yml` reads
+  `@ObservesAsync` observers and declares both `Event.fireAsync` overloads. They are two
+  mechanisms because ArC notifies only synchronous observers from `fire` and only asynchronous
+  ones from `fireAsync` (CP-59 finding 10), so neither reaches the other's observers. Each fire
+  is a hop under `in_process` to every observer its class is assignable to; an observer of a
+  framework event nothing in the module fires (`@Observes StartupEvent`) is a registration with
+  no hop and no endpoint row. No example under `examples/` fires a CDI event: on
+  `quarkus-quickstarts`' `stork-quickstart` and `reactive-routes-quickstart` the five observers
+  are registrations keyed by their framework event, with no hop and no endpoint row moved; the
+  Pekko samples (5 rows, 28 hops, 23 registrations) and apollo-portal (17 hops) are identical.
+  Event qualifiers are not read (a stated bound).
 - **Akka and Pekko actors: a trace crosses actors** (spec 2026-11-04, SEXTANT-178, the user's
   ruling B "I want it complete"; probe CP-57, Akka 2.6.21 and Pekko 1.1.3). Three parts, each
   pinned on `fixtures/orders-actors-pekko` and `-akka`, then the measurement:

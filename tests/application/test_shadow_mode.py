@@ -342,6 +342,8 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # ask with two slots, so `receptionist` goes to (8, 12) and `cluster-sharding` to (6, 8).
 # **`spring-events` joined with Spring application events** (spec 2026-11-05 §4 item 5): six
 # `dispatch_sends` entries and one `dispatch_implementations` entry, each a `value_arg`.
+# **`cdi-events` and `cdi-async-events` joined with CDI events** (spec 2026-11-05 §4 item 6):
+# two `dispatch_sends` entries each, each a `value_arg`.
 _ASKS_PER_CATALOG = {
     "akka-actor-handlers": (69, 94),
     "akka-cluster-sharding": (6, 8),
@@ -352,6 +354,8 @@ _ASKS_PER_CATALOG = {
     "akka-receptionist": (8, 12),
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
+    "cdi-async-events": (2, 2),
+    "cdi-events": (2, 2),
     "google-pubsub-client": (1, 1),
     "google-pubsub-publisher": (2, 2),
     "google-pubsub-subscriber": (2, 3),
@@ -463,7 +467,8 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # **+2 on 2026-11-04** (Task 7 fix round): each handler catalog's `setReceiveTimeout` send.
     # **-8 on 2026-11-05**: the key class moved onto `channel_via` as `class_arg`, same comment.
     # **+7 on 2026-11-05**: the new `spring-events` catalog, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 1421
+    # **+4 on 2026-11-05**: the new `cdi-events` and `cdi-async-events` catalogs, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 1425
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole
