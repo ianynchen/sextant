@@ -943,6 +943,36 @@ CREATE TABLE IF NOT EXISTS rpc_hops (
     evidence TEXT
 );
 
+-- Spec 2026-11-04 §3b: the cases of each behavior a module builds — which message class, or
+-- which constant, reaches which handler, in the order the behavior tries them. A message is
+-- handled by the first case it matches, a predicated case never shadowing a later one; that
+-- rule is `resolve/message_handlers.reachable_handlers`, applied by the passes that read
+-- this table. One row per case. A derived TABLE because the reading is Python (the chain
+-- walk); replaced whole per resolve through reset_message_handlers.sql +
+-- insert_message_handlers.sql, both run by that one writing pass, the `rpc_hops` pairing.
+CREATE TABLE IF NOT EXISTS message_handlers (
+    -- The behavior: the chain that built it, `<caller>#<root ordinal>`, the caller
+    -- module-prefixed as `call_edges.caller` is.
+    behavior      TEXT,
+    -- The case's 0-based place in its behavior, in the order the behavior tries its cases.
+    position      INTEGER,
+    -- The message class the case takes, the class literal's symbol. NULL for a value case,
+    -- a predicate-only case, or a class the code does not state as a literal.
+    message_type  TEXT,
+    -- The constant the case takes a message equal to, by identity: the constant's own symbol
+    -- (`<owner>#<field>.`). NULL for a class case.
+    message_value TEXT,
+    -- Whether the case also tests a predicate: it may decline, so it never shadows a later
+    -- case.
+    predicated    BOOLEAN,
+    -- The handler method, module-prefixed. NULL where the handler argument names none.
+    handler       TEXT,
+    -- Whether the handler's return is a message delivered to its own receiver.
+    delivers      BOOLEAN,
+    -- D00 §4's evidence set. Always `compiler`: a catalog's rule over compiled facts.
+    evidence      TEXT
+);
+
 -- Spec 2026-09-22 §3d and §7a: what the backward value walk WOULD resolve, and
 -- what it could not, at every position a catalog asked about.
 --

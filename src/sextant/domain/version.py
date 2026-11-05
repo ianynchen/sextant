@@ -175,6 +175,10 @@ SEXTANT_VERSION = version("sextant")
 #             NULL where it accepts it. A refused row's handler is not a root. A workspace
 #             of the older vintage would read every refused schedule as one that runs, so it
 #             is refused and re-analysed.
+#     15      `message_handlers`, a new table: each behavior's message handler cases in the
+#             order the behavior tries them (spec 2026-11-04 §3b, approved by the user with
+#             the design). A workspace of the older vintage has no such table, so a reader of
+#             the cases would find none, and it is refused and re-analysed.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -197,5 +201,5 @@ SEXTANT_VERSION = version("sextant")
 #             consumer reading a schedule without it would take a refused one for work that
 #             runs.
 FACT_SCHEMA_VERSION = 6
-GRAPH_SCHEMA_VERSION = 14
+GRAPH_SCHEMA_VERSION = 15
 BOUNDARY_VOCABULARY_VERSION = 4

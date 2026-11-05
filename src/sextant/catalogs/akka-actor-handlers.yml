@@ -1,0 +1,194 @@
+id: akka-actor-handlers
+displayName: Akka message handler registrations (typed, persistence and classic builders)
+style: message_handlers
+
+# Spec 2026-11-04 §3b and §3d items 1-2. A behavior binds each message class (or an equal
+# value) to a handler, in order, and the first case a message matches handles it. This file
+# says which calls build a behavior and which of them register a case; it mints no endpoint
+# row. `resolve/message_handlers.py` reads it into the `message_handlers` table, one row per
+# case, its place in the chain kept, and `reachable_handlers` applies the first-match rule.
+#
+# A BEHAVIOR IS ONE CHAIN, walked receiver to result (§3d item 1): the roots below start it,
+# the steps register its cases in order, a terminal makes it one. Where CP-57 measured that a
+# registration returns a NEW builder (the typed `BehaviorBuilder`), the chain is only what
+# each call's result is called on next, so a builder whose result is dropped registers
+# nothing. Where it returns `this` (the typed `ReceiveBuilder`, every `onCommand`, classic
+# `match`/`matchEquals`), the step is `returns_receiver: true`, so a builder held in a local
+# and configured statement by statement is still one chain.
+#
+# Not declared, and read as nothing: `onSignal` (a lifecycle signal, not a message), classic
+# `matchAny` (a case with no class and no value, which this word cannot state; in the samples
+# only in test code), persistence `onAnyCommand` (it ends the builder in a `CommandHandler`,
+# no case of the chain), and `ReceiveBuilder.create()` (the classic static factory, absent
+# from the samples).
+detect:
+  coordinates: ["com.typesafe.akka:akka-actor-typed_2.13", "com.typesafe.akka:akka-actor-typed_3",
+                "com.typesafe.akka:akka-persistence-typed_2.13", "com.typesafe.akka:akka-persistence-typed_3",
+                "com.typesafe.akka:akka-actor_2.13", "com.typesafe.akka:akka-actor_3"]
+
+# CP-57 read every descriptor and every "returns this" verdict below with `javap -c -p` on
+# the jars the fixture resolves, and each jar's own manifest reports
+# `Implementation-Version: 2.6.21`.
+measured:
+  - { artifact: "com.typesafe.akka:akka-actor-typed_2.13", versions: ["2.6.21"],
+      identity: reported, by: scripts/probes/cp57_actors.md }
+  - { artifact: "com.typesafe.akka:akka-persistence-typed_2.13", versions: ["2.6.21"],
+      identity: reported, by: scripts/probes/cp57_actors.md }
+  - { artifact: "com.typesafe.akka:akka-actor_2.13", versions: ["2.6.21"],
+      identity: reported, by: scripts/probes/cp57_actors.md }
+
+requires: [call_site, chain_reconstruction]
+
+matches:
+  # THE ROOTS, each the call that hands back a fresh builder (CP-57: every one "new/other").
+  # `newReceiveBuilder` and classic `receiveBuilder` are inherited by the module's own class
+  # and called on `this`, so the call site names that class; the reader matches such a call
+  # by the class's ancestry (`message_handlers.py`). Each `forState`/`forStateType`/
+  # `forAnyState` call is its own builder and so its own behavior: states are alternatives.
+  roots:
+    - { owner: akka.actor.typed.javadsl.Behaviors, method: receive,
+        descriptor: "(Ljava/lang/Class;)Lakka/actor/typed/javadsl/BehaviorBuilder;" }
+    - { owner: akka.actor.typed.javadsl.AbstractBehavior, method: newReceiveBuilder,
+        descriptor: "()Lakka/actor/typed/javadsl/ReceiveBuilder;" }
+    - { owner: &command_handler_builder akka.persistence.typed.javadsl.CommandHandlerBuilder, method: forAnyState,
+        descriptor: "()Lakka/persistence/typed/javadsl/CommandHandlerBuilderByState;" }
+    - { owner: *command_handler_builder, method: forState,
+        descriptor: "(Ljava/util/function/Predicate;)Lakka/persistence/typed/javadsl/CommandHandlerBuilderByState;" }
+    - { owner: *command_handler_builder, method: forState,
+        descriptor: "(Ljava/lang/Class;Ljava/util/function/Predicate;)Lakka/persistence/typed/javadsl/CommandHandlerBuilderByState;" }
+    - { owner: *command_handler_builder, method: forStateType,
+        descriptor: "(Ljava/lang/Class;)Lakka/persistence/typed/javadsl/CommandHandlerBuilderByState;" }
+    - { owner: akka.actor.AbstractActor, method: receiveBuilder,
+        descriptor: "()Lakka/japi/pf/ReceiveBuilder;" }
+
+  # THE STEPS, one per registration overload, each named again under `message_handlers`
+  # below with what its arguments mean. Every step carries its call in `case` (argument 0,
+  # whatever it holds), `repeats` keeping the calls in chain order; the reader reads each
+  # call's arguments itself.
+  steps:
+    # Typed `BehaviorBuilder` (`Behaviors.receive(C)`): IMMUTABLE, every registration
+    # returns a new builder (CP-57 finding 1).
+    - { owner: &behavior_builder akka.actor.typed.javadsl.BehaviorBuilder, method: onMessage,
+        descriptor: "(Ljava/lang/Class;Lakka/japi/function/Function;)Lakka/actor/typed/javadsl/BehaviorBuilder;",
+        captures: { case: arg0 }, repeats: [case] }
+    - { owner: *behavior_builder, method: onMessage,
+        descriptor: "(Ljava/lang/Class;Lakka/japi/function/Predicate;Lakka/japi/function/Function;)Lakka/actor/typed/javadsl/BehaviorBuilder;",
+        captures: { case: arg0 }, repeats: [case] }
+    - { owner: *behavior_builder, method: onMessageEquals,
+        descriptor: "(Ljava/lang/Object;Lakka/japi/function/Creator;)Lakka/actor/typed/javadsl/BehaviorBuilder;",
+        captures: { case: arg0 }, repeats: [case] }
+    # Typed `ReceiveBuilder` (`newReceiveBuilder()`): MUTABLE, every registration returns
+    # `this` (CP-57 finding 1).
+    - { owner: &receive_builder akka.actor.typed.javadsl.ReceiveBuilder, method: onMessage,
+        descriptor: "(Ljava/lang/Class;Lakka/japi/function/Function;)Lakka/actor/typed/javadsl/ReceiveBuilder;",
+        captures: { case: arg0 }, repeats: [case], returns_receiver: true }
+    - { owner: *receive_builder, method: onMessage,
+        descriptor: "(Ljava/lang/Class;Lakka/japi/function/Predicate;Lakka/japi/function/Function;)Lakka/actor/typed/javadsl/ReceiveBuilder;",
+        captures: { case: arg0 }, repeats: [case], returns_receiver: true }
+    - { owner: *receive_builder, method: onMessageEquals,
+        descriptor: "(Ljava/lang/Object;Lakka/japi/function/Creator;)Lakka/actor/typed/javadsl/ReceiveBuilder;",
+        captures: { case: arg0 }, repeats: [case], returns_receiver: true }
+    # Persistence `CommandHandlerBuilderByState`: every `onCommand` returns `this` (CP-57
+    # finding 2). There is no 3-argument form and no `onCommandEquals` (finding 3); the
+    # predicate-first forms test the command and name no class.
+    - { owner: &by_state akka.persistence.typed.javadsl.CommandHandlerBuilderByState, method: onCommand,
+        descriptor: "(Ljava/util/function/Predicate;Ljava/util/function/BiFunction;)Lakka/persistence/typed/javadsl/CommandHandlerBuilderByState;",
+        captures: { case: arg0 }, repeats: [case], returns_receiver: true }
+    - { owner: *by_state, method: onCommand,
+        descriptor: "(Ljava/util/function/Predicate;Ljava/util/function/Function;)Lakka/persistence/typed/javadsl/CommandHandlerBuilderByState;",
+        captures: { case: arg0 }, repeats: [case], returns_receiver: true }
+    - { owner: *by_state, method: onCommand,
+        descriptor: "(Ljava/lang/Class;Ljava/util/function/BiFunction;)Lakka/persistence/typed/javadsl/CommandHandlerBuilderByState;",
+        captures: { case: arg0 }, repeats: [case], returns_receiver: true }
+    - { owner: *by_state, method: onCommand,
+        descriptor: "(Ljava/lang/Class;Ljava/util/function/Function;)Lakka/persistence/typed/javadsl/CommandHandlerBuilderByState;",
+        captures: { case: arg0 }, repeats: [case], returns_receiver: true }
+    - { owner: *by_state, method: onCommand,
+        descriptor: "(Ljava/lang/Class;Ljava/util/function/Supplier;)Lakka/persistence/typed/javadsl/CommandHandlerBuilderByState;",
+        captures: { case: arg0 }, repeats: [case], returns_receiver: true }
+    # Classic `japi.pf.ReceiveBuilder` (`receiveBuilder()`): `match` and `matchEquals` return
+    # `this` (CP-57 finding 4).
+    - { owner: &classic_builder akka.japi.pf.ReceiveBuilder, method: match,
+        descriptor: "(Ljava/lang/Class;Lakka/japi/pf/FI$UnitApply;)Lakka/japi/pf/ReceiveBuilder;",
+        captures: { case: arg0 }, repeats: [case], returns_receiver: true }
+    - { owner: *classic_builder, method: match,
+        descriptor: "(Ljava/lang/Class;Lakka/japi/pf/FI$TypedPredicate;Lakka/japi/pf/FI$UnitApply;)Lakka/japi/pf/ReceiveBuilder;",
+        captures: { case: arg0 }, repeats: [case], returns_receiver: true }
+    - { owner: *classic_builder, method: match,
+        descriptor: "(Ljava/lang/Class;Ljava/util/function/BooleanSupplier;Lakka/japi/pf/FI$UnitApply;)Lakka/japi/pf/ReceiveBuilder;",
+        captures: { case: arg0 }, repeats: [case], returns_receiver: true }
+    - { owner: *classic_builder, method: matchEquals,
+        descriptor: "(Ljava/lang/Object;Lakka/japi/pf/FI$UnitApply;)Lakka/japi/pf/ReceiveBuilder;",
+        captures: { case: arg0 }, repeats: [case], returns_receiver: true }
+    - { owner: *classic_builder, method: matchEquals,
+        descriptor: "(Ljava/lang/Object;Lakka/japi/pf/FI$TypedPredicate;Lakka/japi/pf/FI$UnitApply;)Lakka/japi/pf/ReceiveBuilder;",
+        captures: { case: arg0 }, repeats: [case], returns_receiver: true }
+    - { owner: *classic_builder, method: matchEquals,
+        descriptor: "(Ljava/lang/Object;Ljava/util/function/BooleanSupplier;Lakka/japi/pf/FI$UnitApply;)Lakka/japi/pf/ReceiveBuilder;",
+        captures: { case: arg0 }, repeats: [case], returns_receiver: true }
+
+  # What makes a chain a behavior: `build()` for the three receive builders. A persistence
+  # state builder is never built itself (its parent `CommandHandlerBuilder.build()` builds
+  # every state), so its own registration is what makes it one: `onCommand`, which returns
+  # `this`, named again here.
+  terminal:
+    - build
+    - { owner: *by_state, method: onCommand, returns_receiver: true }
+
+  # WHAT EACH REGISTRATION MEANS, by its exact overload: the argument holding the message
+  # class (`class_arg`) or the equal value (`value_arg`), the handler (`handler_arg`), and
+  # the predicate where one is given (`predicate_arg`). A predicated case never shadows a
+  # later one (§3d item 2); a predicate with no class (`onCommand(Predicate, h)`) tests any
+  # message.
+  message_handlers:
+    - { owner: *behavior_builder, method: onMessage,
+        descriptor: "(Ljava/lang/Class;Lakka/japi/function/Function;)Lakka/actor/typed/javadsl/BehaviorBuilder;",
+        class_arg: 0, handler_arg: 1 }
+    - { owner: *behavior_builder, method: onMessage,
+        descriptor: "(Ljava/lang/Class;Lakka/japi/function/Predicate;Lakka/japi/function/Function;)Lakka/actor/typed/javadsl/BehaviorBuilder;",
+        class_arg: 0, predicate_arg: 1, handler_arg: 2 }
+    - { owner: *behavior_builder, method: onMessageEquals,
+        descriptor: "(Ljava/lang/Object;Lakka/japi/function/Creator;)Lakka/actor/typed/javadsl/BehaviorBuilder;",
+        value_arg: 0, handler_arg: 1 }
+    - { owner: *receive_builder, method: onMessage,
+        descriptor: "(Ljava/lang/Class;Lakka/japi/function/Function;)Lakka/actor/typed/javadsl/ReceiveBuilder;",
+        class_arg: 0, handler_arg: 1 }
+    - { owner: *receive_builder, method: onMessage,
+        descriptor: "(Ljava/lang/Class;Lakka/japi/function/Predicate;Lakka/japi/function/Function;)Lakka/actor/typed/javadsl/ReceiveBuilder;",
+        class_arg: 0, predicate_arg: 1, handler_arg: 2 }
+    - { owner: *receive_builder, method: onMessageEquals,
+        descriptor: "(Ljava/lang/Object;Lakka/japi/function/Creator;)Lakka/actor/typed/javadsl/ReceiveBuilder;",
+        value_arg: 0, handler_arg: 1 }
+    - { owner: *by_state, method: onCommand,
+        descriptor: "(Ljava/util/function/Predicate;Ljava/util/function/BiFunction;)Lakka/persistence/typed/javadsl/CommandHandlerBuilderByState;",
+        predicate_arg: 0, handler_arg: 1 }
+    - { owner: *by_state, method: onCommand,
+        descriptor: "(Ljava/util/function/Predicate;Ljava/util/function/Function;)Lakka/persistence/typed/javadsl/CommandHandlerBuilderByState;",
+        predicate_arg: 0, handler_arg: 1 }
+    - { owner: *by_state, method: onCommand,
+        descriptor: "(Ljava/lang/Class;Ljava/util/function/BiFunction;)Lakka/persistence/typed/javadsl/CommandHandlerBuilderByState;",
+        class_arg: 0, handler_arg: 1 }
+    - { owner: *by_state, method: onCommand,
+        descriptor: "(Ljava/lang/Class;Ljava/util/function/Function;)Lakka/persistence/typed/javadsl/CommandHandlerBuilderByState;",
+        class_arg: 0, handler_arg: 1 }
+    - { owner: *by_state, method: onCommand,
+        descriptor: "(Ljava/lang/Class;Ljava/util/function/Supplier;)Lakka/persistence/typed/javadsl/CommandHandlerBuilderByState;",
+        class_arg: 0, handler_arg: 1 }
+    - { owner: *classic_builder, method: match,
+        descriptor: "(Ljava/lang/Class;Lakka/japi/pf/FI$UnitApply;)Lakka/japi/pf/ReceiveBuilder;",
+        class_arg: 0, handler_arg: 1 }
+    - { owner: *classic_builder, method: match,
+        descriptor: "(Ljava/lang/Class;Lakka/japi/pf/FI$TypedPredicate;Lakka/japi/pf/FI$UnitApply;)Lakka/japi/pf/ReceiveBuilder;",
+        class_arg: 0, predicate_arg: 1, handler_arg: 2 }
+    - { owner: *classic_builder, method: match,
+        descriptor: "(Ljava/lang/Class;Ljava/util/function/BooleanSupplier;Lakka/japi/pf/FI$UnitApply;)Lakka/japi/pf/ReceiveBuilder;",
+        class_arg: 0, predicate_arg: 1, handler_arg: 2 }
+    - { owner: *classic_builder, method: matchEquals,
+        descriptor: "(Ljava/lang/Object;Lakka/japi/pf/FI$UnitApply;)Lakka/japi/pf/ReceiveBuilder;",
+        value_arg: 0, handler_arg: 1 }
+    - { owner: *classic_builder, method: matchEquals,
+        descriptor: "(Ljava/lang/Object;Lakka/japi/pf/FI$TypedPredicate;Lakka/japi/pf/FI$UnitApply;)Lakka/japi/pf/ReceiveBuilder;",
+        value_arg: 0, predicate_arg: 1, handler_arg: 2 }
+    - { owner: *classic_builder, method: matchEquals,
+        descriptor: "(Ljava/lang/Object;Ljava/util/function/BooleanSupplier;Lakka/japi/pf/FI$UnitApply;)Lakka/japi/pf/ReceiveBuilder;",
+        value_arg: 0, predicate_arg: 1, handler_arg: 2 }

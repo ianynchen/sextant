@@ -15,7 +15,7 @@ import yaml
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.domain.closed_sets import Direction, Protocol, TargetKind, TerminalKind
-from sextant.domain.symbols import parameter_types, type_descriptor
+from sextant.domain.symbols import descriptor_slots, parameter_types, type_descriptor
 
 # The safe loader, compiled where the interpreter has the C library and pure
 # Python where it does not — the same YAML subset, the same Python objects
@@ -548,6 +548,8 @@ class YamlCatalogSource:
                     type_model=conformance,
                     # The server's own prefix keys, built above.
                     server_model=servers,
+                    # Spec 2026-11-04 §3b: what each declared registration call means.
+                    message_handlers=_message_handlers(raw["matches"], path),
                 )
             )
         return catalogs
@@ -1530,6 +1532,95 @@ def _hand_off_effect(entry: Any, path: Path) -> dict[str, Any]:
         "refuses": refuses,
         "by": str(entry["by"]),
     }
+
+
+_HANDLER_POSITIONS = ("class_arg", "value_arg", "predicate_arg", "handler_arg")
+
+
+def _message_handlers(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
+    """`matches.message_handlers` (spec 2026-11-04 §3b), checked and converted: each entry
+    `{owner, method, descriptor, class_arg | value_arg, handler_arg, predicate_arg?,
+    returns_message?}`, the owner as a type symbol (the facts' spelling) and every position an
+    argument index the descriptor has. A registration names its message by class or by an
+    equal value, never both, and one with neither is a predicate-only case, so it needs
+    `predicate_arg`. Every key is checked, because a position that reads the wrong argument
+    is a wrong row rather than a missing one. Empty for a catalog declaring none."""
+    declared = matches.get("message_handlers") if isinstance(matches, dict) else None
+    if declared is None:
+        return ()
+    where = f"loading catalog {path}: `message_handlers`"
+    if not isinstance(declared, list):
+        raise CatalogError(f"{where} must be a list, got {declared!r}")
+    entries: list[dict[str, Any]] = []
+    for entry in declared:
+        if not isinstance(entry, dict) or not all(
+            isinstance(entry.get(key), str) and entry.get(key)
+            for key in ("owner", "method", "descriptor")
+        ):
+            raise CatalogError(
+                f"{where}: each entry names its call by `owner`, `method` and `descriptor`, "
+                f"got {entry!r}"
+            )
+        unknown = sorted(
+            set(entry) - {"owner", "method", "descriptor", "returns_message", *_HANDLER_POSITIONS}
+        )
+        if unknown:
+            raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
+        descriptor = str(entry["descriptor"])
+        if not descriptor.startswith("(") or ")" not in descriptor:
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares `descriptor: {descriptor!r}`, which "
+                f"is not a method descriptor"
+            )
+        arity = len(descriptor_slots(descriptor)[0])
+        positions: dict[str, int | None] = {}
+        for key in _HANDLER_POSITIONS:
+            value = entry.get(key)
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or not 0 <= value < arity
+            ):
+                raise CatalogError(
+                    f"{where}: `{entry['method']}` declares `{key}: {value!r}`, which is not "
+                    f"an argument of `{descriptor}`"
+                )
+            positions[key] = value
+        if positions["handler_arg"] is None:
+            raise CatalogError(f"{where}: `{entry['method']}` names no `handler_arg`")
+        if positions["class_arg"] is not None and positions["value_arg"] is not None:
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares both `class_arg` and `value_arg`; a "
+                f"case matches a message by its class or by an equal value, never both"
+            )
+        if (
+            positions["class_arg"] is None
+            and positions["value_arg"] is None
+            and positions["predicate_arg"] is None
+        ):
+            raise CatalogError(
+                f"{where}: `{entry['method']}` names no `class_arg`, `value_arg` or "
+                f"`predicate_arg`; a case with none of them is not one this word states"
+            )
+        used = [value for value in positions.values() if value is not None]
+        if len(used) != len(set(used)):
+            raise CatalogError(
+                f"{where}: `{entry['method']}` reads one argument for two meanings: {positions}"
+            )
+        returns_message = entry.get("returns_message", False)
+        if not isinstance(returns_message, bool):
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares `returns_message: {returns_message!r}`, "
+                f"which is not true or false"
+            )
+        entries.append(
+            {
+                "owner": type_descriptor(str(entry["owner"])),
+                "method": str(entry["method"]),
+                "descriptor": descriptor,
+                **positions,
+                "returns_message": returns_message,
+            }
+        )
+    return tuple(entries)
 
 
 def _arg_index(value: Any, where: str) -> int:

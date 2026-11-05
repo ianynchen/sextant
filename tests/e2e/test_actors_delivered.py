@@ -10,6 +10,7 @@ package `com.acme.actors`), so every test runs on each.
 **Not a document check.** Real bytecode, real pipeline, assertion on derived endpoints.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -24,8 +25,8 @@ _FAMILIES = ("orders-actors-pekko", "orders-actors-akka")
 
 
 @pytest.fixture(scope="module", params=_FAMILIES)
-def actor_rows(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> set:
-    """`(direction, path, resolution)` for every `actor` row one fixture derives."""
+def analyzed(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """One fixture, analysed once the way a user analyses it: its workspace file."""
     root = FIXTURES / request.param
     workspace_dir = tmp_path_factory.mktemp(request.param)
     compile_fixture(root)
@@ -33,7 +34,13 @@ def actor_rows(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPath
         cli, ["module", "analyze", str(root), "--workspace", str(workspace_dir)]
     )
     assert result.exit_code == 0, result.output
-    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    return workspace_dir / "workspace.duckdb"
+
+
+@pytest.fixture(scope="module")
+def actor_rows(analyzed: Path) -> set:
+    """`(direction, path, resolution)` for every `actor` row one fixture derives."""
+    workspace = DuckDbWorkspace(analyzed)
     try:
         return {
             (str(row["direction"]), row["path"], str(row["resolution"]))
@@ -113,3 +120,110 @@ def test_a_key_the_module_does_not_serve_is_an_outbound_row(tmp_path: Path) -> N
     workspace.close()
 
     assert remaining == [("inbound", "stock"), ("outbound", "inventory")]
+
+
+@pytest.fixture(scope="module")
+def handler_cases(analyzed: Path) -> dict[str, list[tuple]]:
+    """Every `message_handlers` row one fixture derives, by the behavior's method
+    (`Class#method`, module and signature left out), each `(position, message_type,
+    message_value, predicated, handler's Class#method, delivers)` in position order."""
+    workspace = DuckDbWorkspace(analyzed)
+    try:
+        rows = workspace.query("message_handlers")
+    finally:
+        workspace.close()
+
+    def method_of(symbol: str) -> str:
+        """`Class#method`; a lambda's synthetic body is `Class#lambda`, because javac names
+        it with a hash that differs between the two families' builds."""
+        name = symbol.rsplit("/", 1)[1].split("(")[0]
+        return re.sub(r"#lambda\$.*", "#lambda", name)
+
+    cases: dict[str, list[tuple]] = {}
+    for row in rows:
+        behavior = str(row["behavior"])
+        key = method_of(behavior.rsplit("#", 1)[0]) + "@" + behavior.rsplit("#", 1)[1]
+        cases.setdefault(key, []).append(
+            (
+                row["position"],
+                None if row["message_type"] is None else method_of(str(row["message_type"])),
+                None if row["message_value"] is None else method_of(str(row["message_value"])),
+                row["predicated"],
+                None if row["handler"] is None else method_of(str(row["handler"])),
+                row["delivers"],
+            )
+        )
+    return {key: sorted(value) for key, value in cases.items()}
+
+
+def test_stock_handlers_are_read_in_order(handler_cases):
+    """`Stock`'s immutable chain (spec §3d items 1-3): four cases, one behavior, in chain
+    order; the predicated `Release` case at 1 and the unpredicated one at 2 both stand, and
+    the `Tick.INSTANCE` case is a value case, no class."""
+    [stock] = [cases for key, cases in handler_cases.items() if key.startswith("Stock#behavior@")]
+    assert stock == [
+        (0, "Stock$Reserve#", None, False, "Stock#onReserve", False),
+        (1, "Stock$Release#", None, True, "Stock#onUrgentRelease", False),
+        (2, "Stock$Release#", None, False, "Stock#onRelease", False),
+        (3, None, "Stock$Tick#INSTANCE.", False, "Stock#onTick", False),
+    ]
+
+
+def test_every_behavior_the_fixture_builds(handler_cases):
+    """The whole set, so a behavior too many is a failure too. `Orders` builds three state
+    behaviors on one `CommandHandlerBuilder` (`forAnyState()` chained, then each `forState`
+    result held in a local and given its `onCommand` as a statement), each its own; `Frontend`
+    a mutable `newReceiveBuilder()` chain, a root its own class inherits; `OrderEntity` an
+    immutable chain whose handler is a lambda, its synthetic body named; `ClassicBroker` a
+    classic `receiveBuilder()`, also inherited."""
+    assert sorted((key.split("@")[0], cases) for key, cases in handler_cases.items()) == [
+        (
+            "ClassicBroker#createReceive",
+            [
+                (0, "ClassicBroker$Price#", None, False, "ClassicBroker#onPrice", False),
+            ],
+        ),
+        (
+            "Frontend#createReceive",
+            [
+                (0, "Frontend$Workers#", None, False, "Frontend#onWorkers", False),
+                (1, "Frontend$Start#", None, False, "Frontend#onStart", False),
+                (2, "Frontend$Reserved#", None, False, "Frontend#lambda", False),
+                (3, "Frontend$Failed#", None, False, "Frontend#lambda", False),
+                (4, "Frontend$Loaded#", None, False, "Frontend#lambda", False),
+            ],
+        ),
+        (
+            "OrderEntity#create",
+            [
+                (0, "OrderEntity$Get#", None, False, "OrderEntity#lambda", False),
+            ],
+        ),
+        (
+            "Orders#commandHandler",
+            [
+                (0, "Orders$Cancel#", None, False, "Orders#onCancel", False),
+            ],
+        ),
+        (
+            "Orders#commandHandler",
+            [
+                (0, "Orders$Cancel#", None, False, "Orders#onCancelEmpty", False),
+            ],
+        ),
+        (
+            "Orders#commandHandler",
+            [
+                (0, "Orders$Place#", None, False, "Orders#onPlace", False),
+            ],
+        ),
+        (
+            "Stock#behavior",
+            [
+                (0, "Stock$Reserve#", None, False, "Stock#onReserve", False),
+                (1, "Stock$Release#", None, True, "Stock#onUrgentRelease", False),
+                (2, "Stock$Release#", None, False, "Stock#onRelease", False),
+                (3, None, "Stock$Tick#INSTANCE.", False, "Stock#onTick", False),
+            ],
+        ),
+    ]

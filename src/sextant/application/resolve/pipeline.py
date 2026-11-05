@@ -14,6 +14,7 @@ from sextant.application.resolve.endpoint_attributes import record_endpoint_attr
 from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoints_with_runs
 from sextant.application.resolve.environment_divergence import record_environment_divergence
 from sextant.application.resolve.format import resolve_format
+from sextant.application.resolve.message_handlers import record_message_handlers
 from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.path_prefix import apply_path_prefixes
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
@@ -242,6 +243,12 @@ def resolve(
     # resets its own table, being its only writer.
     with _timed("record_rpc_hops"):
         record_rpc_hops(workspace, declared)
+    # Spec 2026-11-04 §3b: each behavior's message handler cases, read off the call sites the
+    # catalogs declare. Right after the hop pass above, which the message hops will join
+    # (they read these rows); it reads no endpoint row and resets its own table, being its
+    # only writer.
+    with _timed("record_message_handlers"):
+        record_message_handlers(workspace, declared)
     # **The module's own server prefix, and it runs HERE for a reason** (spec 2026-10-18 §3,
     # `OI-148`): every row exists by now, and nothing has copied an address yet.
     # `record_roots`, `record_routing_conflicts` and `record_self_exchange` all key on the

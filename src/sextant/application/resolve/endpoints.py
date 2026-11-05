@@ -150,6 +150,7 @@ def derive_endpoints_with_runs(
             _bound(_engine_for(_wire_identity_checked(_shape_checked(catalog))), catalog, catalogs),
         )
         for catalog in catalogs
+        if catalog.style not in _READ_BY_A_LATER_PASS
     ]
     # Emptied once, here, rather than once per catalog: D02 §5 has two
     # catalogs both matching and both producing endpoints, so a per-catalog
@@ -339,6 +340,12 @@ def _derives_rows(catalog: Catalog) -> int:
 # The styles that derive into a table of their own rather than into
 # `endpoints` (2O design §4).
 _NON_WIRE = frozenset({"scheduled_work", "scheduled_chain", "error_advice"})
+
+# The styles no engine here runs: a catalog of one declares facts a later pass reads, and
+# mints no row, stamps none and feeds no boundary kind (spec 2026-11-04 §3b). Left out of the
+# engine loop rather than given an engine that does nothing, so no skip and no run is
+# reported for it: its pass is `resolve/message_handlers.py`, after every engine.
+_READ_BY_A_LATER_PASS = frozenset({"message_handlers"})
 
 
 def _derives_endpoint_rows(catalog: Catalog) -> bool:

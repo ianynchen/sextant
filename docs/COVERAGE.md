@@ -795,10 +795,13 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**108 of 122 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**110 of 124 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
+| `akka-actor-handlers` | `com.typesafe.akka:akka-actor-typed_2.13` | 2.6.21 |
+|  | `com.typesafe.akka:akka-actor_2.13` | 2.6.21 |
+|  | `com.typesafe.akka:akka-persistence-typed_2.13` | 2.6.21 |
 | `akka-cluster-sharding` | `com.typesafe.akka:akka-cluster-sharding-typed_2.13` | 2.6.21 |
 | `akka-pubsub-publish` | `com.typesafe.akka:akka-cluster-tools_2.13` | 2.6.21 |
 | `akka-pubsub-put` | `com.typesafe.akka:akka-cluster-tools_2.13` | 2.6.21 |
@@ -860,6 +863,9 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `microprofile-graphql` | `io.smallrye:smallrye-graphql-schema-builder` | 2.0.0, 2.18.5 |
 | `microprofile-rest-client` | `org.eclipse.microprofile.rest.client:microprofile-rest-client-api` | 3.0.1, 4.0.0 |
 | `okhttp` | `com.squareup.okhttp3:okhttp` | 3.14.9, 4.12.0 |
+| `pekko-actor-handlers` | `org.apache.pekko:pekko-actor-typed_2.13` | 1.1.3 |
+|  | `org.apache.pekko:pekko-actor_2.13` | 1.1.3 |
+|  | `org.apache.pekko:pekko-persistence-typed_2.13` | 1.1.3 |
 | `pekko-cluster-sharding` | `org.apache.pekko:pekko-cluster-sharding-typed_2.13` | 1.1.3 |
 | `pekko-connectors-kafka` | `org.apache.pekko:pekko-connectors-kafka_2.13` | 1.1.0 |
 | `pekko-pubsub-publish` | `org.apache.pekko:pekko-cluster-tools_2.13` | 1.1.3 |

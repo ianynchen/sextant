@@ -1077,6 +1077,14 @@ _NAMED_QUERIES = {
         FROM rpc_hops
         ORDER BY caller, ordinal, handler
     """,
+    # Spec 2026-11-04 §3b: each behavior's cases, in the order the behavior tries them. Total
+    # (NFR-1): one (behavior, position) is one case.
+    "message_handlers": """
+        SELECT behavior, position, message_type, message_value, predicated, handler, delivers,
+               evidence
+        FROM message_handlers
+        ORDER BY behavior, position
+    """,
     # Spec 2026-10-22-boundary-vocabulary-and-diff §5 (FR-24): the six in-process questions
     # `application/query/questions.py` answers, each ONE read (GUIDELINES §8.7) and the walk
     # behind `impact` one read per hop of its frontier, never one per symbol it reaches.
@@ -1594,6 +1602,10 @@ _EXPORT_QUERIES = {
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = h.path
         ORDER BY h.caller, h.ordinal, h.handler
     """,
+    # Spec 2026-11-04 §3b. Symbols, an integer and booleans: a class, a constant and a handler
+    # are each named by its symbol, so there is nowhere in it for an address, a config value or
+    # a string constant out of bytecode to be, the `call_edges` reason above.
+    "message_handlers": _NAMED_QUERIES["message_handlers"],
     # F3 §4.2. Both carry only symbols, a closed-set value and an integer — no address,
     # config value or bytecode string — so redaction has nothing to reach here, the same
     # reason `call_edges` above is exported whole. W34's ratchet requires them: a table
@@ -1874,6 +1886,10 @@ _NAMED_DERIVATIONS = {
     # nothing but `resolve/rpc_hops.py` writes here.
     "rpc_hops_reset": "reset_rpc_hops.sql",
     "rpc_hops_insert": "insert_rpc_hops.sql",
+    # Spec 2026-11-04 §3b. A reset/insert pair owned by its one writing pass, as above:
+    # nothing but `resolve/message_handlers.py` writes here.
+    "message_handlers_reset": "reset_message_handlers.sql",
+    "message_handlers_insert": "insert_message_handlers.sql",
     # 2Q `I1`. A reset/insert pair owned by its one writing pass, exactly as
     # `return_flows` above is and for the same reason.
     "roots_reset": "reset_roots.sql",

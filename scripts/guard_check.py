@@ -146,6 +146,8 @@ _FLUENT = "sextant/application/resolve/engines/fluent.py"
 # The chain walk `fluent` derives from (Quartz spec 2026-10-28 §3d), moved out of `_FLUENT`
 # whole, with the guards on the walk's own rules.
 _CHAINS = "sextant/application/resolve/shapes/chains.py"
+# Message handler cases per behavior, and the first-match rule (spec 2026-11-04 §3b).
+_MESSAGE_HANDLERS = "sextant/application/resolve/message_handlers.py"
 _CLIENT_BASE = "sextant/application/resolve/shapes/client_base.py"
 # Which handler on a route chain answers (Vert.x spec 2026-10-30 §3b, plan Task 10).
 _PASS_THROUGH = "sextant/application/resolve/shapes/pass_through.py"
@@ -7037,6 +7039,139 @@ GUARDS: dict[str, Guard] = {
                 find='_PROTOCOLS: dict[str, str | None] = {"grpc": "/", "actor": None}\n',
                 replace='_PROTOCOLS: dict[str, str | None] = {"grpc": "/", "actor": "/"}  # guard disabled\n',
             ),
+        ),
+    ),
+    "message-handlers.the-cases-are-WRITTEN": Guard(
+        what="each case a behavior registers is written as a `message_handlers` row",
+        why="spec 2026-11-04 §3b: the rows are what a send's hop and an inbound key's handler "
+        "are found through. Without them every actor message stops at the library call that "
+        "sends it, and no inbound key row names a handler",
+        edits=(
+            Edit(
+                path=_MESSAGE_HANDLERS,
+                find='    if rows:\n        workspace.derive("message_handlers_insert", rows=rows)\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n"
+                '        workspace.derive("message_handlers_insert", rows=rows)\n',
+            ),
+        ),
+    ),
+    "message-handlers.the-FIRST-unpredicated-match-wins": Guard(
+        what="a message reaches the first unpredicated case it matches in a behavior, and no "
+        "case after it",
+        why="spec 2026-11-04 §3c: a behavior dispatches to the first case whose class the "
+        "message is assignable to. Without the stop, `onMessage(Command)` followed by "
+        "`onMessage(Reserve)` gives a `Reserve` send a hop to a handler that never runs",
+        edits=(
+            Edit(
+                path=_MESSAGE_HANDLERS,
+                find='            if not case["predicated"]:\n                break\n',
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n"
+                "                break\n",
+            ),
+        ),
+    ),
+    "message-handlers.a-PREDICATED-case-never-shadows": Guard(
+        what="a case carrying a predicate does not stop the search for the case a message reaches",
+        why="spec 2026-11-04 §3d item 2: a predicate may decline, so the case after it is "
+        "reached too. Read as shadowing, `onMessage(Release, urgent)` before "
+        "`onMessage(Release)` hides the handler that runs for every non-urgent release",
+        edits=(
+            Edit(
+                path=_MESSAGE_HANDLERS,
+                find='            if not case["predicated"]:\n                break\n',
+                replace="            if True:  # guard disabled by scripts/guard_check.py\n"
+                "                break\n",
+            ),
+        ),
+    ),
+    "message-handlers.a-PREDICATE-only-case-tests-every-message": Guard(
+        what="a case naming no class and no value but a predicate is reached by every message",
+        why="the controller's ruling on `onCommand(Predicate, h)`: the predicate tests any "
+        "command, so its handler may run for any of them. Read as matching nothing, the "
+        "handler is lost from every hop",
+        edits=(
+            Edit(
+                path=_MESSAGE_HANDLERS,
+                find='    return bool(case["predicated"])\n',
+                replace="    return False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "message-handlers.a-VALUE-case-matches-by-IDENTITY": Guard(
+        what="a value case is reached only by a message that is its constant",
+        why="spec 2026-11-04 §3d item 3: `onMessageEquals(Tick.INSTANCE)` tests equality with "
+        "that constant. Matched by anything else, a `new Tick()` send would land on it and "
+        "never reach the class case that takes it",
+        edits=(
+            Edit(
+                path=_MESSAGE_HANDLERS,
+                find='        return message_value is not None and case["message_value"] == message_value\n',
+                replace="        return True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "message-handlers.each-ROOT-is-its-own-behavior": Guard(
+        what="a behavior is named by its root call, so two chains in one method are two behaviors",
+        why="spec 2026-11-04 §3d item 1: each `forState` returns its own state builder, and "
+        "states are alternatives. Named by the method alone, three states would be one "
+        "behavior whose first `Cancel` case shadows the other state's",
+        edits=(
+            Edit(
+                path=_MESSAGE_HANDLERS,
+                find="        behavior = f\"{end.root['caller']}#{end.root['ordinal']}\"\n",
+                replace="        behavior = f\"{end.root['caller']}#0\"  # guard disabled\n",
+            ),
+        ),
+    ),
+    "message-handlers.an-inherited-root-needs-the-ANCESTRY": Guard(
+        what="a root call made through a module class is the declared root only where that "
+        "class's ancestry reaches the root's owner",
+        why="JVMS 5.4.3.3: a call names the class it is made through and resolves up that "
+        "class's ancestry. Without the ancestry test any class's own `newReceiveBuilder()` "
+        "would be read as the library's and its calls as message cases",
+        edits=(
+            Edit(
+                path=_MESSAGE_HANDLERS,
+                find="        heirs = sorted(child for child in ancestors if _reaches(child, owners, ancestors))\n",
+                replace="        heirs = sorted(ancestors)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "actor.a-builder-held-in-a-local-is-ONE-behavior-where-it-returns-this": Guard(
+        what="the typed `ReceiveBuilder.onMessage` step is `returns_receiver: true`, so its "
+        "statements on one local are one chain",
+        why="CP-57 finding 1: the mutable builder returns `this`. Read as returning a new "
+        "builder, `b.onMessage(A, h); b.onMessage(B, g); b.build()` registers nothing, and "
+        "both handlers are lost",
+        edits=tuple(
+            Edit(
+                path=f"sextant/catalogs/{family}-actor-handlers.yml",
+                find=f'"(Ljava/lang/Class;L{prefix}/japi/function/Function;)L{prefix}/actor/typed/'
+                'javadsl/ReceiveBuilder;",\n        captures: { case: arg0 }, repeats: [case], '
+                "returns_receiver: true }\n",
+                replace=f'"(Ljava/lang/Class;L{prefix}/japi/function/Function;)L{prefix}/actor/'
+                'typed/javadsl/ReceiveBuilder;",\n        captures: { case: arg0 }, repeats: '
+                "[case] }  # guard disabled\n",
+            )
+            for family, prefix in (("pekko", "org/apache/pekko"), ("akka", "akka"))
+        ),
+    ),
+    "actor.a-DROPPED-immutable-builder-registers-nothing": Guard(
+        what="the typed `BehaviorBuilder.onMessage` step is NOT `returns_receiver`, so a "
+        "registration whose new builder is dropped is on no chain",
+        why="CP-57 finding 1: the immutable builder returns a new builder. Read as `this`, "
+        "`b.onMessage(A, h); return b.build();` claims a case the built behavior does not "
+        "have, and a send of `A` gets a hop to a handler that never runs",
+        edits=tuple(
+            Edit(
+                path=f"sextant/catalogs/{family}-actor-handlers.yml",
+                find=f'"(Ljava/lang/Class;L{prefix}/japi/function/Function;)L{prefix}/actor/typed/'
+                'javadsl/BehaviorBuilder;",\n        captures: { case: arg0 }, repeats: [case] }\n',
+                replace=f'"(Ljava/lang/Class;L{prefix}/japi/function/Function;)L{prefix}/actor/'
+                'typed/javadsl/BehaviorBuilder;",\n        captures: { case: arg0 }, repeats: '
+                "[case], returns_receiver: true }  # guard disabled\n",
+            )
+            for family, prefix in (("pekko", "org/apache/pekko"), ("akka", "akka"))
         ),
     ),
     "self-calls.a-served-identity-is-matched-within-ITS-protocol": Guard(

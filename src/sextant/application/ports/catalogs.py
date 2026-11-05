@@ -336,6 +336,14 @@ class Catalog:
     # takes no configured prefix at all, because Spring Boot's keys do not configure it.
     dispatcher: str | None = None
 
+    # The message handler registrations this catalog declares under `matches.message_handlers`
+    # (spec 2026-11-04 §3b): per call, by its exact overload, which argument holds the message
+    # class or the equal value, the handler and any predicate, and whether the handler's return
+    # is a message delivered back to its own receiver. `{owner, method, descriptor, class_arg,
+    # value_arg, predicate_arg, handler_arg, returns_message}`, the owner a type symbol, each
+    # position an index or None. Checked by the loader; read by `resolve/message_handlers.py`.
+    message_handlers: tuple[dict[str, Any], ...] = ()
+
 
 class CatalogError(ValueError):
     """A catalog that cannot be trusted. An unchecked value does not stay in

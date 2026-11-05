@@ -327,7 +327,12 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # new `single_call` catalogs: each row's `channel_arg` is one ask, and each `channel_via`
 # entry another (`receptionist` four rows with one entry each, `cluster-sharding` three, the
 # pub-sub constructor rows none).
+# **The two message handler catalogs joined the same day** (spec 2026-11-04 §3b), each with
+# seventeen registration steps capturing `case: arg0` (the carrier of the call's place in the
+# chain, read by `resolve/message_handlers.py`, never as a value): 34 asks and 57 slots per
+# family as `asks_of` counts them, the same in both.
 _ASKS_PER_CATALOG = {
+    "akka-actor-handlers": (34, 57),
     "akka-cluster-sharding": (6, 6),
     "akka-pubsub-publish": (2, 2),
     "akka-pubsub-put": (1, 1),
@@ -358,6 +363,7 @@ _ASKS_PER_CATALOG = {
     "ktor-sse-client": (39, 39),
     "ktor-websocket-client": (23, 23),
     "okhttp": (5, 6),
+    "pekko-actor-handlers": (34, 57),
     "pekko-cluster-sharding": (6, 6),
     "pekko-connectors-kafka": (15, 15),
     "pekko-pubsub-publish": (2, 2),
@@ -439,7 +445,8 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # **+182 on 2026-10-31** (Task 15): the RxJava 3 and Mutiny wrappers' own roots, steps,
     # mounts and factory rungs, same comment (5 in `vertx-web`, 177 in `vertx-webclient`).
     # **+44 on 2026-11-04**: the twelve Akka and Pekko actor catalogs, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 1276
+    # **+68 on 2026-11-04**: the two message handler catalogs, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 1344
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole
