@@ -164,3 +164,15 @@ Five Major findings (no Critical), each ruled by the user 2026-11-05. Minor find
   own error as its reason, through the existing skip reasons; a part that uses it is skipped with
   Gradle's reason too. The output states every skipped part at the top. Plain `java` builds gain the
   same: one broken part no longer blocks the rest.
+- **M6. Two modules from one folder would overwrite each other's results.** Found while planning.
+  Results live at `<module folder>/.sextant`, and `modules.json` names a module by its folder, so
+  `core-jvm` and `core-android` (or `app-free` and `app-paid`) would share `core/.sextant`.
+  **Ruled 2026-11-05: A.** A folder holding several modules keeps one `.sextant` folder with one
+  sub-folder per module, named by the version or edition name (`core/.sextant/jvm/`,
+  `core/.sextant/android/`); a folder with one module keeps `core/.sextant/` as today. Each
+  `modules.json` row gains `results`, the results folder relative to the repository root
+  (`"results": "core/.sextant/jvm"`) — **a change to the `modules.json` format, approved by the
+  user** — and a row without it means `<dir>/.sextant`, so older files keep working.
+  `system analyze` finds results through `results`. A single-module command (`render`, `enrich`,
+  `export`, `diff`) at a folder whose `.sextant` holds several modules stops and lists each
+  module with its exact `--workspace` command; it never picks one.
