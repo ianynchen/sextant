@@ -1358,6 +1358,69 @@ def test_observability_at_a_shared_folder_asks_for_the_results_folder(
     assert api.observability(core / ".sextant" / "jvm") is not None
 
 
+def _analyze_in_place(repo: Path, modules: tuple[ModuleModel, ...]) -> None:
+    api._analyze_reactor(repo, RepositoryModel(root=repo, modules=modules), False, None, None)
+
+
+@pytest.mark.pins("api.a-module-REMOVES-the-results-the-OTHER-layout-left")
+def test_two_modules_after_one_remove_the_one_module_results(tmp_path: Path):
+    """A folder analyzed with one module and later with two must not keep the old
+    one-module results at the top of `.sextant`: `render` would read them as current.
+    The folder is also the repository root here, so its `.sextant` holds
+    `modules.json` and the system files, and those stay."""
+    compile_fixture(_SHARED_FOLDER_FIXTURE)
+    core = tmp_path / "core"
+    shutil.copytree(_SHARED_FOLDER_FIXTURE, core, ignore=shutil.ignore_patterns(".sextant"))
+    _analyze_in_place(core, (_reactor_one_module(core),))
+    assert (core / ".sextant" / "workspace.duckdb").is_file()
+    (core / ".sextant" / "system.duckdb").write_bytes(b"system")
+    (core / ".sextant" / "render").mkdir(exist_ok=True)
+    (core / ".sextant" / "render" / "system.md").write_text("system", encoding="utf-8")
+    (core / ".sextant" / "render" / "architecture.md").write_text("old", encoding="utf-8")
+
+    modules = (_shared_folder_module(core, "jvm"), _shared_folder_module(core, "android"))
+    _analyze_in_place(core, modules)
+
+    for name in ("workspace.duckdb", "metadata.json", "facts", "render/architecture.md"):
+        assert not (core / ".sextant" / name).exists(), name
+    for name in ("modules.json", "system.duckdb", "render/system.md"):
+        assert (core / ".sextant" / name).exists(), name
+    result = CliRunner().invoke(cli, ["module", "render", str(core)])
+    assert result.exit_code != 0
+    assert f"{core} holds 2 modules: com.acme:core-android" in result.output
+
+
+def test_one_module_after_two_removes_the_sub_folders(tmp_path: Path):
+    """The reverse: a folder that held two modules and now holds one keeps its
+    results at the top of `.sextant`, and the two old sub-folders go."""
+    compile_fixture(_SHARED_FOLDER_FIXTURE)
+    repo = tmp_path / "repo"
+    core = repo / "core"
+    shutil.copytree(_SHARED_FOLDER_FIXTURE, core, ignore=shutil.ignore_patterns(".sextant"))
+    _analyze_in_place(
+        repo, (_shared_folder_module(core, "jvm"), _shared_folder_module(core, "android"))
+    )
+    _analyze_in_place(repo, (_reactor_one_module(core),))
+
+    assert not (core / ".sextant" / "jvm").exists()
+    assert not (core / ".sextant" / "android").exists()
+    result = CliRunner().invoke(cli, ["module", "render", str(core)])
+    assert result.exit_code == 0, result.output
+
+
+def test_query_at_a_shared_folder_names_its_workspace_keyword(shared_folder_repo: Path):
+    """`api.query` reaches a module of a shared folder through `workspace`, and its
+    refusal at the folder names that keyword, not a command-line option it lacks."""
+    core = shared_folder_repo / "core"
+    with pytest.raises(api.NotAnalyzedError) as refused:
+        api.query(core, "source", symbol="x")
+    assert f"com.acme:core-jvm (workspace={core / '.sextant' / 'jvm'})" in str(refused.value)
+    assert "--workspace" not in str(refused.value)
+    with pytest.raises(api.ConfigurationError):
+        # The workspace is read: an unknown symbol is the question's own refusal.
+        api.query(core, "source", symbol="x", workspace=core / ".sextant" / "jvm")
+
+
 def test_a_refused_detection_leaves_a_pre_existing_workspace_byte_untouched(tmp_path: Path):
     """Task 1's reorder made detection run before `DuckDbWorkspace` ever
     touches disk (2M design §2); this pins the OTHER direction, which Task 1

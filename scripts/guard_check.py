@@ -1429,6 +1429,20 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "api.a-module-REMOVES-the-results-the-OTHER-layout-left": Guard(
+        what="analysing a module removes the results the other layout left in its "
+        "`.sextant` — one-module files under a shared folder, sub-folders under a single one",
+        why="a folder analysed with one module and then with two kept the old top-level "
+        "workspace, so `render` read a module that no longer exists as current (Android "
+        "design M6, Task 3 review)",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find="        _remove_other_layout(module.root, module.results_name)\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "render.the-document-SAYS-how-many-named-types-the-header-read-found": Guard(
         what="the coverage section carries one line: dependency types named, headers read, "
         "in no archive, and who answered for the classpath",

@@ -622,6 +622,46 @@ def _workspace_dir_of(
     return path / ".sextant"
 
 
+# What one module's analysis, render, enrich and export write at the top of its results
+# folder. A repository root's `.sextant` also holds `modules.json`, `system.duckdb` and the
+# system document, so a removal names these and nothing else. `bundles/` is kept: an export
+# is read only where a person names it, never as the current analysis.
+_MODULE_RESULT_FILES = (
+    "workspace.duckdb",
+    "workspace.duckdb.wal",
+    "metadata.json",
+    "enrich-brief.json",
+    "enrich-instructions.md",
+    "enrich-transcript.jsonl",
+)
+_MODULE_RESULT_FOLDERS = ("facts",)
+_MODULE_RENDERED = ("architecture.md", "architecture.html")
+
+
+def _remove_other_layout(path: Path, results_name: str | None) -> None:
+    """Removes the results the OTHER layout left in `<path>/.sextant` (Android design
+    M6), so a single-module command never reads them as current. A module written to
+    `<path>/.sextant/<results_name>` removes the one-module results at the top of
+    `<path>/.sextant`. A module written to `<path>/.sextant` removes each sub-folder that
+    holds a `workspace.duckdb`. Call it only for the default location, never for a
+    `--workspace` the caller named."""
+    sextant = _workspace_dir_of(path, None)
+    if not sextant.is_dir():
+        return
+    if results_name is None:
+        for child in sextant.iterdir():
+            if child.is_dir() and (child / "workspace.duckdb").is_file():
+                shutil.rmtree(child)
+        return
+    for name in _MODULE_RESULT_FILES:
+        (sextant / name).unlink(missing_ok=True)
+    for name in _MODULE_RESULT_FOLDERS:
+        if (sextant / name).is_dir():
+            shutil.rmtree(sextant / name)
+    for name in _MODULE_RENDERED:
+        (sextant / "render" / name).unlink(missing_ok=True)
+
+
 def _results_of(root: Path, entry: Mapping[str, object]) -> Path:
     """The results folder of one `modules.json` row, for the repository at `root`
     (Android design M6): the row's `results`, which is relative to `root`. A row
@@ -714,7 +754,11 @@ def _stale_stamps(metadata: dict[str, Any]) -> tuple[str, ...]:
     )
 
 
-def _refuse_if_unanalyzed(path: Path, workspace_dir: Path) -> None:
+def _refuse_if_unanalyzed(
+    path: Path,
+    workspace_dir: Path,
+    how: Callable[[Path], str] = lambda results: f"--workspace {results}",
+) -> None:
     """The `no analysis found` refusal `render`/`enrich`/`export` share
     (M00's "no analysis" rule). Widened for a multi-module root (2M design
     §2): `modules.json`'s presence with no per-module workspace at
@@ -741,7 +785,7 @@ def _refuse_if_unanalyzed(path: Path, workspace_dir: Path) -> None:
                 f"vintage from this one — re-run `sextant module analyze {path}`."
             )
         return
-    _refuse_if_shared(path, workspace_dir, lambda results: f"--workspace {results}")
+    _refuse_if_shared(path, workspace_dir, how)
     modules_path = _modules_json_path(path)
     if modules_path.is_file():
         modules = json.loads(modules_path.read_text(encoding="utf-8"))["modules"]
@@ -925,6 +969,7 @@ def _analyze_reactor(
                 )
             )
             continue
+        _remove_other_layout(module.root, module.results_name)
         try:
             stage_result = _run_analyze(
                 module.root,
@@ -1029,6 +1074,8 @@ def _analyze(
     if reason is not None:
         raise DetectionError(f"{path} ({module.module_id}) is not analyzed: {reason}")
     resolved_workspace_dir = _workspace_dir_of(path, workspace_dir, module.results_name)
+    if workspace_dir is None:
+        _remove_other_layout(path, module.results_name)
     stage_result = _run_analyze(
         path,
         module,
@@ -1989,7 +2036,7 @@ QUESTIONS = _QUESTIONS
 
 
 def query(
-    path: Path, question: str, *, symbol: str
+    path: Path, question: str, *, symbol: str, workspace: Path | None = None
 ) -> list[dict[str, object]] | dict[str, list[dict[str, object]]]:
     """One of the six module-scope questions (`QUESTIONS`: source, callers, callees,
     implementations, uses, impact) about `symbol`, answered from the workspace `analyze`
@@ -2001,16 +2048,20 @@ def query(
     symbol for a call whose callee body was not read, and an ancestor's bare descriptor for
     an ancestor this workspace never scanned. Reads the workspace and never re-analyzes. Raises `NotAnalyzedError` where `render` would, and
     `ConfigurationError` for a question that is not one of the six or a symbol the
-    workspace does not hold."""
-    workspace_dir = _workspace_dir_of(path, None)
-    _refuse_if_unanalyzed(path, workspace_dir)
-    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    workspace does not hold.
+
+    `workspace` names the results folder to read, as `render`'s `--workspace` does: a
+    folder that holds several modules (Android design M6) needs it, and the refusal there
+    names each module's `workspace=<path>`."""
+    workspace_dir = _workspace_dir_of(path, workspace)
+    _refuse_if_unanalyzed(path, workspace_dir, lambda results: f"workspace={results}")
+    graph = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
     try:
-        return answer(workspace, question, symbol=symbol)
+        return answer(graph, question, symbol=symbol)
     except QuestionRefused as refused:
         raise ConfigurationError(str(refused)) from refused
     finally:
-        workspace.close()
+        graph.close()
 
 
 def export(path: Path) -> ExportResult:

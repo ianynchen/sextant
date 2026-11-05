@@ -92,9 +92,16 @@ A row without `results` was written before the key existed and means `<dir>/.sex
 
 A single-module command never picks one module of several. `render`, `enrich` and `export`
 at such a folder stop and name each module with its `--workspace` command (`core holds 2
-modules: com.acme:core-android (--workspace core/.sextant/android), ...`). `diff` takes a
-workspace path directly, so it names each results folder and tells the user to pass that
-folder itself.
+modules: com.acme:core-android (--workspace core/.sextant/android), ...`); `api.query` names
+its `workspace=<path>` keyword in the same place. `diff` takes a workspace path directly, so it
+names each results folder and tells the user to pass that folder itself.
+
+`module analyze` removes the results the other layout left in that folder, so a command
+never reads them as current: a module written to `<dir>/.sextant/<name>` removes the
+one-module results at the top of `<dir>/.sextant`, and a module written to `<dir>/.sextant`
+removes each sub-folder that holds a workspace. It removes only a module's own results, never
+`modules.json`, the system workspace or the system document, and never exported `bundles/`.
+With `--workspace`, it removes nothing.
 
 ### `module render` has no display flag ([GUIDELINES](../../GUIDELINES.md) §8.4)
 
