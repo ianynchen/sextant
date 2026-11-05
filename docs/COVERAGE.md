@@ -2845,9 +2845,14 @@ parameter the container fills (a `@Provides` method's, or an `@Inject` construct
 the value of the one recipe the container chooses for it, by Dagger's exact key (qualifier with
 its attributes, full type). Measured on `fixtures/orders-dagger`: Kotlin `object` and `class`
 modules, a Java module with static recipes, `@Named`, a custom qualifier, a qualified base
-`String` and an `@Inject` constructor each give the right address. Stated bounds, each leaving a
-row `partial`, never wrong: a key with two recipes in the module (two components or two
-editions; which one is used is not in the module); a recipe in another build module; a
+`String` and an `@Inject` constructor each give the right address. A recipe in a reactor
+sibling the module depends on is read too: the detector scans such a sibling with the module
+(Maven W24, Gradle W55), so the Android shape `:core:network` -> `:app` resolves (measured on
+`fixtures/orders-dagger-reactor`). Whether a key has one recipe is decided over the module and
+those scanned siblings together. Stated bounds, each leaving a row `partial`, never wrong: a key
+with two recipes in the module and its siblings (two components or two editions; which one is
+used is not in the module); a recipe in a jar the analysis does not scan (not a reactor sibling, not opted in); an annotation whose type was not read beside no read
+qualifier (it may be one); a
 `Provider<T>` or `Lazy<T>` parameter, `@Binds`, `@BindsInstance`, component dependencies and
 field injection (not read) (OI-315); Koin (a lookup call, not a filled parameter) and Metro (no
 bean model yet) (OI-318); a client made
@@ -4255,8 +4260,8 @@ on two real builds: kotlinconf-app (AGP 9.3.3) with its Android, JVM and shared 
 ktor-samples `client-mpp` (AGP 8.13.1) with `commonMain` sources located. **Boundaries:**
 Android inbound (manifest, deep links, exported components, `Worker`s) stays post-MVP; a
 Retrofit client made through Dagger/Hilt `@Provides` has its address (OI-304, measured on
-`fixtures/orders-dagger`), and stays `partial` where the recipe is in another build module, where
-one key has two recipes, for `Provider<T>`/`Lazy<T>`, `@Binds` and field injection (OI-315), and
+`fixtures/orders-dagger`, and from a reactor sibling on `fixtures/orders-dagger-reactor`), and
+stays `partial` for a recipe in a jar the analysis does not scan (not a reactor sibling, not opted in), where one key has two recipes over the module and its siblings, for `Provider<T>`/`Lazy<T>`, `@Binds` and field injection (OI-315), and
 for Koin and Metro (OI-318); the limits of the address read are OI-307; the limits of the Android detection are OI-310
 (a flavored library joined by an app, Java resources, AGP 7.4 to 7.x unmeasured, no AGP 8
 fixture). Duplicate and wrong-verb Ktor client rows seen on kotlinconf-app are fixed in a separate pull request (#92), not here. Not verified: NotyKT (its eight Retrofit rows made through Hilt included) and koog (they need a JDK 17 toolchain), and AGP 7.4 to 7.x.

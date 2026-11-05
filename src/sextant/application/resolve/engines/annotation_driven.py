@@ -13,7 +13,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.beans import meta_annotated_types
+from sextant.application.resolve.beans import erased_type_of, meta_annotated_types
 from sextant.application.resolve.dependencies import unmet_dependency
 from sextant.application.resolve.effective_annotations import (
     TypeHierarchy,
@@ -271,8 +271,8 @@ def _annotated_parameter(
 def _erased_type(parameter: dict[str, Any]) -> str | None:
     """A parameter's erased type, the descriptor's answer (the class a value is dispatched
     by), or None where the fact carries none."""
-    symbol = parameter.get("erased_symbol") or (parameter.get("type") or {}).get("symbol")
-    return None if not symbol else bare_descriptor(str(symbol))
+    symbol = erased_type_of(parameter)
+    return None if symbol is None else bare_descriptor(symbol)
 
 
 def _payload_type(declaration: dict[str, Any], catalog: Catalog) -> str | None:

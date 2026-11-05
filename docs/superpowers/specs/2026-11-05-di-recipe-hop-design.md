@@ -69,7 +69,8 @@ injection is not built (logged).
 
 ## 3. Not in this design (each stays partial with its reason; logged)
 
-Provider in another Gradle module; `Provider<T>`/`Lazy<T>`; `@BindsInstance`, component
+A provider in a jar the analysis does not scan (not a reactor sibling, not opted in; a sibling
+the module depends on IS scanned and its recipes are read, see §5); `Provider<T>`/`Lazy<T>`; `@BindsInstance`, component
 dependencies, `@Binds` (abstract), field/member injection; Spring constructor injection; Koin
 (a lookup call, not a filled parameter; 0 corpus builds need it); the argument hop OI-306 still
 needs for `@HttpExchange`; Metro (a second bean-model file later).
@@ -108,12 +109,25 @@ Tasks 1–4, branch `cov/hilt-provides` (9cd89f2e, bab3160d, b6911ba4, then Task
 - **Fixture:** `fixtures/orders-dagger` (Maven, Kotlin 2.4.20 with kapt, Dagger 2.57.2, Retrofit
   2.11.0, JDK 21; plain Dagger `@Component`s, and Hilt's `@InstallIn` modules were measured on the
   Task 3 kapt probe). The
-  other-module recipe is in the library `fixtures/orders-dagger-network` (Java, installed by
+  unscanned-jar recipe is in the library `fixtures/orders-dagger-network` (Java, installed by
   `tests/fixture_stub.py`). `tests/e2e/test_dagger_recipes.py` pins its eight Retrofit rows: six
   resolved, `region` (two recipes of one key) and `shared` (recipe in the library) partial.
 - **Measured:** see the Task 4 report (`.superpowers/sdd/2026-11-05-di-recipe-hop/task-4-report.md`).
 - **Not verified:** NotyKT (needs a JDK 17 toolchain).
-- **Logged:** OI-315 (other-module recipe, `Provider<T>`/`Lazy<T>`, `@Binds`, field injection),
+- **Reactor siblings (whole-branch review I1):** the detectors scan a reactor sibling the module
+  depends on as a library root (Maven W24, Gradle W55), so its `@Provides` methods are in the
+  workspace and are read as recipes, and a key's uniqueness is decided over the module and those
+  siblings together. `fixtures/orders-dagger-reactor` pins it: a sibling's recipe resolves the
+  row, and one key with a recipe in the sibling and one in the app stays `partial`.
+- **Ladder (whole-branch review m1, m3, m4):** `beans.TypeLattice` answers assignable, not
+  assignable, or unread (a type on the walk whose supertypes were not read; no dependency
+  reaches a module type). The type, qualifier and
+  name rungs weigh the beans of the type or a subtype; the qualifier rung keeps an unread one,
+  the type and name rungs choose only a known one. `Unresolved` carries the beans an ambiguous
+  rung weighed, which `Ambiguous` reports (one encoding of the ladder).
+- **Unread qualifier (m2):** an annotation whose type was not read, with no read qualifier
+  beside it, makes the slot (or every unqualified slot of a recipe's type) `unread_type`.
+- **Logged:** OI-315 (recipe in a jar the analysis does not scan, `Provider<T>`/`Lazy<T>`, `@Binds`, field injection),
   OI-316 (qualifier defaults, wildcard variance, primitive and boxed), OI-317 (Spring constructor
   injection), OI-318 (Koin, Metro), OI-319 (an unreachable difference between the recipe step
   and the caller loop).

@@ -25,13 +25,15 @@ here would restate those documents rather than add anything.
   plus the full type, an unqualified parameter matches an unqualified recipe only, and a
   multibinding recipe is never a candidate for `T` (new `catalogs/bean-models/dagger.yml`; new
   bean-model words `injection`, `multibinding_annotations`, `injecting_annotations`, D02 §1c).
-  Spring `@Bean` parameters cross through the existing ladder. A key with several recipes in the
-  module answers `non_enumerable`, a recipe in another build module is not read, and both leave the
-  row `partial`, never a guess. Measured on the new fixture `fixtures/orders-dagger` (Kotlin
+  Spring `@Bean` parameters cross through the existing ladder. A recipe in a reactor sibling the
+  module depends on is read (the detector scans the sibling with the module), and a key is unique
+  only over the module and those siblings together. A key with several recipes answers
+  `non_enumerable`, a recipe in a jar the analysis does not scan (not a reactor sibling, not opted in) is not read, and both leave the row `partial`, never a guess. Measured on the new fixture `fixtures/orders-dagger` (Kotlin
   `object` and `class` modules, a Java static module, `@Named`, a custom qualifier, a qualified base
   `String`, an `@Inject` constructor: six rows resolved; two recipes of one key and a recipe in the
-  library `fixtures/orders-dagger-network`: two rows `partial`). No row changed on the other
-  fixtures or on the six field pins. NotyKT is not verified (it needs a JDK 17 toolchain).
+  library `fixtures/orders-dagger-network`: two rows `partial`), and on
+  `fixtures/orders-dagger-reactor` (a recipe in a sibling: resolved; one key in the sibling and
+  the app: `partial`). No row changed on the other fixtures or on the six field pins. NotyKT is not verified (it needs a JDK 17 toolchain).
 - **Android modules are read for outbound calls, and Kotlin Multiplatform parts by version**
   (OI-274, design `2026-11-05-android-outbound-design.md`). An Android part (application, library,
   Kotlin Multiplatform library) is read through the Android Gradle Plugin: its release build, or its

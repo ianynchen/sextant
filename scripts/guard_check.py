@@ -8562,16 +8562,55 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "beans.the-NAME-rung-reads-only-the-TYPE-s-candidates": Guard(
-        what="the Spring ladder's qualifier and name rungs choose only among the beans of the "
-        "parameter's type or of a subtype of it",
+        what="the Spring ladder's name rung chooses only among the beans of the parameter's "
+        "type or of a subtype of it",
         why="Task 3 review m3: Spring compares names only over the type's candidates; a bean of "
         "an unrelated type that shares the name is never injected",
         edits=(
             Edit(
                 path=_BEANS,
-                find="            if bean.erased_return is not None and self._assignable("
-                "bean.erased_return, erased_type)\n",
-                replace="            if True  # guard disabled by scripts/guard_check.py\n",
+                find="            named = self._one_named(reference.name, sure)\n",
+                replace="            named = self._one_named(reference.name, [b for bs in "
+                "self._declared.by_type.values() for b in bs])  # guard disabled\n",
+            ),
+        ),
+    ),
+    "beans.the-TYPE-rung-counts-SUBTYPES": Guard(
+        what="the Spring ladder's type rung counts a bean of a subtype of the parameter's type",
+        why="whole-branch review m3: Spring's only bean of the type is the only bean ASSIGNABLE "
+        "to it; an exact-erasure rung misses the subtype and disagrees with the name rung",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="            verdict = self._lattice.assignable(erased, erased_type)\n",
+                replace="            verdict = ASSIGNABLE if erased == erased_type else "
+                "NOT_ASSIGNABLE  # guard disabled\n",
+            ),
+        ),
+    ),
+    "beans.a-bean-of-UNREAD-hierarchy-is-kept-by-the-QUALIFIER-only": Guard(
+        what="a type whose supertypes were not read is neither assignable nor unassignable",
+        why='whole-branch review m1: `@Qualifier("pool") ExecutorService` naming a '
+        "`ThreadPoolExecutor` bean is a true answer the JDK's unread hierarchy would turn to none",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="        return UNREAD if unread and declared not in self._scanned else "
+                "NOT_ASSIGNABLE\n",
+                replace="        return NOT_ASSIGNABLE  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.an-UNREAD-annotation-may-be-a-QUALIFIER": Guard(
+        what="an annotation whose type was not read leaves an unqualified Dagger key unknown",
+        why="whole-branch review m2: dropped from the key, an unread qualifier makes a qualified "
+        "slot or recipe look unqualified, a possible false resolved",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="        if not qualifier and (self._unread_qualifier(uses) or declared_type "
+                "in self._unsure):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

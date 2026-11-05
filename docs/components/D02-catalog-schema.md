@@ -500,10 +500,13 @@ candidate. Any **other** reference resolves by `@Qualifier`, else exactly one de
 its erased type, else the one of several marked `@Primary` (the `primary_annotation` — two so
 marked fail the injection and read `ambiguous`), else its name — the container's own candidate
 order, cited on the model (CP-27 row 15; `@Priority` is not read, a boundary stated there). For
-such a reference the `@Qualifier` and the name choose only among the candidates of its type: a
+such a reference every rung weighs only the candidates of its type, as the container does: a
 bean whose type is the parameter's or a subtype of it (the module's type facts and its
-dependencies' class headers), as the container does; a bean of an unrelated type that shares the
-name is not one (OI-304 Task 4). Two
+dependencies' class headers, `beans.TypeLattice`). A bean whose hierarchy was not read to the end
+(a JDK type, an unresolved classpath) may be a candidate: the `@Qualifier` rung keeps it (a
+qualifier naming a bean that is not assignable fails the container's start), the type and name
+rungs choose only a bean known to be of the type. A bean of a type known to be unrelated that
+shares the name is never one (OI-304 Task 4). Two
 candidates on any rung, or none, is `Unresolved`, never a guess; a
 parameter compiled without names skips the name rung. The list is the INTERFACES the
 framework's beans implement, with exact membership: a parameter declared as a concrete
@@ -519,7 +522,9 @@ at once. So the loader hands every catalog every model by id (`Catalog.bean_mode
 walk reads all of them. A catalog's own `bean_model` keeps its uses as before: fluent's
 `bean_via`, `scheduled_chain`, `bean_conditions` and the dispatch reader's qualifiers.
 `catalogs/bean-models/dagger.yml` is named by no catalog; the walk is its reader. The walk
-answers a filled parameter with the returns of its one recipe, read in the recipe's own body
+reads the recipes of the module and of the reactor siblings the detector scans with it, so a
+key's uniqueness is decided over those together; a recipe in a jar the analysis does not scan is
+not read. It answers a filled parameter with the returns of its one recipe, read in the recipe's own body
 (a path step `<recipe> returns <n>`); with `unresolved`, reason `non_enumerable`, where the key
 has several recipes in the module; and as before (callers, else `external`) where the module has
 no recipe for it.

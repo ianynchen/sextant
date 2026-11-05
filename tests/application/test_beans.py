@@ -25,6 +25,7 @@ import yaml
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.beans import (
     NO_RECIPE,
+    UNREAD_TYPE,
     Ambiguous,
     BeanRef,
     NotProvided,
@@ -144,7 +145,34 @@ def _catalog(model: dict, catalog_id: str = "invented") -> Catalog:
     )
 
 
+def _library_headers() -> list[TypeHeaderFact]:
+    """The class-file headers a resolved classpath gives for the library types these tests
+    use, so their place in the hierarchy is known (`beans.TypeLattice`)."""
+    channel = "org/springframework/messaging/MessageChannel#"
+    supertypes = {
+        channel: (),
+        "org/springframework/messaging/SubscribableChannel#": (channel,),
+        "org/springframework/messaging/PollableChannel#": (channel,),
+        "org/springframework/integration/channel/DirectChannel#": (
+            "org/springframework/messaging/SubscribableChannel#",
+        ),
+        _CONTAINER_TYPE: (),
+    }
+    return [
+        TypeHeaderFact(
+            document_id="doc_1",
+            symbol="sextant-jvm maven org.springframework/spring 6.1.6 " + bare,
+            construct_kind=ConstructKind.INTERFACE if "messaging" in bare else ConstructKind.CLASS,
+            interfaces=list(interfaces),
+            origin="org.springframework:spring",
+            version="6.1.6",
+        )
+        for bare, interfaces in supertypes.items()
+    ]
+
+
 def _loaded(tmp_path: Path, facts: list) -> DuckDbWorkspace:
+    facts = _library_headers() + facts
     write_fact_file(tmp_path / "facts" / "MessagingConfig.jsonl", _document(), facts)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(tmp_path / "facts")
@@ -302,45 +330,78 @@ def test_a_container_parameter_resolves_by_unique_type_then_name(tmp_path: Path)
     )
 
 
+def _header(bare: str, superclass: str | None = None, interfaces: tuple[str, ...] = ()):
+    """A dependency type whose class-file header was read: its place in the hierarchy is known."""
+    return TypeHeaderFact(
+        document_id="doc_1",
+        symbol="sextant-jvm maven com.vendor/lib 1.0.0 " + bare,
+        construct_kind=ConstructKind.CLASS,
+        superclass=superclass,
+        interfaces=list(interfaces),
+        origin="com.vendor:lib",
+        version="1.0.0",
+    )
+
+
+_SUPERTYPE = "com/acme/Supertype#"
+
+
 @pytest.mark.pins("beans.the-NAME-rung-reads-only-the-TYPE-s-candidates")
-def test_the_name_rung_reads_only_the_beans_of_the_parameter_s_type(tmp_path: Path):
-    """Task 3 review m3. The container compares names only among the candidates of
-    the parameter's type (`determineAutowireCandidate` runs over the beans
-    `findAutowireCandidates` found for that type), so a bean of an unrelated type
-    that shares the parameter's name is never injected. A bean whose type is a
-    SUBTYPE of the parameter's (the module's type facts or a dependency's class
-    header) is a candidate, and its name is then the rung that chooses it."""
-    supertype = "com/acme/Supertype#"
+@pytest.mark.pins("beans.the-TYPE-rung-counts-SUBTYPES")
+def test_the_rungs_read_only_the_beans_of_the_parameter_s_type(tmp_path: Path):
+    """Task 3 review m3, whole-branch review m3. The container weighs only the candidates of
+    the parameter's type (`findAutowireCandidates`): a bean of the type or of a subtype of it.
+    So a bean whose type extends the parameter's is the only bean of that type, whatever the
+    parameter is called; and a bean of an unrelated type that shares the parameter's name,
+    or that its qualifier names, is never injected. Here every type on the bean's walk was
+    read (two dependency headers), so "unrelated" is known, not guessed."""
     facts = (
         _bean(_CONTAINER, _CONTAINER_TYPE)
         + [_method(_HELPER)]
-        + [
-            TypeHeaderFact(
-                document_id="doc_1",
-                symbol="sextant-jvm maven org.springframework.amqp/spring-rabbit 3.1.0 "
-                + _CONTAINER_TYPE,
-                construct_kind=ConstructKind.CLASS,
-                superclass=supertype,
-                origin="org.springframework.amqp:spring-rabbit",
-                version="3.1.0",
-            )
-        ]
+        + [_header(_CONTAINER_TYPE, superclass=_SUPERTYPE), _header(_SUPERTYPE)]
     )
     workspace = _loaded(tmp_path, facts)
     table = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset())
     workspace.close()
 
-    # No bean of `Unrelated`; the bean named `container` is of another type.
     assert table.bean_of(_parameter("com/acme/Unrelated#", "container")) == Unresolved("none")
     assert table.bean_of(_parameter("com/acme/Unrelated#", "c", qualifier="container")) == (
         Unresolved("none")
     )
-    # The bean's type extends `Supertype`: it is a candidate, and the name chooses it.
     container = BeanRef(
         method=_MODULE + _CONTAINER, name="container", erased_return=_CONTAINER_TYPE
     )
-    assert table.bean_of(_parameter(supertype, "container")) == container
-    assert table.bean_of(_parameter(supertype, "c", qualifier="container")) == container
+    assert table.bean_of(_parameter(_SUPERTYPE, "anything")) == container
+    assert table.bean_of(_parameter(_SUPERTYPE, "c", qualifier="container")) == container
+
+
+@pytest.mark.pins("beans.a-bean-of-UNREAD-hierarchy-is-kept-by-the-QUALIFIER-only")
+def test_a_bean_whose_hierarchy_was_not_read_is_kept_by_the_qualifier_only(tmp_path: Path):
+    """Whole-branch review m1. `@Bean ThreadPoolExecutor pool()` injected as
+    `@Qualifier("pool") ExecutorService`: the JDK's types have no header, so the walk from
+    `ThreadPoolExecutor` cannot say whether it reaches `ExecutorService`. A qualifier naming
+    a bean that is not assignable fails the container's start, so the qualifier rung keeps it.
+    The type and name rungs need the hierarchy and do not choose it: `none`, never a guess.
+    A parameter of a MODULE type cannot be filled by a type outside the module (a dependency
+    does not depend on the module), so there the unread bean is not a candidate."""
+    executor = "java/util/concurrent/ExecutorService#"
+    pool_type = "java/util/concurrent/ThreadPoolExecutor#"
+    pool = _CONFIG + "pool(sig_7a8b9c0d)."
+    facts = _bean(pool, pool_type) + [
+        _method(_HELPER),
+        SymbolFact(document_id="doc_1", symbol=_MODULE + "com/acme/Orders#",
+                   construct_kind=ConstructKind.CLASS),
+    ]  # fmt: skip
+    workspace = _loaded(tmp_path, facts)
+    table = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset())
+    workspace.close()
+
+    bean = BeanRef(method=_MODULE + pool, name="pool", erased_return=pool_type)
+    assert table.bean_of(_parameter(executor, "e", qualifier="pool")) == bean
+    assert table.bean_of(_parameter(executor, "pool")) == Unresolved("none")
+    assert table.bean_of(_parameter("com/acme/Orders#", "o", qualifier="pool")) == (
+        Unresolved("none")
+    )
 
 
 def test_one_primary_among_the_type_candidates_wins_over_the_name_match(tmp_path: Path):
@@ -618,8 +679,15 @@ def _recipe(
 def _qualifier_types() -> list[SymbolFact | AnnotationFact | TypeHeaderFact]:
     """`@Named` as a library type whose header was read (javax.inject's own jar), and the
     module's own `@Billing`: each carries `javax.inject.Qualifier`, which is what makes it a
-    qualifier. `@NotNull` carries nothing, so it never is one."""
+    qualifier. `@NotNull` (its jar's header read) carries nothing, so it never is one."""
     return [
+        TypeHeaderFact(
+            document_id="doc_1",
+            symbol="sextant-jvm maven org.jetbrains/annotations 13.0 " + _NOT_NULL,
+            construct_kind=ConstructKind.ANNOTATION,
+            origin="org.jetbrains:annotations",
+            version="13.0",
+        ),
         TypeHeaderFact(
             document_id="doc_1",
             symbol="sextant-jvm maven javax.inject/javax.inject 1 " + _NAMED,
@@ -701,6 +769,35 @@ def test_two_unqualified_recipes_of_one_key_are_ambiguous(tmp_path: Path):
     )
 
     assert found[(_MODULE + _API, 0)] == Ambiguous((_MODULE + first, _MODULE + second))
+
+
+_REGION = "com/vendor/Region#"
+
+
+@pytest.mark.pins("beans.an-UNREAD-annotation-may-be-a-QUALIFIER")
+def test_an_annotation_whose_type_was_not_read_may_be_a_qualifier(tmp_path: Path):
+    """Whole-branch review m2. Whether an annotation is a qualifier is read off its type; a
+    type that is neither the module's nor a read dependency header (`@Region`, its jar not
+    resolved) may be one. An unqualified slot carrying it, or an unqualified recipe of the
+    slot's type carrying it, cannot be keyed: `unread_type`, never the unqualified recipe.
+    Dagger refuses two qualifiers on one binding, so beside a qualifier that WAS read the
+    unread annotation is not one."""
+    plain = _NETWORK + "retrofit(sig_e61c31ac)."
+    pay = _NETWORK + "payRetrofit(sig_e61c31ac)."
+    region = AnnotationUse(annotation=_REGION)
+    recipes = _recipe(plain, _type(_RETROFIT)) + _recipe(pay, _type(_RETROFIT), _named("pay"))
+
+    assert _injections(tmp_path / "slot", recipes + _consumer(region))[
+        (_MODULE + _API, 0)
+    ] == NotProvided(UNREAD_TYPE)
+    assert _injections(tmp_path / "qualified", recipes + _consumer(_named("pay"), region))[
+        (_MODULE + _API, 0)
+    ] == ProvidedBy(_MODULE + pay)
+    other = _NETWORK + "regionRetrofit(sig_e61c31ac)."
+    unread_recipe = recipes + _recipe(other, _type(_RETROFIT), region)
+    assert _injections(tmp_path / "recipe", unread_recipe + _consumer())[
+        (_MODULE + _API, 0)
+    ] == NotProvided(UNREAD_TYPE)
 
 
 def test_no_recipe_of_the_key_is_not_provided(tmp_path: Path):
@@ -884,6 +981,39 @@ def test_a_spring_bean_parameter_crosses_by_spring_s_own_ladder(tmp_path: Path):
 
     assert isinstance(ladder, BeanRef)
     assert found[(_MODULE + helper, 0)] == ProvidedBy(_MODULE + other) == ProvidedBy(ladder.method)
+
+
+def test_an_ambiguous_spring_slot_carries_the_beans_the_ladder_weighed(tmp_path: Path):
+    """Whole-branch review m4: one encoding of the ladder. Two beans of the slot's type,
+    neither primary, and a name that is neither's: the ladder weighed both, and the table's
+    `Ambiguous` names exactly those, read off `bean_of`'s own answer."""
+    container = _CONFIG + "container(sig_3c4d5e6f)."
+    other = _CONFIG + "otherContainer(sig_4d5e6f70)."
+    helper = _CONFIG + "helper(sig_6f708192)."
+    facts = (
+        _recipe(container, _type(_CONTAINER_TYPE), declaring=_BEAN)
+        + _recipe(other, _type(_CONTAINER_TYPE), declaring=_BEAN)
+        + _recipe(
+            helper,
+            _type("com/acme/Helper#"),
+            parameters=(_slot(_type(_CONTAINER_TYPE), name="c"),),
+            declaring=_BEAN,
+        )
+        + [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_MODULE + "com/acme/Helper#",
+                construct_kind=ConstructKind.CLASS,
+            )
+        ]
+    )
+    workspace = _loaded(tmp_path, facts)
+    try:
+        found = injected_parameters(workspace, _MODELS, (_VALUE,))
+    finally:
+        workspace.close()
+
+    assert found[(_MODULE + helper, 0)] == Ambiguous((_MODULE + container, _MODULE + other))
 
 
 @pytest.mark.pins("beans.a-GENERIC-Spring-slot-has-NO-entry")

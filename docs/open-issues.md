@@ -318,7 +318,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-312 | [SEXTANT-306](https://app.plane.so/portolan/browse/SEXTANT-306/) | Gradle detector: Gradle 5.x rejecting --no-configuration-cache is reported as "distribution not present" |
 | OI-313 | [SEXTANT-307](https://app.plane.so/portolan/browse/SEXTANT-307/) | Analysis wipes render/ at a repository root that is also a module, removing system.md |
 | OI-314 | [SEXTANT-308](https://app.plane.so/portolan/browse/SEXTANT-308/) | Maven: profiles activated at deploy time (-P) are not evaluated; no narrower gap stated after the declared-set gap moved |
-| OI-315 | [SEXTANT-309](https://app.plane.so/portolan/browse/SEXTANT-309/) | Dagger/Hilt recipe hop limits: recipe in another build module, Provider<T>/Lazy<T>, @Binds/@BindsInstance/component dependencies, field injection (row partial) |
+| OI-315 | [SEXTANT-309](https://app.plane.so/portolan/browse/SEXTANT-309/) | Dagger/Hilt recipe hop limits: a recipe in a jar the analysis does not scan (not a reactor sibling, not opted in), Provider<T>/Lazy<T>, @Binds/@BindsInstance/component dependencies, field injection (row partial) |
 | OI-316 | [SEXTANT-310](https://app.plane.so/portolan/browse/SEXTANT-310/) | Dagger key not mirrored in three details: qualifier default attribute values, wildcard variance, primitive and boxed types as one key (answer none or ambiguous) |
 | OI-317 | [SEXTANT-311](https://app.plane.so/portolan/browse/SEXTANT-311/) | Spring constructor injection: the value walk crosses @Bean method parameters only |
 | OI-318 | [SEXTANT-312](https://app.plane.so/portolan/browse/SEXTANT-312/) | Koin and Metro: no recipe model (Koin is a lookup call; Metro needs its own bean-model file) |

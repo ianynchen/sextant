@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
@@ -70,6 +70,9 @@ class BeanRef:
 @dataclass(frozen=True)
 class Unresolved:
     reason: str  # 'none' | 'ambiguous'
+    # For `ambiguous`, the beans the rung that could not choose weighed, in fold order. Not
+    # part of equality: the reason is the answer, the beans are what it was weighed over.
+    candidates: tuple[BeanRef, ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True)
@@ -106,6 +109,82 @@ NO_RECIPE = "no_recipe"
 UNREAD_TYPE = "unread_type"
 
 
+# `TypeLattice.assignable`'s three answers.
+ASSIGNABLE = "assignable"
+NOT_ASSIGNABLE = "not_assignable"
+UNREAD = "unread"
+
+
+class TypeLattice:
+    """The module's type hierarchy, as the bean rungs read it: each type's direct supertypes
+    (`dispatch.ancestry_of`), and which types were READ — compiled by the module or a scanned
+    sibling, or a dependency whose class-file header was read (`type_header`). A type outside
+    both was not read: its supertypes are not known. The platform's root class is never a
+    recorded supertype (D00 §5), so a walk ends at the last type that names one."""
+
+    def __init__(
+        self,
+        ancestors: Mapping[str, Sequence[tuple[str, str, bool]]],
+        scanned: frozenset[str],
+        headers: frozenset[str],
+    ) -> None:
+        self._ancestors = ancestors
+        self._scanned = scanned
+        self._read = scanned | headers
+        self._answers: dict[tuple[str, str], str] = {}
+
+    def is_read(self, bare: str) -> bool:
+        """Whether this type's own place in the hierarchy was read."""
+        return bare in self._read
+
+    def assignable(self, child: str, declared: str) -> str:
+        """Whether a value of `child` can be given where `declared` is asked for.
+        `ASSIGNABLE` where the walk from `child` reaches `declared`. `NOT_ASSIGNABLE` where it
+        does not and every type on the walk was read, or where `declared` is a type the module
+        compiled: no dependency extends a type of the module that depends on it. `UNREAD`
+        otherwise: a type whose supertypes are not known may reach `declared`."""
+        key = (child, declared)
+        if key not in self._answers:
+            self._answers[key] = self._walk(child, declared)
+        return self._answers[key]
+
+    def _walk(self, child: str, declared: str) -> str:
+        seen: set[str] = set()
+        pending = [child]
+        unread = False
+        while pending:
+            current = pending.pop()
+            if current == declared:
+                return ASSIGNABLE
+            if current in seen:
+                continue
+            seen.add(current)
+            unread = unread or current not in self._read
+            pending.extend(ancestor for ancestor, _, _ in self._ancestors.get(current, ()))
+        return UNREAD if unread and declared not in self._scanned else NOT_ASSIGNABLE
+
+
+def type_lattice(workspace: Workspace) -> TypeLattice:
+    """The module's `TypeLattice`, built once per load (GUIDELINES §8.7): the hierarchy
+    `dispatch_of` already read, and one read of the dependency headers."""
+    return workspace.once(_lattice)
+
+
+def _lattice(workspace: Workspace) -> TypeLattice:
+    dispatch = workspace.once(dispatch_of)
+    headers = frozenset(
+        bare_descriptor(str(row["symbol"])) for row in workspace.query("type_headers")
+    )
+    return TypeLattice(dispatch.ancestors, frozenset(dispatch.scanned), headers)
+
+
+def erased_type_of(declared: Mapping[str, Any]) -> str | None:
+    """A declared parameter's erased type as its signature entry spells it (the descriptor's
+    class, else the declared type's symbol), or None where the entry names no type."""
+    erased = declared.get("erased_symbol") or (declared.get("type") or {}).get("symbol")
+    return str(erased) if erased else None
+
+
 @dataclass(frozen=True)
 class Parameter:
     """An injected parameter as the caller reads it off a declared signature: the
@@ -134,21 +213,20 @@ class DeclaredBeans:
 
 class BeanTable:
     """`bean_table`'s answer: the declared beans under one model, read through that
-    model's channel types and the caller's own channel names. `ancestors` is every type's
-    direct supertypes (`dispatch.ancestry_of`), read to tell which beans are candidates
-    of a parameter's type."""
+    model's channel types and the caller's own channel names. `lattice` is the module's
+    type hierarchy, read to tell which beans are candidates of a parameter's type."""
 
     def __init__(
         self,
         declared: DeclaredBeans,
         channel_types: frozenset[str],
         known_channels: frozenset[str],
-        ancestors: Mapping[str, Sequence[tuple[str, str, bool]]],
+        lattice: TypeLattice,
     ) -> None:
         self._declared = declared
         self._channel_types = channel_types
         self._known_channels = known_channels
-        self._ancestors = ancestors
+        self._lattice = lattice
 
     def kind_of(self, erased_type: str) -> str:
         """`channel` for one of the model's `channel_types`, else `other`."""
@@ -157,36 +235,38 @@ class BeanTable:
     def bean_of(self, reference: Parameter) -> BeanRef | Unresolved:
         """The bean this injected parameter names, by the rungs of its kind."""
         is_channel = self.kind_of(reference.erased_type) == "channel"
-        if reference.qualifier is not None:
-            if not is_channel:
-                return self._named_of_type(reference.qualifier, reference.erased_type)
-            return self._named_or_known(reference.qualifier, is_channel)
         if is_channel:
-            if reference.name is None:
+            called = reference.qualifier if reference.qualifier is not None else reference.name
+            if called is None:
                 return Unresolved("none")
-            return self._named_or_known(reference.name, is_channel=True)
-        by_type = self._declared.by_type.get(reference.erased_type, ())
-        if len(by_type) == 1:
-            return by_type[0]
-        # Several of the type: the one marked primary is the container's choice before
-        # any name is compared (CP-27 row 15 — `determinePrimaryCandidate` runs before
+            return self._named_or_known(called, is_channel=True)
+        # Every rung below weighs only the candidates of the parameter's type, as the
+        # container does (`findAutowireCandidates`): a bean of the type or of a subtype of it.
+        # `maybe` are beans whose hierarchy was not read to the end (`TypeLattice`).
+        sure, maybe = self._candidates(reference.erased_type)
+        if reference.qualifier is not None:
+            # A qualifier naming a bean that is not assignable fails the container's start,
+            # so a bean whose hierarchy was not read is kept here.
+            return self._one_named(reference.qualifier, sure + maybe)
+        weighed = sure + maybe
+        if len(weighed) == 1:
+            return sure[0] if sure else Unresolved("none")
+        # Several: the one marked primary is the container's choice before any name is
+        # compared (CP-27 row 15 — `determinePrimaryCandidate` runs before
         # `matchesBeanName`), so a parameter named after the OTHER bean still gets the
-        # primary; two marked primary fail the injection, and the name rung is not
-        # tried for them either.
-        primaries = [bean for bean in by_type if bean.primary]
-        if len(primaries) == 1:
+        # primary; two marked primary fail the injection, and the name rung is not tried
+        # for them either. A primary whose hierarchy was not read may not be a candidate.
+        primaries = [bean for bean in weighed if bean.primary]
+        if len(primaries) == 1 and primaries[0] in sure:
             return primaries[0]
-        if len(primaries) > 1:
-            return Unresolved("ambiguous")
-        # The name rung reads only the candidates of the parameter's type, as the
-        # container does (`determineAutowireCandidate` runs over the beans
-        # `findAutowireCandidates` found for the type): a bean of the type or of a
-        # subtype of it. A bean of an unrelated type that shares the name is never it.
+        if primaries:
+            return Unresolved("ambiguous", tuple(primaries))
+        # The name rung is strict: only a bean known to be of the type.
         if reference.name is not None:
-            named = self._named_of_type(reference.name, reference.erased_type)
+            named = self._one_named(reference.name, sure)
             if isinstance(named, BeanRef) or named.reason == "ambiguous":
                 return named
-        return Unresolved("ambiguous" if len(by_type) > 1 else "none")
+        return Unresolved("ambiguous", weighed) if weighed else Unresolved("none")
 
     def bean_called(self, method_symbol: str) -> BeanRef | None:
         """The bean a DIRECT call to a declaring method names — `channel(ordersChannel())`
@@ -199,31 +279,26 @@ class BeanTable:
             return None
         return found[0] if len(found) == 1 else Unresolved("ambiguous")
 
-    def _named_of_type(self, name: str, erased_type: str) -> BeanRef | Unresolved:
-        """The declared bean of that name among the candidates of `erased_type`: `none`
-        where no bean of the name is of the type or of a subtype of it."""
-        found = [
-            bean
-            for bean in self._declared.by_name.get(name, ())
-            if bean.erased_return is not None and self._assignable(bean.erased_return, erased_type)
-        ]
+    def _candidates(self, erased_type: str) -> tuple[tuple[BeanRef, ...], tuple[BeanRef, ...]]:
+        """The declared beans of `erased_type` or of a subtype of it, in fold order: those
+        known to be, and those whose hierarchy was not read to the end (`TypeLattice`)."""
+        sure: list[BeanRef] = []
+        maybe: list[BeanRef] = []
+        for erased, beans in self._declared.by_type.items():
+            verdict = self._lattice.assignable(erased, erased_type)
+            if verdict == ASSIGNABLE:
+                sure.extend(beans)
+            elif verdict == UNREAD:
+                maybe.extend(beans)
+        return tuple(sure), tuple(maybe)
+
+    @staticmethod
+    def _one_named(name: str, beans: Sequence[BeanRef]) -> BeanRef | Unresolved:
+        """The one bean of `beans` called `name`; `none` for no such bean."""
+        found = tuple(bean for bean in beans if bean.name == name)
         if not found:
             return Unresolved("none")
-        return found[0] if len(found) == 1 else Unresolved("ambiguous")
-
-    def _assignable(self, child: str, declared: str) -> bool:
-        """Whether `child` is `declared` or a subtype of it, by the supertypes the
-        module's type facts and its dependencies' class headers record."""
-        seen: set[str] = set()
-        pending = [child]
-        while pending:
-            current = pending.pop()
-            if current == declared:
-                return True
-            if current not in seen:
-                seen.add(current)
-                pending.extend(ancestor for ancestor, _, _ in self._ancestors.get(current, ()))
-        return False
+        return found[0] if len(found) == 1 else Unresolved("ambiguous", found)
 
     def _named_or_known(self, name: str, is_channel: bool) -> BeanRef | Unresolved:
         """A declared bean of that name, else — for a CHANNEL reference only — a channel
@@ -253,8 +328,8 @@ def injected_bean(
     if index >= len(parameters):
         return Unresolved("none")
     declared = parameters[index]
-    erased = declared.get("erased_symbol") or (declared.get("type") or {}).get("symbol")
-    if not isinstance(erased, str):
+    erased = erased_type_of(declared)
+    if erased is None:
         return Unresolved("none")
     name = declared.get("name")
     return beans.bean_of(
@@ -304,10 +379,7 @@ def bean_table(workspace: Workspace, catalog: Catalog, known_channels: frozenset
         type_descriptor(name) for name in _strings(model, "channel_types", where)
     )
     return BeanTable(
-        declared_beans(workspace, model),
-        channel_types,
-        known_channels,
-        workspace.once(dispatch_of).ancestors,
+        declared_beans(workspace, model), channel_types, known_channels, type_lattice(workspace)
     )
 
 
@@ -491,7 +563,15 @@ class _ExactKey:
     an unqualified recipe only; there is no name rung and no primary. A recipe that adds to
     a collection (`multibinding_annotations`) is never a candidate for `T`. Dagger refuses
     two recipes of one key on one component, but Sextant sees the whole module, not the
-    component: one recipe in the module is the answer, several are `Ambiguous`."""
+    component: one recipe is the answer, several are `Ambiguous`. "The module" is what the
+    analysis read: the module's own classes and the reactor siblings it depends on, which
+    the detector scans as library roots (Maven W24, Gradle W55), so a sibling's recipe is
+    read and uniqueness is decided over the module and those siblings together. A recipe in
+    a jar the analysis does not scan is not read (`NO_RECIPE`).
+
+    Whether an annotation is a qualifier is read off its type. Where that type was not read
+    (`TypeLattice.is_read`) and no read qualifier is beside it, the key is not known: the slot
+    is `UNREAD_TYPE`, and so is every unqualified slot of a type that has such a recipe."""
 
     def __init__(
         self,
@@ -510,7 +590,10 @@ class _ExactKey:
         multibinding = frozenset(
             type_descriptor(name) for name in model.get("multibinding_annotations") or []
         )
+        self._lattice = type_lattice(workspace)
         self._recipes: dict[tuple[Any, Any], list[str]] = {}
+        # The types with an unqualified recipe that may yet be qualified (`_unread_qualifier`).
+        self._unsure: set[Any] = set()
         for symbol, row in declarations.items():
             uses = index.get(symbol, [])
             names = {annotation for annotation, _ in uses}
@@ -521,6 +604,10 @@ class _ExactKey:
             if returned is not None:
                 key = (self._qualifier_key(uses), returned)
                 self._recipes.setdefault(key, []).append(symbol)
+                if not key[0] and self._unread_qualifier(
+                    [use for use in uses if use[0] != declaring]
+                ):
+                    self._unsure.add(returned)
         self._type_enclosing: dict[str, str] | None = None
 
     def recipe_for(
@@ -534,9 +621,10 @@ class _ExactKey:
             (str(use.get("annotation")), dict(use.get("args") or {}))
             for use in declared.get("annotations") or []
         ]
-        candidates = self._one_per_recipe(
-            self._recipes.get((self._qualifier_key(uses), declared_type), [])
-        )
+        qualifier = self._qualifier_key(uses)
+        if not qualifier and (self._unread_qualifier(uses) or declared_type in self._unsure):
+            return NotProvided(UNREAD_TYPE)
+        candidates = self._one_per_recipe(self._recipes.get((qualifier, declared_type), []))
         if not candidates:
             return NotProvided(NO_RECIPE)
         if len(candidates) == 1:
@@ -553,6 +641,12 @@ class _ExactKey:
                 if bare_descriptor(annotation) in self._qualifiers
             )
         )
+
+    def _unread_qualifier(self, uses: Sequence[tuple[str, dict[str, Any]]]) -> bool:
+        """Whether `uses` carry an annotation whose type was not read, so whether it is a
+        qualifier is not known. Asked only where no read qualifier is among them: Dagger
+        refuses two qualifiers on one binding, so beside a read one it is not a qualifier."""
+        return any(not self._lattice.is_read(bare_descriptor(annotation)) for annotation, _ in uses)
 
     def _one_per_recipe(self, candidates: list[str]) -> list[str]:
         """`candidates` less the second method of one recipe. A compiler can emit one recipe of
@@ -597,9 +691,7 @@ class _Ladder:
         channel_types = frozenset(
             type_descriptor(name) for name in model.get("channel_types") or []
         )
-        self._beans = BeanTable(
-            self._declared, channel_types, frozenset(), workspace.once(dispatch_of).ancestors
-        )
+        self._beans = BeanTable(self._declared, channel_types, frozenset(), type_lattice(workspace))
 
     def recipe_for(
         self, method: str, parameters: Sequence[Mapping[str, Any]], position: int
@@ -609,22 +701,9 @@ class _Ladder:
             return NotProvided(NO_RECIPE) if answer.method is None else ProvidedBy(answer.method)
         if answer.reason != "ambiguous":
             return NotProvided(NO_RECIPE)
-        return Ambiguous(self._candidates(parameters[position]))
-
-    def _candidates(self, declared: Mapping[str, Any]) -> tuple[str, ...]:
-        """The recipes the rung that said `ambiguous` weighed: the qualifier's or the name's
-        beans, else the beans of the slot's erased type (or the primary ones among them)."""
-        qualifier = qualifier_of(list(declared.get("annotations") or []), self._model)
-        named = qualifier or declared.get("name")
-        by_type = self._declared.by_type.get(
-            str(declared.get("erased_symbol") or (declared.get("type") or {}).get("symbol")), ()
+        return Ambiguous(
+            tuple(sorted(str(bean.method) for bean in answer.candidates if bean.method))
         )
-        primaries = [bean for bean in by_type if bean.primary]
-        if qualifier is None and len(by_type) > 1:
-            beans: Sequence[BeanRef] = primaries if len(primaries) > 1 else by_type
-        else:
-            beans = self._declared.by_name.get(str(named), ()) if named else ()
-        return tuple(sorted(str(bean.method) for bean in beans if bean.method is not None))
 
 
 def _parameters(signature: Any) -> list[dict[str, Any]]:
