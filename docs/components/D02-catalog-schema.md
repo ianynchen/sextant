@@ -1804,8 +1804,8 @@ matches:
 
 Each `methods` row is `{name, arity?, descriptor?, http_method | method_arg | neither,
 url_arg | channel_arg, body_arg?, response_arg?, record_arg?, direction?,
-path_from_argument_type?, channel_via?, address_arg_2?, lambda_arg?, lambda_steps?,
-request_url?, address_parts?}`, beside the catalog-level `default_address?` and
+path_from_argument_type?, channel_via?, message_class_via?, address_arg_2?, lambda_arg?,
+lambda_steps?, request_url?, address_parts?}`, beside the catalog-level `default_address?` and
 `client_base?`, all described below.
 **`http_method` is a literal when the catalog already knows the verb** — `postForObject` is
 always a POST, so the catalog states it once. **`method_arg` is a position when the call
@@ -1955,6 +1955,35 @@ answered. This same ladder — literal first, linked call as fallback — is wha
 and `interface_implementation` (both below) read a `channel`/`channel_arg` position through
 too. **Every entry is also hoisted into §1f's estate-wide identity table**, where the same
 three fields are declared once per producer instead of once per consumer.
+
+**`message_class_via` names where an inbound key's message class is read** (spec
+`2026-11-04-akka-pekko-actors-design.md` §3a, §3d item 6). A Receptionist service key or a
+sharded entity type is a name and a class, two arguments of one producing call
+(`ServiceKey.create(Command.class, "stock")`): `channel_via` reads the name, and
+`message_class_via` — the same `[{owner, method, arg}]` list — names the hops to the class
+literal, read by the same backward walk from `channel_arg` with these entries placed ahead
+of §1f's table (so the producer answers with its class argument). It is **never hoisted**:
+it states which argument is the class, not what the producer's value is.
+
+```yaml
+    - { name: init, arity: 1, descriptor: "(L…/javadsl/Entity;)L…/ActorRef;", channel_arg: 0,
+        channel_via: [{ owner: …javadsl.Entity, method: of, arg: 0 }],
+        message_class_via: [{ owner: …javadsl.Entity, method: of, arg: 0 },
+                            { owner: …javadsl.EntityTypeKey, method: create, arg: 0 }] }
+```
+
+The engine still writes the row with the registering method as `handler`; after the
+message handler pass, `resolve/message_hops.record_key_handlers` replaces each inbound row of
+the catalog with one row per handler a message of the class, or of any subtype of it,
+reaches (`message_handlers.served_cases`: the hop's first-match rule asked per candidate
+class, so a row and a hop always agree), the rows differing only in `handler`, as a route
+with two handlers is two rows (§5's insert, through `derive_call_endpoints.sql`). A class
+reaching no handler, or not read, leaves one row with `handler` NULL. Refused at resolve:
+the word on a row that is not inbound or has no `channel_arg`, an entry not `{owner,
+method, arg}` with an integer `arg`, and an inbound row without it in a catalog where
+another inbound row has it (every inbound row of such a catalog is replaced). A row whose
+catalog declares no `message_class_via` — a classic pub-sub `Subscribe`, which takes any
+message — keeps the method that subscribed.
 
 **`lambda_arg` and `lambda_steps` read a destination the call site has no position for at
 all** (`OI-74`, W57) — the whole send handed over as one builder lambda:

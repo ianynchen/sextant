@@ -18,6 +18,7 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.message_handlers import (
     reachable_handlers,
     record_message_handlers,
+    served_cases,
 )
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
@@ -335,6 +336,63 @@ def test_each_behavior_answers_on_its_own():
 def test_a_message_no_case_takes_reaches_nothing():
     rows = [_row("b", 0, "Reserve#")]
     assert reachable_handlers(rows, "Placed#", None, _SUPERTYPES) == []
+
+
+_CONSTANTS = {"Tick#INSTANCE.": "Tick#", "Other#INSTANCE.": "Other#"}
+
+
+def _served(rows: list[dict], message_class: str | None) -> list[tuple]:
+    return [
+        (row["behavior"], row["position"])
+        for row in served_cases(rows, message_class, _SUPERTYPES, _CONSTANTS)
+    ]
+
+
+@pytest.mark.pins("message-handlers.a-key-reaches-the-cases-of-its-SUBTYPES")
+def test_a_key_class_reaches_each_case_of_a_subtype():
+    """An inbound key carries a `Command` (spec §3d item 6): every case some `Command` reaches
+    is one of its handlers — `Reserve`'s, both `Release` cases (a predicate never shadows) —
+    and a case for a class that is no `Command` is not."""
+    rows = [
+        _row("b", 0, "Reserve#"),
+        _row("b", 1, "Release#", predicated=True),
+        _row("b", 2, "Release#"),
+        _row("c", 0, "Placed#"),
+    ]
+    assert _served(rows, "Command#") == [("b", 0), ("b", 1), ("b", 2)]
+
+
+@pytest.mark.pins("message-handlers.a-key-reaches-a-VALUE-case-of-its-class")
+def test_a_key_class_reaches_a_value_case_whose_constant_is_one():
+    """`onMessageEquals(Tick.INSTANCE)`: the constant is a `Tick`, a `Command`, so a key
+    carrying `Command`s reaches the case. A constant of a class that is no `Command` does
+    not."""
+    rows = [
+        _row("b", 0, message_value="Tick#INSTANCE."),
+        _row("b", 1, message_value="Other#INSTANCE."),
+    ]
+    assert _served(rows, "Command#") == [("b", 0)]
+
+
+def test_a_case_a_key_class_shadows_is_not_reached():
+    """The hop rule, per class: `onMessage(Command)` at 0 takes every `Command`, so
+    `onMessage(Reserve)` after it is never run and is no handler of the key."""
+    rows = [_row("b", 0, "Command#"), _row("b", 1, "Reserve#")]
+    assert _served(rows, "Command#") == [("b", 0)]
+
+
+def test_a_key_of_one_class_reaches_only_that_class():
+    """A key carrying `Reserve` alone (the samples' `ServiceKey.create(ProcessText.class,
+    …)`) reaches `Reserve`'s case, not `Release`'s."""
+    rows = [_row("b", 0, "Reserve#"), _row("b", 1, "Release#")]
+    assert _served(rows, "Reserve#") == [("b", 0)]
+
+
+def test_a_key_whose_class_no_case_takes_reaches_nothing():
+    """And a class not read reaches nothing either: never every case."""
+    rows = [_row("b", 0, "Reserve#")]
+    assert _served(rows, "Placed#") == []
+    assert _served(rows, None) == []
 
 
 def _state_chain(caller: str, at: int, builder: int, root: str, case: str, handler: str):

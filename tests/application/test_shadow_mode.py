@@ -334,14 +334,18 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # (spec 2026-11-04 §3c): thirty-two `message_sends` entries, each a `message_arg`, and two
 # registrations no chain step names (`messageAdapter`, the ask's reply mapper): 68 asks and 93
 # slots per family as `asks_of` counts them.
+# **The key rows' `message_class_via` entries joined with the key-handler pass** (spec
+# 2026-11-04 §3d item 6): one more ask per entry, `receptionist` two (its two `register`
+# rows), `cluster-sharding` two (`init`'s two hops) — `asks_of` reads the `{owner, method,
+# arg}` shape wherever it is spelled.
 _ASKS_PER_CATALOG = {
     "akka-actor-handlers": (68, 93),
-    "akka-cluster-sharding": (6, 6),
+    "akka-cluster-sharding": (8, 8),
     "akka-pubsub-publish": (2, 2),
     "akka-pubsub-put": (1, 1),
     "akka-pubsub-send": (2, 2),
     "akka-pubsub-subscribe": (3, 3),
-    "akka-receptionist": (8, 8),
+    "akka-receptionist": (10, 10),
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
     "google-pubsub-client": (1, 1),
@@ -367,13 +371,13 @@ _ASKS_PER_CATALOG = {
     "ktor-websocket-client": (23, 23),
     "okhttp": (5, 6),
     "pekko-actor-handlers": (68, 93),
-    "pekko-cluster-sharding": (6, 6),
+    "pekko-cluster-sharding": (8, 8),
     "pekko-connectors-kafka": (15, 15),
     "pekko-pubsub-publish": (2, 2),
     "pekko-pubsub-put": (1, 1),
     "pekko-pubsub-send": (2, 2),
     "pekko-pubsub-subscribe": (3, 3),
-    "pekko-receptionist": (8, 8),
+    "pekko-receptionist": (10, 10),
     "quartz": (8, 11),
     "spring-cloud-gateway": (14, 20),
     "spring-cloud-gateway-outbound": (4, 4),
@@ -450,7 +454,8 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # **+44 on 2026-11-04**: the twelve Akka and Pekko actor catalogs, same comment.
     # **+68 on 2026-11-04**: the two message handler catalogs, same comment.
     # **+68 on 2026-11-04** (hops): those two catalogs' sends and standalone registrations.
-    assert sum(asks for asks, _ in counted.values()) == 1412
+    # **+8 on 2026-11-04** (key handlers): the four key catalogs' `message_class_via`.
+    assert sum(asks for asks, _ in counted.values()) == 1420
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

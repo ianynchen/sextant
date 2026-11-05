@@ -15,7 +15,7 @@ from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoin
 from sextant.application.resolve.environment_divergence import record_environment_divergence
 from sextant.application.resolve.format import resolve_format
 from sextant.application.resolve.message_handlers import record_message_handlers
-from sextant.application.resolve.message_hops import record_message_hops
+from sextant.application.resolve.message_hops import record_key_handlers, record_message_hops
 from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.path_prefix import apply_path_prefixes
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
@@ -256,6 +256,13 @@ def resolve(
     # writer, from the cases just read. Before `apply_path_prefixes`, with the other hop pass.
     with _timed("record_message_hops"):
         record_message_hops(workspace, declared)
+    # Spec 2026-11-04 §3d item 6: each inbound key row named by the handlers its message class
+    # reaches, from the same cases. After `record_self_calls`, which reads a key as served
+    # off its row while every row still names its registering method: a key no handler
+    # serves becomes a row with no handler here, and is still served. Before
+    # `apply_path_prefixes` and the passes that key on a row.
+    with _timed("record_key_handlers"):
+        record_key_handlers(workspace, declared)
     # **The module's own server prefix, and it runs HERE for a reason** (spec 2026-10-18 §3,
     # `OI-148`): every row exists by now, and nothing has copied an address yet.
     # `record_roots`, `record_routing_conflicts` and `record_self_exchange` all key on the

@@ -28,8 +28,11 @@ W27 (`self_exchange.py`) files a question, not a rule, for the other protocols, 
 their far end may be another deployment. Ruling 3 builds the rule for gRPC. The actor
 design (spec 2026-11-04 §3d item 5) applies it to `actor`: a key or topic the module
 registers, inits or subscribes to is served here, so a call naming it is a hop. An actor
-row comes from a registration call in code, never from a schema, so its `handler` (the
-registering method, until the message handlers replace it) is always set.
+row comes from a registration call in code, never from a schema, so when this pass runs its
+`handler` is always set: the registering method, as `single_call` wrote it. A key row's
+handlers are named later, by its message class (`message_hops.record_key_handlers`, after
+this pass in the pipeline), and a key no handler here serves ends with `handler` NULL; it
+was served when this pass read it, which is what keeps a call naming it a hop.
 
 The two differ only in what an outbound row names. A gRPC client names the service and the
 inbound path adds `/<Method>`; an actor key or topic is named whole on both sides. A row

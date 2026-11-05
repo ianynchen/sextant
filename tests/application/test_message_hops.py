@@ -17,8 +17,9 @@ import pytest
 from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
-from sextant.application.ports.catalogs import CatalogError
+from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.query.trace import trace_of
+from sextant.application.resolve.message_hops import _keyed_methods, _paired
 from sextant.application.resolve.roots import Root
 from sextant.cli.app import cli
 from sextant.domain.closed_sets import RootKind, TraceStop
@@ -313,3 +314,66 @@ def test_a_send_is_loaded_with_its_message_position(tmp_path: Path):
             "message_arg": 0,
         },
     )
+
+
+@pytest.mark.pins("key-handlers.a-key-takes-the-class-read-on-its-OWN-path")
+def test_a_key_takes_only_the_class_read_on_its_own_path():
+    """Two keys one helper builds (`ServiceKey.create(c, name)` with both from its callers):
+    the address walk and the class walk each give one path per caller, and a key takes the
+    class read on its own path, where one path extends the other (the crossings both made are
+    the nearest, the end of `Binding.path`). Never the other caller's class. A site whose
+    address no path read is one row with no address, carrying every class read there."""
+    named = [(("x",), "a"), (("y",), "b")]
+    read = [(("x",), "A#"), (("outer", "y"), "B#")]
+    assert _paired(named, read) == {"a": {"A#"}, "b": {"B#"}}
+    assert _paired(named, []) == {"a": {None}, "b": {None}}
+    assert _paired([], read) == {None: {"A#", "B#"}}
+
+
+def _keyed_catalog(tmp_path: Path, methods: str) -> Catalog:
+    (tmp_path / "keys.yml").write_text(
+        "id: keys\ndisplayName: keys\nstyle: single_call\nprotocol: actor\ndirection: inbound\n"
+        "requires: [call_site, string_constants]\n"
+        f"matches:\n  owner: a.Registry\n  methods:\n{methods}"
+    )
+    [catalog] = YamlCatalogSource(tmp_path).load()
+    return catalog
+
+
+_REGISTER = (
+    "    - { name: register, arity: 1, descriptor: '(La/Key;)V', channel_arg: 0,\n"
+    "        channel_via: [{ owner: a.Key, method: create, arg: 1 }]VIA }\n"
+)
+_VIA = ",\n        message_class_via: [{ owner: a.Key, method: create, arg: 0 }]"
+
+
+@pytest.mark.parametrize(
+    ("methods", "refused"),
+    [
+        (
+            _REGISTER.replace("VIA", _VIA)
+            + _REGISTER.replace("VIA", "").replace("register", "serve"),
+            "declaring no `message_class_via` beside one that does",
+        ),
+        (
+            _REGISTER.replace("VIA", _VIA).replace("arity: 1,", "arity: 1, direction: outbound,"),
+            "not inbound",
+        ),
+        (
+            _REGISTER.replace("VIA", _VIA.replace("arg: 0", "arg: first")),
+            "non-empty list",
+        ),
+    ],
+)
+def test_a_malformed_message_class_via_is_refused(tmp_path: Path, methods: str, refused: str):
+    with pytest.raises(CatalogError, match=refused):
+        _keyed_methods(_keyed_catalog(tmp_path, methods))
+
+
+def test_an_outbound_row_needs_no_message_class_via(tmp_path: Path):
+    methods = _REGISTER.replace("VIA", _VIA) + _REGISTER.replace("VIA", "").replace(
+        "arity: 1,", "arity: 1, direction: outbound,"
+    ).replace("register", "find")
+    assert [method["name"] for method in _keyed_methods(_keyed_catalog(tmp_path, methods))] == [
+        "register"
+    ]

@@ -207,6 +207,14 @@ reaches which handler, in the order the behavior tries them. One row per case.
 - The first-match rule over these rows is `resolve/message_handlers.reachable_handlers`: per
   behavior, the first unpredicated case the message matches (its class or a supertype of it,
   transitively; a value case by identity), and every predicated case before it that matches.
+- **An inbound key row's handlers come from these rows too** (spec §3d item 6,
+  `resolve/message_hops.record_key_handlers`): the key's message class (`ServiceKey.create` /
+  `EntityTypeKey.create` argument 0, D02's `message_class_via`) reaches every case the rule
+  above gives for it, for each subtype of it in the module, and for each constant a value
+  case names whose declared type is one of those (`served_cases`). The registering row is
+  replaced by one `endpoints` row per handler, differing only in `handler`; one row with
+  `handler` NULL where no case is reached or the class was not read. It runs after
+  `record_self_calls`, which therefore read the key as served off the registering row.
 - **Exported whole**: every column is a symbol, an integer or a boolean
   ([D06](D06-bundle-format.md) §3). A derived table because the reading is Python
   (`resolve/message_handlers.py`, the shared chain walk); replaced whole per resolve by that
@@ -619,7 +627,7 @@ column with its own evidence, never this one.
 | GraphQL non-root resolver | `graphql` | NULL | `Type.field` (`Order.lines`) | the annotation catalogs |
 | WebSocket / STOMP | `websocket` | NULL | the connection path or destination (`/live`, `/orders/place`) | the WebSocket and STOMP catalogs |
 | RSocket route | `rsocket` | NULL | the route the handler answers (`/orders/place`), or the class-level prefix alone for a `@ConnectMapping` naming none | the Spring RSocket catalog (F2 §3.6). Verbless for STOMP's reason: an RSocket route declares no verb. It shares `@MessageMapping` with STOMP and is told apart by the build, or by a `@ConnectMapping` anywhere in the module |
-| Actor message | `actor` | NULL | the key name (a Receptionist service key, a sharded entity type) or the distributed pub-sub topic | the Akka and Pekko actor catalogs (SEXTANT-178). Verbless for the messaging protocols' reason: an actor is addressed by a name, not called by a verb |
+| Actor message | `actor` | NULL | the key name (a Receptionist service key, a sharded entity type) or the distributed pub-sub topic | the Akka and Pekko actor catalogs (SEXTANT-178). Verbless for the messaging protocols' reason: an actor is addressed by a name, not called by a verb. An inbound key row's `handler` is each handler its message class reaches, one row per handler, NULL where none does (`resolve/message_hops.record_key_handlers`); a pub-sub row's is the method that subscribed |
 | SSE | `sse` | the HTTP verb (`GET`) | the route path (`/events/stream`) | an HTTP row, reclassified ([D02](D02-catalog-schema.md) §2's `protocol_hint`) |
 | SOAP operation | `soap` | NULL | the input element's QName in W3C notation (`{http://orders.example.com/ws}placeOrderRequest`) | the SOAP annotation catalogs, `single_call` off the payload type, and `schema_operations` from the WSDL |
 | SOAP action | `soap` | NULL | the action URI verbatim (`http://orders.example.com/action/cancelOrder`) | the Spring-WS catalog |

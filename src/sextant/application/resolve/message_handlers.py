@@ -3,8 +3,8 @@
 A behavior binds message classes, or values equal to a constant, to handlers, in order, and
 a message is handled by the FIRST case it matches. This pass reads the cases into the
 `message_handlers` table, one row per case with its place in its behavior; `reachable_handlers`
-is the first-match rule over those rows, which the hop pass and the inbound key rows both
-apply. Nothing here names a framework type: every owner, method and argument position is the
+is the first-match rule over those rows, which the hop pass applies to a message's class and
+`served_cases` to every subtype of an inbound key's class. Nothing here names a framework type: every owner, method and argument position is the
 catalog's.
 
 ## A behavior is a chain
@@ -117,13 +117,7 @@ def reachable_handlers(
     behaviors: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         behaviors.setdefault(str(row["behavior"]), []).append(row)
-    assignable = set[str]()
-    pending = [] if message_type is None else [message_type]
-    while pending:
-        current = pending.pop()
-        if current not in assignable:
-            assignable.add(current)
-            pending.extend(supertypes.get(current, ()))
+    assignable = set[str]() if message_type is None else _ancestry(message_type, supertypes)
     for cases in behaviors.values():
         for case in sorted(cases, key=lambda case: int(case["position"])):
             if not _matches(case, assignable, message_value):
@@ -132,6 +126,57 @@ def reachable_handlers(
             if not case["predicated"]:
                 break
     return reached
+
+
+def served_cases(
+    rows: list[dict[str, Any]],
+    message_class: str | None,
+    supertypes: Mapping[str, set[str]],
+    constant_classes: Mapping[str, str | None],
+) -> list[dict[str, Any]]:
+    """The cases a message of `message_class` can reach, whichever subtype it is: an inbound
+    key's handlers (spec §3d item 6), where the key names a class (`Command`) and a sender
+    sends any instance of it.
+
+    The hop rule, asked once per candidate class, so the two always agree:
+    `reachable_handlers` for `message_class` and for each type in `supertypes` that has it
+    among its supertypes (a `Reserve`, a `Release`), and for each constant a value case names
+    whose class (`constant_classes`, the constant's declared type) is one of those types
+    (`Tick.INSTANCE`). A case shadowed for every one of them is not reached; a predicated
+    case is, as for a hop. Reading "every case registered under a subtype" instead would
+    name a case that a `Command` case before it shadows, a handler no message can run, and
+    would miss a `Command` case taking a subtype it was not registered for.
+
+    No class (`None`, not read) reaches nothing, never every case. One entry per case, in
+    `(behavior, position)` order."""
+    if message_class is None:
+        return []
+    classes = {message_class} | {
+        candidate for candidate in supertypes if message_class in _ancestry(candidate, supertypes)
+    }
+    messages: list[tuple[str, str | None]] = [(candidate, None) for candidate in sorted(classes)]
+    for constant in sorted({str(row["message_value"]) for row in rows if row["message_value"]}):
+        constant_class = constant_classes.get(constant)
+        if constant_class in classes:
+            messages.append((str(constant_class), constant))
+    reached: dict[tuple[str, int], dict[str, Any]] = {}
+    for candidate, value in messages:
+        for case in reachable_handlers(rows, candidate, value, supertypes):
+            reached.setdefault((str(case["behavior"]), int(case["position"])), case)
+    return [reached[key] for key in sorted(reached)]
+
+
+def _ancestry(start: str, supertypes: Mapping[str, set[str]]) -> set[str]:
+    """`start` and every supertype of it, transitively: the classes a `start` is assignable
+    to."""
+    found = set[str]()
+    pending = [start]
+    while pending:
+        current = pending.pop()
+        if current not in found:
+            found.add(current)
+            pending.extend(supertypes.get(current, ()))
+    return found
 
 
 def _matches(case: Mapping[str, Any], assignable: set[str], message_value: str | None) -> bool:

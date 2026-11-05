@@ -7384,6 +7384,104 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "message-handlers.a-key-reaches-the-cases-of-its-SUBTYPES": Guard(
+        what="an inbound key's handlers are the cases any subtype of its message class reaches",
+        why="spec 2026-11-04 §3d item 6: a key names its protocol's interface (`Command`) and "
+        "the cases name the classes implementing it. Asked for the key's class alone, the "
+        "key reaches no case, and every key row loses its handlers",
+        edits=(
+            Edit(
+                path=_MESSAGE_HANDLERS,
+                find="    classes = {message_class} | {\n"
+                "        candidate for candidate in supertypes if message_class in _ancestry(candidate, supertypes)\n"
+                "    }\n",
+                replace="    classes = {message_class}  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "message-handlers.a-key-reaches-a-VALUE-case-of-its-class": Guard(
+        what="an inbound key reaches a value case whose constant is of its class",
+        why="spec 2026-11-04 §3d items 3 and 6: `onMessageEquals(Tick.INSTANCE, h)` handles a "
+        "`Command` the key carries. Without the constants the key row drops `h`, a handler a "
+        "sender reaches",
+        edits=(
+            Edit(
+                path=_MESSAGE_HANDLERS,
+                find="        if constant_class in classes:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "key-handlers.the-registering-method-is-REPLACED": Guard(
+        what="an inbound key row is replaced by one row per handler its class reaches",
+        why="spec 2026-11-04 §3a: registering a key is not handling its messages. Kept, the "
+        "row names the method that called `register` or `init` as the key's handler, and a "
+        "trace from the key starts in setup code",
+        edits=(
+            Edit(
+                path=_MESSAGE_HOPS,
+                find='            dropped.append({"row_id": row["row_id"]})\n',
+                replace="            continue  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "key-handlers.a-key-no-handler-serves-keeps-ONE-row": Guard(
+        what="a key whose class reaches no handler keeps one row, `handler` NULL",
+        why="spec 2026-11-04 §3d item 6: the key is still served here. Without the row it "
+        "vanishes from the module's inbound boundary",
+        edits=(
+            Edit(
+                path=_MESSAGE_HOPS,
+                find="            for handler in handlers or [None]:\n                kept = ",
+                replace="            for handler in handlers:  # guard disabled by scripts/guard_check.py\n"
+                "                kept = ",
+            ),
+        ),
+    ),
+    "key-handlers.the-class-is-read-through-message_class_via": Guard(
+        what="a key's message class is read through the row's `message_class_via` hops",
+        why="spec 2026-11-04 §3d item 6: the producer's identity entry names the key's NAME. "
+        "Read through it, the class walk answers the name string, no class, and every key "
+        "row loses its handlers",
+        edits=(
+            Edit(
+                path=_MESSAGE_HOPS,
+                find="        ] + list(catalog.value_model)\n",
+                replace="        ][:0] + list(catalog.value_model)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "key-handlers.a-key-takes-the-class-read-on-its-OWN-path": Guard(
+        what="a key takes only the class read on a path agreeing with its address's",
+        why="two keys built by one helper from its callers' arguments: paired across paths, "
+        "each key takes both classes, and each row names the other key's handlers",
+        edits=(
+            Edit(
+                path=_MESSAGE_HOPS,
+                find="            if _extends(name_path, class_path) or _extends(class_path, name_path)\n",
+                replace="            if True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "key-handlers.run-AFTER-self-calls": Guard(
+        what="the key-handler pass runs after the self-call pass",
+        why="spec 2026-11-04 §3d items 5-6: the self-call pass reads a key as served off its "
+        "inbound row's handler. Run after the key rows are named, a key no handler serves has "
+        "none, and a call naming it comes back as an outbound row to the module itself",
+        edits=(
+            Edit(
+                path=_PIPELINE,
+                find="        record_self_calls(workspace)\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_PIPELINE,
+                find="        record_key_handlers(workspace, declared)\n",
+                replace="        record_key_handlers(workspace, declared)\n"
+                "        record_self_calls(workspace)  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "message-hops.ONE-reset-before-both-writers": Guard(
         what="the pipeline clears `rpc_hops` once per resolve, before its two writers",
         why="spec 2026-11-04 §3d item 7: both writers only insert. Without the reset a second "

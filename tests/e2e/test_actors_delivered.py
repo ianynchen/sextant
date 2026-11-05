@@ -71,12 +71,15 @@ def test_a_pubsub_subscription_is_an_inbound_row(actor_rows):
     assert ("inbound", None, "unresolved") in actor_rows
 
 
+@pytest.mark.pins("key-handlers.run-AFTER-self-calls")
 def test_a_key_the_module_serves_is_no_outbound_row(actor_rows):
     """`Receptionist.subscribe(Stock.KEY, …)`, `entityRefFor(OrderEntity.KEY, id)` and
     `new Publish("prices", …)` each name a key or topic this module itself registers, inits
-    or subscribes to: a hop, not an outbound call (§3d item 5)."""
+    or subscribes to: a hop, not an outbound call (§3d item 5). `Receptionist.find(Audit.KEY,
+    …)` too, although no handler here serves `audit`'s class: a key is served by its
+    registration, and its row stands with no handler."""
     outbound = {path for direction, path, _ in actor_rows if direction == "outbound"}
-    assert not outbound & {"stock", "order", "prices"}
+    assert not outbound & {"stock", "order", "prices", "audit"}
 
 
 def test_every_actor_row_the_fixture_gives(actor_rows):
@@ -86,10 +89,83 @@ def test_every_actor_row_the_fixture_gives(actor_rows):
     assert actor_rows == {
         ("inbound", "stock", "resolved"),
         ("inbound", "order", "resolved"),
+        ("inbound", "audit", "resolved"),
         ("inbound", "prices", "resolved"),
         ("inbound", None, "unresolved"),
         ("outbound", "/user/broker", "resolved"),
     }
+
+
+@pytest.fixture(scope="module")
+def inbound_handlers(analyzed: Path) -> list[tuple]:
+    """`(path, handler's Class#method)` for every inbound `actor` row, one per row, sorted;
+    a lambda's synthetic body is `Class#lambda` (`handler_cases`' reason)."""
+    workspace = DuckDbWorkspace(analyzed)
+    try:
+        rows = [
+            row
+            for row in workspace.query("endpoints")
+            if str(row["protocol"]) == "actor" and str(row["direction"]) == "inbound"
+        ]
+    finally:
+        workspace.close()
+
+    def short(symbol: object) -> str | None:
+        if symbol is None:
+            return None
+        name = str(symbol).rsplit("/", 1)[1].split("(")[0]
+        return re.sub(r"#lambda\$.*", "#lambda", name)
+
+    return sorted(((row["path"], short(row["handler"])) for row in rows), key=repr)
+
+
+@pytest.mark.pins("message-handlers.a-key-reaches-the-cases-of-its-SUBTYPES")
+@pytest.mark.pins("message-handlers.a-key-reaches-a-VALUE-case-of-its-class")
+@pytest.mark.pins("key-handlers.the-registering-method-is-REPLACED")
+@pytest.mark.pins("key-handlers.the-class-is-read-through-message_class_via")
+def test_a_service_key_row_names_each_handler_of_its_class(inbound_handlers):
+    """`stock`'s message class is `Stock.Command` (`ServiceKey.create` argument 0, read
+    through `KEY`'s `<clinit>`): its row names each handler a `Command` reaches, one row per
+    handler (spec §3a, §3d item 6) — `Reserve`'s, the predicated `Release` case and the one
+    after it (a predicate never shadows), and `Tick.INSTANCE`'s value case. The registering
+    method is not one of them."""
+    assert [row for row in inbound_handlers if row[0] == "stock"] == [
+        ("stock", "Stock#onRelease"),
+        ("stock", "Stock#onReserve"),
+        ("stock", "Stock#onTick"),
+        ("stock", "Stock#onUrgentRelease"),
+    ]
+
+
+@pytest.mark.pins("key-handlers.the-registering-method-is-REPLACED")
+def test_an_entity_key_row_names_its_handlers(inbound_handlers):
+    """`order`'s class is `OrderEntity.Command`, read `Entity.of` argument 0 then
+    `EntityTypeKey.create` argument 0: its one case, `Get`'s lambda, is its handler."""
+    assert [row for row in inbound_handlers if row[0] == "order"] == [
+        ("order", "OrderEntity#lambda"),
+    ]
+
+
+@pytest.mark.pins("key-handlers.a-key-no-handler-serves-keeps-ONE-row")
+def test_a_key_no_handler_serves_keeps_one_row_without_a_handler(inbound_handlers):
+    """`audit`'s class, `Audit.Entry`, is handled by no behavior here: one row, handler
+    NULL, never the method that registered it."""
+    assert [row for row in inbound_handlers if row[0] == "audit"] == [("audit", None)]
+
+
+def test_every_inbound_actor_row_and_its_handler(inbound_handlers):
+    """The whole set. A pub-sub row carries no message class (`Subscribe`, `Put`): it keeps
+    the method that subscribed, as Task 3 wrote it."""
+    assert inbound_handlers == [
+        ("audit", None),
+        ("order", "OrderEntity#lambda"),
+        ("prices", "ClassicBroker#preStart"),
+        ("stock", "Stock#onRelease"),
+        ("stock", "Stock#onReserve"),
+        ("stock", "Stock#onTick"),
+        ("stock", "Stock#onUrgentRelease"),
+        (None, "ClassicBroker#preStart"),
+    ]
 
 
 _MODULE = "sextant-jvm maven com.acme/actors 1.0.0 "
@@ -289,6 +365,8 @@ def test_every_actor_hop_the_fixture_gives(actor_hops):
     is at its super-constructor call."""
     unread_call = "message class not read: unresolved"
     assert actor_hops == {
+        ("Audit#lookup", 3, None, None, unread_call),
+        ("Audit#register", 3, None, None, unread_call),
         ("ClassicBroker#announce", 1, "ClassicBroker$Price", "ClassicBroker#onPrice", "compiler"),
         ("ClassicBroker#announce", 3, "DistributedPubSubMediator$Publish", None, "compiler"),
         ("ClassicBroker#announce", 5, "ClassicBroker$Price", "ClassicBroker#onPrice", "compiler"),

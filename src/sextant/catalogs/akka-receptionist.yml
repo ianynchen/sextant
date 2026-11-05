@@ -27,16 +27,20 @@ matches:
   methods:
     # The key arrives as a static final field (`static final ServiceKey<C> KEY =
     # ServiceKey.create(C.class, "stock")`); the walk reads it through the field's
-    # `<clinit>` to the `create` call, whose argument 1 is the name.
+    # `<clinit>` to the `create` call, whose argument 1 is the name. Argument 0 is the class
+    # literal of the messages the key carries, read the same way (`message_class_via`): the
+    # row's handlers are the cases a message of that class reaches (spec §3d item 6).
     - { name: register, arity: 2,
         descriptor: "(Lakka/actor/typed/receptionist/ServiceKey;Lakka/actor/typed/ActorRef;)Lakka/actor/typed/receptionist/Receptionist$Command;",
         channel_arg: 0,
-        channel_via: [{ owner: akka.actor.typed.receptionist.ServiceKey, method: create, arg: 1 }] }
+        channel_via: [{ owner: akka.actor.typed.receptionist.ServiceKey, method: create, arg: 1 }],
+        message_class_via: [{ owner: akka.actor.typed.receptionist.ServiceKey, method: create, arg: 0 }] }
     # The 3-argument form adds a reply-to for the `Registered` acknowledgement.
     - { name: register, arity: 3,
         descriptor: "(Lakka/actor/typed/receptionist/ServiceKey;Lakka/actor/typed/ActorRef;Lakka/actor/typed/ActorRef;)Lakka/actor/typed/receptionist/Receptionist$Command;",
         channel_arg: 0,
-        channel_via: [{ owner: akka.actor.typed.receptionist.ServiceKey, method: create, arg: 1 }] }
+        channel_via: [{ owner: akka.actor.typed.receptionist.ServiceKey, method: create, arg: 1 }],
+        message_class_via: [{ owner: akka.actor.typed.receptionist.ServiceKey, method: create, arg: 0 }] }
     # `subscribe` and `find` look the key up to send to its actors: outbound. A key this
     # module registers itself is a hop, not an outbound row (§3d item 5,
     # `resolve/self_calls.py`).
