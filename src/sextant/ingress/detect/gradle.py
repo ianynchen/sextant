@@ -31,9 +31,11 @@ other projects are read.
 becomes a detect note (I1) rather than a silent absence. A root project that
 carries its own source alongside subprojects loses that source the same way
 an aggregation-only POM's own element does (2M design §2) — also a detect
-note now (I2), never silent. Android variants are not modelled: this
-detector reads the plain JVM-language source-set shape Gradle's own `main`
-source set already exposes, nothing richer. `buildSrc` convention-plugin
+note now (I2), never silent. An Android project is read through the Android
+Gradle Plugin's own variant API (its release variant, or its only variant;
+one module per product edition), and a part built for several platforms
+through its JVM and Android versions; both give one module for each version
+that compiles to JVM bytecode. `buildSrc` convention-plugin
 SOURCES are never read — the init script reads the EVALUATED model, so a
 convention plugin's effects on a project (its extra source sets, its applied
 plugins) are visible, but `buildSrc/src` itself is not. A Gradle version too
@@ -692,7 +694,8 @@ class GradleDetector:
             # a record the init script writes may carry one too.
             build_failure=project.get("buildFailure"),
             # The init script's reason that a project it read holds nothing Sextant reads
-            # (Android outbound Task 7). It is not a build failure: the project was built.
+            # (Android outbound Task 7). It is not a build failure: nothing in it
+            # compiles to JVM bytecode.
             skip_reason=project.get("skipReason"),
             results_name=identity.results_name,
         )

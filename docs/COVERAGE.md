@@ -4223,7 +4223,7 @@ all. These need new `protocol` values, not new columns in §2.
 | Android | Content providers | manifest `<provider android:authorities>` + subclass | artifact + `interface_implementation` | B |
 | Android | Push | `FirebaseMessagingService.onMessageReceived` | `interface_implementation` | B |
 | Android | Background work | `WorkManager` `Worker` subclasses | `interface_implementation` | B |
-| Android | **Retrofit** `@GET("users/{id}")` (outbound) | interface annotations | `annotation` | **A — highest-value Android catalog** |
+| Android | **Retrofit** `@GET("users/{id}")` (outbound) | interface annotations | `annotation` | **A — highest-value Android catalog.** ✅ built 2026-11-05 (OI-274): the Android module is read from its release build, and each row has the server address of the `Retrofit` object that made its client (`made_by`); OkHttp and Ktor client rows are read from the same module. Boundaries below |
 | iOS | Custom URL schemes | `Info.plist` `CFBundleURLTypes` | artifact | B |
 | iOS | **Universal Links** | `apple-app-site-association` — **lives on the server, outside the app repository** | artifact | C — cross-repository join |
 | iOS | App Intents / Siri — `AppIntents` framework, iOS 16+ | structs conforming to `AppIntent` with a `perform()` method; **they live in the main binary**, not an extension | `interface_implementation` | B |
@@ -4232,8 +4232,23 @@ all. These need new `protocol` values, not new columns in §2.
 **Android needs no new scanner.** The build emits ordinary JVM `.class` intermediates
 before D8 dexes them, and the Android Gradle Plugin's own instrumentation API takes an **ASM
 `ClassVisitor`** over exactly those files. Point the scanner at the intermediates and our
-extractor works unchanged. Android-specific features are **post-MVP by decision**; the work
-is catalogs and an `AndroidManifest.xml` reader, not a scanner.
+extractor works unchanged. Android **inbound** features are **post-MVP by decision**; the work
+is an `AndroidManifest.xml` reader, not a scanner.
+
+**Android outbound is read** (OI-274, 2026-11-05; design `2026-11-05-android-outbound-design.md`).
+The detector reads an Android module through AGP's variant API: its release build, or its only
+build, one module for each product edition, and for a Kotlin Multiplatform part one module for each
+JVM-bytecode version (M02). Retrofit (with its address, see the M8 paragraph in §2), OkHttp and
+Ktor client calls in that code are rows as in any JVM module; no catalog was added. Measured on a
+fixture (`fixtures/gradle-android`: two editions, each with its own Retrofit address, an OkHttp
+call, and a Kotlin Multiplatform part whose JVM and Android versions each give their own row) and
+on two real builds: kotlinconf-app (AGP 9.3.3) with its Android, JVM and shared modules, and the
+ktor-samples `client-mpp` (AGP 8.13.1) with `commonMain` sources located. **Boundaries:**
+Android inbound (manifest, deep links, exported components, `Worker`s) stays post-MVP; a
+Retrofit client made in a Dagger/Hilt `@Provides` method keeps its row `partial` (OI-304); the
+limits of the address read are OI-307; the limits of the Android detection are OI-310
+(a flavored library joined by an app, Java resources, AGP 7.4 to 7.x unmeasured, no AGP 8
+fixture). Duplicate and wrong-verb Ktor client rows seen on kotlinconf-app are fixed in a separate pull request (#92), not here. Not verified: NotyKT and koog (they need a JDK 17 toolchain), and AGP 7.4 to 7.x.
 
 ---
 

@@ -66,7 +66,7 @@ downstream depends on, and only the build tool knows them.
 `<gradle> [--offline] --init-script <ours> --no-configuration-cache --continue -q
 sextantBuild sextantModel -Psextant.outDir=<tmpdir>` (2M design §1; `--offline` governs only
 the first of at most two attempts — the second is the flagged online retry). The script
-registers one `sextantModel` task in every project, which writes that project's own records to
+registers one `sextantModel` task in every project (one per read build in an Android part), which writes that project's own records to
 `projects/<path>.json`, and a `sextantBuild` task in the root project, which writes
 `build.json` naming every project (Android design M4). The detector joins the files into one
 document. Nothing goes to stdout, which Gradle, the target build's own scripts, and JVM
@@ -198,6 +198,42 @@ artifact variant attribute named `org.jetbrains.kotlin.platform.type` (measured 
 `gradle-android` fixture: `jvm` for a Kotlin JVM part, `androidJvm` for an Android part). The
 record with that label is joined. No label, or a label that no record carries, is not guessed:
 `libraries_not_resolved` gets "could not tell which version of `<path>` this part uses".
+
+**An Android part is read through the Android Gradle Plugin (AGP), never by folder names** (Android
+design §2a to §2e; applies to `com.android.application`, `com.android.library` and
+`com.android.kotlin.multiplatform.library`). Such a part has no `java` plugin, so the init script asks AGP's
+`androidComponents.onVariants` for each build it reads, and reports it in the same record a `java`
+project gets, through one shared record builder:
+
+- **Which build.** The release build type. A part with no build types (the Kotlin Multiplatform
+  Android library has one build, with no build type) is read from that one build. A part with no
+  release build is skipped: "no release build: nothing that ships to read". A part with product
+  editions (flavors) gives one module per release edition, named as for a Kotlin Multiplatform
+  version, with Android's own edition name: `Noty.app-free`, `Noty.app-freeStaging`. Code shared
+  by every edition is read once for each edition. Debug builds and test classes are not read.
+- **Classes.** The directories in AGP's project classes (`ScopedArtifact.CLASSES`): the classes AGP
+  itself hands to bytecode instrumentation, whichever plugin compiled them. A directory that
+  holds no `.class` file is dropped (the Kotlin plugin adds its tooling metadata as a "class"
+  folder). Only directories are read: a jar in the list (AGP adds `R.jar`, the resource-id
+  constants) is named in a detect note, never dropped silently.
+- **Sources.** AGP's Java and Kotlin source directories, with the language of the set that listed
+  each. For a Kotlin Multiplatform part, the Android version's source sets (`commonMain`
+  included) are added, because AGP 8 does not list them.
+- **Classpath.** The build's `compileConfiguration`, read as a `java` project's compile
+  classpath, so a sibling project joins as before. The Android SDK's `android.jar` is not on it
+  and is not added: `java.*` types come from the extractor's own JDK, so `android.*` supertypes
+  stay unread, and no outbound catalog matches an `android.*` type.
+- **AGP floor.** AGP 7.4 or newer (the first with `ScopedArtifacts`). An older AGP is skipped with
+  "Android Gradle Plugin <version> is older than 7.4, which Sextant needs to read Android parts".
+  AGP 8.13 and 9.3 are measured; 7.4 to 7.x are not.
+- **Identity** is the Gradle identity as for any project. The Android `applicationId` is not used.
+
+**A Kotlin Multiplatform part that has no JVM-bytecode version is skipped with a true reason**:
+"no JVM or Android target: Sextant reads JVM bytecode only (targets: js)" (the target names are
+Kotlin's). A JS, wasm or Kotlin/Native version is never read. This is a stated gap, not a failure.
+Three limits are logged (OI-311): Java files in `jvmMain` are not attributed to the module; a part
+with two `jvm()` versions gives a gap, not a guess, when a sibling is joined; and the `-<version>`
+suffix may collide with the name of a real project.
 
 **Every compiled output directory the build reports is scanned, in one scan** (OI-273). Gradle's
 `classesDirs` is a set — one directory per compiling plugin — so a Kotlin JVM project reports

@@ -18,13 +18,13 @@ the address shapes are new.
 
 ## Android
 
-Kotlin is already an MVP language. Android-specific features are **post-MVP by decision**.
+Kotlin is already an MVP language. Android **outbound** is read (2026-11-05, OI-274, see the next section). Android **inbound** features are **post-MVP by decision**.
 
 ### The toolchain answer is: nothing changes
 
  The Android build compiles Kotlin and Java to **ordinary JVM `.class` files** and only then runs D8 to produce DEX. The intermediates sit at `app/build/intermediates/…/*.class` before dexing, and the Android Gradle Plugin exposes its own instrumentation API that takes an **ASM `ClassVisitor`** over exactly those files.
 
-So our existing extractor works on Android **unchanged**, provided we point the scanner at the pre-dex intermediates rather than at the APK or AAB. If we ever needed to read a shipped artifact instead, DEX requires a different reader (`dexlib2`) — but there is no reason to, because the intermediates are a build output we already have.
+So our existing extractor works on Android **unchanged**, provided we point the scanner at the pre-dex intermediates rather than at the APK or AAB. The detector does this: it asks the Android Gradle Plugin for those class directories (release build, or the only build), so no path is guessed. If we ever needed to read a shipped artifact instead, DEX requires a different reader (`dexlib2`) — but there is no reason to, because the intermediates are a build output we already have.
 
 The real Android work is therefore **catalogs and a manifest reader**, not a new scanner.
 
@@ -37,6 +37,8 @@ The real Android work is therefore **catalogs and a manifest reader**, not a new
 | Ktor client | `client.get("https://…") { … }` | `registration_call` |
 | Apollo (GraphQL) | generated operation classes from `.graphql` documents | `generated_descriptor` |
 | Firebase / Firestore | `db.collection("users").document(id).get()` | `fluent_chain` — a data boundary worth modelling |
+
+**Built 2026-11-05 (OI-274).** Retrofit, OkHttp and Ktor client calls in an Android module are rows as in any JVM module. A Retrofit row has the address of the `Retrofit` object that made its client (`made_by`, found through `create(Api::class.java)` and the `baseUrl(...)` of its builder); where that address is not in code Sextant can follow, the row is `partial` ("server address not read"). One module per product edition (`Noty.app-free`) and, for Kotlin Multiplatform, one per JVM-bytecode version (`core-jvm`, `core-android`). Measured on a fixture and on kotlinconf-app (AGP 9.3.3) and ktor-samples `client-mpp` (AGP 8.13.1). Not built: a client made by a Dagger/Hilt `@Provides` method stays `partial` (OI-304); address-read limits are OI-307; Android detection limits are OI-310. Not verified: NotyKT, koog (need JDK 17), AGP 7.4 to 7.x. Apollo and Firebase are not covered.
 
 Base URLs live in `Retrofit.Builder().baseUrl(…)`, in a build-config field, or in a flavour-specific resource — a `config_join`, and the same problem as everywhere else.
 
@@ -56,7 +58,7 @@ Base URLs live in `Retrofit.Builder().baseUrl(…)`, in a build-config field, or
 
 ### Post-MVP scope note
 
-Per decision, MVP covers Kotlin as a JVM language — the language, the bytecode, the ordinary server-side catalogs. Retrofit, the manifest reader, Room and the intent model are deferred. They are listed here so the deferral is a choice rather than an oversight.
+Per decision, MVP covers Kotlin as a JVM language — the language, the bytecode, the ordinary server-side catalogs. The manifest reader, Room and the intent model are deferred; Retrofit, OkHttp and Ktor client outbound are built. They are listed here so the deferral is a choice rather than an oversight.
 
 ---
 
@@ -123,7 +125,7 @@ struct Order: Codable {
 
 ## Verdict
 
-**Android is cheap** — the scanner already works, and the gap is catalogs (Retrofit above all) plus an `AndroidManifest.xml` reader. It is deferred by choice, not by difficulty.
+**Android is cheap** — the scanner already works. Outbound (Retrofit above all) is built; the gap left is an `AndroidManifest.xml` reader for inbound. It is deferred by choice, not by difficulty.
 
 **iOS is more work but not blocked.** The index store is a real compiler-backed fact source, so Swift ranks third behind the JVM and Go, ahead of Python and Rust. The costs are a macOS build requirement and an inbound model built on `Info.plist` and entitlements rather than on route declarations.
 

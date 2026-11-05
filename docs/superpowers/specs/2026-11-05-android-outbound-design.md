@@ -1,6 +1,6 @@
 # Android modules — outbound — design
 
-**Status: DRAFT 2026-11-05, for the user's approval.** Plane OI-274 = SEXTANT-268, the last open
+**Status: BUILT 2026-11-05; approved, with the rulings in §4. See §5, "As built".** Plane OI-274 = SEXTANT-268, the last open
 item of "Java/Kotlin complete" (SEXTANT-265) besides Akka (PR #91). Android **inbound** (deep
 links, manifest, exported components) stays post-MVP (COVERAGE §6); this design is outbound only.
 Branch `cov/android-outbound`, cut from `fix/gradle-no-group` (PR #90), which it needs.
@@ -193,3 +193,72 @@ Five Major findings (no Critical), each ruled by the user 2026-11-05. Minor find
   **Catalog word approved 2026-11-05:** `made_by` (under `matches` of an `annotation_driven`
   catalog: the call that makes the client object for an interface; its address comes from the
   object that call is made on), reusing `class_arg` from PR #91 and the existing `steps` words.
+
+## 5. As built (2026-11-05)
+
+Code is finished on branch `cov/android-outbound`. This section says what shipped against the
+design.
+
+**Shipped as designed.**
+
+- **One task per part (M4).** Every project, `java`, Android and Kotlin Multiplatform, has its
+  own task that writes its own record; the root task `sextantBuild` writes `build.json` naming
+  every project. Parallel builds (`org.gradle.parallel=true`) stay parallel.
+- **`--continue` (M5).** A part that fails to build is skipped with Gradle's own reason, and a
+  part that needs it is skipped with "a part it needs failed to build". If every part fails, or no
+  `build.json` was written, the run is refused with Gradle's words. Plain `java` builds gain the
+  same.
+- **Android branch (§2a, §2e).** Release build, or the only build; one module per release edition
+  (M3, named with `variant.flavorName`); class directories from `ScopedArtifact.CLASSES`, only
+  those that hold a `.class` file; project jars named in a note; compile classpath from the
+  build's `compileConfiguration`; AGP 7.4 is the floor, with a reason for an older one.
+- **Kotlin Multiplatform versions (M1, M2).** One module per JVM-bytecode version, `-<version>`
+  added only where a part has several; a sibling is joined by Gradle's platform label. A part with
+  no JVM-bytecode version is skipped with "no JVM or Android target: Sextant reads JVM bytecode
+  only (targets: ...)".
+- **Results sub-folders (M6)** and **description files (M7)**: as ruled, including the `results`
+  field in `modules.json`. Single-module commands at a folder with several modules stop and list
+  each module's `--workspace` command.
+- **`made_by` (M8).** The approved catalog word, on `retrofit.yml`. A Retrofit row has the address
+  of the object that made its client, or is `partial` with "server address not read". No other
+  catalog uses the word yet.
+
+**Different from the design, or added while building.**
+
+- **`commonMain` on AGP 8.** AGP 8's source list does not hold the Kotlin Multiplatform source
+  sets, so the Android branch adds the Android version's source sets. Found on `client-mpp`:
+  before, the source locations of its calls were null; after, the `Api` file is located.
+- **The fence.** Found while testing `made_by`: an interface that extends another counted as
+  implementing it, so the base interface lost every row. Ruled 2026-11-05: only a class
+  implements. This changes the shared rule for every outbound catalog that declares clients on
+  interfaces. With `made_by`, each inheriting interface that a client is made for gets its own row
+  with its own address.
+- **The render.** A Gradle module's coverage sentence now says "resolved by Gradle", and the
+  declared-set gap is stated only for a declared set.
+- **No catalog added** (as §3 said); one catalog word, `made_by`, as approved.
+
+**Measured on real builds** (JDK 21, SDK at `/opt/homebrew/share/android-commandlinetools`).
+
+- **Fixture `fixtures/gradle-android`.** `app-free` and `app-paid`: Retrofit
+  `https://free.api.example/orders/{id}` and `https://paid.api.example/orders/{id}` (each its own
+  address), OkHttp `https://status.example.com/health`. `shared-jvm`: `pricing.internal.example`.
+  `shared-android`: `pricing.example.com`. `server` is a plain JVM module.
+- **kotlinconf-app (AGP 9.3.3, parallel on).** Detected as modules `KotlinConfApp:core-jvm`,
+  `KotlinConfApp:core-android`, `KotlinConfApp.app:shared-jvm`, `KotlinConfApp.app:shared-android`,
+  `ui-components-jvm`, `ui-components-android`, `androidApp`, `desktopApp` and `backend`. The
+  JS-only parts are skipped with a true reason. The duplicate and false `GET` Ktor client rows
+  seen in the first check are fixed on a separate pull request (#92), not on this branch, so no
+  row count is claimed here.
+- **ktor-samples `client-mpp` (AGP 8.13.1).** `shared` is read with its `commonMain` sources.
+- **orders-service.** Two Retrofit rows (`LegacyBillingApi`, which the module never makes a
+  client for) went from `resolved` to `partial`: they had no server address.
+- **Field pins.** The six pins held (none is Android).
+
+**Not verified.** NotyKT and koog (they need a JDK 17 toolchain, not installed); AGP 7.4 to 7.x;
+the CI download of SDK platform 37.
+
+**Logged, not built** (OI-304 to OI-314): Hilt `@Provides` clients (304), MicroProfile
+`RestClientBuilder` (305), Spring `@HttpExchange` through `HttpServiceProxyFactory` (306),
+`made_by` limits (307), request chains with a step in a helper (308), Ktor builder shapes (309),
+Android detection limits (310), Kotlin Multiplatform module limits (311), a Gradle 5.x message
+(312), `render/` wiped at a module root (313), Maven deploy-time profiles (314).

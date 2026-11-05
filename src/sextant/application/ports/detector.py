@@ -174,9 +174,9 @@ class ModuleModel:
     # a module it needs failed. None when it was built. A module with a value is skipped
     # with it as the reason, and the other modules go on.
     build_failure: str | None = None
-    # Why the module holds nothing Sextant reads, in the detector's words, when the build
-    # did build it (Android outbound Task 7): a part whose versions all compile to code
-    # that is not bytecode. None for every other module. A module with a value is
+    # Why the module holds nothing Sextant reads, in the detector's words (Android
+    # outbound Task 7): nothing in it compiles to JVM bytecode. None for every other
+    # module. A module with a value is
     # skipped with it as the reason.
     skip_reason: str | None = None
     # The version or edition name of this module when its folder holds more than one

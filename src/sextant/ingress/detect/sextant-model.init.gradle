@@ -295,8 +295,9 @@ gradle.rootProject { rp ->
                     }
                     // A part with no JVM version and no Android build (only JS or
                     // Kotlin/Native versions) holds nothing Sextant reads. Its record
-                    // says so and names the versions; the part was built, so this is
-                    // not a build failure. The `common` metadata version is not named.
+                    // says so and names the versions: nothing in it compiles to JVM
+                    // bytecode, so this is not a build failure. The `common` metadata
+                    // version is not named.
                     if (records.isEmpty() && !android.applied) {
                         def names = p.kotlin.targets.findAll { it.platformType.name() != "common" }
                             .collect { it.name }.sort()
