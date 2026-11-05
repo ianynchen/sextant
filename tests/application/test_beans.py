@@ -24,11 +24,16 @@ import yaml
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.resolve.beans import (
+    NO_RECIPE,
+    Ambiguous,
     BeanRef,
+    NotProvided,
     Parameter,
+    ProvidedBy,
     Unresolved,
     bean_table,
     declared_beans,
+    injected_parameters,
     qualifier_of,
 )
 from sextant.domain.closed_sets import ConstructKind, OriginTier
@@ -39,9 +44,11 @@ from sextant.domain.facts import (
     Document,
     Signature,
     SymbolFact,
+    TypeHeaderFact,
     TypeRef,
 )
 from sextant.domain.facts import Parameter as DeclaredParameter
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -516,3 +523,337 @@ def test_the_fold_is_shared_by_every_catalog_naming_the_same_model(tmp_path: Pat
         method=_MODULE + _CONTAINER, name="container", erased_return="com/acme/di/Pipe#"
     )
     assert other.bean_of(_parameter("com/acme/di/Pipe#", "x")) == Unresolved("none")
+
+
+# --- which recipe fills a container-filled parameter (spec 2026-11-05 di-recipe-hop §2) ----
+#
+# `injected_parameters` reads EVERY bean model (D02 §1c), not one catalog's: here the shipped
+# `bean-models/` directory, so Dagger's rules are read through `dagger.yml`'s own words and
+# Spring's through `spring.yml`'s. Dagger is mirrored exactly (§2a): the key is the qualifier
+# with all of its attributes plus the full type, an unqualified parameter matches an
+# unqualified recipe only, and a key that is not unique in the module is never a guess.
+
+_MODELS = YamlCatalogSource(catalogs_dir()).bean_models()
+_PROVIDES = "dagger/Provides#"
+_INJECT = "javax/inject/Inject#"
+_NAMED = "javax/inject/Named#"
+_BILLING = "com/acme/Billing#"
+_NOT_NULL = "org/jetbrains/annotations/NotNull#"
+_RETROFIT = "retrofit2/Retrofit#"
+_NETWORK = "com/acme/NetworkModule#"
+_API = _NETWORK + "api(sig_c3728865)."
+
+
+def _type(symbol: str, *arguments: TypeRef) -> TypeRef:
+    return TypeRef(symbol=symbol, arguments=list(arguments))
+
+
+def _slot(declared: TypeRef, *uses: AnnotationUse, name: str = "retrofit") -> DeclaredParameter:
+    return DeclaredParameter(
+        name=name, type=declared, erased_symbol=declared.symbol, annotations=list(uses)
+    )
+
+
+def _recipe(
+    bare: str,
+    returns: TypeRef,
+    *annotations: AnnotationUse,
+    parameters: tuple[DeclaredParameter, ...] = (),
+    static: bool = False,
+    declaring: str = _PROVIDES,
+) -> list[SymbolFact | AnnotationFact]:
+    """A method carrying `declaring` and `annotations`, as the scanner records it: one symbol
+    fact with its signature and modifiers, one annotation fact per use on the method."""
+    owner = bare.partition("#")[0] + "#"
+    return [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + bare,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + owner,
+            signature=Signature(parameters=list(parameters), returns=returns),
+            modifiers={"static": static},
+        )
+    ] + [
+        AnnotationFact(document_id="doc_1", target=_MODULE + bare, retention="runtime", use=use)
+        for use in (AnnotationUse(annotation=declaring), *annotations)
+    ]
+
+
+def _qualifier_types() -> list[SymbolFact | AnnotationFact | TypeHeaderFact]:
+    """`@Named` as a library type whose header was read (javax.inject's own jar), and the
+    module's own `@Billing`: each carries `javax.inject.Qualifier`, which is what makes it a
+    qualifier. `@NotNull` carries nothing, so it never is one."""
+    return [
+        TypeHeaderFact(
+            document_id="doc_1",
+            symbol="sextant-jvm maven javax.inject/javax.inject 1 " + _NAMED,
+            construct_kind=ConstructKind.ANNOTATION,
+            annotations=[AnnotationUse(annotation="javax/inject/Qualifier#")],
+            origin="javax.inject:javax.inject",
+            version="1",
+        ),
+        SymbolFact(
+            document_id="doc_1", symbol=_MODULE + _BILLING, construct_kind=ConstructKind.ANNOTATION
+        ),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_MODULE + _BILLING,
+            retention="runtime",
+            use=AnnotationUse(annotation="javax/inject/Qualifier#"),
+        ),
+    ]
+
+
+def _named(value: str) -> AnnotationUse:
+    return AnnotationUse(annotation=_NAMED, args={"value": value})
+
+
+def _consumer(*uses: AnnotationUse, declared: TypeRef | None = None) -> list:
+    """`@Provides fun api(retrofit: Retrofit): OrdersApi` — the recipe whose parameter the
+    container fills, carrying `uses` on that parameter."""
+    return _recipe(
+        _API,
+        _type("com/acme/OrdersApi#"),
+        parameters=(_slot(declared or _type(_RETROFIT), *uses),),
+    )
+
+
+def _injections(tmp_path: Path, facts: list) -> dict:
+    workspace = _loaded(tmp_path, _qualifier_types() + facts)
+    try:
+        return dict(injected_parameters(workspace, _MODELS))
+    finally:
+        workspace.close()
+
+
+@pytest.mark.pins("beans.a-QUALIFIED-recipe-never-fills-an-UNQUALIFIED-parameter")
+def test_an_unqualified_parameter_gets_the_one_unqualified_recipe(tmp_path: Path):
+    """Measured on Dagger 2.57.2: an unqualified `Retrofit` parameter got the unqualified
+    recipe although a `@Named("pay")` and a `@Billing` recipe of the same type were in the
+    same module. A qualified recipe is not a candidate for an unqualified request (Spring
+    differs here). An annotation that is not a qualifier (`@NotNull`) changes nothing. The
+    recipe is an instance method, as in a Kotlin `object` module."""
+    found = _injections(
+        tmp_path,
+        _recipe(_NETWORK + "retrofit(sig_e61c31ac).", _type(_RETROFIT))
+        + _recipe(_NETWORK + "payRetrofit(sig_e61c31ac).", _type(_RETROFIT), _named("pay"))
+        + _recipe(
+            _NETWORK + "billingRetrofit(sig_e61c31ac).",
+            _type(_RETROFIT),
+            AnnotationUse(annotation=_BILLING),
+        )
+        + _consumer(AnnotationUse(annotation=_NOT_NULL)),
+    )
+
+    assert found[(_MODULE + _API, 0)] == ProvidedBy(_MODULE + _NETWORK + "retrofit(sig_e61c31ac).")
+
+
+def test_two_unqualified_recipes_of_one_key_are_ambiguous(tmp_path: Path):
+    """Dagger refuses two recipes of one key on one component (`DuplicateBindings`), but
+    the same two in modules on DIFFERENT components compile, and Sextant sees the whole
+    module, not the component. Two in the module is `ambiguous`, never a guess."""
+    first = "com/acme/JavaModule#retrofit(sig_e61c31ac)."
+    second = _NETWORK + "retrofit(sig_e61c31ac)."
+    found = _injections(
+        tmp_path,
+        _recipe(first, _type(_RETROFIT), static=True)
+        + _recipe(second, _type(_RETROFIT))
+        + _consumer(),
+    )
+
+    assert found[(_MODULE + _API, 0)] == Ambiguous((_MODULE + first, _MODULE + second))
+
+
+def test_no_recipe_of_the_key_is_not_provided(tmp_path: Path):
+    """A key no recipe in the module provides (a recipe in another Gradle module, an
+    `@Inject` class, `@BindsInstance`): `none`, never the nearest recipe."""
+    found = _injections(
+        tmp_path,
+        _recipe(_NETWORK + "payRetrofit(sig_e61c31ac).", _type(_RETROFIT), _named("pay"))
+        + _consumer(),
+    )
+
+    assert found[(_MODULE + _API, 0)] == NotProvided(NO_RECIPE)
+
+
+@pytest.mark.pins("beans.a-QUALIFIER-s-ATTRIBUTES-are-part-of-the-key")
+@pytest.mark.pins("beans.a-QUALIFIED-recipe-never-fills-an-UNQUALIFIED-parameter")
+def test_a_qualifier_matches_with_all_of_its_attributes(tmp_path: Path):
+    """`@Named("a")` and `@Named("b")` are two keys: each parameter gets its own recipe,
+    and `@Named("c")` gets none, never a recipe of another name."""
+    recipes = _recipe(_NETWORK + "a(sig_e61c31ac).", _type(_RETROFIT), _named("a")) + _recipe(
+        _NETWORK + "b(sig_e61c31ac).", _type(_RETROFIT), _named("b")
+    )
+
+    for value, expected in (
+        ("a", ProvidedBy(_MODULE + _NETWORK + "a(sig_e61c31ac).")),
+        ("b", ProvidedBy(_MODULE + _NETWORK + "b(sig_e61c31ac).")),
+        ("c", NotProvided(NO_RECIPE)),
+    ):
+        found = _injections(tmp_path / value, recipes + _consumer(_named(value)))
+        assert found[(_MODULE + _API, 0)] == expected, value
+
+
+@pytest.mark.pins("beans.a-QUALIFIED-recipe-never-fills-an-UNQUALIFIED-parameter")
+def test_the_module_s_own_qualifier_is_one(tmp_path: Path):
+    """`@Billing` is a qualifier because its own type carries `javax.inject.Qualifier`: the
+    `@Billing` parameter gets the `@Billing` recipe, not the unqualified one."""
+    billing = _NETWORK + "billingRetrofit(sig_e61c31ac)."
+    found = _injections(
+        tmp_path,
+        _recipe(_NETWORK + "retrofit(sig_e61c31ac).", _type(_RETROFIT))
+        + _recipe(billing, _type(_RETROFIT), AnnotationUse(annotation=_BILLING))
+        + _consumer(AnnotationUse(annotation=_BILLING)),
+    )
+
+    assert found[(_MODULE + _API, 0)] == ProvidedBy(_MODULE + billing)
+
+
+@pytest.mark.pins("beans.TYPE-ARGUMENTS-are-part-of-the-key")
+def test_type_arguments_are_part_of_the_key(tmp_path: Path):
+    """`List<String>` and `List<Integer>` are two keys in Dagger, one erasure on the JVM."""
+    strings = _NETWORK + "strings(sig_3f061508)."
+    numbers = _NETWORK + "numbers(sig_3f061508)."
+    listed = _type("java/util/List#", _type("java/lang/Integer#"))
+    found = _injections(
+        tmp_path,
+        _recipe(strings, _type("java/util/List#", _type("java/lang/String#")))
+        + _recipe(numbers, listed)
+        + _consumer(declared=listed),
+    )
+
+    assert found[(_MODULE + _API, 0)] == ProvidedBy(_MODULE + numbers)
+
+
+@pytest.mark.pins("beans.a-MULTIBINDING-recipe-never-fills-T")
+def test_a_multibinding_contribution_is_never_the_recipe_for_its_type(tmp_path: Path):
+    """An `@IntoSet` recipe of `String` adds an element to `Set<String>`; it does not
+    provide `String`. Alone it is no recipe for a `String` parameter; beside a plain
+    `String` recipe, the plain one is the only candidate."""
+    into_set = _recipe(
+        _NETWORK + "element(sig_aa).",
+        _type("java/lang/String#"),
+        AnnotationUse(annotation="dagger/multibindings/IntoSet#"),
+    )
+    plain = _NETWORK + "plain(sig_aa)."
+    consumer = _consumer(declared=_type("java/lang/String#"))
+
+    assert _injections(tmp_path / "alone", into_set + consumer)[(_MODULE + _API, 0)] == (
+        NotProvided(NO_RECIPE)
+    )
+    beside = _injections(
+        tmp_path / "beside", into_set + _recipe(plain, _type("java/lang/String#")) + consumer
+    )
+    assert beside[(_MODULE + _API, 0)] == ProvidedBy(_MODULE + plain)
+
+
+@pytest.mark.pins("beans.an-INJECT-constructor-s-parameters-are-container-filled")
+def test_an_inject_constructor_s_parameters_are_container_filled(tmp_path: Path):
+    """`class OrdersRepo @Inject constructor(retrofit: Retrofit)`: the container fills the
+    constructor's parameters by the same key. A constructor with no `@Inject` is not the
+    container's to fill, so it has no entry."""
+    inject = "com/acme/OrdersRepo#<init>(sig_be4b88df)."
+    plain = "com/acme/Plain#<init>(sig_be4b88df)."
+    retrofit = _NETWORK + "retrofit(sig_e61c31ac)."
+
+    def constructor(bare: str) -> SymbolFact:
+        return SymbolFact(
+            document_id="doc_1",
+            symbol=_MODULE + bare,
+            construct_kind=ConstructKind.CONSTRUCTOR,
+            enclosing=_MODULE + bare.partition("#")[0] + "#",
+            signature=Signature(parameters=[_slot(_type(_RETROFIT))], returns=_type("void#")),
+        )
+
+    found = _injections(
+        tmp_path,
+        _recipe(retrofit, _type(_RETROFIT))
+        + [constructor(inject), constructor(plain)]
+        + [
+            AnnotationFact(
+                document_id="doc_1",
+                target=_MODULE + inject,
+                retention="runtime",
+                use=AnnotationUse(annotation=_INJECT),
+            )
+        ],
+    )
+
+    assert found[(_MODULE + inject, 0)] == ProvidedBy(_MODULE + retrofit)
+    assert (_MODULE + plain, 0) not in found
+
+
+@pytest.mark.pins("beans.a-COMPANION-recipe-and-its-STATIC-FORWARDER-are-one")
+def test_a_companion_recipe_and_its_static_forwarder_are_one_recipe(tmp_path: Path):
+    """Measured on Dagger 2.57.2 + Kotlin 2.2.21: `@JvmStatic @Provides` in a companion
+    object compiles to TWO methods carrying `@Provides` — the companion's instance method
+    and a static forwarder of the same name and descriptor on the enclosing module — and
+    the component calls the forwarder. One recipe, never `ambiguous`. A plain companion
+    recipe (no forwarder) is found on the companion itself."""
+    module = "com/acme/CompModule#"
+    companion = "com/acme/CompModule$Companion#"
+    stat = "statRetrofit(sig_e61c31ac)."
+    comp = "compRetrofit(sig_e61c31ac)."
+    facts = (
+        [
+            SymbolFact(document_id="doc_1", symbol=_MODULE + module, construct_kind="class"),
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_MODULE + companion,
+                construct_kind="class",
+                enclosing=_MODULE + module,
+            ),
+        ]
+        + _recipe(module + stat, _type(_RETROFIT), _named("stat"), static=True)
+        + _recipe(companion + stat, _type(_RETROFIT), _named("stat"))
+        + _recipe(companion + comp, _type(_RETROFIT), _named("comp"))
+    )
+
+    stat_found = _injections(tmp_path / "stat", facts + _consumer(_named("stat")))
+    comp_found = _injections(tmp_path / "comp", facts + _consumer(_named("comp")))
+
+    assert stat_found[(_MODULE + _API, 0)] == ProvidedBy(_MODULE + module + stat)
+    assert comp_found[(_MODULE + _API, 0)] == ProvidedBy(_MODULE + companion + comp)
+
+
+def test_a_spring_bean_parameter_crosses_by_spring_s_own_ladder(tmp_path: Path):
+    """Spec §2b: a `@Bean` method's parameter takes Spring's ladder unchanged — the answer
+    is `bean_of`'s. Here the parameter is unqualified and two beans share its type: Spring
+    picks the `@Primary` one, which Dagger's rules would call `ambiguous`."""
+    container = _CONFIG + "container(sig_3c4d5e6f)."
+    other = _CONFIG + "otherContainer(sig_4d5e6f70)."
+    helper = _CONFIG + "helper(sig_6f708192)."
+    facts = (
+        _recipe(container, _type(_CONTAINER_TYPE), declaring=_BEAN)
+        + _recipe(other, _type(_CONTAINER_TYPE), declaring=_BEAN)
+        + [_primary(other)]
+        + _recipe(
+            helper,
+            _type("com/acme/Helper#"),
+            parameters=(_slot(_type(_CONTAINER_TYPE), name="c"),),
+            declaring=_BEAN,
+        )
+    )
+    workspace = _loaded(tmp_path, facts)
+    try:
+        found = injected_parameters(workspace, _MODELS)
+        ladder = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset()).bean_of(
+            _parameter(_CONTAINER_TYPE, "c")
+        )
+    finally:
+        workspace.close()
+
+    assert isinstance(ladder, BeanRef)
+    assert found[(_MODULE + helper, 0)] == ProvidedBy(_MODULE + other) == ProvidedBy(ladder.method)
+
+
+def test_the_table_is_built_once_per_resolve(tmp_path: Path):
+    """GUIDELINES §8.7: built once per load through `Workspace.once`, keyed on the models'
+    contents, so every reader in one resolve shares it."""
+    workspace = _loaded(tmp_path, _qualifier_types() + _consumer())
+    try:
+        first = injected_parameters(workspace, _MODELS)
+        assert injected_parameters(workspace, dict(_MODELS)) is first
+    finally:
+        workspace.close()

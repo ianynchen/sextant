@@ -23,10 +23,17 @@ candidate at all.
 `annotation_index` once per load and per MODEL, keyed on the model's own contents rather
 than on the catalog — so every catalog naming `spring` shares one fold — and the table a
 caller holds is a view over it plus the caller's own channel names.
+
+**Which recipe fills a container-filled parameter** (spec 2026-11-05 di-recipe-hop §2):
+`injected_parameters` answers, for each parameter the container fills, the one recipe
+(provider method) the container chooses for it, by that container's own rule (the model's
+`injection`). It reads EVERY bean model, not one catalog's (D02 §1c), and is built once per
+resolve. The value walk reads it.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -34,7 +41,13 @@ from typing import Any
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.conditions import annotation_index
-from sextant.domain.symbols import bare_descriptor, method_name, names_a_type, type_descriptor
+from sextant.domain.symbols import (
+    bare_descriptor,
+    member_name,
+    method_name,
+    names_a_type,
+    type_descriptor,
+)
 
 
 @dataclass(frozen=True)
@@ -54,6 +67,40 @@ class BeanRef:
 @dataclass(frozen=True)
 class Unresolved:
     reason: str  # 'none' | 'ambiguous'
+
+
+@dataclass(frozen=True)
+class ProvidedBy:
+    """A container-filled parameter receives the value of this one recipe: `provider` is the
+    recipe method's full symbol."""
+
+    provider: str
+
+
+@dataclass(frozen=True)
+class Ambiguous:
+    """Several recipes match the parameter in the module, and the container's choice between
+    them is not in the module (another component, another environment). `candidates` are
+    their full symbols, sorted."""
+
+    candidates: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class NotProvided:
+    """No recipe in the module matches the parameter: `reason` is `NO_RECIPE` or
+    `UNREAD_TYPE`."""
+
+    reason: str
+
+
+Injection = ProvidedBy | Ambiguous | NotProvided
+
+# No recipe in the module has the parameter's key (the recipe is in another module, or the
+# container makes the value another way).
+NO_RECIPE = "no_recipe"
+# The parameter's declared type is absent or is a type variable, so it gives no key.
+UNREAD_TYPE = "unread_type"
 
 
 @dataclass(frozen=True)
@@ -297,6 +344,250 @@ class _Fold:
             by_name={name: tuple(beans) for name, beans in by_name.items()},
             by_type={erased: tuple(beans) for erased, beans in by_type.items()},
         )
+
+
+def injected_parameters(
+    workspace: Workspace, models: Mapping[str, Mapping[str, Any]]
+) -> Mapping[tuple[str, int], Injection]:
+    """For each parameter the container fills, keyed `(method full symbol, index)`, the recipe
+    the container chooses for it (spec 2026-11-05 di-recipe-hop §2). `models` are every bean
+    model by id (`Catalog.bean_models`); a model with no `injection` declares no recipe.
+
+    The container fills each parameter of a method that carries the model's
+    `declaring_annotation` (a recipe's own parameters), and of a constructor that carries one
+    of its `injecting_annotations`. The model's `injection` chooses the recipe:
+    `exact_key` mirrors Dagger, `candidates` takes Spring's ladder (`bean_of`) unchanged.
+
+    Built once per load through `Workspace.once`, keyed on the models' contents
+    (GUIDELINES §8.7), and catalog-free: it reads facts only."""
+    return workspace.once(_Injected(json.dumps(models, sort_keys=True)))
+
+
+def meta_annotated_types(workspace: Workspace, markers: frozenset[str]) -> frozenset[str]:
+    """Every annotation type carrying one of `markers` as a class-level annotation: module
+    types through their own annotation facts, library types (`@Named`) through the class-level
+    annotations their type header recorded. One level, the marker on the type itself, which is
+    where a qualifier is declared. Two reads per call: once per declaring catalog in the
+    dispatch reader, once per resolve in `injected_parameters` (GUIDELINES §8.7)."""
+    return frozenset(
+        bare_descriptor(str(row["target"]))
+        for query in ("annotations", "type_header_annotations")
+        for row in workspace.query(query)
+        if bare_descriptor(str(row["annotation"])) in markers
+    )
+
+
+# `injected_parameters`' key and builder in one, as `_Fold` below: the models as canonical
+# JSON, so two equal mappings build one key and share the entry.
+@dataclass(frozen=True)
+class _Injected:
+    models: str
+
+    def __call__(self, workspace: Workspace) -> dict[tuple[str, int], Injection]:
+        index = annotation_index(workspace)
+        declarations = {str(row["symbol"]): row for row in workspace.query("method_declarations")}
+        constructors = {
+            str(row["symbol"]): json.loads(str(row["signature"] or "{}")) or {}
+            for row in workspace.query("constructor_declarations")
+        }
+        models = json.loads(self.models)
+        found: dict[tuple[str, int], Injection] = {}
+        # Sorted by id, so a method two models claim gets one answer in every run (NFR-1).
+        for model_id in sorted(models):
+            model = models[model_id]
+            if model.get("injection") is None:
+                continue
+            declaring = type_descriptor(str(model["declaring_annotation"]))
+            injecting = frozenset(
+                type_descriptor(name) for name in model.get("injecting_annotations") or []
+            )
+            filled: dict[str, list[dict[str, Any]]] = {}
+            for symbol, row in declarations.items():
+                if any(annotation == declaring for annotation, _ in index.get(symbol, [])):
+                    filled[symbol] = _parameters(row["signature"])
+            for symbol, signature in constructors.items():
+                if any(annotation in injecting for annotation, _ in index.get(symbol, [])):
+                    filled[symbol] = _parameters(signature)
+            if model["injection"] == "exact_key":
+                choose = _ExactKey(workspace, model, index, declarations).recipe_for
+            else:
+                choose = _Ladder(workspace, model).recipe_for
+            for method, parameters in sorted(filled.items()):
+                for position in range(len(parameters)):
+                    found.setdefault((method, position), choose(method, parameters, position))
+        return found
+
+
+class _ExactKey:
+    """Dagger's rule (spec §2a): the key is the qualifier annotation with all of its
+    attributes and the full type with its type arguments. An unqualified parameter matches
+    an unqualified recipe only; there is no name rung and no primary. A recipe that adds to
+    a collection (`multibinding_annotations`) is never a candidate for `T`. Dagger refuses
+    two recipes of one key on one component, but Sextant sees the whole module, not the
+    component: one recipe in the module is the answer, several are `Ambiguous`."""
+
+    def __init__(
+        self,
+        workspace: Workspace,
+        model: Mapping[str, Any],
+        index: Mapping[str, list[tuple[str, dict[str, Any]]]],
+        declarations: Mapping[str, Mapping[str, Any]],
+    ) -> None:
+        self._workspace = workspace
+        self._declarations = declarations
+        self._qualifiers = meta_annotated_types(
+            workspace,
+            frozenset(type_descriptor(name) for name in model["qualifier_meta_annotations"]),
+        )
+        declaring = type_descriptor(str(model["declaring_annotation"]))
+        multibinding = frozenset(
+            type_descriptor(name) for name in model.get("multibinding_annotations") or []
+        )
+        self._recipes: dict[tuple[Any, Any], list[str]] = {}
+        for symbol, row in declarations.items():
+            uses = index.get(symbol, [])
+            names = {annotation for annotation, _ in uses}
+            if declaring not in names or names & multibinding:
+                continue
+            signature = row["signature"] if isinstance(row["signature"], dict) else {}
+            returned = _type_key(signature.get("returns"))
+            if returned is not None:
+                key = (self._qualifier_key(uses), returned)
+                self._recipes.setdefault(key, []).append(symbol)
+        self._type_enclosing: dict[str, str] | None = None
+
+    def recipe_for(
+        self, method: str, parameters: Sequence[Mapping[str, Any]], position: int
+    ) -> Injection:
+        declared = parameters[position]
+        declared_type = _type_key(declared.get("type"))
+        if declared_type is None:
+            return NotProvided(UNREAD_TYPE)
+        uses = [
+            (str(use.get("annotation")), dict(use.get("args") or {}))
+            for use in declared.get("annotations") or []
+        ]
+        candidates = self._one_per_recipe(
+            self._recipes.get((self._qualifier_key(uses), declared_type), [])
+        )
+        if not candidates:
+            return NotProvided(NO_RECIPE)
+        if len(candidates) == 1:
+            return ProvidedBy(candidates[0])
+        return Ambiguous(tuple(sorted(candidates)))
+
+    def _qualifier_key(self, uses: Sequence[tuple[str, dict[str, Any]]]) -> tuple[str, ...]:
+        """The qualifier annotations among `uses`, each with all of its attributes, as one
+        comparable value: empty for an unqualified slot."""
+        return tuple(
+            sorted(
+                bare_descriptor(annotation) + json.dumps(args, sort_keys=True)
+                for annotation, args in uses
+                if bare_descriptor(annotation) in self._qualifiers
+            )
+        )
+
+    def _one_per_recipe(self, candidates: list[str]) -> list[str]:
+        """`candidates` less the second method of one recipe. A compiler can emit one recipe of
+        a nested object (a companion) as two methods with the declaring annotation: the
+        object's own instance method, and a static method of the same name and descriptor on
+        the enclosing type that forwards to it. The container makes one recipe of the two and
+        calls the static one (measured on the OI-304 probe with Dagger 2.57.2: the component
+        calls the enclosing module's factory). So the instance method is dropped where the
+        enclosing type of its own type declares that static twin."""
+        if len(candidates) < 2:
+            return candidates
+        if self._type_enclosing is None:
+            self._type_enclosing = {
+                str(row["symbol"]): str(row["enclosing"])
+                for row in self._workspace.query("located_symbols")
+                if row["enclosing"] is not None
+            }
+        statics = {
+            (str(self._declarations[symbol]["enclosing"]), _member(symbol))
+            for symbol in candidates
+            if _modifier(self._declarations[symbol], "static")
+        }
+        return [
+            symbol
+            for symbol in candidates
+            if _modifier(self._declarations[symbol], "static")
+            or (
+                self._type_enclosing.get(str(self._declarations[symbol]["enclosing"])),
+                _member(symbol),
+            )
+            not in statics
+        ]
+
+
+class _Ladder:
+    """Spring's rule (spec §2b): the existing ladder, `bean_of`, unchanged. The fold's
+    channel names are none: a channel the index knows is not a recipe."""
+
+    def __init__(self, workspace: Workspace, model: Mapping[str, Any]) -> None:
+        self._model = dict(model)
+        self._declared = declared_beans(workspace, self._model)
+        channel_types = frozenset(
+            type_descriptor(name) for name in model.get("channel_types") or []
+        )
+        self._beans = BeanTable(self._declared, channel_types, frozenset())
+
+    def recipe_for(
+        self, method: str, parameters: Sequence[Mapping[str, Any]], position: int
+    ) -> Injection:
+        answer = injected_bean(self._beans, method, parameters, position, self._model)
+        if isinstance(answer, BeanRef):
+            return NotProvided(NO_RECIPE) if answer.method is None else ProvidedBy(answer.method)
+        if answer.reason != "ambiguous":
+            return NotProvided(NO_RECIPE)
+        return Ambiguous(self._candidates(parameters[position]))
+
+    def _candidates(self, declared: Mapping[str, Any]) -> tuple[str, ...]:
+        """The recipes the rung that said `ambiguous` weighed: the qualifier's or the name's
+        beans, else the beans of the slot's erased type (or the primary ones among them)."""
+        qualifier = qualifier_of(list(declared.get("annotations") or []), self._model)
+        named = qualifier or declared.get("name")
+        by_type = self._declared.by_type.get(
+            str(declared.get("erased_symbol") or (declared.get("type") or {}).get("symbol")), ()
+        )
+        primaries = [bean for bean in by_type if bean.primary]
+        if qualifier is None and len(by_type) > 1:
+            beans: Sequence[BeanRef] = primaries if len(primaries) > 1 else by_type
+        else:
+            beans = self._declared.by_name.get(str(named), ()) if named else ()
+        return tuple(sorted(str(bean.method) for bean in beans if bean.method is not None))
+
+
+def _parameters(signature: Any) -> list[dict[str, Any]]:
+    return list((signature if isinstance(signature, dict) else {}).get("parameters") or [])
+
+
+def _type_key(declared: Any) -> tuple[Any, ...] | None:
+    """A declared type with its type arguments, recursively, as one comparable value; None
+    where no type is declared or the type is a type variable (D00 §5a's `names_a_type`).
+    Nullability is not part of it: the container does not key on it."""
+    if not isinstance(declared, Mapping) or not declared.get("symbol"):
+        return None
+    symbol = str(declared["symbol"])
+    if not names_a_type(symbol):
+        return None
+    arguments = []
+    for argument in declared.get("arguments") or []:
+        key = _type_key(argument)
+        if key is None:
+            return None
+        arguments.append(key)
+    return (symbol, tuple(arguments))
+
+
+def _member(symbol: str) -> str:
+    """A method's name and descriptor without its type: the part two twins share."""
+    return member_name(bare_descriptor(symbol))
+
+
+def _modifier(row: Mapping[str, Any], name: str) -> bool:
+    modifiers = row.get("modifiers")
+    return isinstance(modifiers, dict) and bool(modifiers.get(name))
 
 
 def _first_string(args: dict[str, Any], names: tuple[str, ...]) -> str | None:

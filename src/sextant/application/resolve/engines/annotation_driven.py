@@ -13,6 +13,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.beans import meta_annotated_types
 from sextant.application.resolve.dependencies import unmet_dependency
 from sextant.application.resolve.effective_annotations import (
     TypeHierarchy,
@@ -166,7 +167,7 @@ def registrations(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]
         selected.append((declaration, keys))
     if by_parameter:
         marked = (
-            _meta_annotated_types(workspace, qualifier_marks) if qualifier_marks else frozenset()
+            meta_annotated_types(workspace, qualifier_marks) if qualifier_marks else frozenset()
         )
         for _, declaration in sorted(methods.items()):
             parameter = _annotated_parameter(declaration, by_parameter)
@@ -226,19 +227,6 @@ def _annotation_names(mapping: dict[str, Any], word: str, catalog: Catalog) -> f
             f"of annotation names, got {declared!r} (spec 2026-11-05 §2)"
         )
     return frozenset(_catalog_symbol(name) for name in declared)
-
-
-def _meta_annotated_types(workspace: Workspace, markers: frozenset[str]) -> frozenset[str]:
-    """Every annotation type carrying one of `markers` as a class-level annotation: module
-    types through their own annotation facts, library types (`@Named`) through the class-level
-    annotations their type header recorded. One level, the marker on the type itself, which is
-    where a qualifier is declared. Two reads per declaring catalog (GUIDELINES §8.7)."""
-    return frozenset(
-        bare_descriptor(str(row["target"]))
-        for query in ("annotations", "type_header_annotations")
-        for row in workspace.query(query)
-        if bare_descriptor(str(row["annotation"])) in markers
-    )
 
 
 def generic_parameter(parameter: Mapping[str, Any]) -> bool:

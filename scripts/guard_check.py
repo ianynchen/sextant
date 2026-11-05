@@ -143,6 +143,7 @@ class Guard:
 _SINGLE_CALL = "sextant/application/resolve/engines/single_call.py"
 _SUPERTYPE_DISPATCH = "sextant/application/resolve/engines/supertype_dispatch.py"
 _FLUENT = "sextant/application/resolve/engines/fluent.py"
+_BEANS = "sextant/application/resolve/beans.py"
 # The chain walk `fluent` derives from (Quartz spec 2026-10-28 §3d), moved out of `_FLUENT`
 # whole, with the guards on the walk's own rules.
 _CHAINS = "sextant/application/resolve/shapes/chains.py"
@@ -8431,6 +8432,82 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "beans.a-QUALIFIED-recipe-never-fills-an-UNQUALIFIED-parameter": Guard(
+        what="the exact key reads only annotations whose type is a qualifier, and an "
+        "unqualified parameter matches an unqualified recipe only",
+        why="spec 2026-11-05 di-recipe-hop §2a: with qualifiers unread, an unqualified "
+        "`Retrofit` parameter reads every `Retrofit` recipe and a `@Named` one reads none",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="                if bare_descriptor(annotation) in self._qualifiers\n",
+                replace="                if False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.a-QUALIFIER-s-ATTRIBUTES-are-part-of-the-key": Guard(
+        what="a qualifier is compared with all of its attributes",
+        why='spec §2a: without them `@Named("a")` and `@Named("b")` are one key, and a '
+        "parameter gets the other name's recipe or none",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="                bare_descriptor(annotation) + json.dumps(args, sort_keys=True)\n",
+                replace="                bare_descriptor(annotation)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "beans.TYPE-ARGUMENTS-are-part-of-the-key": Guard(
+        what="the exact key compares the full type with its type arguments",
+        why="spec §2a: `List<String>` and `List<Integer>` are two keys in Dagger; by the "
+        "erasure, a parameter would receive a value of another type",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="    return (symbol, tuple(arguments))\n",
+                replace="    return (symbol, ())  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.a-MULTIBINDING-recipe-never-fills-T": Guard(
+        what="a recipe carrying a multibinding annotation is never a candidate for its type",
+        why="spec §2a: an `@IntoSet` recipe adds to `Set<T>`; read as a recipe for `T`, it "
+        "gives the parameter a value the container never gives it",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="            if declaring not in names or names & multibinding:\n",
+                replace="            if declaring not in names:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "beans.a-COMPANION-recipe-and-its-STATIC-FORWARDER-are-one": Guard(
+        what="a nested object's recipe and the static forwarder of the same name and "
+        "descriptor on the enclosing type are one recipe",
+        why="measured on Dagger 2.57.2 + Kotlin 2.2.21: `@JvmStatic @Provides` in a companion "
+        "gives two methods with `@Provides`, one recipe; as two, every such key is ambiguous",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="        if len(candidates) < 2:\n",
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.an-INJECT-constructor-s-parameters-are-container-filled": Guard(
+        what="the parameters of a constructor with one of the model's injecting annotations "
+        "are container-filled",
+        why="spec §2a: `class Repo @Inject constructor(retrofit: Retrofit)` makes its client "
+        "from what the container gives; unread, its address is never read",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="                if any(annotation in injecting for annotation, _ in "
+                "index.get(symbol, [])):\n",
+                replace="                if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "annotation-registrations.ONLY-a-QUALIFIER-makes-an-observer-KEYLESS": Guard(
         what="only an annotation type meta-annotated by the bean model's qualifier marker makes "
         "an observer keyless",
@@ -8438,7 +8515,7 @@ GUARDS: dict[str, Guard] = {
         "Read as a qualifier, the observer loses every hop it really has",
         edits=(
             Edit(
-                path=_ANNOTATION_DRIVEN,
+                path=_BEANS,
                 find='        if bare_descriptor(str(row["annotation"])) in markers\n',
                 replace="        if True  # guard disabled by scripts/guard_check.py\n",
             ),
