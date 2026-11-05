@@ -80,6 +80,7 @@ from sextant.domain.symbols import (
     without_type_marker,
 )
 from sextant.egress.render.diagrams import class_diagram, sequence_diagram
+from sextant.egress.render.metadata import KNOWN_GAPS, known_gaps_of
 from sextant.egress.render.viewmodel import (
     ClassEdge,
     ClassNode,
@@ -1801,7 +1802,10 @@ def assemble_module_document(
     questions_end = beside_question[-1][1] if beside_question else endpoints_end
 
     sections.append(MachineHeading(2, "Known gaps"))
-    gap_items = [_runs(gap) for gap in _GAPS]
+    # The sentences of the gaps that are true of this module, by the key each one pairs
+    # with in `KNOWN_GAPS` (Android outbound Task 7).
+    stated = set(known_gaps_of(module))
+    gap_items = [_runs(gap) for key, gap in zip(KNOWN_GAPS, _GAPS, strict=True) if key in stated]
     # Named one by one, because a compiled source nothing read is the one gap
     # a reader can act on: it says which part of the module this document is
     # silent about (FR-17, M03).

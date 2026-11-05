@@ -60,6 +60,20 @@ KNOWN_GAPS = [
 ]
 
 
+def known_gaps_of(module: ModuleModel) -> list[str]:
+    """The gaps that are true of this module: `KNOWN_GAPS` in its order, without the
+    declared-set gap where the build tool answered (Android outbound Task 7). That gap
+    says transitive dependencies and profiles are missing, which is true only of a set
+    read off the build file (`dependency_source` `declared`). A set the build tool
+    resolved (`maven`, `gradle`) holds the transitives and the profiles the tool chose."""
+    return [
+        gap
+        for gap in KNOWN_GAPS
+        if gap != "maven_profile_and_transitive_resolution_not_implemented"
+        or module.dependency_source == "declared"
+    ]
+
+
 def write_metadata(
     path: Path,
     module: ModuleModel,
@@ -193,7 +207,7 @@ def write_metadata(
         # is a set of names, not a row sequence, and a sorted list is
         # deterministic without depending on the query's own ORDER BY.
         "environments": sorted({str(row["environment"]) for row in resolved_config}),
-        "gaps": KNOWN_GAPS,
+        "gaps": known_gaps_of(module),
         # Detect-time observations (2M design §1c) — build-system coexistence,
         # a wrapper fallback, a boundary refusal — sorted so the key is
         # deterministic regardless of what order the detector found them in.

@@ -1806,3 +1806,29 @@ def test_the_coverage_line_says_why_a_declared_set_was_used():
     report = replace(REPORT, coverage={**REPORT.coverage, "type_headers": 3})
     text = render_module_document(module, report, "a3f91c")
     assert "(dependencies: the build file's declared set — mvn is not on PATH)." in text
+
+
+_DECLARED_SET_GAP = "maven_profile_and_transitive_resolution_not_implemented"
+
+
+@pytest.mark.parametrize("source", ["maven", "gradle"])
+@pytest.mark.pins("render.the-DECLARED-SET-gap-is-stated-only-for-a-declared-set")
+def test_a_build_tool_answer_states_no_declared_set_gap(tmp_path: Path, source):
+    """The build tool's own answer holds the transitive dependencies and the profiles the
+    build tool chose, so the gap that says they are missing is not stated for it (Android
+    outbound Task 7). A Gradle module carried the pom.xml sentence."""
+    module = replace(MODULE, dependency_source=source)
+    write_metadata(tmp_path / "metadata.json", module, REPORT, SCANNERS, "a3f91c")
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    assert _DECLARED_SET_GAP not in metadata["gaps"]
+    assert len(metadata["gaps"]) == len(KNOWN_GAPS) - 1
+    text = render_module_document(module, REPORT, "a3f91c")
+    assert "transitive dependencies are not resolved" not in text
+
+
+def test_a_declared_set_states_the_declared_set_gap(tmp_path: Path):
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c")
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    assert metadata["gaps"] == KNOWN_GAPS
+    text = render_module_document(MODULE, REPORT, "a3f91c")
+    assert "Maven profiles and transitive dependencies are not resolved" in text

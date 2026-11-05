@@ -1558,6 +1558,19 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "render.the-DECLARED-SET-gap-is-stated-only-for-a-declared-set": Guard(
+        what="the gap that says transitive dependencies and profiles are missing is stated "
+        "only for a dependency set read off the build file",
+        why="without it every module whose build tool resolved the set (Gradle, Maven) "
+        "states the pom.xml sentence, which is false for it (Android outbound Task 7)",
+        edits=(
+            Edit(
+                path="sextant/egress/render/metadata.py",
+                find='        or module.dependency_source == "declared"\n',
+                replace="        or True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "storage.the-UNLOCATED-count-is-read-off-the-header-document": Guard(
         what="`coverage.type_headers_unlocated` is the count the header document carries",
         why="without it the only number is the headers READ, and a classpath that was not the "

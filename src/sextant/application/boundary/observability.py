@@ -8,8 +8,9 @@ so a bundle written before this existed can have its map computed from its manif
 Only measurements of this module are inputs — `uncovered`, `coverage.partial_documents`,
 the skipped catalogs and the kinds each would have fed (`feeds`, recorded at `analyze`
 because a bundle's reader has no catalogs), `catalogs_run`, and
-`module.dependency_source`. `gaps` is a statement about Sextant, identical on every
-manifest, so it is listed as `stated_boundaries` and never folded into a verdict.
+`module.dependency_source`. `gaps` is a statement about Sextant (only the declared-set
+gap depends on `dependency_source`), so it is listed as `stated_boundaries` and never
+folded into a verdict.
 
 `module` and `boundary-property` are `observable` with no reasons, always: they are not
 code-grounded (`Kind.grounded_in_code`), a module's own metadata and a resolved config
