@@ -756,7 +756,9 @@ class GradleDetector:
         results_name = None
         suffix = ""
         if len(by_path.get(str(path_in_build), ())) > 1:
-            results_name = str(project["target"])
+            # Only an Android record has no version name beside others: a multiplatform
+            # part with `com.android.library` and no `androidTarget()`.
+            results_name = str(project["target"] or "android")
             suffix = f"-{results_name}"
         if group:
             return _Identity(
@@ -814,7 +816,8 @@ class GradleDetector:
         one of them for this project. The init script records the label Gradle put on
         what it picked (`platform`: `jvm`, `androidJvm`), and the record with that label
         is joined. A label no version carries, or no label, is not guessed at: it is
-        named in the second list, which joins `libraries_not_resolved`.
+        named in the second list, which joins `libraries_not_resolved`. A sibling that
+        was not built (Android design M5) is named there too, with its reason.
 
         `by_path` is the reactor's records by project path (`_records_by_path`).
         """
@@ -840,6 +843,11 @@ class GradleDetector:
             if not candidates:
                 continue
             sibling = candidates[0]
+            # A sibling that was not built has no classes (Android design M5). Its reason
+            # is named, so the part that uses it does not lose it with nothing said.
+            if sibling.get("buildFailure") is not None:
+                not_resolved.append(f"{sibling_path} was not built: {sibling['buildFailure']}")
+                continue
             # A sibling with no group is read too (OI-273 round 2): it is on the
             # classpath like any other. It has no coordinates, so it is named by its module
             # id and marked unpublished — `.` for package and version — the identity its

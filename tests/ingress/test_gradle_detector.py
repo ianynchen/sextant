@@ -384,6 +384,25 @@ def test_the_init_script_names_the_targets_of_a_part_with_no_jvm_target():
     assert "skipReason:" in script
 
 
+@pytest.mark.parametrize(
+    "reason",
+    [
+        '"no release build: nothing that ships to read"',
+        (
+            '"Android Gradle Plugin ${version} is older than 7.4, which Sextant needs to read '
+            'Android parts"'
+        ),
+    ],
+)
+def test_an_android_part_with_nothing_to_read_is_a_skip_not_a_build_failure(reason: str):
+    """A part with no release build, or built by an AGP older than 7.4, was built: it has
+    nothing Sextant reads. The script says so through `skipReason`, the channel of a part
+    with no JVM target, and writes no `buildFailure` (Android design M5)."""
+    script = Path(gradle_module.__file__).with_name("sextant-model.init.gradle").read_text()
+    assert reason in script
+    assert "buildFailure" not in script
+
+
 # --- composite builds and a root that carries its own source (fix round 1,
 # I1/I2) -----------------------------------------------------------------
 
@@ -1320,12 +1339,12 @@ def test_a_part_that_built_carries_no_build_failure(
 
 
 def test_a_build_failure_written_inside_a_record_reaches_the_module(tmp_path: Path):
-    """A record can carry `buildFailure` itself, not only one the detector makes for a part
-    with no file — the init script writes one where a part cannot be read at all."""
+    """The `buildFailure` the detector writes into the record of a part that was not built
+    reaches the module."""
     project = _project(tmp_path, path=":app", name="app")
-    project["buildFailure"] = "the Android plugin is older than 7.0"
+    project["buildFailure"] = "Compilation failed; see the compiler output below."
     module = GradleDetector._module_of(tmp_path, project, gradle_module._records_by_path([project]))
-    assert module.build_failure == "the Android plugin is older than 7.0"
+    assert module.build_failure == "Compilation failed; see the compiler output below."
 
 
 def test_an_offline_refusal_in_one_part_names_allow_resolve(
@@ -1823,6 +1842,41 @@ def test_a_one_project_build_with_two_versions_gives_both_modules_to_the_reactor
     ]
     # The root project IS the modules here, so no note says it was dropped.
     assert model.notes == ()
+
+
+def test_a_sibling_that_was_not_built_is_named_with_its_reason(tmp_path: Path):
+    """A part this part uses failed to build (Android design M5), so it has no classes
+    to read. It is named with Gradle's reason, so this part's analysis does not lose it
+    with nothing said."""
+    root = _project(tmp_path, path=":", group="", name="ShopApp", classes_dirs=[])
+    lib = {
+        **_project(tmp_path / "lib", path=":lib", name="lib", classes_dirs=[]),
+        "buildFailure": "Compilation failed; see the compiler output below.",
+    }
+    app = _project(
+        tmp_path / "app",
+        path=":app",
+        name="app",
+        classpath=[{"path": "/elsewhere/lib.jar", "internal": True, "projectPath": ":lib"}],
+    )
+    module = GradleDetector._module_of(
+        tmp_path / "app", app, gradle_module._records_by_path([root, lib, app])
+    )
+    assert module.library_roots == ()
+    assert module.libraries_not_resolved == (
+        ":lib was not built: Compilation failed; see the compiler output below.",
+    )
+
+
+def test_an_android_record_with_no_version_name_beside_others_is_named_android(tmp_path: Path):
+    """A Kotlin Multiplatform part that applies `com.android.library` with no
+    `androidTarget()` gives an Android record with no version name beside its JVM record.
+    It is named `android`, never `None`."""
+    root, android, jvm = _two_version_part(tmp_path, group="com.acme")
+    android = {**android, "target": None}
+    by_path = gradle_module._records_by_path([root, android, jvm])
+    module = GradleDetector._module_of(tmp_path / "shared", android, by_path)
+    assert (module.module_id, module.results_name) == ("com.acme:shared-android", "android")
 
 
 def test_a_one_version_part_keeps_its_name(tmp_path: Path):

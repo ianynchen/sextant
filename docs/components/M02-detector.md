@@ -128,7 +128,8 @@ output, never a partial model assembled by guessing.
 and its reason is Gradle's own message for its failed task (javac's error lines included), or
 `not built: a part it needs failed to build (failed: <paths>)` for a project that needs one
 that failed. The other projects are analysed. A skipped project's results from an earlier
-run are removed, so `system analyze` and `render` never read them as current. A root project that was not built is never a
+run are removed, so `system analyze` and `render` never read them as current. A project that
+uses a skipped one gets "<path> was not built: <reason>" in `libraries_not_resolved`. A root project that was not built is never a
 module in a build with subprojects, so its reason becomes the note "gradle root project at
 <dir> was not built: <reason>". Without `--allow-resolve`, a part the cache could not serve has
 "(--allow-resolve lets Gradle download it)" after its reason, and the run gets the note "some
@@ -191,7 +192,9 @@ is `jvm`, with its own source, classes and compile classpath. A part that also a
 with more than one record has one module per version: a dash and the version name from the
 build file are added to the last part of the name (`com.acme:shared-jvm`, `ShopApp:shared-jvm`),
 the spelling Kotlin uses when it uploads each version, and the results go in
-`<folder>/.sextant/<version name>`. A part with one record keeps its name. A build whose only
+`<folder>/.sextant/<version name>`. An Android record with no version name beside other records
+(a Kotlin Multiplatform part with `com.android.library` and no `androidTarget()`) is named
+`android`. A part with one record keeps its name. A build whose only
 project gives more than one record (a one-project Kotlin Multiplatform library, or a one-project
 app with editions) is walked as a reactor, so each of its modules is analysed.
 
@@ -203,14 +206,15 @@ record with that label is joined. No label, or a label that no record carries, i
 `libraries_not_resolved` gets "could not tell which version of `<path>` this part uses".
 
 **An Android part is read through the Android Gradle Plugin (AGP), never by folder names** (Android
-design §2a to §2e; applies to `com.android.application`, `com.android.library` and
-`com.android.kotlin.multiplatform.library`). Such a part has no `java` plugin, so the init script asks AGP's
+design §2a to §2e; applies to `com.android.application`, `com.android.library`,
+`com.android.kotlin.multiplatform.library` and `com.android.dynamic-feature`). Such a part has no `java` plugin, so the init script asks AGP's
 `androidComponents.onVariants` for each build it reads, and reports it in the same record a `java`
 project gets, through one shared record builder:
 
 - **Which build.** The release build type. A part with no build types (the Kotlin Multiplatform
   Android library has one build, with no build type) is read from that one build. A part with no
-  release build is skipped: "no release build: nothing that ships to read". A part with product
+  release build is skipped: "no release build: nothing that ships to read". The part was built,
+  so this is a skip reason (`skipReason`), not a build failure. A part with product
   editions (flavors) gives one module per release edition, named as for a Kotlin Multiplatform
   version, with Android's own edition name: `Noty.app-free`, `Noty.app-freeStaging`. Code shared
   by every edition is read once for each edition. Debug builds and test classes are not read.
@@ -227,7 +231,8 @@ project gets, through one shared record builder:
   and is not added: `java.*` types come from the extractor's own JDK, so `android.*` supertypes
   stay unread, and no outbound catalog matches an `android.*` type.
 - **AGP floor.** AGP 7.4 or newer (the first with `ScopedArtifacts`). An older AGP is skipped with
-  "Android Gradle Plugin <version> is older than 7.4, which Sextant needs to read Android parts".
+  "Android Gradle Plugin <version> is older than 7.4, which Sextant needs to read Android parts",
+  also a skip reason, not a build failure.
   AGP 8.13 and 9.3 are measured; 7.4 to 7.x are not.
 - **Identity** is the Gradle identity as for any project. The Android `applicationId` is not used.
 

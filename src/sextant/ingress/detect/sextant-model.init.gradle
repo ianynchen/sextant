@@ -267,7 +267,7 @@ gradle.rootProject { rp ->
         // What the Android branch below found for this project: whether an Android plugin
         // is applied, why its builds cannot be read (null when they can), and one record
         // per Android build that was read. The per-build tasks add the records.
-        def android = [applied: false, failure: null, records: Collections.synchronizedList([])]
+        def android = [applied: false, skipReason: null, records: Collections.synchronizedList([])]
         def sextantModel = p.tasks.register("sextantModel") {
             // No declared inputs/outputs, for the same reason as `sextantBuild`.
             doLast {
@@ -370,9 +370,10 @@ gradle.rootProject { rp ->
                 }
                 // An Android part (Android design 2a, 2b): one record per Android build that
                 // was read. A part that cannot be read, or that has no release build, gets one
-                // record that says why, and the detector skips it with that reason.
+                // record that says why, and the detector skips it with that reason. The part
+                // was built, so the reason is a skip reason, not a build failure (M5).
                 if (android.applied) {
-                    def reason = android.failure
+                    def reason = android.skipReason
                     if (reason == null && android.records.isEmpty()) {
                         reason = "no release build: nothing that ships to read"
                     }
@@ -380,7 +381,7 @@ gradle.rootProject { rp ->
                         records += android.records
                     } else {
                         records << (sextantRecord(p, [target: androidTargetName(p), platform: "androidJvm"])
-                            + [buildFailure: reason])
+                            + [skipReason: reason])
                     }
                 }
                 def projectsDir = new File(outDir, "projects")
@@ -429,7 +430,7 @@ gradle.rootProject { rp ->
                 } catch (ClassNotFoundException ignored) {
                     def version = loader.loadClass("com.android.builder.model.Version")
                         .getField("ANDROID_GRADLE_PLUGIN_VERSION").get(null)
-                    android.failure =
+                    android.skipReason =
                         "Android Gradle Plugin ${version} is older than 7.4, which Sextant needs to read Android parts"
                     return
                 }
