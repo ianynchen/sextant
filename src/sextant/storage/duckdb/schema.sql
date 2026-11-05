@@ -987,7 +987,10 @@ CREATE TABLE IF NOT EXISTS dispatch_registrations (
     -- Whether the handler's return is a value handed to its own receiver.
     delivers    BOOLEAN,
     -- The declaring catalog's `dispatch.match`: `first`, `all` or `one`.
-    match       TEXT
+    match       TEXT,
+    -- The dispatch mechanism the registration belongs to: a send, or an inbound key, reaches
+    -- only registrations of its own catalog's mechanism (the catalog id's family).
+    mechanism   TEXT
 );
 
 -- Spec 2026-09-22 §3d and §7a: what the backward value walk WOULD resolve, and

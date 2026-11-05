@@ -20,11 +20,13 @@ from fixture_build import FIXTURES, compile_fixture
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.query.trace import trace_of
 from sextant.application.resolve.dispatch_hops import _keyed_methods, _Reading
+from sextant.application.resolve.dispatch_registrations import dispatch_mechanism
 from sextant.application.resolve.roots import Root
 from sextant.cli.app import cli
 from sextant.domain.closed_sets import RootKind, TraceStop
 from sextant.domain.symbols import bare_descriptor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 _FAMILIES = ("orders-actors-pekko", "orders-actors-akka")
@@ -221,19 +223,93 @@ def test_an_unread_message_class_reaches_not_even_a_predicate_only_case(tmp_path
         workspace._connection.execute(
             "INSERT INTO dispatch_registrations VALUES "
             "('m Entity#create(sig_1).#0', 0, NULL, NULL, NULL, true, 'm Entity#onAny(sig_2).', "
-            "false, 'first')"
+            "false, 'first', 'pekko')"
         )
         reading = _Reading(workspace, [])
         unread = reading.hops(
-            "m Relay#forward(sig_3).", 0, (None, None, None, "parameter"), "actor"
+            "m Relay#forward(sig_3).", 0, (None, None, None, "parameter"), "actor", "pekko"
         )
-        read = reading.hops("m Relay#forward(sig_3).", 0, ("Get#", None, None, None), "actor")
+        read = reading.hops(
+            "m Relay#forward(sig_3).", 0, ("Get#", None, None, None), "actor", "pekko"
+        )
     finally:
         workspace.close()
     assert [(row["path"], row["handler"], row["evidence"]) for row in unread] == [
         (None, None, "compiler")
     ]
     assert [row["handler"] for row in read] == ["m Entity#onAny(sig_2)."]
+
+
+# The shipped root-type conformance (`type-models/conformance.yml`): every class is an
+# `Object`, so `Get` is assignable to the listener's key.
+_ROOT = [{"subtype": "*", "supertype": "java.lang.Object", "by": "JLS 4.10.2"}]
+
+
+def _two_mechanisms(workspace: DuckDbWorkspace) -> tuple[str, str]:
+    """One module running an actor toolkit and Spring application events: a behavior's case
+    for `Get` and a listener of `Object`, each written under its own catalog's mechanism, as
+    the registration pass writes them. Returns the two mechanisms, read off the shipped
+    catalogs rather than spelled here."""
+    catalogs = {catalog.id: catalog for catalog in YamlCatalogSource(catalogs_dir()).load()}
+    actor = dispatch_mechanism(catalogs["pekko-actor-handlers"])
+    events = dispatch_mechanism(catalogs["spring-events"])
+    workspace._connection.execute(
+        "INSERT INTO dispatch_registrations VALUES "
+        "('m Entity#create(sig_1).#0', 0, 'Get#', NULL, NULL, false, 'm Entity#onGet(sig_2).', "
+        f"false, 'first', '{actor}'), "
+        "('m Any#on(sig_4).', 0, 'java/lang/Object#', NULL, NULL, false, 'm Any#on(sig_4).', "
+        f"false, 'all', '{events}')"
+    )
+    return actor, events
+
+
+@pytest.mark.pins("dispatch-hops.a-send-reaches-only-its-OWN-mechanism")
+def test_a_tell_never_reaches_a_listener_of_object(tmp_path: Path):
+    """A module running both: an actor `tell(new Get())` is handled by the behavior's case,
+    and never by the application-event listener of `Object`, which a `Get` is assignable to
+    but which no actor send can reach."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        actor, _ = _two_mechanisms(workspace)
+        reading = _Reading(workspace, _ROOT)
+        rows = reading.hops(
+            "m Relay#forward(sig_3).", 0, ("Get#", None, None, None), "actor", actor
+        )
+    finally:
+        workspace.close()
+    assert [row["handler"] for row in rows] == ["m Entity#onGet(sig_2)."]
+
+
+@pytest.mark.pins("dispatch-hops.a-send-reaches-only-its-OWN-mechanism")
+def test_a_published_event_never_reaches_an_actor_case(tmp_path: Path):
+    """The other way: `publishEvent(new Get())` reaches the listener of `Object` and never the
+    actor case for `Get`, which only a send to that actor runs."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        _, events = _two_mechanisms(workspace)
+        reading = _Reading(workspace, _ROOT)
+        rows = reading.hops(
+            "m Publisher#place(sig_5).", 0, ("Get#", None, None, None), "in_process", events
+        )
+    finally:
+        workspace.close()
+    assert [row["handler"] for row in rows] == ["m Any#on(sig_4)."]
+
+
+@pytest.mark.pins("dispatch-hops.a-KEY-is-served-only-by-its-OWN-mechanism")
+def test_an_inbound_key_is_served_only_by_its_own_mechanism(tmp_path: Path):
+    """An actor key carrying `Get` names the behavior's case as its handler, never the
+    application-event listener of `Object`."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        actor, events = _two_mechanisms(workspace)
+        reading = _Reading(workspace, _ROOT)
+        served = reading.key_handlers("Get#", actor)
+        listened = reading.key_handlers("Get#", events)
+    finally:
+        workspace.close()
+    assert served == ["m Entity#onGet(sig_2)."]
+    assert listened == ["m Any#on(sig_4)."]
 
 
 def test_a_trace_crosses_the_ask(analyzed: Path):

@@ -388,10 +388,12 @@ def test_match_all_reaches_every_matching_registration(match: str):
 
 @pytest.mark.pins("dispatch-registrations.each-row-is-asked-under-its-OWN-match")
 def test_reached_by_asks_each_row_under_its_own_match():
-    """One table holds every catalog's registrations: a behavior's cases (`first`) beside
-    listeners (`all`). Each is asked under its own rule, so the behavior's `Command` case
-    still hides its `Reserve` case after it, while both listeners of `Reserve`'s supertypes
-    receive it (spec 2026-11-05 §1)."""
+    """The match rule over rows of several rules at once: each row is asked under its own
+    `match`, so a `first` group's `Command` case still hides its `Reserve` case after it,
+    while both `all` listeners of `Reserve`'s supertypes receive it (spec 2026-11-05 §1).
+    This is the rule over rows only; which rows a send is asked of — its own mechanism's,
+    never another framework's — is the hop pass's (`test_dispatch_hops`'
+    `test_a_tell_never_reaches_a_listener_of_object`)."""
     rows = [
         _row("behavior", 0, "Command#"),
         _row("behavior", 1, "Reserve#"),

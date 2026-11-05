@@ -58,9 +58,12 @@ the fixture, prints every table below).
    registration reader reads to carry the bridge to the method it forwards to.
 6. **The root of an event's ancestry.** `ApplicationEvent`'s `super_class` is
    `java/util/EventObject` (the spring-context header the workspace reads says so too);
-   `EventObject`'s is `java/lang/Object`. The JDK is never scanned, so the second link is declared
-   in `type-models/conformance.yml`, and a listener of `Object` receives an event extending
-   `ApplicationEvent`.
+   `EventObject`'s is `java/lang/Object`, in a JDK nothing scans; and the fixture's plain
+   `OrderShipped` has `java/lang/Object` too, which its symbol fact does not carry (D00 §5a
+   writes no `superclass` for the root). So no scanned or headered ancestry reaches the root
+   type, and `type-models/conformance.yml` declares it once for every type (`subtype: "*"`,
+   JLS 4.10.2): a listener of `Object` receives a plain event and one extending
+   `ApplicationEvent` alike.
 7. **What javac writes at a publish site** (the fixture's `OrderService`): `invokeinterface
    ApplicationEventPublisher.publishEvent(ApplicationEvent)` for `new OrderPlaced(…)`,
    `publishEvent(Object)` for an `Object` parameter, and
@@ -156,9 +159,13 @@ aborts without, not the version the fixture's pom asked for.
 
 - `org.springframework.context.ApplicationEvent` super_class: `java/util/EventObject`
 - `java.util.EventObject` super_class: `java/lang/Object`
+- fixture `com.acme.events.OrderShipped` super_class: `java/lang/Object`
 
 ### 7. What javac writes at the fixture's publish sites
 
 - `OrderService`: `invokeinterface` `org/springframework/context/ApplicationEventPublisher.publishEvent:(Lorg/springframework/context/ApplicationEvent;)V`
+- `OrderService`: `invokeinterface` `org/springframework/context/ApplicationEventPublisher.publishEvent:(Lorg/springframework/context/ApplicationEvent;)V`
+- `OrderService`: `invokeinterface` `org/springframework/context/ApplicationEventPublisher.publishEvent:(Ljava/lang/Object;)V`
+- `OrderService`: `invokeinterface` `org/springframework/context/ApplicationEventPublisher.publishEvent:(Ljava/lang/Object;)V`
 - `OrderService`: `invokeinterface` `org/springframework/context/ApplicationEventPublisher.publishEvent:(Ljava/lang/Object;)V`
 - `OrderService`: `invokeinterface` `org/springframework/context/ApplicationContext.publishEvent:(Lorg/springframework/context/ApplicationEvent;)V`

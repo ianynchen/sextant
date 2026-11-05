@@ -7310,8 +7310,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_DISPATCH_HOPS,
-                find="    for handler in reading.delivering_handlers() if protocols else []:\n",
-                replace="    for handler in []:  # guard disabled by scripts/guard_check.py\n",
+                find="    for handler, mechanism in reading.delivering_handlers() if protocols else []:\n",
+                replace="    for handler, mechanism in []:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -7635,9 +7635,9 @@ GUARDS: dict[str, Guard] = {
     ),
     "dispatch-hops.the-declared-CONFORMANCE-extends-a-values-ancestry": Guard(
         what="the declared type conformance joins the scanned supertypes a value is matched by",
-        why="CP-59 finding 6: an event extends `ApplicationEvent` extends the JDK's "
-        "`EventObject`, which nothing scans. Without the declared link its ancestry stops "
-        "there and a listener of `Object` never receives it",
+        why="CP-59 finding 6: no fact names the root type (a class extending it directly "
+        "carries no `superclass`; `EventObject` is in a JDK nothing scans). Without the "
+        "declared conformance a listener of `Object` never receives an event",
         edits=(
             Edit(
                 path=_DISPATCH_HOPS,
@@ -7657,6 +7657,46 @@ GUARDS: dict[str, Guard] = {
                 path=_DISPATCH_HOPS,
                 find='        if kind == "unresolved" and argument.get("source") is not None:\n',
                 replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-send-reaches-only-its-OWN-mechanism": Guard(
+        what="a send's value is asked only of its own catalog's mechanism's registrations",
+        why="review m1: one table holds every framework's registrations. Asked of all of them, "
+        "an actor `tell` lands on an application-event listener of `Object`, and a published "
+        "event on an actor case of its class: hops to code that value never reaches",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="            self._by_mechanism.get(mechanism, []), key_type, key_value, "
+                "self._supertypes\n",
+                replace="            self._cases, key_type, key_value, self._supertypes  # disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-KEY-is-served-only-by-its-OWN-mechanism": Guard(
+        what="an inbound key's handlers are its own mechanism's registrations only",
+        why="review m1: an actor key carrying a class would name an application-event "
+        "listener of a supertype as its handler, an endpoint row whose handler no message "
+        "to that key runs",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="                self._by_mechanism.get(mechanism, []),\n",
+                replace="                self._cases,  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-implementations.an-UNREAD-implementation-is-KEPT": Guard(
+        what="an implementation whose bridge names no one method is kept with no key",
+        why="never drop a row: a registration the reader cannot key still exists, and dropping "
+        "it hides a listener the framework registers",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="            key = None\n",
+                replace="            key = None\n            if target is None:\n"
+                "                continue  # guard disabled\n",
             ),
         ),
     ),

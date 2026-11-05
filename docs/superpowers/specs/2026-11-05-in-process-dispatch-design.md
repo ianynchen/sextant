@@ -37,6 +37,7 @@ And one rule says how many receive:
 | Where a value is handed over | `dispatch_sends: [{owner, method, descriptor, value_arg}]` — a catalog block any style may carry (replaces `message_sends`/`message_arg`) | the per-entry owner/method/descriptor matching `declared_call_sites` already does; `value_arg` is `body_arg`'s position |
 | A call-style registration (Akka) | `dispatch_registrations: [{owner, method, descriptor, class_arg \| value_arg, handler_arg, predicate_arg?, returns_value?}]` on an ordinary `fluent` chain (roots/steps/terminal, `case` capture) | `fluent` chains and `chain_ends`; `class_arg` is the existing name for a class literal |
 | An annotation-style registration (Spring, CDI) | the `annotation_driven` style with three additions: select a method by a **parameter** annotation (`@Observes`); key = the payload parameter's type (`path_fallback: payload_type`); output = a dispatch registration, not an endpoint | `annotation_driven`, `request_body` (picks the parameter), `path_from` (reads `@EventListener(classes=…)`) |
+| A registration made by implementing an interface (Spring `ApplicationListener<E>`; Micronaut's `ApplicationEventListener<E>` has the same shape) | `dispatch_implementations: [{owner, method, descriptor, value_arg}]` — each module type below the interface `owner` declaring the method registers it, keyed by its parameter at `value_arg` (added in Task 2, fix round 1 recorded it here) | the entry matching `dispatch_sends` uses; the bridge rule of the annotation inheritance walk (`effective_annotations._synthesis_target`, OI-47) |
 | A receive site, object key | `dispatch_receives: [{owner, method, descriptor, object: receiver, handler: enclosing \| lambda_arg}]` | the same entry matching |
 | How dispatch works for the catalog | `dispatch: { key: type \| object, match: first \| all \| one }` | — (the one genuinely new setting) |
 | The class a key carries (Akka service key) | `channel_via` entries may also name `class_arg`, read from the same producing call in the same walk | `channel_via` (replaces `message_class_via` and its second walk) |
@@ -54,6 +55,14 @@ No `message_*` word remains. No word names a framework.
 - `dispatch_registrations` also carries **`key_object`**: for an object key, the producing call
   `caller#ordinal` of the channel object, from `values.producer_paths(…, which_object=True)` (the
   object-following the Vert.x client reader already uses). NULL for a type key. Still schema 15.
+- …and **`mechanism`** (Task 2 fix round 1): the dispatch mechanism the registration belongs to,
+  the declaring catalog's id family (the word before the first hyphen: `pekko-actor-handlers` and
+  `pekko-receptionist` are `pekko`, `spring-events` is `spring`). A send reaches, and an inbound
+  key is served by, only registrations of its own catalog's mechanism, so a module running two
+  frameworks never has an actor `tell` land on an application-event listener of `Object`, or a
+  published event on an actor case. The protocol cannot draw that line (Spring and CDI are both
+  `in_process`), nor the catalog itself (a key's catalog is not the one registering its
+  handlers). Still schema 15.
 
 ## 4. What changes in this branch
 
@@ -68,10 +77,16 @@ No `message_*` word remains. No word names a framework.
    `@EventListener` and `@TransactionalEventListener` methods are registrations keyed by their
    parameter's type (or the annotation's `classes`), `match: all`. **`ApplicationListener<E>`
    implementations** are registrations keyed by the parameter type of their own
-   `onApplicationEvent(E)` — the non-bridge method (a compiler bridge carries `bridge_of`, D00) —
-   so no fact change is needed. Done when apollo-portal's and dolphinscheduler's publish sites
+   `onApplicationEvent(E)` — the non-bridge method. A javac bridge carries no `bridge_of` (D00
+   §5a writes it only on Kotlin's `$default` bridges and `DefaultImpls` bodies; CP-59 finding 5):
+   it is found by `modifiers.synthetic` and carried to the method it forwards to by
+   `effective_annotations._synthesis_target` (OI-47) — so no fact change is needed. Done when apollo-portal's and dolphinscheduler's publish sites
    hop to their listeners, each checked by hand, and the six field pins still pass (apollo-portal
    is one: any moved row is checked true or false).
+   **Stated bound (review m5):** `publishEvent(pojo)` is wrapped by Spring in a
+   `PayloadApplicationEvent`, so a listener of `ApplicationEvent` (or an
+   `ApplicationListener<ApplicationEvent>`) receives it too. The hop pass matches the POJO's own
+   ancestry, so those hops are missing: a missing hop, never a false one.
 6. **CDI events (Quarkus).** `Event.fire`/`fireAsync` are sends; a method whose parameter carries
    `@Observes`/`@ObservesAsync` is a registration keyed by that parameter's type, `match: all`.
    Checked on the Quarkus examples.

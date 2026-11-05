@@ -6294,7 +6294,11 @@ matches:
   `unresolved` argument whose `source` is that call's `result`) through each class the
   module's own body of that method returns. Anything else is not read, and the row says so.
   A value's class reaches a registration of any of its supertypes: the scanned and headered
-  ones, and the `type-models/` conformance past a JDK class nothing scans.
+  ones, the `type-models/` conformance past a JDK class nothing scans, and the root type (the
+  `subtype: "*"` entry). It is asked only of the registrations of the sending catalog's
+  **mechanism**, its id's family (`pekko-actor-handlers` and `pekko-receptionist` are one;
+  `spring-events` another), and an inbound key's class likewise: a dispatch never crosses
+  frameworks. A catalog's id family is therefore part of its dispatch contract.
 - **An `annotation_driven` catalog declaring `dispatch`** (`spring-events.yml`) reads its
   `mapping` as registrations, not routes (`annotation_driven.registrations`): each method
   carrying one of `mapping.annotations`, in the annotation set the endpoint derivation itself
@@ -6317,7 +6321,9 @@ matches:
   the compiler's synthetic bridge (`modifiers.synthetic`, D00 §5a; javac writes no
   `bridge_of`), which is carried to the method it forwards to by the rule the annotation
   inheritance walk applies (`effective_annotations._synthesis_target`: the same class's one
-  same-name, same-arity method not synthetic); where that is not exactly one method, no row.
+  same-name, same-arity method not synthetic); where that is not exactly one method, or the
+  method has no parameter at `value_arg`, the row is kept with no key (it matches nothing).
+  General: Micronaut's `ApplicationEventListener<E>` has the same shape.
 - **`dispatch_receives`** entries are `{owner, method, descriptor, object: receiver,
   handler: enclosing | lambda_arg}`, checked at load (`yaml_source._dispatch_receives`): a
   call that takes a value from an object key's channel (`take`, `receive`), the object it

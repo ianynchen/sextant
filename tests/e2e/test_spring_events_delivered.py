@@ -90,6 +90,24 @@ def test_a_published_event_hops_to_every_listener_of_its_class(tables):
     assert _hops_from(tables, "OrderService#placeThroughContext") == _EVERY_LISTENER
 
 
+@pytest.mark.pins("annotation-registrations.the-PAYLOAD-parameter-keys-the-listener")
+def test_each_event_reaches_only_the_listeners_of_its_class(tables):
+    """The key decides: `publishEvent(new OrderShipped(id))` reaches `ShippingListener` and
+    the listener of `Object`, none of `OrderPlaced`'s; `publishEvent(new Note())`, a plain
+    object through `publishEvent(Object)`, reaches only the listener of `Object`; and no
+    `OrderPlaced` publish reaches `ShippingListener`. A fan-out ignoring the key fails all
+    three."""
+    assert _hops_from(tables, "OrderService#ship") == {
+        ("in_process", "OrderShipped", "ShippingListener#on"),
+        ("in_process", "OrderShipped", "AnyListener#on"),
+    }
+    assert _hops_from(tables, "OrderService#note") == {("in_process", "Note", "AnyListener#on")}
+    assert not any(
+        handler == "ShippingListener#on"
+        for _, _, handler in _hops_from(tables, "OrderService#place")
+    )
+
+
 @pytest.mark.pins("dispatch-hops.the-declared-CONFORMANCE-extends-a-values-ancestry")
 def test_a_listener_of_a_supertype_receives(tables):
     """`@EventListener on(Object e)` is keyed by `Object`, and an `OrderPlaced` is one:

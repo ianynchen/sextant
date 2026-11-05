@@ -69,7 +69,11 @@ from typing import Any
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
-from sextant.application.resolve.dispatch_registrations import reached_by, served_cases
+from sextant.application.resolve.dispatch_registrations import (
+    dispatch_mechanism,
+    reached_by,
+    served_cases,
+)
 from sextant.application.resolve.shapes.arguments import (
     _arg_at,
     call_site_index,
@@ -88,6 +92,9 @@ from sextant.domain.symbols import (
 
 # The constructor name D00 §5 normalises every language's to.
 _CONSTRUCTOR = "<init>"
+# A conformance entry's subtype meaning every type (`type-models/conformance.yml`): its
+# supertype is the root type, a supertype of every class.
+_EVERY_TYPE = "*"
 # The call form that names exactly the method it runs (`dispatch.py`): no override can run
 # in its place, so its body is the value's producer.
 _STATIC = "static"
@@ -125,7 +132,13 @@ def record_dispatch_hops(workspace: Workspace, catalogs: list[Catalog]) -> None:
         for site, send in declared_call_sites(workspace, catalog.dispatch_sends):
             argument = _arg_at(site["arguments"], send["value_arg"])
             for value in reading.sent(argument, str(site["caller"])):
-                for row in reading.hops(site["caller"], site["ordinal"], value, catalog.protocol):
+                for row in reading.hops(
+                    site["caller"],
+                    site["ordinal"],
+                    value,
+                    catalog.protocol,
+                    dispatch_mechanism(catalog),
+                ):
                     rows.setdefault(tuple(row.values()), row)
     protocols = sorted({catalog.protocol for catalog in delivering})
     if len(protocols) > 1:
@@ -134,9 +147,9 @@ def record_dispatch_hops(workspace: Workspace, catalogs: list[Catalog]) -> None:
             f"handlers are declared under protocols {protocols}; a handler's own delivery is "
             f"written under one (spec 2026-11-04 §3d item 4)"
         )
-    for handler in reading.delivering_handlers() if protocols else []:
+    for handler, mechanism in reading.delivering_handlers() if protocols else []:
         for value in reading.returned(handler):
-            for row in reading.hops(handler, value[2], value, protocols[0]):
+            for row in reading.hops(handler, value[2], value, protocols[0], mechanism):
                 rows.setdefault(tuple(row.values()), row)
     if rows:
         workspace.derive("hops_insert", rows=list(rows.values()))
@@ -176,7 +189,11 @@ def record_key_handlers(workspace: Workspace, catalogs: list[Catalog]) -> None:
                 {None},
             )
             handlers = sorted(
-                {handler for key_class in read for handler in reading.key_handlers(key_class)},
+                {
+                    handler
+                    for key_class in read
+                    for handler in reading.key_handlers(key_class, dispatch_mechanism(catalog))
+                },
                 key=lambda handler: (handler is None, handler),
             )
             dropped.append({"row_id": row["row_id"]})
@@ -292,9 +309,15 @@ class _Reading:
         }
         # The declared conformance of types nothing scans (`type-models/`, the same table
         # every catalog carries as `type_model`): a value's ancestry reaches past a JDK
-        # class to a registration of its supertype (an event extending a headered library
-        # class extending `EventObject`, received by a listener of the root type).
+        # class to a registration of its supertype. The entry whose subtype is `*` is the
+        # root type every class conforms to (JLS 4.10.2), which no fact names — a class
+        # extending it directly carries no `superclass` (D00 §5a) — so it is added to every
+        # value's class as it is asked (`_rooted`): a listener of the root receives them all.
+        self._roots: set[str] = set()
         for entry in conformance:
+            if entry["subtype"] == _EVERY_TYPE:
+                self._roots.add(type_descriptor(entry["supertype"]))
+                continue
             self._supertypes.setdefault(type_descriptor(entry["subtype"]), set()).add(
                 type_descriptor(entry["supertype"])
             )
@@ -311,22 +334,35 @@ class _Reading:
         # class, read once, and each key class's answer, so a key class many inbound rows
         # share walks the module's types once rather than once per row.
         self._constants: dict[str, str | None] | None = None
-        self._key_handlers: dict[str | None, list[str | None]] = {}
+        self._key_handlers: dict[tuple[str | None, str], list[str | None]] = {}
+        # Each mechanism's registrations (`dispatch_registrations.dispatch_mechanism`): a send
+        # or an inbound key is asked only of its own catalog's, never of another framework's.
+        self._by_mechanism: dict[str, list[dict[str, Any]]] = {}
+        for case in self._cases:
+            self._by_mechanism.setdefault(str(case["mechanism"]), []).append(case)
 
-    def key_handlers(self, key_class: str | None) -> list[str | None]:
+    def key_handlers(self, key_class: str | None, mechanism: str) -> list[str | None]:
         """The handlers a value of `key_class`, any subtype of it, reaches
         (`dispatch_registrations.served_cases`); a registration whose handler was not read
         gives None, as for a hop. Nothing for a class not read."""
-        if key_class not in self._key_handlers:
+        if (key_class, mechanism) not in self._key_handlers:
             if self._constants is None:
                 self._constants = {
                     str(case["key_value"]): self._constant_class(str(case["key_value"]))
                     for case in self._cases
                     if case["key_value"] is not None
                 }
-            reached = served_cases(self._cases, key_class, self._supertypes, self._constants)
-            self._key_handlers[key_class] = list(dict.fromkeys(case["handler"] for case in reached))
-        return self._key_handlers[key_class]
+            self._rooted(key_class)
+            reached = served_cases(
+                self._by_mechanism.get(mechanism, []),
+                key_class,
+                self._supertypes,
+                self._constants,
+            )
+            self._key_handlers[(key_class, mechanism)] = list(
+                dict.fromkeys(case["handler"] for case in reached)
+            )
+        return self._key_handlers[(key_class, mechanism)]
 
     def _constant_class(self, symbol: str) -> str | None:
         """A value registration's constant's class: the static field's declared type (an enum
@@ -334,9 +370,20 @@ class _Reading:
         declared, static = self._field_type(symbol)
         return declared if static else None
 
-    def delivering_handlers(self) -> list[str]:
+    def _rooted(self, key_class: str | None) -> None:
+        """Gives `key_class` the root type among its supertypes (JLS 4.10.2), once."""
+        if key_class is not None and self._roots and key_class not in self._roots:
+            self._supertypes.setdefault(key_class, set()).update(self._roots)
+
+    def delivering_handlers(self) -> list[tuple[str, str]]:
+        """Each delivering handler with its registration's mechanism, whose registrations
+        the values it returns are asked of."""
         return sorted(
-            {str(case["handler"]) for case in self._cases if case["delivers"] and case["handler"]}
+            {
+                (str(case["handler"]), str(case["mechanism"]))
+                for case in self._cases
+                if case["delivers"] and case["handler"]
+            }
         )
 
     def sent(self, argument: Mapping[str, Any] | None, caller: str) -> list[_Value]:
@@ -458,9 +505,10 @@ class _Reading:
         return self._field_types.get(symbol, (None, False))
 
     def hops(
-        self, caller: str, ordinal: int | None, value: _Value, protocol: str
+        self, caller: str, ordinal: int | None, value: _Value, protocol: str, mechanism: str
     ) -> list[dict[str, Any]]:
-        """The rows one value gives at one call site: one per handler it reaches, one with
+        """The rows one value gives at one call site, asked of `mechanism`'s registrations
+        only (the sending catalog's): one per handler it reaches, one with
         no handler where it reaches none, one with no path and no handler where its class was
         not read. Nothing where the value was made at no call site the trace could step
         through. Every row's `evidence` is `compiler`, D00 §4's closed set: the send site is a
@@ -472,7 +520,10 @@ class _Reading:
         if unread is not None:
             return [row | {"path": None, "handler": None, "evidence": "compiler"}]
         path = key_value or key_type
-        reached = reached_by(self._cases, key_type, key_value, self._supertypes)
+        self._rooted(key_type)
+        reached = reached_by(
+            self._by_mechanism.get(mechanism, []), key_type, key_value, self._supertypes
+        )
         handlers = sorted({case["handler"] for case in reached}, key=lambda h: (h is None, h))
         return [
             row | {"path": path, "handler": handler, "evidence": "compiler"}

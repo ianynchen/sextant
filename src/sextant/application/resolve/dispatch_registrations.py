@@ -51,6 +51,8 @@ root's owners with `Dispatch.heirs` (JVMS 5.4.3.3), for every chain catalog alik
   body), module-prefixed; NULL if not read.
 - `delivers` — `returns_value`: the handler's return is a value handed to its own receiver.
 - `match` — the catalog's `dispatch.match`.
+- `mechanism` — the catalog's dispatch mechanism (`dispatch_mechanism`); the hop pass asks a
+  send's value only of its own mechanism's rows.
 
 A registration the walk could not read (the builder handed to code we do not have, spec
 2026-11-02 rule 2) keeps its position with every key column NULL: its class is unknown, so it
@@ -123,12 +125,25 @@ def record_dispatch_registrations(workspace: Workspace, catalogs: list[Catalog])
             ),
             *_implementation_rows(workspace, catalog),
         ):
+            row = row | {"mechanism": dispatch_mechanism(catalog)}
             key = tuple(row.values())
             if key not in seen:
                 seen.add(key)
                 rows.append(row)
     if rows:
         workspace.derive("dispatch_registrations_insert", rows=rows)
+
+
+def dispatch_mechanism(catalog: Catalog) -> str:
+    """The dispatch mechanism `catalog` belongs to: its id's family, the word before the first
+    hyphen (`<family>-<part>`, the catalog naming convention). A send reaches, and an inbound
+    key is served by, only the registrations of its own catalog's mechanism, so one
+    framework's value never lands on another's handler in a module running both: an actor's
+    tell on a listener of `Object`, an application event on an actor case of its class.
+    Neither the protocol (two frameworks share `in_process`) nor the catalog itself (a key's
+    catalog is not the one registering its handlers: `<family>-receptionist` beside
+    `<family>-actor-handlers`) draws that line; the family does."""
+    return catalog.id.split("-", 1)[0]
 
 
 def _reads_annotations(catalog: Catalog) -> bool:
@@ -331,7 +346,8 @@ def _implementation_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dic
     wrote. It is carried to the method it forwards to by the rule the inheritance walk
     applies to a mapping found through a bridge (`effective_annotations._synthesis_target`,
     OI-47: the same class's one same-name, same-arity method not synthetic); where that is
-    not exactly one method the row is not written, per §8. A type inheriting the method
+    not exactly one method, or the method has no parameter at `value_arg`, the row is kept
+    with no key (it matches nothing, never every value), as an unread annotated method is. A type inheriting the method
     rather than declaring it writes nothing: the type declaring it is below `owner` too.
 
     Cost (GUIDELINES §8.7): one read of `method_declarations` per resolve (cached), then a
@@ -348,14 +364,17 @@ def _implementation_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dic
             if joined not in declared.symbols:
                 continue
             target = _synthesis_target(joined, siblings, declared.signatures, declared.modifiers)
-            if target is None:
-                continue
-            parameters = (declared.signatures.get(target) or {}).get("parameters") or []
-            if entry["value_arg"] >= len(parameters):
-                continue
-            parameter = parameters[entry["value_arg"]]
-            key = parameter.get("erased_symbol") or (parameter.get("type") or {}).get("symbol")
-            handler = declared.symbols[target]
+            parameters = (
+                [] if target is None else (declared.signatures.get(target) or {}).get("parameters")
+            ) or []
+            key = None
+            if entry["value_arg"] < len(parameters):
+                parameter = parameters[entry["value_arg"]]
+                key = parameter.get("erased_symbol") or (parameter.get("type") or {}).get("symbol")
+            # A bridge forwarding to no ONE method, or a method with no parameter at
+            # `value_arg`, is still a registration: kept with no key, so it matches nothing,
+            # its handler the method the join found (the one the framework calls).
+            handler = declared.symbols[joined if target is None else target]
             yield {
                 "group": handler,
                 "position": 0,

@@ -1083,10 +1083,10 @@ _NAMED_QUERIES = {
     # a different registration at one position, so (group, position) alone is not total.
     "dispatch_registrations": """
         SELECT "group", position, key_type, key_value, key_object, predicated, handler,
-               delivers, match
+               delivers, match, mechanism
         FROM dispatch_registrations
         ORDER BY "group", position, key_type, key_value, key_object, predicated, handler,
-                 delivers, match
+                 delivers, match, mechanism
     """,
     # Spec 2026-10-22-boundary-vocabulary-and-diff §5 (FR-24): the six in-process questions
     # `application/query/questions.py` answers, each ONE read (GUIDELINES §8.7) and the walk

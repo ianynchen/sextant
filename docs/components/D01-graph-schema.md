@@ -194,7 +194,7 @@ site, or no row.
 **`dispatch_registrations`** (named `message_handlers` until spec
 `2026-11-05-in-process-dispatch-design.md` §3; schema 15 unreleased, so no version step)
 carries `group`, `position`, `key_type`, `key_value`, `key_object`, `predicated`, `handler`,
-`delivers` and `match`: every in-process dispatch registration a module makes — which key (a
+`delivers`, `match` and `mechanism`: every in-process dispatch registration a module makes — which key (a
 class, a constant, or a channel object) reaches which handler, in each group in the order it
 is tried, under the declaring catalog's match rule. One row per registration.
 
@@ -220,13 +220,19 @@ is tried, under the declaring catalog's match rule. One row per registration.
   method, a lambda its synthetic body), module-prefixed, NULL where none is read.
   **`delivers`** — the catalog's `returns_value`: the handler's return is a value handed to
   its own receiver. **`match`** — the catalog's `dispatch.match`, `first`, `all` or `one`.
+  **`mechanism`** — the declaring catalog's id family (`dispatch_registrations.dispatch_mechanism`:
+  `pekko`, `spring`): a send's value, and an inbound key's class, is asked only of its own
+  catalog's mechanism's rows, so one framework's value never reaches another's handler.
 - The match rule over these rows is `resolve/dispatch_registrations.reachable_handlers`:
   `first`, per group, the first unpredicated registration the value matches (its class or a
   supertype of it, transitively; a value registration by identity), and every predicated one
   before it that matches; `all` and `one`, every registration it matches. Each row is asked
   under its own `match` (`reached_by`). A value's supertypes are the scanned and headered
-  ones (`Dispatch.ancestors`) and the declared `type-models/` conformance past a JDK class
-  nothing scans (`EventObject` to `Object`).
+  ones (`Dispatch.ancestors`), the declared `type-models/` conformance past a JDK class
+  nothing scans, and the root type every class conforms to (the `subtype: "*"` entry, JLS
+  4.10.2), which no fact names. **Stated bound:** a POJO published through
+  `publishEvent(Object)` is wrapped in `PayloadApplicationEvent` by Spring, so a listener of
+  `ApplicationEvent` receives it too; matched on the POJO's own ancestry, that hop is missing.
 - **An inbound key row's handlers come from these rows too** (spec
   `2026-11-04-akka-pekko-actors-design.md` §3d item 6, `resolve/dispatch_hops.record_key_handlers`):
   the key's class (`ServiceKey.create` / `EntityTypeKey.create` argument 0, named by the
@@ -1522,7 +1528,7 @@ own cadence.
 | 12 | `endpoints` gains `served_by`, the class serving the row: the type its prefix and gate were composed with — the subclass, for a mapping a controller inherits without overriding and for an inherited exposed member. `endpoint_conditions` and the documents find the row's bean there (own symbol first), since Spring reads conditions off the registered class and `@Conditional` is not `@Inherited` (spec `2026-10-30-object-identity-design.md`, ruling 8). The export carries the column | refused by its stamp exactly as at 5 to 11, so an inherited row — whose conditions the older vintage read off the base — is re-derived rather than read beside rows that name their serving class |
 | 13 | `endpoints` gains `path_kind` (`pattern` where the path is a regular expression, not an address) and `method_kind` (`any` where the row serves every HTTP method) (spec `2026-10-30-vertx-web-design.md` §3a). The linker never links a pattern path by path and links a call of any verb to an any-method row; a NULL `method` without the marker still means no verb was read. `roots` and `open_questions` carry both markers from the endpoint row they name, so a trace heading or an open question on such a row reads as the row does. The export carries all of them | refused by its stamp exactly as at 5 to 12, so a pattern is never read as an address from an older vintage |
 | 14 | `scheduled_work` gains `refused`: why the framework refuses the call that schedules a job, NULL where it accepts it, read from the catalog's `hand_off_effects` (spec `2026-11-02-per-path-truth-design.md` rule 7, the column ruled by the user 2026-11-02). A refused row's handler is not a root. The export carries the column, and the boundary vocabulary moves to 4 (`schedule` gains the attribute) [ruled 2026-11-02 by the user] | refused by its stamp exactly as at 5 to 13, so a refused schedule is never read from an older vintage as one that runs |
-| 15 | `message_handlers`, a new derived table: each behavior's message handler cases in the order the behavior tries them (spec `2026-11-04-akka-pekko-actors-design.md` §3b, approved by the user with the design). The export carries it. Renamed before release (spec `2026-11-05-in-process-dispatch-design.md` §3): `dispatch_registrations`, columns `group`, `position`, `key_type`, `key_value`, `key_object`, `predicated`, `handler`, `delivers`, `match`, and `rpc_hops` renamed `hops`; still 15, since no 15 was released | refused by its stamp exactly as at 5 to 14, so a workspace without the table is re-analysed rather than read as one that builds no behavior |
+| 15 | `message_handlers`, a new derived table: each behavior's message handler cases in the order the behavior tries them (spec `2026-11-04-akka-pekko-actors-design.md` §3b, approved by the user with the design). The export carries it. Renamed before release (spec `2026-11-05-in-process-dispatch-design.md` §3): `dispatch_registrations`, columns `group`, `position`, `key_type`, `key_value`, `key_object`, `predicated`, `handler`, `delivers`, `match`, `mechanism`, and `rpc_hops` renamed `hops`; still 15, since no 15 was released | refused by its stamp exactly as at 5 to 14, so a workspace without the table is re-analysed rather than read as one that builds no behavior |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the

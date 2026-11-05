@@ -26,6 +26,16 @@ public class OrderService {
         publisher.publishEvent(event);
     }
 
+    /** A second event class: its own listener, and the listener of `Object`. */
+    public void ship(String id) {
+        publisher.publishEvent(new OrderShipped(id));
+    }
+
+    /** A plain object, through `publishEvent(Object)`: only the listener of `Object`. */
+    public void note() {
+        publisher.publishEvent(new Note());
+    }
+
     /** An event handed in by the caller: its class is not read here. */
     public void republish(Object event) {
         publisher.publishEvent(event);

@@ -186,6 +186,10 @@ def main() -> None:
         f"- `org.springframework.context.ApplicationEvent` super_class: `{super_class('org.springframework.context.ApplicationEvent')}`"
     )
     print(f"- `java.util.EventObject` super_class: `{super_class('java.util.EventObject')}`")
+    print(
+        "- fixture `com.acme.events.OrderShipped` super_class: "
+        f"`{super_class('com.acme.events.OrderShipped')}`"
+    )
     print()
     print("### 7. What javac writes at the fixture's publish sites\n")
     for row in invokes("com.acme.events.OrderService", "publishEvent"):

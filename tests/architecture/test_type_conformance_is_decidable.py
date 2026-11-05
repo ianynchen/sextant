@@ -185,13 +185,13 @@ def test_every_type_gated_pair_is_decided_by_the_conformance_table():
 
 
 # The conformance the in-process dispatch hop pass reads (`dispatch_hops._Reading`, spec
-# 2026-11-05 §4 item 5) rather than a type gate: a Spring event extends `ApplicationEvent`
-# (whose header the workspace reads) extends the JDK's `EventObject`, which nothing scans,
-# and a listener of `Object` receives it only through this link (CP-59 finding 6). Its row is
+# 2026-11-05 §4 item 5) rather than a type gate: the root type every class conforms to
+# (`*`, JLS 4.10.2), which no fact names, so a listener of `Object` receives an event only
+# through this entry (CP-59 finding 6). Its row is
 # `spring-events`' listener of the root type, pinned by
 # `tests/e2e/test_spring_events_delivered.py::test_a_listener_of_a_supertype_receives` and
 # the guard `dispatch-hops.the-declared-CONFORMANCE-extends-a-values-ancestry`.
-_DISPATCH_ANCESTRY = frozenset({("java.util.EventObject", "java.lang.Object")})
+_DISPATCH_ANCESTRY = frozenset({("*", "java.lang.Object")})
 
 
 def test_every_conformance_entry_is_reachable_from_a_catalog():

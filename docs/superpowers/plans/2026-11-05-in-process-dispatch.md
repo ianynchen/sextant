@@ -52,17 +52,17 @@
 
 ### Task 2: Spring application events
 
-**Files:** `engines/annotation_driven.py` (registration output; `path_fallback: payload_type`); new `src/sextant/catalogs/spring-events.yml` (and a sends catalog if one style per file requires it); probe `scripts/probes/cp58_dispatch.md` (+ harness); fixture `fixtures/orders-events/` (Spring Boot, JDK 21); tests `tests/e2e/test_spring_events_delivered.py`, unit tests beside the engine.
+**Files:** `engines/annotation_driven.py` (registration output; `path_fallback: payload_type`); new `src/sextant/catalogs/spring-events.yml` (and a sends catalog if one style per file requires it); probe `scripts/probes/cp59_dispatch.md` (+ harness); fixture `fixtures/orders-events/` (Spring Boot, JDK 21); tests `tests/e2e/test_spring_events_delivered.py`, unit tests beside the engine.
 
 **Interfaces — Consumes:** Task 1's blocks and table. **Produces:** registrations from annotation catalogs: key = the payload parameter's type (`request_body` picks it) or `@EventListener(classes=…)` via `path_from`; `ApplicationListener` implementations keyed by the parameter type of their own non-bridge `onApplicationEvent` (skip `bridge_of`); `match: all`.
 
 - [ ] **Step 1:** Fixture classes: `OrderPlaced` (event), `OrderService` (`publisher.publishEvent(new OrderPlaced(id))`, `publishEvent(param)`), `AuditListener` (`@EventListener void on(OrderPlaced e)`), `AnyListener` (`@EventListener void on(Object e)` — supertype), `ClassesListener` (`@EventListener(classes = OrderPlaced.class) void on()`), `TxListener` (`@TransactionalEventListener`), `MailListener implements ApplicationListener<OrderPlaced>`. Tests: `test_a_published_event_hops_to_every_listener_of_its_class` (Audit, Any, Classes, Tx, Mail), `test_a_listener_of_a_supertype_receives`, `test_an_unread_event_class_is_a_stop`, `test_an_application_listener_is_keyed_by_its_own_method`. Run: FAIL.
-- [ ] **Step 2:** Measure `ApplicationEventPublisher.publishEvent` (both), `ApplicationContext` inheritance, the annotations, in CP-58. Implement. Run: PASS.
+- [ ] **Step 2:** Measure `ApplicationEventPublisher.publishEvent` (both), `ApplicationContext` inheritance, the annotations, in CP-59 (CP-58 was already taken by `cp58-inherited-mappings`). Implement. Run: PASS.
 - [ ] **Step 3:** Analyse `examples/apollo` (apollo-portal, apollo-biz) and `examples/dolphinscheduler` (dolphinscheduler-api) — check every new hop by hand against the source; record in the workspace `corpus.md`. `scripts/field_check.py`: any moved pin row checked. Gate; commit `feat(catalogs): Spring application events are in-process dispatch`.
 
 ### Task 3: CDI events
 
-**Files:** `engines/annotation_driven.py` (`selected_by_parameter: <annotation fqn>` mapping word); new `src/sextant/catalogs/cdi-events.yml` (jakarta + javax if both measured); probe rows in CP-58; fixture `fixtures/orders-cdi-events/` (Quarkus, Maven, JDK 21); tests `tests/e2e/test_cdi_events_delivered.py`.
+**Files:** `engines/annotation_driven.py` (`selected_by_parameter: <annotation fqn>` mapping word); new `src/sextant/catalogs/cdi-events.yml` (jakarta + javax if both measured); probe rows in CP-59; fixture `fixtures/orders-cdi-events/` (Quarkus, Maven, JDK 21); tests `tests/e2e/test_cdi_events_delivered.py`.
 
 **Produces:** sends `Event.fire`/`fireAsync` (key = value's class); registrations = methods with an `@Observes`/`@ObservesAsync` parameter, key = that parameter's type, `match: all`.
 

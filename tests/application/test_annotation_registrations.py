@@ -200,6 +200,20 @@ def test_an_implementation_is_keyed_by_the_method_its_bridge_forwards_to(tmp_pat
     assert _rows(tmp_path, facts) == [("onApplicationEvent", 0, _PLACED, "all", True)]
 
 
+@pytest.mark.pins("dispatch-implementations.an-UNREAD-implementation-is-KEPT")
+def test_an_implementation_whose_bridge_has_no_one_target_is_kept_unkeyed(tmp_path: Path):
+    """A bridge beside two same-arity overloads names no ONE method it forwards to: the
+    registration is kept with no key (it matches nothing, never every event), its handler
+    the bridge the framework calls, as an annotated method with no readable type is kept."""
+    facts = [
+        _class(_LISTENER, (_APPLICATION_LISTENER,)),
+        _method(_LISTENER, "onApplicationEvent", (_PLACED,)),
+        _method(_LISTENER, "onApplicationEvent", (_SHIPPED,)),
+        _method(_LISTENER, "onApplicationEvent", (_APPLICATION_EVENT,), synthetic=True),
+    ]
+    assert _rows(tmp_path, facts) == [("onApplicationEvent", 0, None, "all", True)]
+
+
 def test_an_implementation_of_the_erased_type_needs_no_bridge(tmp_path: Path):
     """`implements ApplicationListener<ApplicationEvent>`: the method the class wrote has the
     interface's own descriptor, so it is the registration, keyed `ApplicationEvent`."""

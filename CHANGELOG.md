@@ -47,8 +47,11 @@ here would restate those documents rather than add anything.
   `dispatch` mints no endpoint row, whatever its style. A sent value that is a static module
   factory's result (`ConfigPublishEvent.instance()`) is read through the factory's returns,
   for actors too (their rows and hops unchanged: 5 rows, 28 hops on the two Pekko samples).
-  `type-models/conformance.yml` gains `EventObject` → `Object`, so a listener of `Object`
-  receives an event extending `ApplicationEvent`. On apollo-portal all 17 publish sites hop to
+  `type-models/conformance.yml` declares the root type every class conforms to (`subtype: "*"`),
+  so a listener of `Object` receives every event. Each registration carries its catalog's
+  `mechanism` (the id family, a new `dispatch_registrations` column, schema 15 unreleased): a
+  send or an inbound key reaches only its own mechanism's registrations, never another
+  framework's. On apollo-portal all 17 publish sites hop to
   their listener (17 hops, each checked by hand); no endpoint row moved on apollo-portal,
   apollo-biz or dolphinscheduler-api, and the six field pins hold. A trace's unread hop now
   reads `(value class not read)` rather than `(message class not read)`.
