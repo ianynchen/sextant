@@ -494,6 +494,21 @@ _NAMED_QUERIES = {
         WHERE kind = 'type_header'
         ORDER BY symbol
     """,
+    # The types this module compiled and those of the reactor siblings it builds with
+    # (`ModuleFact.sibling_coordinates`): no dependency on the classpath extends one of them,
+    # because a dependency does not depend on the module. An opted-in library
+    # (`extract_libraries`) is scanned too but is not here: another dependency may extend it.
+    "own_types": """
+        SELECT s.symbol
+        FROM symbols s
+        JOIN documents d ON d.document_id = s.document_id
+        WHERE d.origin_tier = 'module_output'
+           OR d.origin IN (
+               SELECT unnest(from_json(payload -> 'sibling_coordinates', '["VARCHAR"]'))
+               FROM raw_facts WHERE kind = 'module'
+           )
+        ORDER BY s.symbol
+    """,
     "type_header_annotations": """
         SELECT payload ->> 'symbol'          AS target,
                use ->> 'annotation'          AS annotation,
@@ -1798,6 +1813,8 @@ _FACT_ONLY = frozenset(
         # other fact query — the cache rule test is what said so.
         "type_header_annotations",
         "type_headers",
+        # The module's own types and its siblings' (`symbols` and `documents`, both facts).
+        "own_types",
         # A `DefaultImpls` holder and its bodies are facts, read once per resolve like
         # every other declaration (the merge of the delivery branch added the query).
         "default_bodies",

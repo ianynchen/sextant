@@ -8595,9 +8595,32 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_BEANS,
-                find="        return UNREAD if unread and declared not in self._scanned else "
-                "NOT_ASSIGNABLE\n",
+                find="        return UNREAD\n",
                 replace="        return NOT_ASSIGNABLE  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.an-UNREAD-type-on-a-RESOLVED-classpath-is-the-PLATFORM-s": Guard(
+        what="on a resolved classpath, a type with no header cannot reach a type that was read",
+        why="scoped re-review I-1: without it every bean whose hierarchy touches the platform "
+        "(ObjectMapper, Clock) is a maybe, and the only RestTemplate bean is no longer chosen",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="        if self._resolved and declared in self._read:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.only-the-MODULE-and-its-SIBLINGS-are-never-extended-by-a-dependency": Guard(
+        what="only the module's own types and its siblings' are never extended by a dependency",
+        why="scoped re-review m-a: an opted-in library is scanned but is a dependency; another "
+        "dependency may extend its types, so a bean of an unread type may be one of them",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find='workspace.query("own_types")',
+                replace='workspace.query("declared_symbols")',
             ),
         ),
     ),

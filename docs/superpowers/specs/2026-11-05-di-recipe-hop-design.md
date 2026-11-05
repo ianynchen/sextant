@@ -119,9 +119,12 @@ Tasks 1–4, branch `cov/hilt-provides` (9cd89f2e, bab3160d, b6911ba4, then Task
   workspace and are read as recipes, and a key's uniqueness is decided over the module and those
   siblings together. `fixtures/orders-dagger-reactor` pins it: a sibling's recipe resolves the
   row, and one key with a recipe in the sibling and one in the app stays `partial`.
-- **Ladder (whole-branch review m1, m3, m4):** `beans.TypeLattice` answers assignable, not
-  assignable, or unread (a type on the walk whose supertypes were not read; no dependency
-  reaches a module type). The type, qualifier and
+- **Ladder (whole-branch review m1, m3, m4; scoped re-review I-1, m-a, m-c, m-d):**
+  `beans.TypeLattice` answers assignable, not assignable, or unread (a type on the walk whose
+  supertypes were not read). Not assignable also where no unread type can reach the parameter's
+  type: it is the module's own or a sibling's, or it was read on a classpath the build tool
+  resolved (a type with no header is then the platform's). A lone unread candidate answers
+  `unread` (`unread_type` in the table). The type, qualifier and
   name rungs weigh the beans of the type or a subtype; the qualifier rung keeps an unread one,
   the type and name rungs choose only a known one. `Unresolved` carries the beans an ambiguous
   rung weighed, which `Ambiguous` reports (one encoding of the ladder).

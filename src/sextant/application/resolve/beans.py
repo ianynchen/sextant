@@ -43,6 +43,7 @@ from typing import Any
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.conditions import annotation_index
+from sextant.application.resolve.dependencies import resolved_by_the_build_tool
 from sextant.application.resolve.dispatch import dispatch_of
 from sextant.domain.symbols import (
     bare_descriptor,
@@ -69,7 +70,8 @@ class BeanRef:
 
 @dataclass(frozen=True)
 class Unresolved:
-    reason: str  # 'none' | 'ambiguous'
+    reason: str  # 'none' | 'ambiguous' | 'unread' (`UNREAD`: the one candidate's hierarchy
+    # was not read, so whether it is a candidate at all is not known)
     # For `ambiguous`, the beans the rung that could not choose weighed, in fold order. Not
     # part of equality: the reason is the answer, the beans are what it was weighed over.
     candidates: tuple[BeanRef, ...] = field(default=(), compare=False)
@@ -117,9 +119,11 @@ UNREAD = "unread"
 
 class TypeLattice:
     """The module's type hierarchy, as the bean rungs read it: each type's direct supertypes
-    (`dispatch.ancestry_of`), and which types were READ — compiled by the module or a scanned
-    sibling, or a dependency whose class-file header was read (`type_header`). A type outside
-    both was not read: its supertypes are not known. The platform's root class is never a
+    (`dispatch.ancestry_of`), and which types were READ — scanned (the module, a reactor
+    sibling, an opted-in library), or a dependency whose class-file header was read
+    (`type_header`). A type outside both was not read: its supertypes are not known. `own`
+    are the module's types and its siblings'; `resolved` whether the build tool answered the
+    module's classpath, so every type a jar holds had its header read. The platform's root class is never a
     recorded supertype (D00 §5), so a walk ends at the last type that names one."""
 
     def __init__(
@@ -127,10 +131,13 @@ class TypeLattice:
         ancestors: Mapping[str, Sequence[tuple[str, str, bool]]],
         scanned: frozenset[str],
         headers: frozenset[str],
+        own: frozenset[str],
+        resolved: bool,
     ) -> None:
         self._ancestors = ancestors
-        self._scanned = scanned
         self._read = scanned | headers
+        self._own = own
+        self._resolved = resolved
         self._answers: dict[tuple[str, str], str] = {}
 
     def is_read(self, bare: str) -> bool:
@@ -140,9 +147,14 @@ class TypeLattice:
     def assignable(self, child: str, declared: str) -> str:
         """Whether a value of `child` can be given where `declared` is asked for.
         `ASSIGNABLE` where the walk from `child` reaches `declared`. `NOT_ASSIGNABLE` where it
-        does not and every type on the walk was read, or where `declared` is a type the module
-        compiled: no dependency extends a type of the module that depends on it. `UNREAD`
-        otherwise: a type whose supertypes are not known may reach `declared`."""
+        does not and either every type on the walk was read, or no type the walk left unread
+        can reach `declared`:
+        - `declared` is the module's own or a sibling's: no dependency extends a type of the
+          module that depends on it;
+        - `declared` was read and the classpath was resolved: every type a jar holds then has
+          its header, so a type with none is the platform's, and a platform type extends
+          nothing in a jar or in the module.
+        `UNREAD` otherwise: a type whose supertypes are not known may reach `declared`."""
         key = (child, declared)
         if key not in self._answers:
             self._answers[key] = self._walk(child, declared)
@@ -161,12 +173,17 @@ class TypeLattice:
             seen.add(current)
             unread = unread or current not in self._read
             pending.extend(ancestor for ancestor, _, _ in self._ancestors.get(current, ()))
-        return UNREAD if unread and declared not in self._scanned else NOT_ASSIGNABLE
+        if not unread or declared in self._own:
+            return NOT_ASSIGNABLE
+        if self._resolved and declared in self._read:
+            return NOT_ASSIGNABLE
+        return UNREAD
 
 
 def type_lattice(workspace: Workspace) -> TypeLattice:
     """The module's `TypeLattice`, built once per load (GUIDELINES §8.7): the hierarchy
-    `dispatch_of` already read, and one read of the dependency headers."""
+    `dispatch_of` already read, one read of the dependency headers and of the module's own
+    types, and whether the build tool resolved the classpath."""
     return workspace.once(_lattice)
 
 
@@ -175,7 +192,14 @@ def _lattice(workspace: Workspace) -> TypeLattice:
     headers = frozenset(
         bare_descriptor(str(row["symbol"])) for row in workspace.query("type_headers")
     )
-    return TypeLattice(dispatch.ancestors, frozenset(dispatch.scanned), headers)
+    own = frozenset(bare_descriptor(str(row["symbol"])) for row in workspace.query("own_types"))
+    return TypeLattice(
+        dispatch.ancestors,
+        frozenset(dispatch.scanned),
+        headers,
+        own,
+        resolved_by_the_build_tool(workspace),
+    )
 
 
 def erased_type_of(declared: Mapping[str, Any]) -> str | None:
@@ -250,7 +274,8 @@ class BeanTable:
             return self._one_named(reference.qualifier, sure + maybe)
         weighed = sure + maybe
         if len(weighed) == 1:
-            return sure[0] if sure else Unresolved("none")
+            # One candidate whose hierarchy was not read: whether it is one is not known.
+            return sure[0] if sure else Unresolved(UNREAD, weighed)
         # Several: the one marked primary is the container's choice before any name is
         # compared (CP-27 row 15 — `determinePrimaryCandidate` runs before
         # `matchesBeanName`), so a parameter named after the OTHER bean still gets the
@@ -277,7 +302,7 @@ class BeanTable:
         found = self._declared.by_name.get(name)
         if found is None:
             return None
-        return found[0] if len(found) == 1 else Unresolved("ambiguous")
+        return found[0] if len(found) == 1 else Unresolved("ambiguous", found)
 
     def _candidates(self, erased_type: str) -> tuple[tuple[BeanRef, ...], tuple[BeanRef, ...]]:
         """The declared beans of `erased_type` or of a subtype of it, in fold order: those
@@ -699,6 +724,8 @@ class _Ladder:
         answer = injected_bean(self._beans, method, parameters, position, self._model)
         if isinstance(answer, BeanRef):
             return NotProvided(NO_RECIPE) if answer.method is None else ProvidedBy(answer.method)
+        if answer.reason == UNREAD:
+            return NotProvided(UNREAD_TYPE)
         if answer.reason != "ambiguous":
             return NotProvided(NO_RECIPE)
         return Ambiguous(

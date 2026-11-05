@@ -193,7 +193,7 @@ def dependency_gate(workspace: Workspace, catalog: Catalog) -> tuple[str, str] |
         return None
     if declared is None:
         return SKIP_DEPENDENCIES_UNRECORDED, _NOT_RECORDED.format(coordinates=wanted)
-    if _resolved_by_the_build_tool(workspace):
+    if resolved_by_the_build_tool(workspace):
         return SKIP_FRAMEWORK_ABSENT, _NOT_RESOLVED.format(coordinates=wanted)
     return SKIP_FRAMEWORK_ABSENT, _NOT_DECLARED.format(coordinates=wanted)
 
@@ -253,7 +253,7 @@ def _declared_coordinates(workspace: Workspace) -> set[str] | None:
     return declared if recorded_any else None
 
 
-def _resolved_by_the_build_tool(workspace: Workspace) -> bool:
+def resolved_by_the_build_tool(workspace: Workspace) -> bool:
     """Whether every module fact's dependency set is the build tool's own answer
     (`dependency_source` other than `declared`, spec 2026-10-21 §3c). A fact
     written before the field existed reads NULL and counts as `declared`: it was."""

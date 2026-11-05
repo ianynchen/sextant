@@ -43,6 +43,7 @@ from sextant.domain.facts import (
     AnnotationFact,
     AnnotationUse,
     Document,
+    ModuleFact,
     Signature,
     SymbolFact,
     TypeHeaderFact,
@@ -381,7 +382,7 @@ def test_a_bean_whose_hierarchy_was_not_read_is_kept_by_the_qualifier_only(tmp_p
     `@Qualifier("pool") ExecutorService`: the JDK's types have no header, so the walk from
     `ThreadPoolExecutor` cannot say whether it reaches `ExecutorService`. A qualifier naming
     a bean that is not assignable fails the container's start, so the qualifier rung keeps it.
-    The type and name rungs need the hierarchy and do not choose it: `none`, never a guess.
+    The type and name rungs need the hierarchy and do not choose it: `unread`, never a guess.
     A parameter of a MODULE type cannot be filled by a type outside the module (a dependency
     does not depend on the module), so there the unread bean is not a candidate."""
     executor = "java/util/concurrent/ExecutorService#"
@@ -398,9 +399,90 @@ def test_a_bean_whose_hierarchy_was_not_read_is_kept_by_the_qualifier_only(tmp_p
 
     bean = BeanRef(method=_MODULE + pool, name="pool", erased_return=pool_type)
     assert table.bean_of(_parameter(executor, "e", qualifier="pool")) == bean
-    assert table.bean_of(_parameter(executor, "pool")) == Unresolved("none")
+    assert table.bean_of(_parameter(executor, "pool")) == Unresolved("unread")
     assert table.bean_of(_parameter("com/acme/Orders#", "o", qualifier="pool")) == (
         Unresolved("none")
+    )
+
+
+def _resolved_classpath() -> ModuleFact:
+    """The module fact of a module whose dependency set the build tool answered: every
+    dependency on the classpath then has its class-file header read."""
+    return ModuleFact(
+        document_id="doc_1",
+        module_id="com.acme:orders-service",
+        module_kind="service",
+        languages=["java"],
+        source_roots=[],
+        output_dirs=[],
+        dependency_source="maven",
+    )
+
+
+@pytest.mark.pins("beans.an-UNREAD-type-on-a-RESOLVED-classpath-is-the-PLATFORM-s")
+def test_a_type_the_resolved_classpath_does_not_hold_never_reaches_a_read_type(tmp_path: Path):
+    """Scoped re-review I-1 (probed). `@Bean RestTemplate restTemplate()`, `@Bean ObjectMapper
+    objectMapper()` and `@Bean Clock clock()`, and a parameter `RestTemplate client`: the only
+    bean of the type is `restTemplate`. `ObjectMapper` implements the platform's `Serializable`
+    and `Clock` is the platform's own; neither has a header, because the platform is in no jar.
+    Where the build tool resolved the classpath, every type a jar holds has its header, so a
+    type with none is the platform's, and a platform type extends nothing in a jar or in the
+    module: it cannot reach `RestTemplate`, whose header was read. Where the classpath was not
+    resolved, the same unread type may be a missing jar's, and the rung does not choose."""
+    rest = "org/springframework/web/client/RestTemplate#"
+    mapper = "com/fasterxml/jackson/databind/ObjectMapper#"
+    clock_type = "java/time/Clock#"
+    beans = {
+        "restTemplate": (_CONFIG + "restTemplate(sig_11111111).", rest),
+        "objectMapper": (_CONFIG + "objectMapper(sig_22222222).", mapper),
+        "clock": (_CONFIG + "clock(sig_33333333).", clock_type),
+    }
+    facts = [
+        _method(_HELPER),
+        _header(rest),
+        _header(mapper, interfaces=("java/io/Serializable#",)),
+    ]
+    for bare, returns in beans.values():
+        facts += _bean(bare, returns)
+    template = BeanRef(method=_MODULE + beans["restTemplate"][0], name="restTemplate",
+                       erased_return=rest)  # fmt: skip
+
+    workspace = _loaded(tmp_path / "resolved", facts + [_resolved_classpath()])
+    table = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset())
+    workspace.close()
+    assert table.bean_of(_parameter(rest, "client")) == template
+
+    workspace = _loaded(tmp_path / "declared", facts)
+    table = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset())
+    workspace.close()
+    assert table.bean_of(_parameter(rest, "client")) == Unresolved("ambiguous")
+
+
+@pytest.mark.pins("beans.only-the-MODULE-and-its-SIBLINGS-are-never-extended-by-a-dependency")
+def test_an_opted_in_library_s_type_may_be_extended_by_another_dependency(tmp_path: Path):
+    """Scoped re-review m-a. No dependency extends a type of the module that depends on it, nor
+    of a reactor sibling it builds with. A jar the person opted into (`extract_libraries`) is
+    scanned too, but it is a dependency like any other: another dependency may extend its types.
+    So a bean of an unread type named by a qualifier on such a type is kept."""
+    library = "com/vendor/Gateway#"
+    unread = "com/vendor/impl/FastGateway#"
+    bare = _CONFIG + "gateway(sig_44444444)."
+    library_document = _document().model_copy(
+        update={"document_id": "doc_lib", "relative_path": "com/vendor/Gateway.class",
+                "origin_tier": OriginTier.DEPENDENCY, "origin": "com.vendor/gateway"}
+    )  # fmt: skip
+    write_fact_file(
+        tmp_path / "facts" / "Gateway.jsonl",
+        library_document,
+        [SymbolFact(document_id="doc_lib", symbol="sextant-jvm maven com.vendor/gateway 1.0 "
+                    + library, construct_kind=ConstructKind.INTERFACE)],
+    )  # fmt: skip
+    workspace = _loaded(tmp_path, _bean(bare, unread) + [_method(_HELPER)])
+    table = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset())
+    workspace.close()
+
+    assert table.bean_of(_parameter(library, "g", qualifier="gateway")) == BeanRef(
+        method=_MODULE + bare, name="gateway", erased_return=unread
     )
 
 
@@ -488,8 +570,16 @@ def test_a_bean_named_by_the_name_attribute_wins_over_the_method_name(tmp_path: 
     model); the first element is the name, so both forms are pinned, and the
     method's own name no longer answers for it."""
     workspace = _loaded(
-        tmp_path, _bean(_NAMED_BEAN, "java/lang/String#", args=args) + [_method(_HELPER)]
-    )
+        tmp_path,
+        _bean(_NAMED_BEAN, "java/lang/String#", args=args)
+        + [
+            _method(_HELPER),
+            SymbolFact(
+                document_id="doc_1", symbol=_MODULE + "com/acme/Other#",
+                construct_kind=ConstructKind.CLASS,
+            ),
+        ],
+    )  # fmt: skip
     table = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset())
     workspace.close()
 
@@ -543,7 +633,14 @@ def test_two_declarations_of_one_bean_name_are_ambiguous_by_name(tmp_path: Path)
     table = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset())
     workspace.close()
 
-    assert table.bean_of(_parameter(_CHANNEL_TYPE, "ordersChannel")) == Unresolved("ambiguous")
+    ambiguous = table.bean_of(_parameter(_CHANNEL_TYPE, "ordersChannel"))
+    assert ambiguous == Unresolved("ambiguous")
+    # Scoped re-review m-d: the answer names the two beans the name rung weighed.
+    assert isinstance(ambiguous, Unresolved)
+    assert {bean.method for bean in ambiguous.candidates} == {
+        _MODULE + _ORDERS_CHANNEL,
+        _MODULE + twin,
+    }
     assert table.bean_of(_parameter(_CHANNEL_TYPE, "x", qualifier="ordersChannel")) == (
         Unresolved("ambiguous")
     )
@@ -1014,6 +1111,40 @@ def test_an_ambiguous_spring_slot_carries_the_beans_the_ladder_weighed(tmp_path:
         workspace.close()
 
     assert found[(_MODULE + helper, 0)] == Ambiguous((_MODULE + container, _MODULE + other))
+
+
+def test_a_spring_slot_whose_only_candidate_is_unread_is_unread(tmp_path: Path):
+    """Scoped re-review m-c. `@Bean ThreadPoolExecutor pool()` and a `@Bean` method taking an
+    `ExecutorService`: the pool's hierarchy was not read, so it may be the one candidate. The
+    table says why it does not choose (`unread_type`), not that no recipe exists."""
+    pool = _CONFIG + "pool(sig_7a8b9c0d)."
+    helper = _CONFIG + "helper(sig_6f708192)."
+    executor = "java/util/concurrent/ExecutorService#"
+    facts = (
+        _recipe(pool, _type("java/util/concurrent/ThreadPoolExecutor#"), declaring=_BEAN)
+        + (
+            _recipe(
+                helper,
+                _type("com/acme/Helper#"),
+                parameters=(_slot(_type(executor), name="e"),),
+                declaring=_BEAN,
+            )
+        )
+        + [
+            SymbolFact(
+                document_id="doc_1",
+                symbol=_MODULE + "com/acme/Helper#",
+                construct_kind=ConstructKind.CLASS,
+            )
+        ]
+    )
+    workspace = _loaded(tmp_path, facts)
+    try:
+        found = injected_parameters(workspace, _MODELS, (_VALUE,))
+    finally:
+        workspace.close()
+
+    assert found[(_MODULE + helper, 0)] == NotProvided(UNREAD_TYPE)
 
 
 @pytest.mark.pins("beans.a-GENERIC-Spring-slot-has-NO-entry")

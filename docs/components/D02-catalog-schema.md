@@ -503,9 +503,12 @@ order, cited on the model (CP-27 row 15; `@Priority` is not read, a boundary sta
 such a reference every rung weighs only the candidates of its type, as the container does: a
 bean whose type is the parameter's or a subtype of it (the module's type facts and its
 dependencies' class headers, `beans.TypeLattice`). A bean whose hierarchy was not read to the end
-(a JDK type, an unresolved classpath) may be a candidate: the `@Qualifier` rung keeps it (a
-qualifier naming a bean that is not assignable fails the container's start), the type and name
-rungs choose only a bean known to be of the type. A bean of a type known to be unrelated that
+may be a candidate, unless no unread type can reach the parameter's type: that type is the
+module's own or a reactor sibling's (no dependency extends it), or it was read and the build tool
+resolved the classpath (a type with no header is then the platform's, which extends nothing in a
+jar or the module). A bean that may be a candidate: the `@Qualifier` rung keeps it (a qualifier
+naming a bean that is not assignable fails the container's start), the type and name rungs choose
+only a bean known to be of the type, and a lone such bean answers `unread`. A bean of a type known to be unrelated that
 shares the name is never one (OI-304 Task 4). Two
 candidates on any rung, or none, is `Unresolved`, never a guess; a
 parameter compiled without names skips the name rung. The list is the INTERFACES the
@@ -2830,7 +2833,8 @@ matches:
   is `unresolved`; ONE hop — a `bean_via` met inside the collecting walk is a poison there.
   An unresolved bean reference is the reader's own failure, overwritable by a later literal
   (Spring's setters are last-wins), never a catalog poison. The reason travels:
-  `bean_none`, `bean_ambiguous`, `bean_second_hop`, `bean_across_bodies` (a `bean_via` inside
+  `bean_none`, `bean_ambiguous`, `bean_unread` (the one candidate's hierarchy was not read),
+  `bean_second_hop`, `bean_across_bodies` (a `bean_via` inside
   a lambda body — a parameter index there is into the LAMBDA's signature), `bean_no_chain`,
   `bean_field_uncaptured`, `bean_chains_disagree`. A catalog spelling `bean_via` with no
   `bean_model` is refused at load; the table is built once per run only then.
