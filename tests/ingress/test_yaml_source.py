@@ -16,8 +16,9 @@ from sextant.resources import catalogs_dir
 
 _HEADER = "id: invented\nstyle: annotation_driven\nprotocol: http\ndirection: inbound\n"
 _TINY = (
-    "id: tiny\ndeclaring_annotation: com.acme.di.Provides\nname_attrs: [named]\n"
-    "qualifier_annotation: com.acme.di.Named\nchannel_types: [com.acme.di.Pipe]\n"
+    "id: tiny\ndeclaring_annotation: com.acme.di.Provides\ninjection: candidates\n"
+    "name_attrs: [named]\nqualifier_annotation: com.acme.di.Named\n"
+    "primary_annotation: com.acme.di.Preferred\nchannel_types: [com.acme.di.Pipe]\n"
 )
 
 
@@ -40,8 +41,10 @@ def test_a_catalog_takes_the_bean_model_it_names(tmp_path: Path):
     assert catalog.bean_model == {
         "id": "tiny",
         "declaring_annotation": "com.acme.di.Provides",
+        "injection": "candidates",
         "name_attrs": ["named"],
         "qualifier_annotation": "com.acme.di.Named",
+        "primary_annotation": "com.acme.di.Preferred",
         "channel_types": ["com.acme.di.Pipe"],
     }
 
@@ -704,3 +707,129 @@ def test_made_by_on_an_outbound_annotation_catalog_loads(tmp_path: Path):
     [catalog] = YamlCatalogSource(tmp_path).load()
 
     assert catalog.matches["made_by"]["class_arg"] == 0
+
+
+# --- how a container matches a parameter to a recipe (spec 2026-11-05 di-recipe-hop §2c) ---
+
+_EXACT = (
+    "declaring_annotation: com.acme.di.Provides\ninjection: exact_key\n"
+    "qualifier_meta_annotations: [com.acme.di.Qualifier]\n"
+)
+
+
+def test_every_bean_model_reaches_every_catalog_whatever_model_it_names(tmp_path: Path):
+    """D02 §1c: which value a container-filled parameter receives is a fact about the
+    module's container, not about the catalog that asks. So every catalog carries every
+    model by id, also a catalog that names no model or names another one."""
+    _write_model(tmp_path)
+    _model_with_id(tmp_path, "exact", _EXACT)
+    (tmp_path / "invented-bare.yml").write_text(_HEADER + "matches: {}\n", encoding="utf-8")
+    (tmp_path / "invented-tiny.yml").write_text(
+        _HEADER.replace("invented", "named") + "bean_model: tiny\nmatches: {}\n",
+        encoding="utf-8",
+    )
+
+    source = YamlCatalogSource(tmp_path)
+    bare, named = source.load()
+
+    assert sorted(source.bean_models()) == ["exact", "tiny"]
+    assert bare.bean_models == named.bean_models == source.bean_models()
+    assert bare.bean_model == {}
+    assert named.bean_model["id"] == "tiny"
+
+
+def test_the_shipped_dagger_model_loads_with_its_words():
+    """The Dagger model (spec §2a): `@Provides` declares a recipe, the key is exact, the
+    qualifiers are JSR-330's, a multibinding contribution is never a recipe for `T`, and an
+    `@Inject` constructor's parameters are container-filled. The Spring model keeps its
+    ladder under `candidates`."""
+    models = YamlCatalogSource(catalogs_dir()).bean_models()
+    dagger = models["dagger"]
+
+    assert dagger["declaring_annotation"] == "dagger.Provides"
+    assert dagger["injection"] == "exact_key"
+    assert set(dagger["qualifier_meta_annotations"]) == {
+        "javax.inject.Qualifier",
+        "jakarta.inject.Qualifier",
+    }
+    assert set(dagger["multibinding_annotations"]) == {
+        "dagger.multibindings.IntoSet",
+        "dagger.multibindings.IntoMap",
+        "dagger.multibindings.ElementsIntoSet",
+    }
+    assert set(dagger["injecting_annotations"]) == {"javax.inject.Inject", "jakarta.inject.Inject"}
+    assert models["spring"]["injection"] == "candidates"
+
+
+def test_an_exact_key_model_needs_no_ladder_keys(tmp_path: Path):
+    """The ladder keys (`qualifier_annotation`, `name_attrs`, `primary_annotation`) are
+    Spring's rungs. Dagger has no name rung and no primary, so `exact_key` loads without
+    them."""
+    _model_with_id(tmp_path, "exact", _EXACT)
+
+    assert YamlCatalogSource(tmp_path).bean_models()["exact"]["injection"] == "exact_key"
+
+
+@pytest.mark.parametrize(
+    ("body", "complaint"),
+    [
+        (
+            "declaring_annotation: com.acme.di.Provides\ninjection: by_type\n",
+            "`injection` is `exact_key` or `candidates`",
+        ),
+        (
+            "declaring_annotation: com.acme.di.Provides\n",
+            "`injection` is `exact_key` or `candidates`",
+        ),
+        (
+            "injection: exact_key\nqualifier_meta_annotations: [com.acme.Q]\n",
+            "`declaring_annotation`",
+        ),
+        (
+            (
+                "declaring_annotation: com.acme.di.Provides\ninjection: candidates\n"
+                "name_attrs: [named]\nprimary_annotation: com.acme.di.Preferred\n"
+            ),
+            "`qualifier_annotation`",
+        ),
+        (
+            (
+                "declaring_annotation: com.acme.di.Provides\ninjection: candidates\n"
+                "qualifier_annotation: com.acme.di.Named\nprimary_annotation: com.acme.di.P\n"
+            ),
+            "`name_attrs`",
+        ),
+        (
+            (
+                "declaring_annotation: com.acme.di.Provides\ninjection: candidates\n"
+                "qualifier_annotation: com.acme.di.Named\nname_attrs: [named]\n"
+            ),
+            "`primary_annotation`",
+        ),
+        ("declaring_annotation: com.acme.di.Provides\ninjection: exact_key\n", "`qualifier_meta"),
+        (_EXACT + "multibinding_annotations: com.acme.di.IntoSet\n", "`multibinding_annotations`"),
+        (_EXACT + "multibinding_annotations: []\n", "`multibinding_annotations`"),
+        (_EXACT + "injecting_annotations: [com.acme.di.Inject, 7]\n", "`injecting_annotations`"),
+    ],
+)
+@pytest.mark.pins("bean-models.an-UNKNOWN-injection-word-is-refused-at-LOAD")
+@pytest.mark.pins("bean-models.CANDIDATES-needs-the-LADDER-keys-at-LOAD")
+def test_a_malformed_injection_vocabulary_is_refused_naming_the_model_file(
+    tmp_path: Path, body: str, complaint: str
+):
+    """The value walk reads every model (D02 §1c), so a typo here would match parameters to
+    recipes by a rule nobody wrote, or by no rule: refused where the file is known."""
+    _model_with_id(tmp_path, "tiny", body)
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).bean_models()
+
+    assert "tiny.yml" in str(raised.value)
+    assert complaint in str(raised.value)
+
+
+def _model_with_id(directory: Path, model_id: str, body: str) -> None:
+    (directory / "bean-models").mkdir(exist_ok=True)
+    (directory / "bean-models" / f"{model_id}.yml").write_text(
+        f"id: {model_id}\n" + body, encoding="utf-8"
+    )

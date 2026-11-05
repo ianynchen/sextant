@@ -67,6 +67,13 @@ class YamlCatalogSource:
                 _check_bean_model(raw, path)
         return models
 
+    def bean_models(self) -> dict[str, dict[str, Any]]:
+        """Every bean model this source holds, by id (D02 §1c). The value walk reads all of
+        them, whatever model a catalog names: which value a container-filled parameter
+        receives is a fact about the module's container, not about the catalog that asks
+        (spec 2026-11-05 di-recipe-hop §2). Each model is checked as `_models` checks it."""
+        return self._models("bean-models")
+
     def server_model(self) -> list[dict[str, Any]]:
         """The SERVER's own path prefix, as configuration keys per framework and version
         (`server-models/*.yml`, spec 2026-10-18 §3).
@@ -541,6 +548,8 @@ class YamlCatalogSource:
                     # D02 §1c — the bean model's mapping, resolved above the
                     # way `shape_model` is; `{}` for a catalog naming none.
                     bean_model=_bean_model_of(raw, bean_models, path),
+                    # D02 §1c — every bean model, the same mapping on every catalog.
+                    bean_models=bean_models,
                     # D02 §1f — the source's own identity table, built above.
                     value_model=identities,
                     not_hand_offs=not_hand_offs,
@@ -1201,6 +1210,7 @@ def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
                 f"{where}: `qualifier_meta_annotations` must be a non-empty list of annotation "
                 f"names, got {markers!r}"
             )
+    _check_injection(raw, where)
     # Interfaces the framework registers and implements at run time (CP-46): a malformed entry
     # would leave every such interface without a route, its calls reading as unanswered.
     if "interface_registrations" in raw:
@@ -1224,6 +1234,64 @@ def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
                 f"{where}: `interface_registrations` must be a non-empty list of entries, each "
                 "with `supertypes` (a non-empty list of type names), optional `annotation` and "
                 f"`excluded_by` (annotation names) and a `by:` probe, got {registrations!r}"
+            )
+
+
+_INJECTIONS = ("exact_key", "candidates")
+
+# Spring's rungs (D02 §1c): `candidates` weighs the candidates by them, `exact_key` reads none.
+_LADDER_KEYS = ("qualifier_annotation", "name_attrs", "primary_annotation")
+
+
+def _check_injection(raw: dict[str, Any], where: str) -> None:
+    """Refuses a malformed recipe vocabulary of a bean model (spec 2026-11-05 di-recipe-hop
+    §2c). The value walk reads every model, so a model that declares recipes must say how
+    the container matches a parameter to one: `exact_key` (Dagger's qualifier and full type)
+    or `candidates` (Spring's ladder, whose keys it then needs). A model with no
+    `declaring_annotation` declares no recipe and says nothing about injection."""
+    if "declaring_annotation" not in raw:
+        if "injection" in raw:
+            raise CatalogError(
+                f"{where}: `injection` needs the `declaring_annotation` that marks a recipe"
+            )
+        return
+    injection = raw.get("injection")
+    if injection not in _INJECTIONS:
+        raise CatalogError(
+            f"{where}: a model with a `declaring_annotation` declares how a parameter is "
+            f"matched to a recipe; `injection` is `exact_key` or `candidates`, "
+            f"got {injection!r}"
+        )
+    if injection == "candidates":
+        for key in _LADDER_KEYS:
+            value = raw.get(key)
+            if key == "name_attrs":
+                valid = isinstance(value, list) and all(isinstance(v, str) and v for v in value)
+            else:
+                valid = isinstance(value, str) and bool(value)
+            if not valid:
+                raise CatalogError(
+                    f"{where}: `injection: candidates` weighs candidates by the ladder; "
+                    f"`{key}` is missing or malformed, got {value!r}"
+                )
+    elif not raw.get("qualifier_meta_annotations"):
+        # Without it no annotation is a qualifier, and every qualified recipe would match an
+        # unqualified parameter: a false value for each.
+        raise CatalogError(
+            f"{where}: `injection: exact_key` compares qualifiers; `qualifier_meta_annotations` "
+            "must name the annotations that make one"
+        )
+    for key in ("multibinding_annotations", "injecting_annotations"):
+        if key not in raw:
+            continue
+        names = raw[key]
+        if (
+            not isinstance(names, list)
+            or not names
+            or not all(isinstance(name, str) and name for name in names)
+        ):
+            raise CatalogError(
+                f"{where}: `{key}` must be a non-empty list of annotation names, got {names!r}"
             )
 
 

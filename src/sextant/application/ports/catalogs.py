@@ -267,6 +267,12 @@ class Catalog:
     # annotation, the channel types), so no container's spellings reach this
     # port or the resolve layer as anything but data.
     bean_model: dict[str, Any] = field(default_factory=dict)
+    # D02 §1c (spec 2026-11-05 di-recipe-hop §2): EVERY bean model the source holds, by id. The
+    # value walk reads all of them, whatever model this catalog names: which value a
+    # container-filled parameter receives is a fact about the module's container, not about
+    # the catalog that asks. The source reads it once and hands every catalog the same
+    # mapping, as `value_model` below.
+    bean_models: dict[str, dict[str, Any]] = field(default_factory=dict)
     # D02 §1f (spec 2026-09-22 §2): every PRODUCING call this source knows the identity
     # of — which of its arguments carries the value its result stands for. The walk that
     # answers *what is this value* finds the producing call on its own and is then stuck

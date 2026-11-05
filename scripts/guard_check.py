@@ -8394,6 +8394,31 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "bean-models.an-UNKNOWN-injection-word-is-refused-at-LOAD": Guard(
+        what="a bean model declaring recipes with an `injection` outside `exact_key` and "
+        "`candidates`, or with none, is refused at load",
+        why="spec 2026-11-05 di-recipe-hop §2c: the value walk reads every model, and a typo "
+        "would match container-filled parameters to recipes by a rule nobody wrote",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find="    if injection not in _INJECTIONS:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "bean-models.CANDIDATES-needs-the-LADDER-keys-at-LOAD": Guard(
+        what="a `candidates` bean model missing one of Spring's ladder keys is refused at load",
+        why="spec 2026-11-05 di-recipe-hop §2c: without them the ladder fails at resolve time "
+        "instead, far from the file that is wrong",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find='    if injection == "candidates":\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "dispatch-hops.a-dispatch-catalog-with-NO-PROTOCOL-is-refused-at-LOAD": Guard(
         what="a catalog declaring `dispatch` and no `protocol` is refused at load",
         why="final review m-12: every hop and key row is written under the protocol; refused "
