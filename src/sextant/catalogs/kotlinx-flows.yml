@@ -9,12 +9,13 @@ protocol: in_process
 direction: inbound
 # In-process dispatch keyed by the flow OBJECT: a value emitted on a hot flow reaches every
 # collector of that same flow, whatever the value's class (`match: all`, a broadcast).
-dispatch: { key: object, match: all, mechanism: kotlinx-flows }
+# One mechanism with `kotlinx-channels.yml` (see there).
+dispatch: { key: object, match: all, mechanism: kotlinx-coroutines }
 
 detect:
   coordinates: ["org.jetbrains.kotlinx:kotlinx-coroutines-core", "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm"]
 
-# CP-59 findings 17, 18 and 20, as `kotlinx-channels.yml`.
+# CP-59 findings 17, 18, 20, 22 and 23, as `kotlinx-channels.yml`.
 measured:
   - { artifact: org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm, versions: ["1.11.0"],
       identity: reported, by: scripts/probes/cp59_dispatch.md }
@@ -54,3 +55,29 @@ matches:
         handler: lambda_arg, handler_arg: 0, handler_method: emit, handler_descriptor: *emit }
     - { owner: kotlinx.coroutines.flow.Flow, method: collect, descriptor: *collect, object: receiver,
         handler: lambda_arg, handler_arg: 0, handler_method: emit, handler_descriptor: *emit }
+  # Terminal receives (finding 23), static extensions on `FlowKt` handed the flow as argument 0:
+  # `first`, `firstOrNull` (each with and without a predicate, which picks the value but does
+  # not handle it), `single` and `toList` hand the value(s) to the method making the call;
+  # `toList()` with its default list is the compiler's `toList$default` bridge, which kotlinc
+  # writes at the call site of a library function. `collectLatest { }` hands each value to its
+  # block, a compiled suspend lambda (the `lambda` argument kind, its body the handler).
+    - { owner: &flowkt kotlinx.coroutines.flow.FlowKt, method: first, descriptor: "(Lkotlinx/coroutines/flow/Flow;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", object: arg0, handler: enclosing }
+    - { owner: *flowkt, method: first, descriptor: "(Lkotlinx/coroutines/flow/Flow;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", object: arg0, handler: enclosing }
+    - { owner: *flowkt, method: firstOrNull, descriptor: "(Lkotlinx/coroutines/flow/Flow;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", object: arg0, handler: enclosing }
+    - { owner: *flowkt, method: firstOrNull, descriptor: "(Lkotlinx/coroutines/flow/Flow;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", object: arg0, handler: enclosing }
+    - { owner: *flowkt, method: single, descriptor: "(Lkotlinx/coroutines/flow/Flow;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", object: arg0, handler: enclosing }
+    - { owner: *flowkt, method: toList, descriptor: "(Lkotlinx/coroutines/flow/Flow;Ljava/util/List;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", object: arg0, handler: enclosing }
+    - { owner: *flowkt, method: toList$default, descriptor: "(Lkotlinx/coroutines/flow/Flow;Ljava/util/List;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;", object: arg0, handler: enclosing }
+    - { owner: *flowkt, method: collectLatest, descriptor: "(Lkotlinx/coroutines/flow/Flow;Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;",
+        object: arg0, handler: lambda_arg, handler_arg: 1, handler_method: invoke,
+        handler_descriptor: "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;" }
+  # Views (finding 22): each hands back a wrapper around the object it is given as argument 0
+  # (`ReadonlySharedFlow(this)`, `ReadonlyStateFlow(this)`, `ChannelAsFlow(this, …)`), so a value
+  # sent on the object reaches a receive on the view: the object walk passes through to it.
+  # Operators that make a NEW flow from the values (`map`, `filter`, `onEach`) are not views;
+  # their collectors match no send (a stated bound: missing, never false).
+  dispatch_views:
+    - { owner: *flowkt, method: asSharedFlow, descriptor: "(Lkotlinx/coroutines/flow/MutableSharedFlow;)Lkotlinx/coroutines/flow/SharedFlow;", object: arg0 }
+    - { owner: *flowkt, method: asStateFlow, descriptor: "(Lkotlinx/coroutines/flow/MutableStateFlow;)Lkotlinx/coroutines/flow/StateFlow;", object: arg0 }
+    - { owner: *flowkt, method: receiveAsFlow, descriptor: "(Lkotlinx/coroutines/channels/ReceiveChannel;)Lkotlinx/coroutines/flow/Flow;", object: arg0 }
+    - { owner: *flowkt, method: consumeAsFlow, descriptor: "(Lkotlinx/coroutines/channels/ReceiveChannel;)Lkotlinx/coroutines/flow/Flow;", object: arg0 }

@@ -65,7 +65,7 @@ Under `dispatch: {key: object}` the code that receives a value is the code that 
 same channel object it was handed to, whatever the value's class. Each call site of a declared
 receive is a group of its own, `<caller>#<ordinal>`, at position 0, its handler the method
 making the call (`handler: enclosing`) or the function it hands the value to (`handler:
-lambda_arg`, a flow's `collect { }`: `_function_handler`). Its key is the object it is called on (`object:
+lambda_arg`, a receive given a function: `_function_handler`). Its key is the object it is called on (`object:
 receiver`), followed to the call that MADE it (`ObjectKeys`): two sites act on one object
 exactly when their receivers reach the same such call. One row per distinct object the walk
 reaches; one row with `key_object` NULL where it reaches none, which matches nothing.
@@ -134,6 +134,8 @@ _RECEIVER_OBJECT = "receiver"
 # constant of its own type (the shared instance of a closure capturing nothing).
 _INSTANCE = "instance"
 _CONSTANT = "enum"
+# The argument kind a compiled lambda arrives as, naming its body method (D00 §5a).
+_LAMBDA = "lambda"
 
 
 def record_dispatch_registrations(workspace: Workspace, catalogs: list[Catalog]) -> None:
@@ -442,8 +444,7 @@ def _receive_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dict[str, 
     reaches (the receiver, or `argN`; `ObjectKeys`), its handler the method making the call. One row with `key_object` NULL
     where no object was read: it matches nothing, never every send.
 
-    A receive handing its value to a function argument (`handler: lambda_arg`, `collect {
-    }`) is handled by that function (`_function_handler`), never by its enclosing method,
+    A receive handing its value to a function argument (`handler: lambda_arg`) is handled by that function (`_function_handler`), never by its enclosing method,
     which is not the code that handles the value; one naming no method of it is refused."""
     if not catalog.dispatch_receives:
         return
@@ -487,7 +488,9 @@ def _function_handler(
     workspace: Workspace, site: Mapping[str, Any], receive: Mapping[str, Any]
 ) -> str | None:
     """The method handling the value a `handler: lambda_arg` receive hands to its function
-    argument: the argument at `handler_arg` is an object of a module class (a new instance, or
+    argument. A compiled lambda (the `lambda` kind, a body method the facts name) is handled by
+    that body, read as every handler argument is (`combinator._handler_of`). Otherwise the
+    argument at `handler_arg` is an object of a module class (a new instance, or
     the one shared instance of a closure that captures nothing, which the compiler reads as a
     constant of its own type), and the library calls `handler_method` `handler_descriptor` on
     it. That method is joined on the class by name and the declared, erased descriptor, and
@@ -496,8 +499,13 @@ def _function_handler(
     `_implementation_rows` does). None where the argument is any other kind (a parameter, a
     library object) or its class does not itself declare the method: the handler is not
     read, never guessed."""
-    argument = _arg_at(site["arguments"], int(receive["handler_arg"]))
+    position = int(receive["handler_arg"])
+    argument = _arg_at(site["arguments"], position)
     kind = None if argument is None else argument.get("kind")
+    if kind == _LAMBDA:
+        return _handler_of(
+            site["arguments"], frozenset({position}), workspace.once(_handler_symbols)
+        )
     if kind == _INSTANCE:
         named: str | None = bare_descriptor(str(argument["symbol"]))  # type: ignore[index]
     elif kind == _CONSTANT:
@@ -534,16 +542,25 @@ class ObjectKeys:
 
     **A null check is not where an object is made.** A call the catalogs declare takes its
     value without handing it off (`not_hand_offs`, `value-models/compiler-null-checks.yml`:
-    `Objects.requireNonNull`, a compiler's own null checks) and that returns a reference hands
-    back one of its arguments of that same type, so `this.q = Objects.requireNonNull(q)` is
-    followed on into those arguments rather than ending at the check (a structural rule over
-    the descriptor, never a model of one method). A null check no catalog declares (Guava's
+    `Objects.requireNonNull`, a compiler's own null checks) and that returns a reference is
+    followed on into its arguments of the type it returns, rather than ending at the call (a
+    structural rule over the descriptor, never a model of one method). For a check returning
+    its argument (`this.q = Objects.requireNonNull(q)`) that argument is the object. One entry
+    returns null instead: the compiler's write of null into a spilled slot it read the value
+    from (`nullOutSpilledVariable`, CP-59 finding 21). Followed into its argument, the walk
+    comes back to that slot, a cycle adding no object, so it is never named as the object's
+    maker either; it adds no object it was not already given.
+
+    **A view is the object it views.** A call the catalog declares under `dispatch_views`
+    (CP-59 finding 22: a read-only wrapper of a flow, a flow reading a channel) hands back
+    another reference to the object at its declared position, so the walk continues into that
+    position rather than ending at the call. Catalog data, so the walk names no library type. A null check no catalog declares (Guava's
     `Preconditions.checkNotNull`) still ends the walk: one queue becomes two keys, a missing
     hop.
 
     **A path that comes back to where it started adds no object** (`values.CYCLE`): a field
-    copied into itself — a coroutine lambda's `create` handing `this.$ch` to the fresh instance
-    the coroutine runs, a copy constructor — carries only the values the other paths reaching
+    copied back into itself — a compiled closure copying its captured value into a fresh
+    instance of its own class, a copy constructor — carries only the values the other paths reaching
     that field bring, so it is skipped rather than read as an object not read. Where every path
     is one, no object was read.
 
@@ -562,6 +579,16 @@ class ObjectKeys:
             (built, _CONSTRUCTOR) for built in self._index.constructed
         )
         self._keys: dict[tuple[str, int, int | str], tuple[str | None, ...]] = {}
+        # The catalog's declared views, by owner, name and parameter types: the position of
+        # the object each hands back a view of.
+        self._views: dict[tuple[str, str, str], int | str] = {
+            (view["owner"], view["method"], parameter_types(view["descriptor"])): (
+                RECEIVER
+                if view["object"] == _RECEIVER_OBJECT
+                else int(str(view["object"])[len("arg") :])
+            )
+            for view in catalog.dispatch_views
+        }
 
     def of(self, site: Mapping[str, Any], slot: int | str = RECEIVER) -> tuple[str | None, ...]:
         """Each object at `slot` of `site` (its receiver by default) can be, once each, in the
@@ -585,14 +612,23 @@ class ObjectKeys:
                 # Back at a null check this walk passed through: a cycle, adding no object.
                 continue
             made = self._index.sites.get(at)
-            through = () if made is None else self._checked_arguments(made)
+            through = () if made is None else self._viewed(made) or self._checked_arguments(made)
             if made is None or not through:
                 yield f"{producer.caller}#{producer.ordinal}"
                 continue
             for argument in through:
                 yield from self._ends(made, argument, passed | {at})
 
-    def _checked_arguments(self, site: Mapping[str, Any]) -> tuple[int, ...]:
+    def _viewed(self, site: Mapping[str, Any]) -> tuple[int | str, ...]:
+        """The position of the object a declared view call hands back a view of (class
+        docstring), or nothing for any other call."""
+        recorded = site.get("descriptor")
+        if recorded is None:
+            return ()
+        key = (str(site.get("owner")), str(site["name"]), parameter_types(str(recorded)))
+        return (self._views[key],) if key in self._views else ()
+
+    def _checked_arguments(self, site: Mapping[str, Any]) -> tuple[int | str, ...]:
         """The arguments a declared null check hands back (class docstring): where `site`
         calls a `not_hand_offs` owner or method and returns a reference, each argument whose
         declared type is the type it returns. Empty for any other call."""

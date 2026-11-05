@@ -22,8 +22,9 @@ from sextant.domain.symbols import bare_descriptor
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 _ROOT = FIXTURES / "orders-kotlin-channels"
-_CHANNELS = "kotlinx-channels"
-_FLOWS = "kotlinx-flows"
+# Channels and flows are one mechanism: a send reaches a receive exactly when both act on
+# one object, whichever catalog declares each.
+_MECHANISM = "kotlinx-coroutines"
 
 
 @pytest.fixture(scope="module")
@@ -95,7 +96,7 @@ def test_a_for_loop_over_a_channel_receives(tables):
     `hasNext`/`next` on the iterator it returns: the `iterator()` call is made on the channel,
     so the loop is a receive keyed by `orders`, whose producer is the `Channel(...)` factory
     call in `Pipeline`'s constructor. `submit`'s `send` reaches it."""
-    [made] = _keys_of(tables, _CHANNELS, "Pipeline#drain")
+    [made] = _keys_of(tables, _MECHANISM, "Pipeline#drain")
     assert _short(str(made).rsplit("#", 1)[0]) == "Pipeline#<init>"
     assert ("in_process", "Pipeline#drain") in _hops_from(tables, "Pipeline#submit")
     assert _paths_from(tables, "Pipeline#submit") == {made}
@@ -125,8 +126,9 @@ def test_two_channels_of_one_type_stay_apart(tables):
 
 
 def test_a_channel_held_in_a_data_class_links(tables):
-    """`examples/playport`'s shape: `Client(Channel(capacity = 16))`, the channel read through
-    the data class's property, sent to by `broadcast` (`trySend` over every client) and looped
+    """`examples/playport`'s `WsClient(Channel(capacity = …))` made a DATA class:
+    `Client(Channel(capacity = 16))`, the channel read through the property (playport's own
+    `WsClient` is a plain class, whose one field writer is its constructor), sent to by `broadcast` (`trySend` over every client) and looped
     over in a coroutine that captured the client. The property's field has a second writer, the
     data class's generated `copy(channel)`, which nothing in the module calls: on that path the
     channel is a parameter nobody passes, so the send also keeps one stop saying the object
@@ -172,7 +174,7 @@ def test_a_collector_is_handled_by_its_lambda_body(tables, analyzed: Path):
     [row] = [
         row
         for row in tables["registrations"]
-        if row["mechanism"] == _FLOWS and _short(row["handler"]) == "Bus$mail$2#emit"
+        if row["mechanism"] == _MECHANISM and _short(row["handler"]) == "Bus$mail$2#emit"
     ]
     workspace = DuckDbWorkspace(analyzed)
     try:
@@ -199,9 +201,14 @@ def test_a_state_flow_value_set_is_a_send(tables):
 
 
 def test_a_flow_send_never_reaches_a_channel_receive(tables):
-    """Two mechanisms: a flow's emit reaches only collectors, a channel's send only receives."""
-    receivers = {handler for _, handler in _hops_from(tables, "Bus#publish")}
-    assert not any(str(handler).startswith("Pipeline") for handler in receivers)
+    """Each send reaches only the receives on its own object: `Bus.publish` reaches the flow's
+    collectors and no channel receive, and `Pipeline.submit` reaches the channel's receives and
+    no collector. Both sets are asserted non-empty, so the test fails where nothing is read."""
+    flow = {handler for _, handler in _hops_from(tables, "Bus#publish")}
+    channel = {handler for _, handler in _hops_from(tables, "Pipeline#submit")}
+    assert flow and channel
+    assert not any(str(handler).startswith("Pipeline") for handler in flow)
+    assert not any(str(handler).endswith("#emit") for handler in channel)
 
 
 @pytest.mark.pins("dispatch-objects.a-CYCLE-adds-no-object")
@@ -232,7 +239,7 @@ def test_a_producer_coroutines_send_is_a_stop(tables):
     that same slot: a cycle). It is not where the scope was made, so no path names it."""
     assert _hops_from(tables, "Numbers$numbers$1#invokeSuspend") == {("in_process", None)}
     assert _paths_from(tables, "Numbers$numbers$1#invokeSuspend") == {None}
-    [made] = _keys_of(tables, _CHANNELS, "Numbers#sum")
+    [made] = _keys_of(tables, _MECHANISM, "Numbers#sum")
     assert _short(str(made).rsplit("#", 1)[0]) == "Numbers#numbers"
 
 
@@ -275,3 +282,52 @@ def test_a_cold_flows_emit_is_no_send(tables):
     assert not any(
         str(_short(row["handler"])).startswith("Ticker") for row in tables["registrations"]
     )
+
+
+@pytest.mark.pins("dispatch-objects.a-VIEW-hands-back-the-SAME-object")
+def test_a_collector_of_a_read_only_view_receives(tables):
+    """The read-only view idiom: `private val _items = MutableSharedFlow(); val items =
+    _items.asSharedFlow()`, collected through `items` by another class. `asSharedFlow()` hands
+    back a view of the same flow (a declared `dispatch_views` call), so `push`'s emit on
+    `_items` reaches `FeedReader.read`'s collector, keyed by the flow `Feed`'s constructor
+    made."""
+    assert _hops_from(tables, "Feed#push") == {("in_process", "FeedReader$read$2#emit")}
+    [made] = _keys_of(tables, _MECHANISM, "FeedReader$read$2#emit")
+    assert _short(str(made).rsplit("#", 1)[0]) == "Feed#<init>"
+
+
+def test_an_emit_on_one_flow_never_reaches_the_view_of_another(tables):
+    """`Feed` has two flows of one type, each with its own view: `alert` reaches only the
+    collector of `alerts`, `push` only the collector of `items`."""
+    assert _hops_from(tables, "Feed#alert") == {("in_process", "FeedReader$watchAlerts$2#emit")}
+    assert _paths_from(tables, "Feed#alert") != _paths_from(tables, "Feed#push")
+
+
+def test_a_state_flow_collected_through_its_view_receives(tables):
+    """`val level = _level.asStateFlow()`: `set`'s `value =` reaches `show`'s collector."""
+    assert _hops_from(tables, "Gauge#set") == {("in_process", "Gauge$show$2#emit")}
+
+
+def test_a_channel_read_as_a_flow_receives(tables):
+    """`letters.receiveAsFlow().collect { }` and `letters.consumeAsFlow().collect { }`: each
+    view hands back the channel, so `post`'s send reaches both collectors (channels and flows
+    are one mechanism: what decides is the object)."""
+    assert _hops_from(tables, "Inbox#post") == {
+        ("in_process", "Inbox$stream$2#emit"),
+        ("in_process", "Inbox$drainAll$2#emit"),
+    }
+
+
+@pytest.mark.pins("dispatch-objects.a-LAMBDA-ARG-that-is-a-COMPILED-lambda-names-its-body")
+def test_terminal_receives_take_from_the_flow(tables):
+    """`first()`, `firstOrNull { }`, `single()` and `toList()` take values off the flow and
+    hand them to the method making the call; `collectLatest { }` hands each to its block, a
+    compiled suspend lambda whose body is its `invokeSuspend`. `update`'s emit reaches all
+    five."""
+    assert _hops_from(tables, "Snapshot#update") == {
+        ("in_process", "Snapshot#current"),
+        ("in_process", "Snapshot#matching"),
+        ("in_process", "Snapshot#only"),
+        ("in_process", "Snapshot#all"),
+        ("in_process", "Snapshot$follow$2#invokeSuspend"),
+    }

@@ -149,9 +149,16 @@ No `message_*` word remains. No word names a framework.
    20; not one of kotlinc's lambda base classes, so it carries no `lambda_body`), so a receive
    names the argument (`handler_arg`) and the method the library calls on it (`handler_method`,
    `handler_descriptor`), and the handler is that method on the argument's class, past the
-   compiler's bridge. **Stated bounds:** a flow read through an operator (`asSharedFlow()`, `map`,
-   `consumeAsFlow()`) is the operator's result, another key; terminal operators other than
-   `collect` (`first()`, `collectLatest`, `launchIn`) are not receives; a channel in a local or
+   compiler's bridge. **Fix round 1 (rulings 1-2):** a call handing back a view of the same
+   object is declared as catalog data (`dispatch_views: [{owner, method, descriptor, object}]`;
+   `returns_receiver` is a chain-step word the object walk never reads, so it could not be
+   reused) and passed through by `ObjectKeys`: `asSharedFlow`, `asStateFlow`, `receiveAsFlow`,
+   `consumeAsFlow` (finding 22). The terminal receives `first`, `firstOrNull`, `single`, `toList`
+   (enclosing) and `collectLatest` (`lambda_arg`, its block a compiled lambda read as its body)
+   are declared (finding 23). The two catalogs share one mechanism, `kotlinx-coroutines`, because
+   a channel read as a flow is collected by the flows catalog's receives. **Stated bounds:** a
+   flow made by an operator (`map`, `filter`, `onEach`) is the operator's result, another key;
+   `launchIn` and other terminal operators are not receives; a channel in a local or
    parameter of a `suspend` function used after a suspension point is a receiver the facts do not
    name (merged with its spilled slot), so its send is a stop (each a missing hop, never a false
    one). A data class's generated `copy(channel)` is a second writer of its field from a parameter

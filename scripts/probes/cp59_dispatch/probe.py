@@ -555,7 +555,14 @@ KOTLIN_CLASSES = (
     "Mailer",
     "Status",
     "Ticker",
+    "Feed",
+    "Gauge",
+    "Inbox",
+    "Snapshot",
 )
+# The view calls (`dispatch_views`) and the terminal receives the flows catalog declares.
+VIEWS = ("asSharedFlow", "asStateFlow", "receiveAsFlow", "consumeAsFlow")
+TERMINALS = ("first", "firstOrNull", "single", "toList", "toList$default", "collectLatest")
 # kotlinc's `@Metadata` metadata version for Kotlin 2.4.x; a class file stating another aborts.
 EXPECTED_MV = "[2,4,0]"
 
@@ -629,6 +636,8 @@ def kotlin() -> None:
                 "nullOutSpilledVariable",
                 "getChannel",
                 "access$getOrders$p",
+                *VIEWS,
+                *TERMINALS,
             ):
                 for row in invokes(f"com.acme.kc.{found}", name, cp=cp):
                     print(f"- `{found}`: {row}")
@@ -649,6 +658,26 @@ def kotlin() -> None:
         "kotlin.coroutines.jvm.internal.SpillingKt", "nullOutSpilledVariable(", r"^\s+\d+:", cp
     ):
         print(f"- `SpillingKt.nullOutSpilledVariable` `{re.sub(r'^\d+: ', '', line)}`")
+    print()
+    print("### 22. The views: what each call hands back\n")
+    for name in VIEWS:
+        for row in dict.fromkeys(invokes("probe.OwnersKt", name, cp=OWNERS_CLASSPATH)):
+            print(f"- {row}")
+    for owner, name in (
+        ("kotlinx.coroutines.flow.FlowKt__ShareKt", "asSharedFlow("),
+        ("kotlinx.coroutines.flow.FlowKt__ShareKt", "asStateFlow("),
+        ("kotlinx.coroutines.flow.FlowKt__ChannelsKt", " receiveAsFlow("),
+        ("kotlinx.coroutines.flow.FlowKt__ChannelsKt", " consumeAsFlow("),
+    ):
+        body = lines_matching(owner, name, r"^\s+\d+: (aload_0|new|invokespecial|areturn)", cp)
+        steps = "; ".join(re.sub(r"^\d+: ", "", line) for line in body)
+        print(f"- `{name.strip()}…)` body: `{steps}`")
+    print()
+    print("### 23. The terminal receives\n")
+    for name in TERMINALS:
+        for row in dict.fromkeys(invokes("probe.OwnersKt", name, cp=OWNERS_CLASSPATH)):
+            print(f"- {row}")
+    print(f"- {header('com.acme.kc.Snapshot$follow$2', cp=cp)}")
 
 
 main()

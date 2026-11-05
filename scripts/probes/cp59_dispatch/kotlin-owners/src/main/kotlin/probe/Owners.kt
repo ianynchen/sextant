@@ -10,6 +10,15 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.consumeAsFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.single
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.flow.update
 
 // Each call the catalogs declare (and the near forms beside them), through each owner type a
@@ -58,4 +67,29 @@ suspend fun stateFlow(f: StateFlow<Any>) {
 
 suspend fun flow(f: Flow<Any>) {
     f.collect { println(it) }
+}
+
+// Views handing back the same object (CP-59 finding 22) and the terminal receives (finding 23).
+// One function each: a shared flow's `collect` never returns, so code after it is dead.
+suspend fun sharedView(s: MutableSharedFlow<Any>) {
+    s.asSharedFlow().collect { println(it) }
+}
+
+suspend fun stateView(t: MutableStateFlow<Any>) {
+    t.asStateFlow().collect { println(it) }
+}
+
+suspend fun receiveView(c: Channel<Any>) {
+    c.receiveAsFlow().collect { println(it) }
+}
+
+suspend fun consumeView(c: Channel<Any>) {
+    c.consumeAsFlow().collect { println(it) }
+}
+
+suspend fun terminals(f: Flow<Any>) {
+    f.first(); f.first { it == 1 }
+    f.firstOrNull(); f.firstOrNull { it == 1 }
+    f.single(); f.toList(); f.toList(ArrayList())
+    f.collectLatest { println(it) }
 }

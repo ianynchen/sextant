@@ -555,6 +555,7 @@ class YamlCatalogSource:
                     dispatch_registrations=_dispatch_registrations(raw["matches"], path),
                     dispatch_sends=_dispatch_sends(raw["matches"], path),
                     dispatch_receives=_dispatch_receives(raw["matches"], path),
+                    dispatch_views=_dispatch_views(raw["matches"], path),
                     dispatch_implementations=_dispatch_implementations(raw["matches"], path),
                 )
             )
@@ -1727,17 +1728,7 @@ def _dispatch_receives(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
         )
         if unknown:
             raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
-        taken_from = entry.get("object")
-        arity = len(descriptor_slots(str(entry["descriptor"]))[0])
-        if taken_from != _RECEIVER and not (
-            isinstance(taken_from, str)
-            and re.fullmatch(r"arg\d+", taken_from)
-            and int(taken_from[3:]) < arity
-        ):
-            raise CatalogError(
-                f"{where}: `{entry['method']}` declares `object: {taken_from}`; `object` is "
-                f"`{_RECEIVER}` or `argN`, an argument of `{entry['descriptor']}`"
-            )
+        _check_object(entry, where)
         if entry.get("handler") not in _RECEIVE_HANDLERS:
             raise CatalogError(
                 f"{where}: `{entry['method']}` declares `handler: {entry.get('handler')}`; "
@@ -1755,6 +1746,45 @@ def _dispatch_receives(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
             }
         )
     return tuple(entries)
+
+
+def _dispatch_views(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
+    """`matches.dispatch_views` (spec 2026-11-05 §3), checked and converted: each entry
+    `{owner, method, descriptor, object}`, a call that hands back a VIEW of the object at
+    `object` (`receiver`, or `argN`, an argument of the descriptor): another reference to the
+    same object, so the object walk passes through it to that object rather than ending at it.
+    The owner as a type symbol. Empty for a catalog declaring none."""
+    where, declared = _declared_calls(matches, "dispatch_views", path)
+    entries: list[dict[str, Any]] = []
+    for entry in declared:
+        unknown = sorted(set(entry) - {"owner", "method", "descriptor", "object"})
+        if unknown:
+            raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
+        _check_object(entry, where)
+        entries.append(
+            {
+                "owner": type_descriptor(str(entry["owner"])),
+                "method": str(entry["method"]),
+                "descriptor": str(entry["descriptor"]),
+                "object": str(entry["object"]),
+            }
+        )
+    return tuple(entries)
+
+
+def _check_object(entry: dict[str, Any], where: str) -> None:
+    """Refuses an `object` that is neither `receiver` nor an argument of the descriptor."""
+    taken_from = entry.get("object")
+    arity = len(descriptor_slots(str(entry["descriptor"]))[0])
+    if taken_from != _RECEIVER and not (
+        isinstance(taken_from, str)
+        and re.fullmatch(r"arg\d+", taken_from)
+        and int(taken_from[3:]) < arity
+    ):
+        raise CatalogError(
+            f"{where}: `{entry['method']}` declares `object: {taken_from}`; `object` is "
+            f"`{_RECEIVER}` or `argN`, an argument of `{entry['descriptor']}`"
+        )
 
 
 def _check_lambda_arg(entry: dict[str, Any], where: str) -> None:
@@ -1839,6 +1869,7 @@ _DISPATCH_BLOCKS = (
     "dispatch_registrations",
     "dispatch_sends",
     "dispatch_receives",
+    "dispatch_views",
     "dispatch_implementations",
 )
 # The blocks registering a handler by the value's class (or an equal value), never by an
@@ -1917,12 +1948,13 @@ def _dispatch(raw: dict[str, Any], path: Path) -> dict[str, str] | None:
             f"handlers by the value's class; an object key's handlers are `dispatch_receives` "
             f"(spec 2026-11-05 §2)"
         )
-    if declared["key"] != _OBJECT_KEY and "dispatch_receives" in blocks:
-        raise CatalogError(
-            f"{where}: `dispatch` declares `key: {declared['key']}` beside `dispatch_receives`, "
-            f"whose sites are keyed by the object they take from; it needs `key: object` "
-            f"(spec 2026-11-05 §2)"
-        )
+    for block in ("dispatch_receives", "dispatch_views"):
+        if declared["key"] != _OBJECT_KEY and block in blocks:
+            raise CatalogError(
+                f"{where}: `dispatch` declares `key: {declared['key']}` beside `{block}`, "
+                f"which is read by the object a call acts on; it needs `key: object` "
+                f"(spec 2026-11-05 §2)"
+            )
     return {"key": str(declared["key"]), "match": str(declared["match"]), "mechanism": mechanism}
 
 

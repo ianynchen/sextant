@@ -7448,6 +7448,33 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "dispatch-objects.a-VIEW-hands-back-the-SAME-object": Guard(
+        what="a declared view call is passed through to the object it views",
+        why="CP-59 finding 22: `val events = _events.asSharedFlow()` is the usual way a flow is "
+        "exposed; ending at the view, every collector of it is keyed by another object and no "
+        "emit reaches it",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="            through = () if made is None else self._viewed(made) or "
+                "self._checked_arguments(made)\n",
+                replace="            through = () if made is None else self._checked_arguments(made)"
+                "  # guard disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-LAMBDA-ARG-that-is-a-COMPILED-lambda-names-its-body": Guard(
+        what="a `lambda_arg` receive handed a compiled lambda is handled by the lambda's body",
+        why="CP-59 finding 23: `collectLatest { }`'s block is a compiled suspend lambda; unread, "
+        "every hop to it has no handler and the trace stops at the emit",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="    if kind == _LAMBDA:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "catalogs.a-LAMBDA-ARG-receive-NAMES-its-function": Guard(
         what="a `lambda_arg` receive names its argument and the method called on it, an "
         "`enclosing` one none",
@@ -7473,8 +7500,8 @@ GUARDS: dict[str, Guard] = {
             ),
             Edit(
                 path="sextant/ingress/catalogs/yaml_source.py",
-                find='    if declared["key"] != _OBJECT_KEY and "dispatch_receives" in blocks:\n',
-                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+                find='        if declared["key"] != _OBJECT_KEY and block in blocks:\n',
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

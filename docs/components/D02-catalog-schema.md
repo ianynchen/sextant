@@ -6378,7 +6378,8 @@ matches:
   the object argument holding the function; and `handler_method` with `handler_descriptor`, the
   method the library calls on it with each value, by name and the interface's erased
   descriptor (`emit`, `(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`).
-  The reader (`dispatch_registrations._function_handler`) takes the argument's class — a new
+  The reader (`dispatch_registrations._function_handler`) reads a compiled lambda (the
+  `lambda` argument kind) as its body, as every handler argument is read; otherwise it takes the argument's class — a new
   instance's, or, for a closure capturing nothing, the class of the shared instance the compiler
   reads as a constant of its own type — joins the method on it, and carries the compiler's bridge
   to the method it forwards to (`effective_annotations._synthesis_target`, as for
@@ -6387,7 +6388,15 @@ matches:
   method, which is not the code handling the value. A `lambda_arg` receive read without
   `handler_arg` and `handler_method` (a catalog built by hand) is refused where read. Users:
   `kotlinx-flows.yml`'s five `collect` entries (CP-59 finding 20).
-- **`dispatch: {key: object}`** pairs with `dispatch_sends` and `dispatch_receives` only: the
+- **`dispatch_views`** entries are `{owner, method, descriptor, object: receiver | argN}`,
+  checked at load (`yaml_source._dispatch_views`; read only under `key: object`): a call handing
+  back a VIEW of the object at `object` — another reference to the same object (a read-only
+  wrapper, a flow reading a channel) — which `ObjectKeys` passes through to that object instead
+  of ending at it. A call making a new object from the values (a mapping operator) is not one.
+  First user: `kotlinx-flows.yml` (`asSharedFlow`, `asStateFlow`, `receiveAsFlow`,
+  `consumeAsFlow`, CP-59 finding 22).
+- **`dispatch: {key: object}`** pairs with `dispatch_sends`, `dispatch_receives` and
+  `dispatch_views` only: the
   loader refuses `dispatch_receives` under `key: type` and a class-keyed block
   (`dispatch_registrations`, `dispatch_implementations`, an annotation mapping) under `key:
   object`, since read under the other key either matches nothing. An object-keyed send is a hop
@@ -6406,10 +6415,15 @@ matches:
   declares (`trySend-JP2dKIU`); and `kotlinx-flows.yml` (findings 17, 18, 20, `match: all`):
   `emit` and `tryEmit` on `MutableSharedFlow` and `MutableStateFlow`, `setValue` (`value =`) and
   `compareAndSet` (the inlined `update { }`) on `MutableStateFlow`, and `collect` on the five flow
-  types as `handler: lambda_arg` receives. Stated bounds: a channel or flow read through a flow
-  operator (`asSharedFlow()`, `map`, `consumeAsFlow()`) is the operator's result, another key, so
-  its collectors match no send (missing hops); terminal operators other than `collect`
-  (`first()`, `collectLatest`, `launchIn`) are not receives; a channel held in a local or
+  types as `handler: lambda_arg` receives; the terminal receives `first`, `firstOrNull`, `single`
+  and `toList` (`handler: enclosing`) and `collectLatest` (`handler: lambda_arg`, its block a
+  compiled lambda), each handed the flow as argument 0 (finding 23); and the four views above.
+  Both files name one mechanism, `kotlinx-coroutines`: a channel read as a flow is collected by
+  the flows file's receives, and the object decides. Stated bounds: a flow made from another's
+  values by an operator (`map`, `filter`, `onEach`) is the operator's result, another key, so its
+  collectors match no send (missing hops); `launchIn` and other terminal operators are not
+  receives; a send through a data class's property keeps one "key not read" stop beside its hops
+  (the generated `copy(…)` writes the field from a parameter nothing in the module passes); a channel held in a local or
   parameter of a `suspend` function and used after a suspension point is a receiver the facts do
   not name (the state machine merges the local with its spilled slot), so its send is a stop
   saying its object was not read.

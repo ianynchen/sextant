@@ -11,8 +11,10 @@ direction: inbound
 # In-process dispatch keyed by the channel OBJECT: a value sent on a channel reaches the code
 # that receives from that same channel, whatever the value's class (spec 2026-11-05 §1). Each
 # value is received by ONE consumer, which one decided at run time, so each send is a hop to
-# every receive on the object (`match: one`).
-dispatch: { key: object, match: one, mechanism: kotlinx-channels }
+# every receive on the object (`match: one`). One mechanism with `kotlinx-flows.yml`: a channel
+# read as a flow (`receiveAsFlow()`, declared there as a view) is collected by that file's
+# receives, and what decides which send reaches which receive is the object, never the file.
+dispatch: { key: object, match: one, mechanism: kotlinx-coroutines }
 
 # Not gated (`fluent` is not a style `resolve/dependencies.py` gates on): the coordinates say
 # where the types live. A JVM build resolves the `-jvm` artifact; a Kotlin Multiplatform or

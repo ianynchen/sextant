@@ -203,9 +203,13 @@ site, or no row.
   (`Objects.requireNonNull`, a `not_hand_offs` call, or kotlinc's `nullOutSpilledVariable`) is
   passed through, not a producer, and a path that comes back to where it started (a cycle: a
   coroutine lambda's `create` copying its captured `this.$ch`, a field copied into itself) adds
-  no object. Kotlin channels (`Channel.send`, a `for` loop's `iterator()`) and shared and state
-  flows (`emit`, `value =`, `collect`) are object-keyed too (`kotlinx-channels`,
-  `kotlinx-flows`). The key has three stated bounds, each over-linking (two queues read as one, never one missed): a field read is answered by every write of that field, so two instances of one class each holding a queue in it are one object; two objects one module helper makes (`newQueue()` called twice) are one; and two objects one library call site hands back are one. A null check no catalog declares (Guava's `Preconditions.checkNotNull`) splits one queue into two keys instead, a missing hop.
+  no object. A call the catalog declares as a view (`dispatch_views`, D02 §2m) is passed through
+  to the object it views. Kotlin channels (`Channel.send`, a `for` loop's `iterator()`) and
+  shared and state flows (`emit`, `value =`, `collect`, `first()`), one mechanism, are
+  object-keyed too (`kotlinx-channels`, `kotlinx-flows`; a read-only `asSharedFlow()` view or a
+  channel's `receiveAsFlow()` is the same object). A send through a data class's property keeps
+  one stop with `path` NULL beside its hops: the generated `copy(…)` writes the field from a
+  parameter nothing in the module passes (a public method, so not read, never dropped). The key has three stated bounds, each over-linking (two queues read as one, never one missed): a field read is answered by every write of that field, so two instances of one class each holding a queue in it are one object; two objects one module helper makes (`newQueue()` called twice) are one; and two objects one library call site hands back are one. A null check no catalog declares (Guava's `Preconditions.checkNotNull`) splits one queue into two keys instead, a missing hop.
 
 **`dispatch_registrations`** (named `message_handlers` until spec
 `2026-11-05-in-process-dispatch-design.md` §3; schema 15 unreleased, so no version step)
@@ -239,15 +243,16 @@ is tried, under the declaring catalog's match rule. One row per registration.
 - **`predicated`** — the registration carries a predicate; it never shadows a later one.
   **`handler`** — the method the handler argument names (a method reference names the
   method, a lambda its synthetic body), module-prefixed, NULL where none is read. For a receive
-  handing its value to a function (`handler: lambda_arg`, D02 §2m: a flow's `collect { }`), the
-  method the library calls on that argument, joined on the argument's class (a new instance, or
-  a closure's shared instance read as a constant of its own type) and carried past the
-  compiler's bridge to the method it forwards to; NULL where the argument is anything else.
+  handing its value to a function (`handler: lambda_arg`, D02 §2m: a flow's `collect { }`), a
+  compiled lambda's body, or the method the library calls on that argument, joined on the
+  argument's class (a new instance, or a closure's shared instance read as a constant of its own
+  type) and carried past the compiler's bridge to the method it forwards to; NULL where the
+  argument is anything else.
   **`delivers`** — the catalog's `returns_value`: the handler's return is a value handed to
   its own receiver. **`match`** — the catalog's `dispatch.match`, `first`, `all` or `one`.
   **`mechanism`** — the declaring catalog's `dispatch.mechanism` ([D02](D02-catalog-schema.md)
   §2m: `pekko-actors`, `spring-events`, `cdi-events`, `cdi-async-events`, `jdk-blocking-queue`,
-  `kotlinx-channels`, `kotlinx-flows`): a send's value, and an inbound key's class, is asked only of its own
+  `kotlinx-coroutines`): a send's value, and an inbound key's class, is asked only of its own
   catalog's mechanism's rows, so one framework's value never reaches another's handler.
 - The match rule over these rows is `resolve/dispatch_registrations.reachable_handlers`:
   `first`, per group, the first unpredicated registration the value matches (its class or a

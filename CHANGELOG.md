@@ -98,11 +98,18 @@ here would restate those documents rather than add anything.
   read" stop beside the hop, and kotlinc 2.4's `SpillingKt.nullOutSpilledVariable` (body
   `aconst_null; areturn`) is declared in `value-models/compiler-null-checks.yml` as a compiler
   call that takes a value without handing it off (an instance of the 2026-11-02 ruling), so it is
-  no longer named as the call that made a channel. Stated bounds: a flow read through an
-  operator (`asSharedFlow()`, `map`) is another key; terminal operators other than `collect`
-  (`first()`, `collectLatest`) are not receives; a channel in a local or parameter used after a
-  suspension point is a receiver the facts do not name, so its send is a stop. Pinned on
-  `fixtures/orders-kotlin-channels`.
+  no longer named as the call that made a channel. A new catalog block, `dispatch_views`,
+  declares a call handing back a view of the same object, which the object walk passes through:
+  `asSharedFlow()`, `asStateFlow()`, `receiveAsFlow()` and `consumeAsFlow()`, so a collector of
+  `val events = _events.asSharedFlow()` is reached by `_events.emit`. The terminal receives
+  `first`, `firstOrNull`, `single`, `toList` and `collectLatest` (its block a compiled lambda,
+  read as its body) are declared. Channels and flows are one mechanism, `kotlinx-coroutines`: a
+  channel read as a flow is collected by the flows catalog's receives, and the object decides.
+  Stated bounds: a flow made by an operator (`map`, `filter`, `onEach`) is another key; a send
+  through a data class's property keeps one "key not read" stop beside its hops (its generated
+  `copy(…)` writes the field from a parameter nothing passes); a channel in a local or parameter
+  used after a suspension point is a receiver the facts do not name, so its send is a stop.
+  Pinned on `fixtures/orders-kotlin-channels`.
 - **Java blocking queues are object-keyed in-process dispatch** (spec 2026-11-05 §4 item 7, probe
   CP-59 findings 12-15, JDK 21.0.13): the mechanism's second key kind. A catalog declaring
   `dispatch: {key: object}` keys each `dispatch_receives` site by the object it takes from — its

@@ -1186,3 +1186,50 @@ def test_a_registration_is_loaded_with_its_positions(tmp_path: Path):
             "returns_value": True,
         },
     )
+
+
+def test_a_view_is_loaded_with_the_object_it_views(tmp_path: Path):
+    """`dispatch_views`: a call handing back a view of the object at `object`."""
+    (tmp_path / "c.yml").write_text(
+        "id: c\nstyle: fluent\ndispatch: {key: object, match: all, mechanism: m}\nmatches:\n"
+        "  dispatch_receives:\n"
+        "    - { owner: a.Flow, method: take, descriptor: '()Ljava/lang/Object;', "
+        "object: receiver, handler: enclosing }\n"
+        "  dispatch_views:\n"
+        "    - { owner: a.Views, method: readOnly, descriptor: '(La/Flow;)La/Flow;', "
+        "object: arg0 }\n",
+        encoding="utf-8",
+    )
+    [catalog] = YamlCatalogSource(tmp_path).load()
+    assert catalog.dispatch_views == (
+        {
+            "owner": "a/Views#",
+            "method": "readOnly",
+            "descriptor": "(La/Flow;)La/Flow;",
+            "object": "arg0",
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "key, entry, refused",
+    [
+        ("object", "object: arg1", "`object: arg1`"),
+        ("object", "object: arg0, handler: enclosing", "unknown keys"),
+        ("type", "object: arg0", "`key: type` beside `dispatch_views`"),
+    ],
+)
+@pytest.mark.pins("catalogs.a-dispatch-block-is-read-under-ITS-key")
+def test_a_malformed_view_is_refused_at_load(tmp_path: Path, key: str, entry: str, refused: str):
+    """A view's `object` is the receiver or an argument of its descriptor; it declares nothing
+    else; and it is read only under `key: object`, by the object walk."""
+    from sextant.application.ports.catalogs import CatalogError
+
+    (tmp_path / "c.yml").write_text(
+        f"id: c\nstyle: fluent\ndispatch: {{key: {key}, match: all, mechanism: m}}\nmatches:\n"
+        "  dispatch_views:\n"
+        f"    - {{ owner: a.Views, method: readOnly, descriptor: '(La/Flow;)La/Flow;', {entry} }}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(CatalogError, match=refused):
+        YamlCatalogSource(tmp_path).load()

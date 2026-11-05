@@ -370,6 +370,12 @@ class Catalog:
     # on it). Checked by the loader.
     dispatch_receives: tuple[dict[str, Any], ...] = ()
 
+    # The calls this catalog declares under `matches.dispatch_views` (spec 2026-11-05 §3) as
+    # handing back a VIEW of an object: another reference to the same object, which the object
+    # walk passes through. `{owner, method, descriptor, object}`, `object` the position of the
+    # object viewed (`receiver` or `argN`). Checked by the loader; read by `ObjectKeys`.
+    dispatch_views: tuple[dict[str, Any], ...] = ()
+
     # The registrations made by IMPLEMENTING an interface, under
     # `matches.dispatch_implementations` (spec 2026-11-05 §4 item 5): each module class
     # implementing `owner` registers its own `method` of that descriptor (the method its
