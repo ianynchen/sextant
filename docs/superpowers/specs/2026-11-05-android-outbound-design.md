@@ -139,9 +139,10 @@ Five Major findings (no Critical). Minor findings are fixed above, marked "self-
 - **M1. A KMP project gives two modules under one Gradle path.** kotlinconf `:core` has `jvm()` and
   `android`; `:backend` uses its JVM half, `:app:androidApp` uses `:app:shared`'s Android half. The
   detector joins a sibling by project path only (`_sibling_roots`, `_identity`'s `{path: record}`),
-  so one of the two records is lost and a consumer can get the other target's classes. Fix: the init
-  script records the platform the consumer resolved (the artifact variant's
-  `org.jetbrains.kotlin.platform.type`, `jvm` / `androidJvm`) and the join uses path plus platform.
+  so one of the two records is lost and a part can be given the other version's classes.
+  **Ruled 2026-11-05: A.** The init script records the label Gradle puts on the version it picked
+  (`org.jetbrains.kotlin.platform.type`, `jvm` / `androidJvm`) and the lookup uses path plus label.
+  A label Sextant does not know is reported ("could not tell which version"), never guessed.
 - **M2. The identity of a KMP target module is not defined.** "Named as its publication names it"
   holds only where `maven-publish` is applied, and §2c says identity is unchanged. Recommendation:
   the OI-273 identity with `-<target name>` added to the name, which is the artifact id the Kotlin
