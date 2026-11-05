@@ -684,8 +684,10 @@ def _server_address_not_read(endpoint: dict[str, object]) -> bool:
       address has a server part, and that part was not read;
     - the row is an annotation-declared client with a relative path: it names the type that
       serves it (`served_by`, written only by the annotation derivation; a call row has
-      none), its path is the declaration's text read whole, so `partial` there says only
-      that the address of the object that made the client was not read (`made_by`)."""
+      none), and its path is the declaration's text read whole, so its `partial` cannot be
+      an unread piece of the path. For any annotation-declared client catalog, a relative
+      path with no peer leaves the server where the client is made, and `partial` says that
+      place was looked at and not read (`made_by` is the one word that looks today)."""
     if endpoint.get("protocol") != "http" or endpoint.get("resolution") != "partial":
         return False
     path = str(endpoint.get("path"))

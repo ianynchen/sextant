@@ -474,3 +474,66 @@ def test_a_class_implementing_the_interface_still_fences_it(tmp_path: Path):
         _extending("com/acme/app/LocalBase#", _BASE_API, ConstructKind.CLASS),
     ]
     assert _served_rows(tmp_path, facts) == set()
+
+
+def test_a_class_implementing_an_extending_interface_fences_the_base_too(tmp_path: Path):
+    """Fix round 3. `class LocalAuth : AuthApi`, `interface AuthApi : BaseApi`: the class
+    implements `BaseApi` as well (JLS 8.1.5), so the module answers `BaseApi`'s calls and no
+    outbound row derives for them. Round 2 read only the interfaces a class names directly,
+    and published `BaseApi`'s call as outbound."""
+    facts = [
+        *_interface(_BASE_API, "health"),
+        _extending(_AUTH_API, _BASE_API),
+        _extending("com/acme/app/LocalAuth#", _AUTH_API, ConstructKind.CLASS),
+    ]
+    assert _served_rows(tmp_path, facts) == set()
+
+
+def test_an_activity_served_through_an_extending_interface_flips_to_inbound(tmp_path: Path):
+    """Fix round 3, the direction half. A Temporal `@ActivityImpl` class implements
+    `SubActivities`, which extends the `@ActivityInterface` `BaseActivities`: the class serves
+    `BaseActivities#post`, so the row is the INBOUND activity it handles, never an outbound
+    call. Round 2's direct read missed the implementation, and the base row stayed outbound."""
+    base, sub, impl = (
+        "com/acme/app/BaseActivities#",
+        "com/acme/app/SubActivities#",
+        "com/acme/app/LocalActivities#",
+    )
+
+    def post(owner: str) -> SymbolFact:
+        return SymbolFact(
+            document_id="doc_1",
+            symbol=f"{_MODULE}{owner}post(sig_5a5a5a5a).",
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + owner,
+            signature=Signature(parameters=[], returns=TypeRef(symbol="void#", wire_type="")),
+        )
+
+    facts = [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + base, construct_kind=ConstructKind.INTERFACE),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_MODULE + base,
+            retention="runtime",
+            use=AnnotationUse(annotation="io/temporal/activity/ActivityInterface#",
+                              args={"namePrefix": "ledger_"}),
+        ),
+        post(base),
+        _extending(sub, base),
+        _extending(impl, sub, ConstructKind.CLASS),
+        AnnotationFact(
+            document_id="doc_1",
+            target=_MODULE + impl,
+            retention="runtime",
+            use=AnnotationUse(annotation="io/temporal/spring/boot/ActivityImpl#", args={}),
+        ),
+        post(impl),
+    ]  # fmt: skip
+    write_fact_file(tmp_path / "facts" / "App.jsonl", _document(), straight_line(facts))
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    temporal = next(c for c in YamlCatalogSource(CATALOGS).load() if c.id == "temporal-activity")
+    derive_endpoints(workspace, [temporal], capabilities=CAPABILITIES)
+    rows = {(r["direction"], r["path"], r["handler"]) for r in workspace.query("endpoints")}
+    workspace.close()
+    assert rows == {("inbound", "ledger_Post", f"{_MODULE}{impl}post(sig_5a5a5a5a).")}
