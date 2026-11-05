@@ -365,7 +365,9 @@ class Catalog:
     # 2026-11-05 §2), for an object key: per call, by its exact overload, the object it
     # takes from (`receiver`) and where its handler is (`enclosing`, the method making the
     # call, or `lambda_arg`, a function argument). `{owner, method, descriptor, object,
-    # handler}`, the owner a type symbol. Checked by the loader.
+    # handler}`, the owner a type symbol; a `lambda_arg` receive also carries `handler_arg`,
+    # `handler_method` and `handler_descriptor` (which argument, and the method the library calls
+    # on it). Checked by the loader.
     dispatch_receives: tuple[dict[str, Any], ...] = ()
 
     # The registrations made by IMPLEMENTING an interface, under

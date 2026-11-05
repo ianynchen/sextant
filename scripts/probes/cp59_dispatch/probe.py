@@ -1,5 +1,6 @@
 """CP-59: javap readings of Spring's application-event API, the CDI event API and ArC, the JDK's
-blocking queues, and the three fixtures' bytecode. See run.sh."""
+blocking queues, kotlinx-coroutines' channels and flows, and the four fixtures' bytecode. See
+run.sh."""
 
 import re
 import subprocess
@@ -19,6 +20,10 @@ QUEUES_CLASSPATH = (
     f"{QUEUES_FIX / 'target/classes'}:{(QUEUES_FIX / 'target/probe.cp').read_text().strip()}"
 )
 CDI_CLASSPATH = f"{CDI_FIX / 'target/classes'}:{(CDI_FIX / 'target/probe.cp').read_text().strip()}"
+KOTLIN_FIX = Path(ARGS["KOTLIN_FIX"])
+KOTLIN_LIBS = (KOTLIN_FIX / "target/probe.cp").read_text().strip()
+KOTLIN_CLASSPATH = f"{KOTLIN_FIX / 'target/classes'}:{KOTLIN_LIBS}"
+OWNERS_CLASSPATH = f"{ARGS['OWNERS']}:{KOTLIN_LIBS}"
 
 # The artifacts whose types the catalog names, by jar file-name stem.
 ARTIFACTS = ("spring-context", "spring-tx")
@@ -87,10 +92,12 @@ def cdi_jar(artifact: str) -> str:
     return jars[0]
 
 
-def header(cls: str) -> str:
+def header(cls: str, cp: str = "") -> str:
     """The class's declaration line as javap prints it (supertypes, type parameters)."""
     return next(
-        line for line in javap("-s", cls).splitlines() if re.search(r"\b(class|interface) ", line)
+        line
+        for line in javap("-s", cls, cp=cp).splitlines()
+        if re.search(r"\b(class|interface) ", line)
     ).strip()
 
 
@@ -99,7 +106,7 @@ def methods(cls: str, name: str, cp: str = "") -> list[str]:
     text = javap("-v", "-p", cls, cp=cp)
     rows, current = [], None
     for line in text.splitlines():
-        m = re.match(r"^  (?:[\w$<>\[\]., ]+ )?([\w$<>]+)\(.*\)(?: throws [\w.$, ]+)?;$", line)
+        m = re.match(r"^  (?:[\w$<>\[\]., ]+ )?([\w$<>-]+)\(.*\)(?: throws [\w.$, ]+)?;$", line)
         if m:
             current = {"name": m.group(1), "desc": "", "flags": ""}
             continue
@@ -150,7 +157,7 @@ def invokes(cls: str, name: str, cp: str = "") -> list[str]:
     return [
         f"`{m.group(1)}` `{m.group(2)}.{name}:{m.group(3)}`"
         for m in re.finditer(
-            rf"(invoke\w+)\s+#\d+(?:,\s+\d+)?\s+// (?:Interface)?Method ([\w/$]+)\.{name}:(\S+)",
+            rf'(invoke\w+)\s+#\d+(?:,\s+\d+)?\s+// (?:Interface)?Method ([\w/$]+)\."?{re.escape(name)}"?:(\S+)',
             javap("-c", "-p", cls, cp=cp),
         )
     ]
@@ -511,5 +518,139 @@ def guava() -> None:
             print(f"- `{declared.split()[1]}…, Duration)` calls `{item}`")
 
 
+# The `kotlinx-channels` and `kotlinx-flows` catalogs' owners and the methods each declares,
+# under the JVM names the jar declares (an inline-class result mangles the name).
+CHANNEL_OWNERS = (
+    "kotlinx.coroutines.channels.Channel",
+    "kotlinx.coroutines.channels.SendChannel",
+    "kotlinx.coroutines.channels.ReceiveChannel",
+    "kotlinx.coroutines.channels.ProducerScope",
+)
+CHANNEL_METHODS = (
+    "send",
+    "trySend-JP2dKIU",
+    "receive",
+    "tryReceive-PtdJZtk",
+    "receiveCatching-JP2dKIU",
+    "iterator",
+)
+FLOW_OWNERS = (
+    "kotlinx.coroutines.flow.MutableSharedFlow",
+    "kotlinx.coroutines.flow.MutableStateFlow",
+    "kotlinx.coroutines.flow.SharedFlow",
+    "kotlinx.coroutines.flow.StateFlow",
+    "kotlinx.coroutines.flow.Flow",
+    "kotlinx.coroutines.flow.FlowCollector",
+)
+FLOW_METHODS = ("emit", "tryEmit", "setValue", "compareAndSet", "collect")
+# The fixture's classes, and the probe module's one file-level class.
+KOTLIN_CLASSES = (
+    "Pipeline",
+    "Hub",
+    "Relay",
+    "Workers",
+    "Numbers",
+    "Outbox",
+    "Bus",
+    "Mailer",
+    "Status",
+    "Ticker",
+)
+# kotlinc's `@Metadata` metadata version for Kotlin 2.4.x; a class file stating another aborts.
+EXPECTED_MV = "[2,4,0]"
+
+
+def kotlin_jar(artifact: str) -> str:
+    """The one `<artifact>-<version>.jar` on the Kotlin fixture's class path."""
+    jars = [
+        c for c in KOTLIN_LIBS.split(":") if re.fullmatch(rf"{artifact}-[\d.]+\.jar", Path(c).name)
+    ]
+    if len(jars) != 1:
+        sys.exit(f"expected one {artifact}-*.jar on the Kotlin fixture's class path, found {jars}")
+    return jars[0]
+
+
+def metadata_version(cls: str, cp: str) -> str:
+    """The `mv` kotlinc wrote into `cls`'s `@kotlin.Metadata`: the compiler's own statement of
+    what it is. Aborts where it is missing or not `EXPECTED_MV`."""
+    found = re.search(r"^\s+mv=(\[[\d,]+\])$", javap("-v", cls, cp=cp), flags=re.MULTILINE)
+    if not found or found.group(1) != EXPECTED_MV:
+        sys.exit(f"{cls}: kotlinc metadata version {found and found.group(1)}, not {EXPECTED_MV}")
+    return found.group(1)
+
+
+def kotlin() -> None:
+    """Tables 17-21: Kotlin channels and flows (`kotlinx-channels`, `kotlinx-flows`)."""
+    cp = KOTLIN_CLASSPATH
+    coroutines = kotlin_jar("kotlinx-coroutines-core-jvm")
+    stdlib = kotlin_jar("kotlin-stdlib")
+    print("### Identity, Kotlin (from each jar's own MANIFEST.MF, and kotlinc's `@Metadata`)\n")
+    print(
+        "- `kotlinx-coroutines-core-jvm`: "
+        f"`{manifest_version(coroutines, ('Implementation-Version',))}`"
+    )
+    print(f"- `kotlin-stdlib`: `{manifest_version(stdlib, ('Implementation-Version',))}`")
+    print(f"- fixture `Bus` `@Metadata mv`: `{metadata_version('com.acme.kc.Bus', cp)}`")
+    print(
+        f"- probe `OwnersKt` `@Metadata mv`: `{metadata_version('probe.OwnersKt', OWNERS_CLASSPATH)}`"
+    )
+    print()
+    print("### 17. What the channel and flow types declare\n")
+    for owner, names in (
+        *((owner, CHANNEL_METHODS) for owner in CHANNEL_OWNERS),
+        *((owner, FLOW_METHODS) for owner in FLOW_OWNERS),
+    ):
+        print(f"- {header(owner, cp=cp)}")
+        for name in names:
+            for row in methods(owner, name, cp=cp):
+                print(f"  - `{name}` {row}")
+    print()
+    print("### 18. What kotlinc writes for each declared call through each owner\n")
+    for name in (*CHANNEL_METHODS, *FLOW_METHODS, "getValue"):
+        for row in dict.fromkeys(invokes("probe.OwnersKt", name, cp=OWNERS_CLASSPATH)):
+            print(f"- {row}")
+    print()
+    print("### 19. What kotlinc writes at the fixture's channel and flow sites\n")
+    for cls in KOTLIN_CLASSES:
+        for found in sorted(
+            {
+                str(path.name).removesuffix(".class")
+                for path in (KOTLIN_FIX / "target/classes/com/acme/kc").glob(f"{cls}*.class")
+            }
+        ):
+            for name in (
+                *CHANNEL_METHODS,
+                *FLOW_METHODS,
+                "hasNext",
+                "next",
+                "Channel$default",
+                "MutableSharedFlow$default",
+                "MutableStateFlow",
+                "nullOutSpilledVariable",
+                "getChannel",
+                "access$getOrders$p",
+            ):
+                for row in invokes(f"com.acme.kc.{found}", name, cp=cp):
+                    print(f"- `{found}`: {row}")
+    print()
+    print("### 20. What a `collect { }` lambda compiles to\n")
+    for cls in ("Bus$mail$2", "Mailer$run$2", "Status$watch$2"):
+        print(f"- {header('com.acme.kc.' + cls, cp=cp)}")
+        for row in methods(f"com.acme.kc.{cls}", "emit", cp=cp):
+            print(f"  - `emit` {row}")
+    for cls, declared in (("Bus", "mail("), ("Mailer", "run("), ("Status", "watch(")):
+        for line in lines_matching(
+            f"com.acme.kc.{cls}", declared, rf"(getstatic|new) .*\${declared[:-1]}\$2\b", cp
+        ):
+            print(f"- `{cls}.{declared[:-1]}` hands `collect`: `{re.sub(r'^\d+: ', '', line)}`")
+    print()
+    print("### 21. kotlinc's spilled-variable null-out\n")
+    for line in lines_matching(
+        "kotlin.coroutines.jvm.internal.SpillingKt", "nullOutSpilledVariable(", r"^\s+\d+:", cp
+    ):
+        print(f"- `SpillingKt.nullOutSpilledVariable` `{re.sub(r'^\d+: ', '', line)}`")
+
+
 main()
 queues()
+kotlin()

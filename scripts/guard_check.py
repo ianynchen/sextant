@@ -7365,6 +7365,102 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "dispatch-objects.a-LAMBDA-ARG-receive-is-handled-by-its-FUNCTION": Guard(
+        what="a `handler: lambda_arg` receive's handler is the function it is given",
+        why="CP-59 finding 20: a `collect { }` lambda is a module class whose `emit` handles "
+        "each value; read as the enclosing method, every emit's hop lands on the method that "
+        "subscribed, not the code that handles the value",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="            handler = _function_handler(workspace, site, receive)\n",
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-SHARED-collector-instance-names-its-CLASS": Guard(
+        what="a closure's one shared instance, read as a constant of its own type, names its class",
+        why="CP-59 finding 20: a `collect { }` lambda capturing nothing is handed as its class's "
+        "`INSTANCE`; unread, every such collector has no handler and an emit reaches only the "
+        "capturing ones",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="    elif kind == _CONSTANT:\n",
+                replace="    elif False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-collector-BRIDGE-is-carried-to-its-BODY": Guard(
+        what="a function argument's method found as the compiler's bridge names the method it "
+        "forwards to",
+        why="CP-59 finding 20: `emit(Object, Continuation)` is `ACC_BRIDGE, ACC_SYNTHETIC`; a hop "
+        "to it names a method nobody wrote",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="    return declared.symbols[joined if target is None else target]\n",
+                replace="    return declared.symbols[joined]  # guard disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-CYCLE-adds-no-object": Guard(
+        what="an object-walk path that comes back to where it started is skipped",
+        why="a coroutine lambda's `create` copies `this.$ch` into the instance it runs: read as "
+        "an object not read, every send in a launched block capturing its channel keeps a "
+        "false stop beside its hop",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="            if producer.reason == CYCLE:\n                continue\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n"
+                "                continue\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-NULL-CHECK-met-again-adds-no-object": Guard(
+        what="an object walk back at a null check it passed through adds no object",
+        why="CP-59 finding 21: `L$0 = nullOutSpilledVariable(scope)` feeds the slot it was read "
+        "from; named as the object, a producer coroutine's send names a compiler call as its "
+        "channel",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="                # Back at a null check this walk passed through: a cycle, adding "
+                "no object.\n                continue\n",
+                replace='                yield f"{producer.caller}#{producer.ordinal}"  # guard disabled\n'
+                "                continue\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-SPILLED-variable-null-out-is-no-producer": Guard(
+        what="kotlinc's `nullOutSpilledVariable` is declared a call that takes a value without "
+        "handing it off",
+        why="CP-59 finding 21: its body is `aconst_null; areturn`. Read as a library call whose "
+        "body is not here, the object walk names it as the call that made a coroutine's channel",
+        edits=(
+            Edit(
+                path="sextant/catalogs/value-models/compiler-null-checks.yml",
+                find="  - owner: kotlin.coroutines.jvm.internal.SpillingKt\n"
+                "    methods: [nullOutSpilledVariable]\n",
+                replace="  - owner: kotlin.coroutines.jvm.internal.SpillingKt\n"
+                "    methods: [guardDisabled]\n",
+            ),
+        ),
+    ),
+    "catalogs.a-LAMBDA-ARG-receive-NAMES-its-function": Guard(
+        what="a `lambda_arg` receive names its argument and the method called on it, an "
+        "`enclosing` one none",
+        why="spec 2026-11-05 §2: without them the handler is a guess at which method of which "
+        "argument runs; with them on an `enclosing` receive, words the reader ignores",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find="        _check_lambda_arg(entry, where)\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "catalogs.a-dispatch-block-is-read-under-ITS-key": Guard(
         what="a receive block needs `key: object`, a class-keyed block refuses it",
         why="spec 2026-11-05 §1-§2: read under the other key a block matches nothing and every "
@@ -11677,6 +11773,10 @@ def copy_tree(destination: Path) -> Path:
         # on is followed through javac's fields, constructors and factory calls, read off
         # real facts.
         "orders-queues",
+        # Kotlin channels and flows (spec 2026-11-05 §4 item 7): the same object walk through
+        # kotlinc's coroutine classes, field accessors and collector classes, read off real
+        # facts.
+        "orders-kotlin-channels",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

@@ -6368,9 +6368,25 @@ matches:
   `Queues.drain(queue, …)`, `guava-queues.yml`) — followed by `ObjectKeys`, the value walk's
   object reader (through locals, parameters across callers, helper returns and fields, to a
   construction or a call whose body is not here; a declared null check, `not_hand_offs`,
-  returning its argument's type is passed through), its handler the method making the call.
-  The key has three stated bounds, each over-linking (two queues read as one, never one missed): a field read is answered by every write of that field, so two instances of one class each holding a queue in it are one object; two objects one module helper makes (`newQueue()` called twice) are one; and two objects one library call site hands back are one. A null check no catalog declares (Guava's `Preconditions.checkNotNull`) splits one queue into two keys instead, a missing hop. `handler: lambda_arg` is refused where it is read: a function
-  argument's body is not yet read as a handler, and the enclosing method is not one.
+  returning its argument's type is passed through, and a path that comes back to where it
+  started — a cycle, such as a coroutine lambda's `create` copying its captured `this.$ch` —
+  adds no object), its handler the method making the call (`handler: enclosing`) or the function
+  it hands the value to (`handler: lambda_arg`).
+  The key has three stated bounds, each over-linking (two queues read as one, never one missed): a field read is answered by every write of that field, so two instances of one class each holding a queue in it are one object; two objects one module helper makes (`newQueue()` called twice) are one; and two objects one library call site hands back are one. A null check no catalog declares (Guava's `Preconditions.checkNotNull`) splits one queue into two keys instead, a missing hop.
+  **`handler: lambda_arg`** (a flow's `collect { }`) names three more words, all required with
+  it and refused beside `enclosing` (`yaml_source._check_lambda_arg`): `handler_arg`, the index of
+  the object argument holding the function; and `handler_method` with `handler_descriptor`, the
+  method the library calls on it with each value, by name and the interface's erased
+  descriptor (`emit`, `(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`).
+  The reader (`dispatch_registrations._function_handler`) takes the argument's class — a new
+  instance's, or, for a closure capturing nothing, the class of the shared instance the compiler
+  reads as a constant of its own type — joins the method on it, and carries the compiler's bridge
+  to the method it forwards to (`effective_annotations._synthesis_target`, as for
+  `dispatch_implementations`). Any other argument (a parameter, a library object), or a class not
+  declaring the method itself, gives the row a NULL handler: not read, never the enclosing
+  method, which is not the code handling the value. A `lambda_arg` receive read without
+  `handler_arg` and `handler_method` (a catalog built by hand) is refused where read. Users:
+  `kotlinx-flows.yml`'s five `collect` entries (CP-59 finding 20).
 - **`dispatch: {key: object}`** pairs with `dispatch_sends` and `dispatch_receives` only: the
   loader refuses `dispatch_receives` under `key: type` and a class-keyed block
   (`dispatch_registrations`, `dispatch_implementations`, an annotation mapping) under `key:
@@ -6382,7 +6398,21 @@ matches:
   `drainTo`s and the no-argument `remove()` as receives (`remove(Object)` and `removeIf`
   discard values nothing handles, so neither is one),
   on `BlockingQueue`, `BlockingDeque`, `TransferQueue` and the seven `java.util.concurrent`
-  classes, since javac writes the receiver's static type as every call's owner.
+  classes, since javac writes the receiver's static type as every call's owner. Then
+  `kotlinx-channels.yml` (CP-59 findings 17-19, kotlinx-coroutines 1.11.0, `match: one`):
+  `send` and `trySend` on `Channel`, `SendChannel` and `ProducerScope`, and `receive`,
+  `tryReceive`, `receiveCatching` and `iterator()` (a `for` loop, and the inlined `consumeEach`) on
+  `Channel` and `ReceiveChannel`, the inline-class results under the mangled JVM names the jar
+  declares (`trySend-JP2dKIU`); and `kotlinx-flows.yml` (findings 17, 18, 20, `match: all`):
+  `emit` and `tryEmit` on `MutableSharedFlow` and `MutableStateFlow`, `setValue` (`value =`) and
+  `compareAndSet` (the inlined `update { }`) on `MutableStateFlow`, and `collect` on the five flow
+  types as `handler: lambda_arg` receives. Stated bounds: a channel or flow read through a flow
+  operator (`asSharedFlow()`, `map`, `consumeAsFlow()`) is the operator's result, another key, so
+  its collectors match no send (missing hops); terminal operators other than `collect`
+  (`first()`, `collectLatest`, `launchIn`) are not receives; a channel held in a local or
+  parameter of a `suspend` function and used after a suspension point is a receiver the facts do
+  not name (the state machine merges the local with its spilled slot), so its send is a stop
+  saying its object was not read.
 
 **Ordering (§3):** not in the engine loop at all; the registration pass runs right after the
 gRPC hop pass, and the dispatch hop pass right after it.

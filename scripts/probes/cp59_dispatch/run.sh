@@ -11,6 +11,11 @@
 # declared method through each declared owner, and runs `javap` on the JDK's queue types, for the
 # `jdk-blocking-queue` catalog (the JDK is no jar with a manifest: its version is the one the
 # running `java` reports as `java.version`).
+# Then Kotlin channels and flows: compiles `fixtures/orders-kotlin-channels` and the probe module
+# `kotlin-owners` (each declared call through each owner type), both by kotlinc 2.4.20 against
+# kotlinx-coroutines-core-jvm 1.11.0, and runs `javap` on the coroutines jar, on kotlin-stdlib's
+# `SpillingKt`, and on both modules' classes, for the `kotlinx-channels` and `kotlinx-flows`
+# catalogs.
 # Needs a JDK 21 at $JAVA_HOME, Maven, and network on the first run only. Starts no context.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -34,6 +39,11 @@ copy() {  # copy <coordinate> <directory>: offline first, online once
 QUEUES=../../../fixtures/orders-queues
 (cd "$QUEUES" && { mvn -q -B -o clean compile >&2 || mvn -q -B clean compile >&2; }
  mvn -q -B -o dependency:build-classpath -Dmdep.outputFile="$PWD/target/probe.cp" >&2)
+KOTLIN=../../../fixtures/orders-kotlin-channels
+(cd "$KOTLIN" && { mvn -q -B -o clean compile >&2 || mvn -q -B clean compile >&2; }
+ mvn -q -B -o dependency:build-classpath -Dmdep.outputFile="$PWD/target/probe.cp" >&2)
+(cd kotlin-owners && { mvn -q -B -o clean compile >&2 || mvn -q -B clean compile >&2; })
 if [ -x ../../../.venv/bin/python ]; then PY=../../../.venv/bin/python; else PY=python3; fi
 exec "$PY" probe.py "FIX=$(cd "$FIX" && pwd)" "CDI_FIX=$(cd "$CDI" && pwd)" \
-  "QUEUES_FIX=$(cd "$QUEUES" && pwd)" "JAVA_HOME=$JAVA_HOME"
+  "QUEUES_FIX=$(cd "$QUEUES" && pwd)" "KOTLIN_FIX=$(cd "$KOTLIN" && pwd)" \
+  "OWNERS=$PWD/kotlin-owners/target/classes" "JAVA_HOME=$JAVA_HOME"

@@ -131,6 +131,32 @@ No `message_*` word remains. No word names a framework.
    (`Objects.requireNonNull`, a `not_hand_offs` call) is passed through by the object walk.
    **Stated bounds:** the key has three stated bounds, each over-linking (two queues read as one, never one missed): a field read is answered by every write of that field, so two instances of one class each holding a queue in it are one object; two objects one module helper makes (`newQueue()` called twice) are one; and two objects one library call site hands back are one. A null check no catalog declares (Guava's `Preconditions.checkNotNull`) splits one queue into two keys instead, a missing hop. `peek`, the deque ends and `Queue`-typed
    receivers are not read (missing hops, never false ones).
+   **As built (Task 5, Kotlin channels and flows):** `kotlinx-channels.yml` (`match: one`) and
+   `kotlinx-flows.yml` (`match: all`), CP-59 findings 17-21 (kotlinx-coroutines 1.11.0, kotlinc
+   2.4.20). kotlinc writes the receiver's static type as the owner and an inline-class result
+   under its mangled JVM name (`trySend-JP2dKIU`), so `Channel`, `SendChannel`, `ProducerScope` and
+   `ReceiveChannel` are each listed; `for (x in ch)` and the inlined `consumeEach` are an
+   `iterator()` call on the channel; `value =` is `setValue` and `update { }` inlines to
+   `compareAndSet`. The object walk needed no coroutine-specific rule: a send in a launched block's
+   `invokeSuspend` reads the channel through `this$0` and the field's synthetic accessor, both
+   followed already (a field read answers every write of the field), and a captured local is the
+   lambda's `$ch` field, written by its constructor. Two general fixes: a path that comes back to
+   where it started (the lambda's `create` copying `this.$ch`) adds no object instead of being read
+   as "not read"; and kotlinc 2.4's `nullOutSpilledVariable` (body `aconst_null; areturn`) joins
+   `not_hand_offs` as a compiler call that cannot change its value (an instance of the 2026-11-02
+   ruling), passed through rather than named as the channel's maker. **`handler: lambda_arg` is
+   built** for `collect { }`: the lambda is a module class implementing `FlowCollector` (finding
+   20; not one of kotlinc's lambda base classes, so it carries no `lambda_body`), so a receive
+   names the argument (`handler_arg`) and the method the library calls on it (`handler_method`,
+   `handler_descriptor`), and the handler is that method on the argument's class, past the
+   compiler's bridge. **Stated bounds:** a flow read through an operator (`asSharedFlow()`, `map`,
+   `consumeAsFlow()`) is the operator's result, another key; terminal operators other than
+   `collect` (`first()`, `collectLatest`, `launchIn`) are not receives; a channel in a local or
+   parameter of a `suspend` function used after a suspension point is a receiver the facts do not
+   name (merged with its spilled slot), so its send is a stop (each a missing hop, never a false
+   one). A data class's generated `copy(channel)` is a second writer of its field from a parameter
+   nothing calls, so a send through such a property also keeps one "key not read" stop beside its
+   hops (the established one-stop-per-unread-path rule).
 
 ## 5. Later
 

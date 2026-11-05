@@ -81,6 +81,8 @@ PRIMED_FIXTURES = (
     "orders-cdi-events",
     # Java blocking queues, object-keyed dispatch (spec 2026-11-05 §4 item 7).
     "orders-queues",
+    # Kotlin channels and flows, object-keyed dispatch (spec 2026-11-05 §4 item 7).
+    "orders-kotlin-channels",
     "orders-ktor",
     "orders-ktor-classlambdas",
     "orders-gateway",

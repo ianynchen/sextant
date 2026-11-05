@@ -1700,6 +1700,11 @@ def _dispatch_sends(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
 # channel) — and where the code handling that value is.
 _RECEIVER = "receiver"
 _RECEIVE_HANDLERS = ("enclosing", "lambda_arg")
+# The handler word naming a function argument, and the three words saying which argument it
+# is and which of its methods the library calls with the value (`handler_method` by name and
+# `handler_descriptor`, the interface's own, erased).
+_LAMBDA_ARG = "lambda_arg"
+_LAMBDA_ARG_WORDS = ("handler_arg", "handler_method", "handler_descriptor")
 
 
 def _dispatch_receives(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
@@ -1708,12 +1713,18 @@ def _dispatch_receives(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
     which object the call takes its value from (`receiver`, the one it is called on, or
     `argN`, an argument the descriptor has: a static helper handed the channel); `handler`
     where the code handling it is (`enclosing`, the method making the call, or `lambda_arg`,
-    the function it is given). Every key is checked, because a position that reads the wrong
-    argument keys the receive by the wrong object. Empty for a catalog declaring none."""
+    the function it is given). A `lambda_arg` receive names that function's argument
+    (`handler_arg`, a reference-typed argument of the descriptor) and the method the library
+    calls on it (`handler_method`, `handler_descriptor`); an `enclosing` one names none of
+    them. Every key is checked, because a position that reads the wrong argument keys the
+    receive by the wrong object, or names the wrong handler. Empty for a catalog declaring
+    none."""
     where, declared = _declared_calls(matches, "dispatch_receives", path)
     entries: list[dict[str, Any]] = []
     for entry in declared:
-        unknown = sorted(set(entry) - {"owner", "method", "descriptor", "object", "handler"})
+        unknown = sorted(
+            set(entry) - {"owner", "method", "descriptor", "object", "handler", *_LAMBDA_ARG_WORDS}
+        )
         if unknown:
             raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
         taken_from = entry.get("object")
@@ -1732,6 +1743,7 @@ def _dispatch_receives(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
                 f"{where}: `{entry['method']}` declares `handler: {entry.get('handler')}`; "
                 f"`handler` is one of {list(_RECEIVE_HANDLERS)}"
             )
+        _check_lambda_arg(entry, where)
         entries.append(
             {
                 "owner": type_descriptor(str(entry["owner"])),
@@ -1739,9 +1751,50 @@ def _dispatch_receives(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
                 "descriptor": str(entry["descriptor"]),
                 "object": str(entry["object"]),
                 "handler": str(entry["handler"]),
+                **{word: entry[word] for word in _LAMBDA_ARG_WORDS if word in entry},
             }
         )
     return tuple(entries)
+
+
+def _check_lambda_arg(entry: dict[str, Any], where: str) -> None:
+    """Refuses a receive whose function-argument words disagree with its `handler`: a
+    `lambda_arg` receive names all three (`handler_arg` an argument of the descriptor holding
+    a reference, the method called on it by name and descriptor), an `enclosing` one none.
+    Without all three the handler would be a guess at which method of which argument runs."""
+    named = [word for word in _LAMBDA_ARG_WORDS if entry.get(word) is not None]
+    if entry["handler"] != _LAMBDA_ARG:
+        if named:
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares {named} beside `handler: "
+                f"{entry['handler']}`; only a `{_LAMBDA_ARG}` receive names its function"
+            )
+        return
+    if len(named) != len(_LAMBDA_ARG_WORDS):
+        raise CatalogError(
+            f"{where}: `{entry['method']}` declares `handler: {_LAMBDA_ARG}` and names "
+            f"{named}; it names all of {list(_LAMBDA_ARG_WORDS)}"
+        )
+    slots = descriptor_slots(str(entry["descriptor"]))[0]
+    position = entry["handler_arg"]
+    if (
+        not isinstance(position, int)
+        or isinstance(position, bool)
+        or not 0 <= position < len(slots)
+        or not slots[position].startswith("L")
+    ):
+        raise CatalogError(
+            f"{where}: `{entry['method']}` declares `handler_arg: {position}`; it is the "
+            f"index of an object argument of `{entry['descriptor']}`"
+        )
+    called = str(entry["handler_descriptor"])
+    if not isinstance(entry["handler_method"], str) or not (
+        called.startswith("(") and ")" in called
+    ):
+        raise CatalogError(
+            f"{where}: `{entry['method']}` names its handler as `{entry['handler_method']}` "
+            f"`{called}`; a method name and a method descriptor"
+        )
 
 
 def _dispatch_implementations(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:

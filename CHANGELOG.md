@@ -79,6 +79,30 @@ here would restate those documents rather than add anything.
   own qualifier) and an observer of a parameterized type (`List<String>`) keep their
   registration with no key: the fire sites' qualifiers and type arguments are not read, so such
   an observer gets no hop (missing, never false); `@Observes @Priority(10) E` keeps its key.
+- **Kotlin channels and flows are object-keyed in-process dispatch** (spec 2026-11-05 §4 item 7,
+  probe CP-59 findings 17-21, kotlinx-coroutines 1.11.0, kotlinc 2.4.20). `kotlinx-channels.yml`
+  (`match: one`): `send`/`trySend` on `Channel`, `SendChannel` and `ProducerScope`, and
+  `receive`/`tryReceive`/`receiveCatching` and `iterator()` — what kotlinc writes for a
+  `for (x in ch)` loop and the inlined `consumeEach` — on `Channel` and `ReceiveChannel`, the
+  inline-class results under their mangled JVM names. `kotlinx-flows.yml` (`match: all`):
+  `emit`/`tryEmit`, `value =` (`setValue`) and `update { }` (`compareAndSet`) as sends, `collect` on
+  the five flow types as receives. A send inside a coroutine (`scope.launch { ch.send(x) }`) is
+  read through the class kotlinc compiles the block to and the private field's synthetic
+  accessor; a channel a launched block captures from a local is one object. A receive can now
+  hand its value to the function it is given (`handler: lambda_arg`, with new words
+  `handler_arg`, `handler_method`, `handler_descriptor`, checked at load): a `collect { }`
+  lambda's handler is the `emit` of the module class kotlinc compiles it to, past the compiler's
+  bridge, for a capturing lambda (a new instance) and one capturing nothing (its shared
+  `INSTANCE`) alike. The object walk now skips a path that comes back to where it started (a
+  coroutine lambda's `create` copying its captured value), which had added a false "object not
+  read" stop beside the hop, and kotlinc 2.4's `SpillingKt.nullOutSpilledVariable` (body
+  `aconst_null; areturn`) is declared in `value-models/compiler-null-checks.yml` as a compiler
+  call that takes a value without handing it off (an instance of the 2026-11-02 ruling), so it is
+  no longer named as the call that made a channel. Stated bounds: a flow read through an
+  operator (`asSharedFlow()`, `map`) is another key; terminal operators other than `collect`
+  (`first()`, `collectLatest`) are not receives; a channel in a local or parameter used after a
+  suspension point is a receiver the facts do not name, so its send is a stop. Pinned on
+  `fixtures/orders-kotlin-channels`.
 - **Java blocking queues are object-keyed in-process dispatch** (spec 2026-11-05 §4 item 7, probe
   CP-59 findings 12-15, JDK 21.0.13): the mechanism's second key kind. A catalog declaring
   `dispatch: {key: object}` keys each `dispatch_receives` site by the object it takes from — its

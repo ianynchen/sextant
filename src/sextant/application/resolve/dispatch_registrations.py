@@ -64,7 +64,8 @@ matches nothing and shadows nothing.
 Under `dispatch: {key: object}` the code that receives a value is the code that takes from the
 same channel object it was handed to, whatever the value's class. Each call site of a declared
 receive is a group of its own, `<caller>#<ordinal>`, at position 0, its handler the method
-making the call (`handler: enclosing`). Its key is the object it is called on (`object:
+making the call (`handler: enclosing`) or the function it hands the value to (`handler:
+lambda_arg`, a flow's `collect { }`: `_function_handler`). Its key is the object it is called on (`object:
 receiver`), followed to the call that MADE it (`ObjectKeys`): two sites act on one object
 exactly when their receivers reach the same such call. One row per distinct object the walk
 reaches; one row with `key_object` NULL where it reaches none, which matches nothing.
@@ -72,7 +73,8 @@ reaches; one row with `key_object` NULL where it reaches none, which matches not
 ## Cost (GUIDELINES §8.7)
 
 One object walk per receive site (`ObjectKeys`, on the resolve's shared value index, each
-site's answer kept). One `chain_ends` walk per declaring catalog, only where the module calls one of its roots'
+site's answer kept); a `lambda_arg` receive adds a dictionary lookup on the resolve's one read
+of `method_declarations`. One `chain_ends` walk per declaring catalog, only where the module calls one of its roots'
 owners or a type inheriting one (a module calling none pays one index lookup per owner each).
 The heirs come from the resolve's one `Dispatch` (`Workspace.once`). A registration no step
 names costs one index lookup per declared owner and heir.
@@ -95,11 +97,17 @@ from sextant.application.resolve.shapes.arguments import (
 )
 from sextant.application.resolve.shapes.chains import _method_symbols, chain_ends
 from sextant.application.resolve.shapes.rooting import catalog_symbols
-from sextant.application.resolve.values import RECEIVER, cached_value_index, producer_paths
+from sextant.application.resolve.values import (
+    CYCLE,
+    RECEIVER,
+    cached_value_index,
+    producer_paths,
+)
 from sextant.domain.symbols import (
     bare_descriptor,
     descriptor_slots,
     method_descriptor,
+    owner_of,
     parameter_types,
 )
 
@@ -122,6 +130,10 @@ _CONSTRUCTOR = "<init>"
 _REFERENCE = "L"
 # A receive's `object` naming the receiver; anything else is `argN`.
 _RECEIVER_OBJECT = "receiver"
+# The argument kinds an object of a module class arrives as (D00 §5): a new instance, and a
+# constant of its own type (the shared instance of a closure capturing nothing).
+_INSTANCE = "instance"
+_CONSTANT = "enum"
 
 
 def record_dispatch_registrations(workspace: Workspace, catalogs: list[Catalog]) -> None:
@@ -430,9 +442,9 @@ def _receive_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dict[str, 
     reaches (the receiver, or `argN`; `ObjectKeys`), its handler the method making the call. One row with `key_object` NULL
     where no object was read: it matches nothing, never every send.
 
-    Only `handler: enclosing` is read here: a receive handing its value to a function argument
-    (`lambda_arg`) is refused rather than read as its enclosing method, which is not the code
-    that handles the value."""
+    A receive handing its value to a function argument (`handler: lambda_arg`, `collect {
+    }`) is handled by that function (`_function_handler`), never by its enclosing method,
+    which is not the code that handles the value; one naming no method of it is refused."""
     if not catalog.dispatch_receives:
         return
     match = _match_of(catalog)
@@ -445,12 +457,16 @@ def _receive_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dict[str, 
             if receive["object"] == _RECEIVER_OBJECT
             else int(str(receive["object"])[len("arg") :])
         )
+        handler: str | None = str(site["caller"])
         if receive["handler"] != _ENCLOSING:
-            raise CatalogError(
-                f"loading catalog {catalog.source}: `{receive['method']}` declares "
-                f"`handler: {receive['handler']}`; a receive site's handler is read only as the "
-                f"method making the call (`{_ENCLOSING}`) (spec 2026-11-05 §2)"
-            )
+            if receive.get("handler_method") is None or receive.get("handler_arg") is None:
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{receive['method']}` declares "
+                    f"`handler: {receive['handler']}` and names no `handler_arg` and "
+                    f"`handler_method` saying which method of which argument handles the "
+                    f"value (spec 2026-11-05 §2)"
+                )
+            handler = _function_handler(workspace, site, receive)
         group = f"{site['caller']}#{site['ordinal']}"
         made: list[str | None] = [key for key in objects.of(site, slot) if key is not None]
         for key in made or [None]:
@@ -461,10 +477,43 @@ def _receive_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dict[str, 
                 "key_value": None,
                 "key_object": key,
                 "predicated": False,
-                "handler": str(site["caller"]),
+                "handler": handler,
                 "delivers": False,
                 "match": match,
             }
+
+
+def _function_handler(
+    workspace: Workspace, site: Mapping[str, Any], receive: Mapping[str, Any]
+) -> str | None:
+    """The method handling the value a `handler: lambda_arg` receive hands to its function
+    argument: the argument at `handler_arg` is an object of a module class (a new instance, or
+    the one shared instance of a closure that captures nothing, which the compiler reads as a
+    constant of its own type), and the library calls `handler_method` `handler_descriptor` on
+    it. That method is joined on the class by name and the declared, erased descriptor, and
+    where the join finds the compiler's synthetic bridge (a generic implementation's) it is
+    carried to the method it forwards to (`effective_annotations._synthesis_target`, as
+    `_implementation_rows` does). None where the argument is any other kind (a parameter, a
+    library object) or its class does not itself declare the method: the handler is not
+    read, never guessed."""
+    argument = _arg_at(site["arguments"], int(receive["handler_arg"]))
+    kind = None if argument is None else argument.get("kind")
+    if kind == _INSTANCE:
+        named: str | None = bare_descriptor(str(argument["symbol"]))  # type: ignore[index]
+    elif kind == _CONSTANT:
+        named = owner_of(bare_descriptor(str(argument["symbol"])))  # type: ignore[index]
+    else:
+        return None
+    declared = workspace.once(_declarations)
+    joined = method_descriptor(
+        str(named), str(receive["handler_method"]), str(receive["handler_descriptor"])
+    )
+    if joined not in declared.symbols:
+        return None
+    target = _synthesis_target(
+        joined, declared.by_type.get(str(named), []), declared.signatures, declared.modifiers
+    )
+    return declared.symbols[joined if target is None else target]
 
 
 class ObjectKeys:
@@ -491,6 +540,12 @@ class ObjectKeys:
     the descriptor, never a model of one method). A null check no catalog declares (Guava's
     `Preconditions.checkNotNull`) still ends the walk: one queue becomes two keys, a missing
     hop.
+
+    **A path that comes back to where it started adds no object** (`values.CYCLE`): a field
+    copied into itself — a coroutine lambda's `create` handing `this.$ch` to the fresh instance
+    the coroutine runs, a copy constructor — carries only the values the other paths reaching
+    that field bring, so it is skipped rather than read as an object not read. Where every path
+    is one, no object was read.
 
     **Stated bounds** (D01 `hops`, D02 §2m, spec 2026-11-05 §4 item 7), each over-linking:
     a field read is answered by every write of that field, so two instances of one class each
@@ -520,12 +575,17 @@ class ObjectKeys:
         self, site: Mapping[str, Any], slot: int | str, passed: frozenset[tuple[str, int]]
     ) -> Iterator[str | None]:
         for producer, _ in producer_paths(self._index, site, slot, self._made, which_object=True):
+            if producer.reason == CYCLE:
+                continue
             if producer.caller is None or producer.ordinal is None:
                 yield None
                 continue
             at = (producer.caller, producer.ordinal)
+            if at in passed:
+                # Back at a null check this walk passed through: a cycle, adding no object.
+                continue
             made = self._index.sites.get(at)
-            through = () if made is None or at in passed else self._checked_arguments(made)
+            through = () if made is None else self._checked_arguments(made)
             if made is None or not through:
                 yield f"{producer.caller}#{producer.ordinal}"
                 continue

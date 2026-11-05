@@ -242,9 +242,10 @@ def test_a_receive_registration_names_its_site_and_rule(tables):
 
 @pytest.mark.pins("dispatch-objects.a-LAMBDA-ARG-handler-is-refused-not-guessed")
 def test_a_receive_handing_its_value_to_a_function_is_refused(analyzed: Path, tmp_path: Path):
-    """`handler: lambda_arg` (a receive giving its value to the function it is passed) is
-    refused when read rather than read as its enclosing method, which is not the code that
-    handles the value."""
+    """`handler: lambda_arg` (a receive giving its value to the function it is passed) naming
+    no `handler_arg` and `handler_method` says the function handles the value but not which
+    method of which argument: refused when read rather than read as its enclosing method,
+    which is not the code that handles the value."""
     queues = next(
         catalog for catalog in YamlCatalogSource(catalogs_dir()).load() if catalog.id == _MECHANISM
     )

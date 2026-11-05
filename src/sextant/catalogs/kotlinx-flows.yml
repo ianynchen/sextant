@@ -1,0 +1,56 @@
+id: kotlinx-flows
+displayName: Kotlin shared and state flows (emit/tryEmit/value =, collect)
+style: fluent
+# No wire: a value emitted on a shared or state flow is collected from it by code in the same
+# process (spec 2026-11-05 §1, §4 item 7). Every hop this file's sends give is written under
+# `in_process`; this catalog mints no endpoint row. `fluent` names no engine here, as in
+# `kotlinx-channels.yml`.
+protocol: in_process
+direction: inbound
+# In-process dispatch keyed by the flow OBJECT: a value emitted on a hot flow reaches every
+# collector of that same flow, whatever the value's class (`match: all`, a broadcast).
+dispatch: { key: object, match: all, mechanism: kotlinx-flows }
+
+detect:
+  coordinates: ["org.jetbrains.kotlinx:kotlinx-coroutines-core", "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm"]
+
+# CP-59 findings 17, 18 and 20, as `kotlinx-channels.yml`.
+measured:
+  - { artifact: org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm, versions: ["1.11.0"],
+      identity: reported, by: scripts/probes/cp59_dispatch.md }
+
+requires: [call_site]
+
+matches:
+  # Made ON the flow, under the receiver's STATIC type as owner (finding 18). `state.value = x`
+  # is a `setValue` call; `update { }` is an inline function whose body kotlinc writes in
+  # place as `getValue` and `compareAndSet(expect, update)`, so `compareAndSet` is the send of
+  # every `update`, its value argument 1.
+  #
+  # Not declared, and read as nothing (a stated bound): an emit on a `FlowCollector`-typed
+  # receiver (a cold `flow { emit(x) }` builder emits to its own collector, no shared object).
+  dispatch_sends:
+    - { owner: &msf kotlinx.coroutines.flow.MutableSharedFlow, method: emit, descriptor: "(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", value_arg: 0 }
+    - { owner: *msf, method: tryEmit, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: &mst kotlinx.coroutines.flow.MutableStateFlow, method: emit, descriptor: "(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;", value_arg: 0 }
+    - { owner: *mst, method: tryEmit, descriptor: "(Ljava/lang/Object;)Z", value_arg: 0 }
+    - { owner: *mst, method: setValue, descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
+    - { owner: *mst, method: compareAndSet, descriptor: "(Ljava/lang/Object;Ljava/lang/Object;)Z", value_arg: 1 }
+  # `collect { }` hands each value to the collector it is given (`handler: lambda_arg`): kotlinc
+  # compiles the lambda to a class of the module implementing `FlowCollector` (finding 20), its
+  # body the class's own `emit` (the erased `emit(Object, Continuation)` is the compiler's
+  # bridge to it), passed as that class's one shared instance or, where it captures, a new
+  # one. So the handler is the method the argument at `handler_arg`'s class runs for
+  # `handler_method`/`handler_descriptor`, the interface method the flow calls.
+  dispatch_receives:
+    - { owner: *msf, method: collect, descriptor: &collect "(Lkotlinx/coroutines/flow/FlowCollector;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;",
+        object: receiver, handler: lambda_arg, handler_arg: 0, handler_method: emit,
+        handler_descriptor: &emit "(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;" }
+    - { owner: *mst, method: collect, descriptor: *collect, object: receiver, handler: lambda_arg,
+        handler_arg: 0, handler_method: emit, handler_descriptor: *emit }
+    - { owner: kotlinx.coroutines.flow.SharedFlow, method: collect, descriptor: *collect, object: receiver,
+        handler: lambda_arg, handler_arg: 0, handler_method: emit, handler_descriptor: *emit }
+    - { owner: kotlinx.coroutines.flow.StateFlow, method: collect, descriptor: *collect, object: receiver,
+        handler: lambda_arg, handler_arg: 0, handler_method: emit, handler_descriptor: *emit }
+    - { owner: kotlinx.coroutines.flow.Flow, method: collect, descriptor: *collect, object: receiver,
+        handler: lambda_arg, handler_arg: 0, handler_method: emit, handler_descriptor: *emit }

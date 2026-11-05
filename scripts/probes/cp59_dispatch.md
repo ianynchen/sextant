@@ -1,4 +1,4 @@
-# CP-59 — Spring application events (spring-context, spring-tx 7.0.1), CDI events (CDI API 4.1.0, 2.0.0 and 1.0.0, ArC 3.17.5) and Java blocking queues (JDK 21.0.13, Guava 32.0.0), measured
+# CP-59 — Spring application events (spring-context, spring-tx 7.0.1), CDI events (CDI API 4.1.0, 2.0.0 and 1.0.0, ArC 3.17.5), Java blocking queues (JDK 21.0.13, Guava 32.0.0) and Kotlin channels and flows (kotlinx-coroutines 1.11.0, kotlinc 2.4.20), measured
 
 **Number.** The in-process dispatch plan (2026-11-05) names this probe CP-58; that number was
 already taken by `scripts/probes/cp58-inherited-mappings/` (cited by four HTTP catalogs), so it
@@ -9,7 +9,8 @@ versions Spring Boot 4.0.0 manages, as `fixtures/orders-events` resolves them; e
 is read from the jar's own `MANIFEST.MF` by the harness, which aborts if a jar or the key is
 missing. JDK 21.0.13 for `java.util.EventObject`, and the same JDK's `java.base` (`java.version`
 `21.0.13.0.3`) for the blocking queues, findings 12-15, and Guava `32.0.0.jre` (its
-`Bundle-Version`) for its drain helpers, finding 16, scoped below. Spring 5.x and 6.x are outside this measurement:
+`Bundle-Version`) for its drain helpers, finding 16, and `kotlinx-coroutines-core-jvm` **1.11.0**
+with kotlinc 2.4.20 for Kotlin channels and flows, findings 17-21, each scoped below. Spring 5.x and 6.x are outside this measurement:
 the descriptors below have been stable since 4.2 (`publishEvent(Object)`), but that is not read
 here. The fixture is compiled by javac 21 (`--release 21`). For CDI events (findings 8-11):
 `jakarta.enterprise:jakarta.enterprise.cdi-api`
@@ -57,8 +58,27 @@ declares `put`/`offer`/`add` as sends and `take`/`poll` as receives keyed by the
 object; which OWNER javac writes at a call decides which entries match it, so findings 12-15 read
 it off bytecode rather than off the javadoc.
 
+**Version scope, Kotlin (findings 17-21).** `org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm`
+**1.11.0** and `kotlin-stdlib` **2.4.20**, each read from the jar's own `MANIFEST.MF`
+(`Implementation-Version`) on `fixtures/orders-kotlin-channels`' class path, and kotlinc 2.4.x,
+read from the `@kotlin.Metadata` `mv` (`[2,4,0]`) it wrote into the fixture's and the probe
+module's class files (the harness aborts on another). The fixture and the probe module
+`cp59_dispatch/kotlin-owners` (each declared call through each owner type) are both compiled by the
+kotlin-maven-plugin 2.4.20 for JVM 21. Other kotlinx-coroutines versions are outside this
+measurement: the mangled names of `trySend`, `tryReceive` and `receiveCatching` are hashes of
+their inline-class signatures, stable across the 1.x line as far as known, but that is not read
+here. Older kotlinc versions (2.2, which `examples/koog`'s Gradle build may use) are outside it too:
+`nullOutSpilledVariable` (finding 21) is what 2.4 writes, and whether 2.2 writes it is not read.
+
+**Why it was measured, Kotlin.** The `kotlinx-channels` and `kotlinx-flows` catalogs (spec
+2026-11-05 §4 item 7) declare `send`/`trySend`, `emit`/`tryEmit`/`value =`/`update` as sends and
+`receive`/`tryReceive`/`receiveCatching`/`for`/`collect` as receives keyed by the channel or flow
+object. Which owner and which JVM name kotlinc writes, what a `for` loop and a `collect { }`
+lambda compile to, and what a coroutine's state machine does to a spilled variable decide what the
+catalogs and the object walk read, so findings 17-21 read them off bytecode.
+
 Reproduce: `JAVA_HOME=/opt/homebrew/opt/openjdk@21 scripts/probes/cp59_dispatch/run.sh` (rebuilds
-the three fixtures, prints every table below).
+the four fixtures and the Kotlin probe module, prints every table below).
 
 ## Findings (the facts the catalog uses)
 
@@ -160,6 +180,50 @@ the three fixtures, prints every table below).
    `BlockingQueue.drainTo(Collection, int)` and `BlockingQueue.poll(long, TimeUnit)` on argument 0,
    and the `Duration` form calls the `long` form. So each is a receive of the queue at argument
    0 (`object: arg0`, `guava-queues.yml`). The fixture's `Auditor` calls both (table 15).
+
+17. **What the channel and flow types declare.** `Channel<E>` extends `SendChannel<E>` and
+   `ReceiveChannel<E>`; `ProducerScope<E>` (the scope `produce { }`, `channelFlow { }` and
+   `callbackFlow { }` hand their block) extends `SendChannel<E>`. `SendChannel` declares
+   `send(E, Continuation)` (a `suspend` function: the compiler's continuation is its last
+   argument, and it returns `Object`) and `trySend`, which returns the inline class
+   `ChannelResult` and so is declared under the MANGLED JVM name `trySend-JP2dKIU`;
+   `ReceiveChannel` declares `receive(Continuation)`, `tryReceive-PtdJZtk()`,
+   `receiveCatching-JP2dKIU(Continuation)` and `iterator()`. `MutableSharedFlow<T>` extends
+   `SharedFlow<T>` and `FlowCollector<T>` and declares `emit` and `tryEmit`;
+   `MutableStateFlow<T>` extends `StateFlow<T>` and `MutableSharedFlow<T>` and declares
+   `setValue` and `compareAndSet`; `Flow` and `SharedFlow` declare `collect(FlowCollector,
+   Continuation)`; `FlowCollector` declares `emit(Object, Continuation)`, the method a flow calls
+   on its collector for each value.
+18. **kotlinc writes the receiver's static type as the owner, and the mangled name.** The probe
+   module calls each method through each owner type: `invokeinterface Channel.send`,
+   `SendChannel.send`, `ProducerScope.send`, `Channel.trySend-JP2dKIU`, …,
+   `MutableStateFlow.collect`, `Flow.collect`, each under the type the receiver is declared as.
+   `state.value = x` is `MutableStateFlow.setValue`; `update { }` is an inline function whose body
+   kotlinc writes in place as `getValue` and `compareAndSet(expect, new)`. So each catalog lists
+   every call on every owner it can be made through, under the JVM name.
+19. **A `for` loop and `consumeEach` are an `iterator()` call on the channel.** At the fixture's
+   sites, `for (o in orders)` is `Channel.iterator()` then `ChannelIterator.hasNext(Continuation)`
+   and `next()` on the iterator it returns; `consumeEach { }` is inline, so its body is written in
+   place as `ReceiveChannel.iterator()` (the extension's receiver type, whatever the property's)
+   and the same loop. A send inside `scope.launch { }` is in the `invokeSuspend` of the class
+   kotlinc compiles the block to (`Pipeline$start$1`), which reads the private field through the
+   synthetic accessor `Pipeline.access$getOrders$p(this$0)`. The channels and flows are made by
+   static library calls: `ChannelKt.Channel$default`, `SharedFlowKt.MutableSharedFlow$default`,
+   `StateFlowKt.MutableStateFlow`.
+20. **A `collect { }` lambda is a class of the module implementing `FlowCollector`.** Its body is
+   the class's own `emit(<value type>, Continuation)`; `emit(Object, Continuation)` is flagged
+   `ACC_BRIDGE, ACC_SYNTHETIC` and forwards to it. `collect` is handed the class's one shared
+   `INSTANCE` (a `getstatic`) where the lambda captures nothing (`Bus.mail`, `Status.watch`),
+   and a `new` instance where it captures (`Mailer.run`). The class extends `Object`, not one of
+   kotlinc's lambda base classes, so the extractor writes no `lambda_body` for it: the catalog names
+   the method the flow calls (`handler_method: emit`) and the reader joins it on the class.
+21. **kotlinc 2.4 nulls a dead spilled variable out through a library call.** Before a suspension
+   point, a coroutine's state machine writes a spilled variable it no longer needs back into its
+   continuation slot as `L$n = SpillingKt.nullOutSpilledVariable(x)` (fixture: `Pipeline`,
+   `Workers$run$2`, `Numbers$numbers$1`); its body is `aconst_null; areturn`. It takes the value
+   and calls nothing on it, so `value-models/compiler-null-checks.yml` declares it among
+   `not_hand_offs`; read as a call whose body is not here, the object walk took it for the call
+   that made a `ProducerScope`.
 
 ## Observations (generated by `run.sh`; not edited)
 
@@ -542,3 +606,158 @@ aborts without, not the version the fixture's pom asked for.
 - `drainUninterruptibly(…, long, TimeUnit)` calls `invokeinterface #34, 3 // InterfaceMethod java/util/concurrent/BlockingQueue.drainTo:(Ljava/util/Collection;I)I`
 - `drainUninterruptibly(…, long, TimeUnit)` calls `invokeinterface #35, 4 // InterfaceMethod java/util/concurrent/BlockingQueue.poll:(JLjava/util/concurrent/TimeUnit;)Ljava/lang/Object;`
 - `drainUninterruptibly(…, Duration)` calls `invokestatic #37 // Method drainUninterruptibly:(Ljava/util/concurrent/BlockingQueue;Ljava/util/Collection;IJLjava/util/concurrent/TimeUnit;)I`
+
+### Identity, Kotlin (from each jar's own MANIFEST.MF, and kotlinc's `@Metadata`)
+
+- `kotlinx-coroutines-core-jvm`: `Implementation-Version: 1.11.0`
+- `kotlin-stdlib`: `Implementation-Version: 2.4.20`
+- fixture `Bus` `@Metadata mv`: `[2,4,0]`
+- probe `OwnersKt` `@Metadata mv`: `[2,4,0]`
+
+### 17. What the channel and flow types declare
+
+- public interface kotlinx.coroutines.channels.Channel<E> extends kotlinx.coroutines.channels.SendChannel<E>, kotlinx.coroutines.channels.ReceiveChannel<E> {
+- public interface kotlinx.coroutines.channels.SendChannel<E> {
+  - `send` `(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+  - `trySend-JP2dKIU` `(Ljava/lang/Object;)Ljava/lang/Object;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- public interface kotlinx.coroutines.channels.ReceiveChannel<E> {
+  - `receive` `(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+  - `tryReceive-PtdJZtk` `()Ljava/lang/Object;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+  - `receiveCatching-JP2dKIU` `(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+  - `iterator` `()Lkotlinx/coroutines/channels/ChannelIterator;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- public interface kotlinx.coroutines.channels.ProducerScope<E> extends kotlinx.coroutines.CoroutineScope, kotlinx.coroutines.channels.SendChannel<E> {
+- public interface kotlinx.coroutines.flow.MutableSharedFlow<T> extends kotlinx.coroutines.flow.SharedFlow<T>, kotlinx.coroutines.flow.FlowCollector<T> {
+  - `emit` `(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+  - `tryEmit` `(Ljava/lang/Object;)Z` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- public interface kotlinx.coroutines.flow.MutableStateFlow<T> extends kotlinx.coroutines.flow.StateFlow<T>, kotlinx.coroutines.flow.MutableSharedFlow<T> {
+  - `setValue` `(Ljava/lang/Object;)V` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+  - `compareAndSet` `(Ljava/lang/Object;Ljava/lang/Object;)Z` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- public interface kotlinx.coroutines.flow.SharedFlow<T> extends kotlinx.coroutines.flow.Flow<T> {
+  - `collect` `(Lkotlinx/coroutines/flow/FlowCollector;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- public interface kotlinx.coroutines.flow.StateFlow<T> extends kotlinx.coroutines.flow.SharedFlow<T> {
+- public interface kotlinx.coroutines.flow.Flow<T> {
+  - `collect` `(Lkotlinx/coroutines/flow/FlowCollector;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+- public interface kotlinx.coroutines.flow.FlowCollector<T> {
+  - `emit` `(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;` (0x0401) ACC_PUBLIC, ACC_ABSTRACT
+
+### 18. What kotlinc writes for each declared call through each owner
+
+- `invokeinterface` `kotlinx/coroutines/channels/Channel.send:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/channels/SendChannel.send:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/channels/ProducerScope.send:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/channels/Channel.trySend-JP2dKIU:(Ljava/lang/Object;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/channels/SendChannel.trySend-JP2dKIU:(Ljava/lang/Object;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/channels/ProducerScope.trySend-JP2dKIU:(Ljava/lang/Object;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/channels/Channel.receive:(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/channels/ReceiveChannel.receive:(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/channels/Channel.tryReceive-PtdJZtk:()Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/channels/ReceiveChannel.tryReceive-PtdJZtk:()Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/channels/Channel.receiveCatching-JP2dKIU:(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/channels/ReceiveChannel.receiveCatching-JP2dKIU:(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/channels/Channel.iterator:()Lkotlinx/coroutines/channels/ChannelIterator;`
+- `invokeinterface` `kotlinx/coroutines/channels/ReceiveChannel.iterator:()Lkotlinx/coroutines/channels/ChannelIterator;`
+- `invokeinterface` `kotlinx/coroutines/flow/MutableSharedFlow.emit:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/flow/MutableStateFlow.emit:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/flow/MutableSharedFlow.tryEmit:(Ljava/lang/Object;)Z`
+- `invokeinterface` `kotlinx/coroutines/flow/MutableStateFlow.tryEmit:(Ljava/lang/Object;)Z`
+- `invokeinterface` `kotlinx/coroutines/flow/MutableStateFlow.setValue:(Ljava/lang/Object;)V`
+- `invokeinterface` `kotlinx/coroutines/flow/MutableStateFlow.compareAndSet:(Ljava/lang/Object;Ljava/lang/Object;)Z`
+- `invokeinterface` `kotlinx/coroutines/flow/MutableSharedFlow.collect:(Lkotlinx/coroutines/flow/FlowCollector;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/flow/MutableStateFlow.collect:(Lkotlinx/coroutines/flow/FlowCollector;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/flow/SharedFlow.collect:(Lkotlinx/coroutines/flow/FlowCollector;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/flow/StateFlow.collect:(Lkotlinx/coroutines/flow/FlowCollector;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/flow/Flow.collect:(Lkotlinx/coroutines/flow/FlowCollector;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `invokeinterface` `kotlinx/coroutines/flow/MutableStateFlow.getValue:()Ljava/lang/Object;`
+
+### 19. What kotlinc writes at the fixture's channel and flow sites
+
+- `Pipeline`: `invokeinterface` `kotlinx/coroutines/channels/Channel.send:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Pipeline`: `invokeinterface` `kotlinx/coroutines/channels/Channel.send:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Pipeline`: `invokeinterface` `kotlinx/coroutines/channels/Channel.send:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Pipeline`: `invokeinterface` `kotlinx/coroutines/channels/SendChannel.send:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Pipeline`: `invokeinterface` `kotlinx/coroutines/channels/Channel.trySend-JP2dKIU:(Ljava/lang/Object;)Ljava/lang/Object;`
+- `Pipeline`: `invokeinterface` `kotlinx/coroutines/channels/Channel.receive:(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Pipeline`: `invokeinterface` `kotlinx/coroutines/channels/Channel.receive:(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Pipeline`: `invokeinterface` `kotlinx/coroutines/channels/Channel.tryReceive-PtdJZtk:()Ljava/lang/Object;`
+- `Pipeline`: `invokeinterface` `kotlinx/coroutines/channels/Channel.iterator:()Lkotlinx/coroutines/channels/ChannelIterator;`
+- `Pipeline`: `invokeinterface` `kotlinx/coroutines/channels/ReceiveChannel.iterator:()Lkotlinx/coroutines/channels/ChannelIterator;`
+- `Pipeline`: `invokeinterface` `kotlinx/coroutines/channels/ChannelIterator.hasNext:(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Pipeline`: `invokeinterface` `kotlinx/coroutines/channels/ChannelIterator.hasNext:(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Pipeline`: `invokeinterface` `kotlinx/coroutines/channels/ChannelIterator.next:()Ljava/lang/Object;`
+- `Pipeline`: `invokeinterface` `kotlinx/coroutines/channels/ChannelIterator.next:()Ljava/lang/Object;`
+- `Pipeline`: `invokestatic` `kotlinx/coroutines/channels/ChannelKt.Channel$default:(ILkotlinx/coroutines/channels/BufferOverflow;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lkotlinx/coroutines/channels/Channel;`
+- `Pipeline`: `invokestatic` `kotlinx/coroutines/channels/ChannelKt.Channel$default:(ILkotlinx/coroutines/channels/BufferOverflow;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lkotlinx/coroutines/channels/Channel;`
+- `Pipeline`: `invokestatic` `kotlin/coroutines/jvm/internal/SpillingKt.nullOutSpilledVariable:(Ljava/lang/Object;)Ljava/lang/Object;`
+- `Pipeline`: `invokestatic` `kotlin/coroutines/jvm/internal/SpillingKt.nullOutSpilledVariable:(Ljava/lang/Object;)Ljava/lang/Object;`
+- `Pipeline`: `invokestatic` `kotlin/coroutines/jvm/internal/SpillingKt.nullOutSpilledVariable:(Ljava/lang/Object;)Ljava/lang/Object;`
+- `Pipeline`: `invokestatic` `kotlin/coroutines/jvm/internal/SpillingKt.nullOutSpilledVariable:(Ljava/lang/Object;)Ljava/lang/Object;`
+- `Pipeline`: `invokestatic` `kotlin/coroutines/jvm/internal/SpillingKt.nullOutSpilledVariable:(Ljava/lang/Object;)Ljava/lang/Object;`
+- `Pipeline$start$1`: `invokeinterface` `kotlinx/coroutines/channels/Channel.send:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Pipeline$start$1`: `invokestatic` `com/acme/kc/Pipeline.access$getOrders$p:(Lcom/acme/kc/Pipeline;)Lkotlinx/coroutines/channels/Channel;`
+- `Pipeline$start$2`: `invokeinterface` `kotlinx/coroutines/channels/Channel.iterator:()Lkotlinx/coroutines/channels/ChannelIterator;`
+- `Pipeline$start$2`: `invokeinterface` `kotlinx/coroutines/channels/ChannelIterator.hasNext:(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Pipeline$start$2`: `invokeinterface` `kotlinx/coroutines/channels/ChannelIterator.next:()Ljava/lang/Object;`
+- `Pipeline$start$2`: `invokestatic` `com/acme/kc/Pipeline.access$getOrders$p:(Lcom/acme/kc/Pipeline;)Lkotlinx/coroutines/channels/Channel;`
+- `Hub`: `invokeinterface` `kotlinx/coroutines/channels/Channel.trySend-JP2dKIU:(Ljava/lang/Object;)Ljava/lang/Object;`
+- `Hub`: `invokeinterface` `java/util/Set.iterator:()Ljava/util/Iterator;`
+- `Hub`: `invokeinterface` `java/util/Iterator.hasNext:()Z`
+- `Hub`: `invokeinterface` `java/util/Iterator.next:()Ljava/lang/Object;`
+- `Hub`: `invokestatic` `kotlinx/coroutines/channels/ChannelKt.Channel$default:(ILkotlinx/coroutines/channels/BufferOverflow;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lkotlinx/coroutines/channels/Channel;`
+- `Hub`: `invokevirtual` `com/acme/kc/Client.getChannel:()Lkotlinx/coroutines/channels/Channel;`
+- `Hub$connect$1`: `invokeinterface` `kotlinx/coroutines/channels/Channel.iterator:()Lkotlinx/coroutines/channels/ChannelIterator;`
+- `Hub$connect$1`: `invokeinterface` `kotlinx/coroutines/channels/ChannelIterator.hasNext:(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Hub$connect$1`: `invokeinterface` `kotlinx/coroutines/channels/ChannelIterator.next:()Ljava/lang/Object;`
+- `Hub$connect$1`: `invokevirtual` `com/acme/kc/Client.getChannel:()Lkotlinx/coroutines/channels/Channel;`
+- `Relay`: `invokeinterface` `kotlinx/coroutines/channels/Channel.send:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Workers$run$2`: `invokeinterface` `kotlinx/coroutines/channels/Channel.iterator:()Lkotlinx/coroutines/channels/ChannelIterator;`
+- `Workers$run$2`: `invokeinterface` `kotlinx/coroutines/channels/ChannelIterator.hasNext:(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Workers$run$2`: `invokeinterface` `kotlinx/coroutines/channels/ChannelIterator.next:()Ljava/lang/Object;`
+- `Workers$run$2`: `invokestatic` `kotlinx/coroutines/channels/ChannelKt.Channel$default:(ILkotlinx/coroutines/channels/BufferOverflow;Lkotlin/jvm/functions/Function1;ILjava/lang/Object;)Lkotlinx/coroutines/channels/Channel;`
+- `Workers$run$2`: `invokestatic` `kotlin/coroutines/jvm/internal/SpillingKt.nullOutSpilledVariable:(Ljava/lang/Object;)Ljava/lang/Object;`
+- `Workers$run$2`: `invokestatic` `kotlin/coroutines/jvm/internal/SpillingKt.nullOutSpilledVariable:(Ljava/lang/Object;)Ljava/lang/Object;`
+- `Workers$run$2$1`: `invokeinterface` `kotlinx/coroutines/channels/Channel.send:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Numbers`: `invokeinterface` `kotlinx/coroutines/channels/ReceiveChannel.iterator:()Lkotlinx/coroutines/channels/ChannelIterator;`
+- `Numbers`: `invokeinterface` `kotlinx/coroutines/channels/ChannelIterator.hasNext:(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Numbers`: `invokeinterface` `kotlinx/coroutines/channels/ChannelIterator.next:()Ljava/lang/Object;`
+- `Numbers`: `invokestatic` `kotlin/coroutines/jvm/internal/SpillingKt.nullOutSpilledVariable:(Ljava/lang/Object;)Ljava/lang/Object;`
+- `Numbers$numbers$1`: `invokeinterface` `kotlinx/coroutines/channels/ProducerScope.send:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Numbers$numbers$1`: `invokestatic` `kotlin/coroutines/jvm/internal/SpillingKt.nullOutSpilledVariable:(Ljava/lang/Object;)Ljava/lang/Object;`
+- `Outbox`: `invokevirtual` `kotlin/collections/ArrayDeque.iterator:()Ljava/util/Iterator;`
+- `OutboxUser`: `invokevirtual` `com/acme/kc/Outbox.send:(Lcom/acme/kc/Order;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `OutboxUser`: `invokevirtual` `com/acme/kc/Outbox.receive:(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `OutboxUser`: `invokevirtual` `com/acme/kc/Outbox.iterator:()Ljava/util/Iterator;`
+- `OutboxUser`: `invokeinterface` `java/util/Iterator.hasNext:()Z`
+- `OutboxUser`: `invokeinterface` `java/util/Iterator.next:()Ljava/lang/Object;`
+- `Bus`: `invokeinterface` `kotlinx/coroutines/flow/MutableSharedFlow.emit:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Bus`: `invokeinterface` `kotlinx/coroutines/flow/MutableSharedFlow.tryEmit:(Ljava/lang/Object;)Z`
+- `Bus`: `invokeinterface` `kotlinx/coroutines/flow/MutableSharedFlow.collect:(Lkotlinx/coroutines/flow/FlowCollector;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Bus`: `invokeinterface` `kotlinx/coroutines/flow/MutableSharedFlow.collect:(Lkotlinx/coroutines/flow/FlowCollector;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Bus`: `invokestatic` `kotlinx/coroutines/flow/SharedFlowKt.MutableSharedFlow$default:(IILkotlinx/coroutines/channels/BufferOverflow;ILjava/lang/Object;)Lkotlinx/coroutines/flow/MutableSharedFlow;`
+- `Mailer`: `invokeinterface` `kotlinx/coroutines/flow/MutableSharedFlow.collect:(Lkotlinx/coroutines/flow/FlowCollector;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Status`: `invokeinterface` `kotlinx/coroutines/flow/MutableStateFlow.emit:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Status`: `invokeinterface` `kotlinx/coroutines/flow/MutableStateFlow.setValue:(Ljava/lang/Object;)V`
+- `Status`: `invokeinterface` `kotlinx/coroutines/flow/MutableStateFlow.compareAndSet:(Ljava/lang/Object;Ljava/lang/Object;)Z`
+- `Status`: `invokeinterface` `kotlinx/coroutines/flow/MutableStateFlow.collect:(Lkotlinx/coroutines/flow/FlowCollector;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Status`: `invokestatic` `kotlinx/coroutines/flow/StateFlowKt.MutableStateFlow:(Ljava/lang/Object;)Lkotlinx/coroutines/flow/MutableStateFlow;`
+- `Ticker$ticks$1`: `invokeinterface` `kotlinx/coroutines/flow/FlowCollector.emit:(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`
+- `Ticker$ticks$1`: `invokestatic` `kotlin/coroutines/jvm/internal/SpillingKt.nullOutSpilledVariable:(Ljava/lang/Object;)Ljava/lang/Object;`
+
+### 20. What a `collect { }` lambda compiles to
+
+- final class com.acme.kc.Bus$mail$2<T> implements kotlinx.coroutines.flow.FlowCollector {
+  - `emit` `(Lcom/acme/kc/Event;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;` (0x0011) ACC_PUBLIC, ACC_FINAL
+  - `emit` `(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;` (0x1041) ACC_PUBLIC, ACC_BRIDGE, ACC_SYNTHETIC
+- final class com.acme.kc.Mailer$run$2<T> implements kotlinx.coroutines.flow.FlowCollector {
+  - `emit` `(Lcom/acme/kc/Event;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;` (0x0011) ACC_PUBLIC, ACC_FINAL
+  - `emit` `(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;` (0x1041) ACC_PUBLIC, ACC_BRIDGE, ACC_SYNTHETIC
+- final class com.acme.kc.Status$watch$2<T> implements kotlinx.coroutines.flow.FlowCollector {
+  - `emit` `(Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;` (0x0011) ACC_PUBLIC, ACC_FINAL
+  - `emit` `(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;` (0x1041) ACC_PUBLIC, ACC_BRIDGE, ACC_SYNTHETIC
+- `Bus.mail` hands `collect`: `getstatic #91 // Field com/acme/kc/Bus$mail$2.INSTANCE:Lcom/acme/kc/Bus$mail$2;`
+- `Mailer.run` hands `collect`: `new #66 // class com/acme/kc/Mailer$run$2`
+- `Status.watch` hands `collect`: `getstatic #111 // Field com/acme/kc/Status$watch$2.INSTANCE:Lcom/acme/kc/Status$watch$2;`
+
+### 21. kotlinc's spilled-variable null-out
+
+- `SpillingKt.nullOutSpilledVariable` `aconst_null`
+- `SpillingKt.nullOutSpilledVariable` `areturn`

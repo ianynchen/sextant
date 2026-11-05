@@ -364,6 +364,8 @@ _ASKS_PER_CATALOG = {
     "google-pubsub-publisher": (2, 2),
     "google-pubsub-subscriber": (2, 3),
     "jdk-blocking-queue": (40, 40),
+    "kotlinx-channels": (6, 6),
+    "kotlinx-flows": (11, 11),
     "jakarta-jms": (28, 28),
     "jakarta-servlet": (2, 2),
     "jakarta-websocket-client": (12, 12),
@@ -475,7 +477,9 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # **+4 on 2026-11-05**: the new `cdi-events` and `cdi-async-events` catalogs, same comment.
     # **+2 on 2026-11-05**: the javax CDI 2.x `fireAsync` overloads, same comment.
     # **+40 on 2026-11-05**: the new `jdk-blocking-queue` catalog, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 1467
+    # **+17 on 2026-11-05**: the new `kotlinx-channels` (6 sends) and `kotlinx-flows` (6 sends,
+    # 5 collectors' function arguments) catalogs, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 1484
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

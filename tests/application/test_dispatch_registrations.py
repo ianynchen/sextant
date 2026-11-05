@@ -1020,6 +1020,73 @@ def test_a_receive_is_loaded_with_its_object_and_handler(tmp_path: Path):
     )
 
 
+def test_a_receive_handing_its_value_to_a_function_is_loaded_with_it(tmp_path: Path):
+    """`handler: lambda_arg` (`collect { }`): the argument holding the function and the method
+    the library calls on it, by name and descriptor, are carried with the receive."""
+    (tmp_path / "c.yml").write_text(
+        "id: c\nstyle: fluent\ndispatch: {key: object, match: all, mechanism: m}\nmatches:\n"
+        "  dispatch_receives:\n"
+        f"    - {{ owner: a.Flow, method: collect, descriptor: '{_COLLECT}', object: receiver, "
+        f"handler: lambda_arg, handler_arg: 0, handler_method: emit, "
+        f"handler_descriptor: '(Ljava/lang/Object;)V' }}\n",
+        encoding="utf-8",
+    )
+    [catalog] = YamlCatalogSource(tmp_path).load()
+    [receive] = catalog.dispatch_receives
+    assert (
+        receive["handler"],
+        receive["handler_arg"],
+        receive["handler_method"],
+        receive["handler_descriptor"],
+    ) == ("lambda_arg", 0, "emit", "(Ljava/lang/Object;)V")
+
+
+_COLLECT = "(La/Collector;I)V"
+
+
+@pytest.mark.parametrize(
+    "words, refused",
+    [
+        ("handler: lambda_arg", "names all of"),
+        ("handler: lambda_arg, handler_arg: 0, handler_method: emit", "names all of"),
+        (
+            (
+                "handler: lambda_arg, handler_arg: 1, handler_method: emit, "
+                "handler_descriptor: '(Ljava/lang/Object;)V'"
+            ),
+            "`handler_arg: 1`",
+        ),
+        (
+            (
+                "handler: lambda_arg, handler_arg: 2, handler_method: emit, "
+                "handler_descriptor: '(Ljava/lang/Object;)V'"
+            ),
+            "`handler_arg: 2`",
+        ),
+        (
+            "handler: lambda_arg, handler_arg: 0, handler_method: emit, handler_descriptor: emit",
+            "a method name and a method descriptor",
+        ),
+        ("handler: enclosing, handler_arg: 0", "only a `lambda_arg` receive"),
+    ],
+)
+@pytest.mark.pins("catalogs.a-LAMBDA-ARG-receive-NAMES-its-function")
+def test_a_receive_naming_its_function_wrongly_is_refused(tmp_path: Path, words: str, refused: str):
+    """A `lambda_arg` receive names all three words, its `handler_arg` an object argument of
+    the descriptor (not the `int` at 1, not past the end); an `enclosing` one names none."""
+    from sextant.application.ports.catalogs import CatalogError
+
+    (tmp_path / "c.yml").write_text(
+        "id: c\nstyle: fluent\ndispatch: {key: object, match: all, mechanism: m}\nmatches:\n"
+        "  dispatch_receives:\n"
+        f"    - {{ owner: a.Flow, method: collect, descriptor: '{_COLLECT}', object: receiver, "
+        f"{words} }}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(CatalogError, match=refused):
+        YamlCatalogSource(tmp_path).load()
+
+
 @pytest.mark.parametrize(
     "entry, refused",
     [
