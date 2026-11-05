@@ -143,11 +143,11 @@ Five Major findings (no Critical). Minor findings are fixed above, marked "self-
   **Ruled 2026-11-05: A.** The init script records the label Gradle puts on the version it picked
   (`org.jetbrains.kotlin.platform.type`, `jvm` / `androidJvm`) and the lookup uses path plus label.
   A label Sextant does not know is reported ("could not tell which version"), never guessed.
-- **M2. The identity of a KMP target module is not defined.** "Named as its publication names it"
-  holds only where `maven-publish` is applied, and §2c says identity is unchanged. Recommendation:
-  the OI-273 identity with `-<target name>` added to the name, which is the artifact id the Kotlin
-  plugin itself gives each target (`core-jvm`, `core-android`); for an ungrouped project the same
-  suffix on the last path segment.
+- **M2. The name of each version's module.** **Ruled 2026-11-05: A.** Today's name (OI-273) with a
+  dash and the version name the build file gives (`jvm()`, `android {}`) added to the last part:
+  kotlinconf `:core` → `KotlinConfApp:core-jvm` and `KotlinConfApp:core-android`; a grouped part →
+  `org.jetbrains:core-jvm`. The same spelling Kotlin uses when it uploads each version. A part built
+  once keeps today's name. Two modules with one name stop analysis with a clear message.
 - **M3. Flavored apps get an invented id (`Noty.app:free`).** Nothing in Gradle or AGP spells it so,
   and `:` already separates path segments in ungrouped ids. 0 flavored builds in the corpus.
   Recommendation: refuse a flavored project with a named reason now and log an OI; design the id when
