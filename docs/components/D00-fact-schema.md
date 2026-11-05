@@ -34,7 +34,15 @@ sextant-jvm  maven  com.acme/orders  2.1.0  com/acme/OrderService#save(+1).
 | `local <n>` | a symbol confined to one document |
 
 **Where a field has no meaning, write `.`** — an unpublished service has no package
-manager, package or version.
+manager, package or version. A Gradle project with no group is one: Gradle refuses to
+publish it, so its symbols read
+
+```
+sextant-jvm  .  .  .  web/WidgetResourceKt#widget(sig_b841030b).
+```
+
+and its module id is its place in its build instead ([M02](M02-detector.md), "A module's
+identity is the one its build tool gives it").
 
 ### Rules
 

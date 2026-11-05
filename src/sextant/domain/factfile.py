@@ -97,7 +97,16 @@ def config_fact_target(fact_root: Path, relative_path: str) -> Path:
     return fact_root / "config" / (relative_path + ".jsonl")
 
 
-def library_fact_root(fact_root: Path, coordinate: str) -> Path:
+# Where an UNPUBLISHED library's facts live, under `facts/lib/` (OI-273 fix round 1). A
+# Gradle project with no group has no coordinate, only a module id — the bare root name
+# `Acme`, or `Acme:empty` — and filing it as `<group>/<artifact>` would put `Acme`'s
+# classes in the same directory as `Acme:lib`'s subtree. Parentheses are outside what a
+# Maven groupId may contain and outside a JVM package name, so no coordinate and no
+# class path can reach this directory.
+_UNPUBLISHED = "(unpublished)"
+
+
+def library_fact_root(fact_root: Path, coordinate: str, *, unpublished: bool = False) -> Path:
     """Where one extracted library's fact files live: `facts/lib/<groupId>/
     <artifactId>/`, with the scanner's own class-relative tree underneath.
 
@@ -109,13 +118,20 @@ def library_fact_root(fact_root: Path, coordinate: str) -> Path:
     a coordinate may contain a separator (`ingress/detect/sextant_config.py`
     refuses one that does), so no two coordinates can compose one path.
     """
+    if unpublished:
+        # A module id, one segment: Gradle forbids `/` and a backslash in a project name.
+        if not coordinate or "/" in coordinate or "\\" in coordinate:
+            raise ValueError(f"not a module id: {coordinate!r}")
+        return fact_root / "lib" / _UNPUBLISHED / coordinate
     if ":" not in coordinate or "/" in coordinate or "\\" in coordinate:
         raise ValueError(f"not a library coordinate: {coordinate!r}")
     group, _, artifact = coordinate.partition(":")
     return fact_root / "lib" / group / artifact
 
 
-def discard_library_facts(fact_root: Path, coordinate: str | None = None) -> None:
+def discard_library_facts(
+    fact_root: Path, coordinate: str | None = None, *, unpublished: bool = False
+) -> None:
     """Remove the library fact subtree — the whole of it, or one coordinate's.
 
     A fact file is written whole and never appended to, so a document that is
@@ -139,12 +155,13 @@ def discard_library_facts(fact_root: Path, coordinate: str | None = None) -> Non
     """
     target = fact_root / "lib"
     if coordinate is not None:
-        target = library_fact_root(fact_root, coordinate)
+        target = library_fact_root(fact_root, coordinate, unpublished=unpublished)
     shutil.rmtree(target, ignore_errors=True)
 
 
-def discard_scanned_facts(fact_root: Path, classes_dir: Path) -> None:
-    """Remove every fact file a PREVIOUS scan of `classes_dir` left behind.
+def discard_scanned_facts(fact_root: Path, *classes_dirs: Path) -> None:
+    """Remove every fact file a PREVIOUS scan of any of `classes_dirs` left behind — one
+    walk of the tree for all of them, because a module may report several (OI-273).
 
     `discard_library_facts` above, generalised to the module's own classes, and for its
     own stated reason: *a fact file is written whole and never appended to, so a document
@@ -179,7 +196,8 @@ def discard_scanned_facts(fact_root: Path, classes_dir: Path) -> None:
     """
     if not fact_root.exists():
         return
-    target = classes_dir.resolve()
+    spelled = {str(classes_dir) for classes_dir in classes_dirs}
+    targets = {classes_dir.resolve() for classes_dir in classes_dirs}
     for path in sorted(fact_root.rglob("*.jsonl")):
         try:
             with path.open(encoding="utf-8") as handle:
@@ -192,7 +210,7 @@ def discard_scanned_facts(fact_root: Path, classes_dir: Path) -> None:
         entry = record.get("origin_entry")
         if not isinstance(entry, str):
             continue
-        if entry == str(classes_dir) or Path(entry).resolve() == target:
+        if entry in spelled or Path(entry).resolve() in targets:
             path.unlink(missing_ok=True)
 
 

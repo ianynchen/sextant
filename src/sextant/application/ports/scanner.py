@@ -27,6 +27,12 @@ class ScanRequest:
     # `type_header`). Empty for a library scan and wherever nothing resolved, and then the
     # scan is byte-for-byte what it was before the read existed.
     dependency_archives: "tuple[LibraryRoot, ...]" = ()
+    # Further classes directories of the SAME module, read in the same scan as
+    # `classes_dir` (OI-273 fix round 1): Gradle reports one per compiling plugin, and
+    # one scan is what lets the header read see every class's references and count
+    # every directory's own types as the module's. Each document still records the
+    # directory it was read from.
+    more_classes_dirs: tuple[Path, ...] = ()
 
 
 class ScanError(RuntimeError):

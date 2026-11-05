@@ -60,6 +60,7 @@ def _minimal_project(
         "version": version,
         "dir": dir_,
         "sourceRoots": source_roots or [],
+        "sourceLanguages": {root: ["java"] for root in source_roots or []},
         "resourceRoots": [],
         "classesDirs": classes_dirs or [],
         "publishing": False,
@@ -343,12 +344,13 @@ def test_a_single_module_build_never_gets_the_root_source_note():
     assert model.notes == ()
 
 
-# --- coordinates leaving loose: loud refusals (2M design §1) ---------------
+# --- a project's identity, formed the way Gradle itself forms it (OI-273) ---
 
 
 def _project(
     tmp_path: Path,
     *,
+    path: str = ":thing",
     group: str = "com.acme",
     name: str = "thing",
     version: str = "1.0.0",
@@ -356,6 +358,7 @@ def _project(
     classpath: list | None = None,
     classes_dirs: list[str] | None = None,
     source_roots: list[str] | None = None,
+    source_languages: dict[str, list[str]] | None = None,
     resource_roots: list[str] | None = None,
 ) -> dict:
     """A project record backed by REAL directories on disk for its default
@@ -369,13 +372,17 @@ def _project(
         default_source.mkdir(parents=True, exist_ok=True)
     if resource_roots is None:
         default_resource.mkdir(parents=True, exist_ok=True)
+    reported_sources = [str(default_source)] if source_roots is None else source_roots
     return {
-        "path": ":thing",
+        "path": path,
         "group": group,
         "name": name,
         "version": version,
         "dir": str(tmp_path),
-        "sourceRoots": [str(default_source)] if source_roots is None else source_roots,
+        "sourceRoots": reported_sources,
+        "sourceLanguages": {root: ["java"] for root in reported_sources}
+        if source_languages is None
+        else source_languages,
         "resourceRoots": [str(default_resource)] if resource_roots is None else resource_roots,
         "classesDirs": [str(tmp_path / "build" / "classes" / "java" / "main")]
         if classes_dirs is None
@@ -385,16 +392,53 @@ def _project(
     }
 
 
-def test_a_project_with_no_group_is_refused_by_name(tmp_path: Path):
-    project = _project(tmp_path, group="")
-    with pytest.raises(ValueError, match="gradle project thing declares no group"):
-        GradleDetector._module_of(tmp_path, project)
+def test_a_root_project_with_no_group_is_named_by_its_root_project_name_alone(tmp_path: Path):
+    """No group means no Maven coordinates at all — measured on Gradle 9.8.2,
+    `publishToMavenLocal` refuses with "groupId cannot be empty" — so nothing outside
+    the build can reference this project by coordinates, and the only identity it has
+    is its place in its build. A root project's place is its name: what Gradle
+    reports as `rootProject.name` (the folder name by default). Refusing it instead
+    left `kotlin-ktor-exposed-starter` and 21 of 36 ktor-samples unanalysable."""
+    project = _project(tmp_path, path=":", group="", name="kotlin-ktor-exposed-starter")
+    module = GradleDetector._module_of(tmp_path, project, [project])
+    assert module.module_id == "kotlin-ktor-exposed-starter"
 
 
-def test_a_project_with_version_unspecified_is_refused_by_name(tmp_path: Path):
+@pytest.mark.pins("detect.a-NESTED-no-group-gradle-project-is-root-name-plus-path")
+def test_a_nested_project_with_no_group_is_its_root_name_and_full_project_path(tmp_path: Path):
+    """The root project name comes from Gradle's own record of the root (path `:`),
+    never from parsing `settings.gradle`, and every segment of the project path is
+    kept: `:libs:core` and `:core` are different projects of one build, and dropping
+    the middle would give them one identity."""
+    root = _project(tmp_path, path=":", group="", name="Acme", classes_dirs=[])
+    core = _project(tmp_path, path=":libs:core", group="", name="core")
+    app = _project(tmp_path, path=":app", group="", name="app")
+    reactor = [root, core, app]
+    assert GradleDetector._module_of(tmp_path, core, reactor).module_id == "Acme:libs:core"
+    assert GradleDetector._module_of(tmp_path, app, reactor).module_id == "Acme:app"
+
+
+def test_a_project_with_no_group_writes_dot_for_manager_package_and_version(tmp_path: Path):
+    """D00 §1: "an unpublished service has no package manager, package or version".
+    The extractor writes `sextant-jvm . . . <descriptor>` for a module whose
+    coordinates and version are `.` — so a no-group project hands it exactly that,
+    whatever version it declares: a version names a release of a package, and
+    there is no package."""
+    project = _project(tmp_path, path=":", group="", name="app", version="1.4.0")
+    module = GradleDetector._module_of(tmp_path, project, [project])
+    assert (module.coordinates, module.version) == (".", ".")
+
+
+@pytest.mark.pins("detect.a-GROUPED-gradle-project-keeps-its-maven-coordinates")
+def test_a_project_with_a_group_and_no_version_is_published_as_unspecified(tmp_path: Path):
+    """Gradle publishes a grouped project with no version as
+    `com/acme/nogroup-app/unspecified/nogroup-app-unspecified.jar` (measured, Gradle
+    9.8.2): the version is literally `unspecified`, so that is the version its symbols
+    carry — not a refusal, and not an invented one."""
     project = _project(tmp_path, version="unspecified")
-    with pytest.raises(ValueError, match="gradle project thing declares no version"):
-        GradleDetector._module_of(tmp_path, project)
+    module = GradleDetector._module_of(tmp_path, project)
+    assert module.module_id == "com.acme:thing"
+    assert (module.coordinates, module.version) == ("com.acme/thing", "unspecified")
 
 
 # --- source/resource roots Gradle names but does not promise exist (fix
@@ -426,6 +470,80 @@ def test_a_reported_source_root_that_does_exist_is_kept(tmp_path: Path):
     project = _project(tmp_path, source_roots=[str(real)])
     module = GradleDetector._module_of(tmp_path, project)
     assert module.source_roots == (real,)
+
+
+@pytest.mark.pins("detect.a-gradle-source-roots-LANGUAGE-is-the-plugin-that-registered-it")
+def test_a_source_roots_language_is_the_plugin_that_registered_it_not_its_name(
+    tmp_path: Path,
+):
+    """ktor-samples' `client-tools` declares `kotlin.srcDirs("src")`: the directory's
+    NAME is `src`, and reading the language off the name left a module no scanner
+    accepts. Gradle knows which source-directory set registered the root — the Kotlin
+    plugin's `kotlin` set here — and the init script reports it, so that is the answer."""
+    src = tmp_path / "src"
+    src.mkdir()
+    project = _project(tmp_path, source_roots=[str(src)], source_languages={str(src): ["kotlin"]})
+    module = GradleDetector._module_of(tmp_path, project)
+    assert module.languages == {"kotlin"}
+
+
+def test_a_root_two_plugins_registered_carries_both_languages(tmp_path: Path):
+    """The Kotlin plugin adds `src/main/java` to its own set as well — kotlinc compiles
+    `.kt` files found there — so Gradle reports both sets for that one directory, and
+    both are languages of the module."""
+    java = tmp_path / "src" / "main" / "java"
+    java.mkdir(parents=True)
+    project = _project(
+        tmp_path, source_roots=[str(java)], source_languages={str(java): ["java", "kotlin"]}
+    )
+    assert GradleDetector._module_of(tmp_path, project).languages == {"java", "kotlin"}
+
+
+def test_a_root_that_does_not_exist_contributes_no_language(tmp_path: Path):
+    """Every Kotlin JVM project REGISTERS `src/main/kotlin` and `src/main/java`; a
+    directory that is not on disk holds no source, so its language is not present."""
+    kotlin = tmp_path / "src" / "main" / "kotlin"
+    kotlin.mkdir(parents=True)
+    ghost = tmp_path / "src" / "main" / "java"
+    project = _project(
+        tmp_path,
+        source_roots=[str(ghost), str(kotlin)],
+        source_languages={str(ghost): ["java", "kotlin"], str(kotlin): ["kotlin"]},
+    )
+    assert GradleDetector._module_of(tmp_path, project).languages == {"kotlin"}
+
+
+@pytest.mark.pins("detect.a-GENERATED-source-directory-names-a-language")
+def test_a_module_whose_only_source_is_generated_takes_its_language_from_it(tmp_path: Path):
+    """An OpenAPI-generator API module, a jOOQ module, a protobuf contracts module: every
+    class is compiled from a directory a task writes under the build directory. That
+    directory is not a source ROOT — nobody edits it — but Gradle reports it in the
+    source set, registered by the plugin that compiles it, so it names the module's
+    language. Without that the module had classes and no language, and "no scanner accepts
+    a module with no language" stopped the whole reactor (OI-273 fix round 2, review N1)."""
+    generated = tmp_path / "build" / "generated" / "src" / "main" / "java"
+    (generated / "api").mkdir(parents=True)
+    (generated / "api" / "PricingApi.java").write_text("package api; class PricingApi {}\n")
+    project = _project(tmp_path, source_roots=[], source_languages={str(generated): ["java"]})
+    module = GradleDetector._module_of(tmp_path, project)
+    assert module.languages == {"java"}
+    assert module.source_roots == ()
+
+
+def test_an_empty_generated_directory_names_no_language(tmp_path: Path):
+    """Gradle's java plugin creates the annotation-processor output directory on every
+    compile, empty when no processor ran: a compiler's scratch space, not source. A Kotlin
+    module must not read as `java` because of it."""
+    kotlin = tmp_path / "src" / "main" / "kotlin"
+    kotlin.mkdir(parents=True)
+    processor = tmp_path / "build" / "generated" / "sources" / "annotationProcessor" / "java"
+    processor.mkdir(parents=True)
+    project = _project(
+        tmp_path,
+        source_roots=[str(kotlin)],
+        source_languages={str(kotlin): ["kotlin"], str(processor): ["java"]},
+    )
+    assert GradleDetector._module_of(tmp_path, project).languages == {"kotlin"}
 
 
 # --- schema roots: proto/avro stay sibling-to-source; the resource-nested
@@ -660,6 +778,71 @@ def test_distribution_absent_message_has_no_file_to_name_without_a_wrapper(tmp_p
         "Gradle distribution not present — Gradle could not start before running any task"
     )
     assert "org.gradle.wrapper.Download" in message
+
+
+# Captured from the real wrapper (Gradle 9.5.0's, examples/playport, a fresh Gradle user
+# home, `--offline`): the wrapper DOWNLOADED its distribution successfully, and then the
+# build itself failed resolving a plugin offline. Path shortened; otherwise verbatim.
+_REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE = (
+    "Downloading https://services.gradle.org/distributions/gradle-9.5.0-bin.zip\n"
+    ".............10%.............20%..............30%.............40%.............50%"
+    "..............60%.............70%..............80%.............90%.............100%\n"
+    "\nFAILURE: Build failed with an exception.\n\n* Where:\n"
+    "Build file '/repo/playport/build.gradle.kts' line: 1\n\n* What went wrong:\n"
+    "Plugin [id: 'org.jetbrains.kotlin.jvm', version: '2.4.20', apply: false] was not found "
+    "in any of the following sources:\n\n"
+    "- Gradle Core Plugins (plugin is not in 'org.gradle' namespace)\n"
+    "- Included Builds (No included builds contain this plugin)\n"
+    "- Plugin Repositories (could not resolve plugin artifact "
+    "'org.jetbrains.kotlin.jvm:org.jetbrains.kotlin.jvm.gradle.plugin:2.4.20')\n"
+    "  Searched in the following repositories:\n    MavenRepo\n"
+    "    Gradle Central Plugin Repository\n\nBUILD FAILED in 17s\n"
+)
+
+
+@pytest.mark.pins("detect.a-download-that-SUCCEEDED-is-not-a-missing-distribution")
+def test_a_download_that_succeeded_before_a_build_failure_is_not_distribution_absent():
+    """The wrapper prints `Downloading https://...` and its progress, succeeds, and then
+    the BUILD fails — Gradle's own banner says so. Reading the download line alone reported
+    "Gradle distribution not present" and hid Gradle's real reason (OI-273 fix round 1)."""
+    assert (
+        gradle_module._is_distribution_absent(_REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE) is False
+    )
+
+
+@pytest.mark.pins("detect.an-OFFLINE-PLUGIN-refusal-is-retried-online-under-the-flag")
+def test_an_offline_plugin_refusal_with_allow_resolve_retries_online_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Offline, a plugin Gradle has never cached fails as "could not resolve plugin artifact"
+    (measured on Gradle 8.14.1 and 9.5.0) — never as "available for offline mode", the
+    wording a missing DEPENDENCY gets. It is the same refusal: the cache lacks it and the
+    network might not, so `--allow-resolve` retries it online, as it does a dependency."""
+    calls: list[bool] = []
+
+    def fake_run_once(gradle_command, path, out_file, offline):
+        calls.append(offline)
+        if offline:
+            return _completed(1, _REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE)
+        out_file.write_text(json.dumps({"projects": []}), encoding="utf-8")
+        return _completed(0, "")
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", True)
+    assert data == {"projects": []}
+    assert calls == [True, False]
+
+
+def test_an_offline_plugin_refusal_without_the_flag_reports_gradles_own_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def fake_run_once(gradle_command, path, out_file, offline):
+        return _completed(1, _REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    with pytest.raises(ValueError, match="could not resolve plugin artifact") as failure:
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", False)
+    assert "distribution not present" not in str(failure.value)
 
 
 # --- `_invoke`'s retry ladder, driven by a faked subprocess -----------------
@@ -916,3 +1099,36 @@ def test_a_project_record_predating_the_release_field_reads_as_absence(tmp_path:
     project = _minimal_project(dir_=str(tmp_path))
     project.pop("declaredRelease", None)
     assert GradleDetector._module_of(tmp_path, project).declared_release is None
+
+
+@pytest.mark.pins("detect.a-NO-GROUP-sibling-is-read-as-an-unpublished-library-root")
+def test_a_no_group_sibling_is_read_as_a_library_root_under_its_module_id(tmp_path: Path):
+    """The no-group sibling Gradle actually produces: the ROOT project. Gradle gives every
+    subproject a default group (the root's name), so only the root has none, and
+    `:app` with `implementation project(':')` has it on its compile classpath — a
+    dependency in every sense, read the way a grouped sibling is. It has no coordinates
+    (Gradle will not publish it), so it is marked unpublished exactly as a module is:
+    named by its module id, the bare root name `Acme`, with `.` for package and version
+    (OI-273 round 2; fix round 1, review M2: this is the shape that must be tested)."""
+    root_classes = tmp_path / "build" / "classes" / "java" / "main"
+    root_classes.mkdir(parents=True)
+    root = _project(tmp_path, path=":", group="", name="Acme", classes_dirs=[str(root_classes)])
+    app = _project(
+        tmp_path / "app",
+        path=":app",
+        group="Acme",
+        name="app",
+        version="unspecified",
+        classpath=[{"path": str(root_classes), "internal": True, "projectPath": ":"}],
+    )
+    module = GradleDetector._module_of(tmp_path / "app", app, [root, app])
+
+    assert module.module_id == "Acme:app"
+    assert module.sibling_coordinates == ("Acme",)
+    assert [(r.coordinate, r.version, r.package, r.archive) for r in module.library_roots] == [
+        ("Acme", ".", ".", root_classes)
+    ]
+    # The same string the root reports as its OWN id, which is what joins the two.
+    assert module.sibling_coordinates == (
+        GradleDetector._module_of(tmp_path, root, [root, app]).module_id,
+    )

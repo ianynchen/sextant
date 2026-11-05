@@ -1181,6 +1181,213 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "detect.a-GROUPED-gradle-project-keeps-its-maven-coordinates": Guard(
+        what="a Gradle project with a group is `group:name` at its own version, "
+        "`unspecified` included — only a project with NO group loses its coordinates",
+        why="Gradle publishes a grouped project with no version as `group/name/unspecified` "
+        "(OI-273, measured on 9.8.2). Without the branch every grouped project would be "
+        "named by its build path and its symbols would claim `. . .`, an unpublished "
+        "identity for an artifact Gradle does publish",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="        if group:\n            return _Identity(",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            return _Identity(",
+            ),
+        ),
+    ),
+    "detect.a-NESTED-no-group-gradle-project-is-root-name-plus-path": Guard(
+        what="a no-group Gradle project below the root is the root project's name followed "
+        "by its full project path; only the root itself is its name alone",
+        why="without it `:libs:core` would be `core` and `:core` would be `core` too — two "
+        "projects of one build under one module id — and neither would say which build "
+        "it belongs to (OI-273)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find='        if path_in_build == ":":\n',
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-gradle-source-roots-LANGUAGE-is-the-plugin-that-registered-it": Guard(
+        what="a Gradle module's languages are the source-directory sets Gradle reports for "
+        "its existing source roots, never the roots' directory names",
+        why='ktor-samples\' client-tools declares `kotlin.srcDirs("src")`; read off the '
+        "name its language is `src`, no scanner accepts it, and the module cannot be "
+        "analysed at all (OI-273 round 2)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="                found.update(languages)\n",
+                replace="                found.add(Path(directory).name)  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "analyze.EVERY-existing-output-directory-is-scanned": Guard(
+        what="analyze scans each output directory the build reports that exists, not only "
+        "the first",
+        why="a Kotlin JVM Gradle project reports `build/classes/java/main` first, which a "
+        "Kotlin-only build never creates: scanning the first alone refused every such "
+        "module, and on a mixed project would drop one language's classes in silence "
+        "(OI-273 round 2)",
+        edits=(
+            Edit(
+                path="sextant/application/stages/analyze.py",
+                find="    present = tuple(d for d in module.output_dirs if d.is_dir()) or "
+                "module.output_dirs[:1]\n",
+                replace="    present = module.output_dirs[:1]  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-NO-GROUP-sibling-is-read-as-an-unpublished-library-root": Guard(
+        what="a Gradle sibling with no group on the compile classpath is a library root, "
+        "named by its module id and marked unpublished",
+        why="it is on the classpath and its types are in this module's calls; skipped, every "
+        "call from a no-group module into its sibling points at classes nothing read "
+        "(OI-273 round 2)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="            coordinate = identity.module_id\n",
+                replace="            if not identity.published:  # guard disabled by "
+                "scripts/guard_check.py\n                continue\n"
+                "            coordinate = identity.module_id\n",
+            ),
+        ),
+    ),
+    "analyze.an-UNPUBLISHED-library-root-writes-dots-not-maven": Guard(
+        what="a library root marked unpublished is scanned with `.` as its package, so its "
+        "symbols read `. . .`",
+        why="without it a no-group sibling's symbols would read `maven Acme/lib .` — a "
+        "package spelled out of a build path, and a different symbol from the one the same "
+        "class carries when that sibling is analysed as a module (OI-273 round 2)",
+        edits=(
+            Edit(
+                path="sextant/application/stages/analyze.py",
+                find="                    if library.package is None\n",
+                replace="                    if True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "analyze.ONE-scan-over-every-output-directory": Guard(
+        what="every output directory of a module goes to the extractor in ONE scan",
+        why="a scan per directory let the last overwrite the one type-header document and "
+        "counted the other directory's own types as found in no archive: a mixed module "
+        "stated 4 headers read / 3 not found where the truth was 12 / 9 (review M1)",
+        edits=(
+            Edit(
+                path="sextant/ingress/extract/jvm/scanner.py",
+                find="                    for more in request.more_classes_dirs\n",
+                replace="                    for more in ()  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "analyze.an-UNPUBLISHED-library-root-has-its-own-fact-subtree": Guard(
+        what="an unpublished library root (a no-group sibling) is filed under its own "
+        "subtree by module id, never parsed as `group:artifact`",
+        why="the root project is the one no-group sibling Gradle produces by default, and its "
+        "module id has no colon: parsed as a coordinate it stopped the whole reactor with "
+        "`not a library coordinate: 'Acme'` (review M2)",
+        edits=(
+            Edit(
+                path="sextant/application/stages/analyze.py",
+                find="                        fact_root, library.coordinate, "
+                "unpublished=library.unpublished\n",
+                replace="                        fact_root, library.coordinate, unpublished=False"
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "api.a-module-with-NOTHING-TO-SCAN-is-skipped": Guard(
+        what="a module with no source root and no compiled output on disk is skipped with "
+        "its reason",
+        why="`subprojects { apply plugin: 'java' }` gives a folder-only project a classes "
+        "directory it never creates; analysed, it had no language and the refusal stopped "
+        "the whole reactor (OI-273 fix round 1)",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find="    if not module.source_roots and not any(d.is_dir() for d in "
+                "module.output_dirs):\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-download-that-SUCCEEDED-is-not-a-missing-distribution": Guard(
+        what='Gradle\'s build-failure banner rules out "distribution not present"',
+        why="a wrapper that downloads its distribution prints `Downloading https://...`; when "
+        "the build then fails, reading that line reported a missing distribution and hid "
+        "Gradle's real reason (OI-273 fix round 1)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="    if _BUILD_FAILURE_BANNER in output:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.an-OFFLINE-PLUGIN-refusal-is-retried-online-under-the-flag": Guard(
+        what='an offline "could not resolve plugin artifact" is an offline refusal '
+        "`--allow-resolve` retries online",
+        why="a plugin the cache lacks fails offline with plugin wording, never the "
+        "dependency wording; without this `--allow-resolve` could not reach any build "
+        "whose plugins were not already cached (OI-273 fix round 1)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find=" or _OFFLINE_PLUGIN_REFUSAL_SUBSTRING in output",
+                replace="  # guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "detect.a-GENERATED-source-directory-names-a-language": Guard(
+        what="a generated source directory Gradle reports, holding a file, names the "
+        "language of the set that registered it",
+        why="a module whose only code is generated (OpenAPI generator, jOOQ, protobuf) had "
+        "classes and no language, and the refusal stopped the whole reactor (review N1)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="            if directory in roots or (\n",
+                replace="            if directory in roots or False and (  # guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-CONVENTION-registered-source-set-names-a-language": Guard(
+        what="the init script reads a source-directory set a plugin registered as a "
+        "convention, not only as an extension",
+        why="a Kotlin plugin older than the extension (1.6.21 on Gradle 8.14.1, measured) "
+        "registers `kotlin` only as a convention; unread, a Kotlin-only module has no "
+        "language and is refused (review m1)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/sextant-model.init.gradle",
+                find='                    if (main.hasProperty("convention")) {\n',
+                replace="                    if (false) {  // guard disabled by "
+                "scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "api.a-module-NO-SCANNER-reads-is-skipped-before-anything-is-written": Guard(
+        what="a module whose languages no registered scanner accepts is skipped (or, alone, "
+        "refused) with the scanner choice's own words, before its workspace is created",
+        why="a Scala-only or Groovy-only module in a Gradle reactor stopped the whole walk, so "
+        "the Java modules beside it were never analysed; alone, it left a workspace with no "
+        "`metadata.json` (OI-273 fix round 3)",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find="        select_scanner(_scanners(), module.languages)\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "render.the-document-SAYS-how-many-named-types-the-header-read-found": Guard(
         what="the coverage section carries one line: dependency types named, headers read, "
         "in no archive, and who answered for the classpath",

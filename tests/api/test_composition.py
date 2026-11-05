@@ -49,7 +49,7 @@ def test_a_missing_home_directory_is_reported_as_a_message_not_a_stack_trace(
     assert "could not determine the user's home directory" in str(excinfo.value)
 
 
-def test_no_module_kind_causes_a_skip():
+def test_no_module_kind_causes_a_skip(tmp_path: Path):
     """The near-miss for the removed `library` skip (2026-09-04 user ruling):
     module KIND no longer decides analysis at all. Even the value that used to
     skip outright is analyzed now — nothing produces `library` any more, and a
@@ -64,9 +64,11 @@ def test_no_module_kind_causes_a_skip():
             version="1.0.0",
             root=Path("."),
             kind=kind,
-            languages=frozenset(),
+            languages=frozenset({"java"}),  # a language a scanner reads: only KIND is in question
             source_roots=(),
-            output_dirs=(),
+            # Compiled classes on disk, so the module has something to scan and only its
+            # KIND is in question here.
+            output_dirs=(tmp_path,),
         )
         assert api._skip_reason(module) is None, kind
 
@@ -86,7 +88,28 @@ def test_skip_reason_names_packaging_pom():
     assert api._skip_reason(module) == "packaging is pom"
 
 
-def test_skip_reason_is_none_for_an_ordinary_undetermined_jar_module():
+@pytest.mark.pins("api.a-module-with-NOTHING-TO-SCAN-is-skipped")
+def test_a_project_with_no_source_and_no_classes_is_skipped_with_its_reason(tmp_path: Path):
+    """`subprojects { apply plugin: 'java' }` is how a great many Gradle builds are written,
+    and it gives a folder-only project — `:services`, holding `:services:orders` — the java
+    plugin too: Gradle reports a classes directory for it that is never created and no source
+    root that exists. Analysed, it has no language, "no scanner accepts a module with no
+    language" was raised, and the WHOLE reactor stopped (pre-existing; OI-273 fix round 1).
+    It holds nothing to scan, exactly like a Maven `pom` module, so it is skipped and says why."""
+    module = ModuleModel(
+        module_id="shop:services",
+        coordinates="shop/services",
+        version="unspecified",
+        root=tmp_path,
+        kind="undetermined",
+        languages=frozenset(),
+        source_roots=(),
+        output_dirs=(tmp_path / "build" / "classes" / "java" / "main",),
+    )
+    assert api._skip_reason(module) == "no source and no compiled classes: nothing to scan"
+
+
+def test_skip_reason_is_none_for_an_ordinary_undetermined_jar_module(tmp_path: Path):
     """The ruled amendment's whole point: `undetermined` alone is no longer
     a skip reason."""
     module = ModuleModel(
@@ -95,9 +118,9 @@ def test_skip_reason_is_none_for_an_ordinary_undetermined_jar_module():
         version="1.0.0",
         root=Path("."),
         kind="undetermined",
-        languages=frozenset(),
+        languages=frozenset({"java"}),  # a language a scanner reads: only KIND is in question
         source_roots=(),
-        output_dirs=(),
+        output_dirs=(tmp_path,),
     )
     assert api._skip_reason(module) is None
 

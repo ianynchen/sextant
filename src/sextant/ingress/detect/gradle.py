@@ -46,9 +46,10 @@ import tempfile
 from collections.abc import Sequence
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from sextant.application.ports.detector import LibraryRoot, ModuleModel, RepositoryModel
+from sextant.domain.symbols import NOT_APPLICABLE
 from sextant.ingress.detect.conventions import (
     CONTAINER_FILES,
     RESOURCE_SCHEMA_SUFFIXES,
@@ -72,6 +73,19 @@ _COMPOSITE_BUILD_NOTE_PREFIX = "composite build: included builds not analyzed: "
 # recognises to decide whether an online retry is worth offering.
 _OFFLINE_REFUSAL_SUBSTRING = "available for offline mode"
 
+# The same refusal for a PLUGIN (OI-273 fix round 1). Offline, a plugin Gradle has never
+# cached reports "Plugin [id: ...] was not found in any of the following sources", its
+# plugin-repository line reading "could not resolve plugin artifact '<id>:<id>.gradle.
+# plugin:<version>'" — measured on Gradle 8.14.1 and 9.5.0 — and never the dependency
+# wording above. The first attempt is always offline, so the cache is all it consulted.
+_OFFLINE_PLUGIN_REFUSAL_SUBSTRING = "could not resolve plugin artifact"
+
+# Gradle's own build-failure banner: printed only once the build ENGINE ran, so its
+# presence proves the distribution was there (OI-273 fix round 1). A wrapper that
+# downloaded the distribution successfully prints `Downloading https://...` first, and the
+# build may then fail for any reason of its own.
+_BUILD_FAILURE_BANNER = "FAILURE: Build failed with an exception."
+
 # Positive evidence that Gradle's OWN wrapper bootstrap — never Gradle's real
 # build engine — produced this output (2M Task 3 fix round 1, C2). Verified
 # live against Gradle 9.7.1: a wrapper pointed at a distribution version that
@@ -87,6 +101,16 @@ _WRAPPER_BOOTSTRAP_SUBSTRINGS = (
     "Downloading https",
     "Could not create local gradle distribution",
 )
+
+
+class _Identity(NamedTuple):
+    """A project's module id, the `<package> <version>` its symbols carry, and whether
+    it has Maven coordinates at all (`GradleDetector._identity`)."""
+
+    module_id: str
+    coordinates: str
+    version: str
+    published: bool
 
 
 class MissingInitScriptError(FileNotFoundError):
@@ -149,7 +173,19 @@ def _distribution_absent_message(path: Path, output: str) -> str:
 
 
 def _is_distribution_absent(output: str) -> bool:
+    """Wrapper-bootstrap evidence, and no sign the build engine ever ran: the banner
+    alone was this detector's first cut and misread a bad `JAVA_HOME` (fix round 1, C2);
+    the bootstrap substrings alone misread a SUCCESSFUL download followed by a build
+    failure (OI-273 fix round 1). Both together."""
+    if _BUILD_FAILURE_BANNER in output:
+        return False
     return any(substring in output for substring in _WRAPPER_BOOTSTRAP_SUBSTRINGS)
+
+
+def _is_offline_refusal(output: str) -> bool:
+    """Something the local cache lacked and the network might have — a dependency or a
+    plugin — and so worth the one online retry `--allow-resolve` permits."""
+    return _OFFLINE_REFUSAL_SUBSTRING in output or _OFFLINE_PLUGIN_REFUSAL_SUBSTRING in output
 
 
 def _read_json(out_file: Path) -> dict[str, Any]:
@@ -294,7 +330,7 @@ class GradleDetector:
         combined = first.stdout + first.stderr
         if _is_distribution_absent(combined):
             raise ValueError(_distribution_absent_message(path, combined))
-        if not (allow_resolve and _OFFLINE_REFUSAL_SUBSTRING in combined):
+        if not (allow_resolve and _is_offline_refusal(combined)):
             raise ValueError(combined.strip())
 
         second = self._run_once(gradle_command, path, out_file, offline=False)
@@ -347,20 +383,7 @@ class GradleDetector:
         # single-project build gets anyway. The detector's own call site passes the
         # real list; tests that build one project pass nothing and get the
         # pre-W55 behaviour, which is what they are about.
-        name = project["name"]
-        group = project["group"]
-        version = project["version"]
-        # Coordinates Gradle leaves loose are a loud refusal naming the
-        # missing one (2M design §1) — the same discipline `MavenDetector`
-        # applies to a POM missing `<groupId>`/`<version>`, never a
-        # `:name`-shaped module id.
-        if not group:
-            raise ValueError(f"gradle project {name} declares no group — cannot form a module id")
-        if version == "unspecified":
-            raise ValueError(
-                f"gradle project {name} declares no version (Gradle's own `unspecified` "
-                "default) — cannot form a module id"
-            )
+        identity = GradleDetector._identity(project, reactor)
         # Gradle NAMES a source/resource root as a build convention; it does
         # not promise the directory exists on disk (2M Task 3 fix round 1,
         # M1) — the same "no guess" discipline `MavenDetector`'s own
@@ -383,9 +406,9 @@ class GradleDetector:
         siblings = GradleDetector._sibling_roots(project, reactor)
         library_roots = library_roots + siblings
         return ModuleModel(
-            module_id=f"{group}:{name}",
-            coordinates=f"{group}/{name}",
-            version=version,
+            module_id=identity.module_id,
+            coordinates=identity.coordinates,
+            version=identity.version,
             root=path,
             kind=GradleDetector._classify(path, project),
             # Gradle's own default is `jar` in every sense that matters here:
@@ -395,7 +418,7 @@ class GradleDetector:
             # the CLI's existing skip gate (`_skip_reason`, 2M design §2)
             # recognise it without any Gradle-specific case there.
             packaging="jar" if project["classesDirs"] else "pom",
-            languages=frozenset(root.name for root in source_roots),
+            languages=GradleDetector._languages(project, source_roots),
             source_roots=source_roots,
             output_dirs=tuple(Path(entry) for entry in project["classesDirs"]),
             resource_roots=resource_roots,
@@ -466,6 +489,53 @@ class GradleDetector:
         )
 
     @staticmethod
+    def _languages(project: dict[str, Any], source_roots: tuple[Path, ...]) -> frozenset[str]:
+        """The source-directory sets Gradle says registered each source directory (OI-273
+        round 2) — never a directory's name, which a plugin's `srcDirs("src")` makes `src`.
+
+        Two kinds of directory count. An EXISTING source root counts as it stands. A
+        directory Gradle reports that is not a root — generated, under the build directory —
+        counts when it holds a file (fix round 2, review N1): a module whose only code is
+        generated (OpenAPI generator, jOOQ, protobuf) is written in the language of the set
+        that compiles it, and without this it had classes and no language and stopped the
+        reactor. Holding a file, because the JDK's compiling plugin creates its
+        annotation-processor output directory on every compile, empty when no processor ran
+        — a compiler's scratch space, which must not name a language the module lacks."""
+        roots = {str(root) for root in source_roots}
+        found: set[str] = set()
+        for directory, languages in project["sourceLanguages"].items():
+            if directory in roots or (
+                Path(directory).is_dir()
+                and any(entry.is_file() for entry in Path(directory).rglob("*"))
+            ):
+                found.update(languages)
+        return frozenset(found)
+
+    @staticmethod
+    def _identity(project: dict[str, Any], reactor: Sequence[dict[str, Any]]) -> "_Identity":
+        """The identity Gradle itself gives the project (OI-273, ruled 2026-11-03 from
+        Gradle 9.8.2's measured behaviour). A group with no version publishes as
+        `<group>/<name>/unspecified`, so `unspecified` IS the version and is kept. No
+        group publishes as nothing at all — `publishToMavenLocal` refuses with "groupId
+        cannot be empty" — so the project has no coordinates, its symbols carry `. . .`
+        (D00 §1), and its only identity is its place in its build: the root project's
+        name, then the project path with every segment kept (`Acme:libs:core`); the
+        root project itself is its name alone. Both come from Gradle's own records, the
+        root's being the reactor entry at path `:`. One rule for a module and for a
+        sibling read as its library root, so the two spell one project the same way."""
+        name = project["name"]
+        group = project["group"]
+        if group:
+            return _Identity(f"{group}:{name}", f"{group}/{name}", project["version"], True)
+        path_in_build = project["path"]
+        if path_in_build == ":":
+            module_id = name
+        else:
+            root = {p["path"]: p for p in reactor}[":"]
+            module_id = f"{root['name']}{path_in_build}"
+        return _Identity(module_id, NOT_APPLICABLE, NOT_APPLICABLE, False)
+
+    @staticmethod
     def _sibling_roots(
         project: dict[str, Any], reactor: Sequence[dict[str, Any]]
     ) -> tuple[LibraryRoot, ...]:
@@ -475,13 +545,18 @@ class GradleDetector:
         **The design question this had to settle first, and its answer.** Gradle
         reports an inter-project dependency as a `ProjectComponentIdentifier`,
         which carries a project PATH — `:pricing-lib` — and no group, name or
-        version at all. A path cannot be the coordinate: D00 §2 requires `origin`
-        to survive being read on another machine, and a project path is meaningful
-        only inside the build that declares it. So the path is used only to JOIN,
-        and the coordinate comes from that project's own `group` and `name` — the
-        same `group:artifact` spelling Maven's siblings carry, and the spelling
-        `documents.origin` already uses, so `drop_borrowed_endpoints.sql` needs no
-        second shape to match on.
+        version at all. So the path is used to JOIN to that project's own record,
+        and the identity is the one `_identity` forms from it, the same one the
+        sibling has when it is analysed as a module — which is what
+        `drop_borrowed_endpoints.sql` matches `documents.origin` against.
+
+        For a grouped sibling that is its `group:artifact`, the spelling Maven's
+        siblings carry. For a sibling with NO group (OI-273, ruled 2026-11-03) it is
+        the root project's name plus the project path, because that is the only
+        identity such a project has: Gradle will not publish it. The path does become
+        part of the identity then, and D00 §2's portability holds anyway — the root
+        name and the path are the build's own declarations, the same on every
+        machine that checks the build out, never a filesystem location.
 
         **No transitive walk, because Gradle already did it.** `compileClasspath`
         is a RESOLVED configuration: an inter-project dependency's own api
@@ -502,10 +577,12 @@ class GradleDetector:
             sibling = by_path.get(str(entry.get("projectPath") or ""))
             if sibling is None:
                 continue
-            group, name = sibling.get("group"), sibling.get("name")
-            if not group or not name:
-                continue
-            coordinate = f"{group}:{name}"
+            # A sibling with no group is read too (OI-273 round 2): it is on the
+            # classpath like any other. It has no coordinates, so it is named by its module
+            # id and marked unpublished — `.` for package and version — the identity its
+            # symbols carry when it is analysed as a module itself.
+            identity = GradleDetector._identity(sibling, reactor)
+            coordinate = identity.module_id
             # ONE ROOT PER CLASSES DIRECTORY, because `LibraryRoot.archive` is one
             # path and Gradle's `classesDirs` is a SET: it carries one entry per
             # compiled source set, so a project built from more than one of them
@@ -522,8 +599,9 @@ class GradleDetector:
                     (coordinate, str(directory)),
                     LibraryRoot(
                         coordinate=coordinate,
-                        version=str(sibling.get("version") or "unversioned"),
+                        version=str(identity.version or "unversioned"),
                         archive=directory,
+                        package=None if identity.published else NOT_APPLICABLE,
                     ),
                 )
         return tuple(found[key] for key in sorted(found))

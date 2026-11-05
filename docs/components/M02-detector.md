@@ -109,6 +109,12 @@ the escape is one retry away; snapshot-metadata failures additionally say *why* 
 was needed. The mode used is recorded in `state.json`, the same pattern as
 `--allow-uncovered` — a resolution-permitted analysis stays identifiable afterwards.
 
+For Gradle, "the cache lacked it" has two wordings, both retried: a dependency ("No cached
+version of … available for offline mode") and a plugin ("could not resolve plugin artifact",
+measured on Gradle 8.14.1 and 9.5.0). And a wrapper that downloaded its distribution before the
+build failed is a build failure — Gradle's banner says the engine ran — never "distribution not
+present".
+
 Where resolution fails either way, that is a reported failure carrying the tool's own
 output, never a partial model assembled by guessing.
 
@@ -121,6 +127,70 @@ output, never a partial model assembled by guessing.
 | Go | `go.work`, or each `go.mod` |
 | Node | `pnpm-workspace.yaml`, or `workspaces` |
 | Cargo | `members` in the workspace manifest |
+
+### A module's identity is the one its build tool gives it
+
+The module id and the symbol's `<package-manager> <package> <version>` ([D00](D00-fact-schema.md)
+§1) are formed from what the build tool itself does with the project, never from a guess
+(OI-273, user ruling 2026-11-03, measured on Gradle 9.8.2):
+
+| Gradle project | `module_id` | symbol manager, package, version |
+|---|---|---|
+| group and version set | `group:name` | `maven group/name version` |
+| group set, no version | `group:name` | `maven group/name unspecified` — Gradle publishes it as `unspecified` |
+| no group | a root project is its name alone (`kotlin-ktor-exposed-starter`); a subproject that sets `group = ''` is the root project's name, then its full project path (`Acme:empty`, `Acme:libs:core`) | `. . .` — Gradle refuses to publish it ("groupId cannot be empty"), so it has no coordinates |
+
+Both names in the no-group row are Gradle's own records — the root project name and every
+project's path arrive in the init script's document (the root is the entry at path `:`),
+never parsed from `settings.gradle`. Every path segment is kept, so `:libs:core` and
+`:core` stay distinct.
+
+**In practice the no-group row is a ROOT project.** Gradle gives every subproject a default
+group — the root project's name, then its parent's path, dotted: `Acme` for `:lib`,
+`Acme.libs` for `:libs:core` — and publishes it under that group (measured on Gradle 9.8.2:
+`:lib` of root `Acme`, with no group written anywhere, publishes
+`Acme/lib/unspecified/lib-unspecified.jar`). So such a subproject takes the second row,
+`Acme:lib` / `maven Acme/lib unspecified`, because that is what Gradle reports. Only a project
+whose group is empty — a root project, or a subproject that sets `group = ''` — takes the third.
+
+**A reactor sibling with no group is read as a library root too** (OI-273 round 2): it is on
+the compile classpath like any other. It is named by its module id — which is also its
+`origin` and its `sibling_coordinates` entry — and marked unpublished (`LibraryRoot.package`
+and `version` both `.`), so its classes carry `. . .`, the same symbols they have when that
+sibling is analysed as a module of its own. Its facts live under
+`facts/lib/(unpublished)/<module id>/`, never parsed as `group:artifact`: the root project — the
+one no-group sibling Gradle produces by default, reached through `implementation project(':')` —
+has a module id with no `:` at all.
+
+**Every compiled output directory the build reports is scanned, in one scan** (OI-273). Gradle's
+`classesDirs` is a set — one directory per compiling plugin — so a Kotlin JVM project reports
+`build/classes/java/main` and `build/classes/kotlin/main`. Every one that exists goes to the
+extractor in the same run, so the dependency-header read sees every class's references and the
+module's own types across all of them; one that does not exist holds no classes and is skipped.
+Maven reports one, `target/classes`.
+
+**A module with nothing to scan is skipped with its reason, never fatal.** No source root and no
+compiled output on disk is provably nothing to read — a Maven `pom` module's evidence in another
+build's words. `subprojects { apply plugin: 'java' }` gives a folder-only Gradle project such a
+shape, and analysing it used to stop the whole reactor. A single-module run with such a
+module is refused with the same reason, never a traceback, before anything is written. So is
+a module whose classes are in a language no scanner reads (a Scala-only or Groovy-only
+module): the reactor skips it with the scanner choice's own words and analyses the rest.
+
+**A Gradle module's languages are the source-directory sets Gradle reports**, never a
+directory's name (OI-273 round 2). The init script reports, per source root, which set
+registered it — the Java plugin's `java`, and every `SourceDirectorySet` another plugin hangs on
+the source set under its own name (`kotlin`, `groovy`), as an extension or, for an older plugin
+(Kotlin 1.6.21 on Gradle 8.14.1, measured), as a convention — and a module's languages are those
+of its roots that exist on disk, together with those of any generated directory Gradle reports
+(under the build directory, so never a source root) that holds a file — a module whose only code
+is generated (OpenAPI generator, jOOQ, protobuf) is written in the language of the set that
+compiles it. An empty generated directory, such as the annotation-processor output the java
+plugin creates on every compile, names nothing.
+
+`kotlin.srcDirs("src")` is therefore `kotlin`, and `src/main/java` in a Kotlin JVM project is
+both `java` and `kotlin`, because the Kotlin plugin registers it too. Maven still names a root's
+language by its directory, as before.
 
 A repository holding three services produces three modules, **each with its own
 workspace**. A sibling module enters a dependent's analysis as a first-party dependency

@@ -7,6 +7,7 @@
       "version": "unspecified",
       "dir": "{root}",
       "sourceRoots": [],
+      "sourceLanguages": {},
       "resourceRoots": [],
       "classesDirs": [],
       "publishing": false,
@@ -22,6 +23,11 @@
       "sourceRoots": [
         "{root}/pricing-lib/src/main/java"
       ],
+      "sourceLanguages": {
+        "{root}/pricing-lib/src/main/java": [
+          "java"
+        ]
+      },
       "resourceRoots": [
         "{root}/pricing-lib/src/main/resources"
       ],
@@ -41,6 +47,11 @@
       "sourceRoots": [
         "{root}/service-app/src/main/java"
       ],
+      "sourceLanguages": {
+        "{root}/service-app/src/main/java": [
+          "java"
+        ]
+      },
       "resourceRoots": [
         "{root}/service-app/src/main/resources"
       ],

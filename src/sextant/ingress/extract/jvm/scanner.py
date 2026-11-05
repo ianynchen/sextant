@@ -86,6 +86,11 @@ class AsmScanner:
                 request.version,
                 "--classes",
                 str(request.classes_dir),
+                *(
+                    argument
+                    for more in request.more_classes_dirs
+                    for argument in ("--classes", str(more))
+                ),
                 "--out",
                 str(request.out_dir),
                 # Handed over rather than held in Java (Step 0). The extractor

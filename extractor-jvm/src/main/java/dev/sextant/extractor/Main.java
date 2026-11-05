@@ -59,7 +59,13 @@ public final class Main {
                 System.out.println(JsonOut.object(answer));
                 return;
             }
-            Path classes = Path.of(options.get("classes"));
+            // `--classes` may be given more than once: one module's output can sit in
+            // several directories (Gradle's `classesDirs` holds one per compiling plugin),
+            // and they are ONE module — read in one run, so the header read below sees
+            // every class's references and counts every directory's own types as the
+            // module's (OI-273 fix round 1, review M1). Each document still records the
+            // directory it came from as its `origin_entry`.
+            List<String> classesEntries = allOf(args, "--classes");
             Path out = Path.of(options.get("out"));
             ClassScanner scanner =
                 new ClassScanner(options.get("coordinates"), options.get("version"));
@@ -75,157 +81,159 @@ public final class Main {
             java.util.Set<String> ownTypes = new java.util.HashSet<>();
             int typeHeaders = 0;
             int typeHeadersUnlocated = 0;
-            try (ClassSource source = ClassSource.of(classes)) {
-                List<String> classFiles = source.names();
-                // The silent-success hole, closed (2I Task 6). A `--classes`
-                // that yields no class file at all used to report
-                // `documents: 0, facts: 0` at exit 0 with an empty `uncovered`
-                // — indistinguishable from a scan that genuinely found
-                // nothing to say. The two honest shapes are split by what is
-                // wrong: an input this extractor cannot READ is a failed
-                // request and exits non-zero (`ClassSource.of` throws); an
-                // input it read fine that simply holds no class file is a
-                // finding ABOUT the input, so it rides the channel findings
-                // already ride (FR-17's `uncovered`) and reaches
-                // metadata.json and the rendered gaps list by itself. A jar of
-                // zero classes is legitimate-but-suspicious, and this is what
-                // makes it visible instead of silent.
-                //
-                // Named by the COORDINATE where one was given, and only by the
-                // path otherwise. An `uncovered` entry is read by a person, in
-                // metadata.json and in a published bundle: an absolute archive
-                // path under someone's home directory identifies nothing once
-                // it leaves the machine that produced it, while the coordinate
-                // is the same name the configuration used to ask for it.
-                if (classFiles.isEmpty()) {
-                    String named = options.getOrDefault("origin", options.get("classes"));
-                    uncovered.add(named + ": no class files found");
-                }
-                for (String classRelative : classFiles) {
-                    // READ INSIDE the guard, not before it. A corrupt archive
-                    // entry — a bad CRC, a truncated deflate stream — throws
-                    // here rather than in the parse, and while this sat outside
-                    // the guard that threw straight out of the loop: measured
-                    // on a three-entry jar with one corrupt entry, exit 1 with
-                    // ONE document on disk and nothing recording that two more
-                    // were never attempted. An arbitrary unlabelled prefix is
-                    // the one shape that is genuinely indistinguishable from a
-                    // complete scan of a smaller archive.
-                    byte[] bytes;
-                    List<String> reasons = new ArrayList<>();
-                    try {
-                        bytes = source.read(classRelative);
-                    } catch (Exception unreadable) {
-                        bytes = new byte[0];
-                        reasons.add("archive entry unreadable (" + unreadable + ")");
-                    }
-                    // JVMS 4.1 fixes `major_version` at offset 6, big-endian,
-                    // and it is read from the BYTES rather than from ASM's own
-                    // constant set — that set runs ahead of the reader, so it
-                    // would answer for a class file this build cannot parse.
-                    // Recorded on every document, readable or not: it is the
-                    // one thing a refusal can still say about the class it
-                    // refused, and it is what tells a reader whether a gap is
-                    // "too new for this scanner" or something else.
-                    int classMajor = majorVersionOf(bytes);
-                    // D00 §2: one class file is one document, a nested or
-                    // anonymous class's own file included. The id is the sha256
-                    // of the **class**-relative path, so `OrderResult` and its
-                    // nested `Detail` never collide on one id; `relative_path`
-                    // instead names the outer **source** file, because that is
-                    // the file a human edited. The two fields answer different
-                    // questions on purpose.
-                    String documentId = sha256(classRelative);
-                    // Filled by the scan below, from the class file's own
-                    // `SourceFile` attribute. A one-element array rather than a
-                    // field on the scanner, which is reused across every entry
-                    // in this loop and would carry the previous class's answer
-                    // into a class that states none.
-                    String[] sourceFile = {null};
-                    // A Kotlin class compiled by a newer compiler than
-                    // kotlin-metadata-jvm supports is not a corrupt class file —
-                    // its nullability just cannot be read. The class is still
-                    // scanned and its fact file still written (with Java's own
-                    // rule standing in for the field), but the gap itself is an
-                    // honesty obligation the same as a nested class's (FR-17).
-                    // SKIPPED, NOT FATAL (Critical 1). One class this build
-                    // cannot parse used to take the whole scan with it —
-                    // `catch (Exception)` around this loop, exit 1, zero fact
-                    // files — so a single class file from a JDK ahead of our
-                    // ASM lost every other class in the module. It is now a
-                    // finding ABOUT one class, on the channel findings already
-                    // ride, and the document is still WRITTEN: its id, path,
-                    // content hash and class-file major are all knowable
-                    // without parsing it, and a class that vanishes silently is
-                    // the failure FR-17 exists to prevent.
+            for (String classesEntry : classesEntries) {
+                try (ClassSource source = ClassSource.of(Path.of(classesEntry))) {
+                    List<String> classFiles = source.names();
+                    // The silent-success hole, closed (2I Task 6). A `--classes`
+                    // that yields no class file at all used to report
+                    // `documents: 0, facts: 0` at exit 0 with an empty `uncovered`
+                    // — indistinguishable from a scan that genuinely found
+                    // nothing to say. The two honest shapes are split by what is
+                    // wrong: an input this extractor cannot READ is a failed
+                    // request and exits non-zero (`ClassSource.of` throws); an
+                    // input it read fine that simply holds no class file is a
+                    // finding ABOUT the input, so it rides the channel findings
+                    // already ride (FR-17's `uncovered`) and reaches
+                    // metadata.json and the rendered gaps list by itself. A jar of
+                    // zero classes is legitimate-but-suspicious, and this is what
+                    // makes it visible instead of silent.
                     //
-                    // `partial_reason` carries the exception's own text rather
-                    // than a message of ours: what ASM refused is the fact, and
-                    // predicting its wording would be a claim about a library
-                    // we did not measure (§8.1).
-                    // One `partial` flag, THREE ways to earn it, and D00 §2's
-                    // definition covers all: "analysed incompletely, with a
-                    // reason". An archive entry we could not read, a class we
-                    // could not parse, and a Kotlin class whose metadata a
-                    // newer compiler wrote in a form this build cannot decode —
-                    // the last is still scanned and still yields facts, but its
-                    // nullability is missing, which is exactly an incomplete
-                    // analysis.
-                    List<String> lines = List.of();
-                    String partialReason = null;
-                    if (reasons.isEmpty()) {
+                    // Named by the COORDINATE where one was given, and only by the
+                    // path otherwise. An `uncovered` entry is read by a person, in
+                    // metadata.json and in a published bundle: an absolute archive
+                    // path under someone's home directory identifies nothing once
+                    // it leaves the machine that produced it, while the coordinate
+                    // is the same name the configuration used to ask for it.
+                    if (classFiles.isEmpty()) {
+                        String named = options.getOrDefault("origin", classesEntry);
+                        uncovered.add(named + ": no class files found");
+                    }
+                    for (String classRelative : classFiles) {
+                        // READ INSIDE the guard, not before it. A corrupt archive
+                        // entry — a bad CRC, a truncated deflate stream — throws
+                        // here rather than in the parse, and while this sat outside
+                        // the guard that threw straight out of the loop: measured
+                        // on a three-entry jar with one corrupt entry, exit 1 with
+                        // ONE document on disk and nothing recording that two more
+                        // were never attempted. An arbitrary unlabelled prefix is
+                        // the one shape that is genuinely indistinguishable from a
+                        // complete scan of a smaller archive.
+                        byte[] bytes;
+                        List<String> reasons = new ArrayList<>();
                         try {
-                            lines = scanner.scan(bytes, documentId,
-                                reason -> reasons.add("kotlin metadata unreadable (" + reason + ")"),
-                                stated -> sourceFile[0] = stated);
-                        } catch (IllegalArgumentException | IndexOutOfBoundsException unreadable) {
-                            // Narrowed by TYPE, not only by scope. `catch (Exception)`
-                            // swallowed OUR OWN defects too — an NPE in a visitor, a
-                            // bad substring in signature parsing — and reported them
-                            // as "class unreadable" at exit 0, so a regression in this
-                            // extractor degraded a module to zero facts for the
-                            // affected classes instead of failing loudly (§13.6).
-                            //
-                            // These two are what a class file this build cannot read
-                            // actually throws: ASM refuses an unsupported major with
-                            // IllegalArgumentException, and a truncated or malformed
-                            // constant pool surfaces as an index error. Anything else
-                            // is ours, and propagates.
-                            lines = List.of();
-                            reasons.add("class unreadable (" + unreadable + ")");
+                            bytes = source.read(classRelative);
+                        } catch (Exception unreadable) {
+                            bytes = new byte[0];
+                            reasons.add("archive entry unreadable (" + unreadable + ")");
                         }
-                    }
-                    if (!reasons.isEmpty()) {
-                        partialReason = String.join("; ", reasons);
-                        uncovered.add(classRelative + ": " + partialReason);
-                    }
-                    // Named after the class file, not after `relative`: a
-                    // nested class and its outer share a source path, and two
-                    // documents writing to one file would leave only the
-                    // last one on disk.
-                    // D00 §2 defines `content_hash` as "of the source of truth
-                    // this was read from". When the archive entry could not be
-                    // read there IS no source of truth here, and hashing the
-                    // empty array wrote sha256:e3b0c442… — the well-known hash
-                    // of nothing — as though it were a measurement, and made
-                    // two different corrupt entries hash-identical. A stated
-                    // sentinel instead: absence, not a default (NFR-2).
-                    String contentHash = bytes.length == 0 && partialReason != null
-                        ? "unread"
-                        : "sha256:" + sha256Bytes(bytes);
-                    // AFTER the scan, because the class file is what names its own
-                    // source. A class this build could not parse states nothing, and
-                    // falls back to the derivation.
-                    String relative = sourcePathOf(classRelative, sourceFile[0]);
-                    writeFactFile(out.resolve(replaceSuffix(classRelative, ".class", ".jsonl")),
-                                  relative, documentId, options, contentHash, lines,
-                                  classMajor, partialReason, classReleaseOf(classRelative),
-                                  withoutVersionPrefix(classRelative));
-                    documents++;
-                    facts += lines.size();
-                    if (classpathFile != null && bytes.length > 0 && partialReason == null) {
-                        ownTypes.add(withoutVersionPrefix(replaceSuffix(classRelative, ".class", "")));
-                        TypeHeaders.collectReferences(bytes, referenced);
+                        // JVMS 4.1 fixes `major_version` at offset 6, big-endian,
+                        // and it is read from the BYTES rather than from ASM's own
+                        // constant set — that set runs ahead of the reader, so it
+                        // would answer for a class file this build cannot parse.
+                        // Recorded on every document, readable or not: it is the
+                        // one thing a refusal can still say about the class it
+                        // refused, and it is what tells a reader whether a gap is
+                        // "too new for this scanner" or something else.
+                        int classMajor = majorVersionOf(bytes);
+                        // D00 §2: one class file is one document, a nested or
+                        // anonymous class's own file included. The id is the sha256
+                        // of the **class**-relative path, so `OrderResult` and its
+                        // nested `Detail` never collide on one id; `relative_path`
+                        // instead names the outer **source** file, because that is
+                        // the file a human edited. The two fields answer different
+                        // questions on purpose.
+                        String documentId = sha256(classRelative);
+                        // Filled by the scan below, from the class file's own
+                        // `SourceFile` attribute. A one-element array rather than a
+                        // field on the scanner, which is reused across every entry
+                        // in this loop and would carry the previous class's answer
+                        // into a class that states none.
+                        String[] sourceFile = {null};
+                        // A Kotlin class compiled by a newer compiler than
+                        // kotlin-metadata-jvm supports is not a corrupt class file —
+                        // its nullability just cannot be read. The class is still
+                        // scanned and its fact file still written (with Java's own
+                        // rule standing in for the field), but the gap itself is an
+                        // honesty obligation the same as a nested class's (FR-17).
+                        // SKIPPED, NOT FATAL (Critical 1). One class this build
+                        // cannot parse used to take the whole scan with it —
+                        // `catch (Exception)` around this loop, exit 1, zero fact
+                        // files — so a single class file from a JDK ahead of our
+                        // ASM lost every other class in the module. It is now a
+                        // finding ABOUT one class, on the channel findings already
+                        // ride, and the document is still WRITTEN: its id, path,
+                        // content hash and class-file major are all knowable
+                        // without parsing it, and a class that vanishes silently is
+                        // the failure FR-17 exists to prevent.
+                        //
+                        // `partial_reason` carries the exception's own text rather
+                        // than a message of ours: what ASM refused is the fact, and
+                        // predicting its wording would be a claim about a library
+                        // we did not measure (§8.1).
+                        // One `partial` flag, THREE ways to earn it, and D00 §2's
+                        // definition covers all: "analysed incompletely, with a
+                        // reason". An archive entry we could not read, a class we
+                        // could not parse, and a Kotlin class whose metadata a
+                        // newer compiler wrote in a form this build cannot decode —
+                        // the last is still scanned and still yields facts, but its
+                        // nullability is missing, which is exactly an incomplete
+                        // analysis.
+                        List<String> lines = List.of();
+                        String partialReason = null;
+                        if (reasons.isEmpty()) {
+                            try {
+                                lines = scanner.scan(bytes, documentId,
+                                    reason -> reasons.add("kotlin metadata unreadable (" + reason + ")"),
+                                    stated -> sourceFile[0] = stated);
+                            } catch (IllegalArgumentException | IndexOutOfBoundsException unreadable) {
+                                // Narrowed by TYPE, not only by scope. `catch (Exception)`
+                                // swallowed OUR OWN defects too — an NPE in a visitor, a
+                                // bad substring in signature parsing — and reported them
+                                // as "class unreadable" at exit 0, so a regression in this
+                                // extractor degraded a module to zero facts for the
+                                // affected classes instead of failing loudly (§13.6).
+                                //
+                                // These two are what a class file this build cannot read
+                                // actually throws: ASM refuses an unsupported major with
+                                // IllegalArgumentException, and a truncated or malformed
+                                // constant pool surfaces as an index error. Anything else
+                                // is ours, and propagates.
+                                lines = List.of();
+                                reasons.add("class unreadable (" + unreadable + ")");
+                            }
+                        }
+                        if (!reasons.isEmpty()) {
+                            partialReason = String.join("; ", reasons);
+                            uncovered.add(classRelative + ": " + partialReason);
+                        }
+                        // Named after the class file, not after `relative`: a
+                        // nested class and its outer share a source path, and two
+                        // documents writing to one file would leave only the
+                        // last one on disk.
+                        // D00 §2 defines `content_hash` as "of the source of truth
+                        // this was read from". When the archive entry could not be
+                        // read there IS no source of truth here, and hashing the
+                        // empty array wrote sha256:e3b0c442… — the well-known hash
+                        // of nothing — as though it were a measurement, and made
+                        // two different corrupt entries hash-identical. A stated
+                        // sentinel instead: absence, not a default (NFR-2).
+                        String contentHash = bytes.length == 0 && partialReason != null
+                            ? "unread"
+                            : "sha256:" + sha256Bytes(bytes);
+                        // AFTER the scan, because the class file is what names its own
+                        // source. A class this build could not parse states nothing, and
+                        // falls back to the derivation.
+                        String relative = sourcePathOf(classRelative, sourceFile[0]);
+                        writeFactFile(out.resolve(replaceSuffix(classRelative, ".class", ".jsonl")),
+                                      relative, documentId, options, classesEntry, contentHash, lines,
+                                      classMajor, partialReason, classReleaseOf(classRelative),
+                                      withoutVersionPrefix(classRelative));
+                        documents++;
+                        facts += lines.size();
+                        if (classpathFile != null && bytes.length > 0 && partialReason == null) {
+                            ownTypes.add(withoutVersionPrefix(replaceSuffix(classRelative, ".class", "")));
+                            TypeHeaders.collectReferences(bytes, referenced);
+                        }
                     }
                 }
             }
@@ -437,7 +445,8 @@ public final class Main {
     }
 
     private static void writeFactFile(Path target, String relative, String documentId,
-                                      Map<String, String> options, String contentHash,
+                                      Map<String, String> options, String originEntry,
+                                      String contentHash,
                                       List<String> factLines, int classMajor,
                                       String partialReason, String classRelease,
                                       String className) throws IOException {
@@ -464,7 +473,7 @@ public final class Main {
         // rather than repeated on every one of a module's documents.
         document.put("scanner_id", JsonOut.string(SCANNER_ID));
         document.put("content_hash", JsonOut.string(contentHash));
-        document.put("origin_entry", JsonOut.string(options.get("classes")));
+        document.put("origin_entry", JsonOut.string(originEntry));
         // The library this document was extracted FROM, as its coordinate —
         // written only when `--origin` names one (D00 §2). Omitted entirely
         // for a module's own output, rather than written as null, so a scan
@@ -689,6 +698,15 @@ public final class Main {
         fields.put("capabilities", JsonOut.array(capabilities));
         fields.put("uncovered", JsonOut.array(quoted));
         return JsonOut.object(fields);
+    }
+
+    /** Every value a repeatable option was given, in the order given. */
+    private static List<String> allOf(String[] args, String flag) {
+        List<String> values = new ArrayList<>();
+        for (int i = 0; i < args.length - 1; i += 2) {
+            if (args[i].equals(flag)) values.add(args[i + 1]);
+        }
+        return values;
     }
 
     private static Map<String, String> parse(String[] args) {

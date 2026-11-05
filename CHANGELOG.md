@@ -17,6 +17,73 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A Gradle project with no group, or no version, is analysed** (OI-273). Detection refused
+  both, and applications often set neither: `kotlin-ktor-exposed-starter` and 21 of 36
+  ktor-samples projects declare no group. The identity is now the one Gradle itself gives
+  (user ruling, measured on Gradle 9.8.2): a group with no version is `group:name` at version
+  `unspecified`, which is what Gradle publishes; a project with no group cannot be published
+  at all, so its module id is its place in its build — a root project is its name alone
+  (`kotlin-ktor-exposed-starter`), a subproject that sets `group = ''` is the root name plus
+  its path (`Acme:empty`) — and its symbols carry `. . .` (D00 §1). Grouped builds are
+  unchanged: the six field pins do not move.
+- **A module whose only source is generated is analysed.** An OpenAPI-generator, jOOQ or
+  protobuf module compiles every class from a directory a task writes under the build
+  directory; with no source root on disk it had no language, and "no scanner accepts a module
+  with no language" stopped the whole reactor (pre-existing). A generated directory Gradle
+  reports, holding a file, now names the language of the set that registered it; it is still
+  not a source root.
+- **A single module with nothing to read is refused with its reason**, not a traceback, and
+  before anything is written: "is not analyzed: no source and no compiled classes: nothing to
+  scan", or "is not analyzed: no scanner accepts …". A refusal used to leave a workspace with
+  no `metadata.json` behind.
+- **A module in a language no scanner reads no longer stops the reactor.** A Scala-only
+  (Akka/Pekko) or Groovy-only module in a Gradle build ended the whole walk (pre-existing); it
+  is now skipped — "no scanner accepts groovy" — and the other modules are analysed. A module
+  mixing such a language with Java or Kotlin is analysed as before, every class directory
+  included.
+- **A module's output in several directories is read in one scan.** A module with both Java
+  and Kotlin output was scanned once per directory, each scan rewrote the one type-header
+  document, and the last won: one language's dependency headers were lost and the coverage line
+  was false (4 read / 3 not found where the truth was 12 / 6). The extractor now takes every
+  directory in one run, so the header read sees every class and counts every directory's own
+  types as the module's. One walk retracts the previous run's facts for all of them.
+- **A root project used as a library no longer stops the reactor.** `implementation
+  project(':')` on a root with no group put its bare name (`Acme`) where a `group:artifact`
+  was expected, and the run ended at `not a library coordinate: 'Acme'`. An unpublished
+  library's facts now have their own subtree, `facts/lib/(unpublished)/<module id>/`.
+- **A folder-only project is skipped, not fatal.** `subprojects { apply plugin: 'java' }` gives
+  `:services` (holding `:services:orders`) a classes directory it never creates; analysed, it
+  had no language and the refusal stopped the whole reactor (pre-existing). A module with no
+  source and no compiled classes on disk is skipped: "no source and no compiled classes:
+  nothing to scan".
+- **Gradle's own reason is reported when a downloaded wrapper's build fails.** A wrapper that
+  downloaded its distribution and then failed was reported as "Gradle distribution not
+  present"; Gradle's build-failure banner now rules that out.
+- **`--allow-resolve` retries a plugin the offline cache lacks**, as it does a dependency.
+  Offline, Gradle reports such a plugin as "could not resolve plugin artifact", never as
+  "available for offline mode", and no retry was offered.
+- **A Kotlin plugin old enough to register its source set as a convention still names the
+  language** (Kotlin plugin 1.6.21 on Gradle 8.14.1, measured): the init script reads the
+  convention form beside the extension form.
+- **A Gradle sibling with no group is read as a library root.** It is on the compile
+  classpath like a grouped sibling, so its classes are read under its module id and carry
+  `. . .`, the symbols they have when it is analysed on its own. A subproject is rarely without
+  a group: Gradle defaults it to the root project's name plus its parent's path, dotted, and
+  publishes it there (`Acme:lib` at `unspecified`), so that is the identity it gets.
+- **Every output directory a build reports is scanned, not only the first.** Gradle reports
+  one classes directory per compiling plugin, and a Kotlin JVM project's first is
+  `build/classes/java/main`, which a Kotlin-only build never creates: the scan refused every
+  such module (`--classes must name a directory`), and a mixed Java/Kotlin project would have
+  lost one language's classes. A reported directory that does not exist is skipped. Maven
+  reports one directory, so its results are unchanged.
+- **A Gradle source directory's language is the plugin that registered it, not its name.**
+  ktor-samples' `client-tools` declares `kotlin.srcDirs("src")`, so its language read as `src`
+  and no scanner accepted the module. The init script now reports which source-directory set
+  (`java`, `kotlin`, ...) registered each root. Maven is unchanged.
+- **`sextant module analyze examples/x` with a relative path no longer crashes.** The Gradle
+  detector runs the project's own `./gradlew` from inside the project, where a relative path
+  named nothing, and the command died on an uncaught `FileNotFoundError`. The path is made
+  absolute where analysis starts.
 - **The JDK's null checks are not hand-offs, and a request handed to the JDK before its execute
   in one method is `partial`** (item 2 review C3; the user's ruling of 2026-11-03 on OI-262,
   option B). A `not_hand_offs` entry may now name `methods` of its owner (D02 §1f), and

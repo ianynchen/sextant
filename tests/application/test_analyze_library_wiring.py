@@ -13,15 +13,18 @@ stated reason."""
 
 import json
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+from fixture_build import compile_fixture
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.detector import LibraryRoot, ModuleModel, RepositoryModel
 from sextant.application.ports.progress import NullProgress
 from sextant.application.stages.analyze import AnalyzeResult, analyze
 from sextant.domain.factfile import read_fact_file
+from sextant.ingress.detect.maven import MavenDetector
 from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.resources import extractor_jar
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -347,3 +350,142 @@ def test_a_library_that_cannot_be_scanned_does_not_take_the_module_with_it(
     [reported] = result.libraries_not_scanned
     assert reported.startswith("com.example:gone: ")
     assert (tmp_path / "run" / "facts" / "lib" / "com.example" / "orders-soap-client").is_dir()
+
+
+@pytest.mark.pins("analyze.EVERY-existing-output-directory-is-scanned")
+def test_every_existing_output_directory_is_scanned_and_a_missing_one_is_skipped(
+    tmp_path: Path,
+):
+    """Gradle's `classesDirs` is a SET — one directory per compiling plugin — and a
+    Kotlin JVM project reports `build/classes/java/main` first, which a Kotlin-only
+    build never creates. Scanning only the first entry refused every such module, and
+    on a project with both languages would have silently dropped one language's
+    classes. Every directory that exists is scanned into the same fact tree; one that
+    does not exist holds no classes and is skipped, not an error (OI-273 round 2)."""
+    root = tmp_path / "run"
+    # Two classes directories holding different classes of one module, the way
+    # `build/classes/java/main` and `build/classes/kotlin/main` do — real bytecode from
+    # the `orders-soap-client` fixture, split between them.
+    compiled = REPO / "fixtures" / "orders-soap-client" / "target" / "classes"
+    package = Path("com") / "example" / "billing"
+    split = {"java-main": "BillingPort.class", "kotlin-main": "ConflictingOrderException.class"}
+    for directory, name in split.items():
+        (tmp_path / directory / package).mkdir(parents=True)
+        (tmp_path / directory / package / name).write_bytes(
+            (compiled / package / name).read_bytes()
+        )
+    module = replace(
+        _module(root, ()),
+        output_dirs=(tmp_path / "never-built", tmp_path / "java-main", tmp_path / "kotlin-main"),
+    )
+    root.mkdir(parents=True)
+    workspace = DuckDbWorkspace(root / "ws.duckdb")
+    try:
+        analyze(
+            path=root,
+            workspace=workspace,
+            detectors=[_FakeDetector(module)],
+            scanners=[AsmScanner(extractor_jar())],
+            catalogs=_EmptyCatalogs(),
+            fact_root=root / "facts",
+            progress=NullProgress(),
+        )
+    finally:
+        workspace.close()
+    written = {path.stem for path in (root / "facts").rglob("*.jsonl")}
+    assert {"BillingPort", "ConflictingOrderException"} <= written, sorted(written)
+
+
+@pytest.mark.pins("analyze.an-UNPUBLISHED-library-root-writes-dots-not-maven")
+@pytest.mark.pins("analyze.an-UNPUBLISHED-library-root-has-its-own-fact-subtree")
+def test_an_unpublished_sibling_is_scanned_under_its_module_id_with_dots(tmp_path: Path):
+    """A Gradle sibling with no group has no coordinates (OI-273 round 2): its classes
+    are read like any sibling's, every document records its module id as `origin`, and
+    its symbols carry `. . .` — the same identity they have when that sibling is analysed
+    as a module of its own — never a `maven` package spelled out of a build path."""
+    compiled = REPO / "fixtures" / "orders-soap-client" / "target" / "classes"
+    package = Path("com") / "example" / "billing"
+    split = {"app": "ConflictingOrderException.class", "lib": "BillingPort.class"}
+    for directory, name in split.items():
+        (tmp_path / directory / package).mkdir(parents=True)
+        (tmp_path / directory / package / name).write_bytes(
+            (compiled / package / name).read_bytes()
+        )
+    # The ROOT project of a build, the one no-group sibling Gradle produces by default: its
+    # module id is its bare name, with no `:` in it (fix round 1, review M2 — this aborted
+    # the whole reactor with "not a library coordinate: 'Acme'").
+    sibling = LibraryRoot(coordinate="Acme", version=".", archive=tmp_path / "lib", package=".")
+    root = tmp_path / "run"
+    root.mkdir()
+    module = replace(
+        _module(root, (sibling,)),
+        module_id="Acme:app",
+        coordinates=".",
+        version=".",
+        output_dirs=(tmp_path / "app",),
+    )
+    workspace = DuckDbWorkspace(root / "ws.duckdb")
+    try:
+        analyze(
+            path=root,
+            workspace=workspace,
+            detectors=[_FakeDetector(module)],
+            scanners=[AsmScanner(extractor_jar())],
+            catalogs=_EmptyCatalogs(),
+            fact_root=root / "facts",
+            progress=NullProgress(),
+        )
+    finally:
+        workspace.close()
+    fact_root = root / "facts"
+    document, symbol = (
+        json.loads(line)
+        for line in next((fact_root / "lib").rglob("BillingPort.jsonl"))
+        .read_text(encoding="utf-8")
+        .splitlines()[:2]
+    )
+    assert document["origin"] == "Acme"
+    assert symbol["symbol"].startswith("sextant-jvm . . . com/example/billing/BillingPort#")
+
+
+@pytest.mark.pins("analyze.ONE-scan-over-every-output-directory")
+def test_a_module_split_across_output_directories_reads_every_type_header(tmp_path: Path):
+    """A module with Java and Kotlin output has two classes directories. Scanned one run per
+    directory, each run wrote the one `__type_headers__.jsonl` and the last overwrote the first,
+    so the headers only the other directory's classes named were lost, and each run counted the
+    other directory's own types as "found in no archive" — the document's coverage line stated
+    4 read / 3 not found where the truth was 12 / 9 (review M1). The headers a module's output
+    names are the same whether its classes sit in one directory or two."""
+    advice = compile_fixture(REPO / "fixtures" / "orders-advice")
+    module = MavenDetector().detect(advice).modules[0]
+    whole = module.output_dirs[0]
+    package = Path("com") / "acme" / "advice"
+    for directory, name in (
+        ("java-main", "OrderController.class"),
+        ("kt-main", "OrderAdvice.class"),
+    ):
+        (tmp_path / directory / package).mkdir(parents=True)
+        (tmp_path / directory / package / name).write_bytes((whole / package / name).read_bytes())
+    split = replace(module, output_dirs=(tmp_path / "java-main", tmp_path / "kt-main"))
+
+    def headers(analysed: ModuleModel, root: Path) -> str:
+        root.mkdir()
+        workspace = DuckDbWorkspace(root / "ws.duckdb")
+        try:
+            analyze(
+                path=root,
+                workspace=workspace,
+                detectors=[_FakeDetector(analysed)],
+                scanners=[AsmScanner(extractor_jar())],
+                catalogs=_EmptyCatalogs(),
+                fact_root=root / "facts",
+                progress=NullProgress(),
+            )
+        finally:
+            workspace.close()
+        return (root / "facts" / "__type_headers__.jsonl").read_text(encoding="utf-8")
+
+    one = headers(module, tmp_path / "one")
+    two = headers(split, tmp_path / "two")
+    assert one.count("\n") > 2, one
+    assert two == one

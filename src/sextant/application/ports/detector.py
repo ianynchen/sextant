@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Protocol
 
 from sextant.application.ports.selection import NoAdapterError
+from sextant.domain.symbols import NOT_APPLICABLE
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,18 @@ class LibraryRoot:
     coordinate: str
     version: str
     archive: Path
+    # The `<package>` its symbols carry (D00 §1), where that is NOT the coordinate
+    # spelled `group/artifact`. Only `.` today: a Gradle sibling with no group has no
+    # coordinates at all (OI-273 round 2), so `coordinate` holds its module id — still
+    # its `origin` and its `sibling_coordinates` entry — and its symbols read `. . .`,
+    # exactly as they do when that sibling is analysed as a module. `None`, the
+    # default, is every published dependency.
+    package: str | None = None
+
+    @property
+    def unpublished(self) -> bool:
+        """No coordinates at all: `coordinate` is a module id, not `group:artifact`."""
+        return self.package == NOT_APPLICABLE
 
 
 @dataclass(frozen=True)

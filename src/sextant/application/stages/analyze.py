@@ -238,13 +238,24 @@ def analyze(
     # two inbound Pub/Sub endpoints, 143 against a fresh workspace's 141 on identical
     # source. BEFORE the scan, for the reason above and for one more: after it, this
     # would delete what the scan had just written.
-    discard_scanned_facts(fact_root, module.output_dirs[0])
+    discard_scanned_facts(fact_root, *module.output_dirs)
+    # EVERY output directory the build reports, read in ONE scan (OI-273): Gradle's
+    # `classesDirs` is a set, one directory per compiling plugin. The first may not exist
+    # at all (a plugin with nothing to compile never creates it), and on a module with
+    # two compiling plugins each holds part of it — part of ONE module, so one scan: the
+    # header read then sees every class's references, and its one document is written
+    # once (fix round 1, review M1: a scan per directory let the last overwrite it). A
+    # reported directory that does not exist holds no classes and is skipped. Where none
+    # exists the first is still handed over, so the scanner's own refusal names it, as it
+    # always has (Maven reports one).
+    present = tuple(d for d in module.output_dirs if d.is_dir()) or module.output_dirs[:1]
     scan_report = scanner.scan(
         ScanRequest(
             module_id=module.module_id,
             coordinates=module.coordinates,
             version=module.version,
-            classes_dir=module.output_dirs[0],
+            classes_dir=present[0],
+            more_classes_dirs=present[1:],
             out_dir=fact_root,
             # The module's OWN scan reads the headers of the dependency types its classes
             # refer to (D00 §5 `type_header`). The opted-in library scans below are handed
@@ -276,10 +287,14 @@ def analyze(
             library_report = scanner.scan(
                 ScanRequest(
                     module_id=module.module_id,
-                    coordinates=library.coordinate.replace(":", "/"),
+                    coordinates=library.coordinate.replace(":", "/")
+                    if library.package is None
+                    else library.package,
                     version=library.version,
                     classes_dir=library.archive,
-                    out_dir=library_fact_root(fact_root, library.coordinate),
+                    out_dir=library_fact_root(
+                        fact_root, library.coordinate, unpublished=library.unpublished
+                    ),
                     origin=library.coordinate,
                 )
             )
@@ -294,7 +309,7 @@ def analyze(
             # writes each document as it reaches it, so a failure partway
             # through an archive leaves a fraction of a library on disk —
             # indistinguishable, once loaded, from all of a smaller one.
-            discard_library_facts(fact_root, library.coordinate)
+            discard_library_facts(fact_root, library.coordinate, unpublished=library.unpublished)
             # The archive PATH is replaced by the coordinate wherever the
             # backend's own message names it. This string travels — into
             # metadata.json, the rendered gaps list, a published bundle — and a
