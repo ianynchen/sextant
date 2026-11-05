@@ -62,11 +62,14 @@ classpath, the source sets and the output directories. Those are the four things
 downstream depends on, and only the build tool knows them.
 
 **The Gradle mechanism is an init script, run through the project's own wrapper**:
-`<gradle> [--offline] --init-script <ours> --no-configuration-cache -q sextantModel
--Psextant.out=<tmpfile>` (2M design §1; `--offline` governs only the first of at most two
-attempts — the second is the flagged online retry). The script registers a task that walks
-the fully-evaluated model and writes one JSON document to the named file — never stdout,
-which Gradle, the target build's own scripts, and JVM warnings all pollute. It rides
+`<gradle> [--offline] --init-script <ours> --no-configuration-cache --continue -q
+sextantBuild sextantModel -Psextant.outDir=<tmpdir>` (2M design §1; `--offline` governs only
+the first of at most two attempts — the second is the flagged online retry). The script
+registers one `sextantModel` task in every project, which writes that project's own records to
+`projects/<path>.json`, and a `sextantBuild` task in the root project, which writes
+`build.json` naming every project (Android design M4). The detector joins the files into one
+document. Nothing goes to stdout, which Gradle, the target build's own scripts, and JVM
+warnings all pollute. It rides
 whatever Gradle version the project pins, so there is no client-library compatibility
 matrix — the audit found that the official Tooling API route would *also* need an injected
 model builder for source-set precision, making it this mechanism plus a dependency.
@@ -117,6 +120,18 @@ present".
 
 Where resolution fails either way, that is a reported failure carrying the tool's own
 output, never a partial model assembled by guessing.
+
+**One Gradle project that fails to build does not stop the others** (Android design M5, ruled
+2026-11-05). `--continue` lets every project that can build finish. When the run fails but
+`build.json` was written, each project with no file of its own was not built: it is skipped,
+and its reason is Gradle's own message for its failed task (javac's error lines included), or
+`not built: a part it needs failed to build (<paths>)` for a project that needs one that
+failed. The other projects are analysed. Without `--allow-resolve`, a part the cache could not
+serve gives the note "some parts need dependencies that are not in the local Gradle cache;
+--allow-resolve lets Gradle download them"; with it, the whole run is retried online once, into
+an empty folder, so no file from the offline attempt is read. A failed run that wrote no
+`build.json` (a build script that does not evaluate, a missing distribution) is still a refusal
+with Gradle's own words.
 
 ### Discovery reads the build, never a convention
 

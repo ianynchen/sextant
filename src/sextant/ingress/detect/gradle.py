@@ -19,9 +19,11 @@ the probe is not cheap or narrowly scoped (2M Task 3 fix round 1, I4): the
 init script's `sextantModel` task in EVERY source-set-owning project depends
 on that project's own `classes` task, so one invocation compiles the ENTIRE
 target build — every
-project, including ones the CLI will go on to skip-list — takes however long
-that full compile takes, and one project's compile failure refuses detection
-for the whole repository, not only that project.
+project, including ones the CLI will go on to skip-list — and takes however
+long that full compile takes. Gradle runs with `--continue` (Android design
+M5), so a project whose build fails does not stop the others: that project,
+and each project that needs it, is skipped with Gradle's own reason, and the
+other projects are read.
 
 **Boundaries, stated where they arise (2M design §1c, widened by fix round
 1).** A composite build (`includeBuild`) is invisible to `allprojects` —
@@ -42,6 +44,7 @@ special case here.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -91,6 +94,16 @@ _OFFLINE_PLUGIN_REFUSAL_SUBSTRING = "could not resolve plugin artifact"
 _BUILD_FAILURE_BANNERS = (
     "FAILURE: Build failed with an exception.",
     "FAILURE: Build completed with ",
+)
+
+# The line that starts Gradle's own message for one failed task (Android design M5),
+# measured on Gradle 9.7.1. Gradle 9 writes "(registered by plugin class '...')" after the
+# task path, so only the start of the line is matched.
+_FAILED_TASK = re.compile(r"^Execution failed for task '([^']+)'")
+
+_OFFLINE_PARTS_NOTE = (
+    "some parts need dependencies that are not in the local Gradle cache; "
+    "--allow-resolve lets Gradle download them"
 )
 
 # Positive evidence that Gradle's OWN wrapper bootstrap — never Gradle's real
@@ -226,14 +239,57 @@ def _project_file_name(project_path: str) -> str:
     return f"{project_path.replace('_', '__').replace(':', '_')}.json"
 
 
-def _assemble(out_dir: Path) -> dict[str, Any]:
+def _failures_by_project(output: str) -> dict[str, str]:
+    """Gradle's own message for each failed task, by the path of the project that owns the
+    task (Android design M5): `:app:compileJava` belongs to `:app`, and `:compileJava` to
+    the root project `:`. The message is the lines after `Execution failed for task '...'`
+    up to the next blank line. Gradle puts "> " in front of the first line of a message and
+    two spaces in front of each line that continues it (javac's own error lines are such
+    lines); those two characters are removed, and the rest of each line is kept as Gradle
+    wrote it. Two failed tasks of one project give one message, in Gradle's order."""
+    lines = output.splitlines()
+    found: dict[str, list[str]] = {}
+    for index, line in enumerate(lines):
+        failed = _FAILED_TASK.match(line)
+        if failed is None:
+            continue
+        project_path = failed.group(1).rsplit(":", 1)[0] or ":"
+        message = found.setdefault(project_path, [])
+        for following in lines[index + 1 :]:
+            if not following.strip():
+                break
+            message.append(following[2:] if following.startswith(("> ", "  ")) else following)
+    return {path: "\n".join(message) for path, message in sorted(found.items())}
+
+
+def _clear(out_dir: Path) -> None:
+    """Removes every file a Gradle run wrote into `out_dir`, so the next run's result is
+    read alone: a project file left by the offline attempt must not stand in for a project
+    that failed on the online retry."""
+    for entry in out_dir.iterdir():
+        if entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+
+
+def _assemble(out_dir: Path, output: str = "") -> dict[str, Any]:
     """The one document `_repository_model` reads, joined from the files the init script
     wrote (Android design M4): `build.json` from the root project's `sextantBuild` names
     every project and the included builds, and each project's own `sextantModel` wrote a
     list of records under `projects/`. A project with no file gets one record with empty
     lists — its build identity only, nothing to scan. Records are in `(path, target)`
-    order, so the document is the same on every run (NFR-1)."""
+    order, so the document is the same on every run (NFR-1).
+
+    `output` is Gradle's output from a run that FAILED, and empty for a run that did not
+    (Android design M5). After a failed run, every project's `sextantModel` that ran wrote a
+    file, so a project with no file was not built, and its record gets `buildFailure`: its
+    own failed task's message, or else a statement that a project it needs failed, naming
+    the projects that did. Where Gradle's output names no failed task at all, the reason
+    is that output itself, as Gradle wrote it."""
     build = _read_json(out_dir / "build.json")
+    failures = _failures_by_project(output)
+    failed_paths = ", ".join(failures)
     try:
         records: list[dict[str, Any]] = []
         for project in build["projects"]:
@@ -255,6 +311,13 @@ def _assemble(out_dir: Path) -> dict[str, Any]:
                     "platform": None,
                 }
             )
+            if output:
+                records[-1]["buildFailure"] = failures.get(
+                    str(project["path"]),
+                    f"not built: a part it needs failed to build ({failed_paths})"
+                    if failures
+                    else output.strip(),
+                )
         included_builds = build["includedBuilds"]
     except KeyError as missing:
         raise ValueError(
@@ -316,6 +379,7 @@ class GradleDetector:
             )
             notes: list[str] = [note for note in (wrapper_note,) if note]
             notes.extend(GradleDetector._composite_build_notes(data))
+            notes.extend(data.get("notes", []))
             if multi_module:
                 notes.extend(GradleDetector._root_sources_notes(projects))
         except KeyError as missing:
@@ -377,8 +441,14 @@ class GradleDetector:
         BEFORE anything else, on either attempt, because it is not a build
         failure at all — Gradle itself never started. An offline dependency
         refusal is retried online exactly once when `allow_resolve` permits
-        it; any other failure, and a failed retry, surfaces as Gradle's own
-        error verbatim (DR-6)."""
+        it, into an empty output folder.
+
+        A failed run that still wrote `build.json` is a PARTIAL result (Android design
+        M5): `--continue` let every project that could build finish, and `_assemble`
+        gives each project that did not its reason. Without `allow_resolve`, an offline
+        refusal in it adds a note that names the flag. A failed run with no `build.json`
+        never reached the projects at all, and surfaces as Gradle's own error verbatim
+        (DR-6)."""
         first = self._run_once(gradle_command, path, out_dir, offline=True)
         if first.returncode == 0:
             return _assemble(out_dir)
@@ -387,15 +457,26 @@ class GradleDetector:
         if _is_distribution_absent(combined):
             raise ValueError(_distribution_absent_message(path, combined))
         if not (allow_resolve and _is_offline_refusal(combined)):
-            raise ValueError(combined.strip())
+            notes = [_OFFLINE_PARTS_NOTE] if _is_offline_refusal(combined) else []
+            return self._partial(out_dir, combined, notes)
 
+        _clear(out_dir)
         second = self._run_once(gradle_command, path, out_dir, offline=False)
-        if second.returncode != 0:
-            combined_retry = second.stdout + second.stderr
-            if _is_distribution_absent(combined_retry):
-                raise ValueError(_distribution_absent_message(path, combined_retry))
-            raise ValueError(combined_retry.strip())
-        return _assemble(out_dir)
+        if second.returncode == 0:
+            return _assemble(out_dir)
+        combined_retry = second.stdout + second.stderr
+        if _is_distribution_absent(combined_retry):
+            raise ValueError(_distribution_absent_message(path, combined_retry))
+        return self._partial(out_dir, combined_retry, [])
+
+    @staticmethod
+    def _partial(out_dir: Path, output: str, notes: list[str]) -> dict[str, Any]:
+        """A failed run's result: the projects that built, and a reason for each that did
+        not, when Gradle got as far as writing `build.json`; Gradle's own error verbatim
+        when it did not."""
+        if not (out_dir / "build.json").is_file():
+            raise ValueError(output.strip())
+        return {**_assemble(out_dir, output), "notes": notes}
 
     # A cap, not a guess at how long a real build takes (2M Task 3 fix round
     # 1, M3): the init script's own `sextantModel` task compiles the whole
@@ -542,6 +623,10 @@ class GradleDetector:
                 )
                 if Path(str(entry["path"])).is_file()
             ),
+            # Gradle's own reason this project was not built (Android design M5). Read from
+            # every record, not only from one `_assemble` made for a project with no file:
+            # a record the init script writes may carry one too.
+            build_failure=project.get("buildFailure"),
         )
 
     @staticmethod

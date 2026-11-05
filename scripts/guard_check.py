@@ -1345,6 +1345,19 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "detect.a-part-that-FAILED-to-build-is-skipped-not-the-repository": Guard(
+        what="a failed Gradle run that still wrote build.json is read as a partial result",
+        why="with `--continue`, one part that fails to build must be skipped with Gradle's "
+        "reason while the other parts are read; refusing the whole repository over it is "
+        "what Android design M5 ruled out (Android outbound Task 2)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find='        if not (out_dir / "build.json").is_file():\n',
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "detect.an-OFFLINE-PLUGIN-refusal-is-retried-online-under-the-flag": Guard(
         what='an offline "could not resolve plugin artifact" is an offline refusal '
         "`--allow-resolve` retries online",

@@ -33,9 +33,9 @@
 // (2M Task 3 fix round 1, I4): each Java-plugin project's `sextantModel`
 // depends on that project's own `classes` task (below), so running it
 // compiles the ENTIRE target build in one invocation — every project,
-// including ones the CLI will go on to skip-list — and one project's compile
-// failure fails the invocation, refusing detection for every project, not
-// only that one.
+// including ones the CLI will go on to skip-list. With `--continue`, a
+// project whose compile fails writes no file, and GradleDetector skips it
+// with Gradle's own reason; the other projects are read (Android design M5).
 import groovy.json.JsonOutput
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.component.ProjectComponentIdentifier

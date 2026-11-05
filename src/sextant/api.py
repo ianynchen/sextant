@@ -451,6 +451,10 @@ def _skip_reason(module: ModuleModel) -> str | None:
     module nothing references simply yields facts nobody links to, which
     costs a little time and risks nothing, while skipping one that IS
     referenced loses its outbound clients and shapes entirely."""
+    # First, because the build tool's own words say WHY (Android design M5): a module
+    # that was not built also has no classes, and the rules below would give only that.
+    if module.build_failure is not None:
+        return module.build_failure
     if module.packaging == "pom":
         return "packaging is pom"
     # The same evidence in another build's words (OI-273 fix round 1): no source root on

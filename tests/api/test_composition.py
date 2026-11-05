@@ -109,6 +109,25 @@ def test_a_project_with_no_source_and_no_classes_is_skipped_with_its_reason(tmp_
     assert api._skip_reason(module) == "no source and no compiled classes: nothing to scan"
 
 
+def test_skip_reason_puts_a_build_failure_first():
+    """A part Gradle could not build is skipped with Gradle's own words (Android design M5),
+    before any other rule: its packaging and its empty folders say only that it was not
+    built, not why."""
+    module = ModuleModel(
+        module_id="g:a",
+        coordinates="g/a",
+        version="1.0.0",
+        root=Path("."),
+        kind="undetermined",
+        languages=frozenset(),
+        source_roots=(),
+        output_dirs=(),
+        packaging="pom",
+        build_failure="not built: a part it needs failed to build (:lib)",
+    )
+    assert api._skip_reason(module) == "not built: a part it needs failed to build (:lib)"
+
+
 def test_skip_reason_is_none_for_an_ordinary_undetermined_jar_module(tmp_path: Path):
     """The ruled amendment's whole point: `undetermined` alone is no longer
     a skip reason."""

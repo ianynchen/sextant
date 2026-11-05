@@ -1123,6 +1123,236 @@ def test_distribution_absent_is_recognised_even_on_the_second_attempt(
     assert calls == [True, False]
 
 
+# --- a part that fails to build is skipped with Gradle's reason (Android design M5) -----
+
+# Captured from a real Gradle 9.7.1 run (Android outbound Task 2) with this detector's own
+# argv: `:lib` has a syntax error and `:app` depends on `:lib`; the root project applies no
+# plugin. With `--continue`, `:app` is never compiled and Gradle names only `:lib`. javac's
+# own lines come first, then Gradle repeats them under its "> " line, two spaces in. Path
+# shortened; otherwise verbatim.
+_REAL_ONE_PART_FAILS = (
+    "/repo/lib/src/main/java/l/L.java:2: error: illegal start of expression\n"
+    "public class L { int x = }\n"
+    "                         ^\n"
+    "1 error\n"
+    "\n"
+    "FAILURE: Build failed with an exception.\n"
+    "\n"
+    "* What went wrong:\n"
+    "Execution failed for task ':lib:compileJava' (registered by plugin class 'org.gradle.api.plugins.JavaBasePlugin').\n"
+    "> Compilation failed; see the compiler output below.\n"
+    "  /repo/lib/src/main/java/l/L.java:2: error: illegal start of expression\n"
+    "  public class L { int x = }\n"
+    "                           ^\n"
+    "  1 error\n"
+    "\n"
+    "* Try:\n"
+    "> Check your code and dependencies to fix the compilation error(s)\n"
+    "> Run with --scan to get full insights from a Build Scan (powered by Develocity).\n"
+    "\n"
+    "BUILD FAILED in 314ms\n"
+)
+
+# The same run with the root project broken too (Gradle 9.7.1): two failed tasks, so Gradle
+# prints numbered blocks under "Build completed with 2 failures". javac's own lines that
+# precede the banner are left out here; otherwise verbatim, paths shortened.
+_REAL_TWO_PARTS_FAIL = (
+    "FAILURE: Build completed with 2 failures.\n"
+    "\n"
+    "1: Task failed with an exception.\n"
+    "-----------\n"
+    "* What went wrong:\n"
+    "Execution failed for task ':compileJava' (registered by plugin class 'org.gradle.api.plugins.JavaBasePlugin').\n"
+    "> Compilation failed; see the compiler output below.\n"
+    "  /repo/src/main/java/r/R.java:2: error: illegal start of expression\n"
+    "  public class R { int x = }\n"
+    "                           ^\n"
+    "  1 error\n"
+    "\n"
+    "* Try:\n"
+    "> Check your code and dependencies to fix the compilation error(s)\n"
+    "> Run with --scan to get full insights from a Build Scan (powered by Develocity).\n"
+    "==============================================================================\n"
+    "\n"
+    "2: Task failed with an exception.\n"
+    "-----------\n"
+    "* What went wrong:\n"
+    "Execution failed for task ':lib:compileJava' (registered by plugin class 'org.gradle.api.plugins.JavaBasePlugin').\n"
+    "> Compilation failed; see the compiler output below.\n"
+    "  /repo/lib/src/main/java/l/L.java:2: error: illegal start of expression\n"
+    "  public class L { int x = }\n"
+    "                           ^\n"
+    "  1 error\n"
+    "\n"
+    "* Try:\n"
+    "> Check your code and dependencies to fix the compilation error(s)\n"
+    "> Run with --scan to get full insights from a Build Scan (powered by Develocity).\n"
+    "==============================================================================\n"
+    "\n"
+    "BUILD FAILED in 833ms\n"
+)
+
+
+def _write_build(out_dir: Path, records: list[dict], written: list[dict]) -> None:
+    """What a partly failed run leaves: `build.json` names every project, and only the
+    projects whose `sextantModel` ran have a file under `projects/`."""
+    identities = [
+        {key: record[key] for key in ("path", "group", "name", "version", "dir")}
+        for record in records
+    ]
+    (out_dir / "build.json").write_text(
+        json.dumps({"projects": identities, "includedBuilds": []}), encoding="utf-8"
+    )
+    (out_dir / "projects").mkdir(exist_ok=True)
+    for record in written:
+        name = gradle_module._project_file_name(record["path"])
+        (out_dir / "projects" / name).write_text(json.dumps([record]), encoding="utf-8")
+
+
+def _root_record() -> dict:
+    return {**_project_record(":", "parts"), "group": "", "sourceRoots": [], "classesDirs": []}
+
+
+def test_failures_by_project_reads_each_failed_task():
+    """Each `Execution failed for task '<task>'` block gives its project Gradle's own
+    message: the lines after it up to the blank line, with the "> " (or the two spaces) Gradle
+    puts in front of each removed. The project is the task path without its last part, and
+    the root project's own task (`:compileJava`) belongs to `:`."""
+    compile_error = (
+        "Compilation failed; see the compiler output below.\n"
+        "/repo/{file}:2: error: illegal start of expression\n"
+        "public class {name} {{ int x = }}\n"
+        "                         ^\n"
+        "1 error"
+    )
+    assert gradle_module._failures_by_project(_REAL_TWO_PARTS_FAIL) == {
+        ":": compile_error.format(file="src/main/java/r/R.java", name="R"),
+        ":lib": compile_error.format(file="lib/src/main/java/l/L.java", name="L"),
+    }
+
+
+def test_failures_by_project_keeps_every_cause_line_of_an_offline_refusal():
+    reasons = gradle_module._failures_by_project(_REAL_DOWNLOAD_THEN_TWO_OFFLINE_FAILURES)
+    assert sorted(reasons) == [":a", ":b"]
+    assert reasons[":a"].startswith(
+        "Could not resolve all files for configuration ':a:compileClasspath'.\n"
+    )
+    assert reasons[":a"].endswith(
+        "No cached version of org.example.sextant:not-cached-a:1.0.0 available for offline mode."
+    )
+
+
+def test_output_with_no_failed_task_names_no_project():
+    assert gradle_module._failures_by_project(_REAL_BAD_JAVA_HOME_FAILURE) == {}
+
+
+@pytest.mark.pins("detect.a-part-that-FAILED-to-build-is-skipped-not-the-repository")
+def test_a_part_that_uses_a_failed_part_is_skipped_with_that_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`--continue` lets every part that can build finish, and the run still exits 1. A part
+    whose own task failed gets Gradle's text as its reason; a part that never ran because a
+    part it needs failed is named as such. The repository is not refused (Android design M5)."""
+    root, lib, app = _root_record(), _project_record(":lib", "lib"), _project_record(":app", "app")
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        _write_build(out_dir, [root, app, lib], written=[root])
+        return _completed(1, _REAL_ONE_PART_FAILS)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    modules = {module.module_id: module for module in _repository_model(data).modules}
+
+    assert modules["com.acme:lib"].build_failure is not None
+    assert modules["com.acme:lib"].build_failure.startswith(
+        "Compilation failed; see the compiler output below.\n"
+        "/repo/lib/src/main/java/l/L.java:2: error: illegal start of expression"
+    )
+    assert modules["com.acme:app"].build_failure == (
+        "not built: a part it needs failed to build (:lib)"
+    )
+
+
+def test_a_part_that_built_carries_no_build_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    root, lib, app = _root_record(), _project_record(":lib", "lib"), _project_record(":app", "app")
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        _write_build(out_dir, [root, app, lib], written=[root, app])
+        return _completed(1, _REAL_ONE_PART_FAILS)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    modules = {module.module_id: module for module in _repository_model(data).modules}
+
+    assert modules["com.acme:app"].build_failure is None
+    assert modules["com.acme:lib"].build_failure is not None
+
+
+def test_a_build_failure_written_inside_a_record_reaches_the_module(tmp_path: Path):
+    """A record can carry `buildFailure` itself, not only one the detector makes for a part
+    with no file — the init script writes one where a part cannot be read at all."""
+    project = _project(tmp_path, path=":app", name="app")
+    project["buildFailure"] = "the Android plugin is older than 7.0"
+    module = GradleDetector._module_of(tmp_path, project, [project])
+    assert module.build_failure == "the Android plugin is older than 7.0"
+
+
+def test_an_offline_refusal_in_one_part_names_allow_resolve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Without `--allow-resolve` there is no online retry: the parts the cache could not
+    serve are skipped with Gradle's reason, the others are read, and a note says how to let
+    Gradle download what is missing."""
+    root, a, b = _root_record(), _project_record(":a", "a"), _project_record(":b", "b")
+    calls: list[bool] = []
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        calls.append(offline)
+        _write_build(out_dir, [root, a, b], written=[root])
+        return _completed(1, _REAL_DOWNLOAD_THEN_TWO_OFFLINE_FAILURES)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    model = _repository_model(data)
+
+    assert calls == [True]
+    assert (
+        "some parts need dependencies that are not in the local Gradle cache; "
+        "--allow-resolve lets Gradle download them"
+    ) in model.notes
+    modules = {module.module_id: module for module in model.modules}
+    assert "available for offline mode" in str(modules["com.acme:a"].build_failure)
+
+
+def test_the_online_retry_does_not_read_a_file_the_offline_attempt_left(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The offline attempt wrote `:lib`'s file; on the online retry `:lib` failed. The file
+    left from the first attempt must not stand in for the part that failed on the second."""
+    root, lib = _root_record(), _project_record(":lib", "lib")
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        if offline:
+            _write_build(out_dir, [root, lib], written=[root, lib])
+            return _completed(
+                1,
+                "FAILURE: Build failed with an exception.\n"
+                "> No cached version of org.springframework:spring-web:6.1.6 available for "
+                "offline mode.\n",
+            )
+        _write_build(out_dir, [root, lib], written=[root])
+        return _completed(1, _REAL_ONE_PART_FAILS)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, True)
+    [module] = _repository_model(data).modules
+
+    assert module.build_failure is not None
+    assert "illegal start of expression" in module.build_failure
+
+
 # --- escape hatches wrapped into named refusals (2M Task 3 fix round 1, I6)
 
 
