@@ -926,7 +926,7 @@ CREATE TABLE IF NOT EXISTS call_edges (
 -- Spec 2026-11-05 §3: its SECOND writer, `resolve/dispatch_hops.py`, writes an in-process
 -- dispatch send's hops here (named `rpc_hops` until then, spec 2026-11-04 §3c): the send's
 -- call site, the value's class (or a constant's own symbol) as `path`, one row per handler it
--- reaches; a class nobody handles has `handler` NULL, a class not read `path` NULL too;
+-- reaches; a class nobody handles has `handler` NULL, a key not read `path` NULL too;
 -- `evidence` stays `compiler`.
 --
 -- A derived TABLE because both rules are Python; replaced whole per resolve through ONE
@@ -989,7 +989,8 @@ CREATE TABLE IF NOT EXISTS dispatch_registrations (
     -- The declaring catalog's `dispatch.match`: `first`, `all` or `one`.
     match       TEXT,
     -- The dispatch mechanism the registration belongs to: a send, or an inbound key, reaches
-    -- only registrations of its own catalog's mechanism (the catalog id's family).
+    -- only registrations of its own catalog's mechanism (the catalog's declared
+    -- `dispatch.mechanism`, D02 §2m).
     mechanism   TEXT
 );
 

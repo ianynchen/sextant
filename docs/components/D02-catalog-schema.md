@@ -826,7 +826,7 @@ genuinely new shape needs a new engine. (Nine as of Phase 2H; `supertype_derived
 is the twelfth; `supertype_dispatch`, Task 7b, is the thirteenth; `scheduled_work` and
 `error_advice`, Task 8, are the fourteenth and fifteenth; `scheduled_chain`, the Quartz
 design of 2026-10-28, is the sixteenth. In-process dispatch (the design of 2026-11-05) is
-**no style**: it is a setting and four blocks a catalog of an existing style carries, in its
+**no style**: it is a setting and five blocks a catalog of an existing style carries, in its
 own section, §2m. The
 Akka and Pekko design of 2026-11-04 had built a seventeenth style, `message_handlers`, for
 it; the user ruled it framework-specific, and it is gone.)
@@ -6215,11 +6215,13 @@ before the catalog line, and where it disagrees the list changes, not the probe.
 Spec `2026-11-05-in-process-dispatch-design.md`: code hands a value to a framework or a
 channel, and the framework calls the handler(s) that receive it. No address goes on a wire, so
 it is a trace **hop** (D01 §3 `hops`), never an endpoint row; messaging, which names an address
-a broker routes on, keeps its rows. **It is no style**: a setting and four blocks under
-`matches` that a catalog of an existing style carries, read by passes after the engines. **A
-catalog declaring `dispatch` mints no endpoint row**: `derive_endpoints` leaves it out of the
-engine loop whole (`endpoints._reads_by_a_later_pass`: no endpoint validation, no run or skip
-reported), whatever its style.
+a broker routes on, keeps its rows. **It is no style**: a setting and five blocks under
+`matches` (`dispatch_registrations`, `dispatch_sends`, `dispatch_receives`, `dispatch_views`,
+`dispatch_implementations`) that a catalog of an existing style carries, read by passes after
+the engines. **A catalog whose `dispatch` names a `key` mints no endpoint row**:
+`derive_endpoints` leaves it out of the engine loop whole (`endpoints._reads_by_a_later_pass`:
+no endpoint validation, no run or skip reported), whatever its style. A key catalog declaring
+`dispatch: {mechanism}` alone keeps its endpoint rows (its inbound rows are the keys).
 
 ```yaml
 # pekko-actor-handlers.yml
@@ -6300,12 +6302,23 @@ matches:
   A block any style may carry. `resolve/dispatch_hops.py` reads each call site (owner, an heir
   of it, name and parameter types) and writes its hops into `hops` (D01 §3) under the
   catalog's `protocol`, which a catalog declaring sends or a `returns_value` entry must carry
-  (refused at resolve otherwise) although it mints no endpoint row. The value at `value_arg`
-  is read by its kind: an `instance`'s class; an `enum` constant or a static `field` by
-  identity (its class and its own symbol); a `lambda` through each class its body returns (a
-  constructor reference: its owner); a static call's result (`Event.instance()`, an
-  `unresolved` argument whose `source` is that call's `result`) through each class the
-  module's own body of that method returns. Anything else is not read, and the row says so.
+  (refused at load otherwise, `yaml_source._dispatch`) although it mints no endpoint row. The
+  value at `value_arg` is read by its kind: an `instance`'s class; an `enum` constant or a
+  static `field` by identity (its class and its own symbol); a `lambda` through each class its
+  body returns (a constructor reference: its owner); a static call's result
+  (`Event.instance()`, an `unresolved` argument whose `source` is that call's `result`)
+  through each class the module's own body of that method returns. **A value none of those
+  names is read by its DECLARED type** (ruled 2026-11-05): any other call's result (an
+  instance call, `new E().setA(a)`'s chained setters; a library method), and a return the body
+  does not name, by the call's descriptor's return type; a `parameter` by the method's
+  declared parameter type; an instance `field` by the field's declared type. The value is
+  that type or a subtype, so under `match: all` and `one` every registration of the type or a
+  supertype is certainly reached; under `first` a group in which a case names a strict
+  subtype of it (a class registration, or a value registration whose constant is of the type
+  or below) is not read, since that case may take the value first
+  (`dispatch_registrations.certain_cases`): the send adds the not-read row. Anything else (an
+  array element, a `merge`, a primitive or array declared type) is not read, and the row says
+  so (`(key not read)`).
   A value's class reaches a registration of any of its supertypes: the scanned and headered
   ones, the `type-models/` conformance past a JDK class nothing scans, and the root type (the
   `subtype: "*"` entry). It is asked only of the registrations of the sending catalog's
@@ -6363,7 +6376,14 @@ matches:
   inheritance walk applies (`effective_annotations._synthesis_target`: the same class's one
   same-name, same-arity method not synthetic); where that is not exactly one method, or the
   method has no parameter at `value_arg`, the row is kept with no key (it matches nothing).
-  General: Micronaut's `ApplicationEventListener<E>` has the same shape.
+  So is a method whose parameter is GENERIC — a type variable (`Base<E> implements
+  ApplicationListener<E>` declaring `onApplicationEvent(E)`, which javac erases to the bound
+  and writes no bridge for) or a type with type arguments — because the framework dispatches by
+  the type each subclass binds, never by the erasure (`annotation_driven.generic_parameter`,
+  ruled 2026-11-05). The same rule keeps every registration kind's generic parameter keyless:
+  an annotated listener's payload parameter (`@EventListener on(T e)`, `on(Envelope<X> e)`)
+  and a parameter-selected observer's. General: Micronaut's `ApplicationEventListener<E>` has
+  the same shape.
 - **`dispatch_receives`** entries are `{owner, method, descriptor, object: receiver | argN,
   handler: enclosing | lambda_arg}`, checked at load (`yaml_source._dispatch_receives`; `argN`
   must be an argument of the descriptor): a
@@ -6375,7 +6395,9 @@ matches:
   `Queues.drain(queue, …)`, `guava-queues.yml`) — followed by `ObjectKeys`, the value walk's
   object reader (through locals, parameters across callers, helper returns and fields, to a
   construction or a call whose body is not here; a declared null check, `not_hand_offs`,
-  returning its argument's type is passed through, and a path that comes back to where it
+  returning its argument's type is passed through — and where every path past it ends at an
+  object not read (`this.q = Objects.requireNonNull(q)`, `q` injected), the check's own call
+  is the key, the one object it hands back — and a path that comes back to where it
   started — a cycle, such as a coroutine lambda's `create` copying its captured `this.$ch` —
   adds no object), its handler the method making the call (`handler: enclosing`) or the function
   it hands the value to (`handler: lambda_arg`).
@@ -6429,7 +6451,7 @@ matches:
   the flows file's receives, and the object decides. Stated bounds: a flow made from another's
   values by an operator (`map`, `filter`, `onEach`) is the operator's result, another key, so its
   collectors match no send (missing hops); `launchIn` and other terminal operators are not
-  receives; a send through a data class's property keeps one "key not read" stop beside its hops
+  receives; a send through a data class's property keeps one `(key not read)` stop beside its hops
   (the generated `copy(…)` writes the field from a parameter nothing in the module passes); a channel held in a local or
   parameter of a `suspend` function and used after a suspension point is a receiver the facts do
   not name (the state machine merges the local with its spilled slot), so its send is a stop

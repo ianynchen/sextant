@@ -25,22 +25,30 @@ here would restate those documents rather than add anything.
   required and checked at load; a key catalog declares `{mechanism}` alone), and blocks any
   style may carry (D02 §2m): `dispatch_registrations` (on an ordinary `fluent` chain catalog,
   whose chain ends are then registrations), `dispatch_implementations`, `dispatch_sends`,
-  `dispatch_receives` and `dispatch_views`; `mapping.selected_by_parameter` and
-  `mapping.keyless_when_meta_annotated` serve annotation catalogs; a `channel_via` entry may
+  `dispatch_receives` and `dispatch_views`; `mapping.selected_by_parameter` serves annotation
+  catalogs, which then name a DI bean model declaring `qualifier_meta_annotations`
+  (`bean-models/cdi.yml`, D02 §1c; refused at load otherwise); a `channel_via` entry may
   name `class_arg`, read from the same producing call in the same walk as its name. The graph
   table is `dispatch_registrations` (`group`, `position`, `key_type`, `key_value`,
   `key_object`, `predicated`, `handler`, `delivers`, `match`, `mechanism`; schema 15,
   unreleased) and every hop is in `hops`, which `rpc_hops` was; `Protocol.IN_PROCESS`
   (`in_process`, D00 §4) is the protocol of a hop whose catalog has no wire. A send reaches
   only registrations of its own mechanism, `match: all` and `one` reach every matching
-  registration, and a key that is not read is a stop that says so (`(key not read)`), never a
-  fan-out. No catalog word or table starts with `message_` and no code names a framework
-  (architecture tests). Every kind below was checked hop by hop against real code:
-  0 false hops, 0 missing, and no endpoint row moved on any module; the six field pins hold.
+  registration. A sent value no `new`, constant or module factory names (an instance call's
+  result such as `new E().setA(a)`, a parameter, a field) is read by its DECLARED type: every
+  registration of that type or a supertype is certainly reached under `all` and `one`, and
+  under `first` only in a group where no case names a strict subtype. A key that is still not
+  read is a stop that says so (`(key not read)`), never a fan-out. A registration whose
+  parameter is generic (a type variable, type arguments) is kept with no key, for every
+  registration kind. A catalog with sends or delivering handlers and no `protocol` is refused
+  at load. No catalog word or table starts with `message_` and no code names a framework
+  (architecture tests). Every kind below was checked hop by hop on the modules it names, and
+  only those: 0 false hops, no missing hop outside a stated bound, and no endpoint row moved
+  on any module; the six field pins hold.
   - **Akka and Pekko** were re-expressed in the general words; their rows and hops are unchanged
-    on both fixtures and the two Pekko samples (5 rows, 28 hops, 23 registrations, identical).
-    A sent value that is a static module factory's result (`ConfigPublishEvent.instance()`) is
-    read through the factory's returns.
+    on both fixtures and the two Pekko samples (5 rows, 28 hops, 23 registrations; six stops
+    for messages to system actors now name the factory's declared class, `Subscribe` and
+    `Receptionist$Command`, where they read `(key not read)`; no handler hop moved).
   - **Spring application events** (spring-context and spring-tx 7.0.1): `spring-events.yml`, an
     `annotation_driven` catalog. Each `@EventListener` / `@TransactionalEventListener` method is
     keyed by the classes its annotation names (`path_from: [classes, value]`) or its one
@@ -48,17 +56,23 @@ here would restate those documents rather than add anything.
     `onApplicationEvent(E)`, the compiler's bridge carried to the method it forwards to. The
     two `publishEvent` overloads on `ApplicationEventPublisher`, `ApplicationContext` and
     `ConfigurableApplicationContext` are sends; `type-models/conformance.yml` declares the root
-    type every class conforms to, so a listener of `Object` receives every event. On
-    apollo-portal all 17 publish sites hop to their listener. Stated bound: `publishEvent(pojo)`
-    is wrapped by Spring in a `PayloadApplicationEvent`, so a listener of `ApplicationEvent`
-    gets no hop (missing, never false).
+    type every class conforms to, so a listener of `Object` receives every event. A sent value
+    that is a static module factory's result (`ConfigPublishEvent.instance()`) is read through
+    the factory's returns. On apollo-portal all 17 publish sites hop to their listener; on
+    ruoyi-vue-pro's `yudao-module-system`, whose events are built with chained setters, 2 of 3
+    hop to their listener and the third is a stop naming its class (its listener is in another
+    module), all checked by hand. Stated bounds (missing, never false): `publishEvent(pojo)` is
+    wrapped by Spring in a `PayloadApplicationEvent`, so a listener of `ApplicationEvent` gets
+    no hop; a generic listener parameter (`Base<E> implements ApplicationListener<E>`,
+    `on(T e)`) has no key.
   - **CDI events** (Jakarta CDI API 4.1.0, javax CDI API 1.0.0, ArC 3.17.5): `cdi-events.yml`
     (`@Observes`, `Event.fire`) and `cdi-async-events.yml` (`@ObservesAsync`, both `fireAsync`
     overloads) are two mechanisms, because ArC notifies only synchronous observers from `fire`
     and only asynchronous ones from `fireAsync`. An observer is selected by its PARAMETER's
     annotation and keyed by that parameter's type, whatever the container injects beside it. A
-    qualified observer (an annotation meta-annotated `@Qualifier`) and an observer of a
-    parameterized type keep their registration with no key (a missing hop, never a false one).
+    qualified observer (an annotation meta-annotated by the CDI bean model's
+    `qualifier_meta_annotations`, `@Qualifier`) and an observer of a parameterized type or a
+    type variable keep their registration with no key (a missing hop, never a false one).
     No example under `examples/` fires a CDI event, so the check covers registrations only
     (5 of 5 true on two Quarkus quickstarts); the hops are pinned on `fixtures/orders-cdi-events`.
   - **Java blocking queues** (JDK 21.0.13), the mechanism's object key: each receive is keyed
@@ -69,7 +83,9 @@ here would restate those documents rather than add anything.
     `remove()` on the ten JDK blocking-queue types; `guava-queues.yml` declares
     `Queues.drain`/`drainUninterruptibly` through a new `object: argN` receive form;
     `remove(Object)` and `removeIf` are not receives. A queue from outside the module is a
-    stop, and two queues of one type stay apart. 10 hops on apollo and dolphinscheduler. Stated
+    stop, and two queues of one type stay apart; a queue kept through a declared null check
+    (`Objects.requireNonNull(q)`) whose maker is not read (an injected queue) is keyed by the
+    check itself, the one object it hands back. 10 hops on apollo and dolphinscheduler. Stated
     bounds, each over-linking: one field written by several instances, one helper making
     several queues, one library call site handing back several.
   - **Kotlin channels and flows** (kotlinx-coroutines 1.11.0, kotlinc 2.4.20): one mechanism,
@@ -85,7 +101,7 @@ here would restate those documents rather than add anything.
     where it started, and kotlinc 2.4's `SpillingKt.nullOutSpilledVariable` is declared in
     `value-models/compiler-null-checks.yml`. 7 hops on playport and kotlinconf. Stated bounds:
     a flow made by an operator is another key; a channel used after a suspension point is a
-    stop; a send through a data class's property keeps one "key not read" stop beside its hops.
+    stop; a send through a data class's property keeps one `(key not read)` stop beside its hops.
 - **Akka and Pekko actors: a trace crosses actors** (spec 2026-11-04, SEXTANT-178, the user's
   ruling B "I want it complete"; probe CP-57, Akka 2.6.21 and Pekko 1.1.3). Three parts, each
   pinned on `fixtures/orders-actors-pekko` and `-akka`, then the measurement:

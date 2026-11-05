@@ -100,9 +100,10 @@ No `message_*` word remains. No word names a framework.
    observes a framework event), so the Quarkus check covers registrations only; the hops are
    pinned on `fixtures/orders-cdi-events`. **Fix round 1 (review M1, m2; the user's rule: a
    wrong value is a lie, worse than unknown):** an observer whose event parameter also carries
-   a qualifier (an annotation meta-annotated by a `mapping.keyless_when_meta_annotated` marker:
-   `jakarta.inject.Qualifier`, `javax.inject.Qualifier`), or whose observed type carries type
-   arguments, keeps its registration with no key — a missing hop, never a false one. Reading the
+   a qualifier (an annotation meta-annotated by one of the CDI bean model's
+   `qualifier_meta_annotations`: `jakarta.inject.Qualifier`, `javax.inject.Qualifier`; final
+   wave ruling 15 moved the word there from the catalogs), or whose observed type carries type
+   arguments or is a type variable, keeps its registration with no key — a missing hop, never a false one. Reading the
    fire sites' qualifiers (receiver to field, `select(…)`) is deferred until a corpus has a fire
    site.
 7. **Object keys: Kotlin `Channel`, Kotlin `SharedFlow`/`StateFlow`, Java `BlockingQueue`.**
@@ -117,8 +118,9 @@ No `message_*` word remains. No word names a framework.
    a construction (the module's or a library's) or a call whose body is not here
    (`ValueIndex.unscanned`, the unseen-object rule's producers — Guava's
    `Queues.newLinkedBlockingQueue`, which makes all four of apollo's queues). A path ending
-   anywhere else (a parameter nothing calls, an injected object) is "key not read": a send's
-   stop row, a receive's keyless row. javac writes the receiver's static type as the owner of
+   anywhere else (a parameter nothing calls, an injected object) is `(key not read)`: a send's
+   stop row, a receive's keyless row (but past a declared null check whose every path ends so,
+   the check's own call is the key: final wave ruling 17). javac writes the receiver's static type as the owner of
    every call, so all ten JDK blocking-queue types are listed (`Dispatch.heirs` does not reach a
    JDK class that declares the method). The loader refuses `dispatch_receives` under `key: type`
    and a class-keyed block under `key: object`; a receive's `handler: lambda_arg` is refused
@@ -162,7 +164,7 @@ No `message_*` word remains. No word names a framework.
    parameter of a `suspend` function used after a suspension point is a receiver the facts do not
    name (merged with its spilled slot), so its send is a stop (each a missing hop, never a false
    one). A data class's generated `copy(channel)` is a second writer of its field from a parameter
-   nothing calls, so a send through such a property also keeps one "key not read" stop beside its
+   nothing calls, so a send through such a property also keeps one `(key not read)` stop beside its
    hops (the established one-stop-per-unread-path rule).
 
 ## 5. Later
@@ -229,6 +231,23 @@ Each was the controller's, under the user's ruling A, and was recorded with its 
     key keeps channels and flows apart; views serve Reactor, RxJava and JDK wrappers too.
     Cost: none observed.
 
+Rulings of the final review's fix wave (2026-11-05, the controller's, under ruling A):
+
+14. **A sent value no instance names is read by its declared type** (final review I-1:
+    ruoyi-vue-pro builds every event as `new E().setA(..)`, an instance call's result): a call's
+    declared return type (its descriptor), a parameter's or an instance field's declared type.
+    Exact under `match: all` and `one`; under `first` used only in a group where no case names a
+    strict subtype of it, otherwise not read. Cost if wrong: a supertype-typed value reaches
+    the supertype's listeners only (true under `all`), missing a subtype's.
+15. **Qualifier-ness comes from the DI bean model** (final review I-2): `bean-models/cdi.yml`
+    declares `qualifier_meta_annotations`, the CDI catalogs name it, and the catalog word
+    `mapping.keyless_when_meta_annotated` is gone. Cost: one indirection.
+16. **A type-variable or parameterized registration parameter is keyless for every
+    registration kind** (final review m-1), as CDI's already was: a false hop is a lie. Cost: a
+    generic base class's listeners get no hop.
+17. **A null check over an object not read keeps its own key** (deferred minor, final wave):
+    where every path past it ends at an object not read, the check's call is the key.
+
 ### Words beyond §2
 
 The design's table named five words and one setting. What was built adds these, each general
@@ -238,7 +257,7 @@ The design's table named five words and one setting. What was built adds these, 
 |---|---|
 | `dispatch_implementations` | a registration made by implementing an interface (`ApplicationListener<E>`), keyed by its method's parameter (ruling 6) |
 | `dispatch_views` | a call handing back the same object under another type, passed through by the object walk (ruling 13) |
-| `mapping.keyless_when_meta_annotated` | the qualifier marker: an observer whose event parameter carries an annotation meta-annotated by it is kept with no key (ruling 8) |
+| `qualifier_meta_annotations` (a DI bean model key, D02 §1c, not a catalog word) | the qualifier marker: an observer whose event parameter carries an annotation meta-annotated by it is kept with no key (ruling 8). Built first as the catalog word `mapping.keyless_when_meta_annotated`; moved to `bean-models/cdi.yml` by ruling 15 |
 | `mapping.selected_by_parameter` | selects a method by a PARAMETER annotation (`@Observes`), keyed by that parameter's type |
 | `dispatch: {mechanism}` | which registrations serve which sends (ruling 7); a key catalog declares it alone |
 | `object: argN` | a receive of the object at argument N (Guava's `Queues.drain`), beside `object: receiver` (ruling 9) |
@@ -259,7 +278,7 @@ module was analysed before and after each task and compared column for column.
 | Kind | Where measured | True | False | Missing |
 |---|---|---|---|---|
 | Akka / Pekko | `pekko-sample-sharding-java/killrweather`, `pekko-sample-cluster-java` | 5 rows, 28 hops, 23 registrations, identical before and after | 0 | 0 |
-| Spring application events | apollo-portal | 17 hops, one per publish site | 0 | 0 |
+| Spring application events | apollo-portal; ruoyi-vue-pro `yudao-module-system` (final wave) | apollo-portal 17 hops, one per publish site; yudao 3 publish sites: 2 hops and 1 stop naming its class (its listener is in `yudao-module-im`) | 0 | 0 (yudao's 3 were `(key not read)` before ruling 14) |
 | CDI events | `stork-quickstart`, `reactive-routes-quickstart` | 5 of 5 registrations; **no fire site exists in `examples/`**, so the hops are pinned on `fixtures/orders-cdi-events` only | 0 | not measurable |
 | Java blocking queues | apollo-biz, apollo-configservice, apollo-portal, dolphinscheduler-alert-server, dolphinscheduler-task-executor | 10 | 0 | 0 (5 found missing at the first count, fixed in fix round 1) |
 | Kotlin channels and flows | playport/server, kotlinconf-app/backend | 7 (6 and 1) | 0 | 0 (1 found missing at the first count, fixed) |
@@ -276,28 +295,33 @@ Each over-reports nothing: the result is a missing hop or a stop that says why, 
 hop, except the three over-linking object-key bounds, which merge two objects into one.
 
 - **Spring:** `publishEvent(pojo)` is wrapped in a `PayloadApplicationEvent`, so a listener of
-  `ApplicationEvent` also receives it; those hops are missing (review m5). A generic base class
-  `Base<E> implements ApplicationListener<E>` is keyed `ApplicationEvent`; a static factory
-  called through a subclass is not read (an honest stop).
-- **CDI:** the fire sites' qualifiers and type arguments are not read, so a qualified or
-  parameterized observer has a registration and no hop; `BeanManager.fireEvent` is not
+  `ApplicationEvent` also receives it; those hops are missing (review m5). A generic listener
+  parameter (`Base<E> implements ApplicationListener<E>`, `@EventListener on(T e)`,
+  `on(Envelope<X> e)`) is kept with no key (ruling 16), so it gets no hop; a value read by its
+  declared type (ruling 14: a parameter, a field, an instance call's result, a static factory
+  called through a subclass) reaches the listeners of that type and its supertypes only.
+- **CDI:** the fire sites' qualifiers and type arguments are not read, so a qualified,
+  parameterized or type-variable observer has a registration and no hop; `BeanManager.fireEvent` is not
   declared; `@Observes` and `@ObservesAsync` on one catalog's parameters would register twice
   (no catalog does).
 - **Queues:** a field read is answered by every write of that field (two instances of one class
   holding a queue are one object); two queues one module helper makes are one; two objects one
   library call site hands back are one. A null check no catalog declares (Guava's
   `Preconditions.checkNotNull`) splits one queue into two keys instead, a missing hop. `peek`,
-  the deque ends and `Queue`-typed receivers are not read. A null check over an unreadable
-  (injected) object makes both sides keyless where they used to share the check's key.
+  the deque ends and `Queue`-typed receivers are not read. A declared null check over an
+  object not read (an injected queue) is keyed by the check's own call (ruling 17), so the two
+  sides still meet.
 - **Kotlin:** a flow made by an operator (`map`, `filter`, `onEach`) is another key; `launchIn`
   and other terminal operators are not receives; a channel in a local of a `suspend` function
   used after a suspension point is a receiver the facts do not name, so its send is a stop; a
   data class's generated `copy(channel)` writes its field from a parameter nothing calls, so a
-  send through the property keeps one "key not read" stop beside its hops. A `collect` lambda
+  send through the property keeps one `(key not read)` stop beside its hops. A `collect` lambda
   compiled by javac to an indy lambda (not a kotlinc class) has no handler read. Views are
   scoped per catalog, not per mechanism.
-- **Every kind:** a key not read (a parameter, an injected object, a call's result) is a stop
-  that says so, never a fan-out. One class named by `class_arg` anywhere in a catalog makes all
+- **Every kind:** a class key no `new`, constant or module factory names is read by its
+  declared type (ruling 14), under `first` only where no case names a strict subtype; a key
+  still not read (an array element, an injected object, a `first` group the declared type does
+  not decide) is a stop that says so, `(key not read)`, never a fan-out. One class named by `class_arg` anywhere in a catalog makes all
   its inbound rows key rows (D02, `channel_via`).
 
 ### Deferred
@@ -308,4 +332,8 @@ arguments; `_Reading` takes `catalogs[0].type_model`; `_registers` repeats the
 `annotation_driven`/`key` condition that `endpoints.py` also holds; the `nullOutSpilledVariable`
 entry was re-checked on two Kotlin modules only; the `receiveAsFlow` collector row is labelled
 `match: all` (informational for an object key). Two for the log (OI): the generic-base-class
-listener and the static factory called through a subclass.
+listener (now keyless by ruling 16: a missing hop, no longer a false one) and the static factory
+called through a subclass (now read by its declared return type by ruling 14). Final wave, not
+done: a `lambda_arg` receive whose handler is not read writes the same hop row as an object no
+receive takes from (final review m-10): the registration row says which, the trace text does
+not.

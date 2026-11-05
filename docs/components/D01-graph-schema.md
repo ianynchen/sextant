@@ -183,9 +183,12 @@ site, or no row.
   the value's class symbol, or a constant's own symbol where the
   value is one (`com/acme/actors/Stock$Tick#INSTANCE.`); `handler` each handler the class
   reaches under its registrations' match rule (`dispatch_registrations` below), one row per
-  handler. A class no registration takes is one row with `handler` NULL. A class not read (a
-  parameter, an instance or library call's result; a static module factory's result is read
-  through its body's returns) is one row with `path` and `handler` NULL: the two
+  handler. A class no registration takes is one row with `handler` NULL. A static module
+  factory's result is read through its body's returns; a value no `new`, constant or factory
+  names (an instance or library call's result, a parameter, an instance field) by its
+  DECLARED type, reaching under `match: first` only the groups where no case names a strict
+  subtype of it (D02 §2m). A key not read (an array element, a `merge`; under `first`, a
+  group the declared type does not decide) is one row with `path` and `handler` NULL: the two
   NULLs are what say so, and never a fan-out. `evidence` is `compiler` on every dispatch hop
   row, as on every gRPC one, inside [D00](D00-fact-schema.md) §4's closed set: the send site
   is a compiler fact. A handler whose registration `delivers` continues: each class it
