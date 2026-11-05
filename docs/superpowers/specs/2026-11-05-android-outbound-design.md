@@ -35,13 +35,20 @@ reporting in the same JSON record the `java` branch writes:
 
 | Field | From AGP |
 |---|---|
-| `classesDirs` | the variant's project classes — `variant.artifacts.forScope(PROJECT).use(task).toGet(ScopedArtifact.CLASSES, …)`: the directories and jars AGP itself hands to bytecode instrumentation, every language included |
+| `classesDirs` | the directories in the variant's project classes — `variant.artifacts.forScope(PROJECT).use(task).toGet(ScopedArtifact.CLASSES, …)`: what AGP itself hands to bytecode instrumentation, every language included. Jars in that list are not read (see 2e.5) |
 | `sourceRoots` / `sourceLanguages` | `variant.sources.java` / `variant.sources.kotlin` directories (language = the set that registered it, as for `java` projects) |
-| `classpath` | the variant's compile classpath (`variant.compileClasspath`), artifacts and sibling projects, read as the `java` branch reads `compileClasspath` |
+| `classpath` | the variant's compile classpath (2e.7), artifacts and sibling projects, read as the `java` branch reads `compileClasspath` |
 | `declaredRelease` | the variant's Java target, where AGP states one; else null |
 
-`sextantModel` depends on the variant's class-producing tasks, as it depends on `classes` for a
-`java` project, so detection compiles what it reads.
+The callbacks are registered at configuration time; the values are read when the consumer task
+runs. `toGet` wires the consumer task to the tasks that produce the classes, so detection compiles
+what it reads without a separate `dependsOn`.
+
+**One record builder (my call).** The `java` branch and the Android branch differ only in where
+they get three inputs: the source directories per language set, the class directories and the
+compile-classpath configuration. One Groovy closure turns those inputs into the record (generated
+directories, language attribution, classpath entries). Neither branch has its own copy of that
+logic.
 
 ### 2b. Which variant — **my recommendation: the release build type**
 
@@ -86,13 +93,21 @@ Measured against the AGP 9.3.3 API (javap) and init-script probes on kotlinconf-
    Today neither target is read (the init script reads only `java` projects). iOS/JS targets: out.
 5. **The consumer:** a typed per-project task defined in the init script receives
    `ScopedArtifact.CLASSES` (`ListProperty<RegularFile>` jars, `ListProperty<Directory>` dirs);
-   Groovy passes `onVariants(selector, Action)` and `Function1` closures explicitly. Jars in the
-   result (R.jar, others) are read as class sources too: the extractor already reads jars for
-   libraries; the detector reports them beside `classesDirs`.
+   Groovy passes `onVariants(selector, Action)` and `Function1` closures explicitly. **Only the
+   directories are read (self-review, my call).** The module scan reads directories only
+   (`analyze.py` keeps `output_dirs` that are directories), so a jar reported beside them would
+   need a new fact field (a fact-schema change) for no gain: the project-scope jar AGP adds is
+   `R.jar`, generated resource-id constants with no calls in it. A project-scope jar is named in a
+   detect note, never dropped silently.
 6. **Generated source dirs** (`build/generated/...`) are treated as for `java` projects: language
-   attribution yes, source roots no.
+   attribution yes, source roots no. AGP's `java` set also holds `src/main/kotlin`, so that
+   directory is attributed to both `java` and `kotlin`, the mirror of the Kotlin plugin adding
+   `src/main/java` to its own set on a `java` project. Same rule, same result.
 7. **Classpath:** `variant.compileConfiguration` resolved through `incoming.artifacts` (component
-   identifiers, so sibling projects join as today), artifact type classes-jar.
+   identifiers, so sibling projects join as today), artifact type classes-jar. The Android SDK's
+   `android.jar` (the boot classpath) is not on it and is not added: `java.*` types come from the
+   extractor's own JDK as for every module, and no outbound catalog matches an `android.*` type.
+   `android.*` supertypes stay unread, a stated boundary.
 8. NotyKT: one library (`:app`) consumed by two apps (`composeapp`, `simpleapp`) — two app modules
    each reading the library's release classes as a sibling.
 9. The configuration cache is safe because the argv already passes `--no-configuration-cache`.
@@ -103,6 +118,49 @@ Measured against the AGP 9.3.3 API (javap) and init-script probes on kotlinconf-
   `/opt/homebrew/share/android-commandlinetools`), a Retrofit interface and an OkHttp call:
   detection reports both modules with their release classes; analysis gives the outbound rows.
 - kotlinconf-app and ktor-samples client-mpp analysed: every outbound row checked against the
-  source by hand. NotyKT needs a JDK 17 toolchain, not installed — analysed if the user installs
-  `openjdk@17`, otherwise stated.
-- Gate green, six field pins unchanged (no pin is Android), M02 (detector), COVERAGE §6, CHANGELOG.
+  source by hand, the KMP `jvm` modules included (kotlinconf `:backend` reads `:core`'s JVM classes,
+  `:app:androidApp` reads `:app:shared`'s Android classes). NotyKT needs a JDK 17 toolchain, not
+  installed — analysed if the user installs `openjdk@17`, otherwise stated.
+- CI: GitHub's Ubuntu runners carry the Android SDK (`ANDROID_HOME`); the Android fixture joins the
+  existing Gradle priming step, so its offline test has AGP cached. Locally the test is skipped
+  when no SDK is found, with that reason.
+- Gate green, six field pins unchanged (no pin is Android), M02 (detector) and the `gradle.py`
+  docstring ("Android variants are not modelled" is no longer true), COVERAGE §6, CHANGELOG.
+
+**Catalogs.** None added and none changed: Android outbound goes through Retrofit, OkHttp and Ktor
+client, which already exist. Everything Android-specific is in the detector. The four Android
+builds have no Volley, `HttpURLConnection` or Apollo call in app code (one koog test file uses
+`HttpURLConnection`), so no catalog gap is measured.
+
+## 4. Self-review 2026-11-05 — open for the user's decision
+
+Five Major findings (no Critical). Minor findings are fixed above, marked "self-review, my call".
+
+- **M1. A KMP project gives two modules under one Gradle path.** kotlinconf `:core` has `jvm()` and
+  `android`; `:backend` uses its JVM half, `:app:androidApp` uses `:app:shared`'s Android half. The
+  detector joins a sibling by project path only (`_sibling_roots`, `_identity`'s `{path: record}`),
+  so one of the two records is lost and a consumer can get the other target's classes. Fix: the init
+  script records the platform the consumer resolved (the artifact variant's
+  `org.jetbrains.kotlin.platform.type`, `jvm` / `androidJvm`) and the join uses path plus platform.
+- **M2. The identity of a KMP target module is not defined.** "Named as its publication names it"
+  holds only where `maven-publish` is applied, and §2c says identity is unchanged. Recommendation:
+  the OI-273 identity with `-<target name>` added to the name, which is the artifact id the Kotlin
+  plugin itself gives each target (`core-jvm`, `core-android`); for an ungrouped project the same
+  suffix on the last path segment.
+- **M3. Flavored apps get an invented id (`Noty.app:free`).** Nothing in Gradle or AGP spells it so,
+  and `:` already separates path segments in ungrouped ids. 0 flavored builds in the corpus.
+  Recommendation: refuse a flavored project with a named reason now and log an OI; design the id when
+  a real flavored build is in the corpus.
+- **M4. Two collection paths, and `--no-parallel` on every Gradle build.** The `java` branch reads
+  every project from the root task's `doLast`; the Android branch reads from a per-project task.
+  Reading another project's configuration from the root is what breaks under
+  `org.gradle.parallel=true`, and `--no-parallel` fixes it by compiling every Gradle build serially.
+  Recommendation: one per-project task for every project (each resolves its own configurations,
+  which Gradle permits in parallel), the root task only assembles the records. One path, parallel
+  kept.
+- **M5. An Android compile failure refuses detection of the whole repository.** Today Android
+  modules are not compiled, so a mixed repository (backend plus app) is detected. After this design
+  any failure in the Android release compile refuses all of it. Realistic causes: a gitignored
+  `google-services.json` (common in public Firebase apps), a missing JDK toolchain (NotyKT, koog).
+  Recommendation: with M4's per-project tasks, run with `--continue`; a project whose task failed is
+  skipped with Gradle's own error as its reason, and the others are read.
