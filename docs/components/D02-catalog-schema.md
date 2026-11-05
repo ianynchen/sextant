@@ -1963,7 +1963,12 @@ sharded entity type is a name and a class, two arguments of one producing call
 `message_class_via` — the same `[{owner, method, arg}]` list — names the hops to the class
 literal, read by the same backward walk from `channel_arg` with these entries placed ahead
 of §1f's table (so the producer answers with its class argument). It is **never hoisted**:
-it states which argument is the class, not what the producer's value is.
+it states which argument is the class, not what the producer's value is. **A class belongs
+to a key only where the two walks' paths agree**: each walk answers per path, and a class is
+paired with a name when one answer's path extends the other's (the crossings both made are
+the nearest ones, the end of the path), so two keys built by one helper from its two callers
+stay apart and each row names only its own class's handlers
+(`resolve/message_hops._paired`). A name no class agrees with is a class not read.
 
 ```yaml
     - { name: init, arity: 1, descriptor: "(L…/javadsl/Entity;)L…/ActorRef;", channel_arg: 0,

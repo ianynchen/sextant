@@ -37,10 +37,10 @@ thing it runs.
 
 ## An inbound key row names the same handlers (`record_key_handlers`, §3d item 6)
 
-A key (`ServiceKey.create(Command.class, "stock")`) is an address and a message class. Its
-inbound row's handlers are every case a message of that class, any subtype of it, reaches
-(`message_handlers.served_cases`, the hop rule asked once per candidate class), one row per
-handler as a route with two handlers is two rows. The class is read where the address is:
+A key (a producer call taking both, `create(Command.class, "stock")`) is an address and a
+message class. Its inbound row's handlers are every case a message of that class, any subtype
+of it, reaches (`message_handlers.served_cases`, the hop rule asked once per candidate class),
+one row per handler as a route with two handlers is two rows. The class is read where the address is:
 the same walk from the registering call's key argument, with the catalog row's
 `message_class_via` hops naming the producer's class argument. A class reaching nothing, or
 not read, leaves one row with `handler` NULL; the registering method `single_call` wrote is
@@ -259,8 +259,8 @@ def _key_classes(
     """Each inbound key a declared call registers, `(registering method, key)`, mapped to the
     message classes read for it (None: not read).
 
-    The key and its class are two arguments of one producing call (`ServiceKey.create(C.class,
-    "stock")`), read by two walks from the registering call's key argument: the address
+    The key and its class are two arguments of one producing call (`create(C.class, "stock")`
+    on the key type), read by two walks from the registering call's key argument: the address
     through the catalog's identity table, exactly as `single_call` read the row's `path`,
     and the class through the same table with the row's `message_class_via` hops placed
     first, so the producer they name answers with the class argument instead. The walk
