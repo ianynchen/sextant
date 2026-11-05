@@ -9133,6 +9133,124 @@ _HANDED_TO_JDK = CallTarget(
 )
 
 
+_SEND_POST_JVM = "(Lorg/apache/hc/client5/http/classic/methods/HttpPost;)V"
+
+
+def _post_handed_to_send(caller_name: str, sends: int = 1, helper_sets: str | None = None) -> list:
+    """`if (order == null) return; HttpPost p = new HttpPost("http://svc/a");
+    p.setUri("http://svc/b"); send(p);` in `Calls.caller_name(boolean)` (the `send(p)` call
+    `sends` times), and `send(HttpPost r) { [r.setUri(helper_sets);] http.execute(r, h); }`.
+    The early return means no call runs on every path to the caller's exit; each call
+    dominates the next."""
+    caller = _http_method(caller_name)
+    send = _http_method("send", _SEND_POST_JVM)
+    sites = [
+        _call(
+            caller,
+            APACHE_POST,
+            "<init>",
+            0,
+            receiver=3,
+            result=None,
+            arguments=[CallArgument(kind="string", value="http://svc/a")],
+            invoke_kind="special",
+        ),
+        _call(
+            caller,
+            APACHE_POST,
+            "setUri",
+            1,
+            receiver=3,
+            result=None,
+            arguments=[CallArgument(kind="string", value="http://svc/b")],
+        ),
+        *(
+            CallSiteFact(
+                document_id="doc_1",
+                caller=caller,
+                target=CallTarget(owner=_HTTP_OWNER, name="send", descriptor=_SEND_POST_JVM),
+                invoke_kind="static",
+                ordinal=2 + index,
+                receiver=None,
+                result=None,
+                arguments=[CallArgument(kind="unresolved", source=3)],
+            )
+            for index in range(sends)
+        ),
+    ]
+    last = len(sites) - 1
+    return [
+        SymbolFact(document_id="doc_1", symbol=_MODULE + _HTTP_OWNER, construct_kind="class"),
+        _declared_method(_HTTP_OWNER, caller_name, "(Z)V"),
+        _declared_method(_HTTP_OWNER, "send", _SEND_POST_JVM),
+        *[
+            _placed_at(
+                site,
+                None if site.ordinal == 0 else site.ordinal - 1,
+                False,
+                None if site.ordinal == last else site.ordinal + 1,
+            )
+            for site in sites
+        ],
+        MethodReturnFact(document_id="doc_1", method=caller, ordinal=0, value=None),
+        *(
+            ()
+            if helper_sets is None
+            else (
+                _placed_at(
+                    _call(
+                        send,
+                        APACHE_POST,
+                        "setUri",
+                        0,
+                        receiver=None,
+                        result=None,
+                        arguments=[CallArgument(kind="string", value=helper_sets)],
+                    ).model_copy(update={"receiver_parameter": 0}),
+                    None,
+                    True,
+                    1,
+                ),
+            )
+        ),
+        _call(
+            send,
+            APACHE_CLIENT,
+            "execute",
+            0 if helper_sets is None else 1,
+            receiver=9,
+            result=12,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        MethodReturnFact(document_id="doc_1", method=send, ordinal=0, value=None),
+    ]
+
+
+@pytest.mark.pins("chains.a-HAND-OFF-toward-the-send-is-the-reference")
+@pytest.mark.pins("values.a-call-the-reader-READS-opens-no-escapes-window")
+def test_a_request_handed_to_a_send_helper_is_decided_at_the_hand_off(tmp_path: Path):
+    """`if (order == null) return; HttpPost p = new HttpPost(a); p.setUri(b); send(p);`, where
+    `send` calls `http.execute(r, h)`. The request is sent in another method, so the call in
+    this method that hands it toward the send, `send(p)`, is where this method's steps are
+    decided (controller ruling I-1, an application of the user's ruling of 2026-11-05). Both
+    calls run on every path to it: one row, `/b`, `resolved`. Decided at the method's exit,
+    which the early return makes no call reach on every path, the steps split."""
+    rows = _apache_walked_rows(tmp_path, _post_handed_to_send("early"))
+    assert rows == [("POST", "/b", "resolved")], rows
+
+
+@pytest.mark.declines("apache-httpclient")
+@pytest.mark.pins("chains.a-STEP-on-the-way-to-the-send-is-not-read-as-folded")
+def test_a_send_helper_that_sets_the_address_leaves_the_row_partial(tmp_path: Path):
+    """Review round 2, N-1: the same request, and `send(r) { r.setUri("http://svc/c");
+    http.execute(r, h); }`. The request goes to `/c`, and the forward walk, decided at the
+    hand-off `send(p)`, never folds the helper's setter. So the pairing stays by identity and
+    the row is `partial`: never `/b resolved`, which no run sends. A step counts as read only in
+    the chain's own method (`chains._read_in`)."""
+    rows = _apache_walked_rows(tmp_path, _post_handed_to_send("early", helper_sets="http://svc/c"))
+    assert rows == [("POST", "/b", "partial")], rows
+
+
 @pytest.mark.pins("chains.a-walk-back-that-ESCAPES-keeps-the-terminals-row")
 def test_a_builder_a_helper_hands_to_code_we_do_not_have_before_sending_keeps_its_row(
     tmp_path: Path,

@@ -237,7 +237,7 @@ class ChainEnd:
     captures: Mapping[str, Any]  # folded, as fluent's `_fold` leaves them
     # Every call that executes the terminal's built value (`_executing_calls`), in this method
     # or across returns and parameters — empty for a terminal no execute-join declares. Several
-    # consumers are still ONE end: the walk lists them, it does not fork on them.
+    # consumers are still ONE value: every end of the chain lists them all.
     consumers: tuple[Mapping[str, Any], ...]
     # The path the walk back from a rootless terminal took to its root (`_walk_back`,
     # ruling 5, spec 2026-10-30), for reading the captures on that path alone: each caller
@@ -247,10 +247,17 @@ class ChainEnd:
     # side of a split no fact proves, or two or more splits on the path), or did not reach it at
     # all past the path cap: the row is kept, no surer than `partial` (rule 4: never dropped).
     inexact: bool = False
+    # The call that sends the request this end was decided at (`_sends`): each executing call in
+    # the chain's own method gives ends of its own (M9, ruled by the user 2026-11-05). None where
+    # the end was decided at the method's exit.
+    sent_at: Mapping[str, Any] | None = None
 
 
 def chain_ends(
-    workspace: Workspace, catalog: Catalog, published: frozenset[str] | None = None
+    workspace: Workspace,
+    catalog: Catalog,
+    published: frozenset[str] | None = None,
+    pairs_every_send: bool = False,
 ) -> Iterator[ChainEnd]:
     """Every executable chain's end in the module, in the walk's order (ordinal order
     per caller, NFR-1): the walk over one caller's own `call_sites` from each declared
@@ -263,7 +270,11 @@ def chain_ends(
 
     `published` is the capture names the caller's rows show (the user's ruling of 2026-11-03,
     option A): a call on a branch that sets none of them is no split for the several-splits
-    rule. None, a reader that states none: every split counts."""
+    rule. None, a reader that states none: every split counts.
+
+    `pairs_every_send` is for a reader that reads every executing call of an end itself, each
+    on its own path (`ChainEnd.consumers`; Quartz's `scheduleJob` pairings): it takes ONE end
+    per path of a chain, never one per send (`_sends`)."""
     matches = catalog.matches
     roots, bean_roots, steps = _declared_entries(catalog, workspace.once(dispatch_of))
     _validate_steps(steps, catalog)
@@ -368,7 +379,9 @@ def chain_ends(
     # The execute-join's cross-method half, indexed once per catalog run (GUIDELINES §8.7):
     # one producer walk per argument of each declared executing call, never one per terminal
     # the chain walk reaches. Empty for a catalog declaring no `{owner, method}` join.
-    joined, identified = _joined_through_values(workspace, walk_index, via_argument_names)
+    joined, identified, handed_toward = _joined_through_values(
+        workspace, walk_index, via_argument_names, steps
+    )
     # The steps that join through an argument (`receiver_arg`), by name — empty for every
     # catalog declaring none, which then indexes each site by its own `receiver` exactly as
     # before and pays nothing for the rule (GUIDELINES §8.7).
@@ -429,6 +442,7 @@ def chain_ends(
             receiver_terminals=receiver_terminals,
             joined=joined,
             identified=identified,
+            handed_toward=handed_toward,
             catalog=catalog,
             facts=facts,
             field_sources=field_sources,
@@ -443,6 +457,7 @@ def chain_ends(
             annotations=annotations,
             ends=ends,
             reached=reached,
+            pairs_every_send=pairs_every_send,
         )
 
     # What the walk back from a rootless terminal stops at and folds, built the first time a
@@ -758,6 +773,11 @@ class _ChainContext:
     # not read (`escapes`, `cycle`; `_joined_through_values`): read only where nothing else
     # executes the terminal (`_executing_calls`), and then its rows are no surer than `partial`.
     identified: Mapping[tuple[str, int], tuple[dict[str, Any], ...]]
+    # For a terminal site and an executing call in another method the value walk pairs with it,
+    # by both `(caller, ordinal)`s: the ordinals of the calls in the terminal's method that hand
+    # the value on toward that executing call, None for a way out by a return
+    # (`_joined_through_values`). Read by `_sends`.
+    handed_toward: Mapping[tuple[tuple[str, int], tuple[str, int]], tuple[int | None, ...]]
     catalog: Catalog
     facts: CallFacts
     # The field ladder's facts, read by the bean hop (`_literal_of`) alone — None for a
@@ -833,6 +853,8 @@ class _ChainContext:
     hand_offs: HandOffs | None = None
     context_of: Callable[[str], "_ChainContext"] | None = None
     step_parts: frozenset[str] = frozenset()
+    # `chain_ends`' `pairs_every_send`: one end per path of a chain, never one per send.
+    pairs_every_send: bool = False
 
 
 def _prefix_captures(
@@ -1220,23 +1242,78 @@ def _walk(
     # A collecting walk (spec 2026-09-21 §4's container hop) records every
     # chain end, terminal or not: a referenced bean's chain is that bean's
     # configuration, not a registration, and nothing marks it executable.
-    for variant in _forked(None, captures, (), context):
-        if context.collect is not None:
+    if context.collect is not None:
+        for variant in _forked(None, captures, (), context):
             context.collect.append(_without_rule_9(variant))
-        elif terminal is not None:
+        return
+    if terminal is None:
+        return
+    executing = _end_consumers(terminal, context)
+    for send in _sends(terminal, executing, context):
+        for variant in _forked(send, captures, (), context):
             context.ends.append(
                 ChainEnd(
                     context.caller,
                     context.root,
                     terminal,
                     _without_rule_9(variant),
-                    _end_consumers(terminal, context),
+                    executing,
                     context.path,
                     context.inexact
                     or _unsure(variant, context)
                     or _executed_unread(terminal, context),
+                    send,
                 )
             )
+
+
+def _sends(
+    terminal: dict[str, Any], executing: Sequence[dict[str, Any]], context: _ChainContext
+) -> list[dict[str, Any] | None]:
+    """Where the chain's request is sent, of the calls that execute its built value
+    (`executing`): the reference points the chain's end decides its folded calls against
+    (`_forked`'s use), one end each.
+
+    **A step always happens when it runs on every path to the call that SENDS the request**
+    (ruled by the user 2026-11-05), not on every path to the method's exit. The request leaves
+    at its executing call (Ktor's `HttpStatement(builder, client)`, Apache's `execute(p)`), so
+    a call after it cannot change it, and an exit that does not reach the send (a coroutine's
+    resume branch, an early `return`) holds no request. **One send, one window**
+    (M9, ruled by the user 2026-11-05, option A): where one built value is sent from more than
+    one place in this method, each send is measured on its own and is an end of its own, never
+    merged at a common earlier point.
+
+    **A send in another method is reached through this method's hand-off** (controller ruling
+    I-1 of the fix review, applying the same ruling): `send(p)`, the call here that hands the
+    value on toward the executing call (`_ChainContext.handed_toward`), is this method's
+    reference, one end per such call.
+
+    The method's exit stays the reference (`None`) only where there is no send and no hand-off
+    in this method: a terminal reached by name (it executes itself, and steps fold past it, D02
+    §4), a value that leaves this method by a return toward its send (the return is the use),
+    and a send paired only by identity whose path names no call out of this method. It is also the
+    reference for a reader that reads every executing call of one end itself
+    (`pairs_every_send`, Quartz's `scheduleJob` pairings) where the value is sent from more than
+    one place: that reader takes one end, as before."""
+    found: list[dict[str, Any] | None] = []
+    by_ordinal: dict[int, dict[str, Any]] | None = None
+    for call in executing:
+        if call["caller"] == context.caller:
+            references: list[dict[str, Any] | None] = [call]
+        else:
+            if by_ordinal is None:
+                by_ordinal = {int(site["ordinal"]): site for site in context.sites}
+            toward = context.handed_toward.get((_site_key(terminal), _site_key(call)), (None,))
+            references = [
+                None if at is None or terminal["caller"] != context.caller else by_ordinal.get(at)
+                for at in toward
+            ]
+        for reference in references:
+            if not any(seen is reference for seen in found):
+                found.append(reference)
+    if len(found) > 1 and context.pairs_every_send:
+        return [None]
+    return found or [None]
 
 
 def _fold_or_fork(
@@ -1493,8 +1570,9 @@ def _forked(
     context: _ChainContext,
     handed: Sequence[tuple[dict[str, Any], _Outcomes]] = (),
 ) -> list[dict[str, Any]]:
-    """The captures a chain carries on to `use` (a fork, a consumer it is handed to, or None:
-    the chain's end, whose use is the method's exit), one per path: rule 9 (spec 2026-11-02),
+    """The captures a chain carries on to `use` (a fork, a consumer it is handed to, the call
+    that sends the chain's request at its end (`_sends`), or None: the chain's end with no such
+    call, whose use is the method's exit), one per path: rule 9 (spec 2026-11-02),
     by the value walk's own enumeration (`values.Flow.paths`), never a copy of it.
 
     Each call folded in place since the last fork (`_FOLDS`), and each hand-off of the value with
@@ -2856,10 +2934,14 @@ def _handed_before_use(
 
 
 def _joined_through_values(
-    workspace: Workspace, values: ValueIndex, via_argument_names: dict[str, _JoinFilter | None]
+    workspace: Workspace,
+    values: ValueIndex,
+    via_argument_names: dict[str, _JoinFilter | None],
+    steps: list[dict[str, Any]],
 ) -> tuple[
     dict[tuple[str, int], tuple[dict[str, Any], ...]],
     dict[tuple[str, int], tuple[dict[str, Any], ...]],
+    dict[tuple[tuple[str, int], tuple[str, int]], tuple[int | None, ...]],
 ]:
     """The execute-join, found through the value walk: each terminal site, by `(caller,
     ordinal)`, mapped to the declared executing calls whose arguments `values.producers_of`
@@ -2898,14 +2980,27 @@ def _joined_through_values(
     hand-off changes, so the pair is read by the object reader (`which_object`) and returned in
     the second map. It is read only where nothing else executes the terminal
     (`_executing_calls`): what was done to the request is not known, so the row is no surer
-    than `partial` (`_executed_unread`). Before, the request derived no row at all."""
+    than `partial` (`_executed_unread`). Before, the request derived no row at all.
+
+    **The third map names the hand-off toward a send in another method**: for each pair whose
+    executing call is not in the terminal's method, the calls in the terminal's method that
+    hand the value on toward it (`send(p)`), read off the producer walk's own path, or None
+    where the path leaves the method by a return. It is where that method's steps are
+    decided (`_sends`).
+
+    **A step the chain walk folds is read** (controller ruling I-1 of the 2026-11-05 fix
+    review, and review round 2's N-1): a pairing whose window a step call opened
+    (`p.setUri(u)`, Ktor's `url(b, u)`) is read again with the steps of the producer's own
+    method as `read_sites` (`_read_in`), and joins where nothing else opens it. A step in any
+    other method on the way is not folded by the forward walk, so it keeps the pairing by
+    identity, its row `partial`."""
     declared = {
         name: join_filter
         for name, join_filter in via_argument_names.items()
         if join_filter is not None and not join_filter.continues
     }
     if not declared:
-        return {}, {}
+        return {}, {}, {}
     ancestors = workspace.once(dispatch_of).ancestors
     terminals: set[tuple[str, str]] = set()
     in_module: set[tuple[str, str]] = set()
@@ -2923,20 +3018,30 @@ def _joined_through_values(
     terminals -= in_module
     joined: dict[tuple[str, int], list[dict[str, Any]]] = {}
     identified: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    handed: dict[tuple[tuple[str, int], tuple[str, int]], list[int | None]] = {}
+    # The module's step calls by method: a step the forward walk folds is one in the chain's
+    # own method, before its reference, so only those are read (`_read_in`).
+    read_by_method: dict[str, set[tuple[str, int]]] = {}
+    for key, site in values.sites.items():
+        if _matching_step(dict(site), steps) is not None:
+            read_by_method.setdefault(key[0], set()).add(key)
     for consumer in executing:
         for slot in range(len(consumer["arguments"] or [])):
             producers = producers_of(values, consumer, slot, terminals, past_accessors=ancestors)
-            by_identity: tuple[Producer, ...] = ()
+            identity_paths: tuple[tuple[Producer, Path], ...] = ()
             if any(producer.reason in (ESCAPES, CYCLE) for producer in producers):
-                by_identity = tuple(
-                    producer
-                    for producer, _ in producer_paths(
-                        values, consumer, slot, terminals, which_object=True
-                    )
+                identity_paths = producer_paths(
+                    values, consumer, slot, terminals, which_object=True
                 )
+            by_identity = tuple(dict.fromkeys(producer for producer, _ in identity_paths))
+            read = tuple(
+                producer
+                for producer in by_identity
+                if _read_in(values, consumer, slot, terminals, ancestors, producer, read_by_method)
+            )
             for producer, into in (
-                *((producer, joined) for producer in producers),
-                *((producer, identified) for producer in by_identity),
+                *((producer, joined) for producer in (*producers, *read)),
+                *((producer, identified) for producer in by_identity if producer not in read),
             ):
                 if producer.caller is None or producer.ordinal is None or producer.identity is None:
                     continue
@@ -2945,10 +3050,63 @@ def _joined_through_values(
                 pairs = into.setdefault((producer.caller, producer.ordinal), [])
                 if all(_site_key(paired) != _site_key(consumer) for paired in pairs):
                     pairs.append(dict(consumer))
+            # Where a consumer in another method is reached from the producer's method: the
+            # calls there that hand the value on toward it (`Path.calls_out_of`), or None for a
+            # path that leaves the method by a return. Walked only for such a pair: most
+            # executing calls are in the method that built the value (GUIDELINES §8.7).
+            paths = identity_paths
+            if any(
+                producer.caller is not None and producer.caller != consumer["caller"]
+                for producer in producers
+            ):
+                paths += producer_paths(values, consumer, slot, terminals, past_accessors=ancestors)
+            for producer, path in paths:
+                if producer.caller is None or producer.ordinal is None:
+                    continue
+                if producer.caller == consumer["caller"]:
+                    continue
+                toward = handed.setdefault(
+                    ((producer.caller, producer.ordinal), _site_key(consumer)), []
+                )
+                for at in path.calls_out_of(producer.caller) or (None,):
+                    if at not in toward:
+                        toward.append(at)
     return (
         {key: tuple(pairs) for key, pairs in joined.items()},
         {key: tuple(pairs) for key, pairs in identified.items()},
+        {key: tuple(toward) for key, toward in handed.items()},
     )
+
+
+def _read_in(
+    values: ValueIndex,
+    consumer: Mapping[str, Any],
+    slot: int,
+    terminals: set[tuple[str, str]],
+    ancestors: Any,
+    producer: Producer,
+    read_by_method: Mapping[str, set[tuple[str, int]]],
+) -> bool:
+    """Whether a pairing the producer walk read only by identity (`escapes` on the way) is
+    read after all because every call that opened the window is a step the forward walk folds
+    (controller ruling I-1 of the 2026-11-05 fix review): the walk again, with the steps of the
+    producer's own method as `read_sites`, reaches `producer` and nothing it cannot read. The
+    forward walk folds a step only in the chain's own method, before its reference (the send,
+    or the hand-off toward it); a step in a method on the way (a send helper's `r.setUri(c)`)
+    is not folded, so it still opens the window and the row stays `partial`."""
+    if producer.caller is None or producer.caller not in read_by_method:
+        return False
+    again = producers_of(
+        values,
+        consumer,
+        slot,
+        terminals,
+        past_accessors=ancestors,
+        read_sites=frozenset(read_by_method[producer.caller]),
+    )
+    return any(
+        found.caller == producer.caller and found.ordinal == producer.ordinal for found in again
+    ) and not any(found.reason in (ESCAPES, CYCLE) for found in again)
 
 
 def _joins(site: Mapping[str, Any], join_filter: _JoinFilter) -> bool:

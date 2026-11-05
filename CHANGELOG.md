@@ -195,6 +195,16 @@ here would restate those documents rather than add anything.
 - **A Gradle build with `org.gradle.parallel=true` is detected** (Android design M4). The root
   task could not resolve another project's configuration, which broke kotlinconf-app's plain JVM
   backend; each part now resolves its own.
+- **A Ktor call in a Kotlin `suspend` function gave many rows, some with a false GET** (since
+  PR #89). A chain's steps were decided against the method's exit; a coroutine state machine
+  has no call on every exit, so every step looked optional, every combination became a row,
+  and the combinations without `setMethod(Post)` kept Ktor's default GET. kotlinconf's 11 real
+  client calls gave 80 rows (now 11), its backend 7 (now 2), ktor-samples client-mpp 4 (now 1).
+  A step is now decided against each call that sends the request (user ruling M9: each send its
+  own rows), or the call in this method that hands the value toward a send in another method; a
+  step on the way to the send in another method keeps the row `partial`. Identical rows of one
+  call merge; branches that differ only in a published part are one `partial` row (round 4).
+  New fixture `KtorSuspend.kt` compiles real coroutine state machines. Six field pins unchanged.
 - **A Gradle project with no group, or no version, is analysed** (OI-273). Detection refused
   both, and applications often set neither: `kotlin-ktor-exposed-starter` and 21 of 36
   ktor-samples projects declare no group. The identity is now the one Gradle itself gives

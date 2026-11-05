@@ -2292,6 +2292,7 @@ def test_a_trigger_bound_by_forJob_refuses_another_job(tmp_path: Path):
 
 
 @pytest.mark.pins("scheduled_chain.a-call-the-reader-does-NOT-PAIR-may-store-the-trigger")
+@pytest.mark.pins("chains.a-reader-that-PAIRS-every-send-takes-one-end")
 def test_a_forJob_trigger_also_stored_by_a_call_the_reader_does_not_pair_keeps_its_row(
     tmp_path: Path,
 ):
