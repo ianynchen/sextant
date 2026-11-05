@@ -336,6 +336,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # is already in the table, not against duplicates arriving in the same
     # `$rows` batch.
     seen: dict[tuple[str, str, str, str, str | None, str | None, str | None], _Kept] = {}
+    # The rows `seen` does not hold, each with the call it came from (`_derive_captured`): the
+    # paths of one chain that give the very same row are one row.
+    exact: set[tuple[Any, ...]] = set()
     # F5 §6.2 (W29). Accumulated across every caller and inserted once, the `rows`
     # discipline: a per-caller insert would be one statement per method in the module.
     caller_parameters = workspace.once(declared_parameters_of)
@@ -398,6 +401,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 field_sources=field_sources,
                 rows=rows,
                 seen=seen,
+                exact=exact,
                 metadata=metadata,
                 method_symbols=method_symbols,
                 bindings=bindings,
@@ -497,6 +501,8 @@ class _DeriveContext:
     field_sources: FieldFacts | None
     rows: list[dict[str, Any]]
     seen: dict[tuple[str, str, str, str, str | None, str | None, str | None], "_Kept"]
+    # The rows of no identity `seen` holds, by the call each came from and all it shows.
+    exact: set[tuple[Any, ...]]
     # F5 §6.2 (W29). One entry per metadata item the chains carried — a header, a query
     # parameter — already redacted. Separate from `rows` because it is per ENTRY and a
     # chain may carry any number, which is why D01 gives it a side table rather than
@@ -1019,6 +1025,42 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                 continue
             kept = _Kept(published)
             context.seen[key] = kept
+        elif not ranked:
+            # **One call gives one row** (ruled by the user 2026-11-05). A row the key above
+            # does not hold (no path, or a verb not read) is not merged with another call's row
+            # that reads the same: two requests whose address is not read are two rows. But the
+            # paths of ONE chain (rule 9) that give the very same row are one row, so the key is
+            # the call itself (its root, its terminal, the call that sends it) and everything
+            # the row shows. A row that differs in anything stays its own (enumerable is exact).
+            exact = (
+                _site_key(end.root) if end.root else None,
+                None if end.terminal is None else _site_key(end.terminal),
+                None if end.sent_at is None else _site_key(end.sent_at),
+                json.dumps(
+                    (
+                        context.catalog.protocol,
+                        direction,
+                        verb,
+                        path,
+                        handler,
+                        context.caller,
+                        peer,
+                        resolution,
+                        request_shape,
+                        response_shape,
+                        consumes,
+                        produces,
+                        path_kind,
+                        method_kind,
+                        entries,
+                    ),
+                    sort_keys=True,
+                    default=str,
+                ),
+            )
+            if exact in context.exact:
+                continue
+            context.exact.add(exact)
         metadata: list[dict[str, Any]] = [] if ranked else context.metadata
         # Below the dedup `continue` on purpose: a row the key already saw writes no second
         # copy of its own metadata either.

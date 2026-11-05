@@ -1172,9 +1172,10 @@ def test_ktor_routing_derives_every_route_under_its_nested_prefixes(ktor_rows):
     # `KtorStreams.kt` and `KtorClient.kt` add thirteen rows of their own (three inbound,
     # ten outbound, pinned by the tests below), so the twenty-eight are counted on the file
     # they come from and the fixture's whole count is forty-one. No `KtorRoutes.kt` row moved.
+    # `KtorSuspend.kt` (2026-11-05) adds three outbound rows, pinned below: forty-four.
     routes = [r for r in ktor_rows if "/KtorRoutesKt#" in str(r["caller"])]
     assert len(routes) == 28, sorted(rows, key=str)
-    assert len(ktor_rows) == 41, sorted(map(str, ktor_rows))
+    assert len(ktor_rows) == 44, sorted(map(str, ktor_rows))
     stray = [r for r in ktor_rows if "#elsewhere(" in str(r["caller"])]
     assert len(stray) == 1 and stray[0]["resolution"] == "unresolved", stray
     assert not any(str(r["path"]).startswith("/api") for r in stray), stray
@@ -1505,7 +1506,9 @@ def test_ktor_client_calls_derive_outbound_rows_joined_to_the_client_base(ktor_r
     http = {
         (r["method"], r["peer"], r["path"], r["resolution"])
         for r in ktor_rows
-        if r["catalog_id"] == "ktor-client" and "#bareOrders(" not in str(r["caller"])
+        if r["catalog_id"] == "ktor-client"
+        and "KtorClientKt#" in str(r["caller"])
+        and "#bareOrders(" not in str(r["caller"])
     }
     assert http == {
         ("GET", "pricing.example.com", "/quotes", "resolved"),
@@ -1544,6 +1547,36 @@ def test_ktor_client_calls_derive_outbound_rows_joined_to_the_client_base(ktor_r
         for r in ktor_rows
         if r["catalog_id"] in ("ktor-client", "ktor-websocket-client", "ktor-sse-client")
     )
+
+
+def test_ktor_client_calls_in_a_coroutine_body_are_one_row_each_with_their_verb(ktor_rows):
+    """`KtorSuspend.kt`: calls whose response a later line uses, so each `suspend` function
+    compiles to a coroutine state machine and no call before the send runs on every path to the
+    method's exit (its resume branch skips them). Each step is decided at the call that sends
+    the request, `new HttpStatement(builder, client)` (ruled by the user 2026-11-05), so each
+    call is ONE row with its own verb. Decided at the method's exit, these three calls gave 25
+    rows: GET rows for the two POSTs (the builder's default verb, on paths that skip
+    `setMethod(Post)`) and many copies with no address.
+
+    `createOrder`'s `setBody("order")` is `partial`, as `placeOrder`'s is: the inline `setBody`
+    compiles to two calls on branches (ruled 2026-11-03, keep `partial`).
+
+    `failover` sends one builder from two places. Each send is measured on its own (M9, ruled
+    by the user 2026-11-05); the first send's row is the primary address. The second send is
+    after a suspension, where the builder is read back from the continuation's field, so its
+    argument is a merge the chain walk does not follow: that send gives no row (a stated limit,
+    in the fix report of 2026-11-05)."""
+    rows = sorted(
+        (r["caller"].split("#", 1)[1].split("(", 1)[0], r["method"], r["peer"], r["path"])
+        + (r["resolution"],)
+        for r in ktor_rows
+        if r["catalog_id"] == "ktor-client" and "KtorSuspendKt#" in str(r["caller"])
+    )
+    assert rows == [
+        ("createOrder", "POST", "orders.example.com", "/created", "partial"),
+        ("failover", "POST", "orders.example.com", "/failover", "resolved"),
+        ("orderStatus", "GET", "orders.example.com", "/status", "resolved"),
+    ], rows
 
 
 def test_a_ktor_client_with_no_declared_base_is_not_sent_to_localhost(ktor_rows):

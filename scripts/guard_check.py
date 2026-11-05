@@ -5089,9 +5089,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find="        elif terminal is not None:\n            context.ends.append(",
-                replace="        elif True:  # guard disabled by scripts/guard_check.py\n"
-                "            context.ends.append(",
+                find="    if terminal is None:\n        return\n    executing = ",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n"
+                "        return\n    executing = ",
             ),
         ),
     ),
@@ -9823,6 +9823,76 @@ GUARDS: dict[str, Guard] = {
                 path=_CHAINS,
                 find="    if len(executing) != 1:\n",
                 replace="    if not executing:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-chain-is-decided-at-the-call-that-SENDS-it": Guard(
+        what="a chain's end decides its folded calls against the call that sends its request, "
+        "not against the method's exit",
+        why="in a Kotlin coroutine body no call runs on every path to the exit, so every step "
+        "splits: kotlinconf's 11 Ktor calls gave 80 rows, with GET rows for POST calls (the "
+        "builder's default verb on paths that skip `setMethod`)",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    for send in _sends(executing, context):\n",
+                replace="    for send in [None]:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.each-SEND-of-one-request-is-measured-on-its-own": Guard(
+        what="where one built value is sent from several places in a method, each send is an "
+        "end of its own, decided against that send (M9)",
+        why="measured once, the second send's request is read as the first's: a failover to a "
+        "mirror address publishes the primary address twice and the mirror never",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    return here or [None]\n",
+                replace="    return here[:1] or [None]  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "chains.a-reader-that-PAIRS-every-send-takes-one-end": Guard(
+        what="a reader that reads every executing call of an end itself (Quartz) takes one end "
+        "per path of a chain, never one per send",
+        why="Quartz pairs each `scheduleJob` on its own path and decides whether ANY call "
+        "stores the trigger; one end per send repeats every pairing and its rows",
+        edits=(
+            Edit(
+                path=_CHAINS,
+                find="    if len(here) > 1 and context.pairs_every_send:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.IDENTICAL-rows-of-one-call-are-one-row": Guard(
+        what="the paths of one chain that give the very same row with no identity key give "
+        "that row once",
+        why="a Ktor POST whose address is not read and whose inline `setBody` is on branches "
+        "gave one identical `POST NULL NULL` row per path: kotlinconf's `sign` gave eight",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            if exact in context.exact:\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "fluent.the-exact-merge-is-keyed-on-the-CALL": Guard(
+        what="the merge of identical rows holds only rows of one call: its root, its terminal "
+        "and the call that sends it are in the key",
+        why="two requests in one method whose addresses are not read show the same row; "
+        "merged, one real call has no row",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="                _site_key(end.root) if end.root else None,\n"
+                "                None if end.terminal is None else _site_key(end.terminal),\n"
+                "                None if end.sent_at is None else _site_key(end.sent_at),\n",
+                replace="                None,  # guard disabled by scripts/guard_check.py\n"
+                "                None,\n"
+                "                None,\n",
             ),
         ),
     ),

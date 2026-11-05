@@ -237,7 +237,7 @@ class ChainEnd:
     captures: Mapping[str, Any]  # folded, as fluent's `_fold` leaves them
     # Every call that executes the terminal's built value (`_executing_calls`), in this method
     # or across returns and parameters — empty for a terminal no execute-join declares. Several
-    # consumers are still ONE end: the walk lists them, it does not fork on them.
+    # consumers are still ONE value: every end of the chain lists them all.
     consumers: tuple[Mapping[str, Any], ...]
     # The path the walk back from a rootless terminal took to its root (`_walk_back`,
     # ruling 5, spec 2026-10-30), for reading the captures on that path alone: each caller
@@ -247,10 +247,17 @@ class ChainEnd:
     # side of a split no fact proves, or two or more splits on the path), or did not reach it at
     # all past the path cap: the row is kept, no surer than `partial` (rule 4: never dropped).
     inexact: bool = False
+    # The call that sends the request this end was decided at (`_sends`): each executing call in
+    # the chain's own method gives ends of its own (M9, ruled by the user 2026-11-05). None where
+    # the end was decided at the method's exit.
+    sent_at: Mapping[str, Any] | None = None
 
 
 def chain_ends(
-    workspace: Workspace, catalog: Catalog, published: frozenset[str] | None = None
+    workspace: Workspace,
+    catalog: Catalog,
+    published: frozenset[str] | None = None,
+    pairs_every_send: bool = False,
 ) -> Iterator[ChainEnd]:
     """Every executable chain's end in the module, in the walk's order (ordinal order
     per caller, NFR-1): the walk over one caller's own `call_sites` from each declared
@@ -263,7 +270,11 @@ def chain_ends(
 
     `published` is the capture names the caller's rows show (the user's ruling of 2026-11-03,
     option A): a call on a branch that sets none of them is no split for the several-splits
-    rule. None, a reader that states none: every split counts."""
+    rule. None, a reader that states none: every split counts.
+
+    `pairs_every_send` is for a reader that reads every executing call of an end itself, each
+    on its own path (`ChainEnd.consumers`; Quartz's `scheduleJob` pairings): it takes ONE end
+    per path of a chain, never one per send (`_sends`)."""
     matches = catalog.matches
     roots, bean_roots, steps = _declared_entries(catalog, workspace.once(dispatch_of))
     _validate_steps(steps, catalog)
@@ -443,6 +454,7 @@ def chain_ends(
             annotations=annotations,
             ends=ends,
             reached=reached,
+            pairs_every_send=pairs_every_send,
         )
 
     # What the walk back from a rootless terminal stops at and folds, built the first time a
@@ -833,6 +845,8 @@ class _ChainContext:
     hand_offs: HandOffs | None = None
     context_of: Callable[[str], "_ChainContext"] | None = None
     step_parts: frozenset[str] = frozenset()
+    # `chain_ends`' `pairs_every_send`: one end per path of a chain, never one per send.
+    pairs_every_send: bool = False
 
 
 def _prefix_captures(
@@ -1220,23 +1234,59 @@ def _walk(
     # A collecting walk (spec 2026-09-21 §4's container hop) records every
     # chain end, terminal or not: a referenced bean's chain is that bean's
     # configuration, not a registration, and nothing marks it executable.
-    for variant in _forked(None, captures, (), context):
-        if context.collect is not None:
+    if context.collect is not None:
+        for variant in _forked(None, captures, (), context):
             context.collect.append(_without_rule_9(variant))
-        elif terminal is not None:
+        return
+    if terminal is None:
+        return
+    executing = _end_consumers(terminal, context)
+    for send in _sends(executing, context):
+        for variant in _forked(send, captures, (), context):
             context.ends.append(
                 ChainEnd(
                     context.caller,
                     context.root,
                     terminal,
                     _without_rule_9(variant),
-                    _end_consumers(terminal, context),
+                    executing,
                     context.path,
                     context.inexact
                     or _unsure(variant, context)
                     or _executed_unread(terminal, context),
+                    send,
                 )
             )
+
+
+def _sends(
+    executing: Sequence[dict[str, Any]], context: _ChainContext
+) -> list[dict[str, Any] | None]:
+    """Where the chain's request is sent, of the calls that execute its built value
+    (`executing`): the reference point the chain's end decides its folded calls against
+    (`_forked`'s use).
+
+    **A step always happens when it runs on every path to the call that SENDS the request**
+    (ruled by the user 2026-11-05), not on every path to the method's exit. The request leaves
+    at its executing call (Ktor's `HttpStatement(builder, client)`, Apache's `execute(p)`), so
+    a call after it cannot change it, and an exit that does not reach the send (a coroutine's
+    resume branch, an early `return`) holds no request. **One send, one window**
+    (M9, ruled by the user 2026-11-05, option A): where one built value is sent from more than
+    one place in this method, each send is measured on its own and is an end of its own, never
+    merged at a common earlier point.
+
+    The method's exit stays the reference (`None`) where the chain has no executing call in
+    this method: a terminal reached by name (it executes itself, and steps fold past it, D02
+    §4), or executing calls only in other methods (across returns and parameters). It is also
+    the reference for a reader that reads every executing call of one end itself
+    (`pairs_every_send`, Quartz's `scheduleJob` pairings) where the value is sent from more
+    than one place: that reader takes one end, as before."""
+    here: list[dict[str, Any] | None] = [
+        call for call in executing if call["caller"] == context.caller
+    ]
+    if len(here) > 1 and context.pairs_every_send:
+        return [None]
+    return here or [None]
 
 
 def _fold_or_fork(
@@ -1493,8 +1543,9 @@ def _forked(
     context: _ChainContext,
     handed: Sequence[tuple[dict[str, Any], _Outcomes]] = (),
 ) -> list[dict[str, Any]]:
-    """The captures a chain carries on to `use` (a fork, a consumer it is handed to, or None:
-    the chain's end, whose use is the method's exit), one per path: rule 9 (spec 2026-11-02),
+    """The captures a chain carries on to `use` (a fork, a consumer it is handed to, the call
+    that sends the chain's request at its end (`_sends`), or None: the chain's end with no such
+    call, whose use is the method's exit), one per path: rule 9 (spec 2026-11-02),
     by the value walk's own enumeration (`values.Flow.paths`), never a copy of it.
 
     Each call folded in place since the last fork (`_FOLDS`), and each hand-off of the value with

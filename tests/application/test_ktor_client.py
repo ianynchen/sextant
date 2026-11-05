@@ -398,3 +398,182 @@ def _resolve_walked_fluent(tmp_path: Path, facts: list[CallSiteFact]):
     record_call_edges(workspace)
     assert derive_endpoints(workspace, [_ktor_client()], capabilities=FLUENT_CAPABILITIES) == []
     return workspace
+
+
+# A Kotlin `suspend` function with a suspension that is not its last call compiles to a
+# coroutine state machine: its resume branch (`label == 1`) goes straight to the code after the
+# suspension, so no call made before it runs on every path to the method's exit. Every Ktor call
+# that a later line uses (`val r = client.post(u) { … }; return r.bodyAsText()`) has this shape
+# (measured on kotlinconf-app and ktor-samples' client-mpp, 2026-11-05). The tests below state
+# it: the straight line's positions with `on_every_exit` False, and the calls in `branched` on
+# branches that rejoin after them (the `when (body)` that Ktor's inline `setBody` compiles to).
+
+
+def _in_a_coroutine(facts: list[CallSiteFact], branched: frozenset[int] = frozenset()) -> list:
+    """`facts` with the positions a coroutine body gives them (see above). A call in
+    `branched` is dominated by the call before it; any other call by the nearest earlier call
+    not in `branched`."""
+    placed = []
+    for fact in straight_line(facts):
+        earlier = [ordinal for ordinal in range(fact.ordinal) if ordinal not in branched]
+        dominator = fact.ordinal - 1 if fact.ordinal in branched else max(earlier, default=None)
+        placed.append(
+            fact.model_copy(
+                update={"dominator": dominator if fact.ordinal else None, "on_every_exit": False}
+            )
+        )
+    return placed
+
+
+def _raw_rows(tmp_path: Path, facts: list) -> list[tuple]:
+    """`_rows`, for facts that already carry their positions: every row, duplicates kept."""
+    write_fact_file(tmp_path / "facts" / "Client.jsonl", _document(), facts)
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    assert derive_endpoints(workspace, [_ktor_client()], capabilities=FLUENT_CAPABILITIES) == []
+    rows = workspace.query("endpoints")
+    workspace.close()
+    return sorted(
+        (r["method"], r["peer"], r["path"], r["resolution"], r["request_shape"] is not None)
+        for r in rows
+    )
+
+
+@pytest.mark.pins("chains.a-chain-is-decided-at-the-call-that-SENDS-it")
+def test_a_post_in_a_coroutine_body_is_one_post_row(tmp_path: Path):
+    """`val r = client.post(u) { setBody(x) }; return r.bodyAsText()`. No call runs on every
+    path to the method's exit, but every one runs on every path to `new HttpStatement(builder,
+    client)`, the call that sends the request (ruled by the user 2026-11-05). So nothing
+    splits: one POST row, `resolved`, with its body. Measured against the exit, every step
+    "may not have run", and the paths that skip `setMethod(Post)` keep the builder's default
+    GET, a request this code never sends."""
+    facts = _inlined_call(
+        _caller("create"),
+        "https://orders.example.com/orders",
+        verbs=("Post", "Post"),
+        body=CallArgument(kind="string", value="x"),
+    )
+    assert _raw_rows(tmp_path, _in_a_coroutine(facts)) == [
+        ("POST", "orders.example.com", "/orders", "resolved", True)
+    ]
+
+
+@pytest.mark.pins("fluent.IDENTICAL-rows-of-one-call-are-one-row")
+def test_identical_rows_of_one_call_with_no_path_are_one_row(tmp_path: Path):
+    """The same POST with its address not read (`path` NULL) and its two `setBody` calls on
+    branches: two counted splits, so four paths (neither, one, the other, both). Three of them
+    carry the body and give the very same row, and one call gives that row once (ruled by the
+    user 2026-11-05). The path with no body is a different row and stays its own (enumerable
+    is exact)."""
+    facts = _inlined_call(
+        _caller("create"),
+        "https",
+        verbs=("Post", "Post"),
+        body=CallArgument(kind="string", value="x"),
+        url_descriptor=_URL_PARTS,
+    )
+    assert _raw_rows(tmp_path, _in_a_coroutine(facts, frozenset({4, 5, 6, 7}))) == [
+        ("POST", None, None, "unresolved", False),
+        ("POST", None, None, "unresolved", True),
+    ]
+
+
+def _second_call(facts: list[CallSiteFact]) -> list[CallSiteFact]:
+    """`facts` and a second copy of the call after it in the same method: its own builder
+    (value 19) and statement (value 177), its ordinals after the first call's."""
+    moved = len(facts)
+    renumbered = {_B: 19, 176: 177, 182: 183}
+    copies = []
+    for fact in facts:
+        arguments = [
+            argument.model_copy(update={"source": renumbered.get(argument.source)})
+            if argument.source is not None
+            else argument
+            for argument in fact.arguments
+        ]
+        copies.append(
+            fact.model_copy(
+                update={
+                    "ordinal": fact.ordinal + moved,
+                    "receiver": renumbered.get(fact.receiver, fact.receiver),
+                    "result": renumbered.get(fact.result, fact.result),
+                    "arguments": arguments,
+                }
+            )
+        )
+    return [*facts, *copies]
+
+
+@pytest.mark.declines("ktor-client")
+@pytest.mark.pins("fluent.the-exact-merge-is-keyed-on-the-CALL")
+def test_two_calls_with_no_path_in_one_method_stay_two_rows(tmp_path: Path):
+    """The near-miss of the merge: two calls in one method, neither address read. Their rows
+    read the same, but they are two requests (two builders, two sends), so they stay two
+    rows."""
+    facts = _inlined_call(_caller("twice"), "https", verbs=(None, "Get"), url_descriptor=_URL_PARTS)
+    assert _raw_rows(tmp_path, _in_a_coroutine(_second_call(facts))) == [
+        ("GET", None, None, "unresolved", False),
+        ("GET", None, None, "unresolved", False),
+    ]
+
+
+@pytest.mark.pins("chains.each-SEND-of-one-request-is-measured-on-its-own")
+def test_one_request_sent_from_two_places_is_measured_at_each_send(tmp_path: Path):
+    """`b = HttpRequestBuilder(); b.method = Post; b.url(primary); HttpStatement(b,
+    client).execute(); if (ok) return; b.url(mirror); HttpStatement(b, client).execute()`: one
+    builder, sent from two places. Each send is measured on its own (M9, ruled by the user
+    2026-11-05, option A): the first sends to the primary address (the mirror `url` runs after
+    it), the second to the mirror (both `url` calls run before it, and the last wins). One row
+    per send, each `resolved`."""
+    caller = _caller("failover")
+    builder = CallArgument(kind="instance", source=_B, symbol=BUILDER)
+    client = CallArgument(kind="field", symbol="com/acme/kt/ClientKt#client.")
+
+    def url(ordinal: int, address: str) -> CallSiteFact:
+        return _site(
+            caller,
+            REQUEST_KT,
+            "url",
+            _URL,
+            ordinal,
+            None,
+            [builder, CallArgument(kind="string", value=address)],
+            invoke_kind="static",
+        )
+
+    def send(ordinal: int, statement: int) -> list[CallSiteFact]:
+        return [
+            _site(
+                caller,
+                STATEMENT,
+                "<init>",
+                _STATEMENT,
+                ordinal,
+                statement,
+                [builder, client],
+                invoke_kind="special",
+            ),
+            _site(
+                caller,
+                STATEMENT,
+                "execute",
+                "(Lkotlin/coroutines/Continuation;)Ljava/lang/Object;",
+                ordinal + 1,
+                statement,
+                [CallArgument(kind="parameter", value=0)],
+                result=statement + 6,
+            ),
+        ]
+
+    facts = [
+        _site(caller, BUILDER, "<init>", "()V", 0, _B, [], invoke_kind="special"),
+        _site(caller, BUILDER, "setMethod", _SET_METHOD, 1, _B, [_verb("Post")]),
+        url(2, "https://orders.example.com/orders"),
+        *send(3, 176),
+        url(5, "https://mirror.example.com/orders"),
+        *send(6, 177),
+    ]
+    assert _raw_rows(tmp_path, _in_a_coroutine(facts)) == [
+        ("POST", "mirror.example.com", "/orders", "resolved", False),
+        ("POST", "orders.example.com", "/orders", "resolved", False),
+    ]
