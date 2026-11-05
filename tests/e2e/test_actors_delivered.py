@@ -366,14 +366,16 @@ def test_every_actor_hop_the_fixture_gives(actor_hops):
     """The whole set (spec §3c), so a hop too many is a failure too. Each send's message is
     read by its class, by identity (`Tick.INSTANCE`) or through the `new` a function returns;
     a reply nobody here handles and an envelope told to the pub-sub mediator are stops naming
-    their class; a message from a parameter or a factory call is a stop with no path and no
-    handler, its class not read. Every row's evidence is `compiler`, D00 §4's closed set: the
+    their class; a message a library factory or a boxing call makes (`Receptionist.register(…)`,
+    `tell(count)`) is a stop naming the call's declared return type, and one from a parameter
+    declared `Object` reaches no case under `first` where a case names a subtype, a stop with
+    no path and no handler. Every row's evidence is `compiler`, D00 §4's closed set: the
     send site is a compiler fact. The ask's reply mapper and the adapter deliver, so the classes they return
     are hops from their own `new`s; `Counter`'s adapter is a constructor reference, whose hop
     is at its super-constructor call."""
     assert actor_hops == {
-        ("Audit#lookup", 3, None, None, "compiler"),
-        ("Audit#register", 3, None, None, "compiler"),
+        ("Audit#lookup", 3, "Receptionist$Command", None, "compiler"),
+        ("Audit#register", 3, "Receptionist$Command", None, "compiler"),
         ("ClassicBroker#announce", 1, "ClassicBroker$Price", "ClassicBroker#onPrice", "compiler"),
         ("ClassicBroker#announce", 3, "DistributedPubSubMediator$Publish", None, "compiler"),
         ("ClassicBroker#announce", 5, "ClassicBroker$Price", "ClassicBroker#onPrice", "compiler"),
@@ -381,12 +383,12 @@ def test_every_actor_hop_the_fixture_gives(actor_hops):
         ("ClassicBroker#onPrice", 3, "ClassicBroker$Ack", None, "compiler"),
         ("ClassicBroker#preStart", 3, "DistributedPubSubMediator$Subscribe", None, "compiler"),
         ("ClassicBroker#preStart", 7, "DistributedPubSubMediator$Put", None, "compiler"),
-        ("Counter#onReport", 2, None, None, "compiler"),
+        ("Counter#onReport", 2, "Integer", None, "compiler"),
         ("Counter#release", 1, "Stock$Release", "Stock#onUrgentRelease", "compiler"),
         ("Counter#release", 1, "Stock$Release", "Stock#onRelease", "compiler"),
         ("Counter#report", 2, "Counter$Report", "Counter#onReport", "compiler"),
         ("Counter$Counted#<init>", 0, "Counter$Counted", "Counter#onCounted", "compiler"),
-        ("Frontend#<init>", 6, None, None, "compiler"),
+        ("Frontend#<init>", 6, "Receptionist$Command", None, "compiler"),
         ("Frontend#onStart", 4, "Stock$Reserve", "Stock#onReserve", "compiler"),
         ("Frontend#onStart", 9, "Frontend$Loaded", "Frontend#lambda", "compiler"),
         ("OrderEntity#onGet", 2, "OrderEntity$Summary", None, "compiler"),
@@ -394,7 +396,7 @@ def test_every_actor_hop_the_fixture_gives(actor_hops):
         ("Relay#forward", 0, None, None, "compiler"),
         ("Session#<init>", 3, "Session$Timeout#INSTANCE.", "Session#onTimeout", "compiler"),
         ("Stock#lambda", 1, "Stock$Tick#INSTANCE.", "Stock#onTick", "compiler"),
-        ("Stock#lambda", 4, None, None, "compiler"),
+        ("Stock#lambda", 4, "Receptionist$Command", None, "compiler"),
         ("Stock#onReserve", 3, "Stock$Reply", "Frontend#lambda", "compiler"),
         ("Stock#onReserve", 3, "Stock$Reply", "Counter$Counted#<init>", "compiler"),
         ("Frontend#lambda", 0, "Frontend$Workers", "Frontend#onWorkers", "compiler"),
