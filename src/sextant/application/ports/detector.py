@@ -169,6 +169,20 @@ class ModuleModel:
     # than silent because the declared set is the WEAKER claim and a reader must be
     # able to see which one they hold (user ruling b, 2026-10-21).
     dependency_source_reason: str | None = None
+    # Why the build tool did not build this module, in the tool's own words (Android
+    # design M5): Gradle's text for a task of this module that failed, or a statement that
+    # a module it needs failed. None when it was built. A module with a value is skipped
+    # with it as the reason, and the other modules go on.
+    build_failure: str | None = None
+    # Why the module holds nothing Sextant reads, in the detector's words (Android
+    # outbound Task 7): nothing in it compiles to JVM bytecode. None for every other
+    # module. A module with a value is
+    # skipped with it as the reason.
+    skip_reason: str | None = None
+    # The version or edition name of this module when its folder holds more than one
+    # module (Android design M6): its results go to `<root>/.sextant/<results_name>`.
+    # None when the folder holds only this module, and its results go to `<root>/.sextant`.
+    results_name: str | None = None
 
 
 @dataclass(frozen=True)

@@ -21,11 +21,12 @@ from sextant.application.resolve.effective_annotations import (
     inherited_rows_over,
     type_hierarchy,
 )
+from sextant.application.resolve.shapes import made_by
 from sextant.application.resolve.shapes.contracts import _body_parameter, _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.inbound_routes import validated_verbless_serves
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
-from sextant.domain.closed_sets import Direction
+from sextant.domain.closed_sets import ConstructKind, Direction
 from sextant.domain.paths import serves_urls
 from sextant.domain.symbols import bare_descriptor, is_type_descriptor, member_name, owner_of
 
@@ -82,6 +83,10 @@ def insert(workspace: Workspace, catalog: Catalog) -> None:
     that answer exactly what it was when the whole derivation ran per turn."""
     if not _derives(catalog):
         return
+    # Android outbound spec M8: an annotation-declared client's rows take the server address
+    # of the object that made the client, before the guard below compares them. Nothing for
+    # a catalog declaring no `made_by`.
+    made_by.addressed_candidates(workspace, catalog)
     workspace.derive("endpoints_insert", catalog_id=catalog.id)
     # Optional (D02 §2, amended): a catalog with no `reply` block declares no
     # second-row rule at all — the HTTP catalogs, which never see @SendTo.
@@ -1227,9 +1232,21 @@ def _declared_on(catalog: Catalog) -> str | None:
     return None if declared is None else str(declared)
 
 
+# The construct kinds that list `interfaces` and implement none of them (Android outbound
+# fix round 2, the controller's ruling of 2026-11-05): an interface's `interfaces` are the
+# interfaces it EXTENDS, and an annotation type's is the platform's own annotation root.
+# Neither answers a call, so neither is the module implementing the interface the fence
+# asks about.
+_IMPLEMENTS_NOTHING = frozenset({str(ConstructKind.INTERFACE), str(ConstructKind.ANNOTATION)})
+
+
 def _locally_implemented(workspace: Workspace) -> list[str]:
-    """Every interface this module's own classes declare they implement (D00
-    §5a's `implemented_interfaces`), as BARE descriptors.
+    """Every interface this module's own classes implement (D00 §5a's
+    `implemented_interfaces`, closed over each one's superinterfaces), as BARE descriptors.
+    Only a class counts: an interface extending another implements nothing, and a Retrofit
+    interface extending a base one left the base's calls fenced off, with no row and nothing
+    saying so (fix round 2). A class implementing the extending interface implements the base
+    too (JLS 8.1.5), so the base is fenced then (fix round 3).
 
     The same strip `interface_implementation._implemented_interfaces` and
     `config_join._implemented_interfaces` make, for the same reason: each
@@ -1237,12 +1254,45 @@ def _locally_implemented(workspace: Workspace) -> list[str]:
     ever compared (D00 §5a). Sorted and deduped so the bound parameter is one
     value for one workspace regardless of read order (NFR-1).
     """
+    rows = workspace.query("implementations")
+    above = _superinterfaces(rows)
     found = {
-        bare_descriptor(str(entry))
-        for row in workspace.query("implementations")
+        implemented
+        for row in rows
+        if row.get("construct_kind") not in _IMPLEMENTS_NOTHING
         for entry in json.loads(str(row["interfaces"]))
+        for implemented in _with_superinterfaces(bare_descriptor(str(entry)), above)
     }
     return sorted(found)
+
+
+def _superinterfaces(rows: list[dict[str, object]]) -> dict[str, list[str]]:
+    """Each interface's DIRECT superinterfaces, by bare descriptor, from the same
+    `implementations` rows: an interface's `interfaces` are the interfaces it extends."""
+    above: dict[str, list[str]] = {}
+    for row in rows:
+        if row.get("construct_kind") != str(ConstructKind.INTERFACE):
+            continue
+        above[bare_descriptor(str(row["symbol"]))] = [
+            bare_descriptor(str(entry)) for entry in json.loads(str(row["interfaces"]))
+        ]
+    return above
+
+
+def _with_superinterfaces(interface: str, above: Mapping[str, list[str]]) -> list[str]:
+    """`interface` and every interface it extends, transitively, in walk order: a class
+    implementing `interface` implements each of them too (JLS 8.1.5). A visited set, as
+    `dispatch._descendants` keeps one: valid bytecode has no cycle, and an unbounded walk
+    would hang on a file nobody wrote by hand."""
+    found: list[str] = []
+    pending = [interface]
+    while pending:
+        current = pending.pop(0)
+        if current in found:
+            continue
+        found.append(current)
+        pending.extend(above.get(current, ()))
+    return found
 
 
 # D02 §2c's `resolves` block, and the ONE key of it that shipped. `format` is
@@ -1433,10 +1483,12 @@ def _served_owners(
     (CP-7 Q3) — contributes no entry, and the SQL leaves the declaring method as
     that row's handler, which is the method the container really invokes.
 
-    Both reads are DIRECT: `implemented_interfaces` names the interfaces a class
-    declares itself, never the ones it inherits through a superclass or through
-    one of those interfaces' own superinterfaces (D00 §5a). Those two shapes
-    derive nothing here and are COVERAGE boundaries rather than silent misses.
+    `implemented_interfaces` names the interfaces a class declares itself (D00 §5a). Each is
+    closed over the interfaces IT extends (`_with_superinterfaces`, fix round 3): a class
+    implementing a sub-interface implements its base too (JLS 8.1.5), and the base's
+    methods are served by that class. An interface inherited through a SUPERCLASS is still
+    not read: that shape derives nothing here and is a COVERAGE boundary rather than a
+    silent miss.
 
     Sorted throughout, and `setdefault` over implementers in symbol order, so
     two classes implementing one interface resolve the same handler twice
@@ -1466,13 +1518,19 @@ def _served_owners(
 
     owners: set[str] = set()
     handlers: dict[str, str] = {}
-    for row in sorted(workspace.query("implementations"), key=lambda row: str(row["symbol"])):
+    rows = workspace.query("implementations")
+    above = _superinterfaces(rows)
+    for row in sorted(rows, key=lambda row: str(row["symbol"])):
         implementer = bare_descriptor(str(row["symbol"]))
         if implementer not in handler_beans:
             continue
         own = methods.get(implementer, {})
-        for entry in json.loads(str(row["interfaces"])):
-            owner = bare_descriptor(str(entry))
+        implemented = [
+            owner
+            for entry in json.loads(str(row["interfaces"]))
+            for owner in _with_superinterfaces(bare_descriptor(str(entry)), above)
+        ]
+        for owner in implemented:
             owners.add(owner)
             for key, declaration in methods.get(owner, {}).items():
                 if key in own:

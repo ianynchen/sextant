@@ -97,30 +97,96 @@ def test_accepts_true_for_the_real_fixture():
 
 
 def test_the_offline_argv_carries_offline_before_the_shared_flags():
-    argv = _compose_argv(["./gradlew"], Path("/init.gradle"), Path("/out.json"), offline=True)
+    argv = _compose_argv(["./gradlew"], Path("/init.gradle"), Path("/out"), offline=True)
     assert argv == [
         "./gradlew",
         "--offline",
         "--init-script",
         "/init.gradle",
         "--no-configuration-cache",
+        "--continue",
         "-q",
+        "sextantBuild",
         "sextantModel",
-        "-Psextant.out=/out.json",
+        "-Psextant.outDir=/out",
     ]
 
 
 def test_the_online_retry_argv_drops_offline_but_keeps_the_rest():
-    argv = _compose_argv(["./gradlew"], Path("/init.gradle"), Path("/out.json"), offline=False)
+    argv = _compose_argv(["./gradlew"], Path("/init.gradle"), Path("/out"), offline=False)
     assert argv == [
         "./gradlew",
         "--init-script",
         "/init.gradle",
         "--no-configuration-cache",
+        "--continue",
         "-q",
+        "sextantBuild",
         "sextantModel",
-        "-Psextant.out=/out.json",
+        "-Psextant.outDir=/out",
     ]
+
+
+def _project_record(path: str, name: str) -> dict:
+    return {
+        "path": path,
+        "group": "com.acme",
+        "name": name,
+        "version": "1.0",
+        "dir": f"/repo/{name}",
+        "sourceRoots": [f"/repo/{name}/src/main/java"],
+        "sourceLanguages": {f"/repo/{name}/src/main/java": ["java"]},
+        "resourceRoots": [],
+        "classesDirs": [f"/repo/{name}/build/classes/java/main"],
+        "declaredRelease": 21,
+        "publishing": False,
+        "classpath": [],
+        "target": None,
+        "platform": None,
+    }
+
+
+def test_assemble_reads_one_file_per_project(tmp_path: Path):
+    """Each project's own `sextantModel` task writes its own file (Android design M4), and
+    the root's `sextantBuild` names every project; the detector joins them, in path order."""
+    lib = _project_record(":pricing-lib", "pricing-lib")
+    app = _project_record(":service-app", "service-app")
+    build = {
+        "projects": [
+            {key: record[key] for key in ("path", "group", "name", "version", "dir")}
+            for record in (app, lib)
+        ],
+        "includedBuilds": ["tools"],
+    }
+    (tmp_path / "build.json").write_text(json.dumps(build), encoding="utf-8")
+    (tmp_path / "projects").mkdir()
+    (tmp_path / "projects" / "_service-app.json").write_text(json.dumps([app]), encoding="utf-8")
+    (tmp_path / "projects" / "_pricing-lib.json").write_text(json.dumps([lib]), encoding="utf-8")
+
+    assembled = gradle_module._assemble(tmp_path)
+
+    assert assembled["projects"] == [lib, app]
+    assert assembled["includedBuilds"] == ["tools"]
+
+
+def test_assemble_gives_a_project_with_no_file_one_record_with_empty_lists(tmp_path: Path):
+    identity = {
+        "path": ":docs",
+        "group": "",
+        "name": "docs",
+        "version": "unspecified",
+        "dir": "/repo/docs",
+    }
+    (tmp_path / "build.json").write_text(
+        json.dumps({"projects": [identity], "includedBuilds": []}), encoding="utf-8"
+    )
+
+    [record] = gradle_module._assemble(tmp_path)["projects"]
+
+    assert record["path"] == ":docs"
+    assert record["classesDirs"] == [] and record["sourceRoots"] == []
+    assert record["classpath"] == [] and record["target"] is None
+    assert "buildFailure" not in record
 
 
 # --- the translation from captured JSON to RepositoryModel/ModuleModel -----
@@ -291,6 +357,52 @@ def test_a_project_without_the_java_plugin_reports_packaging_pom_and_no_source(t
     assert module.output_dirs == ()
 
 
+@pytest.mark.pins("detect.a-part-with-NO-JVM-TARGET-is-skipped-with-that-reason")
+def test_a_part_with_no_jvm_bytecode_target_carries_the_init_scripts_skip_reason(tmp_path: Path):
+    """A Kotlin Multiplatform part whose versions are all JS or Kotlin/Native has nothing
+    Sextant reads, and the init script says so in its own words (Android outbound Task 7).
+    It is not a build failure: the part was built."""
+    reason = "no JVM or Android target: Sextant reads JVM bytecode only (targets: iosArm64, js)"
+    project = {
+        **_project(tmp_path, publishing=False, classes_dirs=[], source_roots=[]),
+        "skipReason": reason,
+    }
+    module = GradleDetector._module_of(tmp_path, project)
+    assert module.skip_reason == reason
+    assert module.build_failure is None
+
+
+def test_a_project_with_no_skip_reason_has_none(tmp_path: Path):
+    project = _project(tmp_path, publishing=False, classes_dirs=[], source_roots=[])
+    assert GradleDetector._module_of(tmp_path, project).skip_reason is None
+
+
+def test_the_init_script_names_the_targets_of_a_part_with_no_jvm_target():
+    """Capture-free: the reason is the script's own text (Android outbound Task 7)."""
+    script = Path(gradle_module.__file__).with_name("sextant-model.init.gradle").read_text()
+    assert '"no JVM or Android target: Sextant reads JVM bytecode only (targets: ' in script
+    assert "skipReason:" in script
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        '"no release build: nothing that ships to read"',
+        (
+            '"Android Gradle Plugin ${version} is older than 7.4, which Sextant needs to read '
+            'Android parts"'
+        ),
+    ],
+)
+def test_an_android_part_with_nothing_to_read_is_a_skip_not_a_build_failure(reason: str):
+    """A part with no release build, or built by an AGP older than 7.4, was built: it has
+    nothing Sextant reads. The script says so through `skipReason`, the channel of a part
+    with no JVM target, and writes no `buildFailure` (Android design M5)."""
+    script = Path(gradle_module.__file__).with_name("sextant-model.init.gradle").read_text()
+    assert reason in script
+    assert "buildFailure" not in script
+
+
 # --- composite builds and a root that carries its own source (fix round 1,
 # I1/I2) -----------------------------------------------------------------
 
@@ -400,7 +512,7 @@ def test_a_root_project_with_no_group_is_named_by_its_root_project_name_alone(tm
     reports as `rootProject.name` (the folder name by default). Refusing it instead
     left `kotlin-ktor-exposed-starter` and 21 of 36 ktor-samples unanalysable."""
     project = _project(tmp_path, path=":", group="", name="kotlin-ktor-exposed-starter")
-    module = GradleDetector._module_of(tmp_path, project, [project])
+    module = GradleDetector._module_of(tmp_path, project, gradle_module._records_by_path([project]))
     assert module.module_id == "kotlin-ktor-exposed-starter"
 
 
@@ -413,9 +525,9 @@ def test_a_nested_project_with_no_group_is_its_root_name_and_full_project_path(t
     root = _project(tmp_path, path=":", group="", name="Acme", classes_dirs=[])
     core = _project(tmp_path, path=":libs:core", group="", name="core")
     app = _project(tmp_path, path=":app", group="", name="app")
-    reactor = [root, core, app]
-    assert GradleDetector._module_of(tmp_path, core, reactor).module_id == "Acme:libs:core"
-    assert GradleDetector._module_of(tmp_path, app, reactor).module_id == "Acme:app"
+    by_path = gradle_module._records_by_path([root, core, app])
+    assert GradleDetector._module_of(tmp_path, core, by_path).module_id == "Acme:libs:core"
+    assert GradleDetector._module_of(tmp_path, app, by_path).module_id == "Acme:app"
 
 
 def test_a_project_with_no_group_writes_dot_for_manager_package_and_version(tmp_path: Path):
@@ -425,7 +537,7 @@ def test_a_project_with_no_group_writes_dot_for_manager_package_and_version(tmp_
     whatever version it declares: a version names a release of a package, and
     there is no package."""
     project = _project(tmp_path, path=":", group="", name="app", version="1.4.0")
-    module = GradleDetector._module_of(tmp_path, project, [project])
+    module = GradleDetector._module_of(tmp_path, project, gradle_module._records_by_path([project]))
     assert (module.coordinates, module.version) == (".", ".")
 
 
@@ -800,6 +912,87 @@ _REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE = (
 )
 
 
+# Captured from a real Gradle 9.7.1 run (Task 1 fix round 1): two projects, each with a
+# dependency the cache lacks, run offline with `--continue` and this detector's own argv. With
+# two or more failed tasks Gradle prints "Build completed with N failures", not the single
+# failure's "Build failed with an exception". The first two lines are the wrapper's download
+# lines, the shape `_REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE` captured: a fresh machine
+# downloads the distribution first and then fails the same way.
+_REAL_DOWNLOAD_THEN_TWO_OFFLINE_FAILURES = (
+    "Downloading https://services.gradle.org/distributions/gradle-9.7.1-bin.zip\n"
+    ".............10%.............20%..............30%.............40%.............50%"
+    "..............60%.............70%..............80%.............90%.............100%\n"
+    "\n"
+    "FAILURE: Build completed with 2 failures.\n"
+    "\n"
+    "1: Task failed with an exception.\n"
+    "-----------\n"
+    "* What went wrong:\n"
+    "Execution failed for task ':a:compileJava' (registered by plugin class 'org.gradle.api.plugins.JavaBasePlugin').\n"
+    "> Could not resolve all files for configuration ':a:compileClasspath'.\n"
+    "   > Could not resolve org.example.sextant:not-cached-a:1.0.0.\n"
+    "     Required by:\n"
+    "         project ':a'\n"
+    "      > No cached version of org.example.sextant:not-cached-a:1.0.0 available for offline mode.\n"
+    "\n"
+    "* Try:\n"
+    "> Run with --stacktrace option to get the stack trace.\n"
+    "> Run with --info or --debug option to get more log output.\n"
+    "> Run with --scan to get full insights from a Build Scan (powered by Develocity).\n"
+    "> Get more help at https://help.gradle.org.\n"
+    "==============================================================================\n"
+    "\n"
+    "2: Task failed with an exception.\n"
+    "-----------\n"
+    "* What went wrong:\n"
+    "Execution failed for task ':b:compileJava' (registered by plugin class 'org.gradle.api.plugins.JavaBasePlugin').\n"
+    "> Could not resolve all files for configuration ':b:compileClasspath'.\n"
+    "   > Could not resolve org.example.sextant:not-cached-b:1.0.0.\n"
+    "     Required by:\n"
+    "         project ':b'\n"
+    "      > No cached version of org.example.sextant:not-cached-b:1.0.0 available for offline mode.\n"
+    "\n"
+    "* Try:\n"
+    "> Run with --stacktrace option to get the stack trace.\n"
+    "> Run with --info or --debug option to get more log output.\n"
+    "> Run with --scan to get full insights from a Build Scan (powered by Develocity).\n"
+    "> Get more help at https://help.gradle.org.\n"
+    "==============================================================================\n"
+    "\n"
+    "BUILD FAILED in 321ms\n"
+)
+
+
+@pytest.mark.pins("detect.SEVERAL-failed-parts-after-a-download-are-retried-online-under-the-flag")
+def test_several_offline_failures_after_a_download_retry_online_under_the_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`--continue` lets every part fail on its own, and Gradle then reports "Build completed
+    with N failures". That banner proves the build engine ran, the same as the single-failure
+    one: the download succeeded, so this is an offline refusal and `--allow-resolve` retries it
+    online — never "Gradle distribution not present"."""
+    calls: list[bool] = []
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        calls.append(offline)
+        if offline:
+            return _completed(1, _REAL_DOWNLOAD_THEN_TWO_OFFLINE_FAILURES)
+        _write_empty_build(out_dir)
+        return _completed(0, "")
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, True)
+    assert data == {"projects": [], "includedBuilds": []}
+    assert calls == [True, False]
+
+
+def test_the_project_file_name_is_distinct_for_every_project_path():
+    """`:a_b` and `:a:b` are two projects; `_` is escaped first, so their files differ."""
+    assert gradle_module._project_file_name(":") == "_.json"
+    assert gradle_module._project_file_name(":a:b") == "_a_b.json"
+    assert gradle_module._project_file_name(":a_b") == "_a__b.json"
+
+
 @pytest.mark.pins("detect.a-download-that-SUCCEEDED-is-not-a-missing-distribution")
 def test_a_download_that_succeeded_before_a_build_failure_is_not_distribution_absent():
     """The wrapper prints `Downloading https://...` and its progress, succeeds, and then
@@ -820,28 +1013,28 @@ def test_an_offline_plugin_refusal_with_allow_resolve_retries_online_once(
     network might not, so `--allow-resolve` retries it online, as it does a dependency."""
     calls: list[bool] = []
 
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         calls.append(offline)
         if offline:
             return _completed(1, _REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE)
-        out_file.write_text(json.dumps({"projects": []}), encoding="utf-8")
+        _write_empty_build(out_dir)
         return _completed(0, "")
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
-    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", True)
-    assert data == {"projects": []}
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, True)
+    assert data == {"projects": [], "includedBuilds": []}
     assert calls == [True, False]
 
 
 def test_an_offline_plugin_refusal_without_the_flag_reports_gradles_own_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         return _completed(1, _REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE)
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
     with pytest.raises(ValueError, match="could not resolve plugin artifact") as failure:
-        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", False)
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
     assert "distribution not present" not in str(failure.value)
 
 
@@ -852,19 +1045,26 @@ def _completed(returncode: int, output: str) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=output, stderr="")
 
 
+def _write_empty_build(out_dir: Path) -> None:
+    """What `sextantBuild` writes for a build with no projects to read."""
+    (out_dir / "build.json").write_text(
+        json.dumps({"projects": [], "includedBuilds": []}), encoding="utf-8"
+    )
+
+
 def test_a_clean_offline_run_reads_the_output_file_and_asks_for_no_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     calls: list[bool] = []
 
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         calls.append(offline)
-        out_file.write_text(json.dumps({"projects": []}), encoding="utf-8")
+        _write_empty_build(out_dir)
         return _completed(0, "")
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
-    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", False)
-    assert data == {"projects": []}
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    assert data == {"projects": [], "includedBuilds": []}
     assert calls == [True]
 
 
@@ -873,7 +1073,7 @@ def test_an_offline_refusal_without_allow_resolve_is_refused_with_no_retry(
 ):
     calls: list[bool] = []
 
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         calls.append(offline)
         return _completed(
             1,
@@ -884,7 +1084,7 @@ def test_an_offline_refusal_without_allow_resolve_is_refused_with_no_retry(
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
     with pytest.raises(ValueError, match="available for offline mode"):
-        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", False)
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
     assert calls == [True]
 
 
@@ -893,7 +1093,7 @@ def test_an_offline_refusal_with_allow_resolve_retries_online_once(
 ):
     calls: list[bool] = []
 
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         calls.append(offline)
         if offline:
             return _completed(
@@ -902,12 +1102,12 @@ def test_an_offline_refusal_with_allow_resolve_retries_online_once(
                 "> No cached version of org.springframework:spring-web:6.1.6 available for "
                 "offline mode.\n",
             )
-        out_file.write_text(json.dumps({"projects": []}), encoding="utf-8")
+        _write_empty_build(out_dir)
         return _completed(0, "")
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
-    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", True)
-    assert data == {"projects": []}
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, True)
+    assert data == {"projects": [], "includedBuilds": []}
     assert calls == [True, False]
 
 
@@ -920,12 +1120,12 @@ def test_a_build_configuration_failure_is_refused_with_gradles_own_words(
         "> Could not find method sextantModel() for arguments...\n"
     )
 
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         return _completed(1, verbatim)
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
     with pytest.raises(ValueError) as failure:
-        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", False)
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
     assert "Could not find method sextantModel" in str(failure.value)
 
 
@@ -937,12 +1137,12 @@ def test_a_bad_java_home_failure_is_refused_verbatim_not_as_distribution_absent(
     must reach the caller as Gradle's own verbatim words, never relabelled
     "Gradle distribution not present"."""
 
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         return _completed(1, _REAL_BAD_JAVA_HOME_FAILURE)
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
     with pytest.raises(ValueError) as failure:
-        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", False)
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
     assert "JAVA_HOME is set to an invalid directory" in str(failure.value)
     assert "distribution not present" not in str(failure.value)
 
@@ -952,7 +1152,7 @@ def test_distribution_absent_is_recognised_even_on_the_second_attempt(
 ):
     calls: list[bool] = []
 
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         calls.append(offline)
         if offline:
             return _completed(
@@ -965,8 +1165,392 @@ def test_distribution_absent_is_recognised_even_on_the_second_attempt(
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
     with pytest.raises(ValueError, match="Gradle distribution not present"):
-        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", True)
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, True)
     assert calls == [True, False]
+
+
+# --- a part that fails to build is skipped with Gradle's reason (Android design M5) -----
+
+# Captured from a real Gradle 9.7.1 run (Android outbound Task 2) with this detector's own
+# argv: `:lib` has a syntax error and `:app` depends on `:lib`; the root project applies no
+# plugin. With `--continue`, `:app` is never compiled and Gradle names only `:lib`. javac's
+# own lines come first, then Gradle repeats them under its "> " line, two spaces in. Path
+# shortened; otherwise verbatim.
+_REAL_ONE_PART_FAILS = (
+    "/repo/lib/src/main/java/l/L.java:2: error: illegal start of expression\n"
+    "public class L { int x = }\n"
+    "                         ^\n"
+    "1 error\n"
+    "\n"
+    "FAILURE: Build failed with an exception.\n"
+    "\n"
+    "* What went wrong:\n"
+    "Execution failed for task ':lib:compileJava' (registered by plugin class 'org.gradle.api.plugins.JavaBasePlugin').\n"
+    "> Compilation failed; see the compiler output below.\n"
+    "  /repo/lib/src/main/java/l/L.java:2: error: illegal start of expression\n"
+    "  public class L { int x = }\n"
+    "                           ^\n"
+    "  1 error\n"
+    "\n"
+    "* Try:\n"
+    "> Check your code and dependencies to fix the compilation error(s)\n"
+    "> Run with --scan to get full insights from a Build Scan (powered by Develocity).\n"
+    "\n"
+    "BUILD FAILED in 314ms\n"
+)
+
+# The same run with the root project broken too (Gradle 9.7.1): two failed tasks, so Gradle
+# prints numbered blocks under "Build completed with 2 failures". javac's own lines that
+# precede the banner are left out here; otherwise verbatim, paths shortened.
+_REAL_TWO_PARTS_FAIL = (
+    "FAILURE: Build completed with 2 failures.\n"
+    "\n"
+    "1: Task failed with an exception.\n"
+    "-----------\n"
+    "* What went wrong:\n"
+    "Execution failed for task ':compileJava' (registered by plugin class 'org.gradle.api.plugins.JavaBasePlugin').\n"
+    "> Compilation failed; see the compiler output below.\n"
+    "  /repo/src/main/java/r/R.java:2: error: illegal start of expression\n"
+    "  public class R { int x = }\n"
+    "                           ^\n"
+    "  1 error\n"
+    "\n"
+    "* Try:\n"
+    "> Check your code and dependencies to fix the compilation error(s)\n"
+    "> Run with --scan to get full insights from a Build Scan (powered by Develocity).\n"
+    "==============================================================================\n"
+    "\n"
+    "2: Task failed with an exception.\n"
+    "-----------\n"
+    "* What went wrong:\n"
+    "Execution failed for task ':lib:compileJava' (registered by plugin class 'org.gradle.api.plugins.JavaBasePlugin').\n"
+    "> Compilation failed; see the compiler output below.\n"
+    "  /repo/lib/src/main/java/l/L.java:2: error: illegal start of expression\n"
+    "  public class L { int x = }\n"
+    "                           ^\n"
+    "  1 error\n"
+    "\n"
+    "* Try:\n"
+    "> Check your code and dependencies to fix the compilation error(s)\n"
+    "> Run with --scan to get full insights from a Build Scan (powered by Develocity).\n"
+    "==============================================================================\n"
+    "\n"
+    "BUILD FAILED in 833ms\n"
+)
+
+
+def _write_build(out_dir: Path, records: list[dict], written: list[dict]) -> None:
+    """What a partly failed run leaves: `build.json` names every project, and only the
+    projects whose `sextantModel` ran have a file under `projects/`."""
+    identities = [
+        {key: record[key] for key in ("path", "group", "name", "version", "dir")}
+        for record in records
+    ]
+    (out_dir / "build.json").write_text(
+        json.dumps({"projects": identities, "includedBuilds": []}), encoding="utf-8"
+    )
+    (out_dir / "projects").mkdir(exist_ok=True)
+    for record in written:
+        name = gradle_module._project_file_name(record["path"])
+        (out_dir / "projects" / name).write_text(json.dumps([record]), encoding="utf-8")
+
+
+def _root_record() -> dict:
+    return {**_project_record(":", "parts"), "group": "", "sourceRoots": [], "classesDirs": []}
+
+
+def test_failures_by_project_reads_each_failed_task():
+    """Each `Execution failed for task '<task>'` block gives its project Gradle's own
+    message: the lines after it up to the blank line, with the "> " (or the two spaces) Gradle
+    puts in front of each removed. The project is the task path without its last part, and
+    the root project's own task (`:compileJava`) belongs to `:`."""
+    compile_error = (
+        "Compilation failed; see the compiler output below.\n"
+        "/repo/{file}:2: error: illegal start of expression\n"
+        "public class {name} {{ int x = }}\n"
+        "                         ^\n"
+        "1 error"
+    )
+    assert gradle_module._failures_by_project(_REAL_TWO_PARTS_FAIL) == {
+        ":": compile_error.format(file="src/main/java/r/R.java", name="R"),
+        ":lib": compile_error.format(file="lib/src/main/java/l/L.java", name="L"),
+    }
+
+
+def test_failures_by_project_keeps_every_cause_line_of_an_offline_refusal():
+    reasons = gradle_module._failures_by_project(_REAL_DOWNLOAD_THEN_TWO_OFFLINE_FAILURES)
+    assert sorted(reasons) == [":a", ":b"]
+    assert reasons[":a"].startswith(
+        "Could not resolve all files for configuration ':a:compileClasspath'.\n"
+    )
+    assert reasons[":a"].endswith(
+        "No cached version of org.example.sextant:not-cached-a:1.0.0 available for offline mode."
+    )
+
+
+def test_output_with_no_failed_task_names_no_project():
+    assert gradle_module._failures_by_project(_REAL_BAD_JAVA_HOME_FAILURE) == {}
+
+
+@pytest.mark.pins("detect.a-part-that-FAILED-to-build-is-skipped-not-the-repository")
+def test_a_part_that_uses_a_failed_part_is_skipped_with_that_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`--continue` lets every part that can build finish, and the run still exits 1. A part
+    whose own task failed gets Gradle's text as its reason; a part that never ran because a
+    part it needs failed is named as such. The repository is not refused (Android design M5):
+    `:other` was built and has code to read."""
+    root, lib, app = _root_record(), _project_record(":lib", "lib"), _project_record(":app", "app")
+    other = _project_record(":other", "other")
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        _write_build(out_dir, [root, app, lib, other], written=[root, other])
+        return _completed(1, _REAL_ONE_PART_FAILS)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    modules = {module.module_id: module for module in _repository_model(data).modules}
+
+    assert modules["com.acme:lib"].build_failure is not None
+    assert modules["com.acme:lib"].build_failure.startswith(
+        "Compilation failed; see the compiler output below.\n"
+        "/repo/lib/src/main/java/l/L.java:2: error: illegal start of expression"
+    )
+    assert modules["com.acme:app"].build_failure == (
+        "not built: a part it needs failed to build (failed: :lib)"
+    )
+
+
+def test_a_part_that_built_carries_no_build_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    root, lib, app = _root_record(), _project_record(":lib", "lib"), _project_record(":app", "app")
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        _write_build(out_dir, [root, app, lib], written=[root, app])
+        return _completed(1, _REAL_ONE_PART_FAILS)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    modules = {module.module_id: module for module in _repository_model(data).modules}
+
+    assert modules["com.acme:app"].build_failure is None
+    assert modules["com.acme:lib"].build_failure is not None
+
+
+def test_a_build_failure_written_inside_a_record_reaches_the_module(tmp_path: Path):
+    """The `buildFailure` the detector writes into the record of a part that was not built
+    reaches the module."""
+    project = _project(tmp_path, path=":app", name="app")
+    project["buildFailure"] = "Compilation failed; see the compiler output below."
+    module = GradleDetector._module_of(tmp_path, project, gradle_module._records_by_path([project]))
+    assert module.build_failure == "Compilation failed; see the compiler output below."
+
+
+def test_an_offline_refusal_in_one_part_names_allow_resolve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Without `--allow-resolve` there is no online retry: the parts the cache could not
+    serve are skipped with Gradle's reason, the others are read, and a note says how to let
+    Gradle download what is missing."""
+    root, a, b = _root_record(), _project_record(":a", "a"), _project_record(":b", "b")
+    other = _project_record(":other", "other")
+    calls: list[bool] = []
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        calls.append(offline)
+        _write_build(out_dir, [root, a, b, other], written=[root, other])
+        return _completed(1, _REAL_DOWNLOAD_THEN_TWO_OFFLINE_FAILURES)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    model = _repository_model(data)
+
+    assert calls == [True]
+    assert (
+        "some parts need dependencies that are not in the local Gradle cache; "
+        "--allow-resolve lets Gradle download them"
+    ) in model.notes
+    modules = {module.module_id: module for module in model.modules}
+    assert "available for offline mode" in str(modules["com.acme:a"].build_failure)
+
+
+def test_a_part_skipped_for_an_offline_refusal_names_allow_resolve_in_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Detect notes reach only the `metadata.json` of a module that is analysed, so a person
+    who reads the skip row of a part the cache could not serve must find the flag there."""
+    root, a, b = _root_record(), _project_record(":a", "a"), _project_record(":b", "b")
+    other = _project_record(":other", "other")
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        _write_build(out_dir, [root, a, b, other], written=[root, other])
+        return _completed(1, _REAL_DOWNLOAD_THEN_TWO_OFFLINE_FAILURES)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    modules = {module.module_id: module for module in _repository_model(data).modules}
+
+    reason = str(modules["com.acme:a"].build_failure)
+    assert reason.endswith(
+        "No cached version of org.example.sextant:not-cached-a:1.0.0 available for offline "
+        "mode. (--allow-resolve lets Gradle download it)"
+    )
+
+
+def test_a_compile_failure_does_not_name_allow_resolve(tmp_path: Path):
+    root, lib = _root_record(), _project_record(":lib", "lib")
+    _write_build(tmp_path, [root, lib], written=[root])
+    records = gradle_module._assemble(tmp_path, _REAL_ONE_PART_FAILS)["projects"]
+    [reason] = [record["buildFailure"] for record in records if record["path"] == ":lib"]
+    assert reason.startswith("Compilation failed")
+    assert "--allow-resolve" not in reason
+
+
+def test_a_root_project_that_was_not_built_is_a_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The root project is never a module in a build with subprojects, so it has no skip row.
+    When Gradle could not build it, its reason is a note: silent before this fix."""
+    root = {**_root_record(), "dir": "/repo"}
+    lib, app = _project_record(":lib", "lib"), _project_record(":app", "app")
+    other = _project_record(":other", "other")
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        _write_build(out_dir, [root, app, lib, other], written=[other])
+        return _completed(1, _REAL_TWO_PARTS_FAIL)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    model = _repository_model(data)
+
+    [note] = [note for note in model.notes if note.startswith("gradle root project at /repo")]
+    assert note.startswith(
+        "gradle root project at /repo was not built: "
+        "Compilation failed; see the compiler output below.\n"
+        "/repo/src/main/java/r/R.java:2: error: illegal start of expression"
+    )
+    # Still not a module: the modules are the same three subprojects.
+    assert sorted(m.module_id for m in model.modules) == [
+        "com.acme:app",
+        "com.acme:lib",
+        "com.acme:other",
+    ]
+
+
+def test_a_built_root_project_gives_no_not_built_note():
+    model = _repository_model(
+        {"projects": [_minimal_project(path=":"), _minimal_project()], "includedBuilds": []}
+    )
+    assert not [note for note in model.notes if "was not built" in note]
+
+
+def test_a_build_in_which_no_part_was_built_is_refused_with_gradles_own_words(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Controller ruling (Task 2 fix round 1): `build.json` was written but no project wrote
+    its file. A reactor in which every module is skipped would end with success; a build that
+    is broken everywhere is refused as before."""
+    root, lib = _root_record(), _project_record(":lib", "lib")
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        _write_build(out_dir, [root, lib], written=[])
+        return _completed(1, _REAL_TWO_PARTS_FAIL)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    with pytest.raises(ValueError) as failure:
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    assert str(failure.value) == _REAL_TWO_PARTS_FAIL.strip()
+
+
+def test_a_build_whose_only_built_project_has_nothing_to_read_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Controller ruling (Task 2 fix round 2), the shape of the real run behind
+    `_REAL_ONE_PART_FAILS`: the root project applies no plugin, so its `sextantModel` writes
+    its record whatever happens; `:lib` fails and `:app` needs it. The only record written has
+    no source and no classes, so nothing can be read, and the run is refused as before M5
+    rather than ending with every module skipped and success."""
+    root, lib, app = _root_record(), _project_record(":lib", "lib"), _project_record(":app", "app")
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        _write_build(out_dir, [root, app, lib], written=[root])
+        return _completed(1, _REAL_ONE_PART_FAILS)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    with pytest.raises(ValueError) as failure:
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    assert str(failure.value) == _REAL_ONE_PART_FAILS.strip()
+
+
+def test_a_folder_only_project_and_a_root_with_no_plugin_do_not_count_as_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The same with the real two-parts-fail capture: `:` and `:lib` fail, `:app` needs
+    `:lib`, and `:services` is a folder that applies no compiling plugin and writes an empty
+    record."""
+    root, lib, app = _root_record(), _project_record(":lib", "lib"), _project_record(":app", "app")
+    services = {**_project_record(":services", "services"), "sourceRoots": [], "classesDirs": []}
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        _write_build(out_dir, [root, app, lib, services], written=[services])
+        return _completed(1, _REAL_TWO_PARTS_FAIL)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    with pytest.raises(ValueError) as failure:
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    assert str(failure.value) == _REAL_TWO_PARTS_FAIL.strip()
+
+
+def test_a_build_in_which_no_part_was_built_offline_is_still_retried_online(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    root, a = _root_record(), _project_record(":a", "a")
+    calls: list[bool] = []
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        calls.append(offline)
+        if offline:
+            _write_build(out_dir, [root, a], written=[])
+            return _completed(1, _REAL_DOWNLOAD_THEN_TWO_OFFLINE_FAILURES)
+        _write_build(out_dir, [root, a], written=[root, a])
+        return _completed(0, "")
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, True)
+    assert calls == [True, False]
+    assert not any("buildFailure" in record for record in data["projects"])
+
+
+def test_the_online_retry_does_not_read_a_file_the_offline_attempt_left(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The offline attempt wrote `:lib`'s file; on the online retry `:lib` failed. The file
+    left from the first attempt must not stand in for the part that failed on the second."""
+    root, lib, other = (
+        _root_record(),
+        _project_record(":lib", "lib"),
+        _project_record(":other", "other"),
+    )
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        if offline:
+            _write_build(out_dir, [root, lib, other], written=[root, lib, other])
+            return _completed(
+                1,
+                "FAILURE: Build failed with an exception.\n"
+                "> No cached version of org.springframework:spring-web:6.1.6 available for "
+                "offline mode.\n",
+            )
+        _write_build(out_dir, [root, lib, other], written=[root, other])
+        return _completed(1, _REAL_ONE_PART_FAILS)
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, True)
+    [module] = [m for m in _repository_model(data).modules if m.module_id == "com.acme:lib"]
+
+    assert module.build_failure is not None
+    assert "illegal start of expression" in module.build_failure
 
 
 # --- escape hatches wrapped into named refusals (2M Task 3 fix round 1, I6)
@@ -1002,7 +1586,7 @@ def test_a_non_executable_wrapper_is_a_named_refusal(
 
     monkeypatch.setattr(gradle_module.subprocess, "run", fake_run)
     with pytest.raises(ValueError, match="not executable"):
-        GradleDetector._run_once(["./gradlew"], tmp_path, tmp_path / "out.json", True)
+        GradleDetector._run_once(["./gradlew"], tmp_path, tmp_path, True)
 
 
 def test_a_timeout_becomes_a_named_refusal_not_a_hang(
@@ -1016,7 +1600,7 @@ def test_a_timeout_becomes_a_named_refusal_not_a_hang(
 
     monkeypatch.setattr(gradle_module.subprocess, "run", fake_run)
     with pytest.raises(ValueError, match="did not finish within"):
-        GradleDetector._run_once(["./gradlew"], tmp_path, tmp_path / "out.json", True)
+        GradleDetector._run_once(["./gradlew"], tmp_path, tmp_path, True)
 
 
 # --- the init script itself, loaded through the installed package (2M Task
@@ -1121,7 +1705,9 @@ def test_a_no_group_sibling_is_read_as_a_library_root_under_its_module_id(tmp_pa
         version="unspecified",
         classpath=[{"path": str(root_classes), "internal": True, "projectPath": ":"}],
     )
-    module = GradleDetector._module_of(tmp_path / "app", app, [root, app])
+    module = GradleDetector._module_of(
+        tmp_path / "app", app, gradle_module._records_by_path([root, app])
+    )
 
     assert module.module_id == "Acme:app"
     assert module.sibling_coordinates == ("Acme",)
@@ -1130,5 +1716,264 @@ def test_a_no_group_sibling_is_read_as_a_library_root_under_its_module_id(tmp_pa
     ]
     # The same string the root reports as its OWN id, which is what joins the two.
     assert module.sibling_coordinates == (
-        GradleDetector._module_of(tmp_path, root, [root, app]).module_id,
+        GradleDetector._module_of(
+            tmp_path, root, gradle_module._records_by_path([root, app])
+        ).module_id,
     )
+
+
+# --- a Kotlin Multiplatform part built in more than one version (Android M1, M2) ---
+
+
+def _two_version_part(tmp_path: Path, *, group: str) -> tuple[dict, dict, dict]:
+    """The root project and the two records a Kotlin Multiplatform part gives: one per
+    version, each with its own classes directory and the label Gradle puts on it."""
+    root = _project(tmp_path, path=":", group="", name="ShopApp", classes_dirs=[])
+    records = []
+    for target, platform in (("android", "androidJvm"), ("jvm", "jvm")):
+        classes = tmp_path / "shared" / "build" / "classes" / "kotlin" / target / "main"
+        classes.mkdir(parents=True)
+        record = _project(
+            tmp_path / "shared",
+            path=":shared",
+            group=group,
+            name="shared",
+            version="unspecified",
+            classes_dirs=[str(classes)],
+        )
+        records.append({**record, "target": target, "platform": platform})
+    return root, records[0], records[1]
+
+
+@pytest.mark.pins("detect.a-TWO-VERSION-gradle-part-is-named-with-a-dash-and-its-version")
+@pytest.mark.parametrize(
+    ("group", "jvm_id", "android_id"),
+    [
+        ("com.acme", "com.acme:shared-jvm", "com.acme:shared-android"),
+        ("", "ShopApp:shared-jvm", "ShopApp:shared-android"),
+    ],
+)
+def test_a_two_version_part_gives_one_module_per_version_named_with_a_dash(
+    tmp_path: Path, group: str, jvm_id: str, android_id: str
+):
+    """Android design M2 (ruled A): today's name with a dash and the version name the
+    build file gives added to the last part — the spelling Kotlin uses when it uploads
+    each version. Each version keeps its results in a folder of its own name, because
+    the two share the part's folder (M6)."""
+    root, android, jvm = _two_version_part(tmp_path, group=group)
+    by_path = gradle_module._records_by_path([root, android, jvm])
+    jvm_module = GradleDetector._module_of(tmp_path / "shared", jvm, by_path)
+    android_module = GradleDetector._module_of(tmp_path / "shared", android, by_path)
+    assert (jvm_module.module_id, jvm_module.results_name) == (jvm_id, "jvm")
+    assert (android_module.module_id, android_module.results_name) == (android_id, "android")
+    if group:
+        assert jvm_module.coordinates == "com.acme/shared-jvm"
+
+
+@pytest.mark.pins("detect.a-part-uses-the-VERSION-gradle-labelled")
+def test_a_part_uses_the_version_gradle_labelled(tmp_path: Path):
+    """Android design M1 (ruled A): `:server` uses `:shared`, and Gradle picked the JVM
+    version for it. The label Gradle put on what it picked says which record to join,
+    so `:server` gets the JVM version's classes and never the Android version's."""
+    root, android, jvm = _two_version_part(tmp_path, group="com.acme")
+    jvm_classes = Path(jvm["classesDirs"][0])
+    server = _project(
+        tmp_path / "server",
+        path=":server",
+        name="server",
+        classpath=[
+            {
+                "path": str(tmp_path / "shared" / "build" / "libs" / "shared-jvm.jar"),
+                "internal": True,
+                "projectPath": ":shared",
+                "platform": "jvm",
+            }
+        ],
+    )
+    module = GradleDetector._module_of(
+        tmp_path / "server", server, gradle_module._records_by_path([root, android, jvm, server])
+    )
+    assert module.sibling_coordinates == ("com.acme:shared-jvm",)
+    assert [r.archive for r in module.library_roots] == [jvm_classes]
+    assert module.libraries_not_resolved == ()
+
+
+@pytest.mark.pins("detect.a-two-version-part-with-NO-LABEL-is-a-named-gap")
+@pytest.mark.parametrize("platform", [None, "wasm"])
+def test_a_two_module_part_with_no_label_is_a_named_gap(tmp_path: Path, platform: str | None):
+    """A label Sextant cannot match to one version — none at all, or one no version of
+    the part carries — is reported, never guessed (Android design M1)."""
+    root, android, jvm = _two_version_part(tmp_path, group="com.acme")
+    entry = {"path": "/elsewhere/shared.jar", "internal": True, "projectPath": ":shared"}
+    if platform is not None:
+        entry["platform"] = platform
+    server = _project(tmp_path / "server", path=":server", name="server", classpath=[entry])
+    module = GradleDetector._module_of(
+        tmp_path / "server", server, gradle_module._records_by_path([root, android, jvm, server])
+    )
+    assert module.library_roots == ()
+    assert module.sibling_coordinates == ()
+    assert module.libraries_not_resolved == (
+        "could not tell which version of :shared this part uses",
+    )
+
+
+@pytest.mark.pins("detect.a-ONE-PROJECT-build-with-two-records-is-walked-as-a-reactor")
+def test_a_one_project_build_with_two_versions_gives_both_modules_to_the_reactor_walk(
+    tmp_path: Path,
+):
+    """A build with no other project whose root project is built in two versions (a
+    one-project Kotlin Multiplatform library with `jvm()` and an Android version, or a
+    one-project app with two editions) gives two modules. A single-module analysis reads
+    only the first one, so the build is a reactor and the walk analyses both."""
+    records = []
+    for target, platform in (("android", "androidJvm"), ("jvm", "jvm")):
+        classes = tmp_path / "build" / "classes" / "kotlin" / target / "main"
+        classes.mkdir(parents=True)
+        record = _project(tmp_path, path=":", name="shared", classes_dirs=[str(classes)])
+        records.append({**record, "target": target, "platform": platform})
+    model = GradleDetector._repository_model(
+        tmp_path, {"projects": records, "includedBuilds": []}, None
+    )
+    assert model.multi_module is True
+    assert [(m.module_id, m.results_name) for m in model.modules] == [
+        ("com.acme:shared-android", "android"),
+        ("com.acme:shared-jvm", "jvm"),
+    ]
+    # The root project IS the modules here, so no note says it was dropped.
+    assert model.notes == ()
+
+
+def test_a_sibling_that_was_not_built_is_named_with_its_reason(tmp_path: Path):
+    """A part this part uses failed to build (Android design M5), so it has no classes
+    to read. It is named with Gradle's reason, so this part's analysis does not lose it
+    with nothing said."""
+    root = _project(tmp_path, path=":", group="", name="ShopApp", classes_dirs=[])
+    lib = {
+        **_project(tmp_path / "lib", path=":lib", name="lib", classes_dirs=[]),
+        "buildFailure": "Compilation failed; see the compiler output below.",
+    }
+    app = _project(
+        tmp_path / "app",
+        path=":app",
+        name="app",
+        classpath=[{"path": "/elsewhere/lib.jar", "internal": True, "projectPath": ":lib"}],
+    )
+    module = GradleDetector._module_of(
+        tmp_path / "app", app, gradle_module._records_by_path([root, lib, app])
+    )
+    assert module.library_roots == ()
+    assert module.libraries_not_resolved == (
+        ":lib was not built: Compilation failed; see the compiler output below.",
+    )
+
+
+def test_an_android_record_with_no_version_name_beside_others_is_named_android(tmp_path: Path):
+    """A Kotlin Multiplatform part that applies `com.android.library` with no
+    `androidTarget()` gives an Android record with no version name beside its JVM record.
+    It is named `android`, never `None`."""
+    root, android, jvm = _two_version_part(tmp_path, group="com.acme")
+    android = {**android, "target": None}
+    by_path = gradle_module._records_by_path([root, android, jvm])
+    module = GradleDetector._module_of(tmp_path / "shared", android, by_path)
+    assert (module.module_id, module.results_name) == ("com.acme:shared-android", "android")
+
+
+def test_a_one_version_part_keeps_its_name(tmp_path: Path):
+    """A part built once keeps today's name and its results stay where they were (M2),
+    and a sibling built once is joined by its path alone, whatever its label."""
+    root = _project(tmp_path, path=":", group="", name="ShopApp", classes_dirs=[])
+    classes = tmp_path / "shared" / "build" / "classes" / "kotlin" / "jvm" / "main"
+    classes.mkdir(parents=True)
+    shared = {
+        **_project(tmp_path / "shared", path=":shared", name="shared", classes_dirs=[str(classes)]),
+        "target": "jvm",
+        "platform": "jvm",
+    }
+    server = _project(
+        tmp_path / "server",
+        path=":server",
+        name="server",
+        classpath=[{"path": str(classes), "internal": True, "projectPath": ":shared"}],
+    )
+    by_path = gradle_module._records_by_path([root, shared, server])
+    shared_module = GradleDetector._module_of(tmp_path / "shared", shared, by_path)
+    assert (shared_module.module_id, shared_module.results_name) == ("com.acme:shared", None)
+    server_module = GradleDetector._module_of(tmp_path / "server", server, by_path)
+    assert server_module.sibling_coordinates == ("com.acme:shared",)
+    assert [r.archive for r in server_module.library_roots] == [classes]
+
+
+# --- Android parts: the release build, one module per edition (Android §2a, §2b, M3) ---
+
+ANDROID_FIXTURE = Path(__file__).parents[2] / "fixtures" / "gradle-android"
+
+
+def _load_android_capture() -> dict:
+    """The assembled document the real wrapper gave for `fixtures/gradle-android`, with
+    `{root}` and `{home}` put back for this checkout (the `gradle-orders` capture's rule)."""
+    raw = (Path(__file__).parent / "gradle-captures" / "gradle-android.json").read_text(
+        encoding="utf-8"
+    )
+    normalized = raw.replace("{root}", str(ANDROID_FIXTURE)).replace("{home}", str(Path.home()))
+    return json.loads(normalized)
+
+
+def test_the_android_capture_names_five_modules():
+    """`:app` is built in two editions and `:shared` in two versions, so the build gives
+    five modules: one per release edition of the app (M3), one per version of the
+    multiplatform part (M2), and `:server`. Each module that shares a folder keeps its
+    results in a sub-folder named by its edition or version (M6)."""
+    model = GradleDetector._repository_model(ANDROID_FIXTURE, _load_android_capture(), None)
+    assert [(module.module_id, module.results_name) for module in model.modules] == [
+        ("com.acme:app-free", "free"),
+        ("com.acme:app-paid", "paid"),
+        ("com.acme:server", None),
+        ("com.acme:shared-android", "android"),
+        ("com.acme:shared-jvm", "jvm"),
+    ]
+    assert all(module.build_failure is None for module in model.modules)
+
+
+def test_an_android_edition_reads_the_classes_agp_gives_its_release_build():
+    """The class directories are the ones AGP hands on for the release build of that
+    edition (Android design 2a, 2b): the Kotlin and the Java (`BuildConfig`) output."""
+    model = GradleDetector._repository_model(ANDROID_FIXTURE, _load_android_capture(), None)
+    free = next(module for module in model.modules if module.module_id == "com.acme:app-free")
+    assert [str(path.relative_to(ANDROID_FIXTURE)) for path in free.output_dirs] == [
+        "app/build/intermediates/built_in_kotlinc/freeRelease/compileFreeReleaseKotlin/classes",
+        "app/build/intermediates/javac/freeRelease/compileFreeReleaseJavaWithJavac/classes",
+    ]
+
+
+@pytest.mark.pins("detect.the-class-JARS-agp-lists-are-NAMED-in-a-note")
+def test_the_class_jars_agp_lists_are_named_in_a_note():
+    """Sextant reads class directories only. The jar AGP lists beside them (`R.jar`) is
+    named in a note, so it is not left out silently (Android design 2e.5)."""
+    model = GradleDetector._repository_model(ANDROID_FIXTURE, _load_android_capture(), None)
+    assert model.notes == (
+        "com.acme:app-free: AGP also lists class jars Sextant does not read: R.jar",
+        "com.acme:app-paid: AGP also lists class jars Sextant does not read: R.jar",
+    )
+
+
+def test_a_record_with_no_class_jars_gives_no_note():
+    projects = [
+        _minimal_project(path=":", name="ShopApp"),
+        {**_minimal_project(path=":lib", name="lib"), "projectJars": []},
+    ]
+    assert _repository_model({"projects": projects, "includedBuilds": []}).notes == ()
+
+
+def test_the_init_script_reads_every_android_plugin_that_ships_code():
+    """A dynamic feature module ships code, so the init script reads its build
+    like an application's (Android design 2a). Capture-free: the list is the
+    script's own text."""
+    script = Path(gradle_module.__file__).with_name("sextant-model.init.gradle").read_text()
+    for plugin_id in (
+        "com.android.application",
+        "com.android.library",
+        "com.android.kotlin.multiplatform.library",
+        "com.android.dynamic-feature",
+    ):
+        assert f'"{plugin_id}"' in script

@@ -24,6 +24,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast, overload
+from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
@@ -50,6 +51,7 @@ from sextant.application.resolve.resolved_schedules import redact_schedule_value
 # addresses that reach it was made in `resolve/roots.py`, and re-making it here
 # is the derivation "Egress is read-only" exists to forbid.
 from sextant.application.resolve.roots import Root
+from sextant.application.resolve.shapes.arguments import _UNREADABLE_HOST
 from sextant.domain.closed_sets import (
     ANY_METHOD,
     PATH_KIND_PATTERN,
@@ -80,6 +82,7 @@ from sextant.domain.symbols import (
     without_type_marker,
 )
 from sextant.egress.render.diagrams import class_diagram, sequence_diagram
+from sextant.egress.render.metadata import KNOWN_GAPS, known_gaps_of
 from sextant.egress.render.viewmodel import (
     ClassEdge,
     ClassNode,
@@ -657,11 +660,41 @@ def _peer_cell(endpoint: dict[str, object], redactor: Redactor) -> str:
     `none recorded` is the house phrase for "this evidence carried no such symbol",
     kept rather than a bespoke word for this column: the claim is about what the
     evidence held, never that the callee does not exist.
+
+    **Some rows did try** (Android outbound spec M8), and say so, because `none recorded`
+    would read as "the call names no server" (`_server_address_not_read`).
     """
     peer = endpoint.get("peer")
     if peer is not None:
         return redactor.redact_text(str(peer))
-    return "unresolved" if endpoint.get("path") is None else "none recorded"
+    if endpoint.get("path") is None:
+        return "unresolved"
+    if _server_address_not_read(endpoint):
+        return "server address not read"
+    return "none recorded"
+
+
+def _server_address_not_read(endpoint: dict[str, object]) -> bool:
+    """Whether a `partial` HTTP row with a read path and no peer is `partial` BECAUSE its
+    server address was not read — said only where the row's own evidence shows that reason,
+    never for every `partial` row (review fix round 1, Important 3: a path with an unread
+    piece behind a configured base is `partial` for the piece, not the server):
+
+    - the path starts with the unread-host marker (`<host>`, `url_of`): the call's own
+      address has a server part, and that part was not read;
+    - the row is an annotation-declared client with a relative path: it names the type that
+      serves it (`served_by`, written only by the annotation derivation; a call row has
+      none), and its path is the declaration's text read whole, so its `partial` cannot be
+      an unread piece of the path. For any annotation-declared client catalog, a relative
+      path with no peer leaves the server where the client is made, and `partial` says that
+      place was looked at and not read (`made_by` is the one word that looks today)."""
+    if endpoint.get("protocol") != "http" or endpoint.get("resolution") != "partial":
+        return False
+    path = str(endpoint.get("path"))
+    if path.startswith(_UNREADABLE_HOST):
+        return True
+    declared = endpoint.get("served_by") is not None
+    return declared and not urlsplit(path).scheme and not path.startswith("//")
 
 
 def _short_handler(descriptor: str) -> str:
@@ -1801,7 +1834,10 @@ def assemble_module_document(
     questions_end = beside_question[-1][1] if beside_question else endpoints_end
 
     sections.append(MachineHeading(2, "Known gaps"))
-    gap_items = [_runs(gap) for gap in _GAPS]
+    # The sentences of the gaps that are true of this module, by the key each one pairs
+    # with in `KNOWN_GAPS` (Android outbound Task 7).
+    stated = set(known_gaps_of(module))
+    gap_items = [_runs(gap) for key, gap in zip(KNOWN_GAPS, _GAPS, strict=True) if key in stated]
     # Named one by one, because a compiled source nothing read is the one gap
     # a reader can act on: it says which part of the module this document is
     # silent about (FR-17, M03).
@@ -3054,11 +3090,13 @@ def _type_header_items(coverage: dict[str, object], module: ModuleModel) -> list
     unlocated = int(str(coverage.get("type_headers_unlocated", 0) or 0))
     if read + unlocated == 0:
         return []
+    # Every value other than `declared` names the build tool that resolved the set
+    # (`maven`, `gradle`), and the line names that tool (Android outbound Task 7).
     source = (
-        "resolved by the build tool"
-        if module.dependency_source == "maven"
-        else "the build file's declared set — "
+        "the build file's declared set — "
         + (module.dependency_source_reason or "the build tool was not asked")
+        if module.dependency_source == "declared"
+        else f"resolved by {module.dependency_source.capitalize()}"
     )
     return [
         _runs(

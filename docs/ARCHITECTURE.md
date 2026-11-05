@@ -293,11 +293,14 @@ Configuration, exclusion and redaction are specified in
   modules.json                   module inventory: one row per module — its id, its
                                  root-relative dir, its kind, whether this run analyzed
                                  it or skip-listed it, and — skip-listed only — the
-                                 reason why (2M design §2, fix round 1). No separate
-                                 "workspaces" field: a module's workspace is always
-                                 `<dir>/.sextant`, derived from `dir` rather than stored.
+                                 reason why (2M design §2, fix round 1); and `results`,
+                                 its results folder relative to the repository root, on
+                                 every row (Android design M6). A row without `results`
+                                 means `<dir>/.sextant`.
 
-<module-root>/.sextant/
+<module-root>/.sextant/          a folder with one module; a folder with several has one
+                                 sub-folder per module, named by the version or edition
+                                 (`<module-root>/.sextant/jvm/`), each holding the files below
   metadata.json                  identity, provenance, coverage, counts
   state.json                     run state, stage completion, cache keys
   workspace.duckdb               the derived graph

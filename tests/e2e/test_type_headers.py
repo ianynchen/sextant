@@ -135,7 +135,7 @@ def test_the_document_says_how_many_named_types_the_read_found_and_who_answered(
     metadata, _, _, _ = analysed
     assert (
         "- Dependency types the header read reached: 15 — header read for 10, found in no "
-        "dependency archive 5 (dependencies: resolved by the build tool)."
+        "dependency archive 5 (dependencies: resolved by Maven)."
     ) in metadata["_document"]
 
 

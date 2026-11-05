@@ -117,7 +117,7 @@ that travels.
 - **No absolute paths from the producing machine.** Paths are relative to the module root.
 - **No workspace database file.**
 - **No overlay files.** Curations are inputs to the system tier and live in git beside
-  `system.yml` — and 2K's own `.sextant-enrichment.json` never travels either; only the
+  `system.yml` — and 2K's own `.sextant-enrichment.json` (or `.sextant-enrichment-<version name>.json`) never travels either; only the
   already-assembled, already-redacted `render/` output it produced does ([D06](D06-bundle-format.md) §2/§7).
 
 ## Honesty obligations

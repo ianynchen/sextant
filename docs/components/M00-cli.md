@@ -78,6 +78,31 @@ side effect out of a module.
 Pipeline stages are internal. `--from-stage` and `--to-stage` exist for debugging and are
 not part of the surface.
 
+### A folder that holds several modules (Android design M6)
+
+`module analyze` at a repository root writes `<repo-root>/.sextant/modules.json`, one row per
+module: `dir`, `module_id`, `kind`, `analyzed`, `skip_reason` and `results`. `results` is the
+module's results folder, relative to the repository root, with `/` between names, on every
+row. A folder with one module keeps its results in `<dir>/.sextant` (`"results":
+"core/.sextant"`). A folder that holds more than one module — the JVM and Android versions of
+a Kotlin Multiplatform part, or the editions of an Android app — has one sub-folder of
+`.sextant` per module, named by the version or edition (`"results": "core/.sextant/jvm"`).
+A row without `results` was written before the key existed and means `<dir>/.sextant`.
+`system analyze` finds each participant's workspace through `results`.
+
+A single-module command never picks one module of several. `render`, `enrich` and `export`
+at such a folder stop and name each module with its `--workspace` command (`core holds 2
+modules: com.acme:core-android (--workspace core/.sextant/android), ...`); `api.query` names
+its `workspace=<path>` keyword in the same place. `diff` takes a workspace path directly, so it
+names each results folder and tells the user to pass that folder itself.
+
+`module analyze` removes the results the other layout left in that folder, so a command
+never reads them as current: a module written to `<dir>/.sextant/<name>` removes the
+one-module results at the top of `<dir>/.sextant`, and a module written to `<dir>/.sextant`
+removes each sub-folder that holds a workspace. It removes only a module's own results, never
+`modules.json`, the system workspace or the system document, and never exported `bundles/`.
+With `--workspace`, it removes nothing.
+
 ### `module render` has no display flag ([GUIDELINES](../../GUIDELINES.md) §8.4)
 
 **One module, one document, and that document is the complete one.** `render` takes a path
@@ -102,7 +127,9 @@ if `render/architecture.md` is absent (an unrendered analysis, or one whose rend
 stale after a re-analyze). Given one, it composes the brief, runs the requested `--agent`
 through the `EnrichmentAgent` port or takes the `--dry-run`/`--ingest` door instead
 ([D04](D04-config-and-exclusion.md) §4b), validates the answer by construction, writes
-`.sextant-enrichment.json` at the module root, and **assembles both rendered outputs
+`.sextant-enrichment.json` at the module root (`.sextant-enrichment-<version name>.json` for a
+module that shares its folder with others, the name of its `.sextant/<version name>` results
+folder), and **assembles both rendered outputs
 itself** — there is no second render command; `render`, run again later over a workspace
 that already carries an overlay, takes the identical assembly path and reproduces the same
 documents.
@@ -169,7 +196,8 @@ either side's rules hide is printed. A bundle side's own extra `redact:` rules c
 applied to the other side, because only their hash travels in the manifest: a value only those
 additions would mask is masked on the workspace side by the workspace's rules alone. A workspace outside its module's `.sextant` directory — a custom
 `--workspace DIR` — is refused by name, because which `.sextant.yml` masks it is unknown:
-pass the module, its `.sextant` directory, or a bundle.
+pass the module, its `.sextant` directory, its results sub-folder of `.sextant` (a folder
+of several modules, M6), or a bundle.
 
 `system diff` stays deferred (`PROJECT.md`): `links` and `participants` would be two more
 kinds, and the drift scenario is per module.

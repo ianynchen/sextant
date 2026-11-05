@@ -1,0 +1,879 @@
+{
+  "projects": [
+    {
+      "path": ":",
+      "group": "com.acme",
+      "name": "ShopApp",
+      "version": "unspecified",
+      "dir": "{root}",
+      "sourceRoots": [],
+      "sourceLanguages": {},
+      "resourceRoots": [],
+      "classesDirs": [],
+      "declaredRelease": null,
+      "publishing": false,
+      "classpath": [],
+      "target": null,
+      "platform": null
+    },
+    {
+      "path": ":app",
+      "group": "com.acme",
+      "name": "app",
+      "version": "unspecified",
+      "dir": "{root}/app",
+      "sourceRoots": [
+        "{root}/app/src/free/java",
+        "{root}/app/src/free/kotlin",
+        "{root}/app/src/freeRelease/java",
+        "{root}/app/src/freeRelease/kotlin",
+        "{root}/app/src/main/java",
+        "{root}/app/src/main/kotlin",
+        "{root}/app/src/release/java",
+        "{root}/app/src/release/kotlin"
+      ],
+      "sourceLanguages": {
+        "{root}/app/build/generated/source/buildConfig/free/release": [
+          "java"
+        ],
+        "{root}/app/src/free/java": [
+          "java",
+          "kotlin"
+        ],
+        "{root}/app/src/free/kotlin": [
+          "kotlin"
+        ],
+        "{root}/app/src/freeRelease/java": [
+          "java",
+          "kotlin"
+        ],
+        "{root}/app/src/freeRelease/kotlin": [
+          "kotlin"
+        ],
+        "{root}/app/src/main/java": [
+          "java",
+          "kotlin"
+        ],
+        "{root}/app/src/main/kotlin": [
+          "kotlin"
+        ],
+        "{root}/app/src/release/java": [
+          "java",
+          "kotlin"
+        ],
+        "{root}/app/src/release/kotlin": [
+          "kotlin"
+        ]
+      },
+      "resourceRoots": [],
+      "classesDirs": [
+        "{root}/app/build/intermediates/built_in_kotlinc/freeRelease/compileFreeReleaseKotlin/classes",
+        "{root}/app/build/intermediates/javac/freeRelease/compileFreeReleaseJavaWithJavac/classes"
+      ],
+      "declaredRelease": null,
+      "publishing": false,
+      "classpath": [
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/com.squareup.okhttp3/okhttp/4.12.0/2f4525d4a200e97e1b87449c2cd9bd2e25b7e8cd/okhttp-4.12.0.jar",
+          "group": "com.squareup.okhttp3",
+          "name": "okhttp",
+          "version": "4.12.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/com.squareup.okio/okio-jvm/3.6.0/5600569133b7bdefe1daf9ec7f4abeb6d13e1786/okio-jvm-3.6.0.jar",
+          "group": "com.squareup.okio",
+          "name": "okio-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/com.squareup.retrofit2/retrofit/2.11.0/6ca8c6caf842271f3232e075519fe04081ef7069/retrofit-2.11.0.jar",
+          "group": "com.squareup.retrofit2",
+          "name": "retrofit",
+          "version": "2.11.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-client-core-jvm/3.6.0/b0e9aa39c710d430dc358f1dfc8e271e96baeebb/ktor-client-core-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-client-core-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-events-jvm/3.6.0/ea771314f209eec799410ff5bac76f56c76fc487/ktor-events-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-events-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-http-cio-jvm/3.6.0/d3e902551e204d656334dc3b927d669803822812/ktor-http-cio-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-http-cio-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-http-jvm/3.6.0/3ae16bcdca60505e82e2e528d15a65a36feef0b7/ktor-http-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-http-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-io-jvm/3.6.0/b74e79e9debe4fc37341fb3d23401d9f69c01417/ktor-io-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-io-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-network-jvm/3.6.0/af8b0b83b089c24b0825ebf5e4818f8ca496a09/ktor-network-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-network-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-serialization-jvm/3.6.0/a7c9b8688f521d726ad7a3b72e0ff70f3e55df73/ktor-serialization-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-serialization-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-sse-jvm/3.6.0/9d437e3da73e49701ae70f86ccc3a567486aed38/ktor-sse-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-sse-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-utils-jvm/3.6.0/8ccaacf81a0d1818dcdf667d663870cc1af503b9/ktor-utils-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-utils-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-websocket-serialization-jvm/3.6.0/aaaeacd09b5b534e1dc2cc63456396f926725b24/ktor-websocket-serialization-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-websocket-serialization-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-websockets-jvm/3.6.0/5dcb20170ccba4710bf708dd2740b628e1f55858/ktor-websockets-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-websockets-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib-jdk7/1.9.10/bc5bfc2690338defd5195b05c57562f2194eeb10/kotlin-stdlib-jdk7-1.9.10.jar",
+          "group": "org.jetbrains.kotlin",
+          "name": "kotlin-stdlib-jdk7",
+          "version": "1.9.10"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib-jdk8/1.9.10/c7510d64a83411a649c76f2778304ddf71d7437b/kotlin-stdlib-jdk8-1.9.10.jar",
+          "group": "org.jetbrains.kotlin",
+          "name": "kotlin-stdlib-jdk8",
+          "version": "1.9.10"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib/2.4.21/c343e135bd1e7dd94b7ed76b4159068d888d09db/kotlin-stdlib-2.4.21.jar",
+          "group": "org.jetbrains.kotlin",
+          "name": "kotlin-stdlib",
+          "version": "2.4.21"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm/1.11.0/3d57dc678bd8d72a60e7adf0eca5c54e3f4f4b79/kotlinx-coroutines-core-jvm-1.11.0.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-coroutines-core-jvm",
+          "version": "1.11.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-io-bytestring-jvm/0.9.1/7a28d93fce9fc8b663a6fe19cb2ae14a6ade7e8a/kotlinx-io-bytestring-jvm-0.9.1.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-io-bytestring-jvm",
+          "version": "0.9.1"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-io-core-jvm/0.9.1/8c926478f17f8109e01e68adee93795c68dcad3c/kotlinx-io-core-jvm-0.9.1.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-io-core-jvm",
+          "version": "0.9.1"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-serialization-core-jvm/1.11.0/c1905c9bf7452b045d5af9248835abe64ddad6bf/kotlinx-serialization-core-jvm-1.11.0.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-serialization-core-jvm",
+          "version": "1.11.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains/annotations/23.0.0/8cc20c07506ec18e0834947b84a864bfc094484e/annotations-23.0.0.jar",
+          "group": "org.jetbrains",
+          "name": "annotations",
+          "version": "23.0.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.slf4j/slf4j-api/2.0.19/efad9817997b3a6ce9e058f92e612917a744c290/slf4j-api-2.0.19.jar",
+          "group": "org.slf4j",
+          "name": "slf4j-api",
+          "version": "2.0.19"
+        },
+        {
+          "path": "{root}/shared/build/intermediates/compile_library_classes_jar/androidMain/bundleAndroidMainClassesToCompileJar/classes.jar",
+          "internal": true,
+          "projectPath": ":shared",
+          "platform": "androidJvm"
+        }
+      ],
+      "target": "free",
+      "platform": "androidJvm",
+      "projectJars": [
+        "{root}/app/build/intermediates/compile_and_runtime_r_class_jar/freeRelease/processFreeReleaseResources/R.jar"
+      ]
+    },
+    {
+      "path": ":app",
+      "group": "com.acme",
+      "name": "app",
+      "version": "unspecified",
+      "dir": "{root}/app",
+      "sourceRoots": [
+        "{root}/app/src/main/java",
+        "{root}/app/src/main/kotlin",
+        "{root}/app/src/paid/java",
+        "{root}/app/src/paid/kotlin",
+        "{root}/app/src/paidRelease/java",
+        "{root}/app/src/paidRelease/kotlin",
+        "{root}/app/src/release/java",
+        "{root}/app/src/release/kotlin"
+      ],
+      "sourceLanguages": {
+        "{root}/app/build/generated/source/buildConfig/paid/release": [
+          "java"
+        ],
+        "{root}/app/src/main/java": [
+          "java",
+          "kotlin"
+        ],
+        "{root}/app/src/main/kotlin": [
+          "kotlin"
+        ],
+        "{root}/app/src/paid/java": [
+          "java",
+          "kotlin"
+        ],
+        "{root}/app/src/paid/kotlin": [
+          "kotlin"
+        ],
+        "{root}/app/src/paidRelease/java": [
+          "java",
+          "kotlin"
+        ],
+        "{root}/app/src/paidRelease/kotlin": [
+          "kotlin"
+        ],
+        "{root}/app/src/release/java": [
+          "java",
+          "kotlin"
+        ],
+        "{root}/app/src/release/kotlin": [
+          "kotlin"
+        ]
+      },
+      "resourceRoots": [],
+      "classesDirs": [
+        "{root}/app/build/intermediates/built_in_kotlinc/paidRelease/compilePaidReleaseKotlin/classes",
+        "{root}/app/build/intermediates/javac/paidRelease/compilePaidReleaseJavaWithJavac/classes"
+      ],
+      "declaredRelease": null,
+      "publishing": false,
+      "classpath": [
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/com.squareup.okhttp3/okhttp/4.12.0/2f4525d4a200e97e1b87449c2cd9bd2e25b7e8cd/okhttp-4.12.0.jar",
+          "group": "com.squareup.okhttp3",
+          "name": "okhttp",
+          "version": "4.12.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/com.squareup.okio/okio-jvm/3.6.0/5600569133b7bdefe1daf9ec7f4abeb6d13e1786/okio-jvm-3.6.0.jar",
+          "group": "com.squareup.okio",
+          "name": "okio-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/com.squareup.retrofit2/retrofit/2.11.0/6ca8c6caf842271f3232e075519fe04081ef7069/retrofit-2.11.0.jar",
+          "group": "com.squareup.retrofit2",
+          "name": "retrofit",
+          "version": "2.11.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-client-core-jvm/3.6.0/b0e9aa39c710d430dc358f1dfc8e271e96baeebb/ktor-client-core-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-client-core-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-events-jvm/3.6.0/ea771314f209eec799410ff5bac76f56c76fc487/ktor-events-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-events-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-http-cio-jvm/3.6.0/d3e902551e204d656334dc3b927d669803822812/ktor-http-cio-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-http-cio-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-http-jvm/3.6.0/3ae16bcdca60505e82e2e528d15a65a36feef0b7/ktor-http-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-http-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-io-jvm/3.6.0/b74e79e9debe4fc37341fb3d23401d9f69c01417/ktor-io-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-io-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-network-jvm/3.6.0/af8b0b83b089c24b0825ebf5e4818f8ca496a09/ktor-network-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-network-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-serialization-jvm/3.6.0/a7c9b8688f521d726ad7a3b72e0ff70f3e55df73/ktor-serialization-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-serialization-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-sse-jvm/3.6.0/9d437e3da73e49701ae70f86ccc3a567486aed38/ktor-sse-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-sse-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-utils-jvm/3.6.0/8ccaacf81a0d1818dcdf667d663870cc1af503b9/ktor-utils-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-utils-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-websocket-serialization-jvm/3.6.0/aaaeacd09b5b534e1dc2cc63456396f926725b24/ktor-websocket-serialization-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-websocket-serialization-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-websockets-jvm/3.6.0/5dcb20170ccba4710bf708dd2740b628e1f55858/ktor-websockets-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-websockets-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib-jdk7/1.9.10/bc5bfc2690338defd5195b05c57562f2194eeb10/kotlin-stdlib-jdk7-1.9.10.jar",
+          "group": "org.jetbrains.kotlin",
+          "name": "kotlin-stdlib-jdk7",
+          "version": "1.9.10"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib-jdk8/1.9.10/c7510d64a83411a649c76f2778304ddf71d7437b/kotlin-stdlib-jdk8-1.9.10.jar",
+          "group": "org.jetbrains.kotlin",
+          "name": "kotlin-stdlib-jdk8",
+          "version": "1.9.10"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib/2.4.21/c343e135bd1e7dd94b7ed76b4159068d888d09db/kotlin-stdlib-2.4.21.jar",
+          "group": "org.jetbrains.kotlin",
+          "name": "kotlin-stdlib",
+          "version": "2.4.21"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm/1.11.0/3d57dc678bd8d72a60e7adf0eca5c54e3f4f4b79/kotlinx-coroutines-core-jvm-1.11.0.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-coroutines-core-jvm",
+          "version": "1.11.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-io-bytestring-jvm/0.9.1/7a28d93fce9fc8b663a6fe19cb2ae14a6ade7e8a/kotlinx-io-bytestring-jvm-0.9.1.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-io-bytestring-jvm",
+          "version": "0.9.1"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-io-core-jvm/0.9.1/8c926478f17f8109e01e68adee93795c68dcad3c/kotlinx-io-core-jvm-0.9.1.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-io-core-jvm",
+          "version": "0.9.1"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-serialization-core-jvm/1.11.0/c1905c9bf7452b045d5af9248835abe64ddad6bf/kotlinx-serialization-core-jvm-1.11.0.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-serialization-core-jvm",
+          "version": "1.11.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains/annotations/23.0.0/8cc20c07506ec18e0834947b84a864bfc094484e/annotations-23.0.0.jar",
+          "group": "org.jetbrains",
+          "name": "annotations",
+          "version": "23.0.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.slf4j/slf4j-api/2.0.19/efad9817997b3a6ce9e058f92e612917a744c290/slf4j-api-2.0.19.jar",
+          "group": "org.slf4j",
+          "name": "slf4j-api",
+          "version": "2.0.19"
+        },
+        {
+          "path": "{root}/shared/build/intermediates/compile_library_classes_jar/androidMain/bundleAndroidMainClassesToCompileJar/classes.jar",
+          "internal": true,
+          "projectPath": ":shared",
+          "platform": "androidJvm"
+        }
+      ],
+      "target": "paid",
+      "platform": "androidJvm",
+      "projectJars": [
+        "{root}/app/build/intermediates/compile_and_runtime_r_class_jar/paidRelease/processPaidReleaseResources/R.jar"
+      ]
+    },
+    {
+      "path": ":server",
+      "group": "com.acme",
+      "name": "server",
+      "version": "unspecified",
+      "dir": "{root}/server",
+      "sourceRoots": [
+        "{root}/server/src/main/java",
+        "{root}/server/src/main/kotlin"
+      ],
+      "sourceLanguages": {
+        "{root}/server/src/main/java": [
+          "java",
+          "kotlin"
+        ],
+        "{root}/server/src/main/kotlin": [
+          "kotlin"
+        ]
+      },
+      "resourceRoots": [
+        "{root}/server/src/main/resources"
+      ],
+      "classesDirs": [
+        "{root}/server/build/classes/java/main",
+        "{root}/server/build/classes/kotlin/main"
+      ],
+      "declaredRelease": 21,
+      "publishing": false,
+      "classpath": [
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-client-cio-jvm/3.6.0/5d90533989c1d1b9257e533a71b0c8409337ee63/ktor-client-cio-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-client-cio-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-client-core-jvm/3.6.0/b0e9aa39c710d430dc358f1dfc8e271e96baeebb/ktor-client-core-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-client-core-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-events-jvm/3.6.0/ea771314f209eec799410ff5bac76f56c76fc487/ktor-events-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-events-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-http-cio-jvm/3.6.0/d3e902551e204d656334dc3b927d669803822812/ktor-http-cio-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-http-cio-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-http-jvm/3.6.0/3ae16bcdca60505e82e2e528d15a65a36feef0b7/ktor-http-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-http-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-io-jvm/3.6.0/b74e79e9debe4fc37341fb3d23401d9f69c01417/ktor-io-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-io-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-network-jvm/3.6.0/af8b0b83b089c24b0825ebf5e4818f8ca496a09/ktor-network-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-network-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-network-tls-jvm/3.6.0/d8fa8a640c1f7833b93ef670b628ca8d335e9200/ktor-network-tls-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-network-tls-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-serialization-jvm/3.6.0/a7c9b8688f521d726ad7a3b72e0ff70f3e55df73/ktor-serialization-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-serialization-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-sse-jvm/3.6.0/9d437e3da73e49701ae70f86ccc3a567486aed38/ktor-sse-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-sse-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-utils-jvm/3.6.0/8ccaacf81a0d1818dcdf667d663870cc1af503b9/ktor-utils-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-utils-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-websocket-serialization-jvm/3.6.0/aaaeacd09b5b534e1dc2cc63456396f926725b24/ktor-websocket-serialization-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-websocket-serialization-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-websockets-jvm/3.6.0/5dcb20170ccba4710bf708dd2740b628e1f55858/ktor-websockets-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-websockets-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib/2.4.21/c343e135bd1e7dd94b7ed76b4159068d888d09db/kotlin-stdlib-2.4.21.jar",
+          "group": "org.jetbrains.kotlin",
+          "name": "kotlin-stdlib",
+          "version": "2.4.21"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm/1.11.0/3d57dc678bd8d72a60e7adf0eca5c54e3f4f4b79/kotlinx-coroutines-core-jvm-1.11.0.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-coroutines-core-jvm",
+          "version": "1.11.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-io-bytestring-jvm/0.9.1/7a28d93fce9fc8b663a6fe19cb2ae14a6ade7e8a/kotlinx-io-bytestring-jvm-0.9.1.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-io-bytestring-jvm",
+          "version": "0.9.1"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-io-core-jvm/0.9.1/8c926478f17f8109e01e68adee93795c68dcad3c/kotlinx-io-core-jvm-0.9.1.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-io-core-jvm",
+          "version": "0.9.1"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-serialization-core-jvm/1.11.0/c1905c9bf7452b045d5af9248835abe64ddad6bf/kotlinx-serialization-core-jvm-1.11.0.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-serialization-core-jvm",
+          "version": "1.11.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains/annotations/23.0.0/8cc20c07506ec18e0834947b84a864bfc094484e/annotations-23.0.0.jar",
+          "group": "org.jetbrains",
+          "name": "annotations",
+          "version": "23.0.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.slf4j/slf4j-api/2.0.19/efad9817997b3a6ce9e058f92e612917a744c290/slf4j-api-2.0.19.jar",
+          "group": "org.slf4j",
+          "name": "slf4j-api",
+          "version": "2.0.19"
+        },
+        {
+          "path": "{root}/shared/build/libs/shared-jvm.jar",
+          "internal": true,
+          "projectPath": ":shared",
+          "platform": "jvm"
+        }
+      ],
+      "target": null,
+      "platform": null
+    },
+    {
+      "path": ":shared",
+      "group": "com.acme",
+      "name": "shared",
+      "version": "unspecified",
+      "dir": "{root}/shared",
+      "sourceRoots": [
+        "{root}/shared/src/androidMain/kotlin",
+        "{root}/shared/src/commonMain/kotlin"
+      ],
+      "sourceLanguages": {
+        "{root}/shared/src/androidMain/kotlin": [
+          "kotlin"
+        ],
+        "{root}/shared/src/commonMain/kotlin": [
+          "kotlin"
+        ]
+      },
+      "resourceRoots": [],
+      "classesDirs": [
+        "{root}/shared/build/classes/kotlin/android/main"
+      ],
+      "declaredRelease": null,
+      "publishing": false,
+      "classpath": [
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-client-core-jvm/3.6.0/b0e9aa39c710d430dc358f1dfc8e271e96baeebb/ktor-client-core-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-client-core-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-events-jvm/3.6.0/ea771314f209eec799410ff5bac76f56c76fc487/ktor-events-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-events-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-http-cio-jvm/3.6.0/d3e902551e204d656334dc3b927d669803822812/ktor-http-cio-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-http-cio-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-http-jvm/3.6.0/3ae16bcdca60505e82e2e528d15a65a36feef0b7/ktor-http-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-http-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-io-jvm/3.6.0/b74e79e9debe4fc37341fb3d23401d9f69c01417/ktor-io-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-io-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-network-jvm/3.6.0/af8b0b83b089c24b0825ebf5e4818f8ca496a09/ktor-network-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-network-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-serialization-jvm/3.6.0/a7c9b8688f521d726ad7a3b72e0ff70f3e55df73/ktor-serialization-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-serialization-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-sse-jvm/3.6.0/9d437e3da73e49701ae70f86ccc3a567486aed38/ktor-sse-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-sse-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-utils-jvm/3.6.0/8ccaacf81a0d1818dcdf667d663870cc1af503b9/ktor-utils-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-utils-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-websocket-serialization-jvm/3.6.0/aaaeacd09b5b534e1dc2cc63456396f926725b24/ktor-websocket-serialization-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-websocket-serialization-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-websockets-jvm/3.6.0/5dcb20170ccba4710bf708dd2740b628e1f55858/ktor-websockets-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-websockets-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib/2.4.21/c343e135bd1e7dd94b7ed76b4159068d888d09db/kotlin-stdlib-2.4.21.jar",
+          "group": "org.jetbrains.kotlin",
+          "name": "kotlin-stdlib",
+          "version": "2.4.21"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm/1.11.0/3d57dc678bd8d72a60e7adf0eca5c54e3f4f4b79/kotlinx-coroutines-core-jvm-1.11.0.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-coroutines-core-jvm",
+          "version": "1.11.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-io-bytestring-jvm/0.9.1/7a28d93fce9fc8b663a6fe19cb2ae14a6ade7e8a/kotlinx-io-bytestring-jvm-0.9.1.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-io-bytestring-jvm",
+          "version": "0.9.1"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-io-core-jvm/0.9.1/8c926478f17f8109e01e68adee93795c68dcad3c/kotlinx-io-core-jvm-0.9.1.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-io-core-jvm",
+          "version": "0.9.1"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-serialization-core-jvm/1.11.0/c1905c9bf7452b045d5af9248835abe64ddad6bf/kotlinx-serialization-core-jvm-1.11.0.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-serialization-core-jvm",
+          "version": "1.11.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains/annotations/23.0.0/8cc20c07506ec18e0834947b84a864bfc094484e/annotations-23.0.0.jar",
+          "group": "org.jetbrains",
+          "name": "annotations",
+          "version": "23.0.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.slf4j/slf4j-api/2.0.19/efad9817997b3a6ce9e058f92e612917a744c290/slf4j-api-2.0.19.jar",
+          "group": "org.slf4j",
+          "name": "slf4j-api",
+          "version": "2.0.19"
+        }
+      ],
+      "target": "android",
+      "platform": "androidJvm",
+      "projectJars": []
+    },
+    {
+      "path": ":shared",
+      "group": "com.acme",
+      "name": "shared",
+      "version": "unspecified",
+      "dir": "{root}/shared",
+      "sourceRoots": [
+        "{root}/shared/src/commonMain/kotlin",
+        "{root}/shared/src/jvmMain/java",
+        "{root}/shared/src/jvmMain/kotlin"
+      ],
+      "sourceLanguages": {
+        "{root}/shared/src/commonMain/kotlin": [
+          "kotlin"
+        ],
+        "{root}/shared/src/jvmMain/java": [
+          "kotlin"
+        ],
+        "{root}/shared/src/jvmMain/kotlin": [
+          "kotlin"
+        ]
+      },
+      "resourceRoots": [
+        "{root}/shared/src/commonMain/resources",
+        "{root}/shared/src/jvmMain/resources"
+      ],
+      "classesDirs": [
+        "{root}/shared/build/classes/java/jvmMain",
+        "{root}/shared/build/classes/kotlin/jvm/main"
+      ],
+      "declaredRelease": null,
+      "publishing": false,
+      "classpath": [
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-client-core-jvm/3.6.0/b0e9aa39c710d430dc358f1dfc8e271e96baeebb/ktor-client-core-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-client-core-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-events-jvm/3.6.0/ea771314f209eec799410ff5bac76f56c76fc487/ktor-events-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-events-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-http-cio-jvm/3.6.0/d3e902551e204d656334dc3b927d669803822812/ktor-http-cio-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-http-cio-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-http-jvm/3.6.0/3ae16bcdca60505e82e2e528d15a65a36feef0b7/ktor-http-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-http-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-io-jvm/3.6.0/b74e79e9debe4fc37341fb3d23401d9f69c01417/ktor-io-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-io-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-network-jvm/3.6.0/af8b0b83b089c24b0825ebf5e4818f8ca496a09/ktor-network-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-network-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-serialization-jvm/3.6.0/a7c9b8688f521d726ad7a3b72e0ff70f3e55df73/ktor-serialization-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-serialization-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-sse-jvm/3.6.0/9d437e3da73e49701ae70f86ccc3a567486aed38/ktor-sse-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-sse-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-utils-jvm/3.6.0/8ccaacf81a0d1818dcdf667d663870cc1af503b9/ktor-utils-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-utils-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-websocket-serialization-jvm/3.6.0/aaaeacd09b5b534e1dc2cc63456396f926725b24/ktor-websocket-serialization-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-websocket-serialization-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/io.ktor/ktor-websockets-jvm/3.6.0/5dcb20170ccba4710bf708dd2740b628e1f55858/ktor-websockets-jvm-3.6.0.jar",
+          "group": "io.ktor",
+          "name": "ktor-websockets-jvm",
+          "version": "3.6.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlin/kotlin-stdlib/2.4.21/c343e135bd1e7dd94b7ed76b4159068d888d09db/kotlin-stdlib-2.4.21.jar",
+          "group": "org.jetbrains.kotlin",
+          "name": "kotlin-stdlib",
+          "version": "2.4.21"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-coroutines-core-jvm/1.11.0/3d57dc678bd8d72a60e7adf0eca5c54e3f4f4b79/kotlinx-coroutines-core-jvm-1.11.0.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-coroutines-core-jvm",
+          "version": "1.11.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-io-bytestring-jvm/0.9.1/7a28d93fce9fc8b663a6fe19cb2ae14a6ade7e8a/kotlinx-io-bytestring-jvm-0.9.1.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-io-bytestring-jvm",
+          "version": "0.9.1"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-io-core-jvm/0.9.1/8c926478f17f8109e01e68adee93795c68dcad3c/kotlinx-io-core-jvm-0.9.1.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-io-core-jvm",
+          "version": "0.9.1"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains.kotlinx/kotlinx-serialization-core-jvm/1.11.0/c1905c9bf7452b045d5af9248835abe64ddad6bf/kotlinx-serialization-core-jvm-1.11.0.jar",
+          "group": "org.jetbrains.kotlinx",
+          "name": "kotlinx-serialization-core-jvm",
+          "version": "1.11.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.jetbrains/annotations/23.0.0/8cc20c07506ec18e0834947b84a864bfc094484e/annotations-23.0.0.jar",
+          "group": "org.jetbrains",
+          "name": "annotations",
+          "version": "23.0.0"
+        },
+        {
+          "path": "{home}/.gradle/caches/modules-2/files-2.1/org.slf4j/slf4j-api/2.0.19/efad9817997b3a6ce9e058f92e612917a744c290/slf4j-api-2.0.19.jar",
+          "group": "org.slf4j",
+          "name": "slf4j-api",
+          "version": "2.0.19"
+        }
+      ],
+      "target": "jvm",
+      "platform": "jvm"
+    }
+  ],
+  "includedBuilds": []
+}

@@ -1,11 +1,14 @@
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
 from fixture_build import compile_fixture
+from sextant import api
+from sextant.application.ports.detector import ModuleModel, RepositoryModel
 from sextant.application.ports.progress import NullProgress
 from sextant.application.ports.scanner import ScannerProvenance, ScanReport, ScanRequest
 from sextant.application.stages.analyze import analyze
@@ -910,6 +913,7 @@ def test_analyze_at_a_reactor_root_analyzes_every_non_bom_module(tmp_path: Path)
         "kind": "undetermined",
         "analyzed": True,
         "skip_reason": None,
+        "results": "../orders-service/.sextant",
     }
     assert by_dir["billing-lib"] == {
         "dir": "billing-lib",
@@ -917,6 +921,7 @@ def test_analyze_at_a_reactor_root_analyzes_every_non_bom_module(tmp_path: Path)
         "kind": "undetermined",
         "analyzed": True,
         "skip_reason": None,
+        "results": "billing-lib/.sextant",
     }
 
     # `render`/`enrich`/`export` never re-detect (M00); pointed at the
@@ -1204,6 +1209,343 @@ def test_one_module_failing_in_a_reactor_stops_the_run_and_names_it(tmp_path: Pa
     assert not (reactor / ".sextant" / "modules.json").exists()
 
 
+_SHARED_FOLDER_FIXTURE = REPO / "fixtures" / "orders-discovery"
+
+
+def _shared_folder_module(root: Path, name: str) -> ModuleModel:
+    """One of two modules built from the same folder (Android design M6): the
+    version name `name` is its `results_name`, and its id is its own."""
+    return ModuleModel(
+        module_id=f"com.acme:core-{name}",
+        coordinates=f"com.acme/core-{name}",
+        version="1.0.0",
+        root=root,
+        kind="undetermined",
+        languages=frozenset({"java"}),
+        source_roots=(),
+        output_dirs=(root / "target" / "classes",),
+        results_name=name,
+    )
+
+
+@pytest.fixture(scope="module")
+def shared_folder_repo(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A repository whose folder `core` holds two modules, `jvm` and `android`,
+    analyzed by the reactor walk. A COPY of the fixture, because the walk writes
+    into the module folder. No detector sets `results_name` yet (Tasks 4 and 5
+    will), so the two modules are built by hand. `orders-discovery` because it is
+    small, and the guard check copies it."""
+    compile_fixture(_SHARED_FOLDER_FIXTURE)
+    repo = tmp_path_factory.mktemp("shared") / "repo"
+    core = repo / "core"
+    shutil.copytree(_SHARED_FOLDER_FIXTURE, core, ignore=shutil.ignore_patterns(".sextant"))
+    modules = (_shared_folder_module(core, "jvm"), _shared_folder_module(core, "android"))
+    api._analyze_reactor(repo, RepositoryModel(root=repo, modules=modules), False, None, None)
+    return repo
+
+
+@pytest.mark.pins("api.modules-sharing-a-FOLDER-keep-results-in-SUB-FOLDERS")
+def test_two_modules_in_one_folder_get_their_own_results(shared_folder_repo: Path):
+    """Two modules from one folder must not overwrite each other (M6): each has
+    its own sub-folder of `core/.sextant`, and each `modules.json` row names it."""
+    core = shared_folder_repo / "core"
+    for name in ("jvm", "android"):
+        metadata = json.loads((core / ".sextant" / name / "metadata.json").read_text())
+        assert metadata["module"]["id"] == f"com.acme:core-{name}"
+        assert (core / ".sextant" / name / "workspace.duckdb").is_file()
+    assert not (core / ".sextant" / "workspace.duckdb").exists()
+    rows = json.loads((shared_folder_repo / ".sextant" / "modules.json").read_text())["modules"]
+    assert {row["module_id"]: row["results"] for row in rows} == {
+        "com.acme:core-jvm": "core/.sextant/jvm",
+        "com.acme:core-android": "core/.sextant/android",
+    }
+
+
+def test_a_one_module_folder_row_names_its_own_sextant_folder(tmp_path: Path):
+    """A folder with one module keeps `<folder>/.sextant` as before, and its
+    row says so: `results` is on every row, not only on a shared folder's."""
+    compile_fixture(_SHARED_FOLDER_FIXTURE)
+    core = tmp_path / "core"
+    shutil.copytree(_SHARED_FOLDER_FIXTURE, core, ignore=shutil.ignore_patterns(".sextant"))
+    module = _reactor_one_module(core)
+    api._analyze_reactor(
+        tmp_path, RepositoryModel(root=tmp_path, modules=(module,)), False, None, None
+    )
+    assert (core / ".sextant" / "workspace.duckdb").is_file()
+    rows = json.loads((tmp_path / ".sextant" / "modules.json").read_text())["modules"]
+    assert [row["results"] for row in rows] == ["core/.sextant"]
+
+
+def _reactor_one_module(root: Path) -> ModuleModel:
+    return ModuleModel(
+        module_id="com.acme:core",
+        coordinates="com.acme/core",
+        version="1.0.0",
+        root=root,
+        kind="undetermined",
+        languages=frozenset({"java"}),
+        source_roots=(),
+        output_dirs=(root / "target" / "classes",),
+    )
+
+
+def test_a_modules_json_row_without_results_means_dir_sextant(tmp_path: Path):
+    """A `modules.json` written before `results` existed still reads: a row
+    without it means `<dir>/.sextant`, and a row with it means what it says."""
+    assert api._results_of(tmp_path, {"dir": "core"}) == tmp_path / "core" / ".sextant"
+    assert (
+        api._results_of(tmp_path, {"dir": "core", "results": "core/.sextant/jvm"})
+        == tmp_path / "core" / ".sextant" / "jvm"
+    )
+
+
+def _component_claim(name: str) -> dict[str, object]:
+    return {
+        "kind": "component",
+        "evidence": "llm",
+        "anchor": "after-component-overview",
+        "name": name,
+        "purpose": "Everything this module exchanges with the billing system lives here.",
+        "members": [],
+    }
+
+
+def _enrich_with(core: Path, name: str, claim_name: str) -> None:
+    """Enriches the module `name` of the shared folder `core` with one canned claim."""
+    answers = core.parent / f"answers-{name}.json"
+    answers.write_text(json.dumps([_component_claim(claim_name)]), encoding="utf-8")
+    results = core / ".sextant" / name
+    rendered = CliRunner().invoke(cli, ["module", "render", str(core), "--workspace", str(results)])
+    assert rendered.exit_code == 0, rendered.output
+    enriched = CliRunner().invoke(
+        cli,
+        [
+            "module",
+            "enrich",
+            str(core),
+            "--workspace",
+            str(results),
+            "--ingest",
+            str(answers),
+            "--agent",
+            "a-agent",
+            "--model",
+            "a-model",
+        ],
+    )
+    assert enriched.exit_code == 0, enriched.output
+
+
+@pytest.mark.pins("enrich.a-module-in-a-SHARED-folder-writes-its-OWN-description-file")
+def test_two_modules_in_one_folder_keep_their_own_descriptions(shared_folder_repo: Path):
+    """Enrich A, enrich B, render A: A's document shows A's claims only (Android M7)."""
+    core = shared_folder_repo / "core"
+    _enrich_with(core, "jvm", "Jvm only claim")
+    _enrich_with(core, "android", "Android only claim")
+
+    assert (core / ".sextant-enrichment-jvm.json").is_file()
+    assert (core / ".sextant-enrichment-android.json").is_file()
+    assert not (core / ".sextant-enrichment.json").exists()
+    rendered = CliRunner().invoke(
+        cli, ["module", "render", str(core), "--workspace", str(core / ".sextant" / "jvm")]
+    )
+    assert rendered.exit_code == 0, rendered.output
+    document = (core / ".sextant" / "jvm" / "render" / "architecture.md").read_text()
+    assert "Jvm only claim" in document
+    assert "Android only claim" not in document
+
+
+def test_system_analyze_reads_results(shared_folder_repo: Path):
+    """`system analyze` finds each participant through its row's `results`: both
+    modules of the shared folder are read, neither is reported as gone."""
+    result = CliRunner().invoke(cli, ["system", "analyze", str(shared_folder_repo)])
+    assert result.exit_code == 0, result.output
+    document = (shared_folder_repo / ".sextant" / "render" / "system.md").read_text()
+    assert "| `core-jvm` | — | yes |" in document
+    assert "| `core-android` | — | yes |" in document
+
+
+def test_render_at_a_shared_folder_lists_each_module(shared_folder_repo: Path):
+    """A single-module command never picks one of several modules (M6): at the
+    shared folder it stops and names each module with its exact `--workspace`."""
+    core = shared_folder_repo / "core"
+    result = CliRunner().invoke(cli, ["module", "render", str(core)])
+    assert result.exit_code != 0
+    assert (
+        f"{core} holds 2 modules: "
+        f"com.acme:core-android (--workspace {core / '.sextant' / 'android'}), "
+        f"com.acme:core-jvm (--workspace {core / '.sextant' / 'jvm'})" in result.output
+    )
+    rendered = CliRunner().invoke(
+        cli, ["module", "render", str(core), "--workspace", str(core / ".sextant" / "jvm")]
+    )
+    assert rendered.exit_code == 0, rendered.output
+
+
+def test_diff_at_a_shared_folder_asks_for_the_results_folder(shared_folder_repo: Path):
+    """`diff` takes a workspace path, not `--workspace`: at the shared folder it
+    names each results folder to pass, and given one it reads it under the
+    module's own `.sextant.yml` like a one-module workspace."""
+    core = shared_folder_repo / "core"
+    refused = CliRunner().invoke(cli, ["module", "diff", str(core), str(core)])
+    assert refused.exit_code != 0
+    assert (
+        f"{core} holds 2 modules: "
+        f"com.acme:core-android ({core / '.sextant' / 'android'}), "
+        f"com.acme:core-jvm ({core / '.sextant' / 'jvm'}) — pass the results folder itself"
+        in refused.output
+    )
+    at_sextant = CliRunner().invoke(
+        cli, ["module", "diff", str(core / ".sextant"), str(core / ".sextant")]
+    )
+    assert "pass the results folder itself" in at_sextant.output
+    jvm = core / ".sextant" / "jvm"
+    same = CliRunner().invoke(cli, ["module", "diff", str(jvm), str(jvm)])
+    assert same.exit_code == 0, same.output
+
+
+def test_observability_at_a_shared_folder_asks_for_the_results_folder(
+    shared_folder_repo: Path,
+):
+    """`observability` takes a results folder as `diff` does, so at the shared
+    folder it names each one, and given one it reads that module's map."""
+    core = shared_folder_repo / "core"
+    with pytest.raises(api.NotAnalyzedError, match="holds 2 modules: com.acme:core-android"):
+        api.observability(core)
+    assert api.observability(core / ".sextant" / "jvm") is not None
+
+
+def _analyze_in_place(repo: Path, modules: tuple[ModuleModel, ...]) -> None:
+    api._analyze_reactor(repo, RepositoryModel(root=repo, modules=modules), False, None, None)
+
+
+@pytest.mark.pins("api.a-module-REMOVES-the-results-the-OTHER-layout-left")
+def test_two_modules_after_one_remove_the_one_module_results(tmp_path: Path):
+    """A folder analyzed with one module and later with two must not keep the old
+    one-module results at the top of `.sextant`: `render` would read them as current.
+    The folder is also the repository root here, so its `.sextant` holds
+    `modules.json` and the system files, and those stay."""
+    compile_fixture(_SHARED_FOLDER_FIXTURE)
+    core = tmp_path / "core"
+    shutil.copytree(_SHARED_FOLDER_FIXTURE, core, ignore=shutil.ignore_patterns(".sextant"))
+    _analyze_in_place(core, (_reactor_one_module(core),))
+    assert (core / ".sextant" / "workspace.duckdb").is_file()
+    (core / ".sextant" / "system.duckdb").write_bytes(b"system")
+    (core / ".sextant" / "render").mkdir(exist_ok=True)
+    (core / ".sextant" / "render" / "system.md").write_text("system", encoding="utf-8")
+    (core / ".sextant" / "render" / "architecture.md").write_text("old", encoding="utf-8")
+
+    modules = (_shared_folder_module(core, "jvm"), _shared_folder_module(core, "android"))
+    _analyze_in_place(core, modules)
+
+    for name in ("workspace.duckdb", "metadata.json", "facts", "render/architecture.md"):
+        assert not (core / ".sextant" / name).exists(), name
+    for name in ("modules.json", "system.duckdb", "render/system.md"):
+        assert (core / ".sextant" / name).exists(), name
+    result = CliRunner().invoke(cli, ["module", "render", str(core)])
+    assert result.exit_code != 0
+    assert f"{core} holds 2 modules: com.acme:core-android" in result.output
+
+
+def test_two_modules_of_the_root_folder_are_both_analyzed_and_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A one-project build built in two versions gives two modules whose folder is the
+    repository root: `dir` is `.` and each result is in a sub-folder of the root's
+    `.sextant`, beside `modules.json`. Both are analysed and `system analyze` reads both."""
+    compile_fixture(_SHARED_FOLDER_FIXTURE)
+    core = tmp_path / "core"
+    shutil.copytree(_SHARED_FOLDER_FIXTURE, core, ignore=shutil.ignore_patterns(".sextant"))
+    modules = (_shared_folder_module(core, "jvm"), _shared_folder_module(core, "android"))
+
+    class _OneProject:
+        def accepts(self, path: Path) -> bool:
+            return True
+
+        def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
+            return RepositoryModel(root=path, modules=modules, multi_module=True)
+
+    monkeypatch.setattr(api, "_DETECTORS", [_OneProject()])
+
+    analyzed = CliRunner().invoke(cli, ["module", "analyze", str(core)])
+    assert analyzed.exit_code == 0, analyzed.output
+    rows = json.loads((core / ".sextant" / "modules.json").read_text())["modules"]
+    assert sorted((row["dir"], row["results"]) for row in rows) == [
+        (".", ".sextant/android"),
+        (".", ".sextant/jvm"),
+    ]
+    result = CliRunner().invoke(cli, ["system", "analyze", str(core)])
+    assert result.exit_code == 0, result.output
+    document = (core / ".sextant" / "render" / "system.md").read_text()
+    assert "| `core-jvm` | — | yes |" in document
+    assert "| `core-android` | — | yes |" in document
+
+
+@pytest.mark.pins("api.a-SKIPPED-module-REMOVES-its-own-old-results")
+def test_a_module_skipped_after_it_was_analyzed_is_absent_not_read_as_current(tmp_path: Path):
+    """A part that fails to build on a later run is skipped (Android design M5). The
+    results of the earlier run are not this run's, so they are removed: `system analyze`
+    gives the module as absent with the reason it was skipped, and `render` finds no
+    analysis. The repository root's own files stay."""
+    compile_fixture(_SHARED_FOLDER_FIXTURE)
+    repo = tmp_path / "repo"
+    core = repo / "core"
+    shutil.copytree(_SHARED_FOLDER_FIXTURE, core, ignore=shutil.ignore_patterns(".sextant"))
+    module = _reactor_one_module(core)
+    _analyze_in_place(repo, (module,))
+    assert (core / ".sextant" / "workspace.duckdb").is_file()
+    rendered = CliRunner().invoke(cli, ["module", "render", str(core)])
+    assert rendered.exit_code == 0, rendered.output
+
+    failed = replace(module, build_failure="Compilation failed; see the compiler output below.")
+    _analyze_in_place(repo, (failed,))
+
+    for name in ("workspace.duckdb", "metadata.json", "facts", "render/architecture.md"):
+        assert not (core / ".sextant" / name).exists(), name
+    result = CliRunner().invoke(cli, ["system", "analyze", str(repo)])
+    assert result.exit_code == 0, result.output
+    document = (repo / ".sextant" / "render" / "system.md").read_text()
+    assert (
+        "the module was skip-listed when the reactor was analyzed: "
+        "Compilation failed; see the compiler output below." in document
+    )
+    assert (repo / ".sextant" / "modules.json").is_file()
+    refused = CliRunner().invoke(cli, ["module", "render", str(core)])
+    assert refused.exit_code != 0
+    assert "no analysis" in refused.output.lower()
+
+
+def test_one_module_after_two_removes_the_sub_folders(tmp_path: Path):
+    """The reverse: a folder that held two modules and now holds one keeps its
+    results at the top of `.sextant`, and the two old sub-folders go."""
+    compile_fixture(_SHARED_FOLDER_FIXTURE)
+    repo = tmp_path / "repo"
+    core = repo / "core"
+    shutil.copytree(_SHARED_FOLDER_FIXTURE, core, ignore=shutil.ignore_patterns(".sextant"))
+    _analyze_in_place(
+        repo, (_shared_folder_module(core, "jvm"), _shared_folder_module(core, "android"))
+    )
+    _analyze_in_place(repo, (_reactor_one_module(core),))
+
+    assert not (core / ".sextant" / "jvm").exists()
+    assert not (core / ".sextant" / "android").exists()
+    result = CliRunner().invoke(cli, ["module", "render", str(core)])
+    assert result.exit_code == 0, result.output
+
+
+def test_query_at_a_shared_folder_names_its_workspace_keyword(shared_folder_repo: Path):
+    """`api.query` reaches a module of a shared folder through `workspace`, and its
+    refusal at the folder names that keyword, not a command-line option it lacks."""
+    core = shared_folder_repo / "core"
+    with pytest.raises(api.NotAnalyzedError) as refused:
+        api.query(core, "source", symbol="x")
+    assert f"com.acme:core-jvm (workspace={core / '.sextant' / 'jvm'})" in str(refused.value)
+    assert "--workspace" not in str(refused.value)
+    with pytest.raises(api.ConfigurationError):
+        # The workspace is read: an unknown symbol is the question's own refusal.
+        api.query(core, "source", symbol="x", workspace=core / ".sextant" / "jvm")
+
+
 def test_a_refused_detection_leaves_a_pre_existing_workspace_byte_untouched(tmp_path: Path):
     """Task 1's reorder made detection run before `DuckDbWorkspace` ever
     touches disk (2M design §2); this pins the OTHER direction, which Task 1
@@ -1476,3 +1818,27 @@ def test_a_reactor_module_no_scanner_reads_is_skipped_and_the_rest_analysed(
     assert "skipped actors (shop:actors): no scanner accepts scala" in result.output
     assert "analyzed billing (shop:billing)" in result.output
     assert not (tmp_path / "actors" / ".sextant").exists()
+
+
+def test_a_one_module_folder_keeps_the_old_file_name(tmp_path: Path):
+    """A module alone in its folder keeps `.sextant-enrichment.json` (Android M7)."""
+    compile_fixture(_SHARED_FOLDER_FIXTURE)
+    core = tmp_path / "core"
+    shutil.copytree(_SHARED_FOLDER_FIXTURE, core, ignore=shutil.ignore_patterns(".sextant"))
+    api._analyze_reactor(
+        tmp_path,
+        RepositoryModel(root=tmp_path, modules=(_reactor_one_module(core),)),
+        False,
+        None,
+        None,
+    )
+    answers = tmp_path / "answers.json"
+    answers.write_text(json.dumps([_component_claim("Alone claim")]), encoding="utf-8")
+    assert CliRunner().invoke(cli, ["module", "render", str(core)]).exit_code == 0
+    enriched = CliRunner().invoke(
+        cli,
+        ["module", "enrich", str(core), "--ingest", str(answers), "--agent", "a", "--model", "m"],
+    )
+    assert enriched.exit_code == 0, enriched.output
+    assert (core / ".sextant-enrichment.json").is_file()
+    assert list(core.glob(".sextant-enrichment-*.json")) == []

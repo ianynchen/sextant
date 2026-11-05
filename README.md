@@ -249,7 +249,8 @@ machine-rendered `architecture.md`. The model gets four read-only tools — `lis
 `find`, `grep`, `read_file` — jailed to the module's own source, its facts and its rendered
 outputs, with every result masked by the same redactor `render`/`export` use. Its answers
 land as **add-only** claims (components, sections, diagrams, verdicts on open questions) at
-`evidence: llm`, written to `.sextant-enrichment.json` at the module root and assembled
+`evidence: llm`, written to `.sextant-enrichment.json` at the module root (`.sextant-enrichment-<version name>.json`
+for a module that shares its folder with others) and assembled
 straight into both `architecture.md` and `architecture.html` — one command, done; nothing
 here rewrites or reorders machine-derived text.
 

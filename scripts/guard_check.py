@@ -1330,8 +1330,122 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/ingress/detect/gradle.py",
-                find="    if _BUILD_FAILURE_BANNER in output:\n",
+                find="    if any(banner in output for banner in _BUILD_FAILURE_BANNERS):\n",
                 replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.SEVERAL-failed-parts-after-a-download-are-retried-online-under-the-flag": Guard(
+        what='Gradle\'s several-failures banner also rules out "distribution not present"',
+        why='with `--continue`, two or more failed parts end in "Build completed with N '
+        'failures", not the single-failure banner; a fresh machine whose wrapper downloaded '
+        "its distribution was then read as a missing distribution and never retried online "
+        "(Android outbound Task 1 fix round 1)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find='    "FAILURE: Build completed with ",\n',
+                replace="    # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-part-that-FAILED-to-build-is-skipped-not-the-repository": Guard(
+        what="a failed Gradle run that still wrote build.json is read as a partial result",
+        why="with `--continue`, one part that fails to build must be skipped with Gradle's "
+        "reason while the other parts are read; refusing the whole repository over it is "
+        "what Android design M5 ruled out (Android outbound Task 2)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find='        if not (out_dir / "build.json").is_file():\n',
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-TWO-VERSION-gradle-part-is-named-with-a-dash-and-its-version": Guard(
+        what="a Gradle part with more than one record is one module per version, named "
+        "with a dash and the version name, its results in a folder of that name",
+        why="without it the JVM and Android versions of one Kotlin Multiplatform part get "
+        "one module id and one results folder, and one version's results replace the "
+        "other's (Android design M2, Android outbound Task 4)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="        if len(by_path.get(str(path_in_build), ())) > 1:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-part-uses-the-VERSION-gradle-labelled": Guard(
+        what="a sibling with more than one record is joined by the label Gradle put on "
+        "the version it picked",
+        why="without it `:server` is given the first record of `:shared` — the Android "
+        "version's classes — while Gradle compiled it against the JVM version (Android "
+        "design M1, Android outbound Task 4)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="            if len(candidates) > 1:\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-two-version-part-with-NO-LABEL-is-a-named-gap": Guard(
+        what="a sibling with more than one record and no label that matches one of them "
+        "is named in libraries_not_resolved, never joined",
+        why="without it a version is guessed and its classes are read as the ones this "
+        "part uses, which Gradle never said (Android design M1, Android outbound Task 4)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find='                    and candidate.get("platform") == entry.get("platform")\n'
+                "                ]\n",
+                replace='                    and candidate.get("platform") == entry.get("platform")\n'
+                "                ] or candidates[:1]  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.the-class-JARS-agp-lists-are-NAMED-in-a-note": Guard(
+        what="the class jars AGP lists beside an Android build's class directories are "
+        "named in a detect note",
+        why="without it `R.jar` is left out of the scan and nothing says so (Android design "
+        "2e.5, Android outbound Task 5)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="            notes.extend(GradleDetector._project_jars_notes(selected, by_path))\n",
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-part-with-NO-JVM-TARGET-is-skipped-with-that-reason": Guard(
+        what="the init script's reason for a part with only JS or Kotlin/Native versions "
+        "reaches the module and is the reason it is skipped",
+        why='without it the part is skipped as "packaging is pom", which says nothing of '
+        "why it holds nothing to read (Android outbound Task 7)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find='            skip_reason=project.get("skipReason"),\n',
+                replace="            skip_reason=None,  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path="sextant/api.py",
+                find="    if module.skip_reason is not None:\n        return module.skip_reason\n",
+                replace="",
+            ),
+        ),
+    ),
+    "enrich.a-module-in-a-SHARED-folder-writes-its-OWN-description-file": Guard(
+        what="`enrich` writes the description file named with the module's version name, so "
+        "two modules in one folder keep their own",
+        why="without it the second module's `enrich` overwrites the first's descriptions "
+        "(Android design M7, Android outbound Task 5b)",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find="        overlay_path = enrichment_file(path, _results_name_of(path, workspace_dir))\n",
+                replace="        overlay_path = enrichment_file(path, None)\n",
             ),
         ),
     ),
@@ -1392,6 +1506,62 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "api.modules-sharing-a-FOLDER-keep-results-in-SUB-FOLDERS": Guard(
+        what="a module whose folder holds more than one module keeps its results in "
+        "`<folder>/.sextant/<results_name>`",
+        why="two modules from one folder (a Kotlin Multiplatform part's versions, an Android "
+        "app's editions) wrote into one `.sextant` and the second overwrote the first "
+        "(Android design M6, Android outbound Task 3)",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find='    if results_name is not None:\n        return path / ".sextant" / results_name\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n        pass\n",
+            ),
+        ),
+    ),
+    "api.a-module-REMOVES-the-results-the-OTHER-layout-left": Guard(
+        what="analysing a module removes the results the other layout left in its "
+        "`.sextant` — one-module files under a shared folder, sub-folders under a single one",
+        why="a folder analysed with one module and then with two kept the old top-level "
+        "workspace, so `render` read a module that no longer exists as current (Android "
+        "design M6, Task 3 review)",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find="        _remove_other_layout(module.root, module.results_name)\n",
+                replace="        pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "api.a-SKIPPED-module-REMOVES-its-own-old-results": Guard(
+        what="a module the reactor walk skips has the results of an earlier run removed "
+        "from its results folder",
+        why="a part that now fails to build kept last run's results, and `system analyze` "
+        "and `render` read them as current, with the wrong commit (Android design M5, "
+        "final review I2)",
+        edits=(
+            Edit(
+                path="sextant/api.py",
+                find="            _remove_module_results(workspace_dir)\n",
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.a-ONE-PROJECT-build-with-two-records-is-walked-as-a-reactor": Guard(
+        what="a Gradle build whose only project gives more than one record is a reactor",
+        why="a one-project Kotlin Multiplatform library or flavored app gave two modules, "
+        "and the single-module analysis read only the first; the other was dropped with "
+        "nothing said (Android design M1, M3, final review I1)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="            multi_module = bool(subprojects) or len(selected) > 1\n",
+                replace="            multi_module = bool(subprojects)"
+                "  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "render.the-document-SAYS-how-many-named-types-the-header-read-found": Guard(
         what="the coverage section carries one line: dependency types named, headers read, "
         "in no archive, and who answered for the classpath",
@@ -1403,6 +1573,33 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/egress/render/document.py",
                 find="    coverage_items += _type_header_items(report.coverage, module)\n",
                 replace="",
+            ),
+        ),
+    ),
+    "render.every-BUILD-TOOL-answer-is-named-as-resolved": Guard(
+        what="the coverage line calls every dependency set a build tool resolved (`maven`, "
+        "`gradle`) resolved by that tool",
+        why="without it every Gradle module read as \"the build file's declared set — the "
+        'build tool was not asked" while its metadata said `dependency_source: gradle` '
+        "(Android outbound Task 7)",
+        edits=(
+            Edit(
+                path="sextant/egress/render/document.py",
+                find='        if module.dependency_source == "declared"\n',
+                replace='        if module.dependency_source != "maven"  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
+    "render.the-DECLARED-SET-gap-is-stated-only-for-a-declared-set": Guard(
+        what="the gap that says transitive dependencies and profiles are missing is stated "
+        "only for a dependency set read off the build file",
+        why="without it every module whose build tool resolved the set (Gradle, Maven) "
+        "states the pom.xml sentence, which is false for it (Android outbound Task 7)",
+        edits=(
+            Edit(
+                path="sextant/egress/render/metadata.py",
+                find='        or module.dependency_source == "declared"\n',
+                replace="        or True  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -3645,7 +3842,7 @@ GUARDS: dict[str, Guard] = {
             Edit(
                 path="sextant/api.py",
                 find="            redactor = redactor.union("
-                "_redactor_for(participant.location.parent.parent))\n",
+                "_redactor_for(module_roots[participant.location]))\n",
                 replace="            redactor = redactor  # guard disabled\n",
             ),
         ),

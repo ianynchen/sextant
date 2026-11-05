@@ -266,6 +266,12 @@ invocation. Machine-written, gitignored, regenerable from the build.
 }
 ```
 
+**As built** (2M design §2; Android design M6), each row carries `dir`, `module_id`, `kind`,
+`analyzed`, `skip_reason` and `results`. `results` is the module's results folder relative to
+the repository root: `<dir>/.sextant` for a folder with one module, and
+`<dir>/.sextant/<version or edition>` for each module of a folder that holds several. A row
+without `results` was written before the key existed and means `<dir>/.sextant`.
+
 This is the one-hop answer to "what is in this repository and where are its workspaces" —
 for `module list`, for `--refresh-stale`, for system-tier tooling, and for an agent that has
 just opened the repository.

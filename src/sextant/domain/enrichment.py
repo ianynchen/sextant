@@ -37,6 +37,28 @@ from sextant.domain.redaction import Redactor
 # The overlay's name and place: the module root, beside `.sextant.yml` and
 # `.sextantignore`. One file per module, versionable in git.
 ENRICHMENT_FILE = ".sextant-enrichment.json"
+_ENRICHMENT_STEM = ".sextant-enrichment"
+_ENRICHMENT_SUFFIX = ".json"
+
+
+def enrichment_file(module_root: Path, results_name: str | None) -> Path:
+    """The description file of the module at `module_root` (Android design M7).
+
+    A module alone in its folder keeps `ENRICHMENT_FILE`. A module that shares its folder
+    with others has a `results_name` (its version or edition name), and its file carries
+    that name, so two modules never overwrite each other's descriptions."""
+    if results_name is None:
+        return module_root / ENRICHMENT_FILE
+    return module_root / f"{_ENRICHMENT_STEM}-{results_name}{_ENRICHMENT_SUFFIX}"
+
+
+def is_enrichment_file_name(name: str) -> bool:
+    """True where `name` is the description file of any module: `ENRICHMENT_FILE` or
+    `enrichment_file`'s name for a shared folder."""
+    return name == ENRICHMENT_FILE or (
+        name.startswith(_ENRICHMENT_STEM + "-") and name.endswith(_ENRICHMENT_SUFFIX)
+    )
+
 
 # The one assessment that answers nothing (2K design §7). Spelled once here
 # because both the schema's own shape rule and the validator's "always valid"
@@ -299,8 +321,9 @@ class EnrichmentOverlay(BaseModel):
     claims: list[Claim]
 
 
-def load_overlay(module_root: Path) -> EnrichmentOverlay | None:
-    """`module_root`'s overlay, or `None` where the module has none.
+def load_overlay(module_root: Path, results_name: str | None = None) -> EnrichmentOverlay | None:
+    """`module_root`'s overlay (the module's own file, `enrichment_file`), or `None`
+    where the module has none.
 
     `None` is the ordinary answer, not an error: most modules have never been
     enriched, and render must behave for them exactly as it did before any of
@@ -309,7 +332,7 @@ def load_overlay(module_root: Path) -> EnrichmentOverlay | None:
     Sextant's own program artifact written wrong, and a silent fallback would
     render a document missing claims nobody was told about.
     """
-    path = module_root / ENRICHMENT_FILE
+    path = enrichment_file(module_root, results_name)
     if not path.is_file():
         return None
     return EnrichmentOverlay.model_validate_json(path.read_text(encoding="utf-8"))

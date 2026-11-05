@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-303 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-315 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -306,6 +306,18 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-300 | [SEXTANT-294](https://app.plane.so/portolan/browse/SEXTANT-294/) | Dispatch: a Spring listener's return value is republished, no hop |
 | OI-301 | [SEXTANT-295](https://app.plane.so/portolan/browse/SEXTANT-295/) | Dispatch: derived Kotlin flows (map/filter/onEach) get a new key |
 | OI-302 | [SEXTANT-296](https://app.plane.so/portolan/browse/SEXTANT-296/) | Dispatch: CDI fire-site qualifiers not read; CDI hops unchecked on real code |
+| OI-303 | [SEXTANT-297](https://app.plane.so/portolan/browse/SEXTANT-297/) | Dispatch: a receive whose lambda handler was not read looks like "no receiver" in hops |
+| OI-304 | [SEXTANT-298](https://app.plane.so/portolan/browse/SEXTANT-298/) | Retrofit made by Dagger/Hilt @Provides methods: server address not read (row partial) |
+| OI-305 | [SEXTANT-299](https://app.plane.so/portolan/browse/SEXTANT-299/) | MicroProfile RestClientBuilder: address of the object that made the client not read (made_by) |
+| OI-306 | [SEXTANT-300](https://app.plane.so/portolan/browse/SEXTANT-300/) | Spring @HttpExchange via HttpServiceProxyFactory: client address not read (argument hop + bean model) |
+| OI-307 | [SEXTANT-301](https://app.plane.so/portolan/browse/SEXTANT-301/) | Retrofit made_by limits: requireNonNull receiver, non-literal class argument, builder passed before build(), baseUrl(HttpUrl/URL), expression base |
+| OI-308 | [SEXTANT-302](https://app.plane.so/portolan/browse/SEXTANT-302/) | Request chains: a step in a helper or lambda before the hand-off is not folded (row partial) |
+| OI-309 | [SEXTANT-303](https://app.plane.so/portolan/browse/SEXTANT-303/) | Ktor/request chains: builder after a suspension, HttpStatement.<init> as the send, two-send client, void by-name terminal, path-less retry rows |
+| OI-310 | [SEXTANT-304](https://app.plane.so/portolan/browse/SEXTANT-304/) | Android detection limits: flavored library join, Java resources, AGP 7.4–7.x unmeasured, empty class folders, no AGP 8 fixture |
+| OI-311 | [SEXTANT-305](https://app.plane.so/portolan/browse/SEXTANT-305/) | Kotlin Multiplatform modules: jvmMain Java sources unattributed, two jvm targets give a gap, -target suffix may collide with a real project |
+| OI-312 | [SEXTANT-306](https://app.plane.so/portolan/browse/SEXTANT-306/) | Gradle detector: Gradle 5.x rejecting --no-configuration-cache is reported as "distribution not present" |
+| OI-313 | [SEXTANT-307](https://app.plane.so/portolan/browse/SEXTANT-307/) | Analysis wipes render/ at a repository root that is also a module, removing system.md |
+| OI-314 | [SEXTANT-308](https://app.plane.so/portolan/browse/SEXTANT-308/) | Maven: profiles activated at deploy time (-P) are not evaluated; no narrower gap stated after the declared-set gap moved |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

@@ -2216,15 +2216,17 @@ def test_a_wrappers_merged_path_reaches_the_document_with_its_verb(full_run: Pat
     as written, at `partial` — behind `<host>`, the unread `baseUrl` — and each carries the
     verb its caller handed in, read from the SAME walked binding as the path (measured on
     `apollo-portal`: without that read 51 of 61 rows had a path and no verb). Nothing here
-    knows what `substring` does; the slash is reported as each caller wrote it."""
+    knows what `substring` does; the slash is reported as each caller wrote it. The Peer
+    column says the server address is not read (Android outbound spec M8): `none recorded`
+    read as "the call names no server", where `baseUrl` names one and was not read."""
     document = (full_run / "render" / "architecture.md").read_text()
     assert (
-        "| `GET <host>/billing/ledger` | none recorded | "
+        "| `GET <host>/billing/ledger` | server address not read | "
         "`com/acme/orders/clients/NormalisingBillingClient#send(sig_863e25b6).` | "
         "json (assumed) | partial |"
     ) in document
     assert (
-        "| `GET <host>billing/ledger/{id}` | none recorded | "
+        "| `GET <host>billing/ledger/{id}` | server address not read | "
         "`com/acme/orders/clients/NormalisingBillingClient#send(sig_863e25b6).` | "
         "json (assumed) | partial |"
     ) in document

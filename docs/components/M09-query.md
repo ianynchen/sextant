@@ -47,8 +47,10 @@ Answers, as text for a terminal and JSON when piped.
 > [boundary-vocabulary-and-diff](../superpowers/specs/2026-10-22-boundary-vocabulary-and-diff-design.md)
 > §5, FR-24).** `source`, `callers`, `callees`, `implementations`, `uses` and `impact` are
 > answered at MODULE scope by `application/query/questions.py` and reached as
-> `sextant.api.query(path, question, symbol=...)`, which reads the workspace `analyze` left and
-> never re-analyzes. The rest of the table WAITS: `find`, `path`, the `endpoint` family
+> `sextant.api.query(path, question, symbol=..., workspace=None)`, which reads the workspace
+> `analyze` left and never re-analyzes. `workspace` names the results folder to read, as
+> `render`'s `--workspace` does; a folder that holds several modules (Android design M6) needs
+> it, and the refusal there names each module's `workspace=<path>`. The rest of the table WAITS: `find`, `path`, the `endpoint` family
 > (`match` and `trace` are system-scope questions over the federated views), the `symbol` and
 > `endpoint` command-line nouns, and the coding-agent plugin. They stay under the gate of
 > 2026-09-18 — the query surface waits for Java/Kotlin, Go, Rust, Python and TypeScript/JavaScript

@@ -632,3 +632,75 @@ def test_a_malformed_hand_off_effect_is_refused_naming_its_file(
 
     assert "hand_off_effects" in str(raised.value) and "invented.yml" in str(raised.value)
     assert says in str(raised.value)
+
+
+_MADE_BY = (
+    "matches:\n"
+    "  made_by:\n"
+    "    owner: com.acme.Retrofit\n"
+    "    method: create\n"
+    "    class_arg: 0\n"
+    "    steps:\n"
+    "      - { method: baseUrl, owner: com.acme.Builder, captures: { base: arg0 } }\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("style", "direction"),
+    [("fluent", "outbound"), ("annotation_driven", "inbound")],
+)
+def test_made_by_outside_an_outbound_annotation_catalog_is_refused_at_load(
+    tmp_path: Path, style: str, direction: str
+):
+    """Android outbound spec M8, review fix round 1: `made_by` says where an
+    annotation-declared CLIENT gets its server address. On a `fluent` catalog, or on an
+    inbound one, nothing reads it, so the file is refused when it loads, naming the word."""
+    (tmp_path / "invented-made-by.yml").write_text(
+        f"id: invented\nstyle: {style}\nprotocol: http\ndirection: {direction}\n" + _MADE_BY,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).load()
+
+    assert "made_by" in str(raised.value)
+    assert "invented-made-by.yml" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("change", "says"),
+    [
+        (("    method: create\n", "    method: create\n    extra: 1\n"), "exactly"),
+        (("    owner: com.acme.Retrofit\n", "    owner: 3\n"), "`owner` must be a name"),
+        (("    method: create\n", "    method: ''\n"), "`method` must be a name"),
+        (("    class_arg: 0\n", "    class_arg: -1\n"), "argument index"),
+    ],
+)
+def test_a_made_by_of_the_wrong_shape_is_refused_at_load(
+    tmp_path: Path, change: tuple[str, str], says: str
+):
+    """The load check is the one rule for `made_by`'s keys (Android final review m3): a key
+    the word does not have, an owner or method that is not a name, or a `class_arg` that is
+    not an argument index is refused when the file loads, naming the file."""
+    (tmp_path / "invented-made-by.yml").write_text(
+        "id: invented\nstyle: annotation_driven\nprotocol: http\ndirection: outbound\n"
+        + _MADE_BY.replace(*change),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).load()
+
+    assert says in str(raised.value) and "invented-made-by.yml" in str(raised.value)
+
+
+def test_made_by_on_an_outbound_annotation_catalog_loads(tmp_path: Path):
+    """The paired positive: the same word where it means something."""
+    (tmp_path / "invented-made-by.yml").write_text(
+        "id: invented\nstyle: annotation_driven\nprotocol: http\ndirection: outbound\n" + _MADE_BY,
+        encoding="utf-8",
+    )
+
+    [catalog] = YamlCatalogSource(tmp_path).load()
+
+    assert catalog.matches["made_by"]["class_arg"] == 0

@@ -3,9 +3,11 @@ reads its build file directly, Gradle has no such file to read — the model a
 `build.gradle(.kts)` describes exists only once Gradle itself has evaluated
 it. So this detector LEARNS the build by running the target repository's own
 `./gradlew`, driven by a read-only init script packaged beside this module
-(`sextant-model.init.gradle`), which walks `allprojects` at task-execution
-time and writes one JSON document to a `-P`-named file — never stdout, which
-Gradle itself, the target build's own scripts, and JVM warnings all pollute.
+(`sextant-model.init.gradle`). Each project's own task writes that project's
+records, and the root project's task names every project, all into a
+`-P`-named folder (Android design M4) — never stdout, which Gradle itself,
+the target build's own scripts, and JVM warnings all pollute. `_assemble`
+joins the files into one document.
 
 **Honesty (2M design §1a).** Invoking `./gradlew` executes the target
 repository's own build code — the same trust already extended when the
@@ -14,12 +16,14 @@ Sextant adds no sandbox around that. Nor is this detector filesystem-read-only
 for the target the way `MavenDetector` is: Gradle writes `.gradle/` state
 into the repository it runs against and may start a background daemon. And
 the probe is not cheap or narrowly scoped (2M Task 3 fix round 1, I4): the
-init script's `sextantModel` task depends on EVERY source-set-owning
-project's own `classes` task, so one invocation compiles the ENTIRE target
-build — every
-project, including ones the CLI will go on to skip-list — takes however long
-that full compile takes, and one project's compile failure refuses detection
-for the whole repository, not only that project.
+init script's `sextantModel` task in EVERY source-set-owning project depends
+on that project's own `classes` task, so one invocation compiles the ENTIRE
+target build — every
+project, including ones the CLI will go on to skip-list — and takes however
+long that full compile takes. Gradle runs with `--continue` (Android design
+M5), so a project whose build fails does not stop the others: that project,
+and each project that needs it, is skipped with Gradle's own reason, and the
+other projects are read.
 
 **Boundaries, stated where they arise (2M design §1c, widened by fix round
 1).** A composite build (`includeBuild`) is invisible to `allprojects` —
@@ -27,9 +31,11 @@ for the whole repository, not only that project.
 becomes a detect note (I1) rather than a silent absence. A root project that
 carries its own source alongside subprojects loses that source the same way
 an aggregation-only POM's own element does (2M design §2) — also a detect
-note now (I2), never silent. Android variants are not modelled: this
-detector reads the plain JVM-language source-set shape Gradle's own `main`
-source set already exposes, nothing richer. `buildSrc` convention-plugin
+note now (I2), never silent. An Android project is read through the Android
+Gradle Plugin's own variant API (its release variant, or its only variant;
+one module per product edition), and a part built for several platforms
+through its JVM and Android versions; both give one module for each version
+that compiles to JVM bytecode. `buildSrc` convention-plugin
 SOURCES are never read — the init script reads the EVALUATED model, so a
 convention plugin's effects on a project (its extra source sets, its applied
 plugins) are visible, but `buildSrc/src` itself is not. A Gradle version too
@@ -40,10 +46,11 @@ special case here.
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from importlib import resources
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -80,11 +87,26 @@ _OFFLINE_REFUSAL_SUBSTRING = "available for offline mode"
 # wording above. The first attempt is always offline, so the cache is all it consulted.
 _OFFLINE_PLUGIN_REFUSAL_SUBSTRING = "could not resolve plugin artifact"
 
-# Gradle's own build-failure banner: printed only once the build ENGINE ran, so its
-# presence proves the distribution was there (OI-273 fix round 1). A wrapper that
+# Gradle's own build-failure banners: printed only once the build ENGINE ran, so either
+# one proves the distribution was there (OI-273 fix round 1). A wrapper that
 # downloaded the distribution successfully prints `Downloading https://...` first, and the
-# build may then fail for any reason of its own.
-_BUILD_FAILURE_BANNER = "FAILURE: Build failed with an exception."
+# build may then fail for any reason of its own. One failed task gives the first banner;
+# with `--continue`, two or more failed tasks give the second, "Build completed with 2
+# failures." (Task 1 fix round 1, measured on Gradle 9.7.1).
+_BUILD_FAILURE_BANNERS = (
+    "FAILURE: Build failed with an exception.",
+    "FAILURE: Build completed with ",
+)
+
+# The line that starts Gradle's own message for one failed task (Android design M5),
+# measured on Gradle 9.7.1. Gradle 9 writes "(registered by plugin class '...')" after the
+# task path, so only the start of the line is matched.
+_FAILED_TASK = re.compile(r"^Execution failed for task '([^']+)'")
+
+_OFFLINE_PARTS_NOTE = (
+    "some parts need dependencies that are not in the local Gradle cache; "
+    "--allow-resolve lets Gradle download them"
+)
 
 # Positive evidence that Gradle's OWN wrapper bootstrap — never Gradle's real
 # build engine — produced this output (2M Task 3 fix round 1, C2). Verified
@@ -104,13 +126,15 @@ _WRAPPER_BOOTSTRAP_SUBSTRINGS = (
 
 
 class _Identity(NamedTuple):
-    """A project's module id, the `<package> <version>` its symbols carry, and whether
-    it has Maven coordinates at all (`GradleDetector._identity`)."""
+    """A project's module id, the `<package> <version>` its symbols carry, whether it
+    has Maven coordinates at all, and the name of the folder its results go in when the
+    part is built in more than one version (`GradleDetector._identity`)."""
 
     module_id: str
     coordinates: str
     version: str
     published: bool
+    results_name: str | None
 
 
 class MissingInitScriptError(FileNotFoundError):
@@ -132,13 +156,15 @@ def _init_script() -> Path:
 
 
 def _compose_argv(
-    gradle_command: list[str], init_script: Path, out_file: Path, offline: bool
+    gradle_command: list[str], init_script: Path, out_dir: Path, offline: bool
 ) -> list[str]:
     """The composed argv (2M design §1, pinned): `<gradle> --init-script
-    <ours> --no-configuration-cache -q sextantModel -Psextant.out=<tmpfile>`,
-    with `--offline` prepended for the first attempt only — network posture
-    is the ONE thing that differs between the two attempts `detect` may
-    make."""
+    <ours> --no-configuration-cache --continue -q sextantBuild sextantModel
+    -Psextant.outDir=<tmpdir>`, with `--offline` prepended for the first
+    attempt only — network posture is the ONE thing that differs between the
+    two attempts `detect` may make. `sextantModel` runs in every project, each
+    reading only its own configurations (Android design M4); `--continue` lets
+    the other projects finish when one fails (M5)."""
     argv = [*gradle_command]
     if offline:
         argv.append("--offline")
@@ -146,9 +172,11 @@ def _compose_argv(
         "--init-script",
         str(init_script),
         "--no-configuration-cache",
+        "--continue",
         "-q",
+        "sextantBuild",
         "sextantModel",
-        f"-Psextant.out={out_file}",
+        f"-Psextant.outDir={out_dir}",
     ]
     return argv
 
@@ -177,7 +205,7 @@ def _is_distribution_absent(output: str) -> bool:
     alone was this detector's first cut and misread a bad `JAVA_HOME` (fix round 1, C2);
     the bootstrap substrings alone misread a SUCCESSFUL download followed by a build
     failure (OI-273 fix round 1). Both together."""
-    if _BUILD_FAILURE_BANNER in output:
+    if any(banner in output for banner in _BUILD_FAILURE_BANNERS):
         return False
     return any(substring in output for substring in _WRAPPER_BOOTSTRAP_SUBSTRINGS)
 
@@ -188,10 +216,10 @@ def _is_offline_refusal(output: str) -> bool:
     return _OFFLINE_REFUSAL_SUBSTRING in output or _OFFLINE_PLUGIN_REFUSAL_SUBSTRING in output
 
 
-def _read_json(out_file: Path) -> dict[str, Any]:
+def _read_json(out_file: Path) -> Any:
     """The init script's own JSON, read back — wrapped into a named refusal
     for two escape hatches a zero exit code does not rule out (2M Task 3 fix
-    round 1, I6): a `sextantModel` name collision or an overriding build
+    round 1, I6): a `sextantBuild` name collision or an overriding build
     script could exit 0 without ever running OUR task's `doLast`, leaving no
     file to read at all; and the file that IS there might not parse."""
     try:
@@ -199,13 +227,123 @@ def _read_json(out_file: Path) -> dict[str, Any]:
     except FileNotFoundError as missing:
         raise ValueError(
             f"gradle exited successfully but wrote no model to {out_file} — the target "
-            "build may have overridden the sextantModel task"
+            "build may have overridden the sextantBuild task"
         ) from missing
     try:
-        document: dict[str, Any] = json.loads(text)
+        return json.loads(text)
     except json.JSONDecodeError as malformed:
         raise ValueError(f"gradle wrote invalid JSON to {out_file}: {malformed}") from malformed
-    return document
+
+
+def _project_file_name(project_path: str) -> str:
+    """The file a project's own `sextantModel` task writes: its path with every `_` made
+    `__` first and then every `:` made `_`, so the root project `:` is `_`, `:libs:core` is
+    `_libs_core` and `:libs_core` is `_libs__core` — two paths never share a file. The init
+    script's own rule."""
+    return f"{project_path.replace('_', '__').replace(':', '_')}.json"
+
+
+def _failures_by_project(output: str) -> dict[str, str]:
+    """Gradle's own message for each failed task, by the path of the project that owns the
+    task (Android design M5): `:app:compileJava` belongs to `:app`, and `:compileJava` to
+    the root project `:`. The message is the lines after `Execution failed for task '...'`
+    up to the next blank line. Gradle puts "> " in front of the first line of a message and
+    two spaces in front of each line that continues it (javac's own error lines are such
+    lines); those two characters are removed, and the rest of each line is kept as Gradle
+    wrote it. Two failed tasks of one project give one message, in Gradle's order."""
+    lines = output.splitlines()
+    found: dict[str, list[str]] = {}
+    for index, line in enumerate(lines):
+        failed = _FAILED_TASK.match(line)
+        if failed is None:
+            continue
+        project_path = failed.group(1).rsplit(":", 1)[0] or ":"
+        message = found.setdefault(project_path, [])
+        for following in lines[index + 1 :]:
+            if not following.strip():
+                break
+            message.append(following[2:] if following.startswith(("> ", "  ")) else following)
+    return {path: "\n".join(message) for path, message in sorted(found.items())}
+
+
+def _clear(out_dir: Path) -> None:
+    """Removes every file a Gradle run wrote into `out_dir`, so the next run's result is
+    read alone: a project file left by the offline attempt must not stand in for a project
+    that failed on the online retry."""
+    for entry in out_dir.iterdir():
+        if entry.is_dir():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+
+
+def _assemble(out_dir: Path, output: str = "") -> dict[str, Any]:
+    """The one document `_repository_model` reads, joined from the files the init script
+    wrote (Android design M4): `build.json` from the root project's `sextantBuild` names
+    every project and the included builds, and each project's own `sextantModel` wrote a
+    list of records under `projects/`. A project with no file gets one record with empty
+    lists — its build identity only, nothing to scan. Records are in `(path, target)`
+    order, so the document is the same on every run (NFR-1).
+
+    `output` is Gradle's output from a run that FAILED, and empty for a run that did not
+    (Android design M5). After a failed run, every project's `sextantModel` that ran wrote a
+    file, so a project with no file was not built, and its record gets `buildFailure`: its
+    own failed task's message, or else a statement that a project it needs failed, naming
+    the projects that did. Where Gradle's output names no failed task at all, the reason
+    is that output itself, as Gradle wrote it. A message that is an offline refusal also
+    names `--allow-resolve`: the reason is the one place a person sees for a skipped
+    project, because detect notes reach only the modules that are analysed."""
+    build = _read_json(out_dir / "build.json")
+    failures = _failures_by_project(output)
+    failed_paths = ", ".join(failures)
+    try:
+        records: list[dict[str, Any]] = []
+        for project in build["projects"]:
+            project_file = out_dir / "projects" / _project_file_name(str(project["path"]))
+            if project_file.is_file():
+                records.extend(_read_json(project_file))
+                continue
+            records.append(
+                {
+                    **project,
+                    "sourceRoots": [],
+                    "sourceLanguages": {},
+                    "resourceRoots": [],
+                    "classesDirs": [],
+                    "declaredRelease": None,
+                    "publishing": False,
+                    "classpath": [],
+                    "target": None,
+                    "platform": None,
+                }
+            )
+            if output:
+                own = failures.get(str(project["path"]))
+                if own is not None and _is_offline_refusal(own):
+                    own = f"{own} (--allow-resolve lets Gradle download it)"
+                records[-1]["buildFailure"] = own or (
+                    f"not built: a part it needs failed to build (failed: {failed_paths})"
+                    if failures
+                    else output.strip()
+                )
+        included_builds = build["includedBuilds"]
+    except KeyError as missing:
+        raise ValueError(
+            f"gradle's own build JSON is missing the {missing} key — the init script "
+            "and this detector may be out of step"
+        ) from missing
+    records.sort(key=lambda record: (str(record["path"]), str(record.get("target") or "")))
+    return {"projects": records, "includedBuilds": included_builds}
+
+
+def _records_by_path(reactor: Sequence[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """The reactor's records by project path. A path can hold more than one record: a
+    part built in more than one version writes one record per version (Android design
+    M1)."""
+    by_path: dict[str, list[dict[str, Any]]] = {}
+    for record in reactor:
+        by_path.setdefault(str(record["path"]), []).append(record)
+    return by_path
 
 
 class GradleDetector:
@@ -228,8 +366,7 @@ class GradleDetector:
     def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
         gradle_command, wrapper_note = self._gradle_command(path)
         with tempfile.TemporaryDirectory() as workdir:
-            out_file = Path(workdir) / "sextant-model.json"
-            data = self._invoke(gradle_command, path, out_file, allow_resolve)
+            data = self._invoke(gradle_command, path, Path(workdir), allow_resolve)
         return self._repository_model(path, data, wrapper_note)
 
     @staticmethod
@@ -248,20 +385,28 @@ class GradleDetector:
         `ModuleModel`, the same way an aggregation-only POM's own element
         never becomes one (2M design §2) — only when it names no OTHER
         project is it the sole module, exactly as a single-module Gradle
-        build (no settings file) has none to name."""
+        build (no settings file) has none to name. A root project with more than one
+        record is then more than one module, and the build is walked as a reactor."""
         try:
             projects = data["projects"]
             subprojects = [project for project in projects if project["path"] != ":"]
-            multi_module = len(subprojects) > 0
-            selected = subprojects if multi_module else [p for p in projects if p["path"] == ":"]
+            selected = subprojects or [p for p in projects if p["path"] == ":"]
+            # A root project built in more than one version or edition gives more than one
+            # module (Android design M1, M3). A single-module analysis reads only one of
+            # them, so this build is walked as a reactor too.
+            multi_module = bool(subprojects) or len(selected) > 1
+            by_path = _records_by_path(projects)
             modules = tuple(
-                GradleDetector._module_of(Path(project["dir"]), project, projects)
+                GradleDetector._module_of(Path(project["dir"]), project, by_path)
                 for project in selected
             )
             notes: list[str] = [note for note in (wrapper_note,) if note]
             notes.extend(GradleDetector._composite_build_notes(data))
-            if multi_module:
+            notes.extend(GradleDetector._project_jars_notes(selected, by_path))
+            notes.extend(data.get("notes", []))
+            if subprojects:
                 notes.extend(GradleDetector._root_sources_notes(projects))
+                notes.extend(GradleDetector._root_not_built_notes(projects))
         except KeyError as missing:
             raise ValueError(
                 f"gradle's own model JSON is missing the {missing} key — the init script "
@@ -283,6 +428,24 @@ class GradleDetector:
         return (f"{_COMPOSITE_BUILD_NOTE_PREFIX}{', '.join(sorted(included))}",)
 
     @staticmethod
+    def _project_jars_notes(
+        projects: Sequence[dict[str, Any]], by_path: Mapping[str, Sequence[dict[str, Any]]]
+    ) -> tuple[str, ...]:
+        """The class jars AGP lists for an Android build beside its class directories
+        (Android design 2e.5). Sextant reads only the directories; the jar AGP adds is
+        `R.jar`, generated resource-id constants with no calls in it. The jars are named
+        in a note, so they are not left out silently."""
+        notes = []
+        for project in projects:
+            jars = project.get("projectJars") or []
+            if not jars:
+                continue
+            module_id = GradleDetector._identity(project, by_path).module_id
+            names = ", ".join(sorted(Path(str(jar)).name for jar in jars))
+            notes.append(f"{module_id}: AGP also lists class jars Sextant does not read: {names}")
+        return tuple(notes)
+
+    @staticmethod
     def _root_sources_notes(projects: list[dict[str, Any]]) -> tuple[str, ...]:
         """A root project that carries its own source alongside subprojects
         loses that source the same way an aggregation-only POM's own
@@ -296,6 +459,16 @@ class GradleDetector:
             "analyzed — it aggregates subprojects (2M design §2's aggregation-only convention)"
         )
         return (message,)
+
+    @staticmethod
+    def _root_not_built_notes(projects: list[dict[str, Any]]) -> tuple[str, ...]:
+        """A root project that Gradle did not build is never a module in a build with
+        subprojects (2M design §2), so it has no skip row to carry its reason. The reason
+        becomes a note, so the failure is stated, not silent (Android design M5)."""
+        root = next((project for project in projects if project["path"] == ":"), None)
+        if root is None or root.get("buildFailure") is None:
+            return ()
+        return (f"gradle root project at {root['dir']} was not built: {root['buildFailure']}",)
 
     @staticmethod
     def _gradle_command(path: Path) -> tuple[list[str], str | None]:
@@ -314,32 +487,61 @@ class GradleDetector:
         return [on_path], _WRAPPER_FALLBACK_NOTE
 
     def _invoke(
-        self, gradle_command: list[str], path: Path, out_file: Path, allow_resolve: bool
+        self, gradle_command: list[str], path: Path, out_dir: Path, allow_resolve: bool
     ) -> dict[str, Any]:
-        """Runs `sextantModel`, offline first, applying the cold-start
+        """Runs `sextantBuild` and `sextantModel`, offline first, applying the cold-start
         taxonomy (2M design §1) to a failure: distribution-absent is checked
         BEFORE anything else, on either attempt, because it is not a build
         failure at all — Gradle itself never started. An offline dependency
         refusal is retried online exactly once when `allow_resolve` permits
-        it; any other failure, and a failed retry, surfaces as Gradle's own
-        error verbatim (DR-6)."""
-        first = self._run_once(gradle_command, path, out_file, offline=True)
+        it, into an empty output folder.
+
+        A failed run that still wrote `build.json` is a PARTIAL result (Android design
+        M5): `--continue` let every project that could build finish, and `_assemble`
+        gives each project that did not its reason. Without `allow_resolve`, an offline
+        refusal in it adds a note that names the flag. A failed run with no `build.json`
+        never reached the projects at all, and surfaces as Gradle's own error verbatim
+        (DR-6)."""
+        first = self._run_once(gradle_command, path, out_dir, offline=True)
         if first.returncode == 0:
-            return _read_json(out_file)
+            return _assemble(out_dir)
 
         combined = first.stdout + first.stderr
         if _is_distribution_absent(combined):
             raise ValueError(_distribution_absent_message(path, combined))
         if not (allow_resolve and _is_offline_refusal(combined)):
-            raise ValueError(combined.strip())
+            notes = [_OFFLINE_PARTS_NOTE] if _is_offline_refusal(combined) else []
+            return self._partial(out_dir, combined, notes)
 
-        second = self._run_once(gradle_command, path, out_file, offline=False)
-        if second.returncode != 0:
-            combined_retry = second.stdout + second.stderr
-            if _is_distribution_absent(combined_retry):
-                raise ValueError(_distribution_absent_message(path, combined_retry))
-            raise ValueError(combined_retry.strip())
-        return _read_json(out_file)
+        _clear(out_dir)
+        second = self._run_once(gradle_command, path, out_dir, offline=False)
+        if second.returncode == 0:
+            return _assemble(out_dir)
+        combined_retry = second.stdout + second.stderr
+        if _is_distribution_absent(combined_retry):
+            raise ValueError(_distribution_absent_message(path, combined_retry))
+        return self._partial(out_dir, combined_retry, [])
+
+    @staticmethod
+    def _partial(out_dir: Path, output: str, notes: list[str]) -> dict[str, Any]:
+        """A failed run's result: the projects that built, and a reason for each that did
+        not, when Gradle got as far as writing `build.json`; Gradle's own error verbatim
+        when it did not. When no project that was built has anything to read, it is also
+        Gradle's own error verbatim (controller ruling, Task 2 fix rounds 1 and 2): a
+        reactor in which every module is skipped would end the command with success, and a
+        build that is broken everywhere must not look like one that worked. A project with
+        no source root and no classes directory does not count as read: a root project or a
+        folder-only project that applies no compiling plugin writes its record whatever
+        happens to the parts that hold the code."""
+        if not (out_dir / "build.json").is_file():
+            raise ValueError(output.strip())
+        assembled = _assemble(out_dir, output)
+        if not any(
+            "buildFailure" not in record and (record["sourceRoots"] or record["classesDirs"])
+            for record in assembled["projects"]
+        ):
+            raise ValueError(output.strip())
+        return {**assembled, "notes": notes}
 
     # A cap, not a guess at how long a real build takes (2M Task 3 fix round
     # 1, M3): the init script's own `sextantModel` task compiles the whole
@@ -350,9 +552,9 @@ class GradleDetector:
 
     @staticmethod
     def _run_once(
-        gradle_command: list[str], path: Path, out_file: Path, offline: bool
+        gradle_command: list[str], path: Path, out_dir: Path, offline: bool
     ) -> subprocess.CompletedProcess[str]:
-        argv = _compose_argv(gradle_command, _init_script(), out_file, offline)
+        argv = _compose_argv(gradle_command, _init_script(), out_dir, offline)
         try:
             return subprocess.run(
                 argv,
@@ -376,14 +578,18 @@ class GradleDetector:
 
     @staticmethod
     def _module_of(
-        path: Path, project: dict[str, Any], reactor: Sequence[dict[str, Any]] = ()
+        path: Path,
+        project: dict[str, Any],
+        by_path: Mapping[str, Sequence[dict[str, Any]]] | None = None,
     ) -> ModuleModel:
-        # `reactor` defaults to EMPTY, which yields no siblings — the honest answer
-        # for a caller that does not know the rest of the build, and what every
-        # single-project build gets anyway. The detector's own call site passes the
-        # real list; tests that build one project pass nothing and get the
+        # `by_path` is the reactor's records by project path (`_records_by_path`), made
+        # once per build by the caller. It defaults to EMPTY, which yields no siblings —
+        # the honest answer for a caller that does not know the rest of the build, and
+        # what every single-project build gets anyway. The detector's own call site
+        # passes the real records; tests that build one project pass nothing and get the
         # pre-W55 behaviour, which is what they are about.
-        identity = GradleDetector._identity(project, reactor)
+        by_path = by_path or {}
+        identity = GradleDetector._identity(project, by_path)
         # Gradle NAMES a source/resource root as a build convention; it does
         # not promise the directory exists on disk (2M Task 3 fix round 1,
         # M1) — the same "no guess" discipline `MavenDetector`'s own
@@ -403,8 +609,9 @@ class GradleDetector:
         # sibling is a dependency in every sense that matters: it is on the
         # classpath, its types appear in this module's signatures, and the only
         # difference from a resolved jar is that it was built next door.
-        siblings = GradleDetector._sibling_roots(project, reactor)
+        siblings, siblings_not_resolved = GradleDetector._sibling_roots(project, by_path)
         library_roots = library_roots + siblings
+        libraries_not_resolved = libraries_not_resolved + siblings_not_resolved
         return ModuleModel(
             module_id=identity.module_id,
             coordinates=identity.coordinates,
@@ -486,6 +693,15 @@ class GradleDetector:
                 )
                 if Path(str(entry["path"])).is_file()
             ),
+            # Gradle's own reason this project was not built (Android design M5). Read from
+            # every record, not only from one `_assemble` made for a project with no file:
+            # a record the init script writes may carry one too.
+            build_failure=project.get("buildFailure"),
+            # The init script's reason that a project it read holds nothing Sextant reads
+            # (Android outbound Task 7). It is not a build failure: nothing in it
+            # compiles to JVM bytecode.
+            skip_reason=project.get("skipReason"),
+            results_name=identity.results_name,
         )
 
     @staticmethod
@@ -512,7 +728,9 @@ class GradleDetector:
         return frozenset(found)
 
     @staticmethod
-    def _identity(project: dict[str, Any], reactor: Sequence[dict[str, Any]]) -> "_Identity":
+    def _identity(
+        project: dict[str, Any], by_path: Mapping[str, Sequence[dict[str, Any]]]
+    ) -> "_Identity":
         """The identity Gradle itself gives the project (OI-273, ruled 2026-11-03 from
         Gradle 9.8.2's measured behaviour). A group with no version publishes as
         `<group>/<name>/unspecified`, so `unspecified` IS the version and is kept. No
@@ -522,25 +740,49 @@ class GradleDetector:
         name, then the project path with every segment kept (`Acme:libs:core`); the
         root project itself is its name alone. Both come from Gradle's own records, the
         root's being the reactor entry at path `:`. One rule for a module and for a
-        sibling read as its library root, so the two spell one project the same way."""
+        sibling read as its library root, so the two spell one project the same way.
+
+        A part built in more than one version (a multiplatform part, Android design M2)
+        has one record per version under one path. Each version is its own module: a dash
+        and the version name the build file gives are added to the last part of the name
+        (`com.acme:shared-jvm`, `ShopApp:shared-jvm`), the spelling the multiplatform
+        plugin uses when it uploads each version, and that version name is the folder its
+        results go in. A part built once keeps its name.
+
+        `by_path` is the reactor's records by project path (`_records_by_path`)."""
         name = project["name"]
         group = project["group"]
-        if group:
-            return _Identity(f"{group}:{name}", f"{group}/{name}", project["version"], True)
         path_in_build = project["path"]
+        results_name = None
+        suffix = ""
+        if len(by_path.get(str(path_in_build), ())) > 1:
+            # Only an Android record has no version name beside others: a multiplatform
+            # part with `com.android.library` and no `androidTarget()`.
+            results_name = str(project["target"] or "android")
+            suffix = f"-{results_name}"
+        if group:
+            return _Identity(
+                f"{group}:{name}{suffix}",
+                f"{group}/{name}{suffix}",
+                project["version"],
+                True,
+                results_name,
+            )
         if path_in_build == ":":
             module_id = name
         else:
-            root = {p["path"]: p for p in reactor}[":"]
+            root = by_path[":"][0]
             module_id = f"{root['name']}{path_in_build}"
-        return _Identity(module_id, NOT_APPLICABLE, NOT_APPLICABLE, False)
+        return _Identity(
+            f"{module_id}{suffix}", NOT_APPLICABLE, NOT_APPLICABLE, False, results_name
+        )
 
     @staticmethod
     def _sibling_roots(
-        project: dict[str, Any], reactor: Sequence[dict[str, Any]]
-    ) -> tuple[LibraryRoot, ...]:
+        project: dict[str, Any], by_path: Mapping[str, Sequence[dict[str, Any]]]
+    ) -> tuple[tuple[LibraryRoot, ...], tuple[str, ...]]:
         """The compiled output of every reactor sibling on this project's compile
-        classpath (W55), as library roots.
+        classpath (W55), as library roots, and the siblings it could not tell apart.
 
         **The design question this had to settle first, and its answer.** Gradle
         reports an inter-project dependency as a `ProjectComponentIdentifier`,
@@ -568,20 +810,49 @@ class GradleDetector:
         skipped rather than guessed at: `LibraryRoot` points at bytecode, and a
         root naming a directory that does not exist would be a scan target the
         scanner has to refuse later.
+
+        **A sibling built in more than one version (Android design M1).** A multiplatform
+        part has one record per version under one path, and Gradle picked
+        one of them for this project. The init script records the label Gradle put on
+        what it picked (`platform`: `jvm`, `androidJvm`), and the record with that label
+        is joined. A label no version carries, or no label, is not guessed at: it is
+        named in the second list, which joins `libraries_not_resolved`. A sibling that
+        was not built (Android design M5) is named there too, with its reason.
+
+        `by_path` is the reactor's records by project path (`_records_by_path`).
         """
-        by_path = {str(entry["path"]): entry for entry in reactor}
         found: dict[tuple[str, str], LibraryRoot] = {}
+        not_resolved: list[str] = []
         for entry in project["classpath"]:
             if not entry.get("internal"):
                 continue
-            sibling = by_path.get(str(entry.get("projectPath") or ""))
-            if sibling is None:
+            sibling_path = str(entry.get("projectPath") or "")
+            candidates = by_path.get(sibling_path, [])
+            if len(candidates) > 1:
+                candidates = [
+                    candidate
+                    for candidate in candidates
+                    if entry.get("platform") is not None
+                    and candidate.get("platform") == entry.get("platform")
+                ]
+                if len(candidates) != 1:
+                    not_resolved.append(
+                        f"could not tell which version of {sibling_path} this part uses"
+                    )
+                    continue
+            if not candidates:
+                continue
+            sibling = candidates[0]
+            # A sibling that was not built has no classes (Android design M5). Its reason
+            # is named, so the part that uses it does not lose it with nothing said.
+            if sibling.get("buildFailure") is not None:
+                not_resolved.append(f"{sibling_path} was not built: {sibling['buildFailure']}")
                 continue
             # A sibling with no group is read too (OI-273 round 2): it is on the
             # classpath like any other. It has no coordinates, so it is named by its module
             # id and marked unpublished — `.` for package and version — the identity its
             # symbols carry when it is analysed as a module itself.
-            identity = GradleDetector._identity(sibling, reactor)
+            identity = GradleDetector._identity(sibling, by_path)
             coordinate = identity.module_id
             # ONE ROOT PER CLASSES DIRECTORY, because `LibraryRoot.archive` is one
             # path and Gradle's `classesDirs` is a SET: it carries one entry per
@@ -604,7 +875,7 @@ class GradleDetector:
                         package=None if identity.published else NOT_APPLICABLE,
                     ),
                 )
-        return tuple(found[key] for key in sorted(found))
+        return tuple(found[key] for key in sorted(found)), tuple(sorted(set(not_resolved)))
 
     @staticmethod
     def _dependency_versions(classpath: list[dict[str, Any]]) -> dict[str, str]:

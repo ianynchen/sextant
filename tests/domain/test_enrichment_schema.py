@@ -20,6 +20,8 @@ from sextant.domain.enrichment import (
     OpenQuestionRef,
     Provenance,
     VerdictClaim,
+    enrichment_file,
+    is_enrichment_file_name,
     open_question_identity,
 )
 from sextant.domain.redaction import Redactor
@@ -338,3 +340,20 @@ def test_a_question_with_no_protocol_still_matches_the_row_it_was_written_for():
     )
 
     assert claim.question.identity == open_question_identity(row, Redactor.from_rules())
+
+
+def test_a_one_module_folder_keeps_the_old_file_name(tmp_path):
+    """A module alone in its folder keeps `.sextant-enrichment.json` (Android M7)."""
+    assert enrichment_file(tmp_path, None) == tmp_path / ".sextant-enrichment.json"
+
+
+def test_a_module_in_a_shared_folder_names_its_file_with_its_version_name(tmp_path):
+    assert enrichment_file(tmp_path, "android") == tmp_path / ".sextant-enrichment-android.json"
+
+
+def test_every_description_file_name_is_recognised_and_other_names_are_not():
+    assert is_enrichment_file_name(".sextant-enrichment.json")
+    assert is_enrichment_file_name(".sextant-enrichment-jvm.json")
+    assert not is_enrichment_file_name(".sextant-enrichment-jvm.txt")
+    assert not is_enrichment_file_name("sextant-enrichment.json")
+    assert not is_enrichment_file_name(".sextant.yml")

@@ -40,7 +40,8 @@ telling the model why (2K Task 5 fix round 2, N5).
 the MOST SPECIFIC containing root.** `ignore` (T2's `IgnoreRules`, already
 loaded for the repository the jailed roots live under) hides
 `.sextantignore` matches and the built-in credential patterns.
-`domain.enrichment.ENRICHMENT_FILE` (`.sextant-enrichment.json`) is
+`domain.enrichment.ENRICHMENT_FILE` (`.sextant-enrichment.json`, or
+`.sextant-enrichment-<name>.json` of a module in a shared folder) is
 excluded here as a JAIL-SPECIFIC rule, not a `.sextantignore` builtin (2K
 Task 3 ruling): the model must never read its own prior run's claims
 through these tools. One residual, accepted rather than closed (2K final
@@ -138,7 +139,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sextant.application.ports.artifacts import file_kind
-from sextant.domain.enrichment import ENRICHMENT_FILE
+from sextant.domain.enrichment import is_enrichment_file_name
 from sextant.domain.factfile import redact_config_entry_line
 from sextant.domain.file_reads import list_directory, read_file_text
 from sextant.domain.ignorefile import IgnoreRules
@@ -198,7 +199,7 @@ FACT_LINE_EXTENSION = "jsonl"
 # unreadable everywhere in the jail, ancestry included, but NOT part of
 # `ignorefile.BUILTIN_PATTERNS` — that set stays the short, non-negatable
 # CREDENTIAL layer; this is a separate, jail-specific exclusion for a
-# module's COMPILED SHADOW, joining `ENRICHMENT_FILE`'s own precedent.
+# module's COMPILED SHADOW, joining the description file's own precedent.
 # Deliberately does not touch `.sextantignore`, `resource_files.list_files`,
 # or any analysis walk — a build directory is fair game for `analyze`
 # (D00 §2's origin tiering already answers whether ITS classes count), only
@@ -207,7 +208,7 @@ FACT_LINE_EXTENSION = "jsonl"
 # `.tradewind` joins this set for the identical reason (2N design §1): the
 # Tradewind adapter's api-key session mirror is the model reading its own
 # prior conversation back — the same feedback loop that excluded the
-# overlay file (`ENRICHMENT_FILE`) above, not a build artifact, but invisible
+# description file above, not a build artifact, but invisible
 # the same jail-specific way rather than through `.sextantignore`.
 DERIVED_OUTPUT_DIRS = frozenset({"target", "build", "out", "node_modules", ".git", ".tradewind"})
 
@@ -721,7 +722,7 @@ class ToolExecutor:
         which does not. Path-shaped and content-blind, like every check
         here: a copy of an excluded file sitting somewhere this does not
         name is not caught by it."""
-        if path.name == ENRICHMENT_FILE:
+        if is_enrichment_file_name(path.name):
             return True
         if self._ignore.matches(path):
             return True

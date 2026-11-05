@@ -1036,6 +1036,45 @@ matches:
   `@FeignClient` carries `path` and `name` on the same row — so `peer_annotation` is
   optional and inert everywhere `peer_from`'s own attribute already sits on the prefix
   annotation; `microprofile-rest-client.yml` is the one catalog that declares it.
+- **`made_by` says where a client's server address is, when no annotation states it**
+  (Android outbound spec M8, approved 2026-11-05). A Retrofit interface states a verb and a
+  path; the server is the `baseUrl` of the builder that made the `Retrofit` object, and that
+  object makes the client in `create(OrdersApi.class)`:
+
+  ```yaml
+  matches:
+    made_by:
+      owner: retrofit2.Retrofit     # the call that makes the client object …
+      method: create
+      class_arg: 0                  # … and the argument holding the interface's class literal
+      steps:                        # `fluent`'s step words, folded on the object that call is made on
+        - { method: baseUrl, owner: retrofit2.Retrofit$Builder, captures: { base: arg0 },
+            returns_receiver: true }
+  ```
+
+  The engine (`resolve/shapes/made_by.py`) joins three pieces that already exist: every
+  `owner.method` call whose `class_arg` is a class literal names the interface it makes; the
+  object that call is made on is followed back to the call that made it, through locals,
+  fields, parameters and helper returns (`values.producer_paths` with `which_object`, the
+  object walk `ObjectKeys` reads for in-process dispatch), keeping the path it took; the
+  `steps` fold backward onto that call exactly as `fluent`'s owner-declared steps fold before
+  a root (`chains.chain_ends`); and the `base` argument is read on the object's own path, so
+  a helper `retrofit(base)` called once per interface gives each interface its own caller's
+  base. The `base` read is joined to the row's path by the framework's own rule, one row per
+  address (a closed set of objects: each address is exact). Where the address is not read — no call names the
+  interface, the object comes from code we do not have, the `base` argument is not read, or
+  the base is one the framework refuses — the row keeps its relative path, has no peer, and
+  is `partial`, never `resolved`. Applied to the candidate rows before the
+  earlier-catalog-wins insert, so that guard compares the address the row has.
+
+  `class_arg` has PR #91's meaning (the argument holding a class literal). Refused at load
+  (`yaml_source._check_made_by`) anywhere but an outbound `annotation_driven` catalog, and
+  unless it declares exactly the four keys with `owner` and `method` names and `class_arg` an
+  argument index (the one rule for the word and its keys); only the steps are
+  checked where the word is read (`made_by.validated_made_by`): every step names an `owner`
+  (only an owner-declared step folds backward) and captures `base` and nothing else. Declared today by `retrofit.yml`
+  only; `@HttpExchange`'s `HttpServiceProxyFactory` and MicroProfile's `RestClientBuilder`
+  need more than this word (see COVERAGE).
 - **`path_separator` says what joins the prefix to the address it prefixes**, and it is
   the character deduped at that seam. Optional; a catalog declaring none concatenates the
   two halves bare, which is what every catalog did before the key existed.

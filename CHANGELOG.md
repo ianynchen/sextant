@@ -17,6 +17,27 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Android modules are read for outbound calls, and Kotlin Multiplatform parts by version**
+  (OI-274, design `2026-11-05-android-outbound-design.md`). An Android part (application, library,
+  Kotlin Multiplatform library) is read through the Android Gradle Plugin: its release build, or its
+  only build, with the class directories AGP lists, its source sets and its compile classpath.
+  An app with product editions gives one module per edition (`Noty.app-free`). A Kotlin
+  Multiplatform part gives one module per JVM-bytecode version (`core-jvm`, `core-android`; a part
+  with one version keeps its name), a sibling is joined by Gradle's own platform label, and a part with only JS or
+  Kotlin/Native versions is skipped with that reason. Several modules in one folder keep one
+  results folder each (`core/.sextant/jvm`; a `results` field on each `modules.json` row, a row
+  without it means `<dir>/.sextant`) and one description file each
+  (`.sextant-enrichment-jvm.json`). Gradle runs with `--continue` and one task per part, so a
+  part that fails to build is skipped with Gradle's reason and the others are read; if every part
+  fails, the run is refused. Measured on a fixture, kotlinconf-app (AGP 9.3.3) and ktor-samples
+  `client-mpp` (AGP 8.13.1). Not verified: NotyKT and koog (JDK 17), AGP 7.4 to 7.x. Android
+  inbound stays post-MVP; limits are OI-310 and OI-311.
+- **A Retrofit row has the server address of the object that made its client** (OI-274 M8;
+  catalog word `made_by`). `api.order(id)` is followed to `create(OrdersApi::class.java)` and the
+  `baseUrl(...)` of the `Retrofit` object that made it. Where the address is not read, the row is
+  `partial` with "server address not read", where it was `resolved` with no address. Two rows of
+  `orders-service` changed from `resolved` to `partial` for that reason. Limits: OI-304, OI-305,
+  OI-306, OI-307.
 - **In-process dispatch: one general mechanism, five kinds** (spec 2026-11-05, "As built"; the
   user's ruling A on the actor words: "invented just for one framework"; probe CP-59). Code
   that hands a value to a framework or a channel, which calls the handler(s) registered for it,
@@ -161,6 +182,19 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **An interface that extends another no longer removes the base interface's calls**
+  (Android outbound review). Only a class counts as implementing an interface, so
+  `interface AuthApi : BaseApi` no longer drops every `BaseApi` call. Applies to every outbound
+  catalog that declares clients on interfaces; with `made_by`, each inheriting interface that a
+  client is made for gets its own row with its own address.
+- **The coverage sentence of a Gradle module, and the declared-set gap** (Android corpus
+  check). A module whose dependencies Gradle resolved said "the build file's declared set"; it now
+  says "resolved by Gradle" (the same wording for Maven). The gap "Maven profiles and
+  transitive dependencies are not resolved" is stated only for a declared set. Maven profiles
+  chosen at deploy time are still not evaluated (OI-314).
+- **A Gradle build with `org.gradle.parallel=true` is detected** (Android design M4). The root
+  task could not resolve another project's configuration, which broke kotlinconf-app's plain JVM
+  backend; each part now resolves its own.
 - **A Ktor call in a Kotlin `suspend` function gave many rows, some with a false GET** (since
   PR #89). A chain's steps were decided against the method's exit; a coroutine state machine
   has no call on every exit, so every step looked optional, every combination became a row,
@@ -171,7 +205,6 @@ here would restate those documents rather than add anything.
   step on the way to the send in another method keeps the row `partial`. Identical rows of one
   call merge; branches that differ only in a published part are one `partial` row (round 4).
   New fixture `KtorSuspend.kt` compiles real coroutine state machines. Six field pins unchanged.
-
 - **A Gradle project with no group, or no version, is analysed** (OI-273). Detection refused
   both, and applications often set neither: `kotlin-ktor-exposed-starter` and 21 of 36
   ktor-samples projects declare no group. The identity is now the one Gradle itself gives

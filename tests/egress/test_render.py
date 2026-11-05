@@ -354,6 +354,91 @@ def test_outbound_row_with_no_method_renders_unresolved_in_the_endpoint_column()
     ) in text
 
 
+def test_a_partial_http_row_with_no_peer_says_its_server_address_is_not_read():
+    """Android outbound spec M8: a Retrofit row whose builder's `baseUrl` is not read keeps
+    its relative path and has no peer. `none recorded` would read as "the call names no
+    server"; the server is set where the client is made, and was not read."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "GET",
+                "path": "legacy/invoices/{id}",
+                # The real row's shape: an outbound annotation row names its interface
+                # method as the caller, and the interface as `served_by`.
+                "handler": None,
+                "caller": "s maven c 1 com/acme/orders/clients/LegacyBillingApi#invoice(String).",
+                "served_by": "s maven c 1 com/acme/orders/clients/LegacyBillingApi#",
+                "peer": None,
+                "resolution": "partial",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "| `GET legacy/invoices/{id}` | server address not read | " in text
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # A configured base and an unread piece of the path: `partial` for the piece.
+        "${orders.url}/orders/{}",
+        # A relative call read on a path the walk cannot call exact: `partial` for the path.
+        "/orders/{id}",
+    ],
+)
+def test_a_partial_call_whose_server_was_not_the_unread_part_says_none_recorded(path: str):
+    """Review fix round 1, Important 3: `server address not read` only where the row's own
+    evidence says the server was the unread part. A call row (no `served_by`) that is
+    `partial` for any other reason keeps `none recorded`."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "GET",
+                "path": path,
+                "caller": "s maven c 1 com/acme/orders/clients/Orders#get(String).",
+                "peer": None,
+                "resolution": "partial",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "| none recorded | " in text
+    assert "server address not read" not in text
+
+
+def test_a_call_whose_host_was_not_read_says_its_server_address_is_not_read():
+    """The other side: the unread-host marker is the row's own evidence that the server
+    part of the call's address was not read."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "GET",
+                "path": "<host>/billing/ledger",
+                "caller": "s maven c 1 com/acme/orders/clients/Orders#get(String).",
+                "peer": None,
+                "resolution": "partial",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "| server address not read | " in text
+
+
 def test_kafka_inbound_row_renders_verbless_with_no_unresolved_marker():
     """A protocol in the verbless set (Task 9) defines no verb, so its wire
     identity is `protocol path` — never a bare `None` standing in for a verb
@@ -1781,6 +1866,57 @@ def test_a_schedule_expression_passes_the_render_redactor_in_the_table_and_the_d
     assert "ACME_A1B2" not in text
     assert f"| `com/acme/OrderSweeper#sweep().` | cron | — | `{shown}` | unresolved |" in text
     assert f"- `com/acme/OrderSweeper#sweep().` — cron `{shown}`\n" in text
+
+
+@pytest.mark.parametrize(
+    ("source", "words"),
+    [("maven", "resolved by Maven"), ("gradle", "resolved by Gradle")],
+)
+@pytest.mark.pins("render.every-BUILD-TOOL-answer-is-named-as-resolved")
+def test_the_coverage_line_names_the_build_tool_that_resolved_the_dependencies(source, words):
+    """Every build tool's own answer is a resolved set, and the line names that tool
+    (Android outbound Task 7). A Gradle module read as "the build file's declared set"
+    while its `metadata.json` said `dependency_source: gradle`."""
+    module = replace(MODULE, dependency_source=source)
+    report = replace(REPORT, coverage={**REPORT.coverage, "type_headers": 3})
+    text = render_module_document(module, report, "a3f91c")
+    assert (
+        "- Dependency types the header read reached: 3 — header read for 3, found in no "
+        f"dependency archive 0 (dependencies: {words})."
+    ) in text
+
+
+def test_the_coverage_line_says_why_a_declared_set_was_used():
+    module = replace(MODULE, dependency_source_reason="mvn is not on PATH")
+    report = replace(REPORT, coverage={**REPORT.coverage, "type_headers": 3})
+    text = render_module_document(module, report, "a3f91c")
+    assert "(dependencies: the build file's declared set — mvn is not on PATH)." in text
+
+
+_DECLARED_SET_GAP = "maven_profile_and_transitive_resolution_not_implemented"
+
+
+@pytest.mark.parametrize("source", ["maven", "gradle"])
+@pytest.mark.pins("render.the-DECLARED-SET-gap-is-stated-only-for-a-declared-set")
+def test_a_build_tool_answer_states_no_declared_set_gap(tmp_path: Path, source):
+    """The build tool's own answer holds the transitive dependencies and the profiles the
+    build tool chose, so the gap that says they are missing is not stated for it (Android
+    outbound Task 7). A Gradle module carried the pom.xml sentence."""
+    module = replace(MODULE, dependency_source=source)
+    write_metadata(tmp_path / "metadata.json", module, REPORT, SCANNERS, "a3f91c")
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    assert _DECLARED_SET_GAP not in metadata["gaps"]
+    assert len(metadata["gaps"]) == len(KNOWN_GAPS) - 1
+    text = render_module_document(module, REPORT, "a3f91c")
+    assert "transitive dependencies are not resolved" not in text
+
+
+def test_a_declared_set_states_the_declared_set_gap(tmp_path: Path):
+    write_metadata(tmp_path / "metadata.json", MODULE, REPORT, SCANNERS, "a3f91c")
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    assert metadata["gaps"] == KNOWN_GAPS
+    text = render_module_document(MODULE, REPORT, "a3f91c")
+    assert "Maven profiles and transitive dependencies are not resolved" in text
 
 
 def test_an_actor_row_renders_verbless():
