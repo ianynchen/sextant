@@ -76,11 +76,14 @@ def test_fire_reaches_the_synchronous_observers_and_fire_async_the_asynchronous(
     `on(@Observes @Priority(10) Shipped)` (`@Priority` orders observers, it qualifies nothing).
     `shipped.fireAsync(new Shipped(id))` reaches only the asynchronous one, `on(@ObservesAsync
     Shipped)`. Neither crosses to the other kind: ArC filters observers by `isAsync()` against
-    the call that fired (CP-59 finding 10)."""
+    the call that fired (CP-59 finding 10). The module's keyless synchronous observers (the
+    qualified and parameterized ones, whose keys are not read) may be notified too, so the
+    `fire` also writes the not-read row, never a claim that only those three run."""
     assert _hops_from(tables, "ShippingService#ship") == {
         ("in_process", "Shipped", "AuditObserver#on"),
         ("in_process", "Shipped", "AnyObserver#on"),
         ("in_process", "Shipped", "PriorityObserver#on"),
+        ("in_process", None, None),
     }
     assert _hops_from(tables, "ShippingService#shipLater") == {
         ("in_process", "Shipped", "AsyncObserver#on"),
@@ -119,8 +122,12 @@ def test_a_parameterized_observed_type_is_kept_keyless(tables):
 @pytest.mark.pins("annotation-registrations.a-PARAMETER-annotation-selects-the-observer")
 def test_each_event_reaches_only_the_observers_of_its_class(tables):
     """The key decides: `events.fire(new Note())` reaches only the observer of `Object`, none
-    of `Shipped`'s. A fan-out ignoring the key fails it."""
-    assert _hops_from(tables, "ShippingService#note") == {("in_process", "Note", "AnyObserver#on")}
+    of `Shipped`'s, plus the not-read row the keyless observers give. A fan-out ignoring the
+    key fails it."""
+    assert _hops_from(tables, "ShippingService#note") == {
+        ("in_process", "Note", "AnyObserver#on"),
+        ("in_process", None, None),
+    }
 
 
 @pytest.mark.pins("annotation-registrations.a-PARAMETER-annotation-selects-the-observer")

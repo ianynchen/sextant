@@ -189,7 +189,9 @@ site, or no row.
   DECLARED type: one row per registration of that type or a supertype, certain under every
   `match`, plus the not-read row where a registration may take some subtype of it (a strict
   subtype, or an unrelated type unless both are known classes) or, under `first`, where a
-  behavior's earlier case may (D02 §2m). A key not
+  behavior's earlier case may (D02 §2m). Any value, exact or declared, also gets the not-read
+  row where a KEYLESS registration of its mechanism (a generic or qualified listener, an unread
+  case) may receive it. A key not
   read (an array element, a `merge`; a declared type that does not decide every handler) is
   one row with `path` and `handler` NULL: the two
   NULLs are what say so, and never a fan-out. `evidence` is `compiler` on every dispatch hop

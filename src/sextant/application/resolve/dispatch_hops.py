@@ -677,11 +677,17 @@ class _Reading:
         self._rooted(key_type)
         cases = self._by_mechanism.get(mechanism, [])
         undecided = False
-        if declared and key_type is not None:
+        if key_type is not None:
             for case in cases:
                 self._rooted(case["key_type"])
             cases, undecided = certain_cases(
-                cases, key_type, self._supertypes, self._constant_classes(), self._classes()
+                cases,
+                key_type,
+                self._supertypes,
+                self._constant_classes(),
+                self._classes(),
+                declared=declared,
+                key_value=key_value,
             )
         reached = reached_by(cases, key_type, key_value, self._supertypes)
         handlers = sorted({case["handler"] for case in reached}, key=lambda h: (h is None, h))

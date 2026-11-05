@@ -265,8 +265,19 @@ def certain_cases(
     supertypes: Mapping[str, set[str]],
     constant_classes: Mapping[str, str | None],
     known_classes: frozenset[str],
+    declared: bool = True,
+    key_value: str | None = None,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """The registrations a value read only by its DECLARED type (a call's declared return, a
+    """The registrations a value is asked of, and whether the send is also NOT READ.
+
+    **A keyless registration** (key, value and object all NULL, not predicated: a generic
+    listener parameter, ruling 16, or a case the walk did not read) may take ANY value, its
+    key being unknown, so it makes every send of its mechanism also not read (under `first`,
+    when it comes before the group's first certain case), never a stop naming the value's
+    class as handled by nobody. That holds for a value read exactly (`declared` False, `new
+    Command()`, a constant `key_value`) as for one read by its declared type.
+
+    The registrations a value read only by its DECLARED type (a call's declared return, a
     parameter's or a field's type) is asked of, and whether the send is also NOT READ. Such a
     value is `key_type` or any subtype of it, so every registration of `key_type` or a
     supertype of it is certainly reached, and those hops are true under every `match`
@@ -299,10 +310,22 @@ def certain_cases(
             and key_type in known_classes
         )
 
+    def keyless(row: Mapping[str, Any]) -> bool:
+        return (
+            row["key_type"] is None
+            and row["key_value"] is None
+            and row.get("key_object") is None
+            and not row["predicated"]
+        )
+
     def may_take(row: Mapping[str, Any]) -> bool:
         """Whether a registration not certainly reached may still take some subtype of the
         value: a class key not above `key_type` and not a class unrelated to it, or a value
         key whose constant's class is not such a class."""
+        if keyless(row):
+            return True
+        if not declared:
+            return False
         if row["key_type"] is not None:
             return str(row["key_type"]) not in above and not unrelated_class(str(row["key_type"]))
         if row["key_value"] is not None:
@@ -321,7 +344,10 @@ def certain_cases(
     for group, registrations in groups.items():
         for registration in sorted(registrations, key=lambda row: int(row["position"])):
             case_type = registration["key_type"]
-            if case_type is not None and str(case_type) in above:
+            certain = (case_type is not None and str(case_type) in above) or (
+                key_value is not None and registration["key_value"] == key_value
+            )
+            if certain:
                 if not registration["predicated"]:
                     break
                 continue

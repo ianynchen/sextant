@@ -43,7 +43,8 @@ here would restate those documents rather than add anything.
   the type. A key that is still not
   read is a stop that says so (`(key not read)`), never a fan-out. A registration whose
   parameter is generic (a type variable, type arguments) is kept with no key, for every
-  registration kind. A catalog with sends or delivering handlers and no `protocol` is refused
+  registration kind; such a keyless registration may receive any value, so every send of its
+  mechanism also writes the not-read row. A catalog with sends or delivering handlers and no `protocol` is refused
   at load. No catalog word or table starts with `message_` and no code names a framework
   (architecture tests). Every kind below was checked hop by hop on the modules it names, and
   only those: 0 false hops, no missing hop outside a stated bound, and no endpoint row moved

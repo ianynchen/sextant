@@ -8196,6 +8196,21 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "dispatch-hops.a-KEYLESS-registration-may-take-ANY-value": Guard(
+        what="a keyless registration of the mechanism makes a send also not read, under every "
+        "match, never a stop saying nobody handles the value",
+        why="re-review of 7e7f7dc5: a generic `Base<E> implements ApplicationListener<E>` or a "
+        "qualified CDI observer is kept keyless and may receive any value; a stop with its "
+        "class and no handler would say nobody does",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        if keyless(row):\n            return True\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
+                "            return True\n",
+            ),
+        ),
+    ),
     "dispatch-hops.a-send-reaches-only-its-OWN-mechanism": Guard(
         what="a send's value is asked only of its own catalog's mechanism's registrations",
         why="review m1: one table holds every framework's registrations. Asked of all of them, "

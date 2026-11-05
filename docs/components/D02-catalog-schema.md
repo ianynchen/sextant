@@ -6323,7 +6323,12 @@ matches:
   any such registration of the mechanism makes the send write the not-read row beside its
   certain hops, never a stop naming the type as if nobody handled it (`publish(DomainEvent e)`
   with a listener of an unrelated `Auditable`). Under `first`, such a case before the group's
-  first certain unpredicated case leaves the group not read. Finality is not read, so a final declared type is treated as subclassable
+  first certain unpredicated case leaves the group not read. **A keyless registration** (key,
+  value and object NULL, not predicated: a generic or qualified listener kept keyless, a case
+  the walk did not read) may take ANY value, so it makes every send of its mechanism also not
+  read, whether the value is read exactly (`new Command()`) or by its declared type, under
+  `first` when it comes before the group's first certain case: never a stop naming the class
+  as handled by nobody. Finality is not read, so a final declared type is treated as subclassable
   (not read where it could have been, never false). Anything else (an
   array element, a `merge`, a primitive or array declared type) is not read, and the row says
   so (`(key not read)`).

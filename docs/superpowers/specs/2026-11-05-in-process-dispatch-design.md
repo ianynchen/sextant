@@ -261,7 +261,12 @@ Rulings of the final review's fix wave (2026-11-05, the controller's, under ruli
     `mapping.keyless_when_meta_annotated` is gone. Cost: one indirection.
 16. **A type-variable or parameterized registration parameter is keyless for every
     registration kind** (final review m-1), as CDI's already was: a false hop is a lie. Cost: a
-    generic base class's listeners get no hop.
+    generic base class's listeners get no hop. **Re-review of `7e7f7dc5`:** a keyless
+    registration may receive ANY value, so every send of its mechanism, exact or declared,
+    also writes the not-read row (under `first`, where the keyless case comes before the
+    group's first certain one): no stop may say nobody handles a value a keyless listener
+    might take. On `fixtures/orders-cdi-events` every `fire` now carries that row (its
+    qualified and parameterized observers); no corpus module has a keyless registration.
 17. **A null check over an object not read keeps its own key** (deferred minor, final wave):
     where every path past it ends at an object not read, the check's call is the key.
 

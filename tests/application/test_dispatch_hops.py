@@ -422,6 +422,58 @@ def test_a_library_interface_with_super_interfaces_is_no_known_class(tmp_path: P
     assert "lib/Auditable#" not in known
 
 
+@pytest.mark.pins("dispatch-hops.a-KEYLESS-registration-may-take-ANY-value")
+def test_a_keyless_listener_leaves_every_send_unread_never_unhandled(tmp_path: Path):
+    """A keyless registration (ruling 16: a generic `Base<E> implements ApplicationListener<E>`,
+    `on(T e)`) may receive any value. A send nothing else certainly reaches, read by its
+    declared type or exactly (`new Command()`), is the not-read row, never a stop naming the
+    class as handled by nobody."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace._connection.execute(
+            "INSERT INTO dispatch_registrations VALUES "
+            "('m G#on(sig_1).', 0, NULL, NULL, NULL, false, 'm G#on(sig_1).', "
+            "false, 'all', 'events')"
+        )
+        reading = _Reading(workspace, [])
+        declared = reading.hops(
+            "m P#send(sig_3).", 0, ("Command#", None, None, None, True), "in_process", "events"
+        )
+        exact = reading.hops(
+            "m P#send(sig_3).", 0, ("Command#", None, None, None, False), "in_process", "events"
+        )
+    finally:
+        workspace.close()
+    assert [(row["path"], row["handler"]) for row in declared] == [(None, None)]
+    assert [(row["path"], row["handler"]) for row in exact] == [(None, None)]
+
+
+@pytest.mark.pins("dispatch-hops.a-KEYLESS-registration-may-take-ANY-value")
+def test_under_first_an_earlier_keyless_case_leaves_the_group_unread(tmp_path: Path):
+    """Under `first`, a keyless case before `Command`'s may take a `new Command()` first, so
+    that group is not read; after it, it is shadowed and the group is a hop."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace._connection.execute(
+            "INSERT INTO dispatch_registrations VALUES "
+            "('m A#create(sig_1).#0', 0, NULL, NULL, NULL, false, NULL, false, 'first', 'pekko'), "
+            "('m A#create(sig_1).#0', 1, 'Command#', NULL, NULL, false, "
+            "'m A#onCommand(sig_2).', false, 'first', 'pekko'), "
+            "('m B#create(sig_1).#0', 0, 'Command#', NULL, NULL, false, "
+            "'m B#onCommand(sig_3).', false, 'first', 'pekko'), "
+            "('m B#create(sig_1).#0', 1, NULL, NULL, NULL, false, NULL, false, 'first', 'pekko')"
+        )
+        rows = _Reading(workspace, []).hops(
+            "m P#send(sig_4).", 0, ("Command#", None, None, None, False), "actor", "pekko"
+        )
+    finally:
+        workspace.close()
+    assert sorted([(row["path"], row["handler"]) for row in rows], key=str) == [
+        ("Command#", "m B#onCommand(sig_3)."),
+        (None, None),
+    ]
+
+
 # The shipped root-type conformance (`type-models/conformance.yml`): every class is an
 # `Object`, so `Get` is assignable to the listener's key.
 _ROOT = [{"subtype": "*", "supertype": "java.lang.Object", "by": "JLS 4.10.2"}]
