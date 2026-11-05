@@ -102,6 +102,9 @@ PRIMED_FIXTURES = (
     # only thing that can see the stub exception's `@ResponseStatus`. The stub is
     # installed by `fixture_stub.py` before this list is compiled.
     "orders-advice",
+    # Retrofit clients Dagger makes (spec 2026-11-05 di-recipe-hop). Depends on
+    # `orders-dagger-network`, installed by `fixture_stub.py` before this list.
+    "orders-dagger",
 )
 
 STAMP = Path("target") / "sextant-fixture.stamp"

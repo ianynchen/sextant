@@ -17,6 +17,21 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A Retrofit client that Dagger or Hilt makes has its server address** (OI-304, spec
+  `2026-11-05-di-recipe-hop-design.md`). A parameter the container fills (a `@Provides` method's,
+  or an `@Inject` constructor's) now receives the value of the one recipe the container chooses for
+  it, in the shared value walk, so `made_by` reads the `baseUrl` of a `Retrofit` that a `@Provides`
+  method builds. Dagger's rule is mirrored exactly: the key is the qualifier with its attributes
+  plus the full type, an unqualified parameter matches an unqualified recipe only, and a
+  multibinding recipe is never a candidate for `T` (new `catalogs/bean-models/dagger.yml`; new
+  bean-model words `injection`, `multibinding_annotations`, `injecting_annotations`, D02 §1c).
+  Spring `@Bean` parameters cross through the existing ladder. A key with several recipes in the
+  module answers `non_enumerable`, a recipe in another build module is not read, and both leave the
+  row `partial`, never a guess. Measured on the new fixture `fixtures/orders-dagger` (Kotlin
+  `object` and `class` modules, a Java static module, `@Named`, a custom qualifier, a qualified base
+  `String`, an `@Inject` constructor: six rows resolved; two recipes of one key and a recipe in the
+  library `fixtures/orders-dagger-network`: two rows `partial`). No row changed on the other
+  fixtures or on the six field pins. NotyKT is not verified (it needs a JDK 17 toolchain).
 - **Android modules are read for outbound calls, and Kotlin Multiplatform parts by version**
   (OI-274, design `2026-11-05-android-outbound-design.md`). An Android part (application, library,
   Kotlin Multiplatform library) is read through the Android Gradle Plugin: its release build, or its
@@ -181,6 +196,11 @@ here would restate those documents rather than add anything.
   `OAuth2WebClient` inherits `get` from `WebClient`. The other 19 are unchanged.
 
 ### Fixed
+
+- **The Spring ladder's qualifier and name rungs read only the candidates of the parameter's type**
+  (OI-304 Task 4). Spring compares a qualifier or a parameter name only among the beans of the
+  parameter's type or a subtype of it; a bean of an unrelated type with the same name is no longer
+  chosen.
 
 - **An interface that extends another no longer removes the base interface's calls**
   (Android outbound review). Only a class counts as implementing an interface, so

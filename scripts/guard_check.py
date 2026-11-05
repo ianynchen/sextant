@@ -12631,6 +12631,8 @@ def copy_tree(destination: Path) -> Path:
         # The second library `fixture_stub.LIBRARIES` installs: the session fixture builds
         # every listed library, so a copy without this one fails before any test runs.
         "orders-vertx-web-base",
+        # The third library `fixture_stub.LIBRARIES` installs, for the same reason.
+        "orders-dagger-network",
         "orders-pathprefixes",
         "orders-fieldheld",
         "orders-pathvars",

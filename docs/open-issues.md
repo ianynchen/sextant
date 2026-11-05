@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-315 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-320 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -318,6 +318,11 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-312 | [SEXTANT-306](https://app.plane.so/portolan/browse/SEXTANT-306/) | Gradle detector: Gradle 5.x rejecting --no-configuration-cache is reported as "distribution not present" |
 | OI-313 | [SEXTANT-307](https://app.plane.so/portolan/browse/SEXTANT-307/) | Analysis wipes render/ at a repository root that is also a module, removing system.md |
 | OI-314 | [SEXTANT-308](https://app.plane.so/portolan/browse/SEXTANT-308/) | Maven: profiles activated at deploy time (-P) are not evaluated; no narrower gap stated after the declared-set gap moved |
+| OI-315 | (to create) | Dagger/Hilt recipe hop limits: recipe in another build module, Provider<T>/Lazy<T>, @Binds/@BindsInstance/component dependencies, field injection (row partial) |
+| OI-316 | (to create) | Dagger key not mirrored in three details: qualifier default attribute values, wildcard variance, primitive and boxed types as one key (answer none or ambiguous) |
+| OI-317 | (to create) | Spring constructor injection: the value walk crosses @Bean method parameters only |
+| OI-318 | (to create) | Koin and Metro: no recipe model (Koin is a lookup call; Metro needs its own bean-model file) |
+| OI-319 | (to create) | Value walk: a recipe whose every return is off the path answers not_readable, where the caller loop answers nothing (no real input reaches it) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

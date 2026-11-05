@@ -82,3 +82,38 @@ needs for `@HttpExchange`; Metro (a second bean-model file later).
   right address; the e2e test pins them.
 - Every changed row on all fixtures and the six field pins judged true; gate green.
 - D02 §1c/§1f, COVERAGE (Retrofit under DI), CHANGELOG. NotyKT stated unverified (no JDK 17).
+
+## 5. As built
+
+Tasks 1–4, branch `cov/hilt-provides` (9cd89f2e, bab3160d, b6911ba4, then Task 4).
+
+- **Words** as approved (§2c): `catalogs/bean-models/dagger.yml`, `injection`,
+  `multibinding_annotations`, `injecting_annotations`. `injection` is required on a model that
+  declares `declaring_annotation`; `exact_key` also requires `qualifier_meta_annotations`.
+  `Catalog.bean_models` (every model, by id) and `Catalog.value_annotations` (the union of the
+  catalogs' `value_annotation`s) are port fields derived at load; no YAML word beyond §2c.
+- **The table** `beans.injected_parameters` → `ProvidedBy | Ambiguous | NotProvided`, once per
+  load. A slot that carries a configuration annotation (`@Value`) has no entry, for every model.
+  Under `candidates`, a slot whose type has type arguments has no entry. A Kotlin `@JvmStatic`
+  companion recipe and its static forwarder are one recipe (measured: Dagger 2.57.2 calls the
+  forwarder).
+- **The hop** in `values._parameter`: the frame, then `stop_at_parameters_of`, then the table,
+  then callers. `ProvidedBy` resolves each return of the recipe in its own body (step
+  `<recipe> returns <n>`). `Ambiguous` answers `unresolved`, reason `non_enumerable` (the
+  existing word: several values the walk does not choose between). `NotProvided` or no entry
+  reads as before.
+- **Spring ladder (Task 4, review m3):** the qualifier and name rungs of a non-channel reference
+  choose only among the beans of the parameter's type or a subtype of it
+  (`dispatch.ancestry_of`), as `determineAutowireCandidate` does.
+- **Fixture:** `fixtures/orders-dagger` (Maven, Kotlin 2.4.20 with kapt, Dagger 2.57.2, Retrofit
+  2.11.0, JDK 21; plain Dagger `@Component`s, and Hilt's `@InstallIn` modules were measured on the
+  Task 3 kapt probe). The
+  other-module recipe is in the library `fixtures/orders-dagger-network` (Java, installed by
+  `tests/fixture_stub.py`). `tests/e2e/test_dagger_recipes.py` pins its eight Retrofit rows: six
+  resolved, `region` (two recipes of one key) and `shared` (recipe in the library) partial.
+- **Measured:** see the Task 4 report (`.superpowers/sdd/2026-11-05-di-recipe-hop/task-4-report.md`).
+- **Not verified:** NotyKT (needs a JDK 17 toolchain).
+- **Logged:** OI-315 (other-module recipe, `Provider<T>`/`Lazy<T>`, `@Binds`, field injection),
+  OI-316 (qualifier defaults, wildcard variance, primitive and boxed), OI-317 (Spring constructor
+  injection), OI-318 (Koin, Metro), OI-319 (an unreachable difference between the recipe step
+  and the caller loop).

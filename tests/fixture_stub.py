@@ -25,7 +25,8 @@ library coordinate through.
 **More than one library.** `LIBRARIES` lists every fixture that is a dependency jar of
 another fixture: the stub above, and `orders-vertx-web-base`, the jar holding the shapes
 Hono keeps in `service-base` (Vert.x Web spec 2026-10-30 §3f), which `orders-vertx-web`
-declares and which must stay OUTSIDE that module's own classes. Each is built and laid down
+declares and which must stay OUTSIDE that module's own classes, and `orders-dagger-network`, the
+Dagger module `orders-dagger` includes from another build module. Each is built and laid down
 by the steps above, one after another. The functions take the library as their last
 argument and default to the first, so every caller written for the stub alone — the suite's
 session fixture, `fixture_build`'s fingerprint, the tests that patch `local_repository_jar`
@@ -61,6 +62,11 @@ LIBRARIES = (
     Library(STUB_GROUP, STUB_ARTIFACT, STUB_VERSION, STUB),
     Library(
         "com.example", "orders-vertx-web-base", "1.0.0", REPO / "fixtures" / "orders-vertx-web-base"
+    ),
+    # The Dagger module `orders-dagger` includes from another build module (spec 2026-11-05
+    # di-recipe-hop §3): its recipe must stay outside that module's own classes.
+    Library(
+        "com.example", "orders-dagger-network", "1.0.0", REPO / "fixtures" / "orders-dagger-network"
     ),
 )
 

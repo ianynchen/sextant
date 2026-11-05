@@ -1,0 +1,63 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme</groupId>
+  <artifactId>orders-dagger</artifactId>
+  <version>1.0.0</version>
+  <!-- Retrofit clients that Dagger makes (spec 2026-11-05 di-recipe-hop, OI-304): a parameter the
+       container fills receives the value of the one recipe (`@Provides` method) the container
+       chooses for it. Kotlin `object` and `class` modules and a Java module with a static
+       recipe; `@Named`, a custom qualifier, a qualified base `String`; an `@Inject` constructor
+       that makes a client; one key with two recipes in two components; and a recipe in another
+       build module (`orders-dagger-network`, a jar). Kotlin 2.4.20 with kapt, Dagger 2.57.2,
+       Retrofit 2.11.0; never run, but Dagger's processor checks every component's wiring at
+       build time. Built with JDK 21 (javac 27 renumbers lambdas). -->
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <maven.compiler.parameters>true</maven.compiler.parameters>
+    <kotlin.version>2.4.20</kotlin.version>
+    <dagger.version>2.57.2</dagger.version>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency><groupId>org.jetbrains.kotlin</groupId><artifactId>kotlin-stdlib</artifactId><version>${kotlin.version}</version></dependency>
+    <dependency><groupId>com.google.dagger</groupId><artifactId>dagger</artifactId><version>${dagger.version}</version></dependency>
+    <dependency><groupId>com.squareup.retrofit2</groupId><artifactId>retrofit</artifactId><version>2.11.0</version></dependency>
+    <dependency><groupId>com.example</groupId><artifactId>orders-dagger-network</artifactId><version>1.0.0</version></dependency>
+  </dependencies>
+  <build>
+    <plugins>
+      <!-- kapt first: Dagger's processor reads the Kotlin and the Java sources and writes the
+           components and factories as Java. Then kotlinc, then javac for the Java sources and
+           the generated ones, with no processor of its own. -->
+      <plugin>
+        <groupId>org.jetbrains.kotlin</groupId><artifactId>kotlin-maven-plugin</artifactId><version>${kotlin.version}</version>
+        <executions>
+          <execution>
+            <id>kapt</id>
+            <goals><goal>kapt</goal></goals>
+            <configuration>
+              <sourceDirs><sourceDir>src/main/kotlin</sourceDir><sourceDir>src/main/java</sourceDir></sourceDirs>
+              <annotationProcessorPaths>
+                <annotationProcessorPath><groupId>com.google.dagger</groupId><artifactId>dagger-compiler</artifactId><version>${dagger.version}</version></annotationProcessorPath>
+              </annotationProcessorPaths>
+            </configuration>
+          </execution>
+          <execution>
+            <id>compile</id><phase>compile</phase><goals><goal>compile</goal></goals>
+            <configuration>
+              <sourceDirs><sourceDir>src/main/kotlin</sourceDir><sourceDir>src/main/java</sourceDir></sourceDirs>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId>
+        <configuration><proc>none</proc></configuration>
+        <executions>
+          <execution><id>default-compile</id><phase>none</phase></execution>
+          <execution><id>java-compile</id><phase>compile</phase><goals><goal>compile</goal></goals></execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
