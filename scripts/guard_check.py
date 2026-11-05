@@ -1414,6 +1414,24 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "detect.a-part-with-NO-JVM-TARGET-is-skipped-with-that-reason": Guard(
+        what="the init script's reason for a part with only JS or Kotlin/Native versions "
+        "reaches the module and is the reason it is skipped",
+        why='without it the part is skipped as "packaging is pom", which says nothing of '
+        "why it holds nothing to read (Android outbound Task 7)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find='            skip_reason=project.get("skipReason"),\n',
+                replace="            skip_reason=None,  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path="sextant/api.py",
+                find="    if module.skip_reason is not None:\n        return module.skip_reason\n",
+                replace="",
+            ),
+        ),
+    ),
     "enrich.a-module-in-a-SHARED-folder-writes-its-OWN-description-file": Guard(
         what="`enrich` writes the description file named with the module's version name, so "
         "two modules in one folder keep their own",
@@ -1523,6 +1541,20 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/egress/render/document.py",
                 find="    coverage_items += _type_header_items(report.coverage, module)\n",
                 replace="",
+            ),
+        ),
+    ),
+    "render.every-BUILD-TOOL-answer-is-named-as-resolved": Guard(
+        what="the coverage line calls every dependency set a build tool resolved (`maven`, "
+        "`gradle`) resolved by that tool",
+        why="without it every Gradle module read as \"the build file's declared set — the "
+        'build tool was not asked" while its metadata said `dependency_source: gradle` '
+        "(Android outbound Task 7)",
+        edits=(
+            Edit(
+                path="sextant/egress/render/document.py",
+                find='        if module.dependency_source == "declared"\n',
+                replace='        if module.dependency_source != "maven"  # guard disabled by scripts/guard_check.py\n',
             ),
         ),
     ),

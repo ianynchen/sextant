@@ -1781,3 +1781,28 @@ def test_a_schedule_expression_passes_the_render_redactor_in_the_table_and_the_d
     assert "ACME_A1B2" not in text
     assert f"| `com/acme/OrderSweeper#sweep().` | cron | — | `{shown}` | unresolved |" in text
     assert f"- `com/acme/OrderSweeper#sweep().` — cron `{shown}`\n" in text
+
+
+@pytest.mark.parametrize(
+    ("source", "words"),
+    [("maven", "resolved by Maven"), ("gradle", "resolved by Gradle")],
+)
+@pytest.mark.pins("render.every-BUILD-TOOL-answer-is-named-as-resolved")
+def test_the_coverage_line_names_the_build_tool_that_resolved_the_dependencies(source, words):
+    """Every build tool's own answer is a resolved set, and the line names that tool
+    (Android outbound Task 7). A Gradle module read as "the build file's declared set"
+    while its `metadata.json` said `dependency_source: gradle`."""
+    module = replace(MODULE, dependency_source=source)
+    report = replace(REPORT, coverage={**REPORT.coverage, "type_headers": 3})
+    text = render_module_document(module, report, "a3f91c")
+    assert (
+        "- Dependency types the header read reached: 3 — header read for 3, found in no "
+        f"dependency archive 0 (dependencies: {words})."
+    ) in text
+
+
+def test_the_coverage_line_says_why_a_declared_set_was_used():
+    module = replace(MODULE, dependency_source_reason="mvn is not on PATH")
+    report = replace(REPORT, coverage={**REPORT.coverage, "type_headers": 3})
+    text = render_module_document(module, report, "a3f91c")
+    assert "(dependencies: the build file's declared set — mvn is not on PATH)." in text

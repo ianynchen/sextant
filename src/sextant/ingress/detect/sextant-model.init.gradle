@@ -200,6 +200,34 @@ def androidTargetName = { p ->
     p.kotlin.targets.find { it.platformType.name() == "androidJvm" }?.name
 }
 
+// The Kotlin compilation of one Android build of a Kotlin Multiplatform part: the
+// compilation of the Android version that has the name of the build (`release`,
+// `freeRelease`), or the `main` compilation where the Android version has one build only
+// (the Android library plugin for Kotlin Multiplatform). Null for a part that is not
+// Kotlin Multiplatform. Its source sets are all the Kotlin source sets that the build
+// compiles, `commonMain` included. AGP 8 does not list `commonMain` in the build's own
+// `kotlin` sources, and Sextant got no source file for code in it.
+def androidCompilation = { p, String buildName ->
+    def name = androidTargetName(p)
+    if (name == null) return null
+    def compilations = p.kotlin.targets.getByName(name).compilations
+    compilations.findByName(buildName) ?: compilations.findByName("main")
+}
+
+// Whether a folder holds a compiled class. A plugin can give AGP a folder of other files
+// as compiled classes, so that AGP puts them into the app: the Kotlin plugin does this
+// with its `kotlinToolingMetadata` folder for a release build of an app. Sextant reads
+// class files only, so such a folder is not a class folder.
+def holdsClassFile = { File dir ->
+    if (!dir.isDirectory()) return false
+    def files = java.nio.file.Files.walk(dir.toPath())
+    try {
+        files.anyMatch { it.fileName.toString().endsWith(".class") }
+    } finally {
+        files.close()
+    }
+}
+
 // The Android plugins whose builds Sextant reads (Android design 2a).
 def androidPluginIds = [
     "com.android.application",
@@ -264,6 +292,16 @@ gradle.rootProject { rp ->
                             target: target.name,
                             platform: "jvm",
                         ])
+                    }
+                    // A part with no JVM version and no Android build (only JS or
+                    // Kotlin/Native versions) holds nothing Sextant reads. Its record
+                    // says so and names the versions; the part was built, so this is
+                    // not a build failure. The `common` metadata version is not named.
+                    if (records.isEmpty() && !android.applied) {
+                        def names = p.kotlin.targets.findAll { it.platformType.name() != "common" }
+                            .collect { it.name }.sort()
+                        records << (sextantRecord(p, [:]) + [skipReason:
+                            "no JVM or Android target: Sextant reads JVM bytecode only (targets: ${names.join(", ") ?: "none"})".toString()])
                     }
                 } else if (p.plugins.hasPlugin("java")) {
                     def main = p.sourceSets.main
@@ -415,10 +453,19 @@ gradle.rootProject { rp ->
                                     languageDirs[language] = set.all.get().collect { it.asFile }
                                 }
                             }
+                            // For a Kotlin Multiplatform part, also the source folders of
+                            // each Kotlin source set that the build's Kotlin compilation
+                            // compiles, as the JVM version above reads them. A folder that
+                            // AGP lists too is listed once.
+                            def compilation = androidCompilation(p, variant.name)
+                            if (compilation != null) {
+                                languageDirs.kotlin = ((languageDirs.kotlin ?: [])
+                                    + compilation.allKotlinSourceSets.collectMany { it.kotlin.srcDirs as List }).unique()
+                            }
                             android.records << (sextantRecord(p, [
                                 sourceSets: languageDirs,
                                 resourceDirs: [],
-                                classesDirs: task.dirs.get().collect { it.asFile },
+                                classesDirs: task.dirs.get().collect { it.asFile }.findAll { holdsClassFile(it) },
                                 // AGP offers each library on the compile classpath in
                                 // several forms, so one must be named (Android design 2e.7):
                                 // without it, Gradle refuses the classpath as ambiguous.

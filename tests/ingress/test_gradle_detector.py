@@ -357,6 +357,33 @@ def test_a_project_without_the_java_plugin_reports_packaging_pom_and_no_source(t
     assert module.output_dirs == ()
 
 
+@pytest.mark.pins("detect.a-part-with-NO-JVM-TARGET-is-skipped-with-that-reason")
+def test_a_part_with_no_jvm_bytecode_target_carries_the_init_scripts_skip_reason(tmp_path: Path):
+    """A Kotlin Multiplatform part whose versions are all JS or Kotlin/Native has nothing
+    Sextant reads, and the init script says so in its own words (Android outbound Task 7).
+    It is not a build failure: the part was built."""
+    reason = "no JVM or Android target: Sextant reads JVM bytecode only (targets: iosArm64, js)"
+    project = {
+        **_project(tmp_path, publishing=False, classes_dirs=[], source_roots=[]),
+        "skipReason": reason,
+    }
+    module = GradleDetector._module_of(tmp_path, project)
+    assert module.skip_reason == reason
+    assert module.build_failure is None
+
+
+def test_a_project_with_no_skip_reason_has_none(tmp_path: Path):
+    project = _project(tmp_path, publishing=False, classes_dirs=[], source_roots=[])
+    assert GradleDetector._module_of(tmp_path, project).skip_reason is None
+
+
+def test_the_init_script_names_the_targets_of_a_part_with_no_jvm_target():
+    """Capture-free: the reason is the script's own text (Android outbound Task 7)."""
+    script = Path(gradle_module.__file__).with_name("sextant-model.init.gradle").read_text()
+    assert '"no JVM or Android target: Sextant reads JVM bytecode only (targets: ' in script
+    assert "skipReason:" in script
+
+
 # --- composite builds and a root that carries its own source (fix round 1,
 # I1/I2) -----------------------------------------------------------------
 

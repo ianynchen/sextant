@@ -3054,11 +3054,13 @@ def _type_header_items(coverage: dict[str, object], module: ModuleModel) -> list
     unlocated = int(str(coverage.get("type_headers_unlocated", 0) or 0))
     if read + unlocated == 0:
         return []
+    # Every value other than `declared` names the build tool that resolved the set
+    # (`maven`, `gradle`), and the line names that tool (Android outbound Task 7).
     source = (
-        "resolved by the build tool"
-        if module.dependency_source == "maven"
-        else "the build file's declared set — "
+        "the build file's declared set — "
         + (module.dependency_source_reason or "the build tool was not asked")
+        if module.dependency_source == "declared"
+        else f"resolved by {module.dependency_source.capitalize()}"
     )
     return [
         _runs(

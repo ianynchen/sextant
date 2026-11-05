@@ -691,6 +691,9 @@ class GradleDetector:
             # every record, not only from one `_assemble` made for a project with no file:
             # a record the init script writes may carry one too.
             build_failure=project.get("buildFailure"),
+            # The init script's reason that a project it read holds nothing Sextant reads
+            # (Android outbound Task 7). It is not a build failure: the project was built.
+            skip_reason=project.get("skipReason"),
             results_name=identity.results_name,
         )
 

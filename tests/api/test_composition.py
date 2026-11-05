@@ -128,6 +128,27 @@ def test_skip_reason_puts_a_build_failure_first():
     assert api._skip_reason(module) == "not built: a part it needs failed to build (:lib)"
 
 
+@pytest.mark.pins("detect.a-part-with-NO-JVM-TARGET-is-skipped-with-that-reason")
+def test_skip_reason_gives_the_detectors_own_reason_before_packaging():
+    """A Kotlin Multiplatform part with only JS or Kotlin/Native versions has no classes, so
+    its packaging is `pom`; the detector's reason says why, and is given instead (Android
+    outbound Task 7)."""
+    reason = "no JVM or Android target: Sextant reads JVM bytecode only (targets: js)"
+    module = ModuleModel(
+        module_id="g:a",
+        coordinates="g/a",
+        version="1.0.0",
+        root=Path("."),
+        kind="undetermined",
+        languages=frozenset(),
+        source_roots=(),
+        output_dirs=(),
+        packaging="pom",
+        skip_reason=reason,
+    )
+    assert api._skip_reason(module) == reason
+
+
 def test_skip_reason_is_none_for_an_ordinary_undetermined_jar_module(tmp_path: Path):
     """The ruled amendment's whole point: `undetermined` alone is no longer
     a skip reason."""

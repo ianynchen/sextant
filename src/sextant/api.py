@@ -463,6 +463,10 @@ def _skip_reason(module: ModuleModel) -> str | None:
     # that was not built also has no classes, and the rules below would give only that.
     if module.build_failure is not None:
         return module.build_failure
+    # Next, for the same reason: the detector's own words for a module that was built and
+    # holds nothing to read say more than its packaging (Android outbound Task 7).
+    if module.skip_reason is not None:
+        return module.skip_reason
     if module.packaging == "pom":
         return "packaging is pom"
     # The same evidence in another build's words (OI-273 fix round 1): no source root on
