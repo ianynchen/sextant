@@ -36,8 +36,10 @@ here would restate those documents rather than add anything.
   only registrations of its own mechanism, `match: all` and `one` reach every matching
   registration. A sent value no `new`, constant or module factory names (an instance call's
   result such as `new E().setA(a)`, a parameter, a field) is read by its DECLARED type: every
-  registration of that type or a supertype is certainly reached under `all` and `one`, and
-  under `first` only in a group where no case names a strict subtype. A key that is still not
+  registration of that type or a supertype is certainly reached, under every `match`; where a
+  registration names a strict subtype (it may run too), or under `first` an earlier case may
+  take a subtype, the send also writes the not-read row, never a stop saying nobody handles
+  the type. A key that is still not
   read is a stop that says so (`(key not read)`), never a fan-out. A registration whose
   parameter is generic (a type variable, type arguments) is kept with no key, for every
   registration kind. A catalog with sends or delivering handlers and no `protocol` is refused
@@ -46,9 +48,7 @@ here would restate those documents rather than add anything.
   only those: 0 false hops, no missing hop outside a stated bound, and no endpoint row moved
   on any module; the six field pins hold.
   - **Akka and Pekko** were re-expressed in the general words; their rows and hops are unchanged
-    on both fixtures and the two Pekko samples (5 rows, 28 hops, 23 registrations; six stops
-    for messages to system actors now name the factory's declared class, `Subscribe` and
-    `Receptionist$Command`, where they read `(key not read)`; no handler hop moved).
+    on both fixtures and the two Pekko samples (5 rows, 28 hops, 23 registrations, identical).
   - **Spring application events** (spring-context and spring-tx 7.0.1): `spring-events.yml`, an
     `annotation_driven` catalog. Each `@EventListener` / `@TransactionalEventListener` method is
     keyed by the classes its annotation names (`path_from: [classes, value]`) or its one

@@ -121,6 +121,8 @@ _CONSTRUCTOR = "<init>"
 # A conformance entry's subtype meaning every type (`type-models/conformance.yml`): its
 # supertype is the root type, a supertype of every class.
 _EVERY_TYPE = "*"
+# The ancestry link naming a type's superclass (`dispatch.ancestry_of`): its target is a class.
+_EXTENDS = "extends"
 # A JVM descriptor slot naming a class or interface type (JVMS 4.3.2): the only declared type
 # a value is read by.
 _REFERENCE = "L"
@@ -364,6 +366,7 @@ class _Reading:
         self._sites = workspace.once(call_site_index).by_caller
         self._field_types: dict[str, tuple[str | None, bool]] | None = None
         self._parameter_types: dict[str, list[str | None]] | None = None
+        self._known_classes: frozenset[str] | None = None
         # `key_handlers`' per-run inputs (GUIDELINES §8.7): each value registration's constant's
         # class, read once, and each key class's answer, so a key class many inbound rows
         # share walks the module's types once rather than once per row.
@@ -391,6 +394,27 @@ class _Reading:
                 dict.fromkeys(case["handler"] for case in reached)
             )
         return self._key_handlers[(key_class, mechanism)]
+
+    def _classes(self) -> frozenset[str]:
+        """The types known to be classes, not interfaces, read once per resolve: each module
+        type that is no interface (`interface_symbols`), and each type some class extends (a
+        superclass, D00 §5a). Any other type may be an interface; `certain_cases` treats it so."""
+        if self._known_classes is None:
+            dispatch = self._workspace.once(dispatch_of)
+            interfaces = {
+                bare_descriptor(str(row["symbol"]))
+                for row in self._workspace.query("interface_symbols")
+            }
+            extended = {
+                ancestor
+                for ancestors in dispatch.ancestors.values()
+                for ancestor, kind, _ in ancestors
+                if kind == _EXTENDS
+            }
+            self._known_classes = frozenset(
+                (set(dispatch.ancestors) - interfaces) | (extended - interfaces)
+            )
+        return self._known_classes
 
     def _constant_classes(self) -> dict[str, str | None]:
         """Each value registration's constant's class, read once per resolve."""
@@ -657,7 +681,7 @@ class _Reading:
             for case in cases:
                 self._rooted(case["key_type"])
             cases, undecided = certain_cases(
-                cases, key_type, self._supertypes, self._constant_classes()
+                cases, key_type, self._supertypes, self._constant_classes(), self._classes()
             )
         reached = reached_by(cases, key_type, key_value, self._supertypes)
         handlers = sorted({case["handler"] for case in reached}, key=lambda h: (h is None, h))

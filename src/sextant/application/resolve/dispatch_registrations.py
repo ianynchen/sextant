@@ -264,33 +264,77 @@ def certain_cases(
     key_type: str,
     supertypes: Mapping[str, set[str]],
     constant_classes: Mapping[str, str | None],
+    known_classes: frozenset[str],
 ) -> tuple[list[dict[str, Any]], bool]:
     """The registrations a value read only by its DECLARED type (a call's declared return, a
-    parameter's or a field's type) is asked of, and whether any group was left out. Such a
+    parameter's or a field's type) is asked of, and whether the send is also NOT READ. Such a
     value is `key_type` or any subtype of it, so every registration of `key_type` or a
-    supertype of it is certainly reached under `all` and `one`. Under `first` that holds only
-    in a group where no case names a strict subtype of `key_type` — a class registration of a
-    type below it, or a value registration whose constant is of `key_type` or below (or of a
-    class not read): the value may be one, and that case would take it first. Such a group is
-    left out (the value is not read there), never asked as if the value were exactly
-    `key_type`."""
-    undecided: set[str] = set()
+    supertype of it is certainly reached, and those hops are true under every `match`
+    (ruling 14 as corrected by the re-review, 2026-11-05). What the declared type cannot say:
+
+    - **Under `all` and `one`, a registration naming a strict subtype** (a class registration
+      of a type below it, or a value registration whose constant is of `key_type` or below, or
+      of a class not read) may take the value too: the certain hops are kept and the send is
+      also not read, never a stop naming `key_type` as if nobody handled it.
+    - **Under `first`, a case before the group's first certain unpredicated case** that may
+      take some subtype of `key_type` leaves the group out (not read there): a case naming a
+      strict subtype, or a type unrelated to `key_type` (neither above nor below it) unless
+      both are classes (`known_classes`: a subtype of a class extends no unrelated class), and
+      a value case whose constant's class is not such an unrelated class. A case after the
+      first certain one is never reached. Finality is not read, so a final declared type is
+      treated as one a subclass may extend (not read where it could have been, never false).
+
+    Returns the registrations to ask (every row but the left-out groups) and whether the send
+    adds the not-read row."""
+    above = _ancestry(key_type, supertypes)
+
+    def below(type_: str) -> bool:
+        return type_ != key_type and key_type in _ancestry(type_, supertypes)
+
+    def unrelated_class(type_: str) -> bool:
+        return (
+            type_ not in above
+            and not below(type_)
+            and type_ in known_classes
+            and key_type in known_classes
+        )
+
+    narrower = False
+    groups: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
-        if row["match"] != _FIRST:
-            continue
         if row["key_type"] is not None:
-            narrower = row["key_type"] != key_type and key_type in _ancestry(
-                str(row["key_type"]), supertypes
-            )
+            names_below = below(str(row["key_type"]))
         elif row["key_value"] is not None:
             constant_class = constant_classes.get(str(row["key_value"]))
-            narrower = constant_class is None or key_type in _ancestry(constant_class, supertypes)
+            names_below = constant_class is None or key_type in _ancestry(
+                constant_class, supertypes
+            )
         else:
-            narrower = False
-        if narrower:
-            undecided.add(str(row["group"]))
+            names_below = False
+        if row["match"] == _FIRST:
+            groups.setdefault(str(row["group"]), []).append(row)
+        elif names_below:
+            narrower = True
+    undecided: set[str] = set()
+    for group, registrations in groups.items():
+        for registration in sorted(registrations, key=lambda row: int(row["position"])):
+            case_type = registration["key_type"]
+            if case_type is not None and str(case_type) in above:
+                if not registration["predicated"]:
+                    break
+                continue
+            if case_type is not None:
+                may_take = not unrelated_class(str(case_type))
+            elif registration["key_value"] is not None:
+                constant_class = constant_classes.get(str(registration["key_value"]))
+                may_take = constant_class is None or not unrelated_class(constant_class)
+            else:
+                may_take = False
+            if may_take:
+                undecided.add(group)
+                break
     kept = [row for row in rows if row["match"] != _FIRST or str(row["group"]) not in undecided]
-    return kept, bool(undecided)
+    return kept, narrower or bool(undecided)
 
 
 def served_cases(

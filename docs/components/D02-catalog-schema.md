@@ -6312,11 +6312,19 @@ matches:
   instance call, `new E().setA(a)`'s chained setters; a library method), and a return the body
   does not name, by the call's descriptor's return type; a `parameter` by the method's
   declared parameter type; an instance `field` by the field's declared type. The value is
-  that type or a subtype, so under `match: all` and `one` every registration of the type or a
-  supertype is certainly reached; under `first` a group in which a case names a strict
-  subtype of it (a class registration, or a value registration whose constant is of the type
-  or below) is not read, since that case may take the value first
-  (`dispatch_registrations.certain_cases`): the send adds the not-read row. Anything else (an
+  that type or a subtype, so every registration of the type or a supertype is certainly
+  reached, and those hops are true under every `match` (`dispatch_registrations.certain_cases`,
+  ruling 14 as corrected 2026-11-05). What the type cannot say is said by the not-read row:
+  under `all` and `one`, where any registration of the mechanism names a strict subtype (a
+  class registration below the type, or a value registration whose constant is of the type,
+  below it or not read), the send writes the not-read row beside its certain hops, never a
+  stop naming the type as if nobody handled it. Under `first`, a group is not read (and the
+  send writes the not-read row) where a case before the group's first certain unpredicated
+  case may take a subtype: a case naming a strict subtype, a type unrelated to the declared
+  one unless both are known classes (a module type that is no interface, or a type some class
+  extends: a subclass extends no unrelated class), or a value case whose constant's class is
+  not such a class. Finality is not read, so a final declared type is treated as subclassable
+  (not read where it could have been, never false). Anything else (an
   array element, a `merge`, a primitive or array declared type) is not read, and the row says
   so (`(key not read)`).
   A value's class reaches a registration of any of its supertypes: the scanned and headered

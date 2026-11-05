@@ -236,9 +236,20 @@ Rulings of the final review's fix wave (2026-11-05, the controller's, under ruli
 14. **A sent value no instance names is read by its declared type** (final review I-1:
     ruoyi-vue-pro builds every event as `new E().setA(..)`, an instance call's result): a call's
     declared return type (its descriptor), a parameter's or an instance field's declared type.
-    Exact under `match: all` and `one`; under `first` used only in a group where no case names a
-    strict subtype of it, otherwise not read. Cost if wrong: a supertype-typed value reaches
-    the supertype's listeners only (true under `all`), missing a subtype's.
+    **Corrected by the re-review (2026-11-05):** the hops written, to registrations of the
+    type or a supertype, are exact under every `match`; but the declared type does not say
+    whether a subtype's registration also runs, so where any registration of the mechanism
+    names a strict subtype, the send ALSO writes the not-read row (`(key not read)`), never a
+    stop naming the type with no handler, which would say nobody handles it
+    (`publish(DomainEvent e)` with only implementations' listeners; `for (Object e : events)`).
+    Under `first` a group is not read where a case before its first certain case may take a
+    subtype: a strict subtype, or a type unrelated to the declared one unless both are known
+    classes, or a value case whose constant's class is not such a class (`[Loggable, Command]`
+    with a `Command` that is also `Loggable`). The first build applied the strict-subtype test
+    whatever the case's position; a case after the first certain one is never reached, so
+    position now counts. Finality is not read (a final declared type is treated as
+    subclassable). Cost if wrong: a declared-type send's hops are incomplete, which the
+    not-read row says.
 15. **Qualifier-ness comes from the DI bean model** (final review I-2): `bean-models/cdi.yml`
     declares `qualifier_meta_annotations`, the CDI catalogs name it, and the catalog word
     `mapping.keyless_when_meta_annotated` is gone. Cost: one indirection.
@@ -299,7 +310,8 @@ hop, except the three over-linking object-key bounds, which merge two objects in
   parameter (`Base<E> implements ApplicationListener<E>`, `@EventListener on(T e)`,
   `on(Envelope<X> e)`) is kept with no key (ruling 16), so it gets no hop; a value read by its
   declared type (ruling 14: a parameter, a field, an instance call's result, a static factory
-  called through a subclass) reaches the listeners of that type and its supertypes only.
+  called through a subclass) reaches the listeners of that type and its supertypes only, and
+  writes the not-read row beside them where a subtype has a listener.
 - **CDI:** the fire sites' qualifiers and type arguments are not read, so a qualified,
   parameterized or type-variable observer has a registration and no hop; `BeanManager.fireEvent` is not
   declared; `@Observes` and `@ObservesAsync` on one catalog's parameters would register twice
@@ -319,9 +331,9 @@ hop, except the three over-linking object-key bounds, which merge two objects in
   compiled by javac to an indy lambda (not a kotlinc class) has no handler read. Views are
   scoped per catalog, not per mechanism.
 - **Every kind:** a class key no `new`, constant or module factory names is read by its
-  declared type (ruling 14), under `first` only where no case names a strict subtype; a key
-  still not read (an array element, an injected object, a `first` group the declared type does
-  not decide) is a stop that says so, `(key not read)`, never a fan-out. One class named by `class_arg` anywhere in a catalog makes all
+  declared type (ruling 14): its certain hops, plus the not-read row where a subtype's
+  registration may also take it or, under `first`, an earlier case may; a key still not read
+  (an array element, an injected object) is a stop that says so, `(key not read)`, never a fan-out. One class named by `class_arg` anywhere in a catalog makes all
   its inbound rows key rows (D02, `channel_via`).
 
 ### Deferred

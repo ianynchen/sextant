@@ -186,9 +186,11 @@ site, or no row.
   handler. A class no registration takes is one row with `handler` NULL. A static module
   factory's result is read through its body's returns; a value no `new`, constant or factory
   names (an instance or library call's result, a parameter, an instance field) by its
-  DECLARED type, reaching under `match: first` only the groups where no case names a strict
-  subtype of it (D02 §2m). A key not read (an array element, a `merge`; under `first`, a
-  group the declared type does not decide) is one row with `path` and `handler` NULL: the two
+  DECLARED type: one row per registration of that type or a supertype, certain under every
+  `match`, plus the not-read row where a registration names a strict subtype (it may run too)
+  or, under `first`, where a behavior's earlier case may take a subtype (D02 §2m). A key not
+  read (an array element, a `merge`; a declared type that does not decide every handler) is
+  one row with `path` and `handler` NULL: the two
   NULLs are what say so, and never a fan-out. `evidence` is `compiler` on every dispatch hop
   row, as on every gRPC one, inside [D00](D00-fact-schema.md) §4's closed set: the send site
   is a compiler fact. A handler whose registration `delivers` continues: each class it

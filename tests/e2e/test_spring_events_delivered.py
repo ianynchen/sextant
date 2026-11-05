@@ -173,14 +173,36 @@ def test_an_event_built_with_chained_setters_reaches_its_listeners(tables):
 @pytest.mark.pins("dispatch-hops.a-PARAMETER-or-FIELD-is-its-DECLARED-type")
 def test_a_parameter_or_a_field_is_read_as_its_declared_type(tables):
     """`republish(Object event)` publishes a parameter declared `Object`: only the listener of
-    `Object` is certainly reached (the others would be guesses, missing hops rather than false
-    ones). `publishEvent(lastShipped)` publishes an instance field declared `OrderShipped`."""
+    `Object` is certainly reached, and since listeners of its subtypes exist (they may run
+    too), the not-read row stands beside that hop, never a guess at them. `publishEvent(
+    lastShipped)` publishes an instance field declared `OrderShipped`, which nothing below it
+    is registered for: its listeners are the whole answer."""
     assert _hops_from(tables, "OrderService#republish") == {
-        ("in_process", "Object", "AnyListener#on")
+        ("in_process", "Object", "AnyListener#on"),
+        ("in_process", None, None),
     }
     assert _hops_from(tables, "OrderService#publishLast") == {
         ("in_process", "OrderShipped", "ShippingListener#on"),
         ("in_process", "OrderShipped", "AnyListener#on"),
+    }
+
+
+@pytest.mark.pins("dispatch-hops.a-DECLARED-type-with-SUBTYPE-registrations-is-NOT-READ")
+def test_a_declared_type_whose_subtypes_have_listeners_is_never_a_nobody_handles_stop(tables):
+    """`publish(DomainEvent e) { publishEvent(e); }`: no listener names `DomainEvent`, but
+    `ParcelListener` names `Parcel`, which implements it, and runs when a `Parcel` is
+    published. The listener of `Object` is the one certain hop; a stop naming `DomainEvent`
+    with no handler would say nobody else handles it, which is false, so the not-read row
+    stands beside the hop. `for (Object e : events) publishEvent(e)` reads
+    `Iterator.next()`'s declared `Object`: the listener of `Object` is a certain hop, and since
+    listeners of its subtypes exist, the not-read row stands beside it."""
+    assert _hops_from(tables, "DomainEvents#publish") == {
+        ("in_process", "DomainEvent", "AnyListener#on"),
+        ("in_process", None, None),
+    }
+    assert _hops_from(tables, "DomainEvents#publishAll") == {
+        ("in_process", "Object", "AnyListener#on"),
+        ("in_process", None, None),
     }
 
 

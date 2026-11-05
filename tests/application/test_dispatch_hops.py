@@ -281,6 +281,70 @@ def test_under_first_a_declared_type_is_read_only_where_no_case_names_a_subtype(
     ]
 
 
+@pytest.mark.pins("dispatch-hops.under-FIRST-an-EARLIER-UNRELATED-case-leaves-the-group-NOT-READ")
+def test_under_first_an_earlier_unrelated_interface_case_leaves_the_group_unread(tmp_path: Path):
+    """`[Loggable, Command]` and a value declared `Command`: a `Command` implementing
+    `Loggable` is taken by the first case at run time, so the group is not read, never a hop
+    to `onCommand`. An earlier case of a class both are known classes unrelated to cannot
+    take it (`[Ping, Command]`, `Ping` and `Command` module classes): that group is a hop."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace._connection.execute(
+            "INSERT INTO dispatch_registrations VALUES "
+            "('m Log#create(sig_1).#0', 0, 'Loggable#', NULL, NULL, false, "
+            "'m Log#onLoggable(sig_2).', false, 'first', 'pekko'), "
+            "('m Log#create(sig_1).#0', 1, 'Command#', NULL, NULL, false, "
+            "'m Log#onCommand(sig_3).', false, 'first', 'pekko')"
+        )
+        reading = _Reading(workspace, [])
+        unrelated = reading.hops(
+            "m Relay#forward(sig_6).", 0, ("Command#", None, None, None, True), "actor", "pekko"
+        )
+        reading._known_classes = frozenset({"Command#", "Loggable#"})
+        both_classes = reading.hops(
+            "m Relay#forward(sig_6).", 0, ("Command#", None, None, None, True), "actor", "pekko"
+        )
+    finally:
+        workspace.close()
+    assert [(row["path"], row["handler"]) for row in unrelated] == [(None, None)]
+    assert [(row["path"], row["handler"]) for row in both_classes] == [
+        ("Command#", "m Log#onCommand(sig_3).")
+    ]
+
+
+@pytest.mark.pins("dispatch-hops.a-DECLARED-type-with-SUBTYPE-registrations-is-NOT-READ")
+def test_under_all_a_declared_type_with_subtype_listeners_adds_the_unread_row(tmp_path: Path):
+    """Under `all`, a value declared `Command` certainly reaches the listener of `Command`; a
+    listener of `Reserve`, below it, may run too, so the not-read row stands beside the hop.
+    With only the subtype's listener there is no "nobody handles it" stop naming `Command`."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace._connection.execute(
+            "INSERT INTO dispatch_registrations VALUES "
+            "('m A#on(sig_1).', 0, 'Reserve#', NULL, NULL, false, 'm A#on(sig_1).', "
+            "false, 'all', 'events'), "
+            "('m B#on(sig_2).', 0, 'Command#', NULL, NULL, false, 'm B#on(sig_2).', "
+            "false, 'all', 'events')"
+        )
+        reading = _Reading(workspace, _RESERVE_IS_A_COMMAND)
+        both = reading.hops(
+            "m P#send(sig_3).", 0, ("Command#", None, None, None, True), "in_process", "events"
+        )
+        workspace._connection.execute(
+            "DELETE FROM dispatch_registrations WHERE \"group\" = 'm B#on(sig_2).'"
+        )
+        only_below = _Reading(workspace, _RESERVE_IS_A_COMMAND).hops(
+            "m P#send(sig_3).", 0, ("Command#", None, None, None, True), "in_process", "events"
+        )
+    finally:
+        workspace.close()
+    assert sorted([(row["path"], row["handler"]) for row in both], key=lambda pair: str(pair)) == [
+        ("Command#", "m B#on(sig_2)."),
+        (None, None),
+    ]
+    assert [(row["path"], row["handler"]) for row in only_below] == [(None, None)]
+
+
 # The shipped root-type conformance (`type-models/conformance.yml`): every class is an
 # `Object`, so `Get` is assignable to the listener's key.
 _ROOT = [{"subtype": "*", "supertype": "java.lang.Object", "by": "JLS 4.10.2"}]

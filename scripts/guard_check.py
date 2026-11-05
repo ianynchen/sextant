@@ -8142,16 +8142,44 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "dispatch-hops.under-FIRST-a-DECLARED-type-reads-only-where-no-SUBTYPE-case": Guard(
-        what="under `first`, a value read by its declared type is not read in a group where a "
-        "case names a strict subtype of it",
+        what="under `first`, a value read by its declared type is not read in a group where an "
+        "earlier case names a strict subtype of it",
         why="final review I-1 ruling: the value may be the subtype the earlier case takes. "
         "Asked as if exactly the declared type, a `tell(cmd)` hops to `onCommand` while the "
         "`Reserve` it carries runs `onReserve`: a false hop",
         edits=(
             Edit(
                 path=_DISPATCH_REGISTRATIONS,
-                find='            undecided.add(str(row["group"]))\n',
-                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+                find="                may_take = not unrelated_class(str(case_type))\n",
+                replace="                may_take = not unrelated_class(str(case_type)) and not "
+                "below(str(case_type))  # guard disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.under-FIRST-an-EARLIER-UNRELATED-case-leaves-the-group-NOT-READ": Guard(
+        what="under `first`, an earlier case naming a type unrelated to the declared type, not "
+        "both known classes, leaves the group not read",
+        why="re-review: `[Loggable, Command]` and a `Command` that also implements `Loggable` "
+        "runs `onLoggable`; a hop to `onCommand` would be false",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="                may_take = not unrelated_class(str(case_type))\n",
+                replace="                may_take = below(str(case_type))  # guard disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.a-DECLARED-type-with-SUBTYPE-registrations-is-NOT-READ": Guard(
+        what="under `all`/`one`, a value read by its declared type with registrations of a "
+        "strict subtype also writes the not-read row",
+        why="re-review: `publish(DomainEvent e)` with only `Parcel` listeners wrote a stop "
+        "naming `DomainEvent` with no handler, which says nobody handles it while the "
+        "`Parcel` listener runs",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        elif names_below:\n            narrower = True\n",
+                replace="        elif False:  # guard disabled\n            narrower = True\n",
             ),
         ),
     ),
