@@ -104,11 +104,23 @@ jobs:
         # fetches those and compiles both subprojects once, online, the same
         # "successful build first" precondition `MavenDetector`'s own priming
         # step states for `mvn`.
+        #
+        # `fixtures/gradle-android` is primed the same way, for
+        # `tests/e2e/test_gradle_android_fixture.py`. GitHub's Ubuntu runners carry
+        # the Android SDK and set `ANDROID_HOME` for every step, so the variable is
+        # not set here: `${{ env.ANDROID_HOME }}` names only variables the workflow
+        # sets, and would make it empty. Online, the Android Gradle Plugin downloads
+        # what the build needs and the runner does not have (the SDK platform the
+        # fixture compiles against).
         run: |
           cd fixtures/gradle-orders
           ./gradlew --init-script ../../src/sextant/ingress/detect/sextant-model.init.gradle \
             --no-configuration-cache --continue -q sextantBuild sextantModel \
             -Psextant.outDir=/tmp/sextant-model-prime
+          cd ../gradle-android
+          ./gradlew --init-script ../../src/sextant/ingress/detect/sextant-model.init.gradle \
+            --no-configuration-cache --continue -q sextantBuild sextantModel \
+            -Psextant.outDir=/tmp/sextant-model-prime-android
 
       # One step per stage, cheapest first (docs/performance.md P-2): a lint or type
       # failure is visible in seconds instead of after a twenty-minute test run, and the

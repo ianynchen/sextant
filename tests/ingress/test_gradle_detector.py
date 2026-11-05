@@ -466,7 +466,7 @@ def test_a_root_project_with_no_group_is_named_by_its_root_project_name_alone(tm
     reports as `rootProject.name` (the folder name by default). Refusing it instead
     left `kotlin-ktor-exposed-starter` and 21 of 36 ktor-samples unanalysable."""
     project = _project(tmp_path, path=":", group="", name="kotlin-ktor-exposed-starter")
-    module = GradleDetector._module_of(tmp_path, project, [project])
+    module = GradleDetector._module_of(tmp_path, project, gradle_module._records_by_path([project]))
     assert module.module_id == "kotlin-ktor-exposed-starter"
 
 
@@ -479,9 +479,9 @@ def test_a_nested_project_with_no_group_is_its_root_name_and_full_project_path(t
     root = _project(tmp_path, path=":", group="", name="Acme", classes_dirs=[])
     core = _project(tmp_path, path=":libs:core", group="", name="core")
     app = _project(tmp_path, path=":app", group="", name="app")
-    reactor = [root, core, app]
-    assert GradleDetector._module_of(tmp_path, core, reactor).module_id == "Acme:libs:core"
-    assert GradleDetector._module_of(tmp_path, app, reactor).module_id == "Acme:app"
+    by_path = gradle_module._records_by_path([root, core, app])
+    assert GradleDetector._module_of(tmp_path, core, by_path).module_id == "Acme:libs:core"
+    assert GradleDetector._module_of(tmp_path, app, by_path).module_id == "Acme:app"
 
 
 def test_a_project_with_no_group_writes_dot_for_manager_package_and_version(tmp_path: Path):
@@ -491,7 +491,7 @@ def test_a_project_with_no_group_writes_dot_for_manager_package_and_version(tmp_
     whatever version it declares: a version names a release of a package, and
     there is no package."""
     project = _project(tmp_path, path=":", group="", name="app", version="1.4.0")
-    module = GradleDetector._module_of(tmp_path, project, [project])
+    module = GradleDetector._module_of(tmp_path, project, gradle_module._records_by_path([project]))
     assert (module.coordinates, module.version) == (".", ".")
 
 
@@ -1297,7 +1297,7 @@ def test_a_build_failure_written_inside_a_record_reaches_the_module(tmp_path: Pa
     with no file — the init script writes one where a part cannot be read at all."""
     project = _project(tmp_path, path=":app", name="app")
     project["buildFailure"] = "the Android plugin is older than 7.0"
-    module = GradleDetector._module_of(tmp_path, project, [project])
+    module = GradleDetector._module_of(tmp_path, project, gradle_module._records_by_path([project]))
     assert module.build_failure == "the Android plugin is older than 7.0"
 
 
@@ -1659,7 +1659,9 @@ def test_a_no_group_sibling_is_read_as_a_library_root_under_its_module_id(tmp_pa
         version="unspecified",
         classpath=[{"path": str(root_classes), "internal": True, "projectPath": ":"}],
     )
-    module = GradleDetector._module_of(tmp_path / "app", app, [root, app])
+    module = GradleDetector._module_of(
+        tmp_path / "app", app, gradle_module._records_by_path([root, app])
+    )
 
     assert module.module_id == "Acme:app"
     assert module.sibling_coordinates == ("Acme",)
@@ -1668,7 +1670,9 @@ def test_a_no_group_sibling_is_read_as_a_library_root_under_its_module_id(tmp_pa
     ]
     # The same string the root reports as its OWN id, which is what joins the two.
     assert module.sibling_coordinates == (
-        GradleDetector._module_of(tmp_path, root, [root, app]).module_id,
+        GradleDetector._module_of(
+            tmp_path, root, gradle_module._records_by_path([root, app])
+        ).module_id,
     )
 
 
@@ -1711,9 +1715,9 @@ def test_a_two_version_part_gives_one_module_per_version_named_with_a_dash(
     each version. Each version keeps its results in a folder of its own name, because
     the two share the part's folder (M6)."""
     root, android, jvm = _two_version_part(tmp_path, group=group)
-    reactor = [root, android, jvm]
-    jvm_module = GradleDetector._module_of(tmp_path / "shared", jvm, reactor)
-    android_module = GradleDetector._module_of(tmp_path / "shared", android, reactor)
+    by_path = gradle_module._records_by_path([root, android, jvm])
+    jvm_module = GradleDetector._module_of(tmp_path / "shared", jvm, by_path)
+    android_module = GradleDetector._module_of(tmp_path / "shared", android, by_path)
     assert (jvm_module.module_id, jvm_module.results_name) == (jvm_id, "jvm")
     assert (android_module.module_id, android_module.results_name) == (android_id, "android")
     if group:
@@ -1740,7 +1744,9 @@ def test_a_part_uses_the_version_gradle_labelled(tmp_path: Path):
             }
         ],
     )
-    module = GradleDetector._module_of(tmp_path / "server", server, [root, android, jvm, server])
+    module = GradleDetector._module_of(
+        tmp_path / "server", server, gradle_module._records_by_path([root, android, jvm, server])
+    )
     assert module.sibling_coordinates == ("com.acme:shared-jvm",)
     assert [r.archive for r in module.library_roots] == [jvm_classes]
     assert module.libraries_not_resolved == ()
@@ -1756,7 +1762,9 @@ def test_a_two_module_part_with_no_label_is_a_named_gap(tmp_path: Path, platform
     if platform is not None:
         entry["platform"] = platform
     server = _project(tmp_path / "server", path=":server", name="server", classpath=[entry])
-    module = GradleDetector._module_of(tmp_path / "server", server, [root, android, jvm, server])
+    module = GradleDetector._module_of(
+        tmp_path / "server", server, gradle_module._records_by_path([root, android, jvm, server])
+    )
     assert module.library_roots == ()
     assert module.sibling_coordinates == ()
     assert module.libraries_not_resolved == (
@@ -1781,9 +1789,70 @@ def test_a_one_version_part_keeps_its_name(tmp_path: Path):
         name="server",
         classpath=[{"path": str(classes), "internal": True, "projectPath": ":shared"}],
     )
-    reactor = [root, shared, server]
-    shared_module = GradleDetector._module_of(tmp_path / "shared", shared, reactor)
+    by_path = gradle_module._records_by_path([root, shared, server])
+    shared_module = GradleDetector._module_of(tmp_path / "shared", shared, by_path)
     assert (shared_module.module_id, shared_module.results_name) == ("com.acme:shared", None)
-    server_module = GradleDetector._module_of(tmp_path / "server", server, reactor)
+    server_module = GradleDetector._module_of(tmp_path / "server", server, by_path)
     assert server_module.sibling_coordinates == ("com.acme:shared",)
     assert [r.archive for r in server_module.library_roots] == [classes]
+
+
+# --- Android parts: the release build, one module per edition (Android §2a, §2b, M3) ---
+
+ANDROID_FIXTURE = Path(__file__).parents[2] / "fixtures" / "gradle-android"
+
+
+def _load_android_capture() -> dict:
+    """The assembled document the real wrapper gave for `fixtures/gradle-android`, with
+    `{root}` and `{home}` put back for this checkout (the `gradle-orders` capture's rule)."""
+    raw = (Path(__file__).parent / "gradle-captures" / "gradle-android.json").read_text(
+        encoding="utf-8"
+    )
+    normalized = raw.replace("{root}", str(ANDROID_FIXTURE)).replace("{home}", str(Path.home()))
+    return json.loads(normalized)
+
+
+def test_the_android_capture_names_five_modules():
+    """`:app` is built in two editions and `:shared` in two versions, so the build gives
+    five modules: one per release edition of the app (M3), one per version of the
+    multiplatform part (M2), and `:server`. Each module that shares a folder keeps its
+    results in a sub-folder named by its edition or version (M6)."""
+    model = GradleDetector._repository_model(ANDROID_FIXTURE, _load_android_capture(), None)
+    assert [(module.module_id, module.results_name) for module in model.modules] == [
+        ("com.acme:app-free", "free"),
+        ("com.acme:app-paid", "paid"),
+        ("com.acme:server", None),
+        ("com.acme:shared-android", "android"),
+        ("com.acme:shared-jvm", "jvm"),
+    ]
+    assert all(module.build_failure is None for module in model.modules)
+
+
+def test_an_android_edition_reads_the_classes_agp_gives_its_release_build():
+    """The class directories are the ones AGP hands on for the release build of that
+    edition (Android design 2a, 2b): the Kotlin and the Java (`BuildConfig`) output."""
+    model = GradleDetector._repository_model(ANDROID_FIXTURE, _load_android_capture(), None)
+    free = next(module for module in model.modules if module.module_id == "com.acme:app-free")
+    assert [str(path.relative_to(ANDROID_FIXTURE)) for path in free.output_dirs] == [
+        "app/build/intermediates/built_in_kotlinc/freeRelease/compileFreeReleaseKotlin/classes",
+        "app/build/intermediates/javac/freeRelease/compileFreeReleaseJavaWithJavac/classes",
+    ]
+
+
+@pytest.mark.pins("detect.the-class-JARS-agp-lists-are-NAMED-in-a-note")
+def test_the_class_jars_agp_lists_are_named_in_a_note():
+    """Sextant reads class directories only. The jar AGP lists beside them (`R.jar`) is
+    named in a note, so it is not left out silently (Android design 2e.5)."""
+    model = GradleDetector._repository_model(ANDROID_FIXTURE, _load_android_capture(), None)
+    assert model.notes == (
+        "com.acme:app-free: AGP also lists class jars Sextant does not read: R.jar",
+        "com.acme:app-paid: AGP also lists class jars Sextant does not read: R.jar",
+    )
+
+
+def test_a_record_with_no_class_jars_gives_no_note():
+    projects = [
+        _minimal_project(path=":", name="ShopApp"),
+        {**_minimal_project(path=":lib", name="lib"), "projectJars": []},
+    ]
+    assert _repository_model({"projects": projects, "includedBuilds": []}).notes == ()

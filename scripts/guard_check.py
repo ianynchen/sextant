@@ -1401,6 +1401,19 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "detect.the-class-JARS-agp-lists-are-NAMED-in-a-note": Guard(
+        what="the class jars AGP lists beside an Android build's class directories are "
+        "named in a detect note",
+        why="without it `R.jar` is left out of the scan and nothing says so (Android design "
+        "2e.5, Android outbound Task 5)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find="            notes.extend(GradleDetector._project_jars_notes(selected, by_path))\n",
+                replace="            pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "detect.an-OFFLINE-PLUGIN-refusal-is-retried-online-under-the-flag": Guard(
         what='an offline "could not resolve plugin artifact" is an offline refusal '
         "`--allow-resolve` retries online",

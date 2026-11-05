@@ -48,7 +48,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from importlib import resources
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -389,12 +389,14 @@ class GradleDetector:
             subprojects = [project for project in projects if project["path"] != ":"]
             multi_module = len(subprojects) > 0
             selected = subprojects if multi_module else [p for p in projects if p["path"] == ":"]
+            by_path = _records_by_path(projects)
             modules = tuple(
-                GradleDetector._module_of(Path(project["dir"]), project, projects)
+                GradleDetector._module_of(Path(project["dir"]), project, by_path)
                 for project in selected
             )
             notes: list[str] = [note for note in (wrapper_note,) if note]
             notes.extend(GradleDetector._composite_build_notes(data))
+            notes.extend(GradleDetector._project_jars_notes(selected, by_path))
             notes.extend(data.get("notes", []))
             if multi_module:
                 notes.extend(GradleDetector._root_sources_notes(projects))
@@ -418,6 +420,24 @@ class GradleDetector:
         if not included:
             return ()
         return (f"{_COMPOSITE_BUILD_NOTE_PREFIX}{', '.join(sorted(included))}",)
+
+    @staticmethod
+    def _project_jars_notes(
+        projects: Sequence[dict[str, Any]], by_path: Mapping[str, Sequence[dict[str, Any]]]
+    ) -> tuple[str, ...]:
+        """The class jars AGP lists for an Android build beside its class directories
+        (Android design 2e.5). Sextant reads only the directories; the jar AGP adds is
+        `R.jar`, generated resource-id constants with no calls in it. The jars are named
+        in a note, so they are not left out silently."""
+        notes = []
+        for project in projects:
+            jars = project.get("projectJars") or []
+            if not jars:
+                continue
+            module_id = GradleDetector._identity(project, by_path).module_id
+            names = ", ".join(sorted(Path(str(jar)).name for jar in jars))
+            notes.append(f"{module_id}: AGP also lists class jars Sextant does not read: {names}")
+        return tuple(notes)
 
     @staticmethod
     def _root_sources_notes(projects: list[dict[str, Any]]) -> tuple[str, ...]:
@@ -552,14 +572,18 @@ class GradleDetector:
 
     @staticmethod
     def _module_of(
-        path: Path, project: dict[str, Any], reactor: Sequence[dict[str, Any]] = ()
+        path: Path,
+        project: dict[str, Any],
+        by_path: Mapping[str, Sequence[dict[str, Any]]] | None = None,
     ) -> ModuleModel:
-        # `reactor` defaults to EMPTY, which yields no siblings — the honest answer
-        # for a caller that does not know the rest of the build, and what every
-        # single-project build gets anyway. The detector's own call site passes the
-        # real list; tests that build one project pass nothing and get the
+        # `by_path` is the reactor's records by project path (`_records_by_path`), made
+        # once per build by the caller. It defaults to EMPTY, which yields no siblings —
+        # the honest answer for a caller that does not know the rest of the build, and
+        # what every single-project build gets anyway. The detector's own call site
+        # passes the real records; tests that build one project pass nothing and get the
         # pre-W55 behaviour, which is what they are about.
-        identity = GradleDetector._identity(project, reactor)
+        by_path = by_path or {}
+        identity = GradleDetector._identity(project, by_path)
         # Gradle NAMES a source/resource root as a build convention; it does
         # not promise the directory exists on disk (2M Task 3 fix round 1,
         # M1) — the same "no guess" discipline `MavenDetector`'s own
@@ -579,7 +603,7 @@ class GradleDetector:
         # sibling is a dependency in every sense that matters: it is on the
         # classpath, its types appear in this module's signatures, and the only
         # difference from a resolved jar is that it was built next door.
-        siblings, siblings_not_resolved = GradleDetector._sibling_roots(project, reactor)
+        siblings, siblings_not_resolved = GradleDetector._sibling_roots(project, by_path)
         library_roots = library_roots + siblings
         libraries_not_resolved = libraries_not_resolved + siblings_not_resolved
         return ModuleModel(
@@ -694,7 +718,9 @@ class GradleDetector:
         return frozenset(found)
 
     @staticmethod
-    def _identity(project: dict[str, Any], reactor: Sequence[dict[str, Any]]) -> "_Identity":
+    def _identity(
+        project: dict[str, Any], by_path: Mapping[str, Sequence[dict[str, Any]]]
+    ) -> "_Identity":
         """The identity Gradle itself gives the project (OI-273, ruled 2026-11-03 from
         Gradle 9.8.2's measured behaviour). A group with no version publishes as
         `<group>/<name>/unspecified`, so `unspecified` IS the version and is kept. No
@@ -706,15 +732,17 @@ class GradleDetector:
         root's being the reactor entry at path `:`. One rule for a module and for a
         sibling read as its library root, so the two spell one project the same way.
 
-        A part built in more than one version (a multiplatform part, Android design M2) has one record per version under one path. Each version is its own module: a
-        dash and the version name the build file gives are added to the last part of the
-        name (`com.acme:shared-jvm`, `ShopApp:shared-jvm`), the spelling the multiplatform
-        plugin uses when it uploads each version, and that version name is the folder its results go in. A
-        part built once keeps its name."""
+        A part built in more than one version (a multiplatform part, Android design M2)
+        has one record per version under one path. Each version is its own module: a dash
+        and the version name the build file gives are added to the last part of the name
+        (`com.acme:shared-jvm`, `ShopApp:shared-jvm`), the spelling the multiplatform
+        plugin uses when it uploads each version, and that version name is the folder its
+        results go in. A part built once keeps its name.
+
+        `by_path` is the reactor's records by project path (`_records_by_path`)."""
         name = project["name"]
         group = project["group"]
         path_in_build = project["path"]
-        by_path = _records_by_path(reactor)
         results_name = None
         suffix = ""
         if len(by_path.get(str(path_in_build), ())) > 1:
@@ -739,7 +767,7 @@ class GradleDetector:
 
     @staticmethod
     def _sibling_roots(
-        project: dict[str, Any], reactor: Sequence[dict[str, Any]]
+        project: dict[str, Any], by_path: Mapping[str, Sequence[dict[str, Any]]]
     ) -> tuple[tuple[LibraryRoot, ...], tuple[str, ...]]:
         """The compiled output of every reactor sibling on this project's compile
         classpath (W55), as library roots, and the siblings it could not tell apart.
@@ -777,8 +805,9 @@ class GradleDetector:
         what it picked (`platform`: `jvm`, `androidJvm`), and the record with that label
         is joined. A label no version carries, or no label, is not guessed at: it is
         named in the second list, which joins `libraries_not_resolved`.
+
+        `by_path` is the reactor's records by project path (`_records_by_path`).
         """
-        by_path = _records_by_path(reactor)
         found: dict[tuple[str, str], LibraryRoot] = {}
         not_resolved: list[str] = []
         for entry in project["classpath"]:
@@ -805,7 +834,7 @@ class GradleDetector:
             # classpath like any other. It has no coordinates, so it is named by its module
             # id and marked unpublished — `.` for package and version — the identity its
             # symbols carry when it is analysed as a module itself.
-            identity = GradleDetector._identity(sibling, reactor)
+            identity = GradleDetector._identity(sibling, by_path)
             coordinate = identity.module_id
             # ONE ROOT PER CLASSES DIRECTORY, because `LibraryRoot.archive` is one
             # path and Gradle's `classesDirs` is a SET: it carries one entry per

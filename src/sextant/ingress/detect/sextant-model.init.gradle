@@ -37,8 +37,27 @@
 // project whose compile fails writes no file, and GradleDetector skips it
 // with Gradle's own reason; the other projects are read (Android design M5).
 import groovy.json.JsonOutput
+import org.gradle.api.Action
+import org.gradle.api.DefaultTask
+import org.gradle.api.attributes.Attribute
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.component.ProjectComponentIdentifier
+import org.gradle.api.file.Directory
+import org.gradle.api.file.RegularFile
+import org.gradle.api.provider.ListProperty
+import org.gradle.api.tasks.InputFiles
+
+// The task that receives the compiled classes of one Android build (Android design 2e.5).
+// AGP fills the two lists through `ScopedArtifacts.toGet`, and that also makes this task
+// depend on the tasks that compile the classes. `jars` are the class jars AGP lists for the
+// project (`R.jar`); `dirs` are the class directories, which are the only ones Sextant reads.
+abstract class SextantAndroidClasses extends DefaultTask {
+    @InputFiles
+    abstract ListProperty<RegularFile> getJars()
+
+    @InputFiles
+    abstract ListProperty<Directory> getDirs()
+}
 
 // One project record, built from what the caller read off the project's own
 // plugin (Android design M4). Every branch — `java` and Kotlin Multiplatform —
@@ -53,6 +72,8 @@ import org.gradle.api.artifacts.component.ProjectComponentIdentifier
 //   target, platform       the version's name and Gradle's label for it, for a
 //                          part built in more than one version; null for a
 //                          `java` project
+//   classpathArtifactType  the artifact type to ask the configuration for, or
+//                          null for the configuration's own artifacts
 // A project with no compiling plugin passes an empty map and gets a record
 // with empty lists.
 def sextantRecord = { p, Map inputs ->
@@ -92,7 +113,13 @@ def sextantRecord = { p, Map inputs ->
     classesDirs = (inputs.classesDirs ?: []).collect { it.absolutePath }.sort()
     def compileClasspath = inputs.classpathConfiguration
     if (compileClasspath != null) {
-        compileClasspath.incoming.artifacts.artifacts.each { artifact ->
+        def artifacts = compileClasspath.incoming.artifacts
+        if (inputs.classpathArtifactType != null) {
+            artifacts = compileClasspath.incoming.artifactView { view ->
+                view.attributes { it.attribute(Attribute.of("artifactType", String), inputs.classpathArtifactType) }
+            }.artifacts
+        }
+        artifacts.artifacts.each { artifact ->
             def id = artifact.id.componentIdentifier
             def entry = [path: artifact.file.absolutePath]
             // Gradle reports a coordinate only where it HAS one
@@ -165,6 +192,21 @@ def jvmTargets = { p ->
     p.kotlin.targets.findAll { it.platformType.name() == "jvm" }.sort { it.name }
 }
 
+// The name of the Android version of a Kotlin Multiplatform part: the Kotlin target whose
+// platform type is `androidJvm`. Null for a part that is not Kotlin Multiplatform, or that
+// has no Android version.
+def androidTargetName = { p ->
+    if (!p.plugins.hasPlugin("org.jetbrains.kotlin.multiplatform")) return null
+    p.kotlin.targets.find { it.platformType.name() == "androidJvm" }?.name
+}
+
+// The Android plugins whose builds Sextant reads (Android design 2a).
+def androidPluginIds = [
+    "com.android.application",
+    "com.android.library",
+    "com.android.kotlin.multiplatform.library",
+]
+
 gradle.rootProject { rp ->
     rp.tasks.register("sextantBuild") {
         // No declared inputs/outputs: this task's whole job is a one-shot
@@ -193,12 +235,16 @@ gradle.rootProject { rp ->
         }
     }
     rp.allprojects.each { p ->
+        // What the Android branch below found for this project: whether an Android plugin
+        // is applied, why its builds cannot be read (null when they can), and one record
+        // per Android build that was read. The per-build tasks add the records.
+        def android = [applied: false, failure: null, records: Collections.synchronizedList([])]
         def sextantModel = p.tasks.register("sextantModel") {
             // No declared inputs/outputs, for the same reason as `sextantBuild`.
             doLast {
                 def outDir = new File(p.property("sextant.outDir").toString())
                 def inputs = [:]
-                def records = null
+                def records = []
                 if (p.plugins.hasPlugin("org.jetbrains.kotlin.multiplatform")) {
                     // A Kotlin Multiplatform part (Android design M1): one record per
                     // version that compiles to JVM bytecode, each with its own name
@@ -282,6 +328,21 @@ gradle.rootProject { rp ->
                         platform: null,
                     ]
                 }
+                // An Android part (Android design 2a, 2b): one record per Android build that
+                // was read. A part that cannot be read, or that has no release build, gets one
+                // record that says why, and the detector skips it with that reason.
+                if (android.applied) {
+                    def reason = android.failure
+                    if (reason == null && android.records.isEmpty()) {
+                        reason = "no release build: nothing that ships to read"
+                    }
+                    if (reason == null) {
+                        records += android.records
+                    } else {
+                        records << (sextantRecord(p, [target: androidTargetName(p), platform: "androidJvm"])
+                            + [buildFailure: reason])
+                    }
+                }
                 def projectsDir = new File(outDir, "projects")
                 projectsDir.mkdirs()
                 new File(projectsDir, p.path.replace("_", "__").replace(":", "_") + ".json").text = JsonOutput.toJson(
@@ -307,6 +368,74 @@ gradle.rootProject { rp ->
                 if (target.platformType.name() == "jvm") {
                     sextantModel.configure { dependsOn target.compilations.getByName("main").output.classesDirs }
                 }
+            }
+        }
+        // An Android part (Android design 2a, 2b, 2e). AGP is asked for each build it
+        // makes, and the release build is kept: the build type `release`, or the only build
+        // where the part has no build types (a Kotlin Multiplatform Android library has one
+        // build, `androidMain`, with no build type). Each kept build gets its own task, which
+        // AGP gives the build's compiled classes, and `sextantModel` depends on it.
+        //
+        // AGP's classes are not on this script's class path, so they are loaded through the
+        // plugin's own class loader. `ScopedArtifacts` came with AGP 7.4; an older AGP does
+        // not have it, and the part gets a record that says so.
+        androidPluginIds.each { pluginId ->
+            p.plugins.withId(pluginId) { plugin ->
+                android.applied = true
+                def loader = plugin.getClass().classLoader
+                def scopeClass
+                try {
+                    scopeClass = loader.loadClass('com.android.build.api.variant.ScopedArtifacts$Scope')
+                } catch (ClassNotFoundException ignored) {
+                    def version = loader.loadClass("com.android.builder.model.Version")
+                        .getField("ANDROID_GRADLE_PLUGIN_VERSION").get(null)
+                    android.failure =
+                        "Android Gradle Plugin ${version} is older than 7.4, which Sextant needs to read Android parts"
+                    return
+                }
+                def projectScope = Enum.valueOf(scopeClass, "PROJECT")
+                def classes = loader.loadClass('com.android.build.api.artifact.ScopedArtifact$CLASSES')
+                    .getField("INSTANCE").get(null)
+                def function1 = loader.loadClass("kotlin.jvm.functions.Function1")
+                def components = p.extensions.getByName("androidComponents")
+                components.onVariants(components.selector().all(), { variant ->
+                    if (variant.buildType != null && variant.buildType != "release") return
+                    def read = p.tasks.register("sextantModel" + variant.name.capitalize(), SextantAndroidClasses) { task ->
+                        task.doLast {
+                            // The edition's name (`free`), or for the Android version of a
+                            // Kotlin Multiplatform part, that version's name (`android`).
+                            def target = variant.flavorName ?: androidTargetName(p)
+                            // An older AGP may not have the `kotlin` set; a set it does
+                            // not have is left out.
+                            def languageDirs = [:]
+                            ["java", "kotlin"].each { language ->
+                                def set = variant.sources.hasProperty(language) ? variant.sources."$language" : null
+                                if (set != null) {
+                                    languageDirs[language] = set.all.get().collect { it.asFile }
+                                }
+                            }
+                            android.records << (sextantRecord(p, [
+                                sourceSets: languageDirs,
+                                resourceDirs: [],
+                                classesDirs: task.dirs.get().collect { it.asFile },
+                                // AGP offers each library on the compile classpath in
+                                // several forms, so one must be named (Android design 2e.7):
+                                // without it, Gradle refuses the classpath as ambiguous.
+                                classpathConfiguration: variant.compileConfiguration,
+                                classpathArtifactType: "android-classes-jar",
+                                declaredRelease: null,
+                                target: target ?: null,
+                                platform: "androidJvm",
+                            ]) + [projectJars: task.jars.get().collect { it.asFile.absolutePath }.sort()])
+                        }
+                    }
+                    variant.artifacts.forScope(projectScope).use(read).toGet(
+                        classes,
+                        { it.jars }.asType(function1),
+                        { it.dirs }.asType(function1)
+                    )
+                    sextantModel.configure { dependsOn read }
+                } as Action)
             }
         }
     }
