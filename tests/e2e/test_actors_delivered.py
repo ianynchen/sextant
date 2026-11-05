@@ -321,6 +321,13 @@ def test_every_behavior_the_fixture_builds(handler_cases):
             ],
         ),
         (
+            "Session#createReceive",
+            [
+                (0, "Session$Touched#", None, False, "Session#onTouched", False),
+                (1, None, "Session$Timeout#INSTANCE.", False, "Session#onTimeout", False),
+            ],
+        ),
+        (
             "Stock#behavior",
             [
                 (0, "Stock$Reserve#", None, False, "Stock#onReserve", False),
@@ -385,6 +392,7 @@ def test_every_actor_hop_the_fixture_gives(actor_hops):
         ("OrderEntity#onGet", 2, "OrderEntity$Summary", None, "compiler"),
         ("OrderRoutes#summary", 2, "OrderEntity$Get", "OrderEntity#lambda", "compiler"),
         ("Relay#forward", 0, None, None, "message class not read: parameter"),
+        ("Session#<init>", 3, "Session$Timeout#INSTANCE.", "Session#onTimeout", "compiler"),
         ("Stock#lambda", 1, "Stock$Tick#INSTANCE.", "Stock#onTick", "compiler"),
         ("Stock#lambda", 4, None, None, unread_call),
         ("Stock#onReserve", 3, "Stock$Reply", "Frontend#lambda", "compiler"),

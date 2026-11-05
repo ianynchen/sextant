@@ -34,7 +34,8 @@ here would restate those documents rather than add anything.
     where the two walks' paths agree, so two keys built by one helper stay apart.
   - **Every message send is a trace hop.** A new catalog word, `message_sends`, declares each
     send and the argument holding its message: `tell`, `ask` (`EntityRef`, `AskPattern`,
-    `context.ask`, classic `Patterns.ask`), timers, `scheduleOnce`, `pipeToSelf`. Each send
+    `context.ask`, classic `Patterns.ask`), timers, `scheduleOnce`, `setReceiveTimeout`,
+    `pipeToSelf`. Each send
     writes one `rpc_hops` row per handler its message's class reaches, first match per
     behavior, so the trace walks from `ref.ask(r -> new Query(…))` into the handler. A
     constant message (`Tick.INSTANCE`) is matched by identity; a `messageAdapter` function or
@@ -42,12 +43,13 @@ here would restate those documents rather than add anything.
     handles is a stop that names it; a class not read is a stop that says so, never a hop to
     every handler. `rpc_hops` has one reset before its two writers.
   - **Measured on the Pekko samples** `pekko-sample-sharding-java/killrweather` and
-    `pekko-sample-cluster-java`: 5 endpoint rows and 27 hops, all true by hand; the trace from
-    killrweather's `WeatherRoutes.query` reaches `WeatherStation#onQuery`. One hop is missing
-    (`setReceiveTimeout`, a stated boundary). The Akka 2.9 twins sit behind Akka's commercial
+    `pekko-sample-cluster-java`: 5 endpoint rows and 28 hops, all true by hand; the trace from
+    killrweather's `WeatherRoutes.query` reaches `WeatherStation#onQuery`. The one hop the first
+    count found missing, `setReceiveTimeout(d, msg)` telling the actor `msg`, is now a declared
+    send (message at argument 1, CP-57). The Akka 2.9 twins sit behind Akka's commercial
     repository and were not built.
   - **COVERAGE.** §5.12's actor rows read ✅ with four stated boundaries (which actor a ref
-    holds, framework-delivered messages, static-factory messages, routers/`actorSelection`/
+    holds, a singleton's stop message, static-factory messages, routers/`actorSelection`/
     singleton/Scala). `akka-pekko-actors` leaves the delivery register, so the Java/Kotlin
     Async cell reads ✅. The Akka HTTP route DSL is still open (§5.1).
 

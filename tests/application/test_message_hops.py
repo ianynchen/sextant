@@ -175,6 +175,14 @@ def test_a_timer_is_a_send_to_the_actor_itself(hops):
     assert _from(hops, "Stock#lambda$create") >= {("Stock$Tick#INSTANCE.", "Stock#onTick")}
 
 
+def test_a_receive_timeout_is_a_send_to_the_actor_itself(hops):
+    """`getContext().setReceiveTimeout(Duration.ofSeconds(3), Timeout.INSTANCE)` (the
+    `pekko-sample-cluster-java` `StatsAggregator` shape): after that long without a message the
+    actor tells itself argument 1, so the constant reaches its `onMessageEquals` case. Argument
+    0, the duration, is never the message."""
+    assert _from(hops, "Session#<init>") == {("Session$Timeout#INSTANCE.", "Session#onTimeout")}
+
+
 @pytest.mark.pins("message-hops.a-message-NOBODY-handles-is-a-STOP-naming-its-class")
 def test_a_reply_nobody_handles_is_a_stop(hops):
     """`replyTo.tell(new Summary(…))`: no behavior here takes a `Summary` (the asker reads it

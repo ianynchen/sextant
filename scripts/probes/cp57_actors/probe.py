@@ -52,7 +52,7 @@ ROWS = [
     (
         "typed javadsl.ActorContext",
         T + ".javadsl.ActorContext",
-        ["ask", "messageAdapter", "pipeToSelf", "scheduleOnce"],
+        ["ask", "messageAdapter", "pipeToSelf", "scheduleOnce", "setReceiveTimeout"],
     ),
     (
         "typed javadsl.TimerScheduler",
@@ -234,7 +234,15 @@ def main():
 
 def lambdas():
     """What javac writes for the fixture's lambdas and sends (Pekko build; Akka's is identical but for names)."""
-    for cls in ("Stock", "OrderRoutes", "Frontend", "Relay", "ClassicBroker", "OrderEntity"):
+    for cls in (
+        "Stock",
+        "OrderRoutes",
+        "Frontend",
+        "Relay",
+        "ClassicBroker",
+        "OrderEntity",
+        "Session",
+    ):
         text = javap("pekko", "com.acme.actors." + cls)
         print(f"\n### {cls}\n")
         for m in methods(text):
@@ -249,6 +257,7 @@ def lambdas():
                 "behavior",
                 "createReceive",
                 "onPrice",
+                "Session",
             ):
                 body = [
                     i

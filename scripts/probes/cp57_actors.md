@@ -60,6 +60,10 @@ descriptor = `org/apache/pekko`; Akka's rows are the same with `akka.` / `akka`.
    The typed actor-level `ActorContext.scheduleOnce(Duration, ActorRef, Object)` (the `pekko-sample-fsm-java`
    `Hakker`'s `ctx.scheduleOnce(duration, ctx.getSelf(), Eat.INSTANCE)`) — receiver arg 1, message arg 2;
    added to the probe for the hop task (Task 5), 2026-11-04.
+   `ActorContext.setReceiveTimeout(Duration, Object)` (the `pekko-sample-cluster-java` `StatsAggregator`'s
+   `getContext().setReceiveTimeout(Duration.ofSeconds(3), Timeout.INSTANCE)`): the actor tells itself the message
+   at **arg 1** after that long without one; added to the probe in Task 7's fix round, 2026-11-04 (fixture
+   `Session`).
 8. **Keys.** `ServiceKey.create(Class, String)`, `EntityTypeKey.create(Class, String)`,
    `Entity.of(EntityTypeKey, Function)` are static factories (a new object); `ClusterSharding.init(Entity)` and
    `entityRefFor(EntityTypeKey, String)` are interface methods; `Receptionist.register(ServiceKey, ActorRef)`
@@ -171,6 +175,7 @@ own result is that verdict). Descriptors and verdicts agree in every row; the on
 | `actor.typed.javadsl.ActorContext.messageAdapter` `(Ljava/lang/Class;L~/japi/function/Function;)L~/actor/typed/ActorRef;` | abstract | abstract |
 | `actor.typed.javadsl.ActorContext.pipeToSelf` `(Ljava/util/concurrent/CompletionStage;L~/japi/function/Function2;)V` | abstract | abstract |
 | `actor.typed.javadsl.ActorContext.scheduleOnce` `(Ljava/time/Duration;L~/actor/typed/ActorRef;Ljava/lang/Object;)L~/actor/Cancellable;` | abstract | abstract |
+| `actor.typed.javadsl.ActorContext.setReceiveTimeout` `(Ljava/time/Duration;Ljava/lang/Object;)V` | abstract | abstract |
 | `actor.typed.javadsl.TimerScheduler.startTimerWithFixedDelay` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;)V` | abstract | abstract |
 | `actor.typed.javadsl.TimerScheduler.startTimerWithFixedDelay` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;Ljava/time/Duration;)V` | abstract | abstract |
 | `actor.typed.javadsl.TimerScheduler.startTimerWithFixedDelay` `(Ljava/lang/Object;Ljava/time/Duration;)V` | void/prim | void/prim |
@@ -219,7 +224,6 @@ own result is that verdict). Descriptors and verdicts agree in every row; the on
 | `pattern.Patterns.pipe` `(Lscala/concurrent/Future;Lscala/concurrent/ExecutionContext;)L~/pattern/PipeToSupport$PipeableFuture;` | new/other | new/other |
 
 ## Compiled fixture shapes (`fixtures/orders-actors-pekko`)
-
 
 ### Stock
 
@@ -412,6 +416,29 @@ own result is that verdict). Descriptors and verdicts agree in every row; the on
     invokestatic  #106                // Method onGet:(Ljava/lang/String;Lcom/acme/actors/OrderEntity$Get;)L~actor/typed/Behavior;
     areturn
 
+### Session
+
+- `Session` `(L~actor/typed/javadsl/ActorContext;)V`
+    invokespecial #1                  // Method ~actor/typed/javadsl/AbstractBehavior."<init>":(L~actor/typed/javadsl/ActorContext;)V
+    invokevirtual #7                  // Method getContext:()L~actor/typed/javadsl/ActorContext;
+    ldc2_w        #13                 // long 3l
+    invokestatic  #15                 // Method java/time/Duration.ofSeconds:(J)Ljava/time/Duration;
+    getstatic     #21                 // Field com/acme/actors/Session$Timeout.INSTANCE:Lcom/acme/actors/Session$Timeout;
+    invokeinterface #27,  3           // InterfaceMethod ~actor/typed/javadsl/ActorContext.setReceiveTimeout:(Ljava/time/Duration;Ljava/lang/Object;)V
+- `create` `()L~actor/typed/Behavior;`
+    invokedynamic #33,  0             // InvokeDynamic #0:apply:()L~japi/function/Function;
+    invokestatic  #37                 // Method ~actor/typed/javadsl/Behaviors.setup:(L~japi/function/Function;)L~actor/typed/Behavior;
+    areturn
+- `createReceive` `()L~actor/typed/javadsl/Receive;`
+    invokevirtual #43                 // Method newReceiveBuilder:()L~actor/typed/javadsl/ReceiveBuilder;
+    ldc           #47                 // class com/acme/actors/Session$Touched
+    invokedynamic #49,  0             // InvokeDynamic #1:apply:(Lcom/acme/actors/Session;)L~japi/function/Function;
+    invokevirtual #52                 // Method ~actor/typed/javadsl/ReceiveBuilder.onMessage:(Ljava/lang/Class;L~japi/function/Function;)L~actor/typed/javadsl/ReceiveBuilder;
+    getstatic     #21                 // Field com/acme/actors/Session$Timeout.INSTANCE:Lcom/acme/actors/Session$Timeout;
+    invokedynamic #58,  0             // InvokeDynamic #2:create:(Lcom/acme/actors/Session;)L~japi/function/Creator;
+    invokevirtual #62                 // Method ~actor/typed/javadsl/ReceiveBuilder.onMessageEquals:(Ljava/lang/Object;L~japi/function/Creator;)L~actor/typed/javadsl/ReceiveBuilder;
+    invokevirtual #66                 // Method ~actor/typed/javadsl/ReceiveBuilder.build:()L~actor/typed/javadsl/Receive;
+    areturn
 
 ### Orders (persistence builder held in locals; Pekko build)
 
@@ -442,4 +469,3 @@ nothing; the behavior is the local the call is made on. The handler references (
     new           #75                 // class probe/TwoReturns$Done
     invokespecial #77                 // Method probe/TwoReturns$Done."<init>":(Ljava/lang/String;)V
     areturn
-

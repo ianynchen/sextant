@@ -339,7 +339,7 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # rows), `cluster-sharding` two (`init`'s two hops) — `asks_of` reads the `{owner, method,
 # arg}` shape wherever it is spelled.
 _ASKS_PER_CATALOG = {
-    "akka-actor-handlers": (68, 93),
+    "akka-actor-handlers": (69, 94),
     "akka-cluster-sharding": (8, 8),
     "akka-pubsub-publish": (2, 2),
     "akka-pubsub-put": (1, 1),
@@ -370,7 +370,7 @@ _ASKS_PER_CATALOG = {
     "ktor-sse-client": (39, 39),
     "ktor-websocket-client": (23, 23),
     "okhttp": (5, 6),
-    "pekko-actor-handlers": (68, 93),
+    "pekko-actor-handlers": (69, 94),
     "pekko-cluster-sharding": (8, 8),
     "pekko-connectors-kafka": (15, 15),
     "pekko-pubsub-publish": (2, 2),
@@ -455,7 +455,8 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # **+68 on 2026-11-04**: the two message handler catalogs, same comment.
     # **+68 on 2026-11-04** (hops): those two catalogs' sends and standalone registrations.
     # **+8 on 2026-11-04** (key handlers): the four key catalogs' `message_class_via`.
-    assert sum(asks for asks, _ in counted.values()) == 1420
+    # **+2 on 2026-11-04** (Task 7 fix round): each handler catalog's `setReceiveTimeout` send.
+    assert sum(asks for asks, _ in counted.values()) == 1422
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

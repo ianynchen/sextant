@@ -260,6 +260,8 @@ with its cost if wrong.
    (`message_arg: 1`).
 10. **Task ordering**: Task 1's probe fix round waited for Task 3's implementer, one writer per
     branch (GUIDELINES §13.9).
+11. **The missing `setReceiveTimeout` hop is fixed now, not logged**: it is real sample code and
+    a catalog declaration (`message_sends`, message at argument 1). Cost: one fix round.
 
 ### Departures from the plan
 
@@ -280,8 +282,9 @@ with its cost if wrong.
 - **`test_rpc_hops.py::test_a_second_run_replaces_the_rows` gained one line** (the pipeline's
   reset), since the reset left `record_rpc_hops`; the property is pinned again by
   `test_message_hops.py::test_a_second_analysis_replaces_the_hops`.
-- **Fixture classes `Counter` (two constructor-reference shapes) and `Audit` (a key whose
-  class no behavior handles)** were added to Task 1's set.
+- **Fixture classes `Counter` (two constructor-reference shapes), `Audit` (a key whose
+  class no behavior handles) and `Session` (a receive timeout, Task 7's fix round)** were added
+  to Task 1's set.
 
 ### The corpus
 
@@ -297,7 +300,7 @@ derived through descriptors measured on 1.1.3, so the API these samples use did 
 | Sample | Endpoint rows | Hops | True | False | Missing |
 |---|---|---|---|---|---|
 | `pekko-sample-sharding-java/killrweather` | 2 | 4 (2 to a handler, 2 replies nobody handles) | 6 | 0 | 0 |
-| `pekko-sample-cluster-java` | 3 | 23 (17 to a handler, 6 not read) | 26 | 0 | 1 hop |
+| `pekko-sample-cluster-java` | 3 | 24 (18 to a handler, 6 not read) | 27 | 0 | 0 (1 hop at the first count, fixed) |
 | `akka-sample-sharding-java/killrweather`, `akka-sample-cluster-java` | not built: Akka 2.9.2 is served by `repo.akka.io` (HTTP 403 without a token) | | | | |
 
 - **The trace from `WeatherRoutes.query`** goes through `ClusterSharding#entityRefFor` (no
@@ -311,16 +314,21 @@ derived through descriptors measured on 1.1.3, so the API these samples use did 
 - **The six "not read" stops** are `receptionist().tell(Receptionist.register/subscribe(…))`
   and `cluster.subscriptions().tell(Subscribe.create(…))`: system-actor messages built by a
   static factory. Honest stops; no behavior in the module handles those classes.
-- **The one missing hop**: `getContext().setReceiveTimeout(d, Timeout.INSTANCE)` in
-  `StatsAggregator` delivers `Timeout` to itself; `setReceiveTimeout` is not declared as a send
-  (§3d item 3 lists timers and `scheduleOnce`). Stated in COVERAGE §5.12, to be logged.
+- **The hop the first count found missing, now built**: `getContext().setReceiveTimeout(d,
+  Timeout.INSTANCE)` in `StatsAggregator` delivers `Timeout` to itself, and `setReceiveTimeout`
+  was not declared as a send (§3d item 3 listed timers and `scheduleOnce`). The fix round
+  measured `ActorContext.setReceiveTimeout(Duration, Object)` in CP-57 (message at argument 1),
+  declared it in both families' `message_sends`, added the fixture class `Session` and the test
+  `test_a_receive_timeout_is_a_send_to_the_actor_itself`. Re-analysed, the sample gives one more
+  row and changes none: `StatsAggregator#<init>` 5 → `StatsAggregator#onTimeout`, path
+  `StatsAggregator$Timeout#INSTANCE.`.
 - **Out of scope and stated**: the cluster singleton's `withStopMessage`, and `Routers.group(key)`
   using a key (served here, so no outbound row is the right answer in this sample).
 
-No wrong row was found, so nothing was fixed at this step.
+No wrong row was found. The one missing hop was fixed (ruling 11).
 
-**Gate at this commit:** `scripts/check.sh` green (5961 passed, 7 skipped, 3 xfailed); the 36
-actor, handler, hop, key-handler, dispatch and heir guards plus their pins re-run by
+**Gate (after the fix round):** `scripts/check.sh` green (5963 passed, 7 skipped, 3 xfailed); the
+36 actor, handler, hop, key-handler, dispatch and heir guards plus their pins re-run by
 `scripts/guard_check.py`, 40 killed and 0 survived; `scripts/field_check.py` all six pins ok.
 
 ### Deferred (Minor, from the task reviews)

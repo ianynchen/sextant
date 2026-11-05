@@ -253,6 +253,10 @@ matches:
     - { owner: *actor_context, method: scheduleOnce,
         descriptor: "(Ljava/time/Duration;Lorg/apache/pekko/actor/typed/ActorRef;Ljava/lang/Object;)Lorg/apache/pekko/actor/Cancellable;",
         message_arg: 2 }
+    # `setReceiveTimeout(d, msg)`: after `d` without a message the actor tells itself `msg`,
+    # argument 1 (finding 7, Task 7's fix round).
+    - { owner: *actor_context, method: setReceiveTimeout,
+        descriptor: "(Ljava/time/Duration;Ljava/lang/Object;)V", message_arg: 1 }
     # Timers (finding 7): the key-less forms carry the message at argument 0, the keyed forms
     # `(key, msg, …)` at argument 1.
     - { owner: &timers org.apache.pekko.actor.typed.javadsl.TimerScheduler, method: startTimerWithFixedDelay,
