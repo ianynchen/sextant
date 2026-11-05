@@ -54,8 +54,9 @@ logic.
 
 What ships to users is the release build; debug adds only debugging aids. So the module is read
 from its **release** variant. Where a project has product flavors, each flavor's release variant is
-a separate shipped app; the module is then read once per release variant, its module id the
-project's id plus the flavor name (`Noty.app` → `Noty.app:free`). **0 flavored builds in the
+a separate shipped app; the module is then read once per release variant, its module named by
+the M2 rule with Android's own name for the flavor combination (`variant.flavorName`):
+`Noty.app` → `Noty.app-free`, two flavor lists → `Noty.app-freeStaging` (M3, ruled B). **0 flavored builds in the
 corpus**, so the flavored branch is built with a fixture only. A project with no release variant
 (a test-only module) is skipped with its reason.
 
@@ -148,10 +149,11 @@ Five Major findings (no Critical). Minor findings are fixed above, marked "self-
   kotlinconf `:core` → `KotlinConfApp:core-jvm` and `KotlinConfApp:core-android`; a grouped part →
   `org.jetbrains:core-jvm`. The same spelling Kotlin uses when it uploads each version. A part built
   once keeps today's name. Two modules with one name stop analysis with a clear message.
-- **M3. Flavored apps get an invented id (`Noty.app:free`).** Nothing in Gradle or AGP spells it so,
-  and `:` already separates path segments in ungrouped ids. 0 flavored builds in the corpus.
-  Recommendation: refuse a flavored project with a named reason now and log an OI; design the id when
-  a real flavored build is in the corpus.
+- **M3. Apps built in several editions (flavors).** **Ruled 2026-11-05: B.** One module per release
+  edition, named by the M2 rule with Android's own name for the edition (`variant.flavorName`):
+  `Noty.app-free`, `Noty.app-freeStaging`. Code shared by every edition appears once per edition,
+  which is true: each shipped app makes the call. Checked on a test app only (0 flavored builds in
+  the corpus), stated as such.
 - **M4. Two collection paths, and `--no-parallel` on every Gradle build.** The `java` branch reads
   every project from the root task's `doLast`; the Android branch reads from a per-project task.
   Reading another project's configuration from the root is what breaks under
