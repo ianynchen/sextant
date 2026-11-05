@@ -289,7 +289,9 @@ is where a schema match or a human can justify one — a claim about two modules
 both are visible, which is exactly what a single module's analysis cannot make.
 
 **`protocol`** — `http`, `soap`, `grpc`, `kafka`, `jms`, `sqs`, `pubsub`, `graphql`,
-`websocket`, `sse`, `amqp`, `pulsar`, `rsocket`. `message` is
+`websocket`, `sse`, `amqp`, `pulsar`, `rsocket`, `temporal`, `eventbus`, `actor`,
+`in_process` (an in-process dispatch with no wire, spec 2026-11-05 §3: the protocol of the
+hops such a catalog gives, never of an endpoint row). `message` is
 retired: it was reserved and never declared by any shipped catalog, so nothing migrates.
 The broker family is the protocol because linking gates on protocol equality (DR-5), and
 a Kafka topic can never be answered by an SQS queue.

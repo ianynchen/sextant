@@ -17,12 +17,13 @@ inside `contracts.py` (2E-prep design §1e).
 import dataclasses
 import json
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _Rules
@@ -40,7 +41,13 @@ from sextant.application.resolve.values import (
 from sextant.domain.closed_sets import Resolution
 from sextant.domain.config_keys import _PLACEHOLDER, carries_expression, normalize_key
 from sextant.domain.redaction import authority_without_userinfo
-from sextant.domain.symbols import bare_descriptor, member_name, method_name, owner_of
+from sextant.domain.symbols import (
+    bare_descriptor,
+    member_name,
+    method_name,
+    owner_of,
+    parameter_types,
+)
 
 # `carries_expression` is defined in `domain/config_keys.py` (values.py reads it too, and this
 # module imports values); it is re-exported here so its callers keep this import.
@@ -1451,6 +1458,33 @@ def call_site_index(workspace: Workspace) -> CallSiteIndex:
         bare_callers.setdefault(bare_descriptor(caller), set()).add(caller)
         positions_by_owner.setdefault(str(site["owner"]), []).append(position)
     return CallSiteIndex(by_caller, bare_callers, positions_by_owner)
+
+
+def declared_call_sites(
+    workspace: Workspace, entries: Sequence[Mapping[str, Any]]
+) -> Iterator[tuple[dict[str, Any], Mapping[str, Any]]]:
+    """Each call site of each catalog entry `{owner, method, descriptor}`, as `(site, entry)`:
+    a call to that method by name and parameter types (GUIDELINES §8.1: a method is its name
+    and parameter types, never its arity), made on the declared owner or through a type that
+    inherits the method from it (`Dispatch.heirs`, JVMS 5.4.3.3). One rule for every pass that
+    reads a declared call wherever it is made; read through the shared index, so each owner
+    costs one lookup."""
+    index = workspace.once(call_site_index)
+    dispatch = workspace.once(dispatch_of)
+    sites = effective_call_sites(workspace)
+    for entry in entries:
+        owner, method = str(entry["owner"]), str(entry["method"])
+        declared = parameter_types(str(entry["descriptor"]))
+        for called in (owner, *dispatch.heirs(owner, method)):
+            for position in index.positions_by_owner.get(called, ()):
+                site = sites[position]
+                recorded = site.get("descriptor")
+                if (
+                    site["name"] == method
+                    and recorded is not None
+                    and parameter_types(str(recorded)) == declared
+                ):
+                    yield site, entry
 
 
 def supertypes_of(workspace: Workspace) -> dict[str, dict[str, Any]]:

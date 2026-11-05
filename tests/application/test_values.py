@@ -6706,3 +6706,98 @@ def test_a_not_hand_offs_methods_list_that_is_not_a_list_of_method_names_is_refu
     )
     with pytest.raises(CatalogError, match="methods"):
         source.not_hand_offs()
+
+
+# Spec 2026-11-05 §2: a producing call that names a value and a class beside it
+# (`create(Command.class, "stock")`), the class read from the same call on the same path.
+_KEYS = _PKG + "Keys#"
+_KEY = "a/Key#"
+_KEY_JVM = "La/Key;"
+_KEY_CREATE = (_KEY, "create", f"(Ljava/lang/Class;Ljava/lang/String;){_KEY_JVM}")
+_KEY_OF = (_KEYS, "key", f"(Ljava/lang/Class;Ljava/lang/String;){_KEY_JVM}")
+_REGISTER_KEY = ("a/Registry#", "register", f"({_KEY_JVM})V")
+_KEY_IDENTITY = {"owner": _KEY, "method": "create", "arg": 1, "class_arg": 0}
+
+
+def _key_facts() -> list[Fact]:
+    """`static Key key(Class c, String n) { return Key.create(c, n); }`, and `start()`, which
+    registers `key(A.class, "a")`, then `key(B.class, "b")`, then `Key.create(C.class, "c")`
+    made in place."""
+    helper = _symbol(*_KEY_OF)
+    start = _symbol(_KEYS, "start", "()V")
+    return [
+        _type(_KEYS),
+        _declared(*_KEY_OF),
+        _site(
+            helper,
+            0,
+            _KEY_CREATE,
+            arguments=[
+                CallArgument(kind="parameter", value=0),
+                CallArgument(kind="parameter", value=1),
+            ],
+            result=1,
+        ),
+        _returns(*_KEY_OF, 0, CallArgument(kind="unresolved", source=1)),
+        _declared(_KEYS, "start", "()V"),
+        _void(_KEYS, "start", "()V"),
+        _site(
+            start,
+            0,
+            _KEY_OF,
+            arguments=[CallArgument(kind="class", symbol="A#"), *_string("a")],
+            result=1,
+        ),
+        _site(start, 1, _REGISTER_KEY, arguments=_results(1)),
+        _site(
+            start,
+            2,
+            _KEY_OF,
+            arguments=[CallArgument(kind="class", symbol="B#"), *_string("b")],
+            result=2,
+        ),
+        _site(start, 3, _REGISTER_KEY, arguments=_results(2)),
+        _site(
+            start,
+            4,
+            _KEY_CREATE,
+            arguments=[CallArgument(kind="class", symbol="C#"), *_string("c")],
+            result=3,
+        ),
+        _site(start, 5, _REGISTER_KEY, arguments=_results(3)),
+    ]
+
+
+@pytest.mark.pins("values.a-CLASS-is-read-from-the-identifying-call-on-its-path")
+def test_channel_via_reads_the_class_in_the_same_walk(tmp_path: Path):
+    """An identity entry naming `class_arg` answers its value with the class literal the
+    SAME producing call names there, on the same path (`Answer.carried_class`): a helper
+    building two keys from its callers' arguments gives each register the class its own
+    caller passed, never the other's, and a key made in place carries its own class. One
+    walk; the class and the value are never paired afterwards. Without `class_arg` no class
+    is carried (the negative half)."""
+    facts = tmp_path / "facts"
+    write_fact_file(facts / "keys.jsonl", _document(), straight_line(_key_facts()))
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace.load_facts(facts)
+        record_return_flows(workspace)
+        record_call_edges(workspace)
+        start = _symbol(_KEYS, "start", "()V")
+        read = {
+            ordinal: [
+                (binding.slots[0].value, binding.slots[0].carried_class)
+                for binding in _identified(workspace, start, ordinal, [_KEY_IDENTITY])
+            ]
+            for ordinal in (1, 3, 5)
+        }
+        plain = [
+            binding.slots[0].carried_class
+            for binding in _identified(
+                workspace, start, 1, [{"owner": _KEY, "method": "create", "arg": 1}]
+            )
+        ]
+    finally:
+        workspace.close()
+    assert read == {1: [("a", "A#")], 3: [("b", "B#")], 5: [("c", "C#")]}
+    assert plain == [None]

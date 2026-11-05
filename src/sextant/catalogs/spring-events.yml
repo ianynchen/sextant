@@ -1,0 +1,85 @@
+id: spring-events
+displayName: Spring application events (publishers, listeners)
+style: annotation_driven
+# No wire: an event is handed to the application context, which calls its listeners in the
+# same process (spec 2026-11-05 §1, §3). Every hop this file's sends give is written under
+# `in_process`; this catalog mints no endpoint row.
+protocol: in_process
+direction: inbound
+# In-process dispatch keyed by the event's TYPE, every listener whose event type the event's
+# class is assignable to receiving it (spec 2026-11-05 §1). Declaring `dispatch` is what makes
+# this annotation catalog's mapping read as registrations rather than endpoint rows
+# (`endpoints._reads_by_a_later_pass`, `annotation_driven.registrations`).
+dispatch: { key: type, match: all, mechanism: spring-events }
+
+detect:
+  coordinates: ["org.springframework:spring-context"]
+
+# D02 §1c: every catalog detecting a Spring artifact names the Spring bean model. Read by
+# nothing for this catalog today: a listener's registration does not ask whether its class
+# is a bean a condition keeps (a stated boundary, as for the actor catalogs' behaviors).
+bean_model: spring
+
+# CP-59 read every descriptor and annotation element below with `javap -c -p -v` on the jars
+# `fixtures/orders-events` resolves (Spring Boot 4.0.0's managed versions), each jar's own
+# manifest reporting its `Implementation-Version`.
+measured:
+  - { artifact: org.springframework:spring-context, versions: ["7.0.1"],
+      identity: reported, by: scripts/probes/cp59_dispatch.md }
+  - { artifact: org.springframework:spring-tx, versions: ["7.0.1"],
+      identity: reported, by: scripts/probes/cp59_dispatch.md }
+
+requires: [annotation_args, typed_signatures, call_site]
+
+matches:
+  # The listener's event type is its one parameter's (CP-59 finding 3: Spring's
+  # `ApplicationListenerMethodAdapter.resolveDeclaredEventTypes` reads the method's parameter
+  # where the annotation names no class, and refuses a method declaring more than one).
+  # `sole_unannotated`: the one parameter, which carries no Spring annotation.
+  request_body: { fallback: sole_unannotated }
+  mapping:
+    # `@EventListener(classes = …)`, and its alias `value`: the event types named on the
+    # annotation, which win over the parameter (finding 3). An array, each class its own
+    # registration.
+    path_from: [classes, value]
+    # Where the annotation names no class, the key is the payload parameter's type
+    # (`request_body` above picks it).
+    path_fallback: payload_type
+    prefix_from: []
+    method_from: method
+    all_methods: []
+    prefix_annotation: null
+    annotations:
+      - { fqn: org.springframework.context.event.EventListener }
+      # Meta-annotated `@EventListener` (finding 4), registered by the same adapter after the
+      # transaction phase it names; listed because the meta-annotation sits on a library
+      # annotation type the composition pass does not scan.
+      - { fqn: org.springframework.transaction.event.TransactionalEventListener }
+
+  # A bean implementing `ApplicationListener<E>` receives every event assignable to `E`
+  # (finding 5). javac writes the class's own `onApplicationEvent(E)` and a synthetic bridge
+  # with the interface's erased descriptor forwarding to it; the registration is the method
+  # the class wrote, keyed by its parameter's type.
+  dispatch_implementations:
+    - { owner: org.springframework.context.ApplicationListener, method: onApplicationEvent,
+        descriptor: "(Lorg/springframework/context/ApplicationEvent;)V", value_arg: 0 }
+
+  # `publishEvent` (finding 1): an `ApplicationEvent` and any other object (wrapped by the
+  # context in a `PayloadApplicationEvent`; its listeners are keyed by the object's own type).
+  # javac writes the receiver's static type as the owner, so each interface declaring or
+  # inheriting the method is listed (finding 2): `ApplicationContext` and
+  # `ConfigurableApplicationContext` extend `ApplicationEventPublisher`.
+  dispatch_sends:
+    - { owner: &publisher org.springframework.context.ApplicationEventPublisher, method: publishEvent,
+        descriptor: "(Lorg/springframework/context/ApplicationEvent;)V", value_arg: 0 }
+    - { owner: *publisher, method: publishEvent,
+        descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
+    - { owner: &context org.springframework.context.ApplicationContext, method: publishEvent,
+        descriptor: "(Lorg/springframework/context/ApplicationEvent;)V", value_arg: 0 }
+    - { owner: *context, method: publishEvent,
+        descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
+    - { owner: &configurable org.springframework.context.ConfigurableApplicationContext,
+        method: publishEvent,
+        descriptor: "(Lorg/springframework/context/ApplicationEvent;)V", value_arg: 0 }
+    - { owner: *configurable, method: publishEvent,
+        descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }

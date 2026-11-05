@@ -413,6 +413,15 @@ class Answer:
     # but no one of them is the value: `url_of_answer` publishes one at `narrowed`,
     # `channel_of_answer` refuses it, and `_joined` marks a template filled from one.
     narrowed: bool = False
+    # **The class the identifying call names beside this value** (spec 2026-11-05 §2): set only
+    # by an identity entry declaring `class_arg`, from that SAME producing call's argument,
+    # read on the same path in the same walk (`_Walk._with_class`), so a key and the class of
+    # what it addresses (`create(Command.class, "stock")`) are never paired afterwards. The
+    # class literal's symbol; None where the entry names no class or the argument is not a
+    # class literal on any path agreeing with the value's. Carried through every hop after,
+    # like `yields`. Part of what the answer is: two keys named alike that address two
+    # classes are two answers.
+    carried_class: str | None = None
     # **Which parameter an `external` answer ended at**, `(method, index)` — set only by
     # `_Walk._parameter` where nothing in the module binds it, for the producer reader to
     # hand on (`Producer.parameter`). Not part of what the answer IS, so it is outside
@@ -3636,7 +3645,13 @@ class _Walk:
             slot = None if constructed is None else self._identified((method, constructed))
             if constructed is None or slot is None:
                 return _only(trail, _unresolved(NOT_READABLE))
-            return self._resolve((_SLOT, method, constructed, slot), trail, frames)
+            return self._with_class(
+                (method, constructed),
+                slot,
+                self._resolve((_SLOT, method, constructed, slot), trail, frames),
+                trail,
+                frames,
+            )
         site = (method, min(producers))
         # **A call that returns its own receiver hands back that same object** (ruling 4,
         # spec 2026-10-30), for the reader asking which object a value is (`which_object`):
@@ -3655,7 +3670,13 @@ class _Walk:
         # is the value (meaning), and no framework is named in this module either way.
         slot = self._identified(site)
         if slot is not None:
-            identified = self._resolve((_SLOT, site[0], site[1], slot), trail, frames)
+            identified = self._with_class(
+                site,
+                slot,
+                self._resolve((_SLOT, site[0], site[1], slot), trail, frames),
+                trail,
+                frames,
+            )
             # **A RENDERING carries one KIND of identity and stamps none** (`OI-138` cause
             # 3, CP-39). `String.valueOf(x)` returns `x.toString()` — the TEXT of whatever
             # `x` stands for — so an entry over it may propagate an identity and must never
@@ -3986,6 +4007,54 @@ class _Walk:
             if isinstance(slot, int):
                 return slot
         return None
+
+    def _identified_class(self, site: tuple[str, int], slot: int) -> int | None:
+        """Which argument of the producing call holds the class literal of what its value
+        addresses, or None: the `class_arg` of a matching entry whose `arg` is the slot
+        `_identified` picked (spec 2026-11-05 §2). Any such entry, not only the first: one
+        producer may be hoisted twice, from a row that reads its class and a row that does
+        not, and both spell the same value."""
+        for entry in self._identity_matches(site):
+            class_arg = entry.get("class_arg")
+            if entry.get("arg") == slot and isinstance(class_arg, int):
+                return class_arg
+        return None
+
+    def _with_class(
+        self,
+        site: tuple[str, int],
+        slot: int,
+        identified: tuple[_Reached, ...],
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...]:
+        """`identified`, each answer carrying the class literal the same producing call names
+        at its entry's `class_arg` (`Answer.carried_class`), read IN THE SAME CALLING CONTEXT
+        (`trail`, `frames`) and paired only where the two paths agree (`_combine`): a helper
+        building two keys from its callers' arguments gives each the class its own caller
+        passed. An answer no class path agrees with carries none. Unchanged where no entry
+        names a class."""
+        class_slot = self._identified_class(site, slot)
+        if class_slot is None:
+            return identified
+        classes = self._resolve((_SLOT, site[0], site[1], class_slot), trail, frames)
+        carried: list[_Reached] = []
+        for crossed, answer in identified:
+            agreeing = [
+                (merged, class_answer)
+                for class_crossed, class_answer in classes
+                if (merged := _combine(crossed, class_crossed)) is not None
+            ]
+            if not agreeing:
+                carried.append((crossed, answer))
+            for merged, class_answer in agreeing:
+                named = (
+                    str(class_answer.value)
+                    if class_answer.kind == LITERAL and class_answer.literal_kind == SYMBOL
+                    else None
+                )
+                carried.append((merged, replace(answer, carried_class=named)))
+        return tuple(dict.fromkeys(carried))
 
     def _identified_yields(self, site: tuple[str, int]) -> str:
         """What KIND of thing the entry that answered for `site` yields — `address` unless

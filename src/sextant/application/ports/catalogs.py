@@ -336,6 +336,54 @@ class Catalog:
     # takes no configured prefix at all, because Spring Boot's keys do not configure it.
     dispatcher: str | None = None
 
+    # How this catalog's in-process dispatch works (spec 2026-11-05 §1-§2), the `dispatch`
+    # setting: `{key, match, mechanism}` (`{mechanism}` alone on a catalog of key rows whose
+    # handlers are registrations), `key` `type` (the handed value's class picks the handler) or
+    # `object` (receivers of the same channel object take it), `match` `first` (the first
+    # matching registration in its group), `all` (every matching one) or `one` (each value
+    # to one receiver, decided at run time). None for a catalog declaring no dispatch.
+    # Checked by the loader; every dispatch block below needs it.
+    dispatch: dict[str, str] | None = None
+
+    # The registrations this catalog declares under `matches.dispatch_registrations` (spec
+    # 2026-11-05 §2): per call, by its exact overload, which argument holds the key's class
+    # literal or the equal value, the handler and any predicate, and whether the handler's
+    # return is a value delivered back to its own receiver. `{owner, method, descriptor,
+    # class_arg, value_arg, predicate_arg, handler_arg, returns_value}`, the owner a type
+    # symbol, each position an index or None. Checked by the loader; read by
+    # `resolve/dispatch_registrations.py`.
+    dispatch_registrations: tuple[dict[str, Any], ...] = ()
+
+    # The sends this catalog declares under `matches.dispatch_sends` (spec 2026-11-05 §2):
+    # per call, by its exact overload, which argument holds the value handed over. `{owner,
+    # method, descriptor, value_arg}`, the owner a type symbol. Checked by the loader; read by
+    # `resolve/dispatch_hops.py`, which writes each send's hops under this catalog's
+    # `protocol`.
+    dispatch_sends: tuple[dict[str, Any], ...] = ()
+
+    # The receive sites this catalog declares under `matches.dispatch_receives` (spec
+    # 2026-11-05 §2), for an object key: per call, by its exact overload, the object it
+    # takes from (`receiver`) and where its handler is (`enclosing`, the method making the
+    # call, or `lambda_arg`, a function argument). `{owner, method, descriptor, object,
+    # handler}`, the owner a type symbol; a `lambda_arg` receive also carries `handler_arg`,
+    # `handler_method` and `handler_descriptor` (which argument, and the method the library calls
+    # on it). Checked by the loader.
+    dispatch_receives: tuple[dict[str, Any], ...] = ()
+
+    # The calls this catalog declares under `matches.dispatch_views` (spec 2026-11-05 §3) as
+    # handing back a VIEW of an object: another reference to the same object, which the object
+    # walk passes through. `{owner, method, descriptor, object}`, `object` the position of the
+    # object viewed (`receiver` or `argN`). Checked by the loader; read by `ObjectKeys`.
+    dispatch_views: tuple[dict[str, Any], ...] = ()
+
+    # The registrations made by IMPLEMENTING an interface, under
+    # `matches.dispatch_implementations` (spec 2026-11-05 §4 item 5): each module class
+    # implementing `owner` registers its own `method` of that descriptor (the method its
+    # compiler bridge forwards to, where it wrote one), keyed by the type of that method's
+    # parameter at `value_arg`. `{owner, method, descriptor, value_arg}`, the owner a type
+    # symbol. Checked by the loader; read by `resolve/dispatch_registrations.py`.
+    dispatch_implementations: tuple[dict[str, Any], ...] = ()
+
 
 class CatalogError(ValueError):
     """A catalog that cannot be trusted. An unchecked value does not stay in

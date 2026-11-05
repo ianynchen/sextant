@@ -1,0 +1,41 @@
+id: pekko-pubsub-subscribe
+displayName: Apache Pekko classic distributed pub-sub (Subscribe)
+style: single_call
+protocol: actor
+direction: inbound
+
+# Spec 2026-11-04 §3a. Classic distributed pub-sub: an actor subscribes to a topic by
+# telling the mediator a `Subscribe` message. The address is the topic, the message's
+# constructor argument 0.
+#
+# ONE FILE PER MESSAGE CLASS, because `matches.owner` is one owner per catalog and every
+# row applies to it: `Subscribe`, `Put`, `Publish` and `Send` are four classes, so four
+# files (`pekko-pubsub-put.yml`, `pekko-pubsub-publish.yml`, `pekko-pubsub-send.yml`).
+detect:
+  coordinates: ["org.apache.pekko:pekko-cluster-tools_2.13", "org.apache.pekko:pekko-cluster-tools_3"]
+
+# CP-57 read every descriptor below with `javap -c -p` on the jars the fixture resolves,
+# and each jar's own manifest reports `Implementation-Version: 1.1.3`.
+measured:
+  - { artifact: org.apache.pekko:pekko-cluster-tools_2.13, versions: ["1.1.3"],
+      identity: reported, by: scripts/probes/cp57_actors.md }
+
+requires: [call_site, string_constants]
+
+matches:
+  # MEASURED (CP-57 finding 9): the pub-sub messages are Scala case classes, built with
+  # `new` and then `tell`-ed to the mediator. The constructor call is the declaration and
+  # the only call that names the topic; the `tell` carries an `Object`.
+  owner: org.apache.pekko.cluster.pubsub.DistributedPubSubMediator$Subscribe
+  methods:
+    - { name: "<init>", arity: 2,
+        descriptor: "(Ljava/lang/String;Lorg/apache/pekko/actor/ActorRef;)V",
+        channel_arg: 0 }
+    # With a group: `Option<String>` or `String` at argument 1. The topic is still
+    # argument 0; the group only chooses which subscriber of a group gets a message.
+    - { name: "<init>", arity: 3,
+        descriptor: "(Ljava/lang/String;Lscala/Option;Lorg/apache/pekko/actor/ActorRef;)V",
+        channel_arg: 0 }
+    - { name: "<init>", arity: 3,
+        descriptor: "(Ljava/lang/String;Ljava/lang/String;Lorg/apache/pekko/actor/ActorRef;)V",
+        channel_arg: 0 }

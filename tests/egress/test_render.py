@@ -1781,3 +1781,19 @@ def test_a_schedule_expression_passes_the_render_redactor_in_the_table_and_the_d
     assert "ACME_A1B2" not in text
     assert f"| `com/acme/OrderSweeper#sweep().` | cron | — | `{shown}` | unresolved |" in text
     assert f"- `com/acme/OrderSweeper#sweep().` — cron `{shown}`\n" in text
+
+
+def test_an_actor_row_renders_verbless():
+    """`actor` is a key name or a topic, addressed rather than called, so it
+    must land in the verbless half of the complement (spec 2026-09-22 §1c)."""
+    from sextant.egress.render.document import _VERBLESS_PROTOCOLS
+
+    assert "actor" in _VERBLESS_PROTOCOLS
+
+
+def test_an_in_process_protocol_renders_verbless():
+    """`in_process` hands a value over by its class and names no verb, so it must land in
+    the verbless half of the complement (spec 2026-09-22 §1c)."""
+    from sextant.egress.render.document import _VERBLESS_PROTOCOLS
+
+    assert "in_process" in _VERBLESS_PROTOCOLS

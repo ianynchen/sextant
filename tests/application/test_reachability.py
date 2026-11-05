@@ -245,7 +245,7 @@ def test_a_hop_records_the_handler_it_lands_on_and_not_the_client_call(tmp_path:
         ],
     )
     workspace.derive(
-        "rpc_hops_insert",
+        "hops_insert",
         rows=[
             {
                 "caller": stub,

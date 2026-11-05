@@ -1,0 +1,17 @@
+id: cdi
+displayName: The CDI dependency-injection model (JSR-330 qualifiers)
+
+# WHAT THIS FILE IS: D02 §1c, the container's vocabulary declared once (see `spring.yml` for
+# why it is not a catalog). The CDI catalogs name it with `bean_model: cdi`.
+#
+# It declares one fact today, the one the CDI event catalogs read: which annotations make
+# another annotation a QUALIFIER. A qualifier is any annotation type meta-annotated
+# `@Qualifier` (`@Named`, `@Any`, an application's own `@Express`; JSR-330's own definition of
+# the meta-annotation), and CDI notifies an observer whose event parameter carries one only of
+# events fired with that qualifier (CDI's observer resolution; not measured by CP-59, which
+# states it as a bound, `scripts/probes/cp59_dispatch.md`). The registration reader keeps such an observer with no
+# key (`annotation_driven.registrations`), because the fire sites' qualifiers are not read: a
+# missing hop, never a false one. Jakarta's name (CDI 3+, Quarkus) and javax's (CDI 1.x/2.x).
+qualifier_meta_annotations:
+  - jakarta.inject.Qualifier
+  - javax.inject.Qualifier

@@ -4610,7 +4610,9 @@ def test_the_endpoints_statement_runs_once_per_resolve_and_every_catalog_takes_i
     the whole `resolve()` with every shipped catalog, so a driver that went back to
     staging per contiguous run — or per catalog — fails here rather than being found
     by the next profile. The turn count is every annotation-driven catalog that ran
-    minus the corroboration-only one, which stages nothing and takes no turn."""
+    minus the corroboration-only one, which stages nothing and takes no turn, and minus
+    any declaring `dispatch`, whose mapping is read as registrations by their own pass
+    (spec 2026-11-05 §2) and never enters the endpoint loop."""
     executions: dict[str, int] = {}
     real_derive = DuckDbWorkspace.derive
 
@@ -4632,6 +4634,7 @@ def test_the_endpoints_statement_runs_once_per_resolve_and_every_catalog_takes_i
         if catalog.style == "annotation_driven"
         and catalog.id not in skipped_ids
         and "mapping" in catalog.matches
+        and catalog.dispatch is None
     ]
 
     assert executions["endpoints"] == 1
@@ -4680,6 +4683,15 @@ def test_every_resolve_pass_logs_its_seconds_at_info(
         # Where a stub call to a served RPC lands (spec 2026-10-25 §3d): right after the
         # pass above, reading the same inbound rows.
         "record_rpc_hops",
+        # Each dispatch registration (spec 2026-11-05 §3): right after the hop pass, which
+        # the dispatch hops will join.
+        "record_dispatch_registrations",
+        # Each dispatch send's hops (spec 2026-11-05 §1): after the registrations it reads,
+        # into the table the gRPC pass writes too, reset once before both.
+        "record_dispatch_hops",
+        # Each inbound key row named by its handlers (spec 2026-11-04 §3d item 6): after the
+        # registrations, and after `record_self_calls`, which read the key as served off its row.
+        "record_key_handlers",
         # The module's own server prefix, between the rows existing and anything copying
         # an address (spec 2026-10-18 §3) — `record_roots` and `record_routing_conflicts`
         # key on the path, so the order here is a correctness property, not a listing.

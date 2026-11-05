@@ -22,16 +22,29 @@ today and every self-call is dropped. A configured name of the module itself (a 
 name, a hostname) is not recognized as this module until OI-186 (SEXTANT-48): such a peer
 reads as another host and the row stays outbound, which is the safe side.
 
-## Only gRPC
+## gRPC and actor
 
 W27 (`self_exchange.py`) files a question, not a rule, for the other protocols, because
-their far end may be another deployment. Ruling 3 builds the rule for gRPC only.
+their far end may be another deployment. Ruling 3 builds the rule for gRPC. The actor
+design (spec 2026-11-04 §3d item 5) applies it to `actor`: a key or topic the module
+registers, inits or subscribes to is served here, so a call naming it is a hop. An actor
+row comes from a registration call in code, never from a schema, so when this pass runs its
+`handler` is always set: the registering method, as `single_call` wrote it. A key row's
+handlers are named later, by its key class (`dispatch_hops.record_key_handlers`, after
+this pass in the pipeline), and a key no handler here serves ends with `handler` NULL; it
+was served when this pass read it, which is what keeps a call naming it a hop.
+
+The two differ only in what an outbound row names. A gRPC client names the service and the
+inbound path adds `/<Method>`; an actor key or topic is named whole on both sides. A row
+matches only a served identity of its own protocol.
 """
 
 from sextant.application.ports.workspace import Workspace
 
 # OI-198: the other protocols' self-calls are re-checked under this rule as their own item.
-_PROTOCOLS = ("grpc",)
+# Each protocol maps to the separator between the identity an outbound row names and the
+# method an inbound path adds after it; None where the inbound path is the identity whole.
+_PROTOCOLS: dict[str, str | None] = {"grpc": "/", "actor": None}
 
 # The hosts that name this module itself. IPv6 loopback appears both bare and bracketed.
 _LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"})
@@ -40,31 +53,53 @@ _LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"})
 _ROW_COLUMNS = ("row_id",)
 
 
-def served_services(workspace: Workspace) -> dict[str, set[str]]:
-    """Each service identity this module handles, mapped to the wire paths it serves.
+def served_services(workspace: Workspace, protocol: str) -> dict[str, set[str]]:
+    """Each `protocol` service identity this module handles, mapped to the wire paths it
+    serves.
 
-    From inbound `grpc` rows whose `handler` is set; an inbound path is
-    `<identity>/<Method>`, e.g. `helloworld.Greeter/SayHello`.
+    From inbound rows of that protocol whose `handler` is set; a `grpc` inbound path is
+    `<identity>/<Method>`, e.g. `helloworld.Greeter/SayHello`. An `actor` row's path is
+    its identity whole, e.g. `stock`.
     """
-    return {identity: set(paths) for identity, paths in served_handlers(workspace).items()}
+    return {
+        identity: set(paths) for identity, paths in served_handlers(workspace, protocol).items()
+    }
 
 
-def served_handlers(workspace: Workspace) -> dict[str, dict[str, set[str]]]:
+def served_handlers(workspace: Workspace, protocol: str) -> dict[str, dict[str, set[str]]]:
     """`served_services`, with each served wire path mapped to its handlers: one read of
-    `endpoints` for a pass that needs both (`resolve/rpc_hops.py`)."""
+    `endpoints` for a pass that needs both (`resolve/rpc_hops.py`). Only `protocol`'s rows:
+    an identity is served in one protocol, and an actor key spelled like a gRPC service
+    serves no RPC."""
     served: dict[str, dict[str, set[str]]] = {}
+    for row_protocol, identity, path, handler in _served_rows(workspace):
+        if row_protocol == protocol:
+            served.setdefault(identity, {}).setdefault(path, set()).add(handler)
+    return served
+
+
+def _served_rows(workspace: Workspace) -> list[tuple[str, str, str, str]]:
+    """`(protocol, identity, path, handler)` for each inbound row that serves an identity:
+    a protocol in `_PROTOCOLS`, a handler and a path. A gRPC path with no `/<Method>` names
+    no RPC and is skipped."""
+    served: list[tuple[str, str, str, str]] = []
     for row in workspace.query("endpoints"):
+        protocol = str(row["protocol"])
         if (
-            str(row["protocol"]) not in _PROTOCOLS
+            protocol not in _PROTOCOLS
             or str(row["direction"]) != "inbound"
             or row["handler"] is None
             or row["path"] is None
         ):
             continue
         path = str(row["path"])
-        identity, separator, _method = path.rpartition("/")
+        method_separator = _PROTOCOLS[protocol]
+        if method_separator is None:
+            served.append((protocol, path, path, str(row["handler"])))
+            continue
+        identity, separator, _method = path.rpartition(method_separator)
         if separator:
-            served.setdefault(identity, {}).setdefault(path, set()).add(str(row["handler"]))
+            served.append((protocol, identity, path, str(row["handler"])))
     return served
 
 
@@ -90,7 +125,7 @@ def _is_this_module(peer: str | None) -> bool:
 def record_self_calls(workspace: Workspace) -> None:
     """Drops every outbound row for a service this module serves, unless its peer names
     another host."""
-    served = served_services(workspace)
+    served = {(protocol, identity) for protocol, identity, _, _ in _served_rows(workspace)}
     if not served:
         return
     rows = [
@@ -99,7 +134,7 @@ def record_self_calls(workspace: Workspace) -> None:
         if str(row["protocol"]) in _PROTOCOLS
         and str(row["direction"]) == "outbound"
         and row["path"] is not None
-        and str(row["path"]) in served
+        and (str(row["protocol"]), str(row["path"])) in served
         and _is_this_module(None if row["peer"] is None else str(row["peer"]))
     ]
     workspace.derive("self_call_endpoints_drop", rows=rows)

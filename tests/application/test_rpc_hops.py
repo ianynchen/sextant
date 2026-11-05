@@ -143,7 +143,7 @@ _GREETER_FACTS: list[object] = [
 
 
 def _hops(workspace: DuckDbWorkspace) -> list[tuple[object, ...]]:
-    rows = [tuple(row.values()) for row in workspace.query("rpc_hops")]
+    rows = [tuple(row.values()) for row in workspace.query("hops")]
     workspace.close()
     return rows
 
@@ -244,6 +244,27 @@ def test_a_service_not_served_here_gets_no_hop(tmp_path: Path) -> None:
     assert _hops(workspace) == []
 
 
+@pytest.mark.pins("grpc.an-ACTOR-key-spelled-like-a-service-serves-no-rpc")
+def test_an_actor_key_spelled_like_a_served_service_gives_no_hop(tmp_path: Path) -> None:
+    """An inbound `actor` row whose key is spelled `helloworld.Greeter`, with a handler, and no
+    `grpc` row: the module serves an actor key, not the gRPC service, so the stub's call is
+    outbound and gets no hop. A hop here would be a gRPC call claimed served with no handler."""
+    workspace = _workspace(
+        tmp_path,
+        facts=_GREETER_FACTS,
+        edges=_blocking_edges(),
+        hierarchy=_STUB_HIERARCHY,
+        handled=[],
+    )
+    workspace._connection.execute(
+        "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler) "
+        "VALUES (1, 'actor', 'inbound', NULL, ?, ?)",
+        [SERVICE, _MODULE + HANDLER],
+    )
+    record_rpc_hops(workspace, [_catalog()])
+    assert _hops(workspace) == []
+
+
 @pytest.mark.pins("grpc.a-stub-of-a-service-NOT-served-gets-no-hop")
 def test_a_stub_of_a_service_other_than_the_one_served_gets_no_hop(tmp_path: Path) -> None:
     """The module serves `helloworld.Hello`, with a handler, and calls `Greeter` through its
@@ -317,7 +338,10 @@ def test_a_stub_method_that_never_reaches_the_client_call_api_gets_no_hop(
     assert _hops(workspace) == []
 
 
-def test_a_second_run_replaces_the_rows(tmp_path: Path) -> None:
+def test_the_pass_only_inserts(tmp_path: Path) -> None:
+    """`hops` has two writers (spec 2026-11-04 §3d item 7), so neither clears it: a row
+    the other wrote survives this pass. The pipeline resets the table once before both, which
+    `test_dispatch_hops.py::test_a_second_analysis_replaces_the_hops` pins."""
     workspace = _workspace(
         tmp_path,
         facts=_GREETER_FACTS,
@@ -325,9 +349,19 @@ def test_a_second_run_replaces_the_rows(tmp_path: Path) -> None:
         hierarchy=_STUB_HIERARCHY,
         handled=[(f"{SERVICE}/SayHello", HANDLER)],
     )
+    other = {
+        "caller": "sender",
+        "ordinal": 0,
+        "protocol": "actor",
+        "path": "com/acme/Message#",
+        "handler": None,
+        "evidence": "compiler",
+    }
+    workspace.derive("hops_insert", rows=[other])
     record_rpc_hops(workspace, [_catalog()])
-    record_rpc_hops(workspace, [_catalog()])
-    assert len(_hops(workspace)) == 1
+    rows = _hops(workspace)
+    assert tuple(other.values()) in rows
+    assert len(rows) == 2
 
 
 def test_two_catalogs_declaring_the_stub_keys_are_refused(tmp_path: Path) -> None:

@@ -199,6 +199,10 @@ FRAMEWORKS: dict[str, list[str]] = {
         "Temporal / Cadence",
         "Vert.x EventBus",
         "Akka / Pekko actors",
+        "Spring application events",
+        "CDI events",
+        "Java blocking queues",
+        "Kotlin channels and flows",
     ],
 }
 
@@ -268,6 +272,7 @@ FAMILIES: dict[str, list[str]] = {
         "Spring Cloud GCP Pub/Sub (Spring Integration)",
         "Spring scheduling (@Scheduled)",
         "Spring Integration",
+        "Spring application events",
     ],
     "Quarkus (Quarkus REST / JAX-RS, Reactive Routes, MicroProfile, SmallRye, gRPC)": [
         "JAX-RS (Quarkus REST, Jersey, RESTEasy, Helidon)",
@@ -282,6 +287,7 @@ FAMILIES: dict[str, list[str]] = {
         # out, the grid's Quarkus/Async cell read `—` — *this family declares no
         # line here* — of a family with a shipped async entry point.
         "Vert.x EventBus",
+        "CDI events",
     ],
     "Micronaut": [
         "Micronaut HTTP",
@@ -320,6 +326,10 @@ FAMILIES: dict[str, list[str]] = {
     ],
     "Temporal / Cadence": ["Temporal / Cadence"],
     "Quartz": ["Quartz"],
+    "JDK and Kotlin channels (BlockingQueue, Channel, Flow)": [
+        "Java blocking queues",
+        "Kotlin channels and flows",
+    ],
 }
 
 _ESCAPED_PIPE = re.compile(r"(?<!\\)\|")

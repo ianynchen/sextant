@@ -5,6 +5,10 @@
 -- module itself, are decided in `resolve/self_calls.py`; this file is handed the finished
 -- list of rows to remove and only removes them.
 --
+-- A second caller, `resolve/dispatch_hops.record_key_handlers` (spec 2026-11-04 §3d item 6),
+-- runs it to remove an inbound key row it rewrites as one row per handler, which it then
+-- inserts through `derive_call_endpoints.sql`; the same DELETE, by `row_id`.
+--
 -- **DELETE only, and only the rows named.** Rows are matched on `row_id` (follow-the-object,
 -- Ruling 7), which names exactly the row the pass chose: two outbound rows of one service
 -- differ only in the address they call, and dropping the one that names this module must not

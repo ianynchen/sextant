@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-290 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-303 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -293,6 +293,19 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-287 | [SEXTANT-281](https://app.plane.so/portolan/browse/SEXTANT-281/) | A second send of the same request after a JDK hand-off gets no row |
 | OI-288 | [SEXTANT-282](https://app.plane.so/portolan/browse/SEXTANT-282/) | A request built by a subclass of a catalog type gives no row |
 | OI-289 | [SEXTANT-283](https://app.plane.so/portolan/browse/SEXTANT-283/) | A helper entered twice with the same field or parameter is read as two different arguments |
+| OI-290 | [SEXTANT-284](https://app.plane.so/portolan/browse/SEXTANT-284/) | A URL passed through a Kotlin extension function's parameter is not followed back to its literal |
+| OI-291 | [SEXTANT-285](https://app.plane.so/portolan/browse/SEXTANT-285/) | A nested no-group sibling's facts go into a folder whose name holds a colon (Windows refuses it) |
+| OI-292 | [SEXTANT-286](https://app.plane.so/portolan/browse/SEXTANT-286/) | System analyze does not link a call to `host:port` to the participant named `host` |
+| OI-293 | [SEXTANT-287](https://app.plane.so/portolan/browse/SEXTANT-287/) | The extractor given no `--classes` reports 0 documents and exits 0 instead of failing |
+| OI-294 | [SEXTANT-288](https://app.plane.so/portolan/browse/SEXTANT-288/) | Actor send whose message is built by a static factory reads "class not read" |
+| OI-295 | [SEXTANT-289](https://app.plane.so/portolan/browse/SEXTANT-289/) | Actor handler predicate cases: non-literal class and predicate-only onCommand over-reach |
+| OI-296 | [SEXTANT-290](https://app.plane.so/portolan/browse/SEXTANT-290/) | ForAnyState case registered before forState gives a hop to a handler that never runs |
+| OI-297 | [SEXTANT-291](https://app.plane.so/portolan/browse/SEXTANT-291/) | Classic pub-sub Send to the module's own Put path stays outbound |
+| OI-298 | [SEXTANT-292](https://app.plane.so/portolan/browse/SEXTANT-292/) | Akka 2.7+ catalogs unmeasured (repo.akka.io needs a token) |
+| OI-299 | [SEXTANT-293](https://app.plane.so/portolan/browse/SEXTANT-293/) | Dispatch: a static event factory called through a subclass is not read |
+| OI-300 | [SEXTANT-294](https://app.plane.so/portolan/browse/SEXTANT-294/) | Dispatch: a Spring listener's return value is republished, no hop |
+| OI-301 | [SEXTANT-295](https://app.plane.so/portolan/browse/SEXTANT-295/) | Dispatch: derived Kotlin flows (map/filter/onEach) get a new key |
+| OI-302 | [SEXTANT-296](https://app.plane.so/portolan/browse/SEXTANT-296/) | Dispatch: CDI fire-site qualifiers not read; CDI hops unchecked on real code |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

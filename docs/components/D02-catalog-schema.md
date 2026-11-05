@@ -457,8 +457,9 @@ channel_types:                               # exact membership — the channel 
 annotations Spring consults when it registers one, and how a bean is named. It is the
 container's knowledge and not any one catalog's, so it sits beside `@Bean` and `@Qualifier`
 and is read by ONE resolve pass (`resolve/bean_conditions.py`) for every bean, naming no
-framework in code. The keys, all in `catalogs/bean-models/spring.yml`, each with the probe
-that read the framework's rule off its jar (`by:`):
+framework in code. The keys, all in `catalogs/bean-models/spring.yml` but the last (CDI's,
+in `catalogs/bean-models/cdi.yml`), each with the probe that read the framework's rule off its
+jar (`by:`):
 
 | Key | Holds | Probe |
 |---|---|---|
@@ -467,6 +468,7 @@ that read the framework's rule off its jar (`by:`):
 | `stereotype_name_attrs` | for each stereotype, the attribute that names the bean — `value` on six, `name` on the two advice annotations, whose `value` aliases `basePackages`. A scanned class naming none is called by its simple name uncapitalised | CP-44 row 6 |
 | `conditions` | `profile: {annotation, expressions, by}`, `property: {annotation, prefix, names, having_value, match_if_missing, by}` and `other: {annotations, by}` — the conditions evaluated against configuration, and the ones the analysis names and never evaluates (`@Conditional` and the autoconfigure conditions) | CP-42, CP-43 |
 | `presence` | `@ConditionalOnMissingBean` / `@ConditionalOnBean`: `missing`, `present`, `type_attrs` (`value` and `type`, one set), `name_attrs`, `annotation_attrs` (a separate criterion), `order_reason` (what a loop holding a `missing` condition says), `present_cycle_reason` (what a loop of `present` conditions alone says) | CP-44 rows 1-3 |
+| `qualifier_meta_annotations` | the annotations that make another annotation a QUALIFIER (JSR-330's `@Qualifier`, Jakarta and javax). Read by the dispatch registration reader: an observer whose event parameter also carries a qualifier is kept with no key (§2m). Declared in `catalogs/bean-models/cdi.yml`, which the two CDI event catalogs name; a non-empty list of names, refused at load otherwise | CDI's observer resolution (stated, not probed: CP-59 bounds it) |
 | `interface_registrations` | a list of `{supertypes, annotation, excluded_by, by}`: an interface assignable to a listed supertype, or carrying `annotation` (itself, a meta-annotation, or an interface it extends), and not carrying `excluded_by` itself, is a bean the framework implements at run time (Spring Data repositories) | CP-46 |
 
 The loader (`yaml_source._check_bean_model`) refuses a malformed block, naming the file
@@ -823,12 +825,16 @@ genuinely new shape needs a new engine. (Nine as of Phase 2H; `supertype_derived
 `injected_client`, Phase 2O Task 5, are the tenth and eleventh; `derived_resource`, Task 6,
 is the twelfth; `supertype_dispatch`, Task 7b, is the thirteenth; `scheduled_work` and
 `error_advice`, Task 8, are the fourteenth and fifteenth; `scheduled_chain`, the Quartz
-design of 2026-10-28, is the sixteenth.)
+design of 2026-10-28, is the sixteenth. In-process dispatch (the design of 2026-11-05) is
+**no style**: it is a setting and five blocks a catalog of an existing style carries, in its
+own section, §2m. The
+Akka and Pekko design of 2026-11-04 had built a seventeenth style, `message_handlers`, for
+it; the user ruled it framework-specific, and it is gone.)
 
-**Sixteen sections follow, and they are NOT sixteen engines** — §5.3 requires this document
-to say which is which rather than let a reader count headings. **Fourteen have an engine**,
-each registered in `application/resolve/endpoints.py`'s `_ENGINES`, which is the list a
-catalog's `style:` is resolved against and the only place the answer lives. The other two
+**Sixteen sections follow, and they are NOT sixteen engines** — §5.3 requires this
+document to say which is which rather than let a reader count headings. **Fourteen have an
+engine**, each registered in `application/resolve/endpoints.py`'s `_ENGINES`, which is the list
+a catalog's `style:` is resolved against and the only place the answer lives. The other two
 are:
 
 - **`protocol_hint` is a resolve PASS, not an engine** — no catalog declares it, and one
@@ -842,8 +848,8 @@ are:
   reasoning; nothing in it describes behaviour that runs today. Its section says so again
   at the top, in the `default_produces` model §5.3 names.
 
-The count above therefore reads: fourteen shipped engine styles, one resolve pass, one
-design. *This heading read "The thirteen styles" and the two non-wire engines had no section
+The count above therefore reads: fourteen shipped engine styles, one style read by a resolve
+pass, one resolve pass, one design. *This heading read "The thirteen styles" and the two non-wire engines had no section
 at all until the 2O documentation sweep; the number counted headings, which is exactly the
 substitution §5.3 forbids.*
 
@@ -1799,8 +1805,8 @@ matches:
 
 Each `methods` row is `{name, arity?, descriptor?, http_method | method_arg | neither,
 url_arg | channel_arg, body_arg?, response_arg?, record_arg?, direction?,
-path_from_argument_type?, channel_via?, address_arg_2?, lambda_arg?, lambda_steps?,
-request_url?, address_parts?}`, beside the catalog-level `default_address?` and
+path_from_argument_type?, channel_via?, address_arg_2?, lambda_arg?,
+lambda_steps?, request_url?, address_parts?}`, beside the catalog-level `default_address?` and
 `client_base?`, all described below.
 **`http_method` is a literal when the catalog already knows the verb** — `postForObject` is
 always a POST, so the catalog states it once. **`method_arg` is a position when the call
@@ -1950,6 +1956,42 @@ answered. This same ladder — literal first, linked call as fallback — is wha
 and `interface_implementation` (both below) read a `channel`/`channel_arg` position through
 too. **Every entry is also hoisted into §1f's estate-wide identity table**, where the same
 three fields are declared once per producer instead of once per consumer.
+
+**A `channel_via` entry may name `class_arg`: where an inbound key's class is read** (spec
+`2026-11-05-in-process-dispatch-design.md` §2, from `2026-11-04-akka-pekko-actors-design.md`
+§3a, §3d item 6). A Receptionist service key or a sharded entity type is a name and a class,
+two arguments of one producing call (`ServiceKey.create(Command.class, "stock")`): the
+entry's `arg` names the name and its `class_arg` the class literal of what the key
+addresses. **The class is read from that same call in the same walk**: where the walk reaches
+the producer through the hoisted entry (§1f), it reads `class_arg` in the calling context
+the name was read in and answers the name carrying the class
+(`values.Answer.carried_class`), so two keys built by one helper from its two callers stay
+apart without any pairing afterwards. A key whose class is not a class literal on any agreeing
+path carries none: a class not read. Checked at load (`yaml_source._check_class_arg`): an
+argument index, other than `arg`, on a `channel_via` entry only. **It is a fact about the
+producer**, like `arg`, so it sits on every entry naming that producer — an outbound row's
+too, where nothing reads it — and reaches a row through the hoisted table even where the row
+names only the key's first step (`init(Entity.of(KEY, …))`, whose `channel_via` names
+`Entity.of` alone, as the type gate requires of a row's entries):
+
+```yaml
+    - { name: entityRefFor, arity: 2, direction: outbound, channel_arg: 0, descriptor: "…",
+        channel_via: [{ owner: …javadsl.EntityTypeKey, method: create, arg: 1, class_arg: 0 }] }
+```
+
+The engine still writes the row with the registering method as `handler`; after the
+registration pass, `resolve/dispatch_hops.record_key_handlers` re-runs that one walk per
+registering site and replaces each inbound row of the catalog with one row per handler a
+value of the class, or of any subtype of it, reaches (`dispatch_registrations.served_cases`:
+the hop's match rule asked per candidate class, so a row and a hop always agree), the rows
+differing only in `handler`, as a route with two handlers is two rows (§5's insert, through
+`derive_call_endpoints.sql`). A class reaching no handler, or not read, leaves one row with
+`handler` NULL. Every inbound row of a catalog any of whose entries names `class_arg` is such
+a key row, **including the rows of entries that name none** (one `class_arg` anywhere in the
+catalog turns all of that catalog's inbound rows into key rows, so a key without a class
+belongs in a catalog of its own); one with no `channel_arg` is refused at resolve (every inbound row of such a
+catalog is replaced). A row whose catalog names no `class_arg` —
+a classic pub-sub `Subscribe`, which takes any value — keeps the method that subscribed.
 
 **`lambda_arg` and `lambda_steps` read a destination the call site has no position for at
 all** (`OI-74`, W57) — the whole send handed over as one builder lambda:
@@ -4098,7 +4140,7 @@ Each is shape-checked when present; a malformed value refuses the catalog.
 
 **Two more keys name the CLIENT side, and this style's engine does not read them**
 (spec 2026-10-25 §3d). `resolve/rpc_hops.py` does: a call from a generated client stub to an
-RPC the module serves lands on its handler (D01 §3, `rpc_hops`). They sit in this style's
+RPC the module serves lands on its handler (D01 §3, `hops`). They sit in this style's
 `matches` because the pass reads the same `supertype_marker` to find the wire method a stub
 calls. `grpc-java.yml` declares both:
 
@@ -6167,6 +6209,269 @@ selector is `messageSelector` and sits on `@Queue`/`@Topic` rather than on the c
 than the list: `delivery` + a boolean is ambiguous, so Spring AMQP's `exclusive` is
 `kind: exclusive` the same way `@ConsumeEvent`'s `local` is `kind: local`. **The probe runs
 before the catalog line, and where it disagrees the list changes, not the probe.**
+
+## 2m. In-process dispatch — `dispatch` and the `dispatch_*` blocks (not a style)
+
+Spec `2026-11-05-in-process-dispatch-design.md`: code hands a value to a framework or a
+channel, and the framework calls the handler(s) that receive it. No address goes on a wire, so
+it is a trace **hop** (D01 §3 `hops`), never an endpoint row; messaging, which names an address
+a broker routes on, keeps its rows. **It is no style**: a setting and five blocks under
+`matches` (`dispatch_registrations`, `dispatch_sends`, `dispatch_receives`, `dispatch_views`,
+`dispatch_implementations`) that a catalog of an existing style carries, read by passes after
+the engines. **A catalog whose `dispatch` names a `key` mints no endpoint row**:
+`derive_endpoints` leaves it out of the engine loop whole (`endpoints._reads_by_a_later_pass`:
+no endpoint validation, no run or skip reported), whatever its style. A key catalog declaring
+`dispatch: {mechanism}` alone keeps its endpoint rows (its inbound rows are the keys).
+
+```yaml
+# pekko-actor-handlers.yml
+style: fluent                     # an ordinary chain catalog
+protocol: actor                   # every hop it gives is written under it
+dispatch: { key: type, match: first, mechanism: pekko-actors }
+requires: [call_site, chain_reconstruction]
+matches:
+  roots:                          # the chain walk's own words, one per builder
+    - { owner: org.apache.pekko.actor.typed.javadsl.Behaviors, method: receive,
+        descriptor: "(Ljava/lang/Class;)Lorg/apache/pekko/actor/typed/javadsl/BehaviorBuilder;" }
+  steps:                          # one per registration overload, each carrying its call
+    - { owner: org.apache.pekko.actor.typed.javadsl.BehaviorBuilder, method: onMessage,
+        descriptor: "(Ljava/lang/Class;Lorg/apache/pekko/japi/function/Function;)L…/BehaviorBuilder;",
+        captures: { case: arg0 }, repeats: [case] }
+  terminal: [build]
+  dispatch_registrations:         # what each registration's arguments mean
+    - { owner: org.apache.pekko.actor.typed.javadsl.BehaviorBuilder, method: onMessage,
+        descriptor: "(Ljava/lang/Class;Lorg/apache/pekko/japi/function/Function;)L…/BehaviorBuilder;",
+        class_arg: 0, handler_arg: 1 }
+  dispatch_sends:                 # where a value is handed over
+    - { owner: org.apache.pekko.actor.typed.ActorRef, method: tell,
+        descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
+```
+
+- **`dispatch: {key, match, mechanism}`** — how the catalog's dispatch works, required beside
+  any block below (checked at load, `yaml_source._dispatch`). `mechanism` names the dispatch
+  mechanism the catalog belongs to (`akka-actors`, `pekko-actors`, `spring-events`: data, a
+  name of the author's choosing): a send, a delivering handler and an inbound key reach only
+  the registrations of catalogs naming the same one, so one framework's value never lands on
+  another's handler. A catalog whose inbound rows are KEYS carrying a class (a `channel_via`
+  entry naming `class_arg`: `pekko-receptionist`, `pekko-cluster-sharding`) declares
+  `dispatch: {mechanism}` alone, saying whose registrations serve its keys; its rows stay
+  endpoint rows. The loader requires the setting on every such catalog and refuses a send or
+  key catalog's mechanism that no registering catalog (registrations, implementations,
+  receives, or an annotation mapping) names (`yaml_source._check_mechanisms`). `key`: `type`, the handed value's class
+  picks the handler (Akka and Pekko, Spring and CDI events), or `object`, the receivers of
+  the same channel object take it (a queue, a channel). `match`: `first`, the first
+  registration in its group the value matches (a behavior tries its cases in order); `all`,
+  every matching registration (listeners); `one`, each value to one receiver decided at run
+  time, so a hop to each.
+- **`dispatch_registrations`** entries are `{owner, method, descriptor, class_arg |
+  value_arg, handler_arg, predicate_arg?, returns_value?}`, checked at load
+  (`yaml_source._dispatch_registrations`): every position an argument the descriptor has, no
+  argument read for two meanings, never both `class_arg` and `value_arg`, and at least one of
+  `class_arg`, `value_arg`, `predicate_arg`.
+  - `class_arg` — the key's class, a class literal (`key_type`);
+  - `value_arg` — a constant the value must equal, by identity (`key_value`);
+  - `predicate_arg` — a predicate the registration also tests: it never shadows a later
+    one. With no class and no value (`onCommand(Predicate, h)`) it tests every value;
+  - `handler_arg` — the handler, a method reference or lambda (`combinator._handler_of`);
+  - `returns_value` — the handler's return is a value handed to its own receiver
+    (`delivers`): `resolve/dispatch_hops.py` continues the hop from each class it returns.
+- **A `fluent` catalog carrying `dispatch_registrations`** describes registrations: its chain
+  ends are registration GROUPS, not endpoint rows. `derive_endpoints` leaves it out of the
+  engine loop whole (`endpoints._reads_by_a_later_pass`: no endpoint validation, no run or
+  skip reported) and `resolve/dispatch_registrations.py` reads it into
+  `dispatch_registrations` (D01 §3) after the engines. The chain is the shared walk
+  (`shapes/chains.chain_ends`), receiver to result, in the `fluent` words: a registration
+  returning a NEW builder is followed through its result; one returning `this` is a
+  `returns_receiver: true` step, so a builder held in a local and given its registrations
+  statement by statement is one chain. Each executable chain end is one group. A root's owner
+  also matches a call made through a type inheriting its method (`Dispatch.heirs`, JVMS
+  5.4.3.3), as for every chain catalog.
+- **`case: argN`** with `repeats: [case]` on every registration step carries the call in
+  chain order; a registration's position is its place in that capture, and its meaning is
+  looked up per call from the block by its exact overload — one capture, never one per field,
+  since an overload without a field would misalign parallel captures. Each step capturing
+  `case` needs exactly one `dispatch_registrations` entry per owner (refused at resolve
+  otherwise).
+- **An entry no step names** (`messageAdapter(Class, f)`, `ActorContext.ask`'s reply mapper
+  at argument 4) is a registration made on its own: each of its call sites — through the
+  declared owner or a type inheriting it (`Dispatch.heirs`) — is a group of its own,
+  `<caller>#<ordinal>`, at position 0. A handler argument that is a constructor reference
+  (`Wrapped::new`) names the constructor.
+- **`dispatch_sends`** entries are `{owner, method, descriptor, value_arg}`, checked at load
+  (`yaml_source._dispatch_sends`): `value_arg` an argument the descriptor has, no other key.
+  A block any style may carry. `resolve/dispatch_hops.py` reads each call site (owner, an heir
+  of it, name and parameter types) and writes its hops into `hops` (D01 §3) under the
+  catalog's `protocol`, which a catalog declaring sends or a `returns_value` entry must carry
+  (refused at load otherwise, `yaml_source._dispatch`) although it mints no endpoint row. The
+  value at `value_arg` is read by its kind: an `instance`'s class; an `enum` constant or a
+  static `field` by identity (its class and its own symbol); a `lambda` through each class its
+  body returns (a constructor reference: its owner); a static call's result
+  (`Event.instance()`, an `unresolved` argument whose `source` is that call's `result`)
+  through each class the module's own body of that method returns. **A value none of those
+  names is read by its DECLARED type** (ruled 2026-11-05): any other call's result (an
+  instance call, `new E().setA(a)`'s chained setters; a library method), and a return the body
+  does not name, by the call's descriptor's return type; a `parameter` by the method's
+  declared parameter type; an instance `field` by the field's declared type. The value is
+  that type or a subtype, so every registration of the type or a supertype is certainly
+  reached, and those hops are true under every `match` (`dispatch_registrations.certain_cases`,
+  ruling 14 as corrected 2026-11-05). What the type cannot say is said by the not-read row. A
+  registration MAY TAKE some subtype of the value where it names a strict subtype, or a type
+  unrelated to the declared one unless both are known classes (a type the module itself
+  declares that is no interface, never a dependency's header, or a type some class extends: a
+  subclass extends no unrelated class, but may implement any interface), or where it is a value
+  registration whose constant's class is not such a class or not read. Under `all` and `one`,
+  any such registration of the mechanism makes the send write the not-read row beside its
+  certain hops, never a stop naming the type as if nobody handled it (`publish(DomainEvent e)`
+  with a listener of an unrelated `Auditable`). Under `first`, such a case before the group's
+  first certain unpredicated case leaves the group not read. **A keyless registration** (key,
+  value and object NULL, not predicated: a generic or qualified listener kept keyless, a case
+  the walk did not read) may take ANY value, so it makes every send of its mechanism also not
+  read, whether the value is read exactly (`new Command()`) or by its declared type, under
+  `first` when it comes before the group's first certain case: never a stop naming the class
+  as handled by nobody. Finality is not read, so a final declared type is treated as subclassable
+  (not read where it could have been, never false). Anything else (an
+  array element, a `merge`, a primitive or array declared type) is not read, and the row says
+  so (`(key not read)`).
+  A value's class reaches a registration of any of its supertypes: the scanned and headered
+  ones, the `type-models/` conformance past a JDK class nothing scans, and the root type (the
+  `subtype: "*"` entry). It is asked only of the registrations of the sending catalog's
+  `dispatch.mechanism`, and an inbound key's class likewise: a dispatch never crosses
+  frameworks.
+- **An `annotation_driven` catalog declaring `dispatch`** (`spring-events.yml`) reads its
+  `mapping` as registrations, not routes (`annotation_driven.registrations`): each method
+  carrying one of `mapping.annotations`, in the annotation set the endpoint derivation itself
+  matches on (folded containers, module-local composed annotations), is one registration per
+  key, its group the method itself and its handler the method. The key is each class named
+  under the first present `mapping.path_from` attribute (`@EventListener(classes = {A.class,
+  B.class})`: two rows, in the order written); where none is present, `mapping.path_fallback:
+  payload_type` keys it by the type of the parameter the catalog's `request_body` rule picks
+  (its erasure, the class a value is dispatched by). `payload_type` is the one fallback a
+  registration takes — every other word composes an address — and any other is refused when
+  the catalog is read. A method giving no class keeps one row with no key: it matches nothing.
+  `match` is the catalog's. `protocol` names the hops its `dispatch_sends` give: `in_process`
+  ([D00](D00-fact-schema.md) §4) for a framework with no wire.
+- **`mapping.selected_by_parameter: [<annotation fqn>, …]`** (`cdi-events.yml`,
+  `cdi-async-events.yml`) selects a method by a PARAMETER annotation instead: each method with
+  a parameter carrying one of the names (`@Observes`, which javac writes in the method's
+  `RuntimeVisibleParameterAnnotations`, CP-59 finding 9) is one registration keyed by THAT
+  parameter's erased type, wherever it sits among the others (the framework injects those:
+  `init(@Observes StartupEvent ev, Vertx vertx)` is keyed `StartupEvent`). Read only on a
+  catalog declaring `dispatch`; anything but a list of names is refused when the registrations
+  are read (a bare string would select nothing). Such a catalog writes `annotations: []`. Two
+  kinds of observer one framework notifies from different sends are two catalogs, one
+  mechanism each: CDI's `fire` notifies only `@Observes` observers and `fireAsync` only
+  `@ObservesAsync` ones (CP-59 finding 10, ArC 3.17.5), so `cdi-events` and `cdi-async-events`
+  never reach each other's registrations. An observer of an event nothing in the module fires
+  (`@Observes StartupEvent`) is a registration no hop reaches, and no endpoint row.
+- **Two shapes keep a parameter-selected registration with no key** (it matches nothing:
+  missing, never false), because the framework matches more than the erased type: a parameter
+  whose type carries type arguments (`@Observes List<String>`, which a `List<Integer>` does not
+  reach), and a parameter also carrying a QUALIFIER: an annotation whose type is
+  meta-annotated by one of the catalog's DI bean model's `qualifier_meta_annotations` (§1c;
+  `bean-models/cdi.yml` names `jakarta.inject.Qualifier` and `javax.inject.Qualifier`:
+  `@Observes @Named("x") E`, an application's `@Express`). Qualifier-ness is the container's
+  knowledge, declared once in its bean model, so a catalog declaring `selected_by_parameter`
+  must name a `bean_model` declaring `qualifier_meta_annotations` and is refused at load
+  otherwise (`yaml_source._bean_model_of`). A qualifier is decided by that meta-annotation — a
+  module annotation type's own annotation facts, a library type's `type_header` class-level
+  annotations — never by "any other annotation": `@Observes @Priority(10) E` keeps its key. The
+  fire sites' qualifiers (`@Inject @Express Event<E>`, `select(…)`) are not read, so a qualified
+  observer is reached by no hop even where a matching qualified fire exists (a missing hop;
+  `@Observes @Any E` too, `@Any` being a qualifier).
+- **`dispatch_implementations`** entries are `{owner, method, descriptor, value_arg}`, checked
+  at load (`yaml_source._dispatch_implementations`): a registration made by IMPLEMENTING the
+  interface `owner` (`ApplicationListener`). Each module type below it (`Dispatch.subtypes`,
+  transitively, through headered library types) that declares the method itself — joined by
+  name and the declared, erased descriptor — registers it, keyed by the type of its parameter
+  at `value_arg`, a group of its own at position 0. For a generic implementation the join finds
+  the compiler's synthetic bridge (`modifiers.synthetic`, D00 §5a; javac writes no
+  `bridge_of`), which is carried to the method it forwards to by the rule the annotation
+  inheritance walk applies (`effective_annotations._synthesis_target`: the same class's one
+  same-name, same-arity method not synthetic); where that is not exactly one method, or the
+  method has no parameter at `value_arg`, the row is kept with no key (it matches nothing).
+  So is a method whose parameter is GENERIC — a type variable (`Base<E> implements
+  ApplicationListener<E>` declaring `onApplicationEvent(E)`, which javac erases to the bound
+  and writes no bridge for) or a type with type arguments — because the framework dispatches by
+  the type each subclass binds, never by the erasure (`annotation_driven.generic_parameter`,
+  ruled 2026-11-05). The same rule keeps every registration kind's generic parameter keyless:
+  an annotated listener's payload parameter (`@EventListener on(T e)`, `on(Envelope<X> e)`)
+  and a parameter-selected observer's. General: Micronaut's `ApplicationEventListener<E>` has
+  the same shape.
+- **`dispatch_receives`** entries are `{owner, method, descriptor, object: receiver | argN,
+  handler: enclosing | lambda_arg}`, checked at load (`yaml_source._dispatch_receives`; `argN`
+  must be an argument of the descriptor): a
+  call that takes a value from an object key's channel (`take`, `receive`), the object it
+  takes from, and where the code handling the value is — the method making the call, or the
+  function it is given. Read by `dispatch_registrations._receive_rows`: each call site is a
+  registration (a group of its own at position 0) keyed by the object at the position `object`
+  names — the receiver, or argument N of a static helper handed the channel (Guava's
+  `Queues.drain(queue, …)`, `guava-queues.yml`) — followed by `ObjectKeys`, the value walk's
+  object reader (through locals, parameters across callers, helper returns and fields, to a
+  construction or a call whose body is not here; a declared null check, `not_hand_offs`,
+  returning its argument's type is passed through — and where every path past it ends at an
+  object not read (`this.q = Objects.requireNonNull(q)`, `q` injected), the check's own call
+  is the key, the one object it hands back — and a path that comes back to where it
+  started — a cycle, such as a coroutine lambda's `create` copying its captured `this.$ch` —
+  adds no object), its handler the method making the call (`handler: enclosing`) or the function
+  it hands the value to (`handler: lambda_arg`).
+  The key has three stated bounds, each over-linking (two queues read as one, never one missed): a field read is answered by every write of that field, so two instances of one class each holding a queue in it are one object; two objects one module helper makes (`newQueue()` called twice) are one; and two objects one library call site hands back are one. A null check no catalog declares (Guava's `Preconditions.checkNotNull`) splits one queue into two keys instead, a missing hop.
+  **`handler: lambda_arg`** (a flow's `collect { }`) names three more words, all required with
+  it and refused beside `enclosing` (`yaml_source._check_lambda_arg`): `handler_arg`, the index of
+  the object argument holding the function; and `handler_method` with `handler_descriptor`, the
+  method the library calls on it with each value, by name and the interface's erased
+  descriptor (`emit`, `(Ljava/lang/Object;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;`).
+  The reader (`dispatch_registrations._function_handler`) reads a compiled lambda (the
+  `lambda` argument kind) as its body, as every handler argument is read; otherwise it takes the argument's class — a new
+  instance's, or, for a closure capturing nothing, the class of the shared instance the compiler
+  reads as a constant of its own type — joins the method on it, and carries the compiler's bridge
+  to the method it forwards to (`effective_annotations._synthesis_target`, as for
+  `dispatch_implementations`). Any other argument (a parameter, a library object), or a class not
+  declaring the method itself, gives the row a NULL handler: not read, never the enclosing
+  method, which is not the code handling the value. A `lambda_arg` receive read without
+  `handler_arg` and `handler_method` (a catalog built by hand) is refused where read. Users:
+  `kotlinx-flows.yml`'s five `collect` entries (CP-59 finding 20).
+- **`dispatch_views`** entries are `{owner, method, descriptor, object: receiver | argN}`,
+  checked at load (`yaml_source._dispatch_views`; read only under `key: object`): a call handing
+  back a VIEW of the object at `object` — another reference to the same object (a read-only
+  wrapper, a flow reading a channel) — which `ObjectKeys` passes through to that object instead
+  of ending at it. A call making a new object from the values (a mapping operator) is not one.
+  First user: `kotlinx-flows.yml` (`asSharedFlow`, `asStateFlow`, `receiveAsFlow`,
+  `consumeAsFlow`, CP-59 finding 22).
+- **`dispatch: {key: object}`** pairs with `dispatch_sends`, `dispatch_receives` and
+  `dispatch_views` only: the
+  loader refuses `dispatch_receives` and `dispatch_views` under `key: type` and a class-keyed block
+  (`dispatch_registrations`, `dispatch_implementations`, an annotation mapping) under `key:
+  object`, since read under the other key either matches nothing. An object-keyed send is a hop
+  to every receive registration of its mechanism on the same object (D01 `hops`), the value's
+  class never asked; `match: one` (each value to one consumer, decided at run time) and `all`
+  give the same rows, every receive on the object. First user: `jdk-blocking-queue.yml` (CP-59
+  findings 12-16): `put`, both `offer`s and `add` as sends, `take`, both `poll`s, both
+  `drainTo`s and the no-argument `remove()` as receives (`remove(Object)` and `removeIf`
+  discard values nothing handles, so neither is one),
+  on `BlockingQueue`, `BlockingDeque`, `TransferQueue` and the seven `java.util.concurrent`
+  classes, since javac writes the receiver's static type as every call's owner. Then
+  `kotlinx-channels.yml` (CP-59 findings 17-19, kotlinx-coroutines 1.11.0, `match: one`):
+  `send` and `trySend` on `Channel`, `SendChannel` and `ProducerScope`, and `receive`,
+  `tryReceive`, `receiveCatching` and `iterator()` (a `for` loop, and the inlined `consumeEach`) on
+  `Channel` and `ReceiveChannel`, the inline-class results under the mangled JVM names the jar
+  declares (`trySend-JP2dKIU`); and `kotlinx-flows.yml` (findings 17, 18, 20, `match: all`):
+  `emit` and `tryEmit` on `MutableSharedFlow` and `MutableStateFlow`, `setValue` (`value =`) and
+  `compareAndSet` (the inlined `update { }`) on `MutableStateFlow`, and `collect` on the five flow
+  types as `handler: lambda_arg` receives; the terminal receives `first`, `firstOrNull`, `single`
+  and `toList` (`handler: enclosing`) and `collectLatest` (`handler: lambda_arg`, its block a
+  compiled lambda), each handed the flow as argument 0 (finding 23); and the four views above.
+  Both files name one mechanism, `kotlinx-coroutines`: a channel read as a flow is collected by
+  the flows file's receives, and the object decides. Stated bounds: a flow made from another's
+  values by an operator (`map`, `filter`, `onEach`) is the operator's result, another key, so its
+  collectors match no send (missing hops); `launchIn` and other terminal operators are not
+  receives; a send through a data class's property keeps one `(key not read)` stop beside its hops
+  (the generated `copy(…)` writes the field from a parameter nothing in the module passes); a channel held in a local or
+  parameter of a `suspend` function and used after a suspension point is a receiver the facts do
+  not name (the state machine merges the local with its spilled slot), so its send is a stop
+  saying its object was not read.
+
+**Ordering (§3):** not in the engine loop at all; the registration pass runs right after the
+gRPC hop pass, and the dispatch hop pass right after it.
 
 ## 3. Ordering
 

@@ -53,7 +53,7 @@ from sextant.application.resolve.beans import (
     known_channels,
 )
 from sextant.application.resolve.conditions import annotation_index
-from sextant.application.resolve.dispatch import dispatch_of
+from sextant.application.resolve.dispatch import Dispatch, dispatch_of
 from sextant.application.resolve.shapes.arguments import (
     _CAPTURED_AT,
     CallFacts,
@@ -265,7 +265,7 @@ def chain_ends(
     option A): a call on a branch that sets none of them is no split for the several-splits
     rule. None, a reader that states none: every split counts."""
     matches = catalog.matches
-    roots, bean_roots, steps = _declared_entries(catalog)
+    roots, bean_roots, steps = _declared_entries(catalog, workspace.once(dispatch_of))
     _validate_steps(steps, catalog)
     _validate_captures(roots, catalog, allow_when=False)
     _validate_captures(bean_roots, catalog, allow_when=False)
@@ -505,11 +505,17 @@ def chain_ends(
 
 
 def _declared_entries(
-    catalog: Catalog,
+    catalog: Catalog, dispatch: Dispatch | None = None
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """`matches.roots`, `matches.beans` and `matches.steps` as the walk reads them, each
     entry's shape checked as it is built. Read by `chain_ends`, and by a consumer that
-    checks its own words against the same entries."""
+    checks its own words against the same entries.
+
+    With `dispatch`, each root's owners also hold every type a call through which runs the
+    root's own method (`Dispatch.heirs`, JVMS 5.4.3.3): javac writes the class a call is made
+    through, so a builder method inherited by the module's class and called on `this` names
+    that class. Without it, as `configuring_calls` reads the steps alone, the owners are the
+    catalog's."""
     matches = catalog.matches
     # Validated on the RAW (pre-`_catalog_symbol`) entries, before
     # `_channel_via_forms` ever dereferences an `owner` — the same two-phase
@@ -520,6 +526,8 @@ def _declared_entries(
     _validate_channel_via_entries(matches.get("steps", []), catalog)
     _validate_channel_via_entries(matches.get("beans", []), catalog)
     roots = [_root_entry(root, catalog, "roots") for root in matches.get("roots", [])]
+    if dispatch is not None:
+        roots = [_with_heirs(root, dispatch) for root in roots]
     # Spec 2026-09-21 §4's `beans:` — root-shaped entries reachable only through a
     # `bean_via` capture: the chain a referenced bean's own factory method
     # builds, walked for its captures and never for a row of its own
@@ -582,6 +590,14 @@ def _declared_entries(
         for step in matches.get("steps", [])
     ]
     return roots, bean_roots, steps
+
+
+def _with_heirs(root: dict[str, Any], dispatch: Dispatch) -> dict[str, Any]:
+    """`root` with its owners widened by `Dispatch.heirs` of each, declared owners first."""
+    heirs = [heir for owner in root["owners"] for heir in dispatch.heirs(owner, root["method"])]
+    if not heirs:
+        return root
+    return {**root, "owners": tuple(dict.fromkeys((*root["owners"], *heirs)))}
 
 
 def _resolves_beans(

@@ -41,3 +41,15 @@ not_hand_offs:
   - owner: java.util.Objects
     methods: [requireNonNull, requireNonNullElse, isNull, nonNull]
     by: docs/superpowers/specs/2026-11-02-per-path-truth-design.md
+  # kotlinc 2.4's coroutine state machine: before a suspension point, a spilled variable the code
+  # no longer needs is written back into its continuation slot as
+  # `L$n = SpillingKt.nullOutSpilledVariable(x)` so the object can be collected. The COMPILER
+  # writes the call, not the author; its body is `aconst_null; areturn` (CP-59 finding 21,
+  # `javap -c` on kotlin-stdlib 2.4.20): it takes the value, never calls anything on it, and
+  # hands back null. An instance of the 2026-11-02 ruling above (a compiler-inserted call that
+  # cannot change the value it is handed). Read as a hand-off, every value spilled across a
+  # suspension became `escapes`; read as where an object is made, the object walk named this
+  # call as a coroutine's channel.
+  - owner: kotlin.coroutines.jvm.internal.SpillingKt
+    methods: [nullOutSpilledVariable]
+    by: scripts/probes/cp59_dispatch.md
