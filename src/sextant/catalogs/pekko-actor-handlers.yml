@@ -1,6 +1,9 @@
 id: pekko-actor-handlers
 displayName: Apache Pekko message handler registrations (typed, persistence and classic builders)
 style: message_handlers
+# The wire identity every hop this file's sends and delivering handlers give is written
+# under (`rpc_hops.protocol`, spec 2026-11-04 §3c); this catalog mints no endpoint row.
+protocol: actor
 
 # Spec 2026-11-04 §3b and §3d items 1-2. A behavior binds each message class (or an equal
 # value) to a handler, in order, and the first case a message matches handles it. This file
@@ -34,6 +37,10 @@ measured:
   - { artifact: "org.apache.pekko:pekko-persistence-typed_2.13", versions: ["1.1.3"],
       identity: reported, by: scripts/probes/cp57_actors.md }
   - { artifact: "org.apache.pekko:pekko-actor_2.13", versions: ["1.1.3"],
+      identity: reported, by: scripts/probes/cp57_actors.md }
+  - { artifact: "org.apache.pekko:pekko-cluster-sharding-typed_2.13", versions: ["1.1.3"],
+      identity: reported, by: scripts/probes/cp57_actors.md }
+  - { artifact: "org.apache.pekko:pekko-cluster-tools_2.13", versions: ["1.1.3"],
       identity: reported, by: scripts/probes/cp57_actors.md }
 
 requires: [call_site, chain_reconstruction]
@@ -195,3 +202,112 @@ matches:
     - { owner: *classic_builder, method: matchEquals,
         descriptor: "(Ljava/lang/Object;Ljava/util/function/BooleanSupplier;Lorg/apache/pekko/japi/pf/FI$UnitApply;)Lorg/apache/pekko/japi/pf/ReceiveBuilder;",
         value_arg: 0, predicate_arg: 1, handler_arg: 2 }
+    # REGISTRATIONS THAT ARE NO STEP OF A CHAIN (spec §3d item 4): a function that maps a
+    # message of the class at `class_arg` to another, delivered to its own actor
+    # (`returns_message`). Each call is a behavior of its own with this one case, and the hop
+    # continues from each class the function returns. `messageAdapter(Class, f)` wraps
+    # messages of that class sent to the adapter it returns; `ask(Class, ref, timeout,
+    # request, mapper)` maps the reply of that class (argument 4; argument 3 is the request,
+    # a send below). CP-57 finding 6.
+    - { owner: &actor_context org.apache.pekko.actor.typed.javadsl.ActorContext, method: messageAdapter,
+        descriptor: "(Ljava/lang/Class;Lorg/apache/pekko/japi/function/Function;)Lorg/apache/pekko/actor/typed/ActorRef;",
+        class_arg: 0, handler_arg: 1, returns_message: true }
+    - { owner: *actor_context, method: ask,
+        descriptor: "(Ljava/lang/Class;Lorg/apache/pekko/actor/typed/RecipientRef;Ljava/time/Duration;Lorg/apache/pekko/japi/function/Function;Lorg/apache/pekko/japi/function/Function2;)V",
+        class_arg: 0, handler_arg: 4, returns_message: true }
+
+  # THE SENDS (spec §3c, §3d items 3-4): each call that hands a message to an actor, by its
+  # exact overload, and the argument holding the message (`message_arg`). A message is read
+  # by its class (a `new`), by identity (a constant), or through the classes a function there
+  # returns (an ask's request, `pipeToSelf`'s mapper); anything else is a stop that says the
+  # class was not read. Which actor a reference holds is not read (spec §4): the hop goes to
+  # every behavior whose first matching case takes the class. Every descriptor is CP-57's.
+  message_sends:
+    # Typed `tell` (finding 6): on an `ActorRef`, on the `RecipientRef` it extends, and on a
+    # sharded `EntityRef`.
+    - { owner: org.apache.pekko.actor.typed.ActorRef, method: tell,
+        descriptor: "(Ljava/lang/Object;)V", message_arg: 0 }
+    - { owner: org.apache.pekko.actor.typed.RecipientRef, method: tell,
+        descriptor: "(Ljava/lang/Object;)V", message_arg: 0 }
+    - { owner: &entity_ref org.apache.pekko.cluster.sharding.typed.javadsl.EntityRef, method: tell,
+        descriptor: "(Ljava/lang/Object;)V", message_arg: 0 }
+    # Typed asks (finding 5): the message is what the request function at `message_arg`
+    # returns. `RecipientRef.ask` does not exist; the actor-level ask is the static
+    # `AskPattern.ask`, and an actor asks through its context (the reply mapper is the
+    # registration above).
+    - { owner: *entity_ref, method: ask,
+        descriptor: "(Lorg/apache/pekko/japi/function/Function;Ljava/time/Duration;)Ljava/util/concurrent/CompletionStage;",
+        message_arg: 0 }
+    - { owner: org.apache.pekko.actor.typed.javadsl.AskPattern, method: ask,
+        descriptor: "(Lorg/apache/pekko/actor/typed/RecipientRef;Lorg/apache/pekko/japi/function/Function;Ljava/time/Duration;Lorg/apache/pekko/actor/typed/Scheduler;)Ljava/util/concurrent/CompletionStage;",
+        message_arg: 1 }
+    - { owner: *actor_context, method: ask,
+        descriptor: "(Ljava/lang/Class;Lorg/apache/pekko/actor/typed/RecipientRef;Ljava/time/Duration;Lorg/apache/pekko/japi/function/Function;Lorg/apache/pekko/japi/function/Function2;)V",
+        message_arg: 3 }
+    # Sends to the actor itself (§3d item 3): `pipeToSelf`'s mapper returns the message;
+    # `scheduleOnce(delay, ref, msg)` names its receiver at argument 1, the message at 2
+    # (finding 7).
+    - { owner: *actor_context, method: pipeToSelf,
+        descriptor: "(Ljava/util/concurrent/CompletionStage;Lorg/apache/pekko/japi/function/Function2;)V",
+        message_arg: 1 }
+    - { owner: *actor_context, method: scheduleOnce,
+        descriptor: "(Ljava/time/Duration;Lorg/apache/pekko/actor/typed/ActorRef;Ljava/lang/Object;)Lorg/apache/pekko/actor/Cancellable;",
+        message_arg: 2 }
+    # Timers (finding 7): the key-less forms carry the message at argument 0, the keyed forms
+    # `(key, msg, …)` at argument 1.
+    - { owner: &timers org.apache.pekko.actor.typed.javadsl.TimerScheduler, method: startTimerWithFixedDelay,
+        descriptor: "(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;)V", message_arg: 1 }
+    - { owner: *timers, method: startTimerWithFixedDelay,
+        descriptor: "(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;Ljava/time/Duration;)V", message_arg: 1 }
+    - { owner: *timers, method: startTimerWithFixedDelay,
+        descriptor: "(Ljava/lang/Object;Ljava/time/Duration;)V", message_arg: 0 }
+    - { owner: *timers, method: startTimerWithFixedDelay,
+        descriptor: "(Ljava/lang/Object;Ljava/time/Duration;Ljava/time/Duration;)V", message_arg: 0 }
+    - { owner: *timers, method: startTimerAtFixedRate,
+        descriptor: "(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;)V", message_arg: 1 }
+    - { owner: *timers, method: startTimerAtFixedRate,
+        descriptor: "(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;Ljava/time/Duration;)V", message_arg: 1 }
+    - { owner: *timers, method: startTimerAtFixedRate,
+        descriptor: "(Ljava/lang/Object;Ljava/time/Duration;)V", message_arg: 0 }
+    - { owner: *timers, method: startTimerAtFixedRate,
+        descriptor: "(Ljava/lang/Object;Ljava/time/Duration;Ljava/time/Duration;)V", message_arg: 0 }
+    - { owner: *timers, method: startSingleTimer,
+        descriptor: "(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;)V", message_arg: 1 }
+    - { owner: *timers, method: startSingleTimer,
+        descriptor: "(Ljava/lang/Object;Ljava/time/Duration;)V", message_arg: 0 }
+    - { owner: *timers, method: startPeriodicTimer,
+        descriptor: "(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;)V", message_arg: 1 }
+    # Classic (findings 6, 7): `tell(msg, sender)`; the scheduler's `scheduleOnce(delay,
+    # receiver, msg, executor, sender)`; `Patterns.ask(ref or selection, msg, timeout)`. The
+    # typed `Scheduler.scheduleOnce` runs a `Runnable` and carries no message: not a send.
+    - { owner: org.apache.pekko.actor.ActorRef, method: tell,
+        descriptor: "(Ljava/lang/Object;Lorg/apache/pekko/actor/ActorRef;)V", message_arg: 0 }
+    - { owner: &classic_scheduler org.apache.pekko.actor.Scheduler, method: scheduleOnce,
+        descriptor: "(Lscala/concurrent/duration/FiniteDuration;Lorg/apache/pekko/actor/ActorRef;Ljava/lang/Object;Lscala/concurrent/ExecutionContext;Lorg/apache/pekko/actor/ActorRef;)Lorg/apache/pekko/actor/Cancellable;",
+        message_arg: 2 }
+    - { owner: *classic_scheduler, method: scheduleOnce,
+        descriptor: "(Ljava/time/Duration;Lorg/apache/pekko/actor/ActorRef;Ljava/lang/Object;Lscala/concurrent/ExecutionContext;Lorg/apache/pekko/actor/ActorRef;)Lorg/apache/pekko/actor/Cancellable;",
+        message_arg: 2 }
+    - { owner: &patterns org.apache.pekko.pattern.Patterns, method: ask,
+        descriptor: "(Lorg/apache/pekko/actor/ActorSelection;Ljava/lang/Object;J)Lscala/concurrent/Future;", message_arg: 1 }
+    - { owner: *patterns, method: ask,
+        descriptor: "(Lorg/apache/pekko/actor/ActorSelection;Ljava/lang/Object;Ljava/time/Duration;)Ljava/util/concurrent/CompletionStage;", message_arg: 1 }
+    - { owner: *patterns, method: ask,
+        descriptor: "(Lorg/apache/pekko/actor/ActorSelection;Ljava/lang/Object;Lorg/apache/pekko/util/Timeout;)Lscala/concurrent/Future;", message_arg: 1 }
+    - { owner: *patterns, method: ask,
+        descriptor: "(Lorg/apache/pekko/actor/ActorRef;Ljava/lang/Object;J)Lscala/concurrent/Future;", message_arg: 1 }
+    - { owner: *patterns, method: ask,
+        descriptor: "(Lorg/apache/pekko/actor/ActorRef;Ljava/lang/Object;Ljava/time/Duration;)Ljava/util/concurrent/CompletionStage;", message_arg: 1 }
+    - { owner: *patterns, method: ask,
+        descriptor: "(Lorg/apache/pekko/actor/ActorRef;Ljava/lang/Object;Lorg/apache/pekko/util/Timeout;)Lscala/concurrent/Future;", message_arg: 1 }
+    # Classic pub-sub (finding 9): the message a `Publish` or `Send` envelope carries, at
+    # argument 1 of its constructor, reaches the topic's or path's subscribers. The envelope
+    # itself is told to the mediator, a system actor, and so is a stop of its own.
+    - { owner: &publish "org.apache.pekko.cluster.pubsub.DistributedPubSubMediator$Publish", method: <init>,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Z)V", message_arg: 1 }
+    - { owner: *publish, method: <init>,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)V", message_arg: 1 }
+    - { owner: &send "org.apache.pekko.cluster.pubsub.DistributedPubSubMediator$Send", method: <init>,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;Z)V", message_arg: 1 }
+    - { owner: *send, method: <init>,
+        descriptor: "(Ljava/lang/String;Ljava/lang/Object;)V", message_arg: 1 }

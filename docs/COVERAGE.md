@@ -801,6 +801,8 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |---|---|---|
 | `akka-actor-handlers` | `com.typesafe.akka:akka-actor-typed_2.13` | 2.6.21 |
 |  | `com.typesafe.akka:akka-actor_2.13` | 2.6.21 |
+|  | `com.typesafe.akka:akka-cluster-sharding-typed_2.13` | 2.6.21 |
+|  | `com.typesafe.akka:akka-cluster-tools_2.13` | 2.6.21 |
 |  | `com.typesafe.akka:akka-persistence-typed_2.13` | 2.6.21 |
 | `akka-cluster-sharding` | `com.typesafe.akka:akka-cluster-sharding-typed_2.13` | 2.6.21 |
 | `akka-pubsub-publish` | `com.typesafe.akka:akka-cluster-tools_2.13` | 2.6.21 |
@@ -865,6 +867,8 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `okhttp` | `com.squareup.okhttp3:okhttp` | 3.14.9, 4.12.0 |
 | `pekko-actor-handlers` | `org.apache.pekko:pekko-actor-typed_2.13` | 1.1.3 |
 |  | `org.apache.pekko:pekko-actor_2.13` | 1.1.3 |
+|  | `org.apache.pekko:pekko-cluster-sharding-typed_2.13` | 1.1.3 |
+|  | `org.apache.pekko:pekko-cluster-tools_2.13` | 1.1.3 |
 |  | `org.apache.pekko:pekko-persistence-typed_2.13` | 1.1.3 |
 | `pekko-cluster-sharding` | `org.apache.pekko:pekko-cluster-sharding-typed_2.13` | 1.1.3 |
 | `pekko-connectors-kafka` | `org.apache.pekko:pekko-connectors-kafka_2.13` | 1.1.0 |

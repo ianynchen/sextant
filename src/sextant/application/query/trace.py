@@ -334,7 +334,9 @@ def _rows(method: str, index: _Index) -> list[dict[str, object]]:
             rows.append(row)
             continue
         for hop in hops:
-            landed = {"callee": hop["handler"], "via": f"{hop['protocol']} {hop['path']}"}
+            # A hop whose message class was not read has no path; its evidence says so.
+            where = hop["path"] if hop["path"] is not None else f"({hop['evidence']})"
+            landed = {"callee": hop["handler"], "via": f"{hop['protocol']} {where}"}
             if hop["handler"] is not None:
                 landed |= {"terminal_kind": None, "target_kind": None}
             rows.append({**row, **landed})

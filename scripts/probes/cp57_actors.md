@@ -57,6 +57,9 @@ descriptor = `org/apache/pekko`; Akka's rows are the same with `akka.` / `akka`.
    `startPeriodicTimer` exists only keyed (deprecated). `Scheduler.scheduleOnce`: typed `(Duration, Runnable,
    ExecutionContext)` (no actor, no message); classic `(Duration, ActorRef, Object, ExecutionContext, ActorRef)`
    — receiver arg 1, message arg 2.
+   The typed actor-level `ActorContext.scheduleOnce(Duration, ActorRef, Object)` (the `pekko-sample-fsm-java`
+   `Hakker`'s `ctx.scheduleOnce(duration, ctx.getSelf(), Eat.INSTANCE)`) — receiver arg 1, message arg 2;
+   added to the probe for the hop task (Task 5), 2026-11-04.
 8. **Keys.** `ServiceKey.create(Class, String)`, `EntityTypeKey.create(Class, String)`,
    `Entity.of(EntityTypeKey, Function)` are static factories (a new object); `ClusterSharding.init(Entity)` and
    `entityRefFor(EntityTypeKey, String)` are interface methods; `Receptionist.register(ServiceKey, ActorRef)`
@@ -167,6 +170,7 @@ own result is that verdict). Descriptors and verdicts agree in every row; the on
 | `actor.typed.javadsl.ActorContext.ask` `(Ljava/lang/Class;L~/actor/typed/RecipientRef;Ljava/time/Duration;L~/japi/function/Function;L~/japi/function/Function2;)V` | abstract | abstract |
 | `actor.typed.javadsl.ActorContext.messageAdapter` `(Ljava/lang/Class;L~/japi/function/Function;)L~/actor/typed/ActorRef;` | abstract | abstract |
 | `actor.typed.javadsl.ActorContext.pipeToSelf` `(Ljava/util/concurrent/CompletionStage;L~/japi/function/Function2;)V` | abstract | abstract |
+| `actor.typed.javadsl.ActorContext.scheduleOnce` `(Ljava/time/Duration;L~/actor/typed/ActorRef;Ljava/lang/Object;)L~/actor/Cancellable;` | abstract | abstract |
 | `actor.typed.javadsl.TimerScheduler.startTimerWithFixedDelay` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;)V` | abstract | abstract |
 | `actor.typed.javadsl.TimerScheduler.startTimerWithFixedDelay` `(Ljava/lang/Object;Ljava/lang/Object;Ljava/time/Duration;Ljava/time/Duration;)V` | abstract | abstract |
 | `actor.typed.javadsl.TimerScheduler.startTimerWithFixedDelay` `(Ljava/lang/Object;Ljava/time/Duration;)V` | void/prim | void/prim |

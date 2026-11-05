@@ -1,4 +1,5 @@
--- `resolve/rpc_hops.py`'s rows (spec 2026-10-25 §3d). Every decision — which classes are
+-- `resolve/rpc_hops.py`'s rows (spec 2026-10-25 §3d), and `resolve/message_hops.py`'s (spec
+-- 2026-11-04 §3c). Every decision — which classes are
 -- client stubs, which wire method a stub method names, where its call leaves for the
 -- wire, which services the module serves — is made in the pass; this file is handed the
 -- finished rows and only inserts them. The insert_resolved_schedules.sql precedent for a

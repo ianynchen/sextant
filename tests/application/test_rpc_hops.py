@@ -326,6 +326,9 @@ def test_a_second_run_replaces_the_rows(tmp_path: Path) -> None:
         handled=[(f"{SERVICE}/SayHello", HANDLER)],
     )
     record_rpc_hops(workspace, [_catalog()])
+    # The table has two writers, so the pipeline resets it once before both (spec
+    # 2026-11-04 §3d item 7); a second resolve runs that reset again.
+    workspace.derive("rpc_hops_reset")
     record_rpc_hops(workspace, [_catalog()])
     assert len(_hops(workspace)) == 1
 

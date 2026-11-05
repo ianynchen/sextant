@@ -550,6 +550,8 @@ class YamlCatalogSource:
                     server_model=servers,
                     # Spec 2026-11-04 §3b: what each declared registration call means.
                     message_handlers=_message_handlers(raw["matches"], path),
+                    # Spec 2026-11-04 §3c: which calls send a message, and where it is.
+                    message_sends=_message_sends(raw["matches"], path),
                 )
             )
         return catalogs
@@ -1618,6 +1620,58 @@ def _message_handlers(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
                 "descriptor": descriptor,
                 **positions,
                 "returns_message": returns_message,
+            }
+        )
+    return tuple(entries)
+
+
+def _message_sends(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
+    """`matches.message_sends` (spec 2026-11-04 §3c), checked and converted: each entry
+    `{owner, method, descriptor, message_arg}`, the owner as a type symbol (the facts'
+    spelling) and `message_arg` the index of the argument holding the message, one the
+    descriptor has. Every key is checked, because a position that reads the wrong argument
+    is a wrong hop rather than a missing one. Empty for a catalog declaring none."""
+    declared = matches.get("message_sends") if isinstance(matches, dict) else None
+    if declared is None:
+        return ()
+    where = f"loading catalog {path}: `message_sends`"
+    if not isinstance(declared, list):
+        raise CatalogError(f"{where} must be a list, got {declared!r}")
+    entries: list[dict[str, Any]] = []
+    for entry in declared:
+        if not isinstance(entry, dict) or not all(
+            isinstance(entry.get(key), str) and entry.get(key)
+            for key in ("owner", "method", "descriptor")
+        ):
+            raise CatalogError(
+                f"{where}: each entry names its call by `owner`, `method` and `descriptor`, "
+                f"got {entry!r}"
+            )
+        unknown = sorted(set(entry) - {"owner", "method", "descriptor", "message_arg"})
+        if unknown:
+            raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
+        descriptor = str(entry["descriptor"])
+        if not descriptor.startswith("(") or ")" not in descriptor:
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares `descriptor: {descriptor!r}`, which "
+                f"is not a method descriptor"
+            )
+        message_arg = entry.get("message_arg")
+        if (
+            not isinstance(message_arg, int)
+            or isinstance(message_arg, bool)
+            or not 0 <= message_arg < len(descriptor_slots(descriptor)[0])
+        ):
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares `message_arg: {message_arg!r}`, which "
+                f"is not an argument of `{descriptor}`"
+            )
+        entries.append(
+            {
+                "owner": type_descriptor(str(entry["owner"])),
+                "method": str(entry["method"]),
+                "descriptor": descriptor,
+                "message_arg": message_arg,
             }
         )
     return tuple(entries)

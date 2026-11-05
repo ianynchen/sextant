@@ -344,6 +344,12 @@ class Catalog:
     # position an index or None. Checked by the loader; read by `resolve/message_handlers.py`.
     message_handlers: tuple[dict[str, Any], ...] = ()
 
+    # The message sends this catalog declares under `matches.message_sends` (spec 2026-11-04
+    # §3c): per call, by its exact overload, which argument holds the message. `{owner, method,
+    # descriptor, message_arg}`, the owner a type symbol. Checked by the loader; read by
+    # `resolve/message_hops.py`, which writes each send's hops under this catalog's `protocol`.
+    message_sends: tuple[dict[str, Any], ...] = ()
+
 
 class CatalogError(ValueError):
     """A catalog that cannot be trusted. An unchecked value does not stay in

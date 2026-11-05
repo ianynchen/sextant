@@ -169,8 +169,21 @@ site, or no row.
   compiled facts. `call_edges` is untouched; the hop lives in its own table, which is also
   what a curation names (ruling 4).
 - **Exported**, `path` through the address map, as `roots.path` is ([D06](D06-bundle-format.md)
-  §3). A derived table rather than a view, because the rule is Python
-  (`resolve/rpc_hops.py`); replaced whole per resolve by that one writing pass.
+  §3). A derived table rather than a view, because the rule is Python.
+- **Two writers, one reset** (spec `2026-11-04-akka-pekko-actors-design.md` §3c, §3d item 7):
+  `resolve/rpc_hops.py` above and `resolve/message_hops.py`, each only inserting; the
+  pipeline clears the table once per resolve, before both.
+- **An actor message send is a hop too** (`resolve/message_hops.py`). `(caller, ordinal)` is
+  the send's own call site (a `message_sends` entry, D02); `protocol` the declaring catalog's
+  (`actor`); `path` the message's class symbol, or a constant's own symbol where the message
+  is one (`com/acme/actors/Stock$Tick#INSTANCE.`); `handler` each handler the class reaches
+  by `message_handlers`' first-match rule, one row per handler. A class no behavior handles
+  is one row with `handler` NULL. A class not read (a parameter, a factory call's result) is
+  one row with `path` and `handler` NULL and `evidence` naming what was there (`message class
+  not read: parameter`), the one place this column holds prose; every other row's is
+  `compiler`. A handler whose case `delivers` continues: each class it returns is a row whose
+  `caller` is that handler and whose `ordinal` is the return's own constructor call (a
+  constructor reference's: its super-constructor call).
 
 **`message_handlers`** carries `behavior`, `position`, `message_type`, `message_value`,
 `predicated`, `handler`, `delivers` and `evidence` (spec `2026-11-04-akka-pekko-actors-design.md`
@@ -198,6 +211,9 @@ reaches which handler, in the order the behavior tries them. One row per case.
   ([D06](D06-bundle-format.md) §3). A derived table because the reading is Python
   (`resolve/message_handlers.py`, the shared chain walk); replaced whole per resolve by that
   one writing pass, which runs right after `rpc_hops`.
+- **A registration no chain holds** (D02's `message_handlers` entry no step names:
+  `messageAdapter`, an ask's reply mapper) is a behavior of its own, `<caller>#<ordinal>` of
+  its call site, one case at position 0.
 
 Kinds deliberately **absent**: `imports` (restates references and containment),
 `field_read` and `field_write` (in JVM code, cross-object field access goes through
@@ -833,6 +849,12 @@ any callee, so it is expanded, `revisited` or a `cycle` by the table above, and 
 `Trace.terminals`, so a trace through a stub has one terminal fewer. The document's arrow ends
 at the handler's lifeline, labelled `blockingUnaryCall (declared ClientCalls) via grpc
 helloworld.Greeter/SayHello`, and the step table's `Reaches` reads `via` and the wire path.
+
+**An actor message send is walked the same way** (spec `2026-11-04-akka-pekko-actors-design.md`
+§3c): at a send whose `rpc_hops` rows name handlers, the step goes to each, `via` the message
+class (`actor com/acme/actors/OrderEntity$Get#`); a class nobody here handles stays
+`boundary` with its class; a class not read stays `boundary` with `via` carrying the row's
+evidence in parentheses (`actor (message class not read: parameter)`), never `actor None`.
 
 **This is deliberately not [D00](D00-fact-schema.md) §4's `terminal_kind`.** That set
 CLASSIFIES what a call reaches — `persistence`, `async_handoff`, an `outbound_call` in the

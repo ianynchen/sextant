@@ -63,8 +63,9 @@ from sextant.domain.symbols import owner_of
 
 
 def record_rpc_hops(workspace: Workspace, catalogs: list[Catalog]) -> None:
-    """Replaces `rpc_hops` whole, from the one declared catalog that names a client stub."""
-    workspace.derive("rpc_hops_reset")
+    """Inserts into `rpc_hops` the hops of the one declared catalog that names a client stub.
+    Inserts only: the pipeline resets the table once before both of its writers, this pass and
+    `resolve/message_hops.py` (spec 2026-11-04 §3d item 7)."""
     catalog = _stub_catalog(catalogs)
     if catalog is None:
         return

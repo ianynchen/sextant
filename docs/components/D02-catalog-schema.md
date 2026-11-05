@@ -4668,9 +4668,35 @@ matches:
     With no class and no value (`onCommand(Predicate, h)`) it tests every message;
   - `handler_arg` — the handler, a method reference or lambda (`combinator._handler_of`);
   - `returns_message` — the handler's return is a message delivered to its own receiver
-    (`delivers`). An entry that matches no step is not read by this pass today.
+    (`delivers`): `resolve/message_hops.py` continues the hop from each class it returns.
+- **An entry no step names** (`messageAdapter(Class, f)`, `ActorContext.ask`'s reply mapper
+  at argument 4) is a registration made on its own: each of its call sites — through the
+  declared owner or a type inheriting it (`Dispatch.heirs`) — is a behavior of its own,
+  `<caller>#<ordinal>`, holding one case at position 0. A handler argument that is a
+  constructor reference (`Wrapped::new`) names the constructor.
+- **`message_sends`** entries are `{owner, method, descriptor, message_arg}`, checked at load
+  (`yaml_source._message_sends`): `message_arg` an argument the descriptor has, no other key.
+  Each names a call that hands a message to an actor and the argument holding it:
 
-**Ordering (§3):** not in the engine loop at all; the pass runs right after `rpc_hops`.
+  ```yaml
+    message_sends:
+      - { owner: org.apache.pekko.actor.typed.ActorRef, method: tell,
+          descriptor: "(Ljava/lang/Object;)V", message_arg: 0 }
+      - { owner: org.apache.pekko.cluster.sharding.typed.javadsl.EntityRef, method: ask,
+          descriptor: "(Lorg/apache/pekko/japi/function/Function;Ljava/time/Duration;)L…/CompletionStage;",
+          message_arg: 0 }
+  ```
+
+  `resolve/message_hops.py` reads each call site (owner, an heir of it, name and parameter
+  types) and writes its hops into `rpc_hops` (D01 §3) under the catalog's `protocol`, which a
+  catalog declaring sends or a `returns_message` entry must carry (refused at resolve
+  otherwise) although it mints no endpoint row. The message at `message_arg` is read by its
+  kind: an `instance`'s class; an `enum` constant or a static `field` by identity (its class
+  and its own symbol); a `lambda` through each class its body returns (a constructor
+  reference: its owner). Anything else is not read, and the row says so.
+
+**Ordering (§3):** not in the engine loop at all; the handler pass runs right after
+`rpc_hops`, and the hop pass right after it.
 
 ### `error_advice`
 

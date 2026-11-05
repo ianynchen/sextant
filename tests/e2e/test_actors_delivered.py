@@ -175,12 +175,33 @@ def test_every_behavior_the_fixture_builds(handler_cases):
     result held in a local and given its `onCommand` as a statement), each its own; `Frontend`
     a mutable `newReceiveBuilder()` chain, a root its own class inherits; `OrderEntity` an
     immutable chain whose handler is a lambda, its synthetic body named; `ClassicBroker` a
-    classic `receiveBuilder()`, also inherited."""
+    classic `receiveBuilder()`, also inherited. `Frontend`'s `messageAdapter` and its
+    `context.ask` reply mapper are registrations no chain holds: each call is a behavior of
+    its own, one case, delivering (spec §3d item 4)."""
     assert sorted((key.split("@")[0], cases) for key, cases in handler_cases.items()) == [
         (
             "ClassicBroker#createReceive",
             [
                 (0, "ClassicBroker$Price#", None, False, "ClassicBroker#onPrice", False),
+            ],
+        ),
+        (
+            "Counter#<init>",
+            [
+                (0, "Stock$Reply#", None, False, "Counter$Counted#<init>", True),
+            ],
+        ),
+        (
+            "Counter#createReceive",
+            [
+                (0, "Counter$Counted#", None, False, "Counter#onCounted", False),
+                (1, "Counter$Report#", None, False, "Counter#onReport", False),
+            ],
+        ),
+        (
+            "Frontend#<init>",
+            [
+                (0, "Receptionist$Listing#", None, False, "Frontend#lambda", True),
             ],
         ),
         (
@@ -191,6 +212,12 @@ def test_every_behavior_the_fixture_builds(handler_cases):
                 (2, "Frontend$Reserved#", None, False, "Frontend#lambda", False),
                 (3, "Frontend$Failed#", None, False, "Frontend#lambda", False),
                 (4, "Frontend$Loaded#", None, False, "Frontend#lambda", False),
+            ],
+        ),
+        (
+            "Frontend#onStart",
+            [
+                (0, "Stock$Reply#", None, False, "Frontend#lambda", True),
             ],
         ),
         (
@@ -227,3 +254,61 @@ def test_every_behavior_the_fixture_builds(handler_cases):
             ],
         ),
     ]
+
+
+@pytest.fixture(scope="module")
+def actor_hops(analyzed: Path) -> set[tuple]:
+    """Every `actor` hop one fixture gives, `(caller, ordinal, path, handler, evidence)`, each
+    symbol as `handler_cases` writes it (a type without its `#`)."""
+    workspace = DuckDbWorkspace(analyzed)
+    try:
+        rows = [row for row in workspace.query("rpc_hops") if row["protocol"] == "actor"]
+    finally:
+        workspace.close()
+
+    def short(symbol: object) -> str | None:
+        if symbol is None:
+            return None
+        name = str(symbol).rsplit("/", 1)[1].split("(")[0].removesuffix("#")
+        return re.sub(r"#lambda\$.*", "#lambda", name)
+
+    return {
+        (short(r["caller"]), r["ordinal"], short(r["path"]), short(r["handler"]), r["evidence"])
+        for r in rows
+    }
+
+
+def test_every_actor_hop_the_fixture_gives(actor_hops):
+    """The whole set (spec §3c), so a hop too many is a failure too. Each send's message is
+    read by its class, by identity (`Tick.INSTANCE`) or through the `new` a function returns;
+    a reply nobody here handles and an envelope told to the pub-sub mediator are stops naming
+    their class; a message from a parameter or a factory call is a stop that says its class
+    was not read. The ask's reply mapper and the adapter deliver, so the classes they return
+    are hops from their own `new`s; `Counter`'s adapter is a constructor reference, whose hop
+    is at its super-constructor call."""
+    unread_call = "message class not read: unresolved"
+    assert actor_hops == {
+        ("ClassicBroker#announce", 1, "ClassicBroker$Price", "ClassicBroker#onPrice", "compiler"),
+        ("ClassicBroker#announce", 3, "DistributedPubSubMediator$Publish", None, "compiler"),
+        ("ClassicBroker#announce", 5, "ClassicBroker$Price", "ClassicBroker#onPrice", "compiler"),
+        ("ClassicBroker#announce", 7, "DistributedPubSubMediator$Send", None, "compiler"),
+        ("ClassicBroker#onPrice", 3, "ClassicBroker$Ack", None, "compiler"),
+        ("ClassicBroker#preStart", 3, "DistributedPubSubMediator$Subscribe", None, "compiler"),
+        ("ClassicBroker#preStart", 7, "DistributedPubSubMediator$Put", None, "compiler"),
+        ("Counter#onReport", 2, None, None, unread_call),
+        ("Counter#report", 2, "Counter$Report", "Counter#onReport", "compiler"),
+        ("Counter$Counted#<init>", 0, "Counter$Counted", "Counter#onCounted", "compiler"),
+        ("Frontend#<init>", 6, None, None, unread_call),
+        ("Frontend#onStart", 4, "Stock$Reserve", "Stock#onReserve", "compiler"),
+        ("Frontend#onStart", 9, "Frontend$Loaded", "Frontend#lambda", "compiler"),
+        ("OrderEntity#onGet", 2, "OrderEntity$Summary", None, "compiler"),
+        ("OrderRoutes#summary", 2, "OrderEntity$Get", "OrderEntity#lambda", "compiler"),
+        ("Relay#forward", 0, None, None, "message class not read: parameter"),
+        ("Stock#lambda", 1, "Stock$Tick#INSTANCE.", "Stock#onTick", "compiler"),
+        ("Stock#lambda", 4, None, None, unread_call),
+        ("Stock#onReserve", 3, "Stock$Reply", "Frontend#lambda", "compiler"),
+        ("Stock#onReserve", 3, "Stock$Reply", "Counter$Counted#<init>", "compiler"),
+        ("Frontend#lambda", 0, "Frontend$Workers", "Frontend#onWorkers", "compiler"),
+        ("Frontend#lambda", 0, "Frontend$Reserved", "Frontend#lambda", "compiler"),
+        ("Frontend#lambda", 1, "Frontend$Failed", "Frontend#lambda", "compiler"),
+    }

@@ -330,9 +330,12 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # **The two message handler catalogs joined the same day** (spec 2026-11-04 §3b), each with
 # seventeen registration steps capturing `case: arg0` (the carrier of the call's place in the
 # chain, read by `resolve/message_handlers.py`, never as a value): 34 asks and 57 slots per
-# family as `asks_of` counts them, the same in both.
+# family as `asks_of` counts them, the same in both. **Their sends joined with the hop pass**
+# (spec 2026-11-04 §3c): thirty-two `message_sends` entries, each a `message_arg`, and two
+# registrations no chain step names (`messageAdapter`, the ask's reply mapper): 68 asks and 93
+# slots per family as `asks_of` counts them.
 _ASKS_PER_CATALOG = {
-    "akka-actor-handlers": (34, 57),
+    "akka-actor-handlers": (68, 93),
     "akka-cluster-sharding": (6, 6),
     "akka-pubsub-publish": (2, 2),
     "akka-pubsub-put": (1, 1),
@@ -363,7 +366,7 @@ _ASKS_PER_CATALOG = {
     "ktor-sse-client": (39, 39),
     "ktor-websocket-client": (23, 23),
     "okhttp": (5, 6),
-    "pekko-actor-handlers": (34, 57),
+    "pekko-actor-handlers": (68, 93),
     "pekko-cluster-sharding": (6, 6),
     "pekko-connectors-kafka": (15, 15),
     "pekko-pubsub-publish": (2, 2),
@@ -446,7 +449,8 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # mounts and factory rungs, same comment (5 in `vertx-web`, 177 in `vertx-webclient`).
     # **+44 on 2026-11-04**: the twelve Akka and Pekko actor catalogs, same comment.
     # **+68 on 2026-11-04**: the two message handler catalogs, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 1344
+    # **+68 on 2026-11-04** (hops): those two catalogs' sends and standalone registrations.
+    assert sum(asks for asks, _ in counted.values()) == 1412
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

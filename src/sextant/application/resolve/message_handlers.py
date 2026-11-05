@@ -19,6 +19,10 @@ chain. Each registration step carries its own call in the `case` capture, and `r
 the calls in chain order, so a case's position is its place in that capture. Each executable
 chain's end is one behavior, named `<root's caller>#<root's ordinal>`.
 
+**A registration no step names** (`messageAdapter(Class, f)`, an ask's reply mapper; spec
+§3d item 4) is no part of a chain: each of its call sites is a behavior of its own,
+`<caller>#<ordinal>`, holding that one case at position 0.
+
 **A root inherited by the module's own class** (`this.newReceiveBuilder()`, which javac writes
 as a call on the subclass) is matched by the shared walk itself: `chain_ends` widens every
 root's owners with `Dispatch.heirs` (JVMS 5.4.3.3), for every chain catalog alike.
@@ -31,7 +35,8 @@ root's owners with `Dispatch.heirs` (JVMS 5.4.3.3), for every chain catalog alik
   `enum` or `field` argument the call reads. NULL for anything else.
 - `predicated` — the registration declares a `predicate_arg`.
 - `handler` — the method the handler argument names (`combinator._handler_of`: a method
-  reference names the method, a lambda its synthetic body), module-prefixed; NULL if not read.
+  reference names the method, a constructor reference the constructor, a lambda its synthetic
+  body), module-prefixed; NULL if not read.
 - `delivers` — `returns_message`: the handler's return is a message to its own receiver.
 
 A case the walk could not read (the builder handed to code we do not have, spec 2026-11-02
@@ -42,7 +47,8 @@ and shadows nothing.
 
 One `chain_ends` walk per declaring catalog, only where the module calls one of its roots'
 owners or a type inheriting one (two catalogs; a module calling neither pays one index lookup
-per owner each). The heirs come from the resolve's one `Dispatch` (`Workspace.once`).
+per owner each). The heirs come from the resolve's one `Dispatch` (`Workspace.once`). A
+registration no step names costs one index lookup per declared owner and heir.
 """
 
 from collections.abc import Iterator, Mapping
@@ -51,11 +57,12 @@ from typing import Any
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
+from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.engines.combinator import _handler_of
 from sextant.application.resolve.shapes.arguments import _CAPTURED_AT, _arg_at, call_site_index
 from sextant.application.resolve.shapes.chains import _method_symbols, chain_ends
 from sextant.application.resolve.shapes.rooting import catalog_symbols
-from sextant.domain.symbols import parameter_types
+from sextant.domain.symbols import bare_descriptor, parameter_types
 
 # The capture each registration step carries its own call in (the catalog's `case: argN`).
 _CASE = "case"
@@ -75,7 +82,7 @@ def record_message_handlers(workspace: Workspace, catalogs: list[Catalog]) -> No
     # behavior's rows once.
     seen: set[tuple[Any, ...]] = set()
     for catalog in declaring:
-        for row in _rows_of(workspace, catalog):
+        for row in (*_rows_of(workspace, catalog), *_standalone_rows(workspace, catalog)):
             key = tuple(row.values())
             if key not in seen:
                 seen.add(key)
@@ -144,7 +151,7 @@ def _rows_of(workspace: Workspace, catalog: Catalog) -> Iterator[dict[str, Any]]
         for called in (owner, *dispatch.heirs(owner, str(root.get("method"))))
     ):
         return
-    method_symbols = workspace.once(_method_symbols)
+    method_symbols = workspace.once(_handler_symbols)
     for end in chain_ends(workspace, catalog):
         behavior = f"{end.root['caller']}#{end.root['ordinal']}"
         # A builder built with no case on it (an immutable builder whose registrations'
@@ -159,6 +166,57 @@ def _rows_of(workspace: Workspace, catalog: Catalog) -> Iterator[dict[str, Any]]
                 yield _unread_case(behavior, position)
                 continue
             yield _case(behavior, position, site, registration, method_symbols)
+
+
+def _standalone_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dict[str, Any]]:
+    """The cases registered by a call no step of a chain names: each call site of such a
+    registration is a behavior of its own, `<caller>#<ordinal>`, with one case at position 0
+    (`messageAdapter(C, f)`, an ask's reply mapper). A call made through a type inheriting
+    the declared owner is matched by `Dispatch.heirs`, as a root is."""
+    stepped = {
+        (owner, str(step.get("method")), parameter_types(str(step.get("descriptor"))))
+        for step in catalog.matches.get("steps", [])
+        for owner in catalog_symbols(step.get("owner"), f"{catalog.source}: steps[].owner")
+    }
+    standalone = [
+        registration
+        for registration in catalog.message_handlers
+        if (
+            registration["owner"],
+            registration["method"],
+            parameter_types(registration["descriptor"]),
+        )
+        not in stepped
+    ]
+    if not standalone:
+        return
+    index = workspace.once(call_site_index)
+    dispatch = workspace.once(dispatch_of)
+    method_symbols = workspace.once(_handler_symbols)
+    sites = effective_call_sites(workspace)
+    for registration in standalone:
+        owner, method = registration["owner"], registration["method"]
+        for called in (owner, *dispatch.heirs(owner, method)):
+            for position in index.positions_by_owner.get(called, ()):
+                site = sites[position]
+                if (
+                    site["name"] == method
+                    and site.get("descriptor") is not None
+                    and parameter_types(str(site["descriptor"]))
+                    == parameter_types(registration["descriptor"])
+                ):
+                    behavior = f"{site['caller']}#{site['ordinal']}"
+                    yield _case(behavior, 0, site, registration, method_symbols)
+
+
+def _handler_symbols(workspace: Workspace) -> dict[str, str]:
+    """The module's method symbols by bare descriptor (`chains._method_symbols`), and its
+    constructors: a constructor reference (`messageAdapter(C, Wrapped::new)`, the samples'
+    usual adapter) names the constructor as the handler, the body that makes the message."""
+    symbols = dict(workspace.once(_method_symbols))
+    for row in workspace.query("constructor_declarations"):
+        symbols.setdefault(bare_descriptor(str(row["symbol"])), str(row["symbol"]))
+    return symbols
 
 
 def _case(

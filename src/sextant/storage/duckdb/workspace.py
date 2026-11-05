@@ -1883,8 +1883,9 @@ _NAMED_DERIVATIONS = {
     # but `resolve/resolved_schedules.py` writes here.
     "resolved_schedules_reset": "reset_resolved_schedules.sql",
     "resolved_schedules_insert": "insert_resolved_schedules.sql",
-    # Spec 2026-10-25 §3d. A reset/insert pair owned by its one writing pass, as above:
-    # nothing but `resolve/rpc_hops.py` writes here.
+    # Spec 2026-10-25 §3d, 2026-11-04 §3d item 7. Two writers, `resolve/rpc_hops.py` and
+    # `resolve/message_hops.py`, each running only the insert; the pipeline runs the reset
+    # once, before both.
     "rpc_hops_reset": "reset_rpc_hops.sql",
     "rpc_hops_insert": "insert_rpc_hops.sql",
     # Spec 2026-11-04 §3b. A reset/insert pair owned by its one writing pass, as above:

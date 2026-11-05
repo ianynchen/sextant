@@ -52,7 +52,7 @@ ROWS = [
     (
         "typed javadsl.ActorContext",
         T + ".javadsl.ActorContext",
-        ["ask", "messageAdapter", "pipeToSelf"],
+        ["ask", "messageAdapter", "pipeToSelf", "scheduleOnce"],
     ),
     (
         "typed javadsl.TimerScheduler",

@@ -921,25 +921,35 @@ CREATE TABLE IF NOT EXISTS call_edges (
 --
 -- One row per (stub method, handler), written only for a service the module serves
 -- (§3c). A stub method naming no single wire method, or never reaching the client-call
--- API, has none. A derived TABLE because the rule is Python
--- (`resolve/rpc_hops.py`); replaced whole per resolve through reset_rpc_hops.sql +
--- insert_rpc_hops.sql, both run by that one writing pass, the `return_flows` pairing.
+-- API, has none.
+--
+-- Spec 2026-11-04 §3c: its SECOND writer, `resolve/message_hops.py`, writes an actor
+-- message send's hops here: the send's call site, the message's class (or a constant's own
+-- symbol) as `path`, one row per handler it reaches; a class nobody handles has `handler`
+-- NULL, a class not read `path` NULL too, with `evidence` naming what was there.
+--
+-- A derived TABLE because both rules are Python; replaced whole per resolve through ONE
+-- reset_rpc_hops.sql, run by the pipeline before both writers, each of which only runs
+-- insert_rpc_hops.sql (spec 2026-11-04 §3d item 7).
 CREATE TABLE IF NOT EXISTS rpc_hops (
     -- The stub method making the call, module-prefixed as `call_edges.caller` is.
     caller   TEXT,
     -- The call site in `caller` whose target belongs to the client-call API: where the
     -- call leaves for the wire. `caller` plus `ordinal` joins the `call_edges` row.
     ordinal  INTEGER,
-    -- The catalog's protocol (`grpc`).
+    -- The catalog's protocol (`grpc`, `actor`).
     protocol TEXT,
     -- The wire path `<service identity>/<wire method>`, spelled as the inbound
-    -- `endpoints.path` it names.
+    -- `endpoints.path` it names; for a message send, the message's class symbol or the
+    -- constant's own, NULL where the class was not read.
     path     TEXT,
     -- That inbound row's handler, module-prefixed. NULL where the module serves the
     -- service but has no handler for this RPC: the trace still carries the wire path.
+    -- For a message send, the handler its class reaches; NULL where none does.
     handler  TEXT,
-    -- D00 §4's evidence set. Always `compiler`, the convention endpoint rows follow: a
-    -- catalog's rule over compiled facts.
+    -- D00 §4's evidence set, `compiler`, the convention endpoint rows follow: a catalog's
+    -- rule over compiled facts. A send whose message class was not read says so here
+    -- instead (`message class not read: parameter`).
     evidence TEXT
 );
 

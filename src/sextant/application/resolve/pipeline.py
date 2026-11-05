@@ -15,6 +15,7 @@ from sextant.application.resolve.endpoints import SkippedCatalog, derive_endpoin
 from sextant.application.resolve.environment_divergence import record_environment_divergence
 from sextant.application.resolve.format import resolve_format
 from sextant.application.resolve.message_handlers import record_message_handlers
+from sextant.application.resolve.message_hops import record_message_hops
 from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.path_prefix import apply_path_prefixes
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
@@ -237,18 +238,24 @@ def resolve(
     # `apply_path_prefixes` and the passes that key on a row (shapes, service-identity gaps).
     with _timed("record_self_calls"):
         record_self_calls(workspace)
+    # `rpc_hops` has two writers, the gRPC pass and the message pass below, and each only
+    # inserts: ONE reset, here, before both (spec 2026-11-04 §3d item 7), so a resolve with
+    # neither still leaves an empty table rather than the previous run's rows.
+    workspace.derive("rpc_hops_reset")
     # Spec 2026-10-25 §3d: where a stub call to a served RPC lands. Right after the pass
     # above, for the same reason: it reads the inbound rows every engine minted, and
-    # `record_call_edges`, far above. Nothing below changes a gRPC row's path, and it
-    # resets its own table, being its only writer.
+    # `record_call_edges`, far above. Nothing below changes a gRPC row's path.
     with _timed("record_rpc_hops"):
         record_rpc_hops(workspace, declared)
     # Spec 2026-11-04 §3b: each behavior's message handler cases, read off the call sites the
-    # catalogs declare. Right after the hop pass above, which the message hops will join
-    # (they read these rows); it reads no endpoint row and resets its own table, being its
-    # only writer.
+    # catalogs declare. Before the message hops, which read these rows; it reads no endpoint
+    # row and resets its own table, being its only writer.
     with _timed("record_message_handlers"):
         record_message_handlers(workspace, declared)
+    # Spec 2026-11-04 §3c: each message send's hops into `rpc_hops`, the table's second
+    # writer, from the cases just read. Before `apply_path_prefixes`, with the other hop pass.
+    with _timed("record_message_hops"):
+        record_message_hops(workspace, declared)
     # **The module's own server prefix, and it runs HERE for a reason** (spec 2026-10-18 §3,
     # `OI-148`): every row exists by now, and nothing has copied an address yet.
     # `record_roots`, `record_routing_conflicts` and `record_self_exchange` all key on the

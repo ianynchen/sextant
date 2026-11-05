@@ -4683,6 +4683,9 @@ def test_every_resolve_pass_logs_its_seconds_at_info(
         # Each behavior's message handler cases (spec 2026-11-04 §3b): right after the hop
         # pass, which the message hops will join.
         "record_message_handlers",
+        # Each message send's hops (spec 2026-11-04 §3c): after the cases it reads, into the
+        # table the gRPC pass writes too, reset once before both.
+        "record_message_hops",
         # The module's own server prefix, between the rows existing and anything copying
         # an address (spec 2026-10-18 §3) — `record_roots` and `record_routing_conflicts`
         # key on the path, so the order here is a correctness property, not a listing.

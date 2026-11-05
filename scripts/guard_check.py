@@ -148,6 +148,8 @@ _FLUENT = "sextant/application/resolve/engines/fluent.py"
 _CHAINS = "sextant/application/resolve/shapes/chains.py"
 # Message handler cases per behavior, and the first-match rule (spec 2026-11-04 §3b).
 _MESSAGE_HANDLERS = "sextant/application/resolve/message_handlers.py"
+# A message send's hops into `rpc_hops` (spec 2026-11-04 §3c).
+_MESSAGE_HOPS = "sextant/application/resolve/message_hops.py"
 _CLIENT_BASE = "sextant/application/resolve/shapes/client_base.py"
 # Which handler on a route chain answers (Vert.x spec 2026-10-30 §3b, plan Task 10).
 _PASS_THROUGH = "sextant/application/resolve/shapes/pass_through.py"
@@ -7223,6 +7225,175 @@ GUARDS: dict[str, Guard] = {
             for family, prefix in (("pekko", "org/apache/pekko"), ("akka", "akka"))
         ),
     ),
+    "message-hops.the-hops-are-WRITTEN": Guard(
+        what="each declared send's hops are written into `rpc_hops`",
+        why="spec 2026-11-04 §3c: the trace reads hops from that table. Without them every "
+        "actor send stops at the library method that sends it, and a trace from a route "
+        "never reaches the actor that answers",
+        edits=(
+            Edit(
+                path=_MESSAGE_HOPS,
+                find='    if rows:\n        workspace.derive("rpc_hops_insert", rows=list(rows.values()))\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n"
+                '        workspace.derive("rpc_hops_insert", rows=list(rows.values()))\n',
+            ),
+        ),
+    ),
+    "message-hops.the-message-is-at-its-DECLARED-argument": Guard(
+        what="a send's message is read at the catalog's `message_arg`",
+        why="CP-57 finding 6: `context.ask(Class, ref, timeout, request, mapper)` carries "
+        "the message in its request at argument 3. Read at argument 0 it is a class literal, "
+        "and the ask's hop to the handler of what it sends is lost",
+        edits=(
+            Edit(
+                path=_MESSAGE_HOPS,
+                find='            argument = _arg_at(site["arguments"], send["message_arg"])\n',
+                replace='            argument = _arg_at(site["arguments"], 0)  # guard disabled\n',
+            ),
+        ),
+    ),
+    "message-hops.a-LAMBDA-message-is-read-through-its-RETURNS": Guard(
+        what="a function passed as the message is read through the classes its body returns",
+        why="CP-57: `ask(replyTo -> new Get(id, replyTo), timeout)` compiles to a synthetic "
+        "body whose declared return is the erased `Command`; only its `new` says the class. "
+        "Unread, the ask from a route stops at `EntityRef#ask`",
+        edits=(
+            Edit(
+                path=_MESSAGE_HOPS,
+                find="            body = self._by_bare.get(str(symbol))\n",
+                replace="            body = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "message-hops.a-CONSTANT-is-sent-with-its-IDENTITY": Guard(
+        what="an `enum` constant sent is read with its own symbol as well as its class",
+        why="spec 2026-11-04 §3d item 3: `onMessageEquals(Tick.INSTANCE, …)` takes that "
+        "constant; sent by class alone, a timer's `Tick.INSTANCE` reaches no case",
+        edits=(
+            Edit(
+                path=_MESSAGE_HOPS,
+                find="            return [(owner_of(str(symbol)), str(symbol), None, None)]\n",
+                replace="            return [(owner_of(str(symbol)), None, None, None)]  # guard disabled\n",
+            ),
+        ),
+    ),
+    "message-hops.an-UNREAD-class-is-a-STOP-that-says-so": Guard(
+        what="a message whose class is not read is one row with no path, its evidence naming why",
+        why="the plan's global constraint: a hop is never guessed. Without the branch the row "
+        "reads as a message nobody handles, a claim about a class nobody read",
+        edits=(
+            Edit(
+                path=_MESSAGE_HOPS,
+                find="        if unread is not None:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "message-hops.a-message-NOBODY-handles-is-a-STOP-naming-its-class": Guard(
+        what="a message no behavior handles is one row with its class and no handler",
+        why="spec 2026-11-04 §3c: a reply its asker reads off a future stays a stop, `via "
+        "actor <class>`. Without the row the trace shows the library's `tell` and never "
+        "the class it sent",
+        edits=(
+            Edit(
+                path=_MESSAGE_HOPS,
+                find="            for handler in handlers or [None]\n",
+                replace="            for handler in handlers  # guard disabled\n",
+            ),
+        ),
+    ),
+    "message-hops.a-DELIVERING-handler-CONTINUES": Guard(
+        what="each class a delivering handler returns is a hop from its return",
+        why="spec 2026-11-04 §3d item 4: an adapter or an ask's reply mapper maps a message "
+        "and delivers the result to its own actor. Without the continuation the trace stops "
+        "inside the mapper and never reaches the handler of `Reserved` or `Failed`",
+        edits=(
+            Edit(
+                path=_MESSAGE_HOPS,
+                find="    for handler in reading.delivering_handlers() if protocols else []:\n",
+                replace="    for handler in []:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "message-hops.a-MERGED-return-is-a-hop-per-CANDIDATE": Guard(
+        what="a return javac merged from two `new`s gives a hop per class",
+        why="CP-57: `res != null ? new Reserved(res) : new Failed(ex)` is one `areturn` with "
+        "two `new`s. Read as unread, the mapper's two outcomes are lost",
+        edits=(
+            Edit(
+                path=_MESSAGE_HOPS,
+                find='        if kind == "merge":\n',
+                replace='        if kind == "merge" and False:  # guard disabled\n',
+            ),
+        ),
+    ),
+    "message-hops.a-CONSTRUCTOR-reference-returns-its-OWNER": Guard(
+        what="a constructor reference used as a message function returns its own class",
+        why="the samples' usual adapter is `messageAdapter(C, Wrapped::new)`, and an ask's "
+        "request may be `Report::new`. A constructor returns no value of its own, so read "
+        "through its returns it delivers nothing and the hop stops",
+        edits=(
+            Edit(
+                path=_MESSAGE_HOPS,
+                find="            return [(owner_of(bare_descriptor(method)), None, self._super_call(method), None)]\n",
+                replace="            return []  # guard disabled by scripts/guard_check.py\n",
+            ),
+            Edit(
+                path=_MESSAGE_HOPS,
+                find="                return [(owner_of(str(symbol)), None, None, None)]\n",
+                replace="                return []  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "message-handlers.a-registration-no-chain-holds-is-its-OWN-behavior": Guard(
+        what="a registration no chain step names is read at each of its call sites",
+        why="spec 2026-11-04 §3d item 4: `messageAdapter` and an ask's reply mapper are no "
+        "step of a builder chain. Unread, a reply reaches no handler and the trace stops at "
+        "the `tell` that sent it",
+        edits=(
+            Edit(
+                path=_MESSAGE_HANDLERS,
+                find="    if not standalone:\n        return\n",
+                replace="    if True:  # guard disabled by scripts/guard_check.py\n        return\n",
+            ),
+        ),
+    ),
+    "message-handlers.a-CONSTRUCTOR-reference-is-a-handler": Guard(
+        what="a constructor reference as a handler argument is named by the constructor",
+        why="`messageAdapter(C, Wrapped::new)`: the module's method symbols hold no "
+        "constructor, so without them the adapter's handler is NULL and its delivery is lost",
+        edits=(
+            Edit(
+                path=_MESSAGE_HANDLERS,
+                find='    for row in workspace.query("constructor_declarations"):\n',
+                replace="    for row in []:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "message-hops.ONE-reset-before-both-writers": Guard(
+        what="the pipeline clears `rpc_hops` once per resolve, before its two writers",
+        why="spec 2026-11-04 §3d item 7: both writers only insert. Without the reset a second "
+        "analysis doubles every hop, and the trace walks each one twice",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/pipeline.py",
+                find='    workspace.derive("rpc_hops_reset")\n',
+                replace="    pass  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "trace.an-UNREAD-hop-says-why-in-its-via": Guard(
+        what="a hop with no path carries its evidence in the step's `via`",
+        why="spec 2026-11-04 §3c: the stop says the message class was not read. Without it "
+        "the step reads `actor None`",
+        edits=(
+            Edit(
+                path="sextant/application/query/trace.py",
+                find='            where = hop["path"] if hop["path"] is not None else f"({hop[\'evidence\']})"\n',
+                replace='            where = hop["path"]  # guard disabled by scripts/guard_check.py\n',
+            ),
+        ),
+    ),
     "self-calls.a-served-identity-is-matched-within-ITS-protocol": Guard(
         what="an outbound row is dropped only for a served identity of its own protocol",
         why="linking is by protocol and address (D01): an actor key named like a gRPC service "
@@ -10862,6 +11033,11 @@ def copy_tree(destination: Path) -> Path:
         # the base jar is read off real facts, so the guard keeping such a row `partial` is
         # pinned on the e2e test of this module.
         "orders-vertx-web",
+        # Akka and Pekko actors (spec 2026-11-04 §3c): a send's message is read through the
+        # lambda bodies and constructor calls javac emits, so the hop guards are pinned on
+        # the two compiled modules, one per family.
+        "orders-actors-pekko",
+        "orders-actors-akka",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing
