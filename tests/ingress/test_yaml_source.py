@@ -810,6 +810,8 @@ def test_an_exact_key_model_needs_no_ladder_keys(tmp_path: Path):
         (_EXACT + "multibinding_annotations: com.acme.di.IntoSet\n", "`multibinding_annotations`"),
         (_EXACT + "multibinding_annotations: []\n", "`multibinding_annotations`"),
         (_EXACT + "injecting_annotations: [com.acme.di.Inject, 7]\n", "`injecting_annotations`"),
+        ("injecting_annotations: [com.acme.di.Inject]\n", "`declaring_annotation`"),
+        ("multibinding_annotations: [com.acme.di.IntoSet]\n", "`declaring_annotation`"),
     ],
 )
 @pytest.mark.pins("bean-models.an-UNKNOWN-injection-word-is-refused-at-LOAD")
@@ -833,3 +835,14 @@ def _model_with_id(directory: Path, model_id: str, body: str) -> None:
     (directory / "bean-models" / f"{model_id}.yml").write_text(
         f"id: {model_id}\n" + body, encoding="utf-8"
     )
+
+
+def test_every_catalog_carries_every_configuration_annotation_the_catalogs_name():
+    """Review m1 (spec 2026-11-05 di-recipe-hop): the recipe table must leave a slot the
+    container fills from configuration. The catalogs already name that annotation in
+    `field_sources.value_annotation`; the loader hands the union to every catalog."""
+    catalogs = YamlCatalogSource(catalogs_dir()).load()
+
+    assert {c.value_annotations for c in catalogs} == {
+        ("org.springframework.beans.factory.annotation.Value",)
+    }

@@ -312,7 +312,13 @@ def _key_classes(
     class that same call names, on the same path (`values.Answer.carried_class`). So a key
     and its class are one answer, and two keys built in one helper stay apart without any
     pairing afterwards."""
-    values = cached_value_index(workspace, catalog.not_hand_offs, catalog.hand_off_effects)
+    values = cached_value_index(
+        workspace,
+        catalog.not_hand_offs,
+        catalog.hand_off_effects,
+        catalog.bean_models,
+        catalog.value_annotations,
+    )
     owner = type_descriptor(str(catalog.matches["owner"]))
     classes: dict[tuple[str | None, str | None], set[str | None]] = {}
     for method in _keyed_methods(catalog):

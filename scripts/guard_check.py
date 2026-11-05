@@ -8508,6 +8508,46 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "beans.a-GENERIC-Spring-slot-has-NO-entry": Guard(
+        what="under `injection: candidates`, a slot whose declared type carries type "
+        "arguments gets no recipe",
+        why="review I1: Spring fills `List<T>` with every bean of `T`; the ladder keys on the "
+        "erasure and would name one unrelated `List` bean, a false value",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="                    if configured or (ladder and "
+                '(declared.get("type") or {}).get("arguments")):\n',
+                replace="                    if configured:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "beans.a-CONFIGURED-slot-has-NO-entry": Guard(
+        what="a slot carrying a configuration annotation (`@Value`) gets no recipe",
+        why="review m1: Spring fills it from configuration; a recipe of its type would be "
+        "read as its value, a false address",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="                    if configured or (ladder and "
+                '(declared.get("type") or {}).get("arguments")):\n',
+                replace="                    if ladder and "
+                '(declared.get("type") or {}).get("arguments"):  # guard disabled\n',
+            ),
+        ),
+    ),
+    "values.a-CONTAINER-FILLED-parameter-receives-its-RECIPE": Guard(
+        what="a parameter the container fills with one recipe receives that recipe's returns",
+        why="spec 2026-11-05 di-recipe-hop §2: without the hop, a Retrofit client made "
+        "through `@Provides` never gets its server address (OI-304)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="        if isinstance(injected, ProvidedBy):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "annotation-registrations.ONLY-a-QUALIFIER-makes-an-observer-KEYLESS": Guard(
         what="only an annotation type meta-annotated by the bean model's qualifier marker makes "
         "an observer keyless",

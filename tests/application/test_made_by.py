@@ -27,8 +27,10 @@ from sextant.domain.facts import (
     Document,
     FieldWriteFact,
     MethodReturnFact,
+    Parameter,
     Signature,
     SymbolFact,
+    TypeHeaderFact,
     TypeRef,
 )
 from sextant.domain.symbols import method_descriptor
@@ -558,3 +560,151 @@ def test_an_activity_served_through_an_extending_interface_flips_to_inbound(tmp_
     rows = {(r["direction"], r["path"], r["handler"]) for r in workspace.query("endpoints")}
     workspace.close()
     assert rows == {("inbound", "ledger_Post", f"{_MODULE}{impl}post(sig_5a5a5a5a).")}
+
+
+# --- a client made through a dependency-injection recipe (spec 2026-11-05 di-recipe-hop) ---
+#
+# The shape the OI-304 kapt probe compiles to: `@Provides fun api(retrofit: Retrofit): OrdersApi
+# = retrofit.create(OrdersApi::class.java)`, and `@Provides fun retrofit(): Retrofit = Retrofit
+# .Builder().baseUrl(...).build()`. The only callers of `api` are Dagger's generated factories,
+# so before the hop every such row was `partial`. The parameter now receives the recipe's value.
+
+NETWORK = "com/acme/app/NetworkModule#"
+_PROVIDES = AnnotationUse(annotation="dagger/Provides#")
+_NAMED = "javax/inject/Named#"
+
+
+def _named(value: str) -> AnnotationUse:
+    return AnnotationUse(annotation=_NAMED, args={"value": value})
+
+
+def _recipe(name: str, returns: str, *on_method: AnnotationUse, parameters=()) -> list:
+    """A `@Provides` method of the module, with its signature and its annotations."""
+    symbol = f"{_MODULE}{NETWORK}{name}(sig_{len(name):08x})."
+    return [
+        SymbolFact(
+            document_id="doc_1",
+            symbol=symbol,
+            construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + NETWORK,
+            signature=Signature(parameters=list(parameters), returns=TypeRef(symbol=returns)),
+        ),
+        *(
+            AnnotationFact(document_id="doc_1", target=symbol, retention="runtime", use=use)
+            for use in (_PROVIDES, *on_method)
+        ),
+    ]
+
+
+def _symbol(facts: list) -> str:
+    return facts[0].symbol
+
+
+def _named_is_a_qualifier() -> TypeHeaderFact:
+    return TypeHeaderFact(
+        document_id="doc_1",
+        symbol="sextant-jvm maven javax.inject/javax.inject 1 " + _NAMED,
+        construct_kind=ConstructKind.ANNOTATION,
+        annotations=[AnnotationUse(annotation="javax/inject/Qualifier#")],
+        origin="javax.inject:javax.inject",
+        version="1",
+    )
+
+
+def _retrofit_recipe(name: str, base: CallArgument, *on_method: AnnotationUse, parameters=()):
+    """`@Provides fun <name>(...): Retrofit = Retrofit.Builder().baseUrl(base).build()`."""
+    declared = _recipe(name, RETROFIT, *on_method, parameters=parameters)
+    maker = _symbol(declared)
+    return declared + [
+        _call(maker, BUILDER, "<init>", "()V", 0, receiver=7, result=None),
+        _call(maker, BUILDER, "baseUrl", _BASE_URL, 1, receiver=7, result=13, arguments=[base]),
+        _call(maker, BUILDER, "build", _BUILD, 2, receiver=13, result=16),
+        MethodReturnFact(
+            document_id="doc_1", method=maker, ordinal=0,
+            value=CallArgument(kind="unresolved", source=16),
+        ),
+    ]  # fmt: skip
+
+
+def _api_recipe(*on_parameter: AnnotationUse) -> list:
+    """`@Provides fun api(retrofit: Retrofit): OrdersApi = retrofit.create(OrdersApi::class.java)`."""
+    declared = _recipe(
+        "api",
+        API,
+        parameters=(
+            Parameter(
+                name="retrofit",
+                type=TypeRef(symbol=RETROFIT),
+                erased_symbol=RETROFIT,
+                annotations=list(on_parameter),
+            ),
+        ),
+    )
+    maker = _symbol(declared)
+    return declared + [
+        _call(maker, RETROFIT, "create", _CREATE, 0, receiver=None, result=5,
+              receiver_parameter=0, arguments=[CallArgument(kind="class", symbol=API)]),
+    ]  # fmt: skip
+
+
+@pytest.mark.pins("values.a-CONTAINER-FILLED-parameter-receives-its-RECIPE")
+def test_a_client_made_from_a_recipe_s_parameter_takes_the_recipe_s_address(tmp_path: Path):
+    """One hop: the container fills `api`'s `Retrofit` parameter with what `retrofit()` makes,
+    so the row takes `retrofit()`'s base."""
+    facts = [
+        *_interface(API, "orders/{id}"),
+        _named_is_a_qualifier(),
+        *_retrofit_recipe("retrofit", _url("https://orders.example/")),
+        *_api_recipe(),
+    ]
+    assert _rows(tmp_path, facts) == {("GET", "orders.example", "/orders/{id}", "resolved")}
+
+
+@pytest.mark.pins("values.a-CONTAINER-FILLED-parameter-receives-its-RECIPE")
+def test_a_recipe_s_own_parameter_is_filled_again_by_its_qualified_recipe(tmp_path: Path):
+    """Two hops, and a qualified base `String`: `retrofit(@Named("base") url: String)` builds
+    with its own parameter, which the container fills from `@Named("base") baseUrl()`. An
+    unqualified `String` recipe beside it is not a candidate."""
+    base = _recipe("baseUrl", "java/lang/String#", _named("base"))
+    other = _recipe("userAgent", "java/lang/String#")
+    facts = [
+        *_interface(API, "orders/{id}"),
+        _named_is_a_qualifier(),
+        *base,
+        MethodReturnFact(document_id="doc_1", method=_symbol(base), ordinal=0,
+                         value=_url("https://named.example/")),
+        *other,
+        MethodReturnFact(document_id="doc_1", method=_symbol(other), ordinal=0,
+                         value=_url("agent/1.0")),
+        *_retrofit_recipe(
+            "retrofit",
+            CallArgument(kind="parameter", value=0),
+            parameters=(
+                Parameter(name="url", type=TypeRef(symbol="java/lang/String#"),
+                          erased_symbol="java/lang/String#", annotations=[_named("base")]),
+            ),
+        ),
+        *_api_recipe(),
+    ]  # fmt: skip
+    assert _rows(tmp_path, facts) == {("GET", "named.example", "/orders/{id}", "resolved")}
+
+
+def test_two_recipes_of_one_key_leave_the_address_unread(tmp_path: Path):
+    """Two unqualified `Retrofit` recipes in the module (two components, or two flavours):
+    which one the container uses is not in the module, so the row is `partial` with no
+    server address, never one of the two picked."""
+    facts = [
+        *_interface(API, "orders/{id}"),
+        _named_is_a_qualifier(),
+        *_retrofit_recipe("retrofit", _url("https://one.example/")),
+        *_retrofit_recipe("otherRetrofit", _url("https://two.example/")),
+        *_api_recipe(),
+    ]
+    assert _rows(tmp_path, facts) == {("GET", None, "orders/{id}", "partial")}
+
+
+def test_a_parameter_no_recipe_provides_reads_as_it_did_before(tmp_path: Path):
+    """No `Retrofit` recipe in the module (it is in another Gradle module): the parameter is
+    not the table's, so the walk answers as before the hop, `partial` with no address."""
+    facts = [*_interface(API, "orders/{id}"), _named_is_a_qualifier(), *_api_recipe()]
+    assert _rows(tmp_path, facts) == {("GET", None, "orders/{id}", "partial")}

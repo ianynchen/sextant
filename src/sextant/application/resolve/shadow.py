@@ -538,6 +538,8 @@ def record_value_resolutions(
         workspace,
         catalogs[0].not_hand_offs if catalogs else (),
         catalogs[0].hand_off_effects if catalogs else (),
+        catalogs[0].bean_models if catalogs else None,
+        catalogs[0].value_annotations if catalogs else (),
     )
     rows: list[dict[str, object]] = []
     # Sorted so two runs over one workspace write one order whatever the catalogs' own

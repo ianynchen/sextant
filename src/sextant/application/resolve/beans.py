@@ -34,7 +34,7 @@ resolve. The value walk reads it.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -347,7 +347,9 @@ class _Fold:
 
 
 def injected_parameters(
-    workspace: Workspace, models: Mapping[str, Mapping[str, Any]]
+    workspace: Workspace,
+    models: Mapping[str, Mapping[str, Any]],
+    configured_by: Iterable[str] = (),
 ) -> Mapping[tuple[str, int], Injection]:
     """For each parameter the container fills, keyed `(method full symbol, index)`, the recipe
     the container chooses for it (spec 2026-11-05 di-recipe-hop §2). `models` are every bean
@@ -358,9 +360,22 @@ def injected_parameters(
     of its `injecting_annotations`. The model's `injection` chooses the recipe:
     `exact_key` mirrors Dagger, `candidates` takes Spring's ladder (`bean_of`) unchanged.
 
+    Two kinds of slot get NO entry, so the walk keeps its own reading of them:
+    - a slot carrying one of `configured_by` (dotted annotation names: the catalogs'
+      `field_sources.value_annotation`, Spring's `@Value`): the container fills it from
+      configuration, not from a recipe;
+    - under `candidates`, a slot whose declared type carries type arguments: Spring fills
+      `List<T>` with every bean of `T`, and the ladder keys on the erasure, so its answer
+      would be false (missing, never false: `annotation_driven.generic_parameter`).
+
     Built once per load through `Workspace.once`, keyed on the models' contents
     (GUIDELINES §8.7), and catalog-free: it reads facts only."""
-    return workspace.once(_Injected(json.dumps(models, sort_keys=True)))
+    return workspace.once(
+        _Injected(
+            json.dumps(models, sort_keys=True),
+            frozenset(type_descriptor(name) for name in configured_by),
+        )
+    )
 
 
 def meta_annotated_types(workspace: Workspace, markers: frozenset[str]) -> frozenset[str]:
@@ -382,6 +397,7 @@ def meta_annotated_types(workspace: Workspace, markers: frozenset[str]) -> froze
 @dataclass(frozen=True)
 class _Injected:
     models: str
+    configured_by: frozenset[str]  # descriptor form
 
     def __call__(self, workspace: Workspace) -> dict[tuple[str, int], Injection]:
         index = annotation_index(workspace)
@@ -412,8 +428,15 @@ class _Injected:
                 choose = _ExactKey(workspace, model, index, declarations).recipe_for
             else:
                 choose = _Ladder(workspace, model).recipe_for
+            ladder = model["injection"] == "candidates"
             for method, parameters in sorted(filled.items()):
-                for position in range(len(parameters)):
+                for position, declared in enumerate(parameters):
+                    configured = any(
+                        bare_descriptor(str(use.get("annotation"))) in self.configured_by
+                        for use in declared.get("annotations") or []
+                    )
+                    if configured or (ladder and (declared.get("type") or {}).get("arguments")):
+                        continue
                     found.setdefault((method, position), choose(method, parameters, position))
         return found
 

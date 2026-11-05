@@ -619,10 +619,13 @@ def _consumer(*uses: AnnotationUse, declared: TypeRef | None = None) -> list:
     )
 
 
+_VALUE = "org.springframework.beans.factory.annotation.Value"
+
+
 def _injections(tmp_path: Path, facts: list) -> dict:
     workspace = _loaded(tmp_path, _qualifier_types() + facts)
     try:
-        return dict(injected_parameters(workspace, _MODELS))
+        return dict(injected_parameters(workspace, _MODELS, (_VALUE,)))
     finally:
         workspace.close()
 
@@ -837,7 +840,7 @@ def test_a_spring_bean_parameter_crosses_by_spring_s_own_ladder(tmp_path: Path):
     )
     workspace = _loaded(tmp_path, facts)
     try:
-        found = injected_parameters(workspace, _MODELS)
+        found = injected_parameters(workspace, _MODELS, (_VALUE,))
         ladder = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset()).bean_of(
             _parameter(_CONTAINER_TYPE, "c")
         )
@@ -848,12 +851,70 @@ def test_a_spring_bean_parameter_crosses_by_spring_s_own_ladder(tmp_path: Path):
     assert found[(_MODULE + helper, 0)] == ProvidedBy(_MODULE + other) == ProvidedBy(ladder.method)
 
 
+@pytest.mark.pins("beans.a-GENERIC-Spring-slot-has-NO-entry")
+def test_a_spring_slot_of_a_generic_type_is_not_the_ladder_s(tmp_path: Path):
+    """Review I1. Spring fills `List<ClientHttpRequestInterceptor>` with EVERY interceptor
+    bean; the ladder keys on the erasure and would pick the one `@Bean List<String>` by
+    type. A generic slot under `candidates` gets no entry: missing, never false (the
+    precedent of `annotation_driven.generic_parameter`)."""
+    listed = _type("java/util/List#", _type("org/acme/Interceptor#"))
+    template = _CONFIG + "template(sig_77)."
+    found = _injections(
+        tmp_path,
+        _recipe(
+            _CONFIG + "hosts(sig_78).",
+            _type("java/util/List#", _type("java/lang/String#")),
+            declaring=_BEAN,
+        )
+        + _recipe(
+            template,
+            _type("org/acme/Template#"),
+            parameters=(_slot(listed, name="interceptors"),),
+            declaring=_BEAN,
+        ),
+    )
+
+    assert (_MODULE + template, 0) not in found
+
+
+@pytest.mark.pins("beans.a-CONFIGURED-slot-has-NO-entry")
+def test_a_slot_filled_from_configuration_is_not_a_recipe_s(tmp_path: Path):
+    """Review m1. Spring fills a `@Value("${orders.url}")` parameter from configuration,
+    not from a bean, even when one bean of its type exists. It gets no entry, so the walk
+    keeps today's reading of it. The annotation is the one the catalogs already name as
+    `field_sources.value_annotation`; no new word."""
+    client = _CONFIG + "client(sig_79)."
+    found = _injections(
+        tmp_path,
+        _recipe(_CONFIG + "name(sig_80).", _type("java/lang/String#"), declaring=_BEAN)
+        + _recipe(
+            client,
+            _type("org/acme/Client#"),
+            parameters=(
+                _slot(
+                    _type("java/lang/String#"),
+                    AnnotationUse(
+                        annotation="org/springframework/beans/factory/annotation/Value#",
+                        args={"value": "${orders.url}"},
+                    ),
+                    name="url",
+                ),
+                _slot(_type("java/lang/String#"), name="name"),
+            ),
+            declaring=_BEAN,
+        ),
+    )
+
+    assert (_MODULE + client, 0) not in found
+    assert found[(_MODULE + client, 1)] == ProvidedBy(_MODULE + _CONFIG + "name(sig_80).")
+
+
 def test_the_table_is_built_once_per_resolve(tmp_path: Path):
     """GUIDELINES §8.7: built once per load through `Workspace.once`, keyed on the models'
     contents, so every reader in one resolve shares it."""
     workspace = _loaded(tmp_path, _qualifier_types() + _consumer())
     try:
-        first = injected_parameters(workspace, _MODELS)
-        assert injected_parameters(workspace, dict(_MODELS)) is first
+        first = injected_parameters(workspace, _MODELS, (_VALUE,))
+        assert injected_parameters(workspace, dict(_MODELS), [_VALUE]) is first
     finally:
         workspace.close()

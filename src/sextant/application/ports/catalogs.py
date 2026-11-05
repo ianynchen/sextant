@@ -273,6 +273,10 @@ class Catalog:
     # the catalog that asks. The source reads it once and hands every catalog the same
     # mapping, as `value_model` below.
     bean_models: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Every catalog's `field_sources.value_annotation` (dotted, sorted): the annotations that
+    # make the container fill a slot from configuration. The source hands every catalog the
+    # same tuple; the value walk's recipe table reads it (a configured slot is no recipe's).
+    value_annotations: tuple[str, ...] = ()
     # D02 §1f (spec 2026-09-22 §2): every PRODUCING call this source knows the identity
     # of — which of its arguments carries the value its result stands for. The walk that
     # answers *what is this value* finds the producing call on its own and is then stuck

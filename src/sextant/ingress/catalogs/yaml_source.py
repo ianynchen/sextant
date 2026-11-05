@@ -7,6 +7,7 @@ which this layer must not import, so the style is checked where the engines
 are — carrying `Catalog.source` so the error still names the file."""
 
 import re
+from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -570,7 +571,21 @@ class YamlCatalogSource:
                 )
             )
         _check_mechanisms(catalogs)
-        return catalogs
+        # The annotations that make the container fill a slot from configuration (Spring's
+        # `@Value`), as every catalog already names them in `field_sources`: one sorted tuple
+        # on every catalog, read by the value walk's recipe table (spec 2026-11-05
+        # di-recipe-hop, review m1), which no catalog owns.
+        configured_by = tuple(
+            sorted(
+                {
+                    str(sources["value_annotation"])
+                    for catalog in catalogs
+                    if isinstance(sources := catalog.matches.get("field_sources"), dict)
+                    and isinstance(sources.get("value_annotation"), str)
+                }
+            )
+        )
+        return [replace(catalog, value_annotations=configured_by) for catalog in catalogs]
 
 
 # Spec 2026-09-22 §2a step 1. The keys a catalog already spells a producer's identity
@@ -1250,10 +1265,11 @@ def _check_injection(raw: dict[str, Any], where: str) -> None:
     or `candidates` (Spring's ladder, whose keys it then needs). A model with no
     `declaring_annotation` declares no recipe and says nothing about injection."""
     if "declaring_annotation" not in raw:
-        if "injection" in raw:
-            raise CatalogError(
-                f"{where}: `injection` needs the `declaring_annotation` that marks a recipe"
-            )
+        for key in ("injection", "multibinding_annotations", "injecting_annotations"):
+            if key in raw:
+                raise CatalogError(
+                    f"{where}: `{key}` needs the `declaring_annotation` that marks a recipe"
+                )
         return
     injection = raw.get("injection")
     if injection not in _INJECTIONS:

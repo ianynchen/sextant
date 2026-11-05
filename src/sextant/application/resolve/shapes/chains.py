@@ -349,7 +349,13 @@ def chain_ends(
     # url is `base + "/path"` could never reach it (`OI-138`, ruling 1). Sharing the index
     # makes the gate unnecessary instead of merely cheaper — `mall-admin` built the same
     # index five times before.
-    walk_index = cached_value_index(workspace, catalog.not_hand_offs, catalog.hand_off_effects)
+    walk_index = cached_value_index(
+        workspace,
+        catalog.not_hand_offs,
+        catalog.hand_off_effects,
+        catalog.bean_models,
+        catalog.value_annotations,
+    )
     flow = Flow(walk_index)
     # Which splits count for the caller's rows: those whose call sets a part they show,
     # read off the same steps and capture names the walk folds (`_parts_set`).

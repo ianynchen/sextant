@@ -119,6 +119,8 @@ def apply_path_prefixes(workspace: Workspace, catalogs: list[Catalog]) -> None:
                 entry,
                 catalogs[0].not_hand_offs if catalogs else (),
                 catalogs[0].hand_off_effects if catalogs else (),
+                catalogs[0].bean_models if catalogs else None,
+                catalogs[0].value_annotations if catalogs else (),
             )
             if declared:
                 for protocol in entry["protocols"]:
@@ -324,6 +326,8 @@ def _installed_prefixes(
     entry: dict[str, Any],
     not_hand_offs: Sequence[str] = (),
     hand_off_effects: Sequence[Mapping[str, Any]] = (),
+    bean_models: Mapping[str, Mapping[str, Any]] | None = None,
+    value_annotations: Sequence[str] = (),
 ) -> tuple[_Installed, ...]:
     """Every entry the module declares in code, measured.
 
@@ -356,7 +360,9 @@ def _installed_prefixes(
     installers = _installer_sites(workspace, sites, entry["installer"])
     if not installers:
         return ()
-    index = cached_value_index(workspace, not_hand_offs, hand_off_effects)
+    index = cached_value_index(
+        workspace, not_hand_offs, hand_off_effects, bean_models, value_annotations
+    )
     # WHICH MAP carries prefixes: the origin of every installer's argument 0.
     carries: set[tuple[str, int]] = set()
     for site in installers:
