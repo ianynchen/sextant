@@ -20,7 +20,7 @@ dispatch: { key: object, match: one, mechanism: jdk-blocking-queue }
 detect:
   coordinates: []
 
-# CP-59 findings 12-15 (`javap` on the JDK and on `fixtures/orders-queues`, and a generated class
+# CP-59 findings 12-16 (`javap` on the JDK and on `fixtures/orders-queues`, and a generated class
 # calling each declared method through each owner below). `jmod:java.base` is the JDK module
 # the types were read out of, in the `group:artifact` shape this block requires; it is NOT a
 # Maven coordinate and nothing resolves it. The version is the `java.version` the running JDK
@@ -43,8 +43,7 @@ matches:
   #
   # Not declared, and read as nothing (a stated bound): a `Queue`- or `Collection`-typed
   # receiver (a plain `Queue` is as often a local data structure, `ArrayDeque`), the deque
-  # ends (`putFirst`, `offerLast`, `takeLast`, `pollFirst`, …), `transfer`/`tryTransfer`,
-  # `drainTo`, and Guava's `Queues.drain(queue, …)`, which takes the queue as an argument.
+  # ends (`putFirst`, `offerLast`, `takeLast`, `pollFirst`, …) and `transfer`/`tryTransfer`.
   #
   # `value_arg` is the value handed over; the KEY is the object the call is made on, followed
   # to the call that made it (`values.producer_paths`, `which_object`).
@@ -91,7 +90,13 @@ matches:
     - { owner: *dq, method: add, descriptor: "(Ljava/util/concurrent/Delayed;)Z", value_arg: 0 }
 
   # The code handling a taken value is the method making the take (`handler: enclosing`): a
-  # take returns the value to its caller, which handles it.
+  # take returns the value to its caller, which handles it. `drainTo(c)` and `drainTo(c, n)`
+  # move values into the collection the caller holds, and the no-argument `remove()` (declared
+  # by `Queue`, written through each owner: finding 14) takes the head, so each is a receive.
+  # NOT receives, on purpose: `remove(Object)`, a `Collection` method that discards one value
+  # it is handed, and `removeIf(Predicate)`, which discards every value its predicate accepts;
+  # the predicate only decides, and nothing handles the values discarded (ruled 2026-11-05).
+  # Guava's `Queues.drain`, handed the queue as an argument, is `guava-queues.yml`'s.
   dispatch_receives:
     - { owner: *bq, method: take, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
     - { owner: *bq, method: poll, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
@@ -123,3 +128,33 @@ matches:
     - { owner: *dq, method: take, descriptor: "()Ljava/util/concurrent/Delayed;", object: receiver, handler: enclosing }
     - { owner: *dq, method: poll, descriptor: "()Ljava/util/concurrent/Delayed;", object: receiver, handler: enclosing }
     - { owner: *dq, method: poll, descriptor: "(JLjava/util/concurrent/TimeUnit;)Ljava/util/concurrent/Delayed;", object: receiver, handler: enclosing }
+    - { owner: *bq, method: drainTo, descriptor: "(Ljava/util/Collection;)I", object: receiver, handler: enclosing }
+    - { owner: *bq, method: drainTo, descriptor: "(Ljava/util/Collection;I)I", object: receiver, handler: enclosing }
+    - { owner: *bq, method: remove, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *bd, method: drainTo, descriptor: "(Ljava/util/Collection;)I", object: receiver, handler: enclosing }
+    - { owner: *bd, method: drainTo, descriptor: "(Ljava/util/Collection;I)I", object: receiver, handler: enclosing }
+    - { owner: *bd, method: remove, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *tq, method: drainTo, descriptor: "(Ljava/util/Collection;)I", object: receiver, handler: enclosing }
+    - { owner: *tq, method: drainTo, descriptor: "(Ljava/util/Collection;I)I", object: receiver, handler: enclosing }
+    - { owner: *tq, method: remove, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *lbq, method: drainTo, descriptor: "(Ljava/util/Collection;)I", object: receiver, handler: enclosing }
+    - { owner: *lbq, method: drainTo, descriptor: "(Ljava/util/Collection;I)I", object: receiver, handler: enclosing }
+    - { owner: *lbq, method: remove, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *abq, method: drainTo, descriptor: "(Ljava/util/Collection;)I", object: receiver, handler: enclosing }
+    - { owner: *abq, method: drainTo, descriptor: "(Ljava/util/Collection;I)I", object: receiver, handler: enclosing }
+    - { owner: *abq, method: remove, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *pbq, method: drainTo, descriptor: "(Ljava/util/Collection;)I", object: receiver, handler: enclosing }
+    - { owner: *pbq, method: drainTo, descriptor: "(Ljava/util/Collection;I)I", object: receiver, handler: enclosing }
+    - { owner: *pbq, method: remove, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *lbd, method: drainTo, descriptor: "(Ljava/util/Collection;)I", object: receiver, handler: enclosing }
+    - { owner: *lbd, method: drainTo, descriptor: "(Ljava/util/Collection;I)I", object: receiver, handler: enclosing }
+    - { owner: *lbd, method: remove, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *ltq, method: drainTo, descriptor: "(Ljava/util/Collection;)I", object: receiver, handler: enclosing }
+    - { owner: *ltq, method: drainTo, descriptor: "(Ljava/util/Collection;I)I", object: receiver, handler: enclosing }
+    - { owner: *ltq, method: remove, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *sq, method: drainTo, descriptor: "(Ljava/util/Collection;)I", object: receiver, handler: enclosing }
+    - { owner: *sq, method: drainTo, descriptor: "(Ljava/util/Collection;I)I", object: receiver, handler: enclosing }
+    - { owner: *sq, method: remove, descriptor: "()Ljava/lang/Object;", object: receiver, handler: enclosing }
+    - { owner: *dq, method: drainTo, descriptor: "(Ljava/util/Collection;)I", object: receiver, handler: enclosing }
+    - { owner: *dq, method: drainTo, descriptor: "(Ljava/util/Collection;I)I", object: receiver, handler: enclosing }
+    - { owner: *dq, method: remove, descriptor: "()Ljava/util/concurrent/Delayed;", object: receiver, handler: enclosing }

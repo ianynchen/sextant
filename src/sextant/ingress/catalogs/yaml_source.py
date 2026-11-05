@@ -1695,30 +1695,43 @@ def _dispatch_sends(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
     return tuple(entries)
 
 
-# A receive site's two closed words (spec 2026-11-05 §2): the object it takes a value from,
-# and where the code handling that value is.
-_RECEIVE_OBJECTS = ("receiver",)
+# A receive site's two words (spec 2026-11-05 §2): the object it takes a value from — the
+# one it is called on (`receiver`) or an argument (`argN`, a static helper handed the
+# channel) — and where the code handling that value is.
+_RECEIVER = "receiver"
 _RECEIVE_HANDLERS = ("enclosing", "lambda_arg")
 
 
 def _dispatch_receives(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
     """`matches.dispatch_receives` (spec 2026-11-05 §2), checked and converted: each entry
     `{owner, method, descriptor, object, handler}`, the owner as a type symbol. `object` says
-    which object the call takes its value from (`receiver`, the one it is called on);
-    `handler` where the code handling it is (`enclosing`, the method making the call, or
-    `lambda_arg`, the function it is given). Empty for a catalog declaring none."""
+    which object the call takes its value from (`receiver`, the one it is called on, or
+    `argN`, an argument the descriptor has: a static helper handed the channel); `handler`
+    where the code handling it is (`enclosing`, the method making the call, or `lambda_arg`,
+    the function it is given). Every key is checked, because a position that reads the wrong
+    argument keys the receive by the wrong object. Empty for a catalog declaring none."""
     where, declared = _declared_calls(matches, "dispatch_receives", path)
     entries: list[dict[str, Any]] = []
     for entry in declared:
         unknown = sorted(set(entry) - {"owner", "method", "descriptor", "object", "handler"})
         if unknown:
             raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
-        for key, words in (("object", _RECEIVE_OBJECTS), ("handler", _RECEIVE_HANDLERS)):
-            if entry.get(key) not in words:
-                raise CatalogError(
-                    f"{where}: `{entry['method']}` declares `{key}: {entry.get(key)}`; "
-                    f"`{key}` is one of {list(words)}"
-                )
+        taken_from = entry.get("object")
+        arity = len(descriptor_slots(str(entry["descriptor"]))[0])
+        if taken_from != _RECEIVER and not (
+            isinstance(taken_from, str)
+            and re.fullmatch(r"arg\d+", taken_from)
+            and int(taken_from[3:]) < arity
+        ):
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares `object: {taken_from}`; `object` is "
+                f"`{_RECEIVER}` or `argN`, an argument of `{entry['descriptor']}`"
+            )
+        if entry.get("handler") not in _RECEIVE_HANDLERS:
+            raise CatalogError(
+                f"{where}: `{entry['method']}` declares `handler: {entry.get('handler')}`; "
+                f"`handler` is one of {list(_RECEIVE_HANDLERS)}"
+            )
         entries.append(
             {
                 "owner": type_descriptor(str(entry["owner"])),

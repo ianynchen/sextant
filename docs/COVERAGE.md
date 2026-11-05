@@ -795,7 +795,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**114 of 128 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**115 of 129 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -829,6 +829,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `grpc-spring` | `io.quarkus:quarkus-grpc-api` | 3.17.5 |
 |  | `net.devh:grpc-server-spring-boot-starter` | 3.1.0.RELEASE |
 |  | `org.springframework.grpc:spring-grpc-core` | 0.10.0 |
+| `guava-queues` | `com.google.guava:guava` | 32.0.0.jre |
 | `jakarta-jaxrs` | `jakarta.ws.rs:jakarta.ws.rs-api` | 3.1.0, 4.0.0 |
 | `jakarta-jms` | `jakarta.jms:jakarta.jms-api` | 3.1.0 |
 | `jakarta-jws` | `com.sun.xml.ws:jaxws-rt` | 4.0.2 |

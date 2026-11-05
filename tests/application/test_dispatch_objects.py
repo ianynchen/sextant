@@ -160,6 +160,57 @@ def test_a_queue_made_by_a_library_factory_links(tables):
     assert _hops_from(tables, "Cleaner#schedule") == {("in_process", "Cleaner#nextToClean")}
 
 
+@pytest.mark.pins("dispatch-objects.a-receive-reads-the-object-at-ITS-position")
+def test_a_queue_drained_in_batches_links(tables):
+    """`apollo-portal`'s audit shape: `Auditor.record` offers; Guava's `Queues.drain(audits,
+    …)` and `drainUninterruptibly(audits, …)` are handed the queue as argument 0 (`object:
+    arg0`), and the queue's own `drainTo(c)` and `drainTo(c, n)` take from it. The offer reaches
+    all four (CP-59 finding 16)."""
+    assert _hops_from(tables, "Auditor#record") == {
+        ("in_process", "Auditor#flushBatch"),
+        ("in_process", "Auditor#flushQuietly"),
+        ("in_process", "Auditor#flushSome"),
+        ("in_process", "Auditor#flushRest"),
+    }
+
+
+@pytest.mark.declines("guava-queues")
+@pytest.mark.pins("calls.a-declared-call-is-matched-on-its-OWNER")
+def test_a_module_helper_named_drain_is_not_guavas(tables):
+    """Near miss for `guava-queues`: `Sweeper.drain(queue, into, max, timeout, unit)` has
+    Guava's name and parameter types but the module's own owner. The call to it is no receive
+    (`Sweeper#sweep` registers nothing); the `drainTo` inside it is, so the put reaches the
+    helper itself."""
+    assert not any(_short(row["handler"]) == "Sweeper#sweep" for row in tables["registrations"])
+    assert _hops_from(tables, "Sweeper#add") == {("in_process", "Sweeper#drain")}
+
+
+def test_remove_takes_the_head_and_remove_of_a_value_does_not(tables):
+    """`dolphinscheduler-eventbus`'s shape: `inbox.remove()` takes the head, a receive;
+    `inbox.remove(job)` discards a value it is handed, which nothing then handles."""
+    assert _hops_from(tables, "Mailbox#deliver") == {("in_process", "Mailbox#next")}
+    assert not any(_short(row["handler"]) == "Mailbox#discard" for row in tables["registrations"])
+
+
+@pytest.mark.pins("dispatch-objects.an-object-NOBODY-takes-from-is-a-STOP-naming-it")
+def test_a_queue_nothing_takes_from_is_a_stop_naming_it(tables):
+    """`Outbox.send` puts on a queue the module only ever `removeIf`s from (ruled not a receive:
+    it discards values, and nothing handles them). The object is read, so the stop names it —
+    one row whose path is the call that made the queue and whose handler is NULL."""
+    assert _hops_from(tables, "Outbox#send") == {("in_process", None)}
+    [made] = _paths_from(tables, "Outbox#send")
+    assert _short(str(made).rsplit("#", 1)[0]) == "Outbox#<init>"
+
+
+@pytest.mark.pins("dispatch-objects.a-NULL-CHECK-hands-back-the-SAME-object")
+def test_a_queue_kept_through_a_null_check_is_one_object(tables):
+    """`Guarded(BlockingQueue q) { this.queue = Objects.requireNonNull(q, "queue"); }`, given
+    `Dispatcher`'s queue: the null check (a declared `not_hand_offs` call returning its
+    argument's type) is not where the queue was made, so `Dispatcher.send`'s put reaches
+    `Guarded.next`'s take."""
+    assert _hops_from(tables, "Dispatcher#send") == {("in_process", "Guarded#next")}
+
+
 @pytest.mark.declines("jdk-blocking-queue")
 @pytest.mark.pins("calls.a-declared-call-is-matched-on-its-OWNER")
 def test_a_plain_queue_is_no_dispatch(tables):

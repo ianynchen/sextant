@@ -6357,15 +6357,19 @@ matches:
   same-name, same-arity method not synthetic); where that is not exactly one method, or the
   method has no parameter at `value_arg`, the row is kept with no key (it matches nothing).
   General: Micronaut's `ApplicationEventListener<E>` has the same shape.
-- **`dispatch_receives`** entries are `{owner, method, descriptor, object: receiver,
-  handler: enclosing | lambda_arg}`, checked at load (`yaml_source._dispatch_receives`): a
+- **`dispatch_receives`** entries are `{owner, method, descriptor, object: receiver | argN,
+  handler: enclosing | lambda_arg}`, checked at load (`yaml_source._dispatch_receives`; `argN`
+  must be an argument of the descriptor): a
   call that takes a value from an object key's channel (`take`, `receive`), the object it
   takes from, and where the code handling the value is — the method making the call, or the
   function it is given. Read by `dispatch_registrations._receive_rows`: each call site is a
-  registration (a group of its own at position 0) keyed by the object its receiver reaches
-  (`ObjectKeys`, the value walk's object reader: through locals, parameters across callers,
-  helper returns and fields, to a construction or a call whose body is not here), its handler
-  the method making the call. `handler: lambda_arg` is refused where it is read: a function
+  registration (a group of its own at position 0) keyed by the object at the position `object`
+  names — the receiver, or argument N of a static helper handed the channel (Guava's
+  `Queues.drain(queue, …)`, `guava-queues.yml`) — followed by `ObjectKeys`, the value walk's
+  object reader (through locals, parameters across callers, helper returns and fields, to a
+  construction or a call whose body is not here; a declared null check, `not_hand_offs`,
+  returning its argument's type is passed through), its handler the method making the call.
+  The key has three stated bounds, each over-linking (two queues read as one, never one missed): a field read is answered by every write of that field, so two instances of one class each holding a queue in it are one object; two objects one module helper makes (`newQueue()` called twice) are one; and two objects one library call site hands back are one. A null check no catalog declares (Guava's `Preconditions.checkNotNull`) splits one queue into two keys instead, a missing hop. `handler: lambda_arg` is refused where it is read: a function
   argument's body is not yet read as a handler, and the enclosing method is not one.
 - **`dispatch: {key: object}`** pairs with `dispatch_sends` and `dispatch_receives` only: the
   loader refuses `dispatch_receives` under `key: type` and a class-keyed block
@@ -6374,7 +6378,9 @@ matches:
   to every receive registration of its mechanism on the same object (D01 `hops`), the value's
   class never asked; `match: one` (each value to one consumer, decided at run time) and `all`
   give the same rows, every receive on the object. First user: `jdk-blocking-queue.yml` (CP-59
-  findings 12-15): `put`, both `offer`s and `add` as sends, `take` and both `poll`s as receives,
+  findings 12-16): `put`, both `offer`s and `add` as sends, `take`, both `poll`s, both
+  `drainTo`s and the no-argument `remove()` as receives (`remove(Object)` and `removeIf`
+  discard values nothing handles, so neither is one),
   on `BlockingQueue`, `BlockingDeque`, `TransferQueue` and the seven `java.util.concurrent`
   classes, since javac writes the receiver's static type as every call's owner.
 

@@ -7225,6 +7225,46 @@ GUARDS: dict[str, Guard] = {
             for family, prefix in (("pekko", "org/apache/pekko"), ("akka", "akka"))
         ),
     ),
+    "dispatch-objects.a-receive-reads-the-object-at-ITS-position": Guard(
+        what="a receive's key is read at the position its `object` names (receiver or `argN`)",
+        why="CP-59 finding 16: Guava's static `Queues.drain(queue, …)` is handed the queue at "
+        "argument 0. Walked on its (absent) receiver it is a keyless row, a silent miss on "
+        "apollo-portal's three audit drains",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        made: list[str | None] = [key for key in objects.of(site, slot) if key "
+                "is not None]\n",
+                replace="        made: list[str | None] = [key for key in objects.of(site) if key "
+                "is not None]  # guard disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.an-object-NOBODY-takes-from-is-a-STOP-naming-it": Guard(
+        what="a send on an object nothing takes from is one row naming it, with no handler",
+        why="spec 2026-11-05 §1: the trace stops at the put and says which queue; without the "
+        "row it reads the put as a plain library call",
+        edits=(
+            Edit(
+                path=_DISPATCH_HOPS,
+                find="                for taker in takers or [None]\n",
+                replace="                for taker in takers  # guard disabled\n",
+            ),
+        ),
+    ),
+    "dispatch-objects.a-NULL-CHECK-hands-back-the-SAME-object": Guard(
+        what="a declared null check returning its argument's type is passed through",
+        why="`this.q = Objects.requireNonNull(q)` is the usual constructor: ending at the check "
+        "splits one queue into two keys, and the put never reaches the take",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find="        return tuple(index for index, slot in enumerate(slots) if slot == "
+                "returned)\n",
+                replace="        return ()  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "dispatch-objects.a-RECEIVE-site-registers-keyed-by-its-OBJECT": Guard(
         what="each declared receive site is a registration keyed by its object",
         why="spec 2026-11-05 §1, §3: a value put on a queue is handled where it is taken off "
@@ -7306,10 +7346,10 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_DISPATCH_REGISTRATIONS,
-                find="                        self._index, site, RECEIVER, self._made, "
-                "which_object=True\n",
-                replace="                        self._index, site, RECEIVER, self._made, "
-                "which_object=False\n",
+                find="        for producer, _ in producer_paths(self._index, site, slot, self._made, "
+                "which_object=True):\n",
+                replace="        for producer, _ in producer_paths(self._index, site, slot, self._made, "
+                "which_object=False):\n",
             ),
         ),
     ),

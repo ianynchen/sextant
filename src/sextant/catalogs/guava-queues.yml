@@ -1,0 +1,42 @@
+id: guava-queues
+displayName: Guava's queue drain helpers (Queues.drain, drainUninterruptibly)
+style: fluent
+# No wire, and no endpoint row: the receive sides of the JDK blocking queues' own mechanism
+# (`jdk-blocking-queue.yml`, spec 2026-11-05 §4 item 7), read by the dispatch passes. `fluent`
+# names no engine here, as there.
+protocol: in_process
+direction: inbound
+# The same mechanism as the queue's own sends: a value put on a queue reaches a `drain` of that
+# queue object. Its own file because Guava is its own artifact, measured on its own jar.
+dispatch: { key: object, match: one, mechanism: jdk-blocking-queue }
+
+detect:
+  coordinates: ["com.google.guava:guava"]
+
+# CP-59 finding 16, `javap` on the jar `fixtures/orders-queues` resolves (the version
+# `examples/apollo` pins), its version from the jar's own manifest (`Bundle-Version: 32.0.0.jre`,
+# the only version key it states).
+measured:
+  - { artifact: com.google.guava:guava, versions: ["32.0.0.jre"],
+      identity: reported, by: scripts/probes/cp59_dispatch.md }
+
+requires: [call_site]
+
+matches:
+  # Each is a static call handed the queue as argument 0 (`object: arg0`), which it takes up to
+  # `numElements` values from into the collection at argument 1 (`drainTo`, then `poll` with a
+  # deadline: finding 16), so the code handling them is the method making the call. The
+  # `Duration` overloads hand straight on to the `long, TimeUnit` ones.
+  dispatch_receives:
+    - { owner: &queues com.google.common.collect.Queues, method: drain,
+        descriptor: "(Ljava/util/concurrent/BlockingQueue;Ljava/util/Collection;IJLjava/util/concurrent/TimeUnit;)I",
+        object: arg0, handler: enclosing }
+    - { owner: *queues, method: drain,
+        descriptor: "(Ljava/util/concurrent/BlockingQueue;Ljava/util/Collection;ILjava/time/Duration;)I",
+        object: arg0, handler: enclosing }
+    - { owner: *queues, method: drainUninterruptibly,
+        descriptor: "(Ljava/util/concurrent/BlockingQueue;Ljava/util/Collection;IJLjava/util/concurrent/TimeUnit;)I",
+        object: arg0, handler: enclosing }
+    - { owner: *queues, method: drainUninterruptibly,
+        descriptor: "(Ljava/util/concurrent/BlockingQueue;Ljava/util/Collection;ILjava/time/Duration;)I",
+        object: arg0, handler: enclosing }

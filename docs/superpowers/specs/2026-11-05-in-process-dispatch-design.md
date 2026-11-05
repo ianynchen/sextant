@@ -123,10 +123,14 @@ No `message_*` word remains. No word names a framework.
    JDK class that declares the method). The loader refuses `dispatch_receives` under `key: type`
    and a class-keyed block under `key: object`; a receive's `handler: lambda_arg` is refused
    where read until a catalog needs it (Task 5). A trace's unread hop now reads `(key not
-   read)` for both key kinds. **Stated bounds:** a field read is answered by every write of the
-   field, so two instances of one class each holding a queue in it are one object
-   (over-linking); `drainTo`, Guava's `Queues.drain(queue, …)`, `peek`/`removeIf`, the deque
-   ends and `Queue`-typed receivers are not read (missing hops, never false ones).
+   read)` for both key kinds. **Fix round 1:** `drainTo` (both) and `remove()` are receives on
+   every owner; Guava's `Queues.drain`/`drainUninterruptibly` are receives of the queue at
+   argument 0, a new `object: argN` form of the receive word (`guava-queues.yml`, the same
+   mechanism); `remove(Object)` and `removeIf` discard values nothing handles and are not
+   receives (ruled 2026-11-05). A declared null check returning its argument's type
+   (`Objects.requireNonNull`, a `not_hand_offs` call) is passed through by the object walk.
+   **Stated bounds:** the key has three stated bounds, each over-linking (two queues read as one, never one missed): a field read is answered by every write of that field, so two instances of one class each holding a queue in it are one object; two objects one module helper makes (`newQueue()` called twice) are one; and two objects one library call site hands back are one. A null check no catalog declares (Guava's `Preconditions.checkNotNull`) splits one queue into two keys instead, a missing hop. `peek`, the deque ends and `Queue`-typed
+   receivers are not read (missing hops, never false ones).
 
 ## 5. Later
 

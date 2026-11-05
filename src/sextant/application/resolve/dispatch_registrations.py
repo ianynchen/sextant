@@ -96,7 +96,12 @@ from sextant.application.resolve.shapes.arguments import (
 from sextant.application.resolve.shapes.chains import _method_symbols, chain_ends
 from sextant.application.resolve.shapes.rooting import catalog_symbols
 from sextant.application.resolve.values import RECEIVER, cached_value_index, producer_paths
-from sextant.domain.symbols import bare_descriptor, method_descriptor, parameter_types
+from sextant.domain.symbols import (
+    bare_descriptor,
+    descriptor_slots,
+    method_descriptor,
+    parameter_types,
+)
 
 # The capture each registration step carries its own call in (the catalog's `case: argN`).
 _CASE = "case"
@@ -112,6 +117,11 @@ _ANNOTATION_STYLE = "annotation_driven"
 _ENCLOSING = "enclosing"
 # The constructor name D00 §5 normalises every language's to: a construction makes an object.
 _CONSTRUCTOR = "<init>"
+# A JVM descriptor slot naming a class or interface type (JVMS 4.3.2), the only kind a null
+# check hands back an object of.
+_REFERENCE = "L"
+# A receive's `object` naming the receiver; anything else is `argN`.
+_RECEIVER_OBJECT = "receiver"
 
 
 def record_dispatch_registrations(workspace: Workspace, catalogs: list[Catalog]) -> None:
@@ -416,8 +426,8 @@ def _implementation_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dic
 def _receive_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dict[str, Any]]:
     """The registrations made by taking from a channel object (`dispatch_receives`, spec
     2026-11-05 §1, §3): each call site of a declared receive is a group of its own,
-    `<caller>#<ordinal>`, at position 0, keyed by each object its receiver reaches
-    (`ObjectKeys`), its handler the method making the call. One row with `key_object` NULL
+    `<caller>#<ordinal>`, at position 0, keyed by each object the position its `object` names
+    reaches (the receiver, or `argN`; `ObjectKeys`), its handler the method making the call. One row with `key_object` NULL
     where no object was read: it matches nothing, never every send.
 
     Only `handler: enclosing` is read here: a receive handing its value to a function argument
@@ -428,6 +438,13 @@ def _receive_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dict[str, 
     match = _match_of(catalog)
     objects = ObjectKeys(workspace, catalog)
     for site, receive in declared_call_sites(workspace, catalog.dispatch_receives):
+        # The object the call takes from: its receiver, or the argument a static helper is
+        # handed the channel at (`object: argN`).
+        slot: int | str = (
+            RECEIVER
+            if receive["object"] == _RECEIVER_OBJECT
+            else int(str(receive["object"])[len("arg") :])
+        )
         if receive["handler"] != _ENCLOSING:
             raise CatalogError(
                 f"loading catalog {catalog.source}: `{receive['method']}` declares "
@@ -435,7 +452,7 @@ def _receive_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dict[str, 
                 f"method making the call (`{_ENCLOSING}`) (spec 2026-11-05 §2)"
             )
         group = f"{site['caller']}#{site['ordinal']}"
-        made: list[str | None] = [key for key in objects.of(site) if key is not None]
+        made: list[str | None] = [key for key in objects.of(site, slot) if key is not None]
         for key in made or [None]:
             yield {
                 "group": group,
@@ -452,10 +469,11 @@ def _receive_rows(workspace: Workspace, catalog: Catalog) -> Iterator[dict[str, 
 
 class ObjectKeys:
     """Which channel object a call site acts on, as the call that made it (spec 2026-11-05 §3):
-    `<caller>#<ordinal>` of each producer the site's receiver reaches, None for each path that
-    reaches none. Two sites act on one object exactly when they reach the same producer.
+    `<caller>#<ordinal>` of each producer the object at a site's position (its receiver, or
+    an argument a static helper is handed) reaches, None for each path that reaches none. Two
+    sites act on one object exactly when they reach the same producer.
 
-    The receiver is followed by the value walk's object reader (`values.producer_paths`,
+    The object is followed by the value walk's object reader (`values.producer_paths`,
     `which_object`: a call made ON the object does not make it another), through locals,
     parameters across callers, helper returns and fields (a field read answered by each write
     of that field, in its writer's frame). Where it ends is any call that makes an object: a
@@ -465,35 +483,69 @@ class ObjectKeys:
     further). A path ending anywhere else — a parameter nothing in the module calls, the
     object a container injects — is None: the object is not read.
 
-    **Stated bounds.** A field read is answered by every write of that field, so two instances
-    of one class each holding its own queue in that field are one object here (over-linking);
-    so are two objects one helper makes, and two a library call hands back at one site.
+    **A null check is not where an object is made.** A call the catalogs declare takes its
+    value without handing it off (`not_hand_offs`, `value-models/compiler-null-checks.yml`:
+    `Objects.requireNonNull`, a compiler's own null checks) and that returns a reference hands
+    back one of its arguments of that same type, so `this.q = Objects.requireNonNull(q)` is
+    followed on into those arguments rather than ending at the check (a structural rule over
+    the descriptor, never a model of one method). A null check no catalog declares (Guava's
+    `Preconditions.checkNotNull`) still ends the walk: one queue becomes two keys, a missing
+    hop.
 
-    Cost (GUIDELINES §8.7): the resolve's one shared value index, one walk per site asked,
-    each answer kept."""
+    **Stated bounds** (D01 `hops`, D02 §2m, spec 2026-11-05 §4 item 7), each over-linking:
+    a field read is answered by every write of that field, so two instances of one class each
+    holding its own queue in that field are one object; two objects one module helper makes
+    (`newQueue()` called twice) are one; and two objects one library call site hands back are
+    one.
+
+    Cost (GUIDELINES §8.7): the resolve's one shared value index, one walk per site and
+    position asked (and one more per null check passed through), each answer kept."""
 
     def __init__(self, workspace: Workspace, catalog: Catalog) -> None:
         self._index = cached_value_index(workspace, catalog.not_hand_offs, catalog.hand_off_effects)
         self._made = self._index.unscanned | frozenset(
             (built, _CONSTRUCTOR) for built in self._index.constructed
         )
-        self._keys: dict[tuple[str, int], tuple[str | None, ...]] = {}
+        self._keys: dict[tuple[str, int, int | str], tuple[str | None, ...]] = {}
 
-    def of(self, site: Mapping[str, Any]) -> tuple[str | None, ...]:
-        """Each object the receiver of `site` can be, once each, in the walk's order."""
-        at = (str(site["caller"]), int(site["ordinal"]))
+    def of(self, site: Mapping[str, Any], slot: int | str = RECEIVER) -> tuple[str | None, ...]:
+        """Each object at `slot` of `site` (its receiver by default) can be, once each, in the
+        walk's order."""
+        at = (str(site["caller"]), int(site["ordinal"]), slot)
         if at not in self._keys:
-            self._keys[at] = tuple(
-                dict.fromkeys(
-                    None
-                    if producer.caller is None or producer.ordinal is None
-                    else f"{producer.caller}#{producer.ordinal}"
-                    for producer, _ in producer_paths(
-                        self._index, site, RECEIVER, self._made, which_object=True
-                    )
-                )
-            ) or (None,)
+            self._keys[at] = tuple(dict.fromkeys(self._ends(site, slot, frozenset()))) or (None,)
         return self._keys[at]
+
+    def _ends(
+        self, site: Mapping[str, Any], slot: int | str, passed: frozenset[tuple[str, int]]
+    ) -> Iterator[str | None]:
+        for producer, _ in producer_paths(self._index, site, slot, self._made, which_object=True):
+            if producer.caller is None or producer.ordinal is None:
+                yield None
+                continue
+            at = (producer.caller, producer.ordinal)
+            made = self._index.sites.get(at)
+            through = () if made is None or at in passed else self._checked_arguments(made)
+            if made is None or not through:
+                yield f"{producer.caller}#{producer.ordinal}"
+                continue
+            for argument in through:
+                yield from self._ends(made, argument, passed | {at})
+
+    def _checked_arguments(self, site: Mapping[str, Any]) -> tuple[int, ...]:
+        """The arguments a declared null check hands back (class docstring): where `site`
+        calls a `not_hand_offs` owner or method and returns a reference, each argument whose
+        declared type is the type it returns. Empty for any other call."""
+        owner, descriptor = str(site.get("owner")), site.get("descriptor")
+        declared = self._index.not_hand_offs
+        if descriptor is None or (
+            owner not in declared and owner + str(site["name"]) not in declared
+        ):
+            return ()
+        slots, returned = descriptor_slots(str(descriptor))
+        if not returned.startswith(_REFERENCE):
+            return ()
+        return tuple(index for index, slot in enumerate(slots) if slot == returned)
 
 
 class _Declarations:

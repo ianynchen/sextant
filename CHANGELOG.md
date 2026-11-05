@@ -92,7 +92,12 @@ here would restate those documents rather than add anything.
   read is answered by every write of that field, so two instances of one class sharing a field
   are one object (a stated bound). The loader refuses a receive block under `key: type` and a
   class-keyed block under `key: object`. A trace's unread hop now reads `(key not read)`, for a
-  class and an object alike.
+  class and an object alike. `drainTo` and `remove()` are receives too, and Guava's
+  `Queues.drain`/`drainUninterruptibly` (`guava-queues.yml`) take from the queue they are handed,
+  read through a new `object: argN` receive form; `remove(Object)` and `removeIf` are not
+  receives. A queue kept through a declared null check (`Objects.requireNonNull`) stays one
+  object. The key's bounds (each over-linking): a field written by several instances, a helper
+  making several queues, a library call site handing back several.
 - **Akka and Pekko actors: a trace crosses actors** (spec 2026-11-04, SEXTANT-178, the user's
   ruling B "I want it complete"; probe CP-57, Akka 2.6.21 and Pekko 1.1.3). Three parts, each
   pinned on `fixtures/orders-actors-pekko` and `-akka`, then the measurement:

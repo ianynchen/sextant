@@ -875,6 +875,19 @@ def test_a_builder_never_built_registers_nothing(tmp_path: Path):
     assert _rows(tmp_path, facts) == []
 
 
+def test_a_receive_handed_its_channel_as_an_argument_is_loaded(tmp_path: Path):
+    """`object: argN`: a static helper taking from the channel it is handed at argument N."""
+    (tmp_path / "c.yml").write_text(
+        "id: c\nstyle: fluent\ndispatch: {key: object, match: one, mechanism: m}\nmatches:\n"
+        "  dispatch_receives:\n"
+        "    - { owner: a.Queues, method: drain, descriptor: '(La/Queue;Ljava/util/Collection;)I', "
+        "object: arg0, handler: enclosing }\n",
+        encoding="utf-8",
+    )
+    [catalog] = YamlCatalogSource(tmp_path).load()
+    assert catalog.dispatch_receives[0]["object"] == "arg0"
+
+
 @pytest.mark.parametrize(
     "entry, refused",
     [
@@ -1011,6 +1024,7 @@ def test_a_receive_is_loaded_with_its_object_and_handler(tmp_path: Path):
     "entry, refused",
     [
         ("object: argument, handler: enclosing", "`object: argument`"),
+        ("object: arg0, handler: enclosing", "`object: arg0`"),
         ("object: receiver, handler: caller", "`handler: caller`"),
         ("object: receiver", "`handler`"),
         ("object: receiver, handler: enclosing, value_arg: 0", "unknown keys"),

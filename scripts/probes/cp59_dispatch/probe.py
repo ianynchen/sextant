@@ -366,8 +366,13 @@ QUEUE_CALLS = (
     "q.take()",
     "q.poll()",
     "q.poll(1, TimeUnit.SECONDS)",
+    "q.drainTo(c)",
+    "q.drainTo(c, 1)",
+    "q.remove()",
 )
-QUEUE_METHODS = ("put", "offer", "add", "take", "poll")
+QUEUE_METHODS = ("put", "offer", "add", "take", "poll", "drainTo", "remove")
+# Guava's static helpers taking from a queue handed to them as argument 0.
+GUAVA_DRAINS = ("drain", "drainUninterruptibly")
 
 
 def java_version() -> str:
@@ -395,7 +400,8 @@ def owners_class() -> str:
     for index, (owner, element) in enumerate(QUEUE_OWNERS):
         calls = " ".join(f"{call};" for call in QUEUE_CALLS)
         bodies.append(
-            f"  void m{index}({owner}<{element}> q, {element} v) throws Exception {{ {calls} }}"
+            f"  void m{index}({owner}<{element}> q, {element} v, java.util.Collection<Object> c)"
+            f" throws Exception {{ {calls} }}"
         )
     source = out_dir / "QueueOwners.java"
     source.write_text(
@@ -413,7 +419,7 @@ def owners_class() -> str:
 
 
 def queues() -> None:
-    """Tables 12-15: Java blocking queues (`jdk-blocking-queue`)."""
+    """Tables 12-16: Java blocking queues (`jdk-blocking-queue`, `guava-queues`)."""
     cp = QUEUES_CLASSPATH
     print("### Identity, blocking queues (from the running JDK)\n")
     print(f"- `java.version`: `{java_version()}`")
@@ -423,8 +429,9 @@ def queues() -> None:
     for name in QUEUE_METHODS:
         for row in methods("java.util.concurrent.BlockingQueue", name, cp=cp):
             print(f"- `BlockingQueue.{name}` {row}")
-    for row in methods("java.util.Queue", "poll", cp=cp):
-        print(f"- `Queue.poll` {row}")
+    for name in ("poll", "remove"):
+        for row in methods("java.util.Queue", name, cp=cp):
+            print(f"- `Queue.{name}` {row}")
     print()
     print("### 13. The JDK's blocking-queue types\n")
     for owner, _ in QUEUE_OWNERS[1:]:
@@ -437,10 +444,71 @@ def queues() -> None:
             print(f"- {row}")
     print()
     print("### 15. What javac writes at the fixture's queue sites\n")
-    for cls in ("Pipeline", "Worker", "Alerts", "Cleaner", "Batch", "Relay", "Scratch"):
-        for name in (*QUEUE_METHODS, "newLinkedBlockingQueue"):
+    for cls in (
+        "Pipeline",
+        "Worker",
+        "Alerts",
+        "Cleaner",
+        "Batch",
+        "Relay",
+        "Scratch",
+        "Auditor",
+        "Mailbox",
+        "Outbox",
+        "Guarded",
+        "Dispatcher",
+    ):
+        for name in (
+            *QUEUE_METHODS,
+            *GUAVA_DRAINS,
+            "newLinkedBlockingQueue",
+            "removeIf",
+            "requireNonNull",
+        ):
             for row in invokes(f"com.acme.queues.{cls}", name, cp=cp):
                 print(f"- `{cls}`: {row}")
+    print()
+    guava()
+
+
+def guava() -> None:
+    """Table 16: Guava's `Queues.drain` helpers (`guava-queues`), read from the jar the queue
+    fixture resolves; its version from the jar's own manifest (`Bundle-Version`, the only
+    version key it states)."""
+    cp = QUEUES_CLASSPATH
+    jars = [c for c in cp.split(":") if re.fullmatch(r"guava-[\w.-]+\.jar", Path(c).name)]
+    if len(jars) != 1:
+        sys.exit(f"expected one guava-*.jar on the queue fixture's class path, found {jars}")
+    print("### Identity, Guava (from the jar's own MANIFEST.MF)\n")
+    print(f"- `com.google.guava:guava`: `{manifest_version(jars[0], ('Bundle-Version',))}`")
+    print()
+    print("### 16. Guava's drain helpers, and what they call on the queue\n")
+    for name in GUAVA_DRAINS:
+        for row in methods("com.google.common.collect.Queues", name, cp=cp):
+            print(f"- `Queues.{name}` {row}")
+    for declared in ("int drain(", "int drainUninterruptibly("):
+        for item in dict.fromkeys(
+            re.sub(r"^\d+: ", "", line)
+            for line in lines_matching(
+                "com.google.common.collect.Queues",
+                declared
+                + "java.util.concurrent.BlockingQueue<E>, java.util.Collection<? super E>, int, long",
+                r"BlockingQueue\.",
+                cp,
+            )
+        ):
+            print(f"- `{declared.split()[1]}…, long, TimeUnit)` calls `{item}`")
+        for item in dict.fromkeys(
+            re.sub(r"^\d+: ", "", line)
+            for line in lines_matching(
+                "com.google.common.collect.Queues",
+                declared
+                + "java.util.concurrent.BlockingQueue<E>, java.util.Collection<? super E>, int, java.time.Duration",
+                r"Method drain|BlockingQueue\.",
+                cp,
+            )
+        ):
+            print(f"- `{declared.split()[1]}…, Duration)` calls `{item}`")
 
 
 main()

@@ -199,8 +199,9 @@ site, or no row.
   queue's several consumers each a row, one of them taking each value at run time). An object
   nothing takes from is one row with that `path` and `handler` NULL; a path on which the object
   was not read (a parameter nothing in the module calls, an object a container injects) is one
-  row with `path` and `handler` NULL. Stated bound: a field read is answered by every write of
-  that field, so two instances of one class each holding a queue in that field are one object.
+  row with `path` and `handler` NULL. A declared null check returning its argument's type
+  (`Objects.requireNonNull`, a `not_hand_offs` call) is passed through, not a producer. The
+  key has three stated bounds, each over-linking (two queues read as one, never one missed): a field read is answered by every write of that field, so two instances of one class each holding a queue in it are one object; two objects one module helper makes (`newQueue()` called twice) are one; and two objects one library call site hands back are one. A null check no catalog declares (Guava's `Preconditions.checkNotNull`) splits one queue into two keys instead, a missing hop.
 
 **`dispatch_registrations`** (named `message_handlers` until spec
 `2026-11-05-in-process-dispatch-design.md` §3; schema 15 unreleased, so no version step)
@@ -227,7 +228,7 @@ is tried, under the declaring catalog's match rule. One row per registration.
   constant's own argument symbol (`<owner>#<field>.`, an `enum` or `field` argument), NULL
   for a class registration. **`key_object`** is the channel object a receive site
   (`dispatch_receives`, D02 §2m) takes from, as the call that made it, `<caller>#<ordinal>`: one
-  row per object its receiver can be, each a group of its own (`<caller>#<ordinal>` of the
+  row per object its receiver (or, for `object: argN`, that argument) can be, each a group of its own (`<caller>#<ordinal>` of the
   receive call) at position 0, its `handler` the method making the call; NULL for a type key,
   and on the one row of a receive whose object was not read. A registration the walk could not
   read keeps its position with every key column NULL.
