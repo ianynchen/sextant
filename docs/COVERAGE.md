@@ -4223,7 +4223,7 @@ all. These need new `protocol` values, not new columns in §2.
 | Android | Content providers | manifest `<provider android:authorities>` + subclass | artifact + `interface_implementation` | B |
 | Android | Push | `FirebaseMessagingService.onMessageReceived` | `interface_implementation` | B |
 | Android | Background work | `WorkManager` `Worker` subclasses | `interface_implementation` | B |
-| Android | **Retrofit** `@GET("users/{id}")` (outbound) | interface annotations | `annotation` | **A — highest-value Android catalog.** ✅ built 2026-11-05 (OI-274): the Android module is read from its release build, and each row has the server address of the `Retrofit` object that made its client (`made_by`); OkHttp and Ktor client rows are read from the same module. Boundaries below |
+| Android | **Retrofit** `@GET("users/{id}")` (outbound) | interface annotations | `annotation` | **A — highest-value Android catalog.** ✅ built 2026-11-05 (OI-274): the Android module is read from its release build, and each row has the server address of the `Retrofit` object that made its client, where the code that makes it is read (Hilt/Dagger `@Provides`: partial, OI-304) (`made_by`); OkHttp and Ktor client rows are read from the same module. Boundaries below |
 | iOS | Custom URL schemes | `Info.plist` `CFBundleURLTypes` | artifact | B |
 | iOS | **Universal Links** | `apple-app-site-association` — **lives on the server, outside the app repository** | artifact | C — cross-repository join |
 | iOS | App Intents / Siri — `AppIntents` framework, iOS 16+ | structs conforming to `AppIntent` with a `perform()` method; **they live in the main binary**, not an extension | `interface_implementation` | B |

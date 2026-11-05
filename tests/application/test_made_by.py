@@ -174,6 +174,35 @@ def test_a_retrofit_row_takes_the_address_of_the_builder_that_made_its_client(tm
     assert _rows(tmp_path, facts) == {("GET", "free.api.example", "/orders/{id}", "resolved")}
 
 
+_CONVERTER = "(Lretrofit2/Converter$Factory;)Lretrofit2/Retrofit$Builder;"
+_CLIENT = "(Lokhttp3/OkHttpClient;)Lretrofit2/Retrofit$Builder;"
+
+
+def test_calls_the_catalog_does_not_declare_between_base_url_and_build_keep_the_address(
+    tmp_path: Path,
+):
+    """`Retrofit.Builder().baseUrl(u).addConverterFactory(x).client(c).build()`, the common
+    shape: the builder calls between `baseUrl` and `build` return the same builder, so the
+    address is still the one `baseUrl` was given."""
+    clinit = _method(ORDERS, "<clinit>")
+    url = _url("https://free.api.example/")
+    converter = CallArgument(kind="unresolved", source=40)
+    client = CallArgument(kind="unresolved", source=41)
+    facts = [
+        *_interface(API, "orders/{id}"),
+        _declared(ORDERS, "<clinit>"),
+        _call(clinit, BUILDER, "<init>", "()V", 0, receiver=7, result=None),
+        _call(clinit, BUILDER, "baseUrl", _BASE_URL, 1, receiver=7, result=13, arguments=[url]),
+        _call(clinit, BUILDER, "addConverterFactory", _CONVERTER, 2, receiver=13, result=14,
+              arguments=[converter]),
+        _call(clinit, BUILDER, "client", _CLIENT, 3, receiver=14, result=15, arguments=[client]),
+        _call(clinit, BUILDER, "build", _BUILD, 4, receiver=15, result=16),
+        _call(clinit, RETROFIT, "create", _CREATE, 5, receiver=16, result=20,
+              arguments=[CallArgument(kind="class", symbol=API)]),
+    ]  # fmt: skip
+    assert _rows(tmp_path, facts) == {("GET", "free.api.example", "/orders/{id}", "resolved")}
+
+
 def test_a_path_with_a_leading_slash_replaces_the_base_path(tmp_path: Path):
     """`baseUrl.resolve(relativeUrl)`: `/orders` is from the root, `orders` from the base's
     own path."""

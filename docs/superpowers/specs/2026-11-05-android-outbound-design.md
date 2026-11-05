@@ -236,6 +236,9 @@ design.
 - **The render.** A Gradle module's coverage sentence now says "resolved by Gradle", and the
   declared-set gap is stated only for a declared set.
 - **No catalog added** (as §3 said); one catalog word, `made_by`, as approved.
+- **Where M5 states the skipped parts.** M5's "states every skipped part at the top" is met by the
+  per-module "skipped <dir> (<id>): <reason>" lines and the `skip_reason` of each `modules.json`
+  row (controller ruling).
 
 **Measured on real builds** (JDK 21, SDK at `/opt/homebrew/share/android-commandlinetools`).
 
