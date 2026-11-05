@@ -244,6 +244,27 @@ def test_a_service_not_served_here_gets_no_hop(tmp_path: Path) -> None:
     assert _hops(workspace) == []
 
 
+@pytest.mark.pins("grpc.an-ACTOR-key-spelled-like-a-service-serves-no-rpc")
+def test_an_actor_key_spelled_like_a_served_service_gives_no_hop(tmp_path: Path) -> None:
+    """An inbound `actor` row whose key is spelled `helloworld.Greeter`, with a handler, and no
+    `grpc` row: the module serves an actor key, not the gRPC service, so the stub's call is
+    outbound and gets no hop. A hop here would be a gRPC call claimed served with no handler."""
+    workspace = _workspace(
+        tmp_path,
+        facts=_GREETER_FACTS,
+        edges=_blocking_edges(),
+        hierarchy=_STUB_HIERARCHY,
+        handled=[],
+    )
+    workspace._connection.execute(
+        "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler) "
+        "VALUES (1, 'actor', 'inbound', NULL, ?, ?)",
+        [SERVICE, _MODULE + HANDLER],
+    )
+    record_rpc_hops(workspace, [_catalog()])
+    assert _hops(workspace) == []
+
+
 @pytest.mark.pins("grpc.a-stub-of-a-service-NOT-served-gets-no-hop")
 def test_a_stub_of_a_service_other_than_the_one_served_gets_no_hop(tmp_path: Path) -> None:
     """The module serves `helloworld.Hello`, with a handler, and calls `Greeter` through its

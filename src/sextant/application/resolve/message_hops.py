@@ -341,18 +341,28 @@ class _Reading:
         }
         self._sites = workspace.once(call_site_index).by_caller
         self._field_types: dict[str, tuple[str | None, bool]] | None = None
+        # `key_handlers`' per-run inputs (GUIDELINES §8.7): each value case's constant's class,
+        # read once, and each message class's answer, so a key class many inbound rows share
+        # walks the module's types once rather than once per row.
+        self._constants: dict[str, str | None] | None = None
+        self._key_handlers: dict[str | None, list[str | None]] = {}
 
     def key_handlers(self, message_class: str | None) -> list[str | None]:
         """The handlers a message of `message_class`, any subtype of it, reaches
         (`message_handlers.served_cases`); a case whose handler was not read gives None, as
         for a hop. Nothing for a class not read."""
-        constants = {
-            str(case["message_value"]): self._constant_class(str(case["message_value"]))
-            for case in self._cases
-            if case["message_value"] is not None
-        }
-        reached = served_cases(self._cases, message_class, self._supertypes, constants)
-        return list(dict.fromkeys(case["handler"] for case in reached))
+        if message_class not in self._key_handlers:
+            if self._constants is None:
+                self._constants = {
+                    str(case["message_value"]): self._constant_class(str(case["message_value"]))
+                    for case in self._cases
+                    if case["message_value"] is not None
+                }
+            reached = served_cases(self._cases, message_class, self._supertypes, self._constants)
+            self._key_handlers[message_class] = list(
+                dict.fromkeys(case["handler"] for case in reached)
+            )
+        return self._key_handlers[message_class]
 
     def _constant_class(self, symbol: str) -> str | None:
         """A value case's constant's class: the static field's declared type (an enum
@@ -454,15 +464,16 @@ class _Reading:
         self, caller: str, ordinal: int | None, message: _Message, protocol: str
     ) -> list[dict[str, Any]]:
         """The rows one message gives at one call site: one per handler it reaches, one with
-        no handler where it reaches none, one with no path where its class was not read.
-        Nothing where the message was made at no call site the trace could step through."""
+        no handler where it reaches none, one with no path and no handler where its class was
+        not read. Nothing where the message was made at no call site the trace could step
+        through. Every row's `evidence` is `compiler`, D00 §4's closed set: the send site is a
+        compiler fact, and a class not read is said by the NULL `path`, not by the evidence."""
         if ordinal is None:
             return []
         message_type, message_value, _, unread = message
         row = {"caller": caller, "ordinal": ordinal, "protocol": protocol}
         if unread is not None:
-            evidence = f"message class not read: {unread}"
-            return [row | {"path": None, "handler": None, "evidence": evidence}]
+            return [row | {"path": None, "handler": None, "evidence": "compiler"}]
         path = message_value or message_type
         reached = reachable_handlers(self._cases, message_type, message_value, self._supertypes)
         handlers = sorted({case["handler"] for case in reached}, key=lambda h: (h is None, h))

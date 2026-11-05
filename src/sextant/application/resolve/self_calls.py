@@ -53,22 +53,28 @@ _LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"})
 _ROW_COLUMNS = ("row_id",)
 
 
-def served_services(workspace: Workspace) -> dict[str, set[str]]:
-    """Each service identity this module handles, mapped to the wire paths it serves.
+def served_services(workspace: Workspace, protocol: str) -> dict[str, set[str]]:
+    """Each `protocol` service identity this module handles, mapped to the wire paths it
+    serves.
 
-    From inbound `grpc` rows whose `handler` is set; an inbound path is
+    From inbound rows of that protocol whose `handler` is set; a `grpc` inbound path is
     `<identity>/<Method>`, e.g. `helloworld.Greeter/SayHello`. An `actor` row's path is
     its identity whole, e.g. `stock`.
     """
-    return {identity: set(paths) for identity, paths in served_handlers(workspace).items()}
+    return {
+        identity: set(paths) for identity, paths in served_handlers(workspace, protocol).items()
+    }
 
 
-def served_handlers(workspace: Workspace) -> dict[str, dict[str, set[str]]]:
+def served_handlers(workspace: Workspace, protocol: str) -> dict[str, dict[str, set[str]]]:
     """`served_services`, with each served wire path mapped to its handlers: one read of
-    `endpoints` for a pass that needs both (`resolve/rpc_hops.py`)."""
+    `endpoints` for a pass that needs both (`resolve/rpc_hops.py`). Only `protocol`'s rows:
+    an identity is served in one protocol, and an actor key spelled like a gRPC service
+    serves no RPC."""
     served: dict[str, dict[str, set[str]]] = {}
-    for _protocol, identity, path, handler in _served_rows(workspace):
-        served.setdefault(identity, {}).setdefault(path, set()).add(handler)
+    for row_protocol, identity, path, handler in _served_rows(workspace):
+        if row_protocol == protocol:
+            served.setdefault(identity, {}).setdefault(path, set()).add(handler)
     return served
 
 

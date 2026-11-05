@@ -26,7 +26,8 @@ state a service identity and a wire method name. Nothing here names a gRPC type.
 - **The path:** `<service identity of that class>/<wire method>`, the spelling of the
   inbound row it names.
 
-A row is written only for a service the module serves (§3c, `served_handlers`): one per
+A row is written only for a service the module serves in the catalog's own protocol (§3c,
+`served_handlers`; an actor key spelled like a service serves no RPC): one per
 handler of that path, or one with no handler when the module serves the service but has
 none for this RPC, so the trace still carries the wire path when the outbound row is gone.
 A call to a service the module does not serve keeps its outbound row and gets no hop.
@@ -69,7 +70,7 @@ def record_rpc_hops(workspace: Workspace, catalogs: list[Catalog]) -> None:
     catalog = _stub_catalog(catalogs)
     if catalog is None:
         return
-    served = served_handlers(workspace)
+    served = served_handlers(workspace, catalog.protocol)
     if not served:
         return
     stubs = _stub_classes(workspace, _catalog_symbol(catalog.matches["client_stub_supertype"]))

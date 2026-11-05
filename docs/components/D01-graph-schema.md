@@ -179,11 +179,12 @@ site, or no row.
   is one (`com/acme/actors/Stock$Tick#INSTANCE.`); `handler` each handler the class reaches
   by `message_handlers`' first-match rule, one row per handler. A class no behavior handles
   is one row with `handler` NULL. A class not read (a parameter, a factory call's result) is
-  one row with `path` and `handler` NULL and `evidence` naming what was there (`message class
-  not read: parameter`), the one place this column holds prose; every other row's is
-  `compiler`. A handler whose case `delivers` continues: each class it returns is a row whose
-  `caller` is that handler and whose `ordinal` is the return's own constructor call (a
-  constructor reference's: its super-constructor call).
+  one row with `path` and `handler` NULL: the two NULLs are what say so. `evidence` is
+  `compiler` on every actor hop row, as on every gRPC one, inside [D00](D00-fact-schema.md)
+  §4's closed set: the send site is a compiler fact. A handler whose case `delivers`
+  continues: each class it returns is a row whose `caller` is that handler and whose
+  `ordinal` is the return's own constructor call (a constructor reference's: its
+  super-constructor call).
 
 **`message_handlers`** carries `behavior`, `position`, `message_type`, `message_value`,
 `predicated`, `handler`, `delivers` and `evidence` (spec `2026-11-04-akka-pekko-actors-design.md`
@@ -861,8 +862,8 @@ helloworld.Greeter/SayHello`, and the step table's `Reaches` reads `via` and the
 **An actor message send is walked the same way** (spec `2026-11-04-akka-pekko-actors-design.md`
 §3c): at a send whose `rpc_hops` rows name handlers, the step goes to each, `via` the message
 class (`actor com/acme/actors/OrderEntity$Get#`); a class nobody here handles stays
-`boundary` with its class; a class not read stays `boundary` with `via` carrying the row's
-evidence in parentheses (`actor (message class not read: parameter)`), never `actor None`.
+`boundary` with its class; a class not read (the hop's `path` NULL) stays `boundary` with
+`via` saying so (`actor (message class not read)`), never `actor None`.
 
 **This is deliberately not [D00](D00-fact-schema.md) §4's `terminal_kind`.** That set
 CLASSIFIES what a call reaches — `persistence`, `async_handoff`, an `outbound_call` in the

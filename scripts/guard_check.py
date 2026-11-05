@@ -7278,9 +7278,9 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "message-hops.an-UNREAD-class-is-a-STOP-that-says-so": Guard(
-        what="a message whose class is not read is one row with no path, its evidence naming why",
-        why="the plan's global constraint: a hop is never guessed. Without the branch the row "
-        "reads as a message nobody handles, a claim about a class nobody read",
+        what="a message whose class is not read is one row with no path and no handler",
+        why="the plan's global constraint: a hop is never guessed. Without the branch a "
+        "predicate-only case, which matches every message, takes one whose class nobody read",
         edits=(
             Edit(
                 path=_MESSAGE_HOPS,
@@ -7495,13 +7495,13 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "trace.an-UNREAD-hop-says-why-in-its-via": Guard(
-        what="a hop with no path carries its evidence in the step's `via`",
+        what="a hop with no path says in the step's `via` that its message class was not read",
         why="spec 2026-11-04 §3c: the stop says the message class was not read. Without it "
         "the step reads `actor None`",
         edits=(
             Edit(
                 path="sextant/application/query/trace.py",
-                find='            where = hop["path"] if hop["path"] is not None else f"({hop[\'evidence\']})"\n',
+                find='            where = hop["path"] if hop["path"] is not None else "(message class not read)"\n',
                 replace='            where = hop["path"]  # guard disabled by scripts/guard_check.py\n',
             ),
         ),
@@ -7559,6 +7559,19 @@ GUARDS: dict[str, Guard] = {
                 path="sextant/application/resolve/rpc_hops.py",
                 find="        if len(named) != 1:\n",
                 replace="        if not named:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "grpc.an-ACTOR-key-spelled-like-a-service-serves-no-rpc": Guard(
+        what="a stub call gets a hop only for a service served in the stub catalog's own protocol",
+        why="linking is by protocol and address (D01): an inbound actor key spelled "
+        "`helloworld.Greeter` serves no RPC. Read across protocols, the stub's call to that "
+        "service is a hop with no handler, a gRPC call claimed served here",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/self_calls.py",
+                find="        if row_protocol == protocol:\n",
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

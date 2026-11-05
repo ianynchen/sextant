@@ -1592,10 +1592,12 @@ _EXPORT_QUERIES = {
     # value. There is nowhere in it for an address, a config value or a string
     # constant out of bytecode to be.
     "call_edges": _NAMED_QUERIES["call_edges"],
-    # Spec 2026-10-25 §3e. Symbols, an integer and closed-set words, plus `path`: the wire
-    # path of the inbound row the hop lands on, so it masks by that column's address map,
-    # as `roots.path` does for the same reason (D06 §3). Ordered on the table's own
-    # columns, the `endpoints` reasoning, so masking cannot reorder rows.
+    # Spec 2026-10-25 §3e. Symbols, an integer and closed-set words (`evidence` is
+    # `compiler` on every row, an actor message send's included, spec 2026-11-04 §3c), plus
+    # `path`: the wire path of the inbound row the hop lands on, so it masks by that
+    # column's address map, as `roots.path` does for the same reason (D06 §3). A message
+    # send's `path` is a class or constant symbol, which no address matches. Ordered on the
+    # table's own columns, the `endpoints` reasoning, so masking cannot reorder rows.
     "rpc_hops": f"""
         SELECT h.caller, h.ordinal, h.protocol, coalesce(a.masked, h.path) AS path,
                h.handler, h.evidence

@@ -118,7 +118,7 @@ def test_a_descriptor_only_inbound_row_serves_nothing(tmp_path: Path) -> None:
         ("grpc", "inbound", "helloworld.Greeter/SayHello"),
         ("grpc", "outbound", "helloworld.Greeter"),
     ]
-    assert served_services(workspace) == {}
+    assert served_services(workspace, "grpc") == {}
 
 
 @pytest.mark.pins("grpc.a-call-naming-ANOTHER-host-stays-outbound")
@@ -210,7 +210,7 @@ def test_served_services_maps_an_identity_to_its_wire_paths(tmp_path: Path) -> N
         ("grpc", "inbound", "helloworld.Other/Ping", None, None),
         ("http", "inbound", "/hello", HANDLER, None),
     )
-    assert served_services(workspace) == {
+    assert served_services(workspace, "grpc") == {
         "helloworld.Greeter": {"helloworld.Greeter/SayHello", "helloworld.Greeter/SayBye"}
     }
 

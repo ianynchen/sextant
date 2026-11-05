@@ -19,7 +19,7 @@ from click.testing import CliRunner
 from fixture_build import FIXTURES, compile_fixture
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.query.trace import trace_of
-from sextant.application.resolve.message_hops import _keyed_methods, _paired
+from sextant.application.resolve.message_hops import _keyed_methods, _paired, _Reading
 from sextant.application.resolve.roots import Root
 from sextant.cli.app import cli
 from sextant.domain.closed_sets import RootKind, TraceStop
@@ -201,14 +201,39 @@ def test_a_pubsub_message_reaches_its_subscriber_and_the_envelope_is_a_stop(hops
     }
 
 
-@pytest.mark.pins("message-hops.an-UNREAD-class-is-a-STOP-that-says-so")
 def test_an_unread_message_class_is_a_stop(hops):
     """`Relay.forward(Object msg, ActorRef<Object> to) { to.tell(msg); }`: the message is a
-    parameter, so its class is not read here. One row, no path and no handler, and its
-    evidence says why; never a hop to every handler."""
+    parameter, so its class is not read here. One row, no path and no handler, which is what
+    says so; never a hop to every handler. Its evidence stays in D00 §4's closed set: the send
+    site is a compiler fact, whatever its argument is."""
     [relay] = [hop for hop in hops if hop[0] == "Relay#forward"]
     assert relay[2:4] == (None, None)
-    assert relay[4] == "message class not read: parameter"
+    assert relay[4] == "compiler"
+
+
+@pytest.mark.pins("message-hops.an-UNREAD-class-is-a-STOP-that-says-so")
+def test_an_unread_message_class_reaches_not_even_a_predicate_only_case(tmp_path: Path):
+    """A predicate-only case (`onCommand(Predicate, h)`) matches every message whose class is
+    known; a message whose class was not read still reaches it nothing: one stop, no path, no
+    handler, never a guessed hop. Asked of the hop rule directly, over one such case."""
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        workspace._connection.execute(
+            "INSERT INTO message_handlers VALUES "
+            "('m Entity#create(sig_1).#0', 0, NULL, NULL, true, 'm Entity#onAny(sig_2).', "
+            "false, 'compiler')"
+        )
+        reading = _Reading(workspace)
+        unread = reading.hops(
+            "m Relay#forward(sig_3).", 0, (None, None, None, "parameter"), "actor"
+        )
+        read = reading.hops("m Relay#forward(sig_3).", 0, ("Get#", None, None, None), "actor")
+    finally:
+        workspace.close()
+    assert [(row["path"], row["handler"], row["evidence"]) for row in unread] == [
+        (None, None, "compiler")
+    ]
+    assert [row["handler"] for row in read] == ["m Entity#onAny(sig_2)."]
 
 
 def test_a_trace_crosses_the_ask(analyzed: Path):
@@ -249,7 +274,7 @@ def test_a_trace_names_an_unread_class(analyzed: Path):
     finally:
         workspace.close()
     assert [(step.via, step.stop) for step in trace.steps] == [
-        ("actor (message class not read: parameter)", TraceStop.BOUNDARY)
+        ("actor (message class not read)", TraceStop.BOUNDARY)
     ]
 
 

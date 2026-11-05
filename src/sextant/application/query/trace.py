@@ -334,8 +334,9 @@ def _rows(method: str, index: _Index) -> list[dict[str, object]]:
             rows.append(row)
             continue
         for hop in hops:
-            # A hop whose message class was not read has no path; its evidence says so.
-            where = hop["path"] if hop["path"] is not None else f"({hop['evidence']})"
+            # A hop with no path is a message whose class was not read: the NULL says so, as
+            # the row's evidence is `compiler` like every other's (D00 §4's closed set).
+            where = hop["path"] if hop["path"] is not None else "(message class not read)"
             landed = {"callee": hop["handler"], "via": f"{hop['protocol']} {where}"}
             if hop["handler"] is not None:
                 landed |= {"terminal_kind": None, "target_kind": None}

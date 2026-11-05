@@ -926,7 +926,7 @@ CREATE TABLE IF NOT EXISTS call_edges (
 -- Spec 2026-11-04 §3c: its SECOND writer, `resolve/message_hops.py`, writes an actor
 -- message send's hops here: the send's call site, the message's class (or a constant's own
 -- symbol) as `path`, one row per handler it reaches; a class nobody handles has `handler`
--- NULL, a class not read `path` NULL too, with `evidence` naming what was there.
+-- NULL, a class not read `path` NULL too; `evidence` stays `compiler`.
 --
 -- A derived TABLE because both rules are Python; replaced whole per resolve through ONE
 -- reset_rpc_hops.sql, run by the pipeline before both writers, each of which only runs
@@ -948,8 +948,8 @@ CREATE TABLE IF NOT EXISTS rpc_hops (
     -- For a message send, the handler its class reaches; NULL where none does.
     handler  TEXT,
     -- D00 §4's evidence set, `compiler`, the convention endpoint rows follow: a catalog's
-    -- rule over compiled facts. A send whose message class was not read says so here
-    -- instead (`message class not read: parameter`).
+    -- rule over compiled facts. A message send's rows too, its class read or not: the send
+    -- site is a compiler fact, and a class not read is said by `path` and `handler` NULL.
     evidence TEXT
 );
 
