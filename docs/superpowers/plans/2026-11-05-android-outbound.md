@@ -279,3 +279,19 @@ modelled" removed), `docs/COVERAGE.md` §6 Android rows and the mobile page, `CH
 
 - [ ] **Step 1:** write them from the measured results (fixture and the corpus hand check).
 - [ ] **Step 2:** `scripts/check.sh` green; commit `docs: Android outbound (OI-274)`.
+
+### Task 5b: One description file per module in a shared folder (M7)
+
+**Files:** `src/sextant/domain/enrichment.py` (`ENRICHMENT_FILE` users), `src/sextant/api.py`
+(every `path / ENRICHMENT_FILE`), `src/sextant/application/enrich/tools.py`, M00/M09 docs where the
+file is named. Test: the existing enrich/render/export tests' files.
+
+**Interfaces:** `enrichment_file(module_root: Path, results_name: str | None) -> Path` in
+`domain/enrichment.py` = `<root>/.sextant-enrichment.json` when `results_name` is None, else
+`<root>/.sextant-enrichment-<results_name>.json`. Every reader and writer goes through it; the
+module's `results_name` comes from the module being enriched/rendered (for a `--workspace` run,
+from the results folder name when it is a sub-folder of `<root>/.sextant`).
+
+- [ ] Tests: `test_two_modules_in_one_folder_keep_their_own_descriptions` (enrich A, enrich B,
+  render A shows A's claims only); `test_a_one_module_folder_keeps_the_old_file_name`.
+- [ ] Implement; covering tests and full gate; commit `feat(enrich): one description file per module in a shared folder (Android M7)`.

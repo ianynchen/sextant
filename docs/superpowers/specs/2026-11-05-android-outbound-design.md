@@ -176,3 +176,9 @@ Five Major findings (no Critical), each ruled by the user 2026-11-05. Minor find
   `system analyze` finds results through `results`. A single-module command (`render`, `enrich`,
   `export`, `diff`) at a folder whose `.sextant` holds several modules stops and lists each
   module with its exact `--workspace` command; it never picks one.
+- **M7. The description file of two modules in one folder.** Found while building Task 3.
+  `enrich` writes `.sextant-enrichment.json` in the module folder (meant for git review), so two
+  modules in one folder would overwrite each other's descriptions. **Ruled 2026-11-05: A.** One file
+  per module, named with the version or edition name: `core/.sextant-enrichment-jvm.json`,
+  `core/.sextant-enrichment-android.json`; a folder with one module keeps
+  `.sextant-enrichment.json`. `enrich`, `render` and `export` read and write the module's own file.
