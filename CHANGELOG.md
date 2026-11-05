@@ -17,118 +17,75 @@ here would restate those documents rather than add anything.
 
 ### Added
 
-- **In-process dispatch is one general mechanism** (spec 2026-11-05, the user's ruling A on the
-  actor words: "invented just for one framework"). Code that hands a value to a framework or a
-  channel, which calls the handler(s) registered for it, is a trace hop and never an endpoint
-  row. A catalog says how with one setting, `dispatch: {key: type | object, match: first | all
-  | one}`, and three blocks any style may carry (D02 §2m): `dispatch_registrations` (on an
-  ordinary `fluent` chain catalog, whose chain ends are then registrations — the endpoint loop
-  leaves it out), `dispatch_sends` and `dispatch_receives`. The graph table is
-  `dispatch_registrations` (`group`, `position`, `key_type`, `key_value`, `key_object`,
-  `predicated`, `handler`, `delivers`, `match`; schema 15, unreleased) and every hop is in
-  `hops`, which `rpc_hops` was. `match: all` and `one` reach every matching registration. A
-  key's class is a `channel_via` entry's `class_arg`, read from the same producing call in the
-  same walk as its name. The Akka and Pekko catalogs are re-expressed in these words; their
-  rows and hops are unchanged on both fixtures and on the two Pekko samples (5 rows, 28 hops,
-  23 registrations, identical). No catalog word or table starts with `message_`, and no code
-  names Akka or Pekko (architecture tests).
-- **Spring application events are in-process dispatch** (spec 2026-11-05 §4 item 5, probe
-  CP-59, spring-context and spring-tx 7.0.1): the second user of the mechanism, and nothing in
-  the code is written for it. `spring-events.yml` is an `annotation_driven` catalog declaring
-  `dispatch: {key: type, match: all}`, so its mapping is read as registrations: each
-  `@EventListener` / `@TransactionalEventListener` method keyed by the classes its annotation
-  names (`path_from: [classes, value]`) or else its one parameter's type (`path_fallback:
-  payload_type`, the parameter `request_body` picks); each class implementing
-  `ApplicationListener<E>` keyed by its own `onApplicationEvent(E)`, the compiler's bridge
-  carried to the method it forwards to (a new block, `dispatch_implementations`). The two
-  `publishEvent` overloads on `ApplicationEventPublisher`, `ApplicationContext` and
-  `ConfigurableApplicationContext` are sends, each publish a hop to every listener its class
-  is assignable to, under a new `Protocol` member, `in_process` (D00 §4). A catalog declaring
-  `dispatch` mints no endpoint row, whatever its style. A sent value that is a static module
-  factory's result (`ConfigPublishEvent.instance()`) is read through the factory's returns,
-  for actors too (their rows and hops unchanged: 5 rows, 28 hops on the two Pekko samples).
-  `type-models/conformance.yml` declares the root type every class conforms to (`subtype: "*"`),
-  so a listener of `Object` receives every event. Each registration carries its catalog's
-  `mechanism` (a new `dispatch_registrations` column, schema 15 unreleased), declared as
-  `dispatch: {key, match, mechanism}` — `{mechanism}` alone on a key catalog, which the actor
-  receptionist and sharding catalogs now carry — and checked at load (required; a send or key
-  catalog's mechanism must be named by a registering catalog): a
-  send or an inbound key reaches only its own mechanism's registrations, never another
-  framework's. On apollo-portal all 17 publish sites hop to
-  their listener (17 hops, each checked by hand); no endpoint row moved on apollo-portal,
-  apollo-biz or dolphinscheduler-api, and the six field pins hold. A trace's unread hop now
-  reads `(value class not read)` rather than `(message class not read)`.
-- **CDI events are in-process dispatch** (spec 2026-11-05 §4 item 6, probe CP-59, Jakarta CDI
-  API 4.1.0, javax CDI API 1.0.0, ArC 3.17.5): the third user of the mechanism, with one new
-  catalog word, `mapping.selected_by_parameter: [<annotation fqn>, …]` (D02 §2m), which selects
-  a method by a PARAMETER annotation and keys it by that parameter's type, whatever other
-  parameters the container injects beside it. `cdi-events.yml` reads `@Observes` observers
-  (Jakarta and javax) and declares `Event.fire` as its send; `cdi-async-events.yml` reads
-  `@ObservesAsync` observers (Jakarta and javax CDI 2.x) and declares both `Event.fireAsync`
-  overloads. They are two
-  mechanisms because ArC notifies only synchronous observers from `fire` and only asynchronous
-  ones from `fireAsync` (CP-59 finding 10), so neither reaches the other's observers. Each fire
-  is a hop under `in_process` to every observer its class is assignable to; an observer of a
-  framework event nothing in the module fires (`@Observes StartupEvent`) is a registration with
-  no hop and no endpoint row. No example under `examples/` fires a CDI event: on
-  `quarkus-quickstarts`' `stork-quickstart` and `reactive-routes-quickstart` the five observers
-  are registrations keyed by their framework event, with no hop and no endpoint row moved; the
-  Pekko samples (5 rows, 28 hops, 23 registrations) and apollo-portal (17 hops) are identical.
-  A qualified observer (its event parameter also carries an annotation meta-annotated by a
-  `mapping.keyless_when_meta_annotated` marker, `@Qualifier`: `@Named("x")`, an application's
-  own qualifier) and an observer of a parameterized type (`List<String>`) keep their
-  registration with no key: the fire sites' qualifiers and type arguments are not read, so such
-  an observer gets no hop (missing, never false); `@Observes @Priority(10) E` keeps its key.
-- **Kotlin channels and flows are object-keyed in-process dispatch** (spec 2026-11-05 §4 item 7,
-  probe CP-59 findings 17-21, kotlinx-coroutines 1.11.0, kotlinc 2.4.20). `kotlinx-channels.yml`
-  (`match: one`): `send`/`trySend` on `Channel`, `SendChannel` and `ProducerScope`, and
-  `receive`/`tryReceive`/`receiveCatching` and `iterator()` — what kotlinc writes for a
-  `for (x in ch)` loop and the inlined `consumeEach` — on `Channel` and `ReceiveChannel`, the
-  inline-class results under their mangled JVM names. `kotlinx-flows.yml` (`match: all`):
-  `emit`/`tryEmit`, `value =` (`setValue`) and `update { }` (`compareAndSet`) as sends, `collect` on
-  the five flow types as receives. A send inside a coroutine (`scope.launch { ch.send(x) }`) is
-  read through the class kotlinc compiles the block to and the private field's synthetic
-  accessor; a channel a launched block captures from a local is one object. A receive can now
-  hand its value to the function it is given (`handler: lambda_arg`, with new words
-  `handler_arg`, `handler_method`, `handler_descriptor`, checked at load): a `collect { }`
-  lambda's handler is the `emit` of the module class kotlinc compiles it to, past the compiler's
-  bridge, for a capturing lambda (a new instance) and one capturing nothing (its shared
-  `INSTANCE`) alike. The object walk now skips a path that comes back to where it started (a
-  coroutine lambda's `create` copying its captured value), which had added a false "object not
-  read" stop beside the hop, and kotlinc 2.4's `SpillingKt.nullOutSpilledVariable` (body
-  `aconst_null; areturn`) is declared in `value-models/compiler-null-checks.yml` as a compiler
-  call that takes a value without handing it off (an instance of the 2026-11-02 ruling), so it is
-  no longer named as the call that made a channel. A new catalog block, `dispatch_views`,
-  declares a call handing back a view of the same object, which the object walk passes through:
-  `asSharedFlow()`, `asStateFlow()`, `receiveAsFlow()` and `consumeAsFlow()`, so a collector of
-  `val events = _events.asSharedFlow()` is reached by `_events.emit`. The terminal receives
-  `first`, `firstOrNull`, `single`, `toList` and `collectLatest` (its block a compiled lambda,
-  read as its body) are declared. Channels and flows are one mechanism, `kotlinx-coroutines`: a
-  channel read as a flow is collected by the flows catalog's receives, and the object decides.
-  Stated bounds: a flow made by an operator (`map`, `filter`, `onEach`) is another key; a send
-  through a data class's property keeps one "key not read" stop beside its hops (its generated
-  `copy(…)` writes the field from a parameter nothing passes); a channel in a local or parameter
-  used after a suspension point is a receiver the facts do not name, so its send is a stop.
-  Pinned on `fixtures/orders-kotlin-channels`.
-- **Java blocking queues are object-keyed in-process dispatch** (spec 2026-11-05 §4 item 7, probe
-  CP-59 findings 12-15, JDK 21.0.13): the mechanism's second key kind. A catalog declaring
-  `dispatch: {key: object}` keys each `dispatch_receives` site by the object it takes from — its
-  receiver followed through locals, parameters, helper returns and fields to the call that made
-  it (a construction, or a call whose body is not here, such as Guava's
-  `Queues.newLinkedBlockingQueue`) — written as `dispatch_registrations.key_object`; each send is
-  a hop to every receive on the same object, whatever the value's class. A queue from outside
-  the module (a parameter nothing calls) is a stop, never a fan-out. `jdk-blocking-queue.yml`
-  declares `put`/`offer`/`add` and `take`/`poll` on the ten JDK blocking-queue types (javac
-  writes the receiver's static type as the owner). Two queues of one type stay apart; a field
-  read is answered by every write of that field, so two instances of one class sharing a field
-  are one object (a stated bound). The loader refuses a receive block under `key: type` and a
-  class-keyed block under `key: object`. A trace's unread hop now reads `(key not read)`, for a
-  class and an object alike. `drainTo` and `remove()` are receives too, and Guava's
-  `Queues.drain`/`drainUninterruptibly` (`guava-queues.yml`) take from the queue they are handed,
-  read through a new `object: argN` receive form; `remove(Object)` and `removeIf` are not
-  receives. A queue kept through a declared null check (`Objects.requireNonNull`) stays one
-  object. The key's bounds (each over-linking): a field written by several instances, a helper
-  making several queues, a library call site handing back several.
+- **In-process dispatch: one general mechanism, five kinds** (spec 2026-11-05, "As built"; the
+  user's ruling A on the actor words: "invented just for one framework"; probe CP-59). Code
+  that hands a value to a framework or a channel, which calls the handler(s) registered for it,
+  is a trace **hop** and never an endpoint row. A catalog says how with one setting,
+  `dispatch: {key: type | object, match: first | all | one, mechanism: <name>}` (`mechanism`
+  required and checked at load; a key catalog declares `{mechanism}` alone), and blocks any
+  style may carry (D02 §2m): `dispatch_registrations` (on an ordinary `fluent` chain catalog,
+  whose chain ends are then registrations), `dispatch_implementations`, `dispatch_sends`,
+  `dispatch_receives` and `dispatch_views`; `mapping.selected_by_parameter` and
+  `mapping.keyless_when_meta_annotated` serve annotation catalogs; a `channel_via` entry may
+  name `class_arg`, read from the same producing call in the same walk as its name. The graph
+  table is `dispatch_registrations` (`group`, `position`, `key_type`, `key_value`,
+  `key_object`, `predicated`, `handler`, `delivers`, `match`, `mechanism`; schema 15,
+  unreleased) and every hop is in `hops`, which `rpc_hops` was; `Protocol.IN_PROCESS`
+  (`in_process`, D00 §4) is the protocol of a hop whose catalog has no wire. A send reaches
+  only registrations of its own mechanism, `match: all` and `one` reach every matching
+  registration, and a key that is not read is a stop that says so (`(key not read)`), never a
+  fan-out. No catalog word or table starts with `message_` and no code names a framework
+  (architecture tests). Every kind below was checked hop by hop against real code:
+  0 false hops, 0 missing, and no endpoint row moved on any module; the six field pins hold.
+  - **Akka and Pekko** were re-expressed in the general words; their rows and hops are unchanged
+    on both fixtures and the two Pekko samples (5 rows, 28 hops, 23 registrations, identical).
+    A sent value that is a static module factory's result (`ConfigPublishEvent.instance()`) is
+    read through the factory's returns.
+  - **Spring application events** (spring-context and spring-tx 7.0.1): `spring-events.yml`, an
+    `annotation_driven` catalog. Each `@EventListener` / `@TransactionalEventListener` method is
+    keyed by the classes its annotation names (`path_from: [classes, value]`) or its one
+    parameter's type (`path_fallback: payload_type`); each `ApplicationListener<E>` by its own
+    `onApplicationEvent(E)`, the compiler's bridge carried to the method it forwards to. The
+    two `publishEvent` overloads on `ApplicationEventPublisher`, `ApplicationContext` and
+    `ConfigurableApplicationContext` are sends; `type-models/conformance.yml` declares the root
+    type every class conforms to, so a listener of `Object` receives every event. On
+    apollo-portal all 17 publish sites hop to their listener. Stated bound: `publishEvent(pojo)`
+    is wrapped by Spring in a `PayloadApplicationEvent`, so a listener of `ApplicationEvent`
+    gets no hop (missing, never false).
+  - **CDI events** (Jakarta CDI API 4.1.0, javax CDI API 1.0.0, ArC 3.17.5): `cdi-events.yml`
+    (`@Observes`, `Event.fire`) and `cdi-async-events.yml` (`@ObservesAsync`, both `fireAsync`
+    overloads) are two mechanisms, because ArC notifies only synchronous observers from `fire`
+    and only asynchronous ones from `fireAsync`. An observer is selected by its PARAMETER's
+    annotation and keyed by that parameter's type, whatever the container injects beside it. A
+    qualified observer (an annotation meta-annotated `@Qualifier`) and an observer of a
+    parameterized type keep their registration with no key (a missing hop, never a false one).
+    No example under `examples/` fires a CDI event, so the check covers registrations only
+    (5 of 5 true on two Quarkus quickstarts); the hops are pinned on `fixtures/orders-cdi-events`.
+  - **Java blocking queues** (JDK 21.0.13), the mechanism's object key: each receive is keyed
+    by the call that made the queue it takes from (followed through locals, parameters, helper
+    returns and fields; Guava's `Queues.newLinkedBlockingQueue` too), written as
+    `dispatch_registrations.key_object`, and each send is a hop to every receive on that
+    object. `jdk-blocking-queue.yml` declares `put`/`offer`/`add` and `take`/`poll`/`drainTo`/
+    `remove()` on the ten JDK blocking-queue types; `guava-queues.yml` declares
+    `Queues.drain`/`drainUninterruptibly` through a new `object: argN` receive form;
+    `remove(Object)` and `removeIf` are not receives. A queue from outside the module is a
+    stop, and two queues of one type stay apart. 10 hops on apollo and dolphinscheduler. Stated
+    bounds, each over-linking: one field written by several instances, one helper making
+    several queues, one library call site handing back several.
+  - **Kotlin channels and flows** (kotlinx-coroutines 1.11.0, kotlinc 2.4.20): one mechanism,
+    `kotlinx-coroutines`, the object deciding. `kotlinx-channels.yml` (`match: one`) and
+    `kotlinx-flows.yml` (`match: all`) declare `send`/`trySend`, `emit`/`tryEmit`, `value =`
+    and `update { }` as sends and `receive`/`tryReceive`/`receiveCatching`, `for (x in ch)`
+    and `consumeEach` (`iterator()`), `collect`, `first`, `firstOrNull`, `single`, `toList`
+    and `collectLatest` as receives; `dispatch_views` passes `asSharedFlow`, `asStateFlow`,
+    `receiveAsFlow` and `consumeAsFlow` through. A send inside `scope.launch { }` is read
+    through the class kotlinc compiles the block to. A receive can hand its value to the
+    function it is given (`handler: lambda_arg`, with `handler_arg`, `handler_method`,
+    `handler_descriptor`, checked at load). The object walk now skips a path that comes back to
+    where it started, and kotlinc 2.4's `SpillingKt.nullOutSpilledVariable` is declared in
+    `value-models/compiler-null-checks.yml`. 7 hops on playport and kotlinconf. Stated bounds:
+    a flow made by an operator is another key; a channel used after a suspension point is a
+    stop; a send through a data class's property keeps one "key not read" stop beside its hops.
 - **Akka and Pekko actors: a trace crosses actors** (spec 2026-11-04, SEXTANT-178, the user's
   ruling B "I want it complete"; probe CP-57, Akka 2.6.21 and Pekko 1.1.3). Three parts, each
   pinned on `fixtures/orders-actors-pekko` and `-akka`, then the measurement:

@@ -202,10 +202,20 @@ within its own protocol only.
 
 ## As built
 
+> **Amended 2026-11-05.** The words below are the ones this design was BUILT with. The user
+> ruled them framework-specific, and `2026-11-05-in-process-dispatch-design.md` (its "As
+> built" section) replaced them: `message_handlers` → `dispatch_registrations`,
+> `message_sends` → `dispatch_sends`, `message_class_via` → `channel_via`'s `class_arg`,
+> the `message_handlers` style → no style (a `fluent` catalog carrying
+> `dispatch_registrations`), `rpc_hops` → `hops`, `message_hops.py` → `dispatch_hops.py`,
+> `message_handlers.py` → `dispatch_registrations.py`. What exists today is named there;
+> this section is kept as the record of the build, and the results below (5 rows, 28 hops,
+> 23 registrations) still hold, unchanged.
+
 Built 2026-11-04 on `cov/akka-actors` in seven tasks (plan
 `docs/superpowers/plans/2026-11-04-akka-pekko-actors.md`), commits `0019dd0c`..this one.
 
-### What exists
+### What existed when built (history: the old words, replaced 2026-11-05)
 
 | Part | Where |
 |---|---|
@@ -275,7 +285,7 @@ with its cost if wrong.
     passes its stub catalog's, so an actor key spelled like a gRPC service serves no RPC.
     `record_self_calls` already matched within one protocol and is unchanged by this.
 
-### Departures from the plan
+### Departures from the plan (history: the old words)
 
 - **A seventeenth catalog style, `message_handlers`**, which mints no endpoint row and has no
   engine: `derive_endpoints` leaves it to the handler pass. No existing style reads roots and

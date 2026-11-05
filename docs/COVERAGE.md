@@ -96,6 +96,7 @@ register.
 | **Akka / Pekko (HTTP, Connectors, actors)** | ◐ (1 not shipped) | — | — | — | — | — | — | ✅ | — | — | — | ✅ |
 | **Temporal / Cadence** | — | — | — | — | — | — | — | — | — | — | — | ✅ |
 | **Quartz** | — | — | — | — | — | — | — | — | — | — | — | ✅ |
+| **JDK and Kotlin channels (BlockingQueue, Channel, Flow)** | — | — | — | — | — | — | — | — | — | — | — | ✅ |
 
 Everything below is the detail behind these three tables: how to read them (§1), what a run produces today (§2), the language and version gate (§3), wire formats (§4), and the per-protocol work list they are generated from (§5).
 
@@ -3942,6 +3943,10 @@ a real `peer` today, the same way OkHttp's absolute `Request.Builder#url` does.
 | Temporal / Cadence | ✅ full | 1/1 | 2 stated boundaries |
 | Vert.x EventBus | ✅ full | 1/1 | 2 stated boundaries |
 | Akka / Pekko actors | ✅ full | 2/2 | 4 stated boundaries |
+| Spring application events | ✅ full | 1/1 | 1 stated boundary |
+| CDI events | ✅ full | 1/1 | 1 stated boundary |
+| Java blocking queues | ✅ full | 1/1 | 1 stated boundary |
+| Kotlin channels and flows | ✅ full | 1/1 | 1 stated boundary |
 <!-- END GENERATED: frameworks 5.12 -->
 
 Not protocols, but genuine entry points that would otherwise fall out of the checklist.
@@ -3981,6 +3986,14 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 | Java | Akka / Pekko actors | **A cluster singleton's stop message** — `SingletonActor.of(…).withStopMessage(msg)` | — | **Boundary — derives nothing.** The singleton manager tells `msg` to the singleton when it hands over, and `withStopMessage` is not declared as a send, so the stop case is reached by no hop. Cluster singletons are out of the spec's scope (§4); found by the corpus check (`pekko-sample-cluster-java`'s `AppOneMaster`). A receive timeout, `setReceiveTimeout(d, msg)`, found missing by the same check, is a declared send |
 | Java | Akka / Pekko actors | **A message built by a static factory for a system actor** — `receptionist().tell(Receptionist.register(…))`, `cluster.subscriptions().tell(Subscribe.create(…))` | `dispatch_sends` | **Boundary — a stop, `message class not read`.** The message is a call's result, not a `new`; no module behavior handles these classes either, so the stop costs no hop |
 | Java | Akka / Pekko actors | **Routers, `actorSelection` paths, cluster singleton and distributed data addresses**; actors written in **Scala** | — | **Boundary — derives nothing.** `Routers.group(key)` uses a key without an outbound row; `actorSelection("akka://…/user/x")` is 0 in the corpus; Scala has no scanner (spec §4) |
+| Java | Spring application events | **Spring application events** — `publishEvent(Object)` and `publishEvent(ApplicationEvent)` on `ApplicationEventPublisher`, `ApplicationContext` and `ConfigurableApplicationContext`; listeners `@EventListener` and `@TransactionalEventListener` (keyed by `classes`/`value` or the one parameter's type) and classes implementing `ApplicationListener<E>` (keyed by their own `onApplicationEvent(E)`, past the compiler's bridge) | `annotation_driven` + `dispatch_sends` + `dispatch_implementations` (in-process dispatch, D02 §2m) | ✅ **shipped** (2026-11-05, spec `docs/superpowers/specs/2026-11-05-in-process-dispatch-design.md`, `spring-events.yml`, spring-context and spring-tx 7.0.1, probe CP-59). Protocol `in_process`: a dispatch is a **hop**, never an endpoint row, under `match: all` (every listener whose parameter the event is assignable to, `Object` and supertypes included). Measured on apollo-portal: **17 publish sites, 17 hops, all true, 0 false, 0 missing**; no endpoint row moved on apollo-portal, apollo-biz or dolphinscheduler-api. Pinned by `tests/e2e/test_spring_events_delivered.py` on `fixtures/orders-events` |
+| Java | Spring application events | `publishEvent(pojo)` — Spring wraps the POJO in a `PayloadApplicationEvent`; a generic base class `Base<E> implements ApplicationListener<E>`; a static factory called through a subclass | `dispatch_sends` | **Boundary — a missing hop, never a false one.** A listener of `ApplicationEvent` also receives a wrapped POJO and gets no hop; the generic base class is keyed `ApplicationEvent`; the factory is not read (an honest stop, `value class not read`). A published value whose class is a parameter is a stop that says so, never a fan-out |
+| Java | CDI events | **CDI events** — `Event.fire` and `Event.fireAsync` (both overloads); observers: a method with a parameter annotated `@Observes` / `@ObservesAsync`, keyed by that parameter's type whatever other parameters the container injects (Jakarta CDI 4.1.0, javax CDI 1.0.0 and 2.x) | `annotation_driven` (`selected_by_parameter`) + `dispatch_sends` | ✅ **shipped** (2026-11-05, same spec, `cdi-events.yml` and `cdi-async-events.yml`, ArC 3.17.5, probe CP-59). Two mechanisms: ArC notifies only synchronous observers from `fire` and only asynchronous ones from `fireAsync`. `match: all`. **No example under `examples/` fires a CDI event** (every one of the 30 `@Observes` there observes a framework event), so the corpus check is registrations only: **5 of 5 true** on `stork-quickstart` and `reactive-routes-quickstart`, 0 hops, no endpoint row moved. The hops are pinned on `fixtures/orders-cdi-events` (`tests/e2e/test_cdi_events_delivered.py`) and have never been checked on real code |
+| Java | CDI events | A qualified observer (`@Named("x")`, any annotation meta-annotated `@Qualifier`), an observer of a parameterized type, `Event.select(…)` qualifiers, `BeanManager.fireEvent` | `dispatch_sends` | **Boundary — a missing hop, never a false one.** A qualified or parameterized observer keeps its registration with no key (`@Observes @Priority(10) E` keeps its key); the fire sites' qualifiers and type arguments are not read; `BeanManager.fireEvent` is not declared |
+| Java | Java blocking queues | **`BlockingQueue` / `BlockingDeque` / `TransferQueue` and the seven `java.util.concurrent` queues** — sends `put`, both `offer`s, `add`; receives `take`, both `poll`s, both `drainTo`s, `remove()`; Guava's `Queues.drain` / `drainUninterruptibly` (receive of the queue at argument 0) | `dispatch_sends` + `dispatch_receives` + `dispatch_views` (object key, D02 §2m) | ✅ **shipped** (2026-11-05, `jdk-blocking-queue.yml`, `guava-queues.yml`, JDK 21.0.13, probe CP-59). The key is the object, not the value's class: a receive is keyed by the call that made the queue it takes from, followed through locals, parameters, helper returns and fields; a send hops to every receive on the same object (`match: one`, since which consumer takes each value is decided at run time). Measured on apollo (biz, configservice, portal) and dolphinscheduler (alert-server, task-executor): **10 hops true, 0 false, 0 missing** (5 found missing at the first count, now declared). Pinned by `tests/e2e/test_blocking_queues_delivered.py` on `fixtures/orders-queues` |
+| Java | Java blocking queues | Which instance a field holds; `peek`, the deque ends, `Queue`-typed receivers; `remove(Object)` and `removeIf` | `dispatch_receives` | **Boundary — three over-linking bounds and some missing hops.** A field read is answered by every write of that field (two instances of one class holding a queue are one object); two queues one module helper makes are one; two objects one library call site hands back are one. A queue from outside the module (a parameter nothing calls, an injected one) is a stop naming "key not read", never a fan-out. `remove(Object)` and `removeIf` discard values nothing handles, so they are not receives (ruled 2026-11-05) |
+| Java | Kotlin channels and flows | **kotlinx-coroutines `Channel` / `SendChannel` / `ReceiveChannel` / `ProducerScope` and `SharedFlow` / `StateFlow`** — sends `send`, `trySend`, `emit`, `tryEmit`, `value =`, `update { }`; receives `receive`, `tryReceive`, `receiveCatching`, `for (x in ch)` and `consumeEach` (`iterator()`), `collect { }`, `first`, `firstOrNull`, `single`, `toList`, `collectLatest`; views `asSharedFlow`, `asStateFlow`, `receiveAsFlow`, `consumeAsFlow` | `dispatch_sends` + `dispatch_receives` (`handler: lambda_arg`) + `dispatch_views` | ✅ **shipped** (2026-11-05, `kotlinx-channels.yml` `match: one`, `kotlinx-flows.yml` `match: all`, kotlinx-coroutines 1.11.0, kotlinc 2.4.20, probe CP-59). One mechanism, `kotlinx-coroutines`, the object deciding. A send inside `scope.launch { … }` is read through the class kotlinc compiles the block to; a `collect { }` lambda's handler is its `emit`. Measured on playport/server (6 hops) and kotlinconf-app/backend (1): **7 hops true, 0 false, 0 missing** (1 found missing at the first count, fixed). Not built: koog (JDK 17 toolchain and Android targets), ktor-samples `chat` and `reverse-proxy-ws`. Pinned by `tests/e2e/test_kotlin_channels_delivered.py` on `fixtures/orders-kotlin-channels` |
+| Java | Kotlin channels and flows | A flow made by an operator (`map`, `filter`, `onEach`); `launchIn`; a channel in a `suspend` function's local used after a suspension point; a send through a data class's property | `dispatch_receives` | **Boundary — a missing hop or a stop, never a false hop.** A derived flow is another key; `launchIn` and other terminal operators are not receives; the spilled local is a receiver the facts do not name, so its send is a stop; a data class's generated `copy(channel)` writes its field from a parameter nothing passes, so a send through the property keeps one "key not read" stop beside its hops |
 | Python | Celery | **Celery** `@app.task`, `task.delay(…)`, `.apply_async(queue=…)` — a real async boundary, easy to miss | `annotation` | A |
 | TS | bullmq | `bullmq` `new Queue("n")`, `new Worker("n", fn)` — string names, matchable like topics | `registration_call` | A |
 | Go | robfig/cron, Temporal Go SDK | `robfig/cron` `c.AddFunc("@hourly", fn)`; Temporal Go SDK `w.RegisterWorkflow(fn)` | `registration_call` | A |
@@ -4200,6 +4213,26 @@ is catalogs and an `AndroidManifest.xml` reader, not a scanner.
 ---
 
 ## 7. Cross-cutting findings
+
+### In-process dispatch: a hop, never a row
+
+Code that hands a value to a framework or a channel, which calls the handler registered for
+it, is a trace **hop** and never an endpoint row (the self-call ruling of 2026-10-25; spec
+`docs/superpowers/specs/2026-11-05-in-process-dispatch-design.md`, "As built"). It is one
+mechanism with two keys, so the five kinds in §5.12 (Akka / Pekko actors, Spring application
+events, CDI events, Java blocking queues, Kotlin channels and flows) are catalogs, not code:
+
+| Key | Who receives | Kinds | Corpus (every hop read against the source) |
+|---|---|---|---|
+| the value's **class** (`match: first` or `all`) | handlers registered for that class | Akka / Pekko; Spring events; CDI events | Pekko samples 5 rows, 28 hops; apollo-portal 17 of 17 publish sites; CDI: **no fire site in `examples/`**, registrations only (5 of 5) |
+| the **object** (`match: one` or `all`) | code that receives from the same object | Java blocking queues; Kotlin channels and flows | queues 10 hops; Kotlin 7 hops |
+
+**0 false hops on every corpus.** The same bounds apply to all five: a key that is not read (a
+parameter, an injected object, a call's result) is a stop that says so, never a fan-out; what
+the facts do not name is a missing hop, never a false one; the object key over-links in three
+stated ways (one field written by several instances, one helper making several objects, one
+library call site handing back several) and never misses an object it can name. Go channels
+wait for a Go scanner. The bounds of each kind are in its §5.12 boundary row.
 
 ### What a trace can start from
 

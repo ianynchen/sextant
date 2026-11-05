@@ -1985,7 +1985,9 @@ the hop's match rule asked per candidate class, so a row and a hop always agree)
 differing only in `handler`, as a route with two handlers is two rows (§5's insert, through
 `derive_call_endpoints.sql`). A class reaching no handler, or not read, leaves one row with
 `handler` NULL. Every inbound row of a catalog any of whose entries names `class_arg` is such
-a key row; one with no `channel_arg` is refused at resolve (every inbound row of such a
+a key row, **including the rows of entries that name none** (one `class_arg` anywhere in the
+catalog turns all of that catalog's inbound rows into key rows, so a key without a class
+belongs in a catalog of its own); one with no `channel_arg` is refused at resolve (every inbound row of such a
 catalog is replaced). A row whose catalog names no `class_arg` —
 a classic pub-sub `Subscribe`, which takes any value — keeps the method that subscribed.
 
@@ -6397,7 +6399,7 @@ matches:
   `consumeAsFlow`, CP-59 finding 22).
 - **`dispatch: {key: object}`** pairs with `dispatch_sends`, `dispatch_receives` and
   `dispatch_views` only: the
-  loader refuses `dispatch_receives` under `key: type` and a class-keyed block
+  loader refuses `dispatch_receives` and `dispatch_views` under `key: type` and a class-keyed block
   (`dispatch_registrations`, `dispatch_implementations`, an annotation mapping) under `key:
   object`, since read under the other key either matches nothing. An object-keyed send is a hop
   to every receive registration of its mechanism on the same object (D01 `hops`), the value's

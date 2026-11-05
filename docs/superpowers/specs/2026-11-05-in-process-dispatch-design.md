@@ -176,3 +176,136 @@ No `message_*` word remains. No word names a framework.
 Same as built: one chain walk per registration catalog, one value read per send. Spring and CDI
 add one annotation pass each (the one `annotation_driven` already runs per catalog). Object keys
 add one cached object walk per send and receive site, then a dictionary join on the producer.
+
+## As built
+
+Built 2026-11-05 on `cov/akka-actors` in five tasks (plan
+`docs/superpowers/plans/2026-11-05-in-process-dispatch.md`), commits `0c83290b`..`aad0804f`,
+this section the sixth. §1-§4 above carry each task's detail where the task changed the design;
+this section is the one place to read what was ruled, what is new beyond §2, what the corpus
+said, and what the mechanism does not do.
+
+### Rulings made during the build
+
+Each was the controller's, under the user's ruling A, and was recorded with its cost if wrong.
+
+1. **`Protocol.IN_PROCESS` (`in_process`) arrives in Task 2**, where the first catalog with no
+   wire protocol (Spring events) needs it; §3 names it. Cost if wrong: none.
+2. **The registration reader stays its own pass**: a plain `fluent` catalog carries the
+   registrations block and the endpoint loop skips it whole, so resets and detection behave as
+   before. Cost if wrong: one more pass name in the pipeline list.
+3. **The probe is CP-59**, not CP-58 (taken by `cp58-inherited-mappings`). Cost: none.
+4. **A listener from a sibling module on the classpath counts as a registration**: at run time
+   it is in the same JVM and receives the event. Cost if wrong: a hop to a listener not
+   deployed with this module.
+5. **Dispatch never crosses mechanisms, fixed now** although no analysed module mixes Spring
+   and Akka: a crossing is a false hop, and the fix is one column in the unreleased schema 15.
+   Cost: one fix round.
+6. **`dispatch_implementations` is kept** (listed for the user's sign-off): it is general, and
+   `interface_implementation` needs a registration call and mints endpoint rows. Cost if wrong:
+   one block word to retire.
+7. **`mechanism` is an explicit key on the `dispatch` setting**, required on every dispatch
+   catalog and checked at load. A naming convention read off the catalog id would be hidden and
+   unchecked, and would silently merge or split mechanisms (false or missing hops). Cost: one
+   key inside an approved setting.
+8. **A qualified or parameterized CDI observer is kept keyless**: a false hop is a lie, and
+   the rule turns it into a missing hop with no row dropped. Cost if wrong: `@Observes @Any`
+   loses its hop.
+9. **`drainTo`, `remove()` and Guava's `Queues.drain` are receives; `removeIf` is not.**
+   `removeIf` discards matching values and nothing handles them, so a hop would claim a handler.
+   Cost if wrong: one missing hop class. The last is declared through `object: argN`, a
+   generalisation of `object: receiver`.
+10. **The Gradle Kotlin-only analysis gap found in Task 5 is OI-273**, fixed on open PR #90
+    (this branch predates it); no new issue.
+11. **Identity views keep the object's key and terminal flow receives are declared**:
+    `asSharedFlow`, `asStateFlow`, `receiveAsFlow`, `consumeAsFlow`; `first`, `firstOrNull`,
+    `single`, `collectLatest`, `toList`. `asSharedFlow` is the commonest Kotlin flow idiom and
+    leaving it gives missing hops for real code. Derived flows (`map`, `filter`) stay a stated
+    bound. Cost: one fix round.
+12. **`nullOutSpilledVariable` joins `compiler-null-checks`** (an instance of the 2026-11-02
+    ruling; no endpoint row moved), and `ProducerScope`, `receiveCatching` and
+    `compareAndSet` are owners/receives/sends.
+13. **One Kotlin mechanism, `kotlinx-coroutines`, and the `dispatch_views` word.** The object
+    key keeps channels and flows apart; views serve Reactor, RxJava and JDK wrappers too.
+    Cost: none observed.
+
+### Words beyond §2
+
+The design's table named five words and one setting. What was built adds these, each general
+(no word names a framework) and each documented in D02 §2m:
+
+| Word | Why it was needed |
+|---|---|
+| `dispatch_implementations` | a registration made by implementing an interface (`ApplicationListener<E>`), keyed by its method's parameter (ruling 6) |
+| `dispatch_views` | a call handing back the same object under another type, passed through by the object walk (ruling 13) |
+| `mapping.keyless_when_meta_annotated` | the qualifier marker: an observer whose event parameter carries an annotation meta-annotated by it is kept with no key (ruling 8) |
+| `mapping.selected_by_parameter` | selects a method by a PARAMETER annotation (`@Observes`), keyed by that parameter's type |
+| `dispatch: {mechanism}` | which registrations serve which sends (ruling 7); a key catalog declares it alone |
+| `object: argN` | a receive of the object at argument N (Guava's `Queues.drain`), beside `object: receiver` (ruling 9) |
+| `handler_arg`, `handler_method`, `handler_descriptor` | a receive hands its value to the function it is given (`collect { }`); `handler_arg` and `handler_method` are existing words of D02, only `handler_descriptor` is new |
+
+Also beyond §2: **one Kotlin mechanism** where the first plan had a mechanism per file (ruling
+13); the probe is **CP-59**, not CP-58 (ruling 3); a static module factory's result is read
+through the factory's returns (apollo-portal's `ConfigPublishEvent.instance()`, seven of its
+seventeen sends); `type-models/conformance.yml` declares the root type every class conforms to
+so a listener of `Object` receives every event.
+
+### The corpus
+
+Every row and hop was read against the source by hand; the working record is
+`.superpowers/sdd/2026-11-05-in-process-dispatch/corpus.md` (not in the repository). Each
+module was analysed before and after each task and compared column for column.
+
+| Kind | Where measured | True | False | Missing |
+|---|---|---|---|---|
+| Akka / Pekko | `pekko-sample-sharding-java/killrweather`, `pekko-sample-cluster-java` | 5 rows, 28 hops, 23 registrations, identical before and after | 0 | 0 |
+| Spring application events | apollo-portal | 17 hops, one per publish site | 0 | 0 |
+| CDI events | `stork-quickstart`, `reactive-routes-quickstart` | 5 of 5 registrations; **no fire site exists in `examples/`**, so the hops are pinned on `fixtures/orders-cdi-events` only | 0 | not measurable |
+| Java blocking queues | apollo-biz, apollo-configservice, apollo-portal, dolphinscheduler-alert-server, dolphinscheduler-task-executor | 10 | 0 | 0 (5 found missing at the first count, fixed in fix round 1) |
+| Kotlin channels and flows | playport/server, kotlinconf-app/backend | 7 (6 and 1) | 0 | 0 (1 found missing at the first count, fixed) |
+
+No endpoint row moved on any module, and `scripts/field_check.py` read all six pins ok after
+every task. **Not measured:** koog (its build needs a JDK 17 toolchain and Android targets),
+ktor-samples `chat` and `reverse-proxy-ws` (Kotlin Multiplatform, no build; by reading, the
+first sends on Ktor sessions that no catalog declares and the second only passes channels
+through parameters, so a stop).
+
+### Stated bounds
+
+Each over-reports nothing: the result is a missing hop or a stop that says why, never a false
+hop, except the three over-linking object-key bounds, which merge two objects into one.
+
+- **Spring:** `publishEvent(pojo)` is wrapped in a `PayloadApplicationEvent`, so a listener of
+  `ApplicationEvent` also receives it; those hops are missing (review m5). A generic base class
+  `Base<E> implements ApplicationListener<E>` is keyed `ApplicationEvent`; a static factory
+  called through a subclass is not read (an honest stop).
+- **CDI:** the fire sites' qualifiers and type arguments are not read, so a qualified or
+  parameterized observer has a registration and no hop; `BeanManager.fireEvent` is not
+  declared; `@Observes` and `@ObservesAsync` on one catalog's parameters would register twice
+  (no catalog does).
+- **Queues:** a field read is answered by every write of that field (two instances of one class
+  holding a queue are one object); two queues one module helper makes are one; two objects one
+  library call site hands back are one. A null check no catalog declares (Guava's
+  `Preconditions.checkNotNull`) splits one queue into two keys instead, a missing hop. `peek`,
+  the deque ends and `Queue`-typed receivers are not read. A null check over an unreadable
+  (injected) object makes both sides keyless where they used to share the check's key.
+- **Kotlin:** a flow made by an operator (`map`, `filter`, `onEach`) is another key; `launchIn`
+  and other terminal operators are not receives; a channel in a local of a `suspend` function
+  used after a suspension point is a receiver the facts do not name, so its send is a stop; a
+  data class's generated `copy(channel)` writes its field from a parameter nothing calls, so a
+  send through the property keeps one "key not read" stop beside its hops. A `collect` lambda
+  compiled by javac to an indy lambda (not a kotlinc class) has no handler read. Views are
+  scoped per catalog, not per mechanism.
+- **Every kind:** a key not read (a parameter, an injected object, a call's result) is a stop
+  that says so, never a fan-out. One class named by `class_arg` anywhere in a catalog makes all
+  its inbound rows key rows (D02, `channel_via`).
+
+### Deferred
+
+Minor, from the task reviews, none produced by a real input: `test_source_rules` scans table
+names by token position; `_payload_type` calls the private `_body_parameter` with placeholder
+arguments; `_Reading` takes `catalogs[0].type_model`; `_registers` repeats the
+`annotation_driven`/`key` condition that `endpoints.py` also holds; the `nullOutSpilledVariable`
+entry was re-checked on two Kotlin modules only; the `receiveAsFlow` collector row is labelled
+`match: all` (informational for an object key). Two for the log (OI): the generic-base-class
+listener and the static factory called through a subclass.
