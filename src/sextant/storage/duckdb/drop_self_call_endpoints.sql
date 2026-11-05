@@ -5,7 +5,7 @@
 -- module itself, are decided in `resolve/self_calls.py`; this file is handed the finished
 -- list of rows to remove and only removes them.
 --
--- A second caller, `resolve/message_hops.record_key_handlers` (spec 2026-11-04 §3d item 6),
+-- A second caller, `resolve/dispatch_hops.record_key_handlers` (spec 2026-11-04 §3d item 6),
 -- runs it to remove an inbound key row it rewrites as one row per handler, which it then
 -- inserts through `derive_call_endpoints.sql`; the same DELETE, by `row_id`.
 --

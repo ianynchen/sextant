@@ -148,8 +148,9 @@ rows, none picked.
   `return_flows`' reason: the bundle is a published surface, and freezing this shape into
   one before anything outside the workspace reads it makes every later change breaking.
 
-**`rpc_hops`** carries `caller`, `ordinal`, `protocol`, `path`, `handler` and `evidence`
-(spec `2026-10-25-quarkus-mutiny-grpc-design.md` §3d, ruling 2): where a gRPC client stub's
+**`hops`** (named `rpc_hops` until spec `2026-11-05-in-process-dispatch-design.md` §3, which
+made it every hop's table; columns unchanged) carries `caller`, `ordinal`, `protocol`, `path`,
+`handler` and `evidence` (spec `2026-10-25-quarkus-mutiny-grpc-design.md` §3d, ruling 2): where a gRPC client stub's
 call to an RPC this module serves lands. `call_edges` stops at the client-call API, a library
 whose body no workspace reads, so a trace through `GreeterBlockingStub#sayHello` ended at
 `ClientCalls#blockingUnaryCall` and never reached the module's own `HelloWorldService#sayHello`.
@@ -171,58 +172,69 @@ site, or no row.
 - **Exported**, `path` through the address map, as `roots.path` is ([D06](D06-bundle-format.md)
   §3). A derived table rather than a view, because the rule is Python.
 - **Two writers, one reset** (spec `2026-11-04-akka-pekko-actors-design.md` §3c, §3d item 7):
-  `resolve/rpc_hops.py` above and `resolve/message_hops.py`, each only inserting; the
+  `resolve/rpc_hops.py` above and `resolve/dispatch_hops.py`, each only inserting; the
   pipeline clears the table once per resolve, before both.
-- **An actor message send is a hop too** (`resolve/message_hops.py`). `(caller, ordinal)` is
-  the send's own call site (a `message_sends` entry, D02); `protocol` the declaring catalog's
-  (`actor`); `path` the message's class symbol, or a constant's own symbol where the message
-  is one (`com/acme/actors/Stock$Tick#INSTANCE.`); `handler` each handler the class reaches
-  by `message_handlers`' first-match rule, one row per handler. A class no behavior handles
-  is one row with `handler` NULL. A class not read (a parameter, a factory call's result) is
-  one row with `path` and `handler` NULL: the two NULLs are what say so. `evidence` is
-  `compiler` on every actor hop row, as on every gRPC one, inside [D00](D00-fact-schema.md)
-  §4's closed set: the send site is a compiler fact. A handler whose case `delivers`
-  continues: each class it returns is a row whose `caller` is that handler and whose
-  `ordinal` is the return's own constructor call (a constructor reference's: its
-  super-constructor call).
+- **An in-process dispatch send is a hop too** (spec `2026-11-05-in-process-dispatch-design.md`
+  §1, `resolve/dispatch_hops.py`): code hands a value to a framework or a channel, which calls
+  the handler(s) registered for it — never an endpoint row. `(caller, ordinal)` is the send's
+  own call site (a `dispatch_sends` entry, D02); `protocol` the declaring catalog's (`actor`
+  for Akka and Pekko); `path` the value's class symbol, or a constant's own symbol where the
+  value is one (`com/acme/actors/Stock$Tick#INSTANCE.`); `handler` each handler the class
+  reaches under its registrations' match rule (`dispatch_registrations` below), one row per
+  handler. A class no registration takes is one row with `handler` NULL. A class not read (a
+  parameter, a factory call's result) is one row with `path` and `handler` NULL: the two
+  NULLs are what say so, and never a fan-out. `evidence` is `compiler` on every dispatch hop
+  row, as on every gRPC one, inside [D00](D00-fact-schema.md) §4's closed set: the send site
+  is a compiler fact. A handler whose registration `delivers` continues: each class it
+  returns is a row whose `caller` is that handler and whose `ordinal` is the return's own
+  constructor call (a constructor reference's: its super-constructor call).
 
-**`message_handlers`** carries `behavior`, `position`, `message_type`, `message_value`,
-`predicated`, `handler`, `delivers` and `evidence` (spec `2026-11-04-akka-pekko-actors-design.md`
-§3b): the cases of each behavior a module builds — which message class, or which constant,
-reaches which handler, in the order the behavior tries them. One row per case.
+**`dispatch_registrations`** (named `message_handlers` until spec
+`2026-11-05-in-process-dispatch-design.md` §3; schema 15 unreleased, so no version step)
+carries `group`, `position`, `key_type`, `key_value`, `key_object`, `predicated`, `handler`,
+`delivers` and `match`: every in-process dispatch registration a module makes — which key (a
+class, a constant, or a channel object) reaches which handler, in each group in the order it
+is tried, under the declaring catalog's match rule. One row per registration.
 
-- **`behavior`** is the chain that built it, `<caller>#<root ordinal>`, the caller
-  module-prefixed: one executable chain end of a `message_handlers`-style catalog's walk
-  ([D02](D02-catalog-schema.md) §2). **`position`** is the case's 0-based place in it. Two
-  ends of one root (a builder forked, or a registration on one branch) share the id; the rows
-  are written once where they are equal and are otherwise not ordered against each other.
-- **`message_type`** is the class literal's symbol; NULL for a value case, a predicate-only
-  case, or a class argument that is not a literal. **`message_value`** is the constant's own
-  argument symbol (`<owner>#<field>.`, an `enum` or `field` argument), NULL for a class case.
-  A case the walk could not read keeps its position with every column NULL.
-- **`predicated`** — the registration carries a predicate; such a case never shadows a later
-  one. **`handler`** — the method the handler argument names (a method reference names the
+- **`group`** is the chain that made it, `<caller>#<root ordinal>`, the caller
+  module-prefixed: one executable chain end of a `fluent` catalog carrying
+  `dispatch_registrations` ([D02](D02-catalog-schema.md) §2) — for Akka and Pekko, a
+  behavior. **`position`** is the registration's 0-based place in it. Two ends of one root (a
+  builder forked, or a registration on one branch) share the id; the rows are written once
+  where they are equal and are otherwise not ordered against each other.
+- **`key_type`** is the class literal's symbol; NULL for a value registration, a
+  predicate-only one, or a class argument that is not a literal. **`key_value`** is the
+  constant's own argument symbol (`<owner>#<field>.`, an `enum` or `field` argument), NULL
+  for a class registration. **`key_object`** is the channel object an object key names, its
+  producing call `<caller>#<ordinal>`; NULL for a type key. A registration the walk could not
+  read keeps its position with every key column NULL.
+- **`predicated`** — the registration carries a predicate; it never shadows a later one.
+  **`handler`** — the method the handler argument names (a method reference names the
   method, a lambda its synthetic body), module-prefixed, NULL where none is read.
-  **`delivers`** — the catalog's `returns_message`: the handler's return is a message to its
-  own receiver. **`evidence`** is `compiler`.
-- The first-match rule over these rows is `resolve/message_handlers.reachable_handlers`: per
-  behavior, the first unpredicated case the message matches (its class or a supertype of it,
-  transitively; a value case by identity), and every predicated case before it that matches.
-- **An inbound key row's handlers come from these rows too** (spec §3d item 6,
-  `resolve/message_hops.record_key_handlers`): the key's message class (`ServiceKey.create` /
-  `EntityTypeKey.create` argument 0, D02's `message_class_via`) reaches every case the rule
-  above gives for it, for each subtype of it in the module, and for each constant a value
-  case names whose declared type is one of those (`served_cases`). The registering row is
-  replaced by one `endpoints` row per handler, differing only in `handler`; one row with
-  `handler` NULL where no case is reached or the class was not read. It runs after
-  `record_self_calls`, which therefore read the key as served off the registering row.
-- **Exported whole**: every column is a symbol, an integer or a boolean
+  **`delivers`** — the catalog's `returns_value`: the handler's return is a value handed to
+  its own receiver. **`match`** — the catalog's `dispatch.match`, `first`, `all` or `one`.
+- The match rule over these rows is `resolve/dispatch_registrations.reachable_handlers`:
+  `first`, per group, the first unpredicated registration the value matches (its class or a
+  supertype of it, transitively; a value registration by identity), and every predicated one
+  before it that matches; `all` and `one`, every registration it matches. Each row is asked
+  under its own `match` (`reached_by`).
+- **An inbound key row's handlers come from these rows too** (spec
+  `2026-11-04-akka-pekko-actors-design.md` §3d item 6, `resolve/dispatch_hops.record_key_handlers`):
+  the key's class (`ServiceKey.create` / `EntityTypeKey.create` argument 0, named by the
+  key's `channel_via` entry's `class_arg` and read in the same walk as its name, D02) reaches
+  every registration the rule above gives for it, for each subtype of it in the module, and
+  for each constant a value registration names whose declared type is one of those
+  (`served_cases`). The registering row is replaced by one `endpoints` row per handler,
+  differing only in `handler`; one row with `handler` NULL where no registration is reached
+  or the class was not read. It runs after `record_self_calls`, which therefore read the key
+  as served off the registering row.
+- **Exported whole**: every column is a symbol, an integer, a boolean or a closed-set word
   ([D06](D06-bundle-format.md) §3). A derived table because the reading is Python
-  (`resolve/message_handlers.py`, the shared chain walk); replaced whole per resolve by that
-  one writing pass, which runs right after `rpc_hops`.
-- **A registration no chain holds** (D02's `message_handlers` entry no step names:
-  `messageAdapter`, an ask's reply mapper) is a behavior of its own, `<caller>#<ordinal>` of
-  its call site, one case at position 0.
+  (`resolve/dispatch_registrations.py`, the shared chain walk); replaced whole per resolve by
+  that one writing pass, which runs right after the gRPC hop pass.
+- **A registration no chain holds** (a `dispatch_registrations` entry no step names:
+  `messageAdapter`, an ask's reply mapper) is a group of its own, `<caller>#<ordinal>` of its
+  call site, at position 0.
 
 Kinds deliberately **absent**: `imports` (restates references and containment),
 `field_read` and `field_write` (in JVM code, cross-object field access goes through
@@ -628,7 +640,7 @@ column with its own evidence, never this one.
 | GraphQL non-root resolver | `graphql` | NULL | `Type.field` (`Order.lines`) | the annotation catalogs |
 | WebSocket / STOMP | `websocket` | NULL | the connection path or destination (`/live`, `/orders/place`) | the WebSocket and STOMP catalogs |
 | RSocket route | `rsocket` | NULL | the route the handler answers (`/orders/place`), or the class-level prefix alone for a `@ConnectMapping` naming none | the Spring RSocket catalog (F2 §3.6). Verbless for STOMP's reason: an RSocket route declares no verb. It shares `@MessageMapping` with STOMP and is told apart by the build, or by a `@ConnectMapping` anywhere in the module |
-| Actor message | `actor` | NULL | the key name (a Receptionist service key, a sharded entity type) or the distributed pub-sub topic | the Akka and Pekko actor catalogs (SEXTANT-178). Verbless for the messaging protocols' reason: an actor is addressed by a name, not called by a verb. An inbound key row's `handler` is each handler its message class reaches, one row per handler, NULL where none does (`resolve/message_hops.record_key_handlers`); a pub-sub row's is the method that subscribed |
+| Actor message | `actor` | NULL | the key name (a Receptionist service key, a sharded entity type) or the distributed pub-sub topic | the Akka and Pekko actor catalogs (SEXTANT-178). Verbless for the messaging protocols' reason: an actor is addressed by a name, not called by a verb. An inbound key row's `handler` is each handler its key class reaches, one row per handler, NULL where none does (`resolve/dispatch_hops.record_key_handlers`); a pub-sub row's is the method that subscribed |
 | SSE | `sse` | the HTTP verb (`GET`) | the route path (`/events/stream`) | an HTTP row, reclassified ([D02](D02-catalog-schema.md) §2's `protocol_hint`) |
 | SOAP operation | `soap` | NULL | the input element's QName in W3C notation (`{http://orders.example.com/ws}placeOrderRequest`) | the SOAP annotation catalogs, `single_call` off the payload type, and `schema_operations` from the WSDL |
 | SOAP action | `soap` | NULL | the action URI verbatim (`http://orders.example.com/action/cancelOrder`) | the Spring-WS catalog |
@@ -830,7 +842,7 @@ So the walk **is** the representation: `trace_of` (§5) computes it on demand, d
 scope. A trace can never disagree with the edges it came from, because it is them.
 
 **Built by 2Q's `G4`/`I3`** — `application/query/trace.py`, over `call_edges`, `roots`,
-`return_flows` and `rpc_hops`. Module scope only; the federation half is `Bundle`/`Link`
+`return_flows` and `hops`. Module scope only; the federation half is `Bundle`/`Link`
 work and unbuilt.
 
 **It takes a ROOT, not an endpoint** (`I3`, ruled by the user): a scheduled job contains
@@ -850,7 +862,7 @@ with no children is a method that calls nothing):
 
 **A gRPC call to this module's own service is a hop, not a stop** (spec
 `2026-10-25-quarkus-mutiny-grpc-design.md` §3d, ruling 2). At a `call_edges` row whose
-`(caller, ordinal)` has `rpc_hops` rows, the walk takes one step per hop instead of the
+`(caller, ordinal)` has `hops` rows, the walk takes one step per hop instead of the
 `boundary` step: the row's `target`, `invoke_kind` and `resolution`, `callee` the hop's
 `handler`, and `via` the wire path (`grpc helloworld.Greeter/SayHello`). The handler is then
 any callee, so it is expanded, `revisited` or a `cycle` by the table above, and a hop whose
@@ -859,9 +871,9 @@ any callee, so it is expanded, `revisited` or a `cycle` by the table above, and 
 at the handler's lifeline, labelled `blockingUnaryCall (declared ClientCalls) via grpc
 helloworld.Greeter/SayHello`, and the step table's `Reaches` reads `via` and the wire path.
 
-**An actor message send is walked the same way** (spec `2026-11-04-akka-pekko-actors-design.md`
-§3c): at a send whose `rpc_hops` rows name handlers, the step goes to each, `via` the message
-class (`actor com/acme/actors/OrderEntity$Get#`); a class nobody here handles stays
+**An in-process dispatch send is walked the same way** (spec
+`2026-11-04-akka-pekko-actors-design.md` §3c, `2026-11-05-in-process-dispatch-design.md` §1):
+at a send whose `hops` rows name handlers, the step goes to each, `via` the value's class (`actor com/acme/actors/OrderEntity$Get#`); a class nobody here handles stays
 `boundary` with its class; a class not read (the hop's `path` NULL) stays `boundary` with
 `via` saying so (`actor (message class not read)`), never `actor None`.
 
@@ -1501,7 +1513,7 @@ own cadence.
 | 12 | `endpoints` gains `served_by`, the class serving the row: the type its prefix and gate were composed with — the subclass, for a mapping a controller inherits without overriding and for an inherited exposed member. `endpoint_conditions` and the documents find the row's bean there (own symbol first), since Spring reads conditions off the registered class and `@Conditional` is not `@Inherited` (spec `2026-10-30-object-identity-design.md`, ruling 8). The export carries the column | refused by its stamp exactly as at 5 to 11, so an inherited row — whose conditions the older vintage read off the base — is re-derived rather than read beside rows that name their serving class |
 | 13 | `endpoints` gains `path_kind` (`pattern` where the path is a regular expression, not an address) and `method_kind` (`any` where the row serves every HTTP method) (spec `2026-10-30-vertx-web-design.md` §3a). The linker never links a pattern path by path and links a call of any verb to an any-method row; a NULL `method` without the marker still means no verb was read. `roots` and `open_questions` carry both markers from the endpoint row they name, so a trace heading or an open question on such a row reads as the row does. The export carries all of them | refused by its stamp exactly as at 5 to 12, so a pattern is never read as an address from an older vintage |
 | 14 | `scheduled_work` gains `refused`: why the framework refuses the call that schedules a job, NULL where it accepts it, read from the catalog's `hand_off_effects` (spec `2026-11-02-per-path-truth-design.md` rule 7, the column ruled by the user 2026-11-02). A refused row's handler is not a root. The export carries the column, and the boundary vocabulary moves to 4 (`schedule` gains the attribute) [ruled 2026-11-02 by the user] | refused by its stamp exactly as at 5 to 13, so a refused schedule is never read from an older vintage as one that runs |
-| 15 | `message_handlers`, a new derived table: each behavior's message handler cases in the order the behavior tries them (spec `2026-11-04-akka-pekko-actors-design.md` §3b, approved by the user with the design). The export carries it | refused by its stamp exactly as at 5 to 14, so a workspace without the table is re-analysed rather than read as one that builds no behavior |
+| 15 | `message_handlers`, a new derived table: each behavior's message handler cases in the order the behavior tries them (spec `2026-11-04-akka-pekko-actors-design.md` §3b, approved by the user with the design). The export carries it. Renamed before release (spec `2026-11-05-in-process-dispatch-design.md` §3): `dispatch_registrations`, columns `group`, `position`, `key_type`, `key_value`, `key_object`, `predicated`, `handler`, `delivers`, `match`, and `rpc_hops` renamed `hops`; still 15, since no 15 was released | refused by its stamp exactly as at 5 to 14, so a workspace without the table is re-analysed rather than read as one that builds no behavior |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the

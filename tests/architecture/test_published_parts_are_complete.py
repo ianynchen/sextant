@@ -28,7 +28,10 @@ def _parts_set_by_steps() -> dict[str, set[str]]:
     """Each fluent catalog's id, with every part one of its steps can set."""
     found: dict[str, set[str]] = {}
     for catalog in YamlCatalogSource(CATALOGS).load():
-        if catalog.style != "fluent":
+        # A chain catalog carrying `dispatch_registrations` publishes no endpoint row: its
+        # chain ends are registrations (spec 2026-11-05 §2), and its one part, `case`, is the
+        # registration call the pass reads, never a column of a row `fluent` writes.
+        if catalog.style != "fluent" or catalog.dispatch_registrations:
             continue
         _, _, steps = _declared_entries(catalog)
         parts: set[str] = set()

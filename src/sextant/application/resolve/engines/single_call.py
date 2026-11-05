@@ -1428,7 +1428,7 @@ def _validate_methods(rows: list[dict[str, Any]], catalog: Catalog) -> None:
                 raise CatalogError(
                     f"loading catalog {catalog.source}: `{row['name']}` declares a "
                     f"`channel_via` entry that must be `{{owner, method, "
-                    f'arg: int|"all_strings", arity?: int}}`, got {entry!r}'
+                    f'arg: int|"all_strings", arity?: int, class_arg?: int}}`, got {entry!r}'
                 )
         if _ADDRESS_ARG_2 in row:
             # The second half of a PAIR, so it means nothing without the

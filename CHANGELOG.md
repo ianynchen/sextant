@@ -17,6 +17,21 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **In-process dispatch is one general mechanism** (spec 2026-11-05, the user's ruling A on the
+  actor words: "invented just for one framework"). Code that hands a value to a framework or a
+  channel, which calls the handler(s) registered for it, is a trace hop and never an endpoint
+  row. A catalog says how with one setting, `dispatch: {key: type | object, match: first | all
+  | one}`, and three blocks any style may carry (D02 §2m): `dispatch_registrations` (on an
+  ordinary `fluent` chain catalog, whose chain ends are then registrations — the endpoint loop
+  leaves it out), `dispatch_sends` and `dispatch_receives`. The graph table is
+  `dispatch_registrations` (`group`, `position`, `key_type`, `key_value`, `key_object`,
+  `predicated`, `handler`, `delivers`, `match`; schema 15, unreleased) and every hop is in
+  `hops`, which `rpc_hops` was. `match: all` and `one` reach every matching registration. A
+  key's class is a `channel_via` entry's `class_arg`, read from the same producing call in the
+  same walk as its name. The Akka and Pekko catalogs are re-expressed in these words; their
+  rows and hops are unchanged on both fixtures and on the two Pekko samples (5 rows, 28 hops,
+  23 registrations, identical). No catalog word or table starts with `message_`, and no code
+  names Akka or Pekko (architecture tests).
 - **Akka and Pekko actors: a trace crosses actors** (spec 2026-11-04, SEXTANT-178, the user's
   ruling B "I want it complete"; probe CP-57, Akka 2.6.21 and Pekko 1.1.3). Three parts, each
   pinned on `fixtures/orders-actors-pekko` and `-akka`, then the measurement:
@@ -27,21 +42,21 @@ here would restate those documents rather than add anything.
     read: `unresolved`); `Receptionist.subscribe`/`find`,
     `entityRefFor`, and pub-sub `Publish`/`Send` are outbound rows. A key or topic the module
     serves itself gives no outbound row: `self_calls` now matches `actor` beside `grpc`.
-  - **An inbound key row names its handlers.** A new `single_call` word, `message_class_via`
-    (D02 §2), reads the key's message class beside its name; the row becomes one row per
+  - **An inbound key row names its handlers.** The key's `channel_via` entry names its class
+    (`class_arg`, D02 §2), read in the same walk as its name; the row becomes one row per
     handler a message of that class (or a subtype) reaches, as a route with two handlers is two
-    rows. A class reaching none keeps one row with no handler. A class is paired with a key only
-    where the two walks' paths agree, so two keys built by one helper stay apart.
-  - **Every message send is a trace hop.** A new catalog word, `message_sends`, declares each
+    rows. A class reaching none keeps one row with no handler. The class is read in the calling
+    context the name was read in, so two keys built by one helper stay apart.
+  - **Every message send is a trace hop.** The handler catalogs' `dispatch_sends` declare each
     send and the argument holding its message: `tell`, `ask` (`EntityRef`, `AskPattern`,
     `context.ask`, classic `Patterns.ask`), timers, `scheduleOnce`, `setReceiveTimeout`,
     `pipeToSelf`. Each send
-    writes one `rpc_hops` row per handler its message's class reaches, first match per
+    writes one `hops` row per handler its message's class reaches, first match per
     behavior, so the trace walks from `ref.ask(r -> new Query(…))` into the handler. A
     constant message (`Tick.INSTANCE`) is matched by identity; a `messageAdapter` function or
     an ask's reply mapper continues to the handler of each class it returns. A class nobody
     handles is a stop that names it; a class not read is a stop that says so, never a hop to
-    every handler. `rpc_hops` has one reset before its two writers.
+    every handler. `hops` has one reset before its two writers.
   - **Measured on the Pekko samples** `pekko-sample-sharding-java/killrweather` and
     `pekko-sample-cluster-java`: 5 endpoint rows and 28 hops, all true by hand; the trace from
     killrweather's `WeatherRoutes.query` reaches `WeatherStation#onQuery`. The one hop the first
@@ -54,13 +69,13 @@ here would restate those documents rather than add anything.
     Async cell reads ✅. The Akka HTTP route DSL is still open (§5.1).
 
 - **Akka and Pekko message handlers are read per behavior** (spec 2026-11-04 §3b, §3d items 1-3;
-  `GRAPH_SCHEMA_VERSION` 15, approved with the design). A new catalog style and word,
-  `message_handlers` (D02 §2), declares the builders a behavior is made with — the immutable
+  `GRAPH_SCHEMA_VERSION` 15, approved with the design). The handler catalogs, `fluent` chain
+  catalogs carrying `dispatch_registrations` (D02 §2m), declare the builders a behavior is made with — the immutable
   `Behaviors.receive(C)`, the mutable `newReceiveBuilder()`, persistence `forAnyState`/
   `forState`/`forStateType`, classic `receiveBuilder()` and `ReceiveBuilder.create()` — and what
   each registration's arguments mean, every descriptor and "returns `this`" measured in CP-57.
-  The new `message_handlers` table holds each case in the order the behavior tries it, and
-  `reachable_handlers` is the first-match rule: the first unpredicated case a message's class
+  The new `dispatch_registrations` table holds each case in the order the behavior tries it, and
+  `reachable_handlers` is the first-match rule (`match: first`): the first unpredicated case a message's class
   (or a supertype) or constant matches, and every predicated case before it. Exported.
 - **A call made through a type that inherits the method is that method's call** (JVMS 5.4.3.3):
   a chain root, and a `single_call` row, also match a call naming a subtype of the declared
@@ -471,8 +486,8 @@ here would restate those documents rather than add anything.
   to the service the generated classes delegate to (`grpc-quarkus-client.yml`): a generated
   wrapper's identity is the one marked class its own code calls into. The generated bean no
   longer fences a client. A gRPC client row for a service the module serves is dropped, and the
-  new derived table `rpc_hops` records where the stub's call into `ClientCalls` lands. The trace
-  follows it to the handler: the step carries `via grpc <path>`, and the document's arrow and
+  new derived table `rpc_hops` (now `hops`) records where the stub's call into `ClientCalls`
+  lands. The trace follows it to the handler: the step carries `via grpc <path>`, and the document's arrow and
   `Reaches` cell say so. **`GRAPH_SCHEMA_VERSION` moves 7 → 8** (a new table): re-analyse the
   workspace. Measured on both `quarkus-quickstarts` gRPC modules: `helloworld.Greeter/SayHello`
   is joined to its handler with no question, no gRPC outbound row is left, and both REST traces

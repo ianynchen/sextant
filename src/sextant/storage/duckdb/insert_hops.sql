@@ -1,5 +1,5 @@
--- `resolve/rpc_hops.py`'s rows (spec 2026-10-25 §3d), and `resolve/message_hops.py`'s (spec
--- 2026-11-04 §3c). Every decision — which classes are
+-- `resolve/rpc_hops.py`'s rows (spec 2026-10-25 §3d), and `resolve/dispatch_hops.py`'s (spec
+-- 2026-11-05 §1; the table was `rpc_hops` until then). Every decision — which classes are
 -- client stubs, which wire method a stub method names, where its call leaves for the
 -- wire, which services the module serves — is made in the pass; this file is handed the
 -- finished rows and only inserts them. The insert_resolved_schedules.sql precedent for a
@@ -9,7 +9,7 @@
 --   $rows -- {caller, ordinal, protocol, path, handler, evidence} rows, one per (stub
 --             method, handler); `caller` and `handler` module-prefixed, `handler` NULL
 --             where the module serves the service but not this RPC.
-INSERT INTO rpc_hops (caller, ordinal, protocol, path, handler, evidence)
+INSERT INTO hops (caller, ordinal, protocol, path, handler, evidence)
 SELECT r.caller, r.ordinal, r.protocol, r.path, r.handler, r.evidence
 FROM (SELECT UNNEST(
     $rows::STRUCT(

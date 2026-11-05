@@ -143,7 +143,7 @@ _GREETER_FACTS: list[object] = [
 
 
 def _hops(workspace: DuckDbWorkspace) -> list[tuple[object, ...]]:
-    rows = [tuple(row.values()) for row in workspace.query("rpc_hops")]
+    rows = [tuple(row.values()) for row in workspace.query("hops")]
     workspace.close()
     return rows
 
@@ -339,9 +339,9 @@ def test_a_stub_method_that_never_reaches_the_client_call_api_gets_no_hop(
 
 
 def test_the_pass_only_inserts(tmp_path: Path) -> None:
-    """`rpc_hops` has two writers (spec 2026-11-04 §3d item 7), so neither clears it: a row
+    """`hops` has two writers (spec 2026-11-04 §3d item 7), so neither clears it: a row
     the other wrote survives this pass. The pipeline resets the table once before both, which
-    `test_message_hops.py::test_a_second_analysis_replaces_the_hops` pins."""
+    `test_dispatch_hops.py::test_a_second_analysis_replaces_the_hops` pins."""
     workspace = _workspace(
         tmp_path,
         facts=_GREETER_FACTS,
@@ -357,7 +357,7 @@ def test_the_pass_only_inserts(tmp_path: Path) -> None:
         "handler": None,
         "evidence": "compiler",
     }
-    workspace.derive("rpc_hops_insert", rows=[other])
+    workspace.derive("hops_insert", rows=[other])
     record_rpc_hops(workspace, [_catalog()])
     rows = _hops(workspace)
     assert tuple(other.values()) in rows

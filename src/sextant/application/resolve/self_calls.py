@@ -30,7 +30,7 @@ design (spec 2026-11-04 §3d item 5) applies it to `actor`: a key or topic the m
 registers, inits or subscribes to is served here, so a call naming it is a hop. An actor
 row comes from a registration call in code, never from a schema, so when this pass runs its
 `handler` is always set: the registering method, as `single_call` wrote it. A key row's
-handlers are named later, by its message class (`message_hops.record_key_handlers`, after
+handlers are named later, by its key class (`dispatch_hops.record_key_handlers`, after
 this pass in the pipeline), and a key no handler here serves ends with `handler` NULL; it
 was served when this pass read it, which is what keeps a call naming it a hop.
 

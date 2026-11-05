@@ -1,6 +1,7 @@
-"""Message handler registrations are read per behavior (spec 2026-11-04 §3b, §3d items 1-3):
-one `message_handlers` row per case, in chain order, and `reachable_handlers` applies the
-first-match rule a behavior dispatches by.
+"""Dispatch registrations are read per group (spec 2026-11-05 §2, 2026-11-04 §3b, §3d items
+1-3): one `dispatch_registrations` row per registration, in chain order, and
+`reachable_handlers` applies the catalog's match rule (`first` for a behavior, `all` and `one`
+for every matching registration).
 
 The chains are hand-built call sites in the shape javac emits (CP-57), read through the
 shipped Pekko handler catalog, so each test is one shape: an immutable builder chain, a
@@ -15,9 +16,9 @@ import pytest
 
 from flow_facts import straight_line
 from sextant.application.ports.catalogs import Catalog
-from sextant.application.resolve.message_handlers import (
+from sextant.application.resolve.dispatch_registrations import (
     reachable_handlers,
-    record_message_handlers,
+    record_dispatch_registrations,
     served_cases,
 )
 from sextant.domain.closed_sets import OriginTier
@@ -123,7 +124,7 @@ def _rows(
     hierarchy: tuple[tuple[str, str], ...] = (),
     catalog_id: str = "pekko-actor-handlers",
 ) -> list[dict]:
-    """The `message_handlers` rows `facts` give, `hierarchy` as `(child, superclass)` pairs,
+    """The `dispatch_registrations` rows `facts` give, `hierarchy` as `(child, superclass)` pairs,
     each written as the child's own symbol fact naming its superclass, as the extractor
     writes one."""
     handlers = sorted(
@@ -157,23 +158,23 @@ def _rows(
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     try:
         workspace.load_facts(tmp_path / "facts")
-        record_message_handlers(workspace, [_handlers_catalog(catalog_id)])
-        return workspace.query("message_handlers")
+        record_dispatch_registrations(workspace, [_handlers_catalog(catalog_id)])
+        return workspace.query("dispatch_registrations")
     finally:
         workspace.close()
 
 
 def _cases(rows: list[dict]) -> list[tuple]:
-    """`(behavior's caller method, position, message_type, message_value, predicated,
+    """`(group's caller method, position, key_type, key_value, predicated,
     handler's method name)`, the module prefix and signatures left out."""
     return [
         (
-            str(row["behavior"]).split("#")[1].split("(")[0]
+            str(row["group"]).split("#")[1].split("(")[0]
             + "#"
-            + str(row["behavior"]).rsplit("#", 1)[1],
+            + str(row["group"]).rsplit("#", 1)[1],
             row["position"],
-            None if row["message_type"] is None else str(row["message_type"]).split("$")[1],
-            row["message_value"],
+            None if row["key_type"] is None else str(row["key_type"]).split("$")[1],
+            row["key_value"],
             row["predicated"],
             None if row["handler"] is None else str(row["handler"]).split("#")[1].split("(")[0],
         )
@@ -181,7 +182,7 @@ def _cases(rows: list[dict]) -> list[tuple]:
     ]
 
 
-@pytest.mark.pins("message-handlers.the-cases-are-WRITTEN")
+@pytest.mark.pins("dispatch-registrations.the-registrations-are-WRITTEN")
 def test_an_immutable_builder_chain_is_one_behavior(tmp_path: Path):
     """`Behaviors.receive(Command.class).onMessage(A).onMessage(B).onMessage(C).build()`:
     each `onMessage` returns a NEW builder (CP-57 finding 1), so the behavior is the chain
@@ -243,48 +244,50 @@ def test_an_immutable_builder_chain_is_one_behavior(tmp_path: Path):
         ("behavior#0", 1, "Release#", None, False, "onRelease"),
         ("behavior#0", 2, "Restock#", None, False, "onRestock"),
     ]
-    assert {str(row["behavior"]) for row in rows} == {f"{caller}#0"}
+    assert {str(row["group"]) for row in rows} == {f"{caller}#0"}
     assert {str(row["handler"]).startswith(_MODULE) for row in rows} == {True}
     assert {row["delivers"] for row in rows} == {False}
-    assert {row["evidence"] for row in rows} == {"compiler"}
+    assert {row["key_object"] for row in rows} == {None}
+    assert {row["match"] for row in rows} == {"first"}
 
 
-def _row(behavior: str, position: int, message_type=None, message_value=None, predicated=False):
+def _row(group: str, position: int, key_type=None, key_value=None, predicated=False, match="first"):
     return {
-        "behavior": behavior,
+        "group": group,
         "position": position,
-        "message_type": message_type,
-        "message_value": message_value,
+        "key_type": key_type,
+        "key_value": key_value,
+        "key_object": None,
         "predicated": predicated,
-        "handler": f"h{behavior}{position}",
+        "handler": f"h{group}{position}",
         "delivers": False,
-        "evidence": "compiler",
+        "match": match,
     }
 
 
 _SUPERTYPES = {"Reserve#": {"Command#"}, "Release#": {"Command#"}, "Tick#": {"Command#"}}
 
 
-@pytest.mark.pins("message-handlers.the-FIRST-unpredicated-match-wins")
+@pytest.mark.pins("dispatch-registrations.the-FIRST-unpredicated-match-wins")
 def test_first_match_wins_within_a_behavior():
     """A message reaches the FIRST unpredicated case its class is assignable to: `Reserve`
     is a `Command`, so `onMessage(Command)` at 0 takes it and `onMessage(Reserve)` at 1 is
     never reached."""
     rows = [_row("b", 0, "Command#"), _row("b", 1, "Reserve#")]
-    assert [row["position"] for row in reachable_handlers(rows, "Reserve#", None, _SUPERTYPES)] == [
-        0
-    ]
+    assert [
+        row["position"] for row in reachable_handlers(rows, "Reserve#", None, _SUPERTYPES, "first")
+    ] == [0]
 
 
 def test_the_case_a_message_reaches_is_found_past_cases_of_other_classes():
     """A case for another class neither matches nor shadows: `Release` reaches position 1."""
     rows = [_row("b", 0, "Reserve#"), _row("b", 1, "Release#"), _row("b", 2, "Command#")]
-    assert [row["position"] for row in reachable_handlers(rows, "Release#", None, _SUPERTYPES)] == [
-        1
-    ]
+    assert [
+        row["position"] for row in reachable_handlers(rows, "Release#", None, _SUPERTYPES, "first")
+    ] == [1]
 
 
-@pytest.mark.pins("message-handlers.a-PREDICATED-case-never-shadows")
+@pytest.mark.pins("dispatch-registrations.a-PREDICATED-case-never-shadows")
 def test_a_predicated_case_never_shadows():
     """`onMessage(Release, pred)` at 1 may decline a `Release` (its predicate is not read), so
     `onMessage(Release)` at 2 is reachable too; both are hop targets."""
@@ -294,32 +297,36 @@ def test_a_predicated_case_never_shadows():
         _row("b", 2, "Release#"),
         _row("b", 3, "Command#"),
     ]
-    assert [row["position"] for row in reachable_handlers(rows, "Release#", None, _SUPERTYPES)] == [
+    assert [
+        row["position"] for row in reachable_handlers(rows, "Release#", None, _SUPERTYPES, "first")
+    ] == [
         1,
         2,
     ]
 
 
-@pytest.mark.pins("message-handlers.a-PREDICATE-only-case-tests-every-message")
+@pytest.mark.pins("dispatch-registrations.a-PREDICATE-only-case-tests-every-message")
 def test_a_predicate_with_no_class_tests_every_message():
     """`onCommand(Predicate, h)` names no class: it may take any command, so it is reachable
     by every message and shadows nothing."""
     rows = [_row("b", 0, predicated=True), _row("b", 1, "Reserve#")]
-    assert [row["position"] for row in reachable_handlers(rows, "Reserve#", None, _SUPERTYPES)] == [
+    assert [
+        row["position"] for row in reachable_handlers(rows, "Reserve#", None, _SUPERTYPES, "first")
+    ] == [
         0,
         1,
     ]
 
 
-@pytest.mark.pins("message-handlers.a-VALUE-case-matches-by-IDENTITY")
+@pytest.mark.pins("dispatch-registrations.a-VALUE-case-matches-by-IDENTITY")
 def test_a_value_case_matches_its_constant_only():
     """`onMessageEquals(Tick.INSTANCE)` matches the constant by identity (§3d item 3): a
     `Tick.INSTANCE` send reaches it, a `new Tick()` (its class alone) does not, and reaches
     the class case after it."""
-    rows = [_row("b", 0, message_value="Tick#INSTANCE."), _row("b", 1, "Command#")]
-    constant = reachable_handlers(rows, "Tick#", "Tick#INSTANCE.", _SUPERTYPES)
+    rows = [_row("b", 0, key_value="Tick#INSTANCE."), _row("b", 1, "Command#")]
+    constant = reachable_handlers(rows, "Tick#", "Tick#INSTANCE.", _SUPERTYPES, "first")
     assert [row["position"] for row in constant] == [0]
-    constructed = reachable_handlers(rows, "Tick#", None, _SUPERTYPES)
+    constructed = reachable_handlers(rows, "Tick#", None, _SUPERTYPES, "first")
     assert [row["position"] for row in constructed] == [1]
 
 
@@ -328,14 +335,54 @@ def test_each_behavior_answers_on_its_own():
     not dispatched across behaviors, and which one a reference holds is not read."""
     rows = [_row("a", 0, "Reserve#"), _row("b", 0, "Command#"), _row("b", 1, "Reserve#")]
     assert [
-        (row["behavior"], row["position"])
-        for row in reachable_handlers(rows, "Reserve#", None, _SUPERTYPES)
+        (row["group"], row["position"])
+        for row in reachable_handlers(rows, "Reserve#", None, _SUPERTYPES, "first")
     ] == [("a", 0), ("b", 0)]
 
 
 def test_a_message_no_case_takes_reaches_nothing():
     rows = [_row("b", 0, "Reserve#")]
-    assert reachable_handlers(rows, "Placed#", None, _SUPERTYPES) == []
+    assert reachable_handlers(rows, "Placed#", None, _SUPERTYPES, "first") == []
+
+
+@pytest.mark.pins("endpoints.a-REGISTRATION-catalog-runs-no-engine")
+def test_a_fluent_catalog_declaring_registrations_mints_no_endpoint_row(tmp_path: Path):
+    """A `fluent` chain catalog carrying `dispatch_registrations` describes registrations,
+    and its chain ends become `dispatch_registrations` rows, written by their own pass: the
+    endpoint loop leaves it out whole, so it is neither run nor reported skipped (a skip
+    would say the module lacks a capability it needs for endpoints it never mints)."""
+    from sextant.application.resolve.endpoints import derive_endpoints
+
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        skipped = derive_endpoints(workspace, [_handlers_catalog()], set())
+        rows = workspace.query("endpoints")
+    finally:
+        workspace.close()
+    assert _handlers_catalog().style == "fluent"
+    assert skipped == []
+    assert rows == []
+
+
+@pytest.mark.pins("dispatch-registrations.match-ALL-takes-every-matching-registration")
+@pytest.mark.parametrize("match", ["all", "one"])
+def test_match_all_reaches_every_matching_registration(match: str):
+    """`match: all` (listeners) and `match: one` (consumers of one queue, which one takes a
+    value being decided at run time) reach EVERY registration whose key the value matches, in
+    every group: a `Command` registration before a `Reserve` one shadows nothing, and an
+    unpredicated match does not end the search. A registration for another class is still
+    not reached, and a class not read reaches nothing (spec 2026-11-05 §1)."""
+    rows = [
+        _row("a", 0, "Command#", match=match),
+        _row("a", 1, "Reserve#", match=match),
+        _row("b", 0, "Release#", match=match),
+        _row("c", 0, "Reserve#", match=match),
+    ]
+    assert [
+        (row["group"], row["position"])
+        for row in reachable_handlers(rows, "Reserve#", None, _SUPERTYPES, match)
+    ] == [("a", 0), ("a", 1), ("c", 0)]
+    assert reachable_handlers(rows, None, None, _SUPERTYPES, match) == []
 
 
 _CONSTANTS = {"Tick#INSTANCE.": "Tick#", "Other#INSTANCE.": "Other#"}
@@ -343,12 +390,12 @@ _CONSTANTS = {"Tick#INSTANCE.": "Tick#", "Other#INSTANCE.": "Other#"}
 
 def _served(rows: list[dict], message_class: str | None) -> list[tuple]:
     return [
-        (row["behavior"], row["position"])
+        (row["group"], row["position"])
         for row in served_cases(rows, message_class, _SUPERTYPES, _CONSTANTS)
     ]
 
 
-@pytest.mark.pins("message-handlers.a-key-reaches-the-cases-of-its-SUBTYPES")
+@pytest.mark.pins("dispatch-registrations.a-key-reaches-the-cases-of-its-SUBTYPES")
 def test_a_key_class_reaches_each_case_of_a_subtype():
     """An inbound key carries a `Command` (spec §3d item 6): every case some `Command` reaches
     is one of its handlers — `Reserve`'s, both `Release` cases (a predicate never shadows) —
@@ -362,14 +409,14 @@ def test_a_key_class_reaches_each_case_of_a_subtype():
     assert _served(rows, "Command#") == [("b", 0), ("b", 1), ("b", 2)]
 
 
-@pytest.mark.pins("message-handlers.a-key-reaches-a-VALUE-case-of-its-class")
+@pytest.mark.pins("dispatch-registrations.a-key-reaches-a-VALUE-case-of-its-class")
 def test_a_key_class_reaches_a_value_case_whose_constant_is_one():
     """`onMessageEquals(Tick.INSTANCE)`: the constant is a `Tick`, a `Command`, so a key
     carrying `Command`s reaches the case. A constant of a class that is no `Command` does
     not."""
     rows = [
-        _row("b", 0, message_value="Tick#INSTANCE."),
-        _row("b", 1, message_value="Other#INSTANCE."),
+        _row("b", 0, key_value="Tick#INSTANCE."),
+        _row("b", 1, key_value="Other#INSTANCE."),
     ]
     assert _served(rows, "Command#") == [("b", 0)]
 
@@ -424,7 +471,7 @@ def _state_chain(caller: str, at: int, builder: int, root: str, case: str, handl
     ]
 
 
-@pytest.mark.pins("message-handlers.each-ROOT-is-its-own-behavior")
+@pytest.mark.pins("dispatch-registrations.each-ROOT-is-its-own-group")
 def test_each_for_state_chain_is_its_own_behavior(tmp_path: Path):
     """`forState(p1).onCommand(Cancel, a)`, `forState(p2).onCommand(Cancel, b)` and
     `forAnyState().onCommand(Place, c)` on one `CommandHandlerBuilder`: each call returns a
@@ -570,13 +617,15 @@ def test_the_classic_builders_static_factory_starts_a_behavior(
     ]
 
 
-@pytest.mark.pins("message-handlers.the-SUPERTYPE-closure-is-walked")
+@pytest.mark.pins("dispatch-registrations.the-SUPERTYPE-closure-is-walked")
 def test_a_supertype_closure_is_walked_whole():
     """`reachable_handlers` walks `supertypes` itself: a map of DIRECT supertypes reaches a
     case two levels up, through an interface (`Reserve implements Stocked extends Command`)."""
     rows = [_row("b", 0, "Command#")]
     direct = {"Reserve#": {"Stocked#"}, "Stocked#": {"Command#"}}
-    assert [row["position"] for row in reachable_handlers(rows, "Reserve#", None, direct)] == [0]
+    assert [
+        row["position"] for row in reachable_handlers(rows, "Reserve#", None, direct, "first")
+    ] == [0]
 
 
 def _statement_builder(prefix: str, caller: str, mutable: bool) -> list[CallSiteFact]:
@@ -814,15 +863,15 @@ def test_a_builder_never_built_registers_nothing(tmp_path: Path):
         ({"handler_arg": 1}, "no `class_arg`, `value_arg` or `predicate_arg`"),
         ({"class_arg": 0, "handler_arg": 2}, "not an argument"),
         ({"class_arg": 0, "handler_arg": 0}, "one argument for two meanings"),
-        ({"class_arg": 0, "handler_arg": 1, "returns_message": "always"}, "not true or false"),
-        ({"class_arg": 0, "handler_arg": 1, "message_arg": 0}, "unknown keys"),
+        ({"class_arg": 0, "handler_arg": 1, "returns_value": "always"}, "not true or false"),
+        ({"class_arg": 0, "handler_arg": 1, "returns_message": True}, "unknown keys"),
     ],
 )
 def test_a_malformed_registration_is_refused_at_load(tmp_path: Path, entry: dict, refused: str):
     from sextant.application.ports.catalogs import CatalogError
 
     (tmp_path / "c.yml").write_text(
-        "id: c\nstyle: message_handlers\nmatches:\n  message_handlers:\n"
+        "id: c\nstyle: fluent\ndispatch: {key: type, match: first}\nmatches:\n  dispatch_registrations:\n"
         "    - { owner: a.B, method: handle, descriptor: '(Ljava/lang/Class;Ljava/lang/Object;)V', "
         + ", ".join(
             f"{key}: {value!r}" if not isinstance(value, str) else f"{key}: {value}"
@@ -835,15 +884,88 @@ def test_a_malformed_registration_is_refused_at_load(tmp_path: Path, entry: dict
         YamlCatalogSource(tmp_path).load()
 
 
-def test_a_registration_is_loaded_with_its_positions(tmp_path: Path):
+@pytest.mark.parametrize(
+    "header, refused",
+    [
+        ("", "declares a dispatch block and no `dispatch`"),
+        ("dispatch: {key: type}\n", "`dispatch` must be"),
+        ("dispatch: {key: name, match: first}\n", "`key: name`"),
+        ("dispatch: {key: type, match: some}\n", "`match: some`"),
+        ("dispatch: {key: type, match: first, order: 1}\n", "`dispatch` must be"),
+    ],
+)
+def test_a_dispatch_block_needs_a_well_formed_dispatch_setting(
+    tmp_path: Path, header: str, refused: str
+):
+    """Every catalog declaring a dispatch block says how its dispatch works (spec 2026-11-05
+    §2): `key` one of `type` or `object`, `match` one of `first`, `all` or `one`, nothing
+    else."""
+    from sextant.application.ports.catalogs import CatalogError
+
     (tmp_path / "c.yml").write_text(
-        "id: c\nstyle: message_handlers\nmatches:\n  message_handlers:\n"
+        f"id: c\nstyle: fluent\n{header}matches:\n  dispatch_registrations:\n"
         "    - { owner: a.B, method: handle, descriptor: '(Ljava/lang/Class;Ljava/lang/Object;)V', "
-        "class_arg: 0, handler_arg: 1, returns_message: true }\n",
+        "class_arg: 0, handler_arg: 1 }\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(CatalogError, match=refused):
+        YamlCatalogSource(tmp_path).load()
+
+
+def test_a_receive_is_loaded_with_its_object_and_handler(tmp_path: Path):
+    """`dispatch_receives` (read by the object-key pass): the receive call, the object it
+    takes from (`receiver`) and where its handler is (`enclosing`, or `lambda_arg`)."""
+    (tmp_path / "c.yml").write_text(
+        "id: c\nstyle: fluent\ndispatch: {key: object, match: one}\nmatches:\n"
+        "  dispatch_receives:\n"
+        "    - { owner: a.Queue, method: take, descriptor: '()Ljava/lang/Object;', "
+        "object: receiver, handler: enclosing }\n",
         encoding="utf-8",
     )
     [catalog] = YamlCatalogSource(tmp_path).load()
-    assert catalog.message_handlers == (
+    assert catalog.dispatch == {"key": "object", "match": "one"}
+    assert catalog.dispatch_receives == (
+        {
+            "owner": "a/Queue#",
+            "method": "take",
+            "descriptor": "()Ljava/lang/Object;",
+            "object": "receiver",
+            "handler": "enclosing",
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "entry, refused",
+    [
+        ("object: argument, handler: enclosing", "`object: argument`"),
+        ("object: receiver, handler: caller", "`handler: caller`"),
+        ("object: receiver", "`handler`"),
+        ("object: receiver, handler: enclosing, value_arg: 0", "unknown keys"),
+    ],
+)
+def test_a_malformed_receive_is_refused_at_load(tmp_path: Path, entry: str, refused: str):
+    from sextant.application.ports.catalogs import CatalogError
+
+    (tmp_path / "c.yml").write_text(
+        "id: c\nstyle: fluent\ndispatch: {key: object, match: one}\nmatches:\n"
+        "  dispatch_receives:\n"
+        f"    - {{ owner: a.Queue, method: take, descriptor: '()Ljava/lang/Object;', {entry} }}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(CatalogError, match=refused):
+        YamlCatalogSource(tmp_path).load()
+
+
+def test_a_registration_is_loaded_with_its_positions(tmp_path: Path):
+    (tmp_path / "c.yml").write_text(
+        "id: c\nstyle: fluent\ndispatch: {key: type, match: first}\nmatches:\n  dispatch_registrations:\n"
+        "    - { owner: a.B, method: handle, descriptor: '(Ljava/lang/Class;Ljava/lang/Object;)V', "
+        "class_arg: 0, handler_arg: 1, returns_value: true }\n",
+        encoding="utf-8",
+    )
+    [catalog] = YamlCatalogSource(tmp_path).load()
+    assert catalog.dispatch_registrations == (
         {
             "owner": "a/B#",
             "method": "handle",
@@ -852,6 +974,6 @@ def test_a_registration_is_loaded_with_its_positions(tmp_path: Path):
             "value_arg": None,
             "predicate_arg": None,
             "handler_arg": 1,
-            "returns_message": True,
+            "returns_value": True,
         },
     )

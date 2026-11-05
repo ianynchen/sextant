@@ -30,23 +30,22 @@ matches:
     # first step is declared here: the type gate checks a row's IMMEDIATE producer against
     # its descriptor, and `EntityTypeKey.create` returns no `Entity`. The second step is
     # the `entityRefFor` rows' entry below, which the loader hoists into the one identity
-    # table every row's walk reads. `message_class_via` names both steps: the same walk, to
-    # `EntityTypeKey.create` argument 0, the class literal of the commands the entity takes
-    # (spec §3d item 6). It is read only to name the row's handlers and never hoisted.
+    # table every row's walk reads. That entry also names `class_arg`: `EntityTypeKey.create`
+    # argument 0, the class literal of the commands the entity takes, read from that same call
+    # in the same walk (spec 2026-11-05 §2), names this row's handlers (spec 2026-11-04 §3d
+    # item 6). A fact about the producer, so it sits on the producer's entry, hoisted.
     - { name: init, arity: 1,
         descriptor: "(Lakka/cluster/sharding/typed/javadsl/Entity;)Lakka/actor/typed/ActorRef;",
         channel_arg: 0,
-        channel_via: [{ owner: akka.cluster.sharding.typed.javadsl.Entity, method: of, arg: 0 }],
-        message_class_via: [{ owner: akka.cluster.sharding.typed.javadsl.Entity, method: of, arg: 0 },
-                            { owner: akka.cluster.sharding.typed.javadsl.EntityTypeKey, method: create, arg: 0 }] }
+        channel_via: [{ owner: akka.cluster.sharding.typed.javadsl.Entity, method: of, arg: 0 }] }
     # `entityRefFor` sends to an entity of the type: outbound. A type this module inits
     # itself is a hop, not an outbound row (§3d item 5, `resolve/self_calls.py`). The
     # 3-argument form names a data centre as well; the type is still argument 0.
     - { name: entityRefFor, arity: 2, direction: outbound,
         descriptor: "(Lakka/cluster/sharding/typed/javadsl/EntityTypeKey;Ljava/lang/String;)Lakka/cluster/sharding/typed/javadsl/EntityRef;",
         channel_arg: 0,
-        channel_via: [{ owner: akka.cluster.sharding.typed.javadsl.EntityTypeKey, method: create, arg: 1 }] }
+        channel_via: [{ owner: akka.cluster.sharding.typed.javadsl.EntityTypeKey, method: create, arg: 1, class_arg: 0 }] }
     - { name: entityRefFor, arity: 3, direction: outbound,
         descriptor: "(Lakka/cluster/sharding/typed/javadsl/EntityTypeKey;Ljava/lang/String;Ljava/lang/String;)Lakka/cluster/sharding/typed/javadsl/EntityRef;",
         channel_arg: 0,
-        channel_via: [{ owner: akka.cluster.sharding.typed.javadsl.EntityTypeKey, method: create, arg: 1 }] }
+        channel_via: [{ owner: akka.cluster.sharding.typed.javadsl.EntityTypeKey, method: create, arg: 1, class_arg: 0 }] }

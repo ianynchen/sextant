@@ -64,9 +64,9 @@ from sextant.domain.symbols import owner_of
 
 
 def record_rpc_hops(workspace: Workspace, catalogs: list[Catalog]) -> None:
-    """Inserts into `rpc_hops` the hops of the one declared catalog that names a client stub.
+    """Inserts into `hops` the hops of the one declared catalog that names a client stub.
     Inserts only: the pipeline resets the table once before both of its writers, this pass and
-    `resolve/message_hops.py` (spec 2026-11-04 §3d item 7)."""
+    `resolve/dispatch_hops.py` (spec 2026-11-04 §3d item 7)."""
     catalog = _stub_catalog(catalogs)
     if catalog is None:
         return
@@ -131,7 +131,7 @@ def record_rpc_hops(workspace: Workspace, catalogs: list[Catalog]) -> None:
                 }
             )
     if rows:
-        workspace.derive("rpc_hops_insert", rows=rows)
+        workspace.derive("hops_insert", rows=rows)
 
 
 def _wire_methods(

@@ -329,23 +329,25 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # pub-sub constructor rows none).
 # **The two message handler catalogs joined the same day** (spec 2026-11-04 §3b), each with
 # seventeen registration steps capturing `case: arg0` (the carrier of the call's place in the
-# chain, read by `resolve/message_handlers.py`, never as a value): 34 asks and 57 slots per
-# family as `asks_of` counts them, the same in both. **Their sends joined with the hop pass**
-# (spec 2026-11-04 §3c): thirty-two `message_sends` entries, each a `message_arg`, and two
+# chain, read by `resolve/dispatch_registrations.py`, never as a value): 34 asks and 57 slots
+# per family as `asks_of` counts them, the same in both. **Their sends joined with the hop
+# pass** (spec 2026-11-04 §3c): thirty-two `dispatch_sends` entries, each a `value_arg`, and two
 # registrations no chain step names (`messageAdapter`, the ask's reply mapper): 68 asks and 93
 # slots per family as `asks_of` counts them.
 # **The key rows' `message_class_via` entries joined with the key-handler pass** (spec
 # 2026-11-04 §3d item 6): one more ask per entry, `receptionist` two (its two `register`
 # rows), `cluster-sharding` two (`init`'s two hops) — `asks_of` reads the `{owner, method,
-# arg}` shape wherever it is spelled.
+# arg}` shape wherever it is spelled. **Folded into `channel_via` on 2026-11-05** (spec
+# 2026-11-05 §2): the class is a `class_arg` on every entry naming the key's producer, one
+# ask with two slots, so `receptionist` goes to (8, 12) and `cluster-sharding` to (6, 8).
 _ASKS_PER_CATALOG = {
     "akka-actor-handlers": (69, 94),
-    "akka-cluster-sharding": (8, 8),
+    "akka-cluster-sharding": (6, 8),
     "akka-pubsub-publish": (2, 2),
     "akka-pubsub-put": (1, 1),
     "akka-pubsub-send": (2, 2),
     "akka-pubsub-subscribe": (3, 3),
-    "akka-receptionist": (10, 10),
+    "akka-receptionist": (8, 12),
     "apache-httpclient": (52, 52),
     "aws-sqs-sdk": (2, 2),
     "google-pubsub-client": (1, 1),
@@ -371,13 +373,13 @@ _ASKS_PER_CATALOG = {
     "ktor-websocket-client": (23, 23),
     "okhttp": (5, 6),
     "pekko-actor-handlers": (69, 94),
-    "pekko-cluster-sharding": (8, 8),
+    "pekko-cluster-sharding": (6, 8),
     "pekko-connectors-kafka": (15, 15),
     "pekko-pubsub-publish": (2, 2),
     "pekko-pubsub-put": (1, 1),
     "pekko-pubsub-send": (2, 2),
     "pekko-pubsub-subscribe": (3, 3),
-    "pekko-receptionist": (10, 10),
+    "pekko-receptionist": (8, 12),
     "quartz": (8, 11),
     "spring-cloud-gateway": (14, 20),
     "spring-cloud-gateway-outbound": (4, 4),
@@ -456,7 +458,8 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # **+68 on 2026-11-04** (hops): those two catalogs' sends and standalone registrations.
     # **+8 on 2026-11-04** (key handlers): the four key catalogs' `message_class_via`.
     # **+2 on 2026-11-04** (Task 7 fix round): each handler catalog's `setReceiveTimeout` send.
-    assert sum(asks for asks, _ in counted.values()) == 1422
+    # **-8 on 2026-11-05**: the key class moved onto `channel_via` as `class_arg`, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 1414
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

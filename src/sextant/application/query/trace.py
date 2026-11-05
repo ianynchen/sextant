@@ -50,7 +50,7 @@ than it looks in three specific ways a reader must be told:
 **A gRPC call to this module's own service is followed, not stopped at** (spec
 2026-10-25 §3d, ruling 2: *"a call hop that's traceable"*). A stub method's call into the
 client-call API is a `boundary` in `call_edges`, a library no workspace reads; where
-`rpc_hops` names the handler that call lands on, the step goes to that handler instead and
+`hops` names the handler that call lands on, the step goes to that handler instead and
 carries the wire path in `via`. The handler is then any callee — expanded, `revisited` or a
 `cycle` by the same three answers — and a hop with no handler here is still a `boundary`,
 with its wire path.
@@ -70,7 +70,7 @@ this walk's; `docs/COVERAGE.md` §7 carries the measurement.
 
 NFR-1 binds ordering as well as content. Steps come out in depth-first order
 over `call_edges`' own total ordering (`caller`, `ordinal`, `target`,
-`callee`), and several hops at one site in `rpc_hops`' own `handler` order, so
+`callee`), and several hops at one site in `hops`' own `handler` order, so
 the walk is the source order of the statements, and the `expanded` set that
 decides which occurrence of a shared method is the expanded one is therefore the
 same set on every run.
@@ -129,7 +129,7 @@ class Step:
     terminal_kind: str | None = None
     target_kind: str | None = None
     # Spec 2026-10-25 §3d: `"<protocol> <path>"` where this call left for the wire and
-    # `callee` is where it lands in this module (`rpc_hops`) — `target` still names the
+    # `callee` is where it lands in this module (`hops`) — `target` still names the
     # client-call method the code called. None on every other step.
     via: str | None = None
 
@@ -172,7 +172,7 @@ class _Index:
     edges: dict[str, list[dict[str, object]]] = field(default_factory=dict)
     returns: dict[tuple[str, int, str], list[tuple[int, str]]] = field(default_factory=dict)
     responses: dict[str, list[tuple[int, str]]] = field(default_factory=dict)
-    # `rpc_hops` by its call site, `(caller, ordinal)` — the `call_edges` row it replaces.
+    # `hops` by its call site, `(caller, ordinal)` — the `call_edges` row it replaces.
     hops: dict[tuple[str, int], list[dict[str, object]]] = field(default_factory=dict)
 
 
@@ -188,7 +188,7 @@ def _index(workspace: Workspace) -> _Index:
     for row in workspace.query("method_returns"):
         responses[str(row["method"])].append((int(str(row["ordinal"])), str(row["value"])))
     hops: dict[tuple[str, int], list[dict[str, object]]] = defaultdict(list)
-    for row in workspace.query("rpc_hops"):
+    for row in workspace.query("hops"):
         hops[(str(row["caller"]), int(str(row["ordinal"])))].append(row)
     return _Index(edges=edges, returns=returns, responses=responses, hops=hops)
 
@@ -315,7 +315,7 @@ def _walk(
 
 
 def _rows(method: str, index: _Index) -> list[dict[str, object]]:
-    """`method`'s `call_edges` rows in their own order, each call site that `rpc_hops` names
+    """`method`'s `call_edges` rows in their own order, each call site that `hops` names
     replaced by one row per hop: the same call, its `callee` the handler it lands on (NULL
     where there is none here) and `via` its wire path (spec 2026-10-25 §3d).
 
@@ -334,7 +334,7 @@ def _rows(method: str, index: _Index) -> list[dict[str, object]]:
             rows.append(row)
             continue
         for hop in hops:
-            # A hop with no path is a message whose class was not read: the NULL says so, as
+            # A hop with no path is a dispatched value whose class was not read: the NULL says so, as
             # the row's evidence is `compiler` like every other's (D00 §4's closed set).
             where = hop["path"] if hop["path"] is not None else "(message class not read)"
             landed = {"callee": hop["handler"], "via": f"{hop['protocol']} {where}"}

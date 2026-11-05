@@ -150,7 +150,7 @@ def derive_endpoints_with_runs(
             _bound(_engine_for(_wire_identity_checked(_shape_checked(catalog))), catalog, catalogs),
         )
         for catalog in catalogs
-        if catalog.style not in _READ_BY_A_LATER_PASS
+        if not _reads_by_a_later_pass(catalog)
     ]
     # Emptied once, here, rather than once per catalog: D02 §5 has two
     # catalogs both matching and both producing endpoints, so a per-catalog
@@ -341,11 +341,16 @@ def _derives_rows(catalog: Catalog) -> int:
 # `endpoints` (2O design §4).
 _NON_WIRE = frozenset({"scheduled_work", "scheduled_chain", "error_advice"})
 
-# The styles no engine here runs: a catalog of one declares facts a later pass reads, and
-# mints no row, stamps none and feeds no boundary kind (spec 2026-11-04 §3b). Left out of the
-# engine loop rather than given an engine that does nothing, so no skip and no run is
-# reported for it: its pass is `resolve/message_handlers.py`, after every engine.
-_READ_BY_A_LATER_PASS = frozenset({"message_handlers"})
+
+def _reads_by_a_later_pass(catalog: Catalog) -> bool:
+    """Whether no engine here runs `catalog`: a chain catalog carrying
+    `dispatch_registrations` (spec 2026-11-05 §2) is an ordinary `fluent` catalog whose chain
+    ends are registrations, not endpoint rows. It mints no row, stamps none and feeds no
+    boundary kind, so it is left out of the engine loop whole — no endpoint validation, and
+    no skip or run reported for it — and read by its own pass,
+    `resolve/dispatch_registrations.py`, after every engine. Decided by the block rather
+    than by a style of its own, so the chain words stay the one `fluent` vocabulary."""
+    return bool(catalog.dispatch_registrations)
 
 
 def _derives_endpoint_rows(catalog: Catalog) -> bool:

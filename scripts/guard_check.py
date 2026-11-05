@@ -146,10 +146,10 @@ _FLUENT = "sextant/application/resolve/engines/fluent.py"
 # The chain walk `fluent` derives from (Quartz spec 2026-10-28 §3d), moved out of `_FLUENT`
 # whole, with the guards on the walk's own rules.
 _CHAINS = "sextant/application/resolve/shapes/chains.py"
-# Message handler cases per behavior, and the first-match rule (spec 2026-11-04 §3b).
-_MESSAGE_HANDLERS = "sextant/application/resolve/message_handlers.py"
-# A message send's hops into `rpc_hops` (spec 2026-11-04 §3c).
-_MESSAGE_HOPS = "sextant/application/resolve/message_hops.py"
+# Dispatch registrations per group, and the match rule (spec 2026-11-05 §1-§3).
+_DISPATCH_REGISTRATIONS = "sextant/application/resolve/dispatch_registrations.py"
+# A dispatch send's hops into `hops` (spec 2026-11-05 §1).
+_DISPATCH_HOPS = "sextant/application/resolve/dispatch_hops.py"
 _CLIENT_BASE = "sextant/application/resolve/shapes/client_base.py"
 # Which handler on a route chain answers (Vert.x spec 2026-10-30 §3b, plan Task 10).
 _PASS_THROUGH = "sextant/application/resolve/shapes/pass_through.py"
@@ -7065,98 +7065,98 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
-    "message-handlers.the-cases-are-WRITTEN": Guard(
-        what="each case a behavior registers is written as a `message_handlers` row",
-        why="spec 2026-11-04 §3b: the rows are what a send's hop and an inbound key's handler "
-        "are found through. Without them every actor message stops at the library call that "
-        "sends it, and no inbound key row names a handler",
+    "dispatch-registrations.the-registrations-are-WRITTEN": Guard(
+        what="each registration a group makes is written as a `dispatch_registrations` row",
+        why="spec 2026-11-05 §3: the rows are what a send's hop and an inbound key's handler "
+        "are found through. Without them every dispatched value stops at the library call "
+        "that sends it, and no inbound key row names a handler",
         edits=(
             Edit(
-                path=_MESSAGE_HANDLERS,
-                find='    if rows:\n        workspace.derive("message_handlers_insert", rows=rows)\n',
+                path=_DISPATCH_REGISTRATIONS,
+                find='    if rows:\n        workspace.derive("dispatch_registrations_insert", rows=rows)\n',
                 replace="    if False:  # guard disabled by scripts/guard_check.py\n"
-                '        workspace.derive("message_handlers_insert", rows=rows)\n',
+                '        workspace.derive("dispatch_registrations_insert", rows=rows)\n',
             ),
         ),
     ),
-    "message-handlers.the-FIRST-unpredicated-match-wins": Guard(
-        what="a message reaches the first unpredicated case it matches in a behavior, and no "
-        "case after it",
+    "dispatch-registrations.the-FIRST-unpredicated-match-wins": Guard(
+        what="under `match: first` a value reaches the first unpredicated registration it "
+        "matches in a group, and none after it",
         why="spec 2026-11-04 §3c: a behavior dispatches to the first case whose class the "
         "message is assignable to. Without the stop, `onMessage(Command)` followed by "
         "`onMessage(Reserve)` gives a `Reserve` send a hop to a handler that never runs",
         edits=(
             Edit(
-                path=_MESSAGE_HANDLERS,
-                find='            if not case["predicated"]:\n                break\n',
+                path=_DISPATCH_REGISTRATIONS,
+                find='            if match == _FIRST and not registration["predicated"]:\n                break\n',
                 replace="            if False:  # guard disabled by scripts/guard_check.py\n"
                 "                break\n",
             ),
         ),
     ),
-    "message-handlers.the-SUPERTYPE-closure-is-walked": Guard(
+    "dispatch-registrations.the-SUPERTYPE-closure-is-walked": Guard(
         what="a class case is reached by a message of any subtype, however many levels down",
         why="a behavior's `onMessage(Command.class)` takes every `Command`, an interface the "
         "message class may implement through another. Read one level deep, a `Reserve "
         "implements Stocked extends Command` send would reach no case and stop",
         edits=(
             Edit(
-                path=_MESSAGE_HANDLERS,
+                path=_DISPATCH_REGISTRATIONS,
                 find="            pending.extend(supertypes.get(current, ()))\n",
                 replace="            pending.extend(())  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
-    "message-handlers.a-PREDICATED-case-never-shadows": Guard(
+    "dispatch-registrations.a-PREDICATED-case-never-shadows": Guard(
         what="a case carrying a predicate does not stop the search for the case a message reaches",
         why="spec 2026-11-04 §3d item 2: a predicate may decline, so the case after it is "
         "reached too. Read as shadowing, `onMessage(Release, urgent)` before "
         "`onMessage(Release)` hides the handler that runs for every non-urgent release",
         edits=(
             Edit(
-                path=_MESSAGE_HANDLERS,
-                find='            if not case["predicated"]:\n                break\n',
-                replace="            if True:  # guard disabled by scripts/guard_check.py\n"
+                path=_DISPATCH_REGISTRATIONS,
+                find='            if match == _FIRST and not registration["predicated"]:\n                break\n',
+                replace="            if match == _FIRST:  # guard disabled by scripts/guard_check.py\n"
                 "                break\n",
             ),
         ),
     ),
-    "message-handlers.a-PREDICATE-only-case-tests-every-message": Guard(
+    "dispatch-registrations.a-PREDICATE-only-case-tests-every-message": Guard(
         what="a case naming no class and no value but a predicate is reached by every message",
         why="the controller's ruling on `onCommand(Predicate, h)`: the predicate tests any "
         "command, so its handler may run for any of them. Read as matching nothing, the "
         "handler is lost from every hop",
         edits=(
             Edit(
-                path=_MESSAGE_HANDLERS,
-                find='    return bool(case["predicated"])\n',
+                path=_DISPATCH_REGISTRATIONS,
+                find='    return bool(registration["predicated"])\n',
                 replace="    return False  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
-    "message-handlers.a-VALUE-case-matches-by-IDENTITY": Guard(
+    "dispatch-registrations.a-VALUE-case-matches-by-IDENTITY": Guard(
         what="a value case is reached only by a message that is its constant",
         why="spec 2026-11-04 §3d item 3: `onMessageEquals(Tick.INSTANCE)` tests equality with "
         "that constant. Matched by anything else, a `new Tick()` send would land on it and "
         "never reach the class case that takes it",
         edits=(
             Edit(
-                path=_MESSAGE_HANDLERS,
-                find='        return message_value is not None and case["message_value"] == message_value\n',
+                path=_DISPATCH_REGISTRATIONS,
+                find='        return key_value is not None and registration["key_value"] == key_value\n',
                 replace="        return True  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
-    "message-handlers.each-ROOT-is-its-own-behavior": Guard(
+    "dispatch-registrations.each-ROOT-is-its-own-group": Guard(
         what="a behavior is named by its root call, so two chains in one method are two behaviors",
         why="spec 2026-11-04 §3d item 1: each `forState` returns its own state builder, and "
         "states are alternatives. Named by the method alone, three states would be one "
         "behavior whose first `Cancel` case shadows the other state's",
         edits=(
             Edit(
-                path=_MESSAGE_HANDLERS,
-                find="        behavior = f\"{end.root['caller']}#{end.root['ordinal']}\"\n",
-                replace="        behavior = f\"{end.root['caller']}#0\"  # guard disabled\n",
+                path=_DISPATCH_REGISTRATIONS,
+                find="        group = f\"{end.root['caller']}#{end.root['ordinal']}\"\n",
+                replace="        group = f\"{end.root['caller']}#0\"  # guard disabled\n",
             ),
         ),
     ),
@@ -7225,146 +7225,146 @@ GUARDS: dict[str, Guard] = {
             for family, prefix in (("pekko", "org/apache/pekko"), ("akka", "akka"))
         ),
     ),
-    "message-hops.the-hops-are-WRITTEN": Guard(
-        what="each declared send's hops are written into `rpc_hops`",
+    "dispatch-hops.the-hops-are-WRITTEN": Guard(
+        what="each declared send's hops are written into `hops`",
         why="spec 2026-11-04 §3c: the trace reads hops from that table. Without them every "
         "actor send stops at the library method that sends it, and a trace from a route "
         "never reaches the actor that answers",
         edits=(
             Edit(
-                path=_MESSAGE_HOPS,
-                find='    if rows:\n        workspace.derive("rpc_hops_insert", rows=list(rows.values()))\n',
+                path=_DISPATCH_HOPS,
+                find='    if rows:\n        workspace.derive("hops_insert", rows=list(rows.values()))\n',
                 replace="    if False:  # guard disabled by scripts/guard_check.py\n"
-                '        workspace.derive("rpc_hops_insert", rows=list(rows.values()))\n',
+                '        workspace.derive("hops_insert", rows=list(rows.values()))\n',
             ),
         ),
     ),
-    "message-hops.the-message-is-at-its-DECLARED-argument": Guard(
-        what="a send's message is read at the catalog's `message_arg`",
+    "dispatch-hops.the-value-is-at-its-DECLARED-argument": Guard(
+        what="a send's value is read at the catalog's `value_arg`",
         why="CP-57 finding 6: `context.ask(Class, ref, timeout, request, mapper)` carries "
         "the message in its request at argument 3. Read at argument 0 it is a class literal, "
         "and the ask's hop to the handler of what it sends is lost",
         edits=(
             Edit(
-                path=_MESSAGE_HOPS,
-                find='            argument = _arg_at(site["arguments"], send["message_arg"])\n',
+                path=_DISPATCH_HOPS,
+                find='            argument = _arg_at(site["arguments"], send["value_arg"])\n',
                 replace='            argument = _arg_at(site["arguments"], 0)  # guard disabled\n',
             ),
         ),
     ),
-    "message-hops.a-LAMBDA-message-is-read-through-its-RETURNS": Guard(
+    "dispatch-hops.a-LAMBDA-value-is-read-through-its-RETURNS": Guard(
         what="a function passed as the message is read through the classes its body returns",
         why="CP-57: `ask(replyTo -> new Get(id, replyTo), timeout)` compiles to a synthetic "
         "body whose declared return is the erased `Command`; only its `new` says the class. "
         "Unread, the ask from a route stops at `EntityRef#ask`",
         edits=(
             Edit(
-                path=_MESSAGE_HOPS,
+                path=_DISPATCH_HOPS,
                 find="            body = self._by_bare.get(str(symbol))\n",
                 replace="            body = None  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
-    "message-hops.a-CONSTANT-is-sent-with-its-IDENTITY": Guard(
+    "dispatch-hops.a-CONSTANT-is-sent-with-its-IDENTITY": Guard(
         what="an `enum` constant sent is read with its own symbol as well as its class",
         why="spec 2026-11-04 §3d item 3: `onMessageEquals(Tick.INSTANCE, …)` takes that "
         "constant; sent by class alone, a timer's `Tick.INSTANCE` reaches no case",
         edits=(
             Edit(
-                path=_MESSAGE_HOPS,
+                path=_DISPATCH_HOPS,
                 find="            return [(owner_of(str(symbol)), str(symbol), None, None)]\n",
                 replace="            return [(owner_of(str(symbol)), None, None, None)]  # guard disabled\n",
             ),
         ),
     ),
-    "message-hops.an-UNREAD-class-is-a-STOP-that-says-so": Guard(
+    "dispatch-hops.an-UNREAD-class-is-a-STOP-that-says-so": Guard(
         what="a message whose class is not read is one row with no path and no handler",
         why="the plan's global constraint: a hop is never guessed. Without the branch a "
         "predicate-only case, which matches every message, takes one whose class nobody read",
         edits=(
             Edit(
-                path=_MESSAGE_HOPS,
+                path=_DISPATCH_HOPS,
                 find="        if unread is not None:\n",
                 replace="        if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
-    "message-hops.a-message-NOBODY-handles-is-a-STOP-naming-its-class": Guard(
+    "dispatch-hops.a-value-NOBODY-handles-is-a-STOP-naming-its-class": Guard(
         what="a message no behavior handles is one row with its class and no handler",
         why="spec 2026-11-04 §3c: a reply its asker reads off a future stays a stop, `via "
         "actor <class>`. Without the row the trace shows the library's `tell` and never "
         "the class it sent",
         edits=(
             Edit(
-                path=_MESSAGE_HOPS,
+                path=_DISPATCH_HOPS,
                 find="            for handler in handlers or [None]\n",
                 replace="            for handler in handlers  # guard disabled\n",
             ),
         ),
     ),
-    "message-hops.a-DELIVERING-handler-CONTINUES": Guard(
+    "dispatch-hops.a-DELIVERING-handler-CONTINUES": Guard(
         what="each class a delivering handler returns is a hop from its return",
         why="spec 2026-11-04 §3d item 4: an adapter or an ask's reply mapper maps a message "
         "and delivers the result to its own actor. Without the continuation the trace stops "
         "inside the mapper and never reaches the handler of `Reserved` or `Failed`",
         edits=(
             Edit(
-                path=_MESSAGE_HOPS,
+                path=_DISPATCH_HOPS,
                 find="    for handler in reading.delivering_handlers() if protocols else []:\n",
                 replace="    for handler in []:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
-    "message-hops.a-MERGED-return-is-a-hop-per-CANDIDATE": Guard(
+    "dispatch-hops.a-MERGED-return-is-a-hop-per-CANDIDATE": Guard(
         what="a return javac merged from two `new`s gives a hop per class",
         why="CP-57: `res != null ? new Reserved(res) : new Failed(ex)` is one `areturn` with "
         "two `new`s. Read as unread, the mapper's two outcomes are lost",
         edits=(
             Edit(
-                path=_MESSAGE_HOPS,
+                path=_DISPATCH_HOPS,
                 find='        if kind == "merge":\n',
                 replace='        if kind == "merge" and False:  # guard disabled\n',
             ),
         ),
     ),
-    "message-hops.a-CONSTRUCTOR-reference-returns-its-OWNER": Guard(
+    "dispatch-hops.a-CONSTRUCTOR-reference-returns-its-OWNER": Guard(
         what="a constructor reference used as a message function returns its own class",
         why="the samples' usual adapter is `messageAdapter(C, Wrapped::new)`, and an ask's "
         "request may be `Report::new`. A constructor returns no value of its own, so read "
         "through its returns it delivers nothing and the hop stops",
         edits=(
             Edit(
-                path=_MESSAGE_HOPS,
+                path=_DISPATCH_HOPS,
                 find="            return [(owner_of(bare_descriptor(method)), None, self._super_call(method), None)]\n",
                 replace="            return []  # guard disabled by scripts/guard_check.py\n",
             ),
             Edit(
-                path=_MESSAGE_HOPS,
+                path=_DISPATCH_HOPS,
                 find="                return [(owner_of(str(symbol)), None, None, None)]\n",
                 replace="                return []  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
-    "message-handlers.a-registration-no-chain-holds-is-its-OWN-behavior": Guard(
+    "dispatch-registrations.a-registration-no-chain-holds-is-its-OWN-group": Guard(
         what="a registration no chain step names is read at each of its call sites",
         why="spec 2026-11-04 §3d item 4: `messageAdapter` and an ask's reply mapper are no "
         "step of a builder chain. Unread, a reply reaches no handler and the trace stops at "
         "the `tell` that sent it",
         edits=(
             Edit(
-                path=_MESSAGE_HANDLERS,
+                path=_DISPATCH_REGISTRATIONS,
                 find="    if not standalone:\n        return\n",
                 replace="    if True:  # guard disabled by scripts/guard_check.py\n        return\n",
             ),
         ),
     ),
-    "message-handlers.a-CONSTRUCTOR-reference-is-a-handler": Guard(
+    "dispatch-registrations.a-CONSTRUCTOR-reference-is-a-handler": Guard(
         what="a constructor reference as a handler argument is named by the constructor",
         why="`messageAdapter(C, Wrapped::new)`: the module's method symbols hold no "
         "constructor, so without them the adapter's handler is NULL and its delivery is lost",
         edits=(
             Edit(
-                path=_MESSAGE_HANDLERS,
+                path=_DISPATCH_REGISTRATIONS,
                 find='    for row in workspace.query("constructor_declarations"):\n',
                 replace="    for row in []:  # guard disabled by scripts/guard_check.py\n",
             ),
@@ -7384,29 +7384,29 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
-    "message-handlers.a-key-reaches-the-cases-of-its-SUBTYPES": Guard(
+    "dispatch-registrations.a-key-reaches-the-cases-of-its-SUBTYPES": Guard(
         what="an inbound key's handlers are the cases any subtype of its message class reaches",
         why="spec 2026-11-04 §3d item 6: a key names its protocol's interface (`Command`) and "
         "the cases name the classes implementing it. Asked for the key's class alone, the "
         "key reaches no case, and every key row loses its handlers",
         edits=(
             Edit(
-                path=_MESSAGE_HANDLERS,
-                find="    classes = {message_class} | {\n"
-                "        candidate for candidate in supertypes if message_class in _ancestry(candidate, supertypes)\n"
+                path=_DISPATCH_REGISTRATIONS,
+                find="    classes = {key_class} | {\n"
+                "        candidate for candidate in supertypes if key_class in _ancestry(candidate, supertypes)\n"
                 "    }\n",
-                replace="    classes = {message_class}  # guard disabled by scripts/guard_check.py\n",
+                replace="    classes = {key_class}  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
-    "message-handlers.a-key-reaches-a-VALUE-case-of-its-class": Guard(
+    "dispatch-registrations.a-key-reaches-a-VALUE-case-of-its-class": Guard(
         what="an inbound key reaches a value case whose constant is of its class",
         why="spec 2026-11-04 §3d items 3 and 6: `onMessageEquals(Tick.INSTANCE, h)` handles a "
         "`Command` the key carries. Without the constants the key row drops `h`, a handler a "
         "sender reaches",
         edits=(
             Edit(
-                path=_MESSAGE_HANDLERS,
+                path=_DISPATCH_REGISTRATIONS,
                 find="        if constant_class in classes:\n",
                 replace="        if False:  # guard disabled by scripts/guard_check.py\n",
             ),
@@ -7419,7 +7419,7 @@ GUARDS: dict[str, Guard] = {
         "trace from the key starts in setup code",
         edits=(
             Edit(
-                path=_MESSAGE_HOPS,
+                path=_DISPATCH_HOPS,
                 find='            dropped.append({"row_id": row["row_id"]})\n',
                 replace="            continue  # guard disabled by scripts/guard_check.py\n",
             ),
@@ -7431,35 +7431,52 @@ GUARDS: dict[str, Guard] = {
         "vanishes from the module's inbound boundary",
         edits=(
             Edit(
-                path=_MESSAGE_HOPS,
+                path=_DISPATCH_HOPS,
                 find="            for handler in handlers or [None]:\n                kept = ",
                 replace="            for handler in handlers:  # guard disabled by scripts/guard_check.py\n"
                 "                kept = ",
             ),
         ),
     ),
-    "key-handlers.the-class-is-read-through-message_class_via": Guard(
-        what="a key's message class is read through the row's `message_class_via` hops",
-        why="spec 2026-11-04 §3d item 6: the producer's identity entry names the key's NAME. "
-        "Read through it, the class walk answers the name string, no class, and every key "
-        "row loses its handlers",
+    "key-handlers.every-INBOUND-row-of-a-keyed-catalog-is-read": Guard(
+        what="every inbound row of a catalog whose producer entries name `class_arg` is a key "
+        "row, and no outbound row is",
+        why="spec 2026-11-05 §2: `class_arg` is the producer's, hoisted; `init(Entity.of(KEY, "
+        "…))` names only the key's first step. Keyed by its own entries, `init` would keep "
+        "its registering method as handler; keyed by direction alone, an outbound `find` "
+        "would be replaced by handler rows of a key it only calls",
         edits=(
             Edit(
-                path=_MESSAGE_HOPS,
-                find="        ] + list(catalog.value_model)\n",
-                replace="        ][:0] + list(catalog.value_model)  # guard disabled by scripts/guard_check.py\n",
+                path=_DISPATCH_HOPS,
+                find='        if method.get("direction", catalog.direction) != str(Direction.INBOUND):\n',
+                replace="        if not _reads_class(method):  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
-    "key-handlers.a-key-takes-the-class-read-on-its-OWN-path": Guard(
-        what="a key takes only the class read on a path agreeing with its address's",
-        why="two keys built by one helper from its callers' arguments: paired across paths, "
-        "each key takes both classes, and each row names the other key's handlers",
+    "key-handlers.the-class-is-read-at-the-producers-class_arg": Guard(
+        what="a key's class is read from the producing call's `class_arg`, beside its name",
+        why="spec 2026-11-05 §2: the producer's identity entry names the key's NAME; its "
+        "`class_arg` names the class literal of what the key addresses. Unread, every key "
+        "row loses its handlers",
         edits=(
             Edit(
-                path=_MESSAGE_HOPS,
-                find="            if _extends(name_path, class_path) or _extends(class_path, name_path)\n",
-                replace="            if True  # guard disabled by scripts/guard_check.py\n",
+                path="sextant/application/resolve/values.py",
+                find="        class_slot = self._identified_class(site, slot)\n",
+                replace="        class_slot = None  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.a-CLASS-is-read-from-the-identifying-call-on-its-path": Guard(
+        what="the class an identity entry's `class_arg` names is read in the calling context "
+        "the value was read in",
+        why="spec 2026-11-05 §2: two keys one helper builds from its callers' arguments "
+        "(`create(c, name)`). Read outside the value's context, the class argument is every "
+        "caller's, and each key row names the other key's handlers",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="        classes = self._resolve((_SLOT, site[0], site[1], class_slot), trail, frames)\n",
+                replace="        classes = self._resolve((_SLOT, site[0], site[1], class_slot), (), ())  # guard disabled\n",
             ),
         ),
     ),
@@ -7482,14 +7499,40 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
-    "message-hops.ONE-reset-before-both-writers": Guard(
-        what="the pipeline clears `rpc_hops` once per resolve, before its two writers",
+    "dispatch-registrations.match-ALL-takes-every-matching-registration": Guard(
+        what="under `match: all` or `one` a value reaches every registration it matches",
+        why="spec 2026-11-05 §1: listeners all receive, and which consumer of a queue takes a "
+        "value is decided at run time. Read as `first`, a `Command` listener hides the "
+        "`Reserve` listener after it, and a send's hop names one of several handlers that run",
+        edits=(
+            Edit(
+                path=_DISPATCH_REGISTRATIONS,
+                find='            if match == _FIRST and not registration["predicated"]:\n',
+                replace='            if not registration["predicated"]:  # guard disabled\n',
+            ),
+        ),
+    ),
+    "endpoints.a-REGISTRATION-catalog-runs-no-engine": Guard(
+        what="a chain catalog carrying `dispatch_registrations` is left out of the endpoint loop",
+        why="spec 2026-11-05 §2: its chain ends are registrations, read by their own pass. Run "
+        "as a `fluent` catalog it is reported skipped for capabilities it never needs, or, "
+        "where they are met, its chains are validated and read as endpoint rows",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/endpoints.py",
+                find="    return bool(catalog.dispatch_registrations)\n",
+                replace="    return False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "dispatch-hops.ONE-reset-before-both-writers": Guard(
+        what="the pipeline clears `hops` once per resolve, before its two writers",
         why="spec 2026-11-04 §3d item 7: both writers only insert. Without the reset a second "
         "analysis doubles every hop, and the trace walks each one twice",
         edits=(
             Edit(
                 path="sextant/application/resolve/pipeline.py",
-                find='    workspace.derive("rpc_hops_reset")\n',
+                find='    workspace.derive("hops_reset")\n',
                 replace="    pass  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -7521,7 +7564,7 @@ GUARDS: dict[str, Guard] = {
     ),
     "grpc.a-STUB-call-to-a-served-rpc-is-a-hop": Guard(
         what="a generated client stub's call to an RPC this module serves is written as an "
-        "`rpc_hops` row naming the handler it lands on",
+        "`hops` row naming the handler it lands on",
         why="spec 2026-10-25 ruling 2: a self-call is a traceable hop. Without the row the "
         "trace from a REST method through `GreeterBlockingStub#sayHello` stops at "
         "`ClientCalls#blockingUnaryCall`, and with the outbound row fenced the call is "
@@ -7529,9 +7572,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/rpc_hops.py",
-                find='    if rows:\n        workspace.derive("rpc_hops_insert", rows=rows)\n',
+                find='    if rows:\n        workspace.derive("hops_insert", rows=rows)\n',
                 replace="    if False:  # guard disabled by scripts/guard_check.py\n"
-                '        workspace.derive("rpc_hops_insert", rows=rows)\n',
+                '        workspace.derive("hops_insert", rows=rows)\n',
             ),
         ),
     ),
@@ -7610,7 +7653,7 @@ GUARDS: dict[str, Guard] = {
     ),
     "grpc.an-UNHANDLED-rpc-of-a-served-service-gets-a-hop": Guard(
         what="a stub call to an RPC of a served service that has no handler here still gets "
-        "one `rpc_hops` row, its handler NULL",
+        "one `hops` row, its handler NULL",
         why="spec 2026-10-25 §3d: the outbound row of a served service is fenced, so without "
         "the row the step carries no wire path and the call's destination is nowhere in the "
         "document",
@@ -7940,7 +7983,7 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "trace.the-walk-CROSSES-a-hop-into-the-handler": Guard(
-        what="at a call site `rpc_hops` names, the walk steps into the hop's handler, with "
+        what="at a call site `hops` names, the walk steps into the hop's handler, with "
         "the wire path in `via`, instead of stopping at the client-call library",
         why="spec 2026-10-25 §3d, ruling 2: a call to the module's own service is a call hop "
         "that is traceable. Ignoring the hops ends every trace through a gRPC stub at "

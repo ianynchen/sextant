@@ -30,6 +30,8 @@ FRAMEWORKS = {
     "django",
     "fastapi",
     "flask",
+    "akka",
+    "pekko",
 }
 # Every member of `domain.closed_sets.Protocol`, spelled out rather than read off the
 # enum: the rule below is about NAMES appearing in `storage/`, and a rule that imported
@@ -64,6 +66,46 @@ def test_no_framework_is_named_anywhere_in_code():
     data, never code (D02). Catalogs are excluded because naming frameworks is
     exactly what they are for — the rule is about the engines that read them."""
     assert offenders(python_files() + sql_files(), FRAMEWORKS) == {}
+
+
+def test_no_catalog_word_or_table_starts_with_message():
+    """Spec 2026-11-05 (ruling A): in-process dispatch is one general mechanism, not
+    messaging — messaging names an address a broker routes on and keeps its endpoint rows.
+    The words built first for actors (`message_handlers`, `message_sends`,
+    `message_class_via`) read as messaging and named one framework's idea, so no catalog
+    key and no graph table may start with `message_`. Keys are read through
+    `yaml.safe_load`, so a comment is free to say why."""
+    offending = [
+        f"{path.relative_to(SRC)}: {key}"
+        for path in yaml_files("catalogs")
+        for key in _keys(yaml.safe_load(path.read_text(encoding="utf-8")))
+        if key.startswith("message_")
+    ]
+    schema = (SRC / "storage" / "duckdb" / "schema.sql").read_text(encoding="utf-8")
+    offending += [
+        f"schema.sql: {line.strip()}"
+        for line in schema.splitlines()
+        if line.upper().startswith("CREATE TABLE")
+        and line.split()[-2 if line.rstrip().endswith("(") else -1].lower().startswith("message_")
+    ]
+    offending += [
+        f"{path.relative_to(SRC)}: {path.name}"
+        for path in sql_files("storage")
+        if "message_" in path.name
+    ]
+
+    assert offending == []
+
+
+def _keys(node: object) -> Iterator[str]:
+    """Every mapping key anywhere in a loaded YAML document."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield str(key)
+            yield from _keys(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _keys(value)
 
 
 def test_catalogs_use_one_fqn_notation():

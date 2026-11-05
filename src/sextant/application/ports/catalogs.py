@@ -336,19 +336,36 @@ class Catalog:
     # takes no configured prefix at all, because Spring Boot's keys do not configure it.
     dispatcher: str | None = None
 
-    # The message handler registrations this catalog declares under `matches.message_handlers`
-    # (spec 2026-11-04 §3b): per call, by its exact overload, which argument holds the message
-    # class or the equal value, the handler and any predicate, and whether the handler's return
-    # is a message delivered back to its own receiver. `{owner, method, descriptor, class_arg,
-    # value_arg, predicate_arg, handler_arg, returns_message}`, the owner a type symbol, each
-    # position an index or None. Checked by the loader; read by `resolve/message_handlers.py`.
-    message_handlers: tuple[dict[str, Any], ...] = ()
+    # How this catalog's in-process dispatch works (spec 2026-11-05 §1-§2), the `dispatch`
+    # setting: `{key, match}`, `key` `type` (the handed value's class picks the handler) or
+    # `object` (receivers of the same channel object take it), `match` `first` (the first
+    # matching registration in its group), `all` (every matching one) or `one` (each value
+    # to one receiver, decided at run time). None for a catalog declaring no dispatch.
+    # Checked by the loader; every dispatch block below needs it.
+    dispatch: dict[str, str] | None = None
 
-    # The message sends this catalog declares under `matches.message_sends` (spec 2026-11-04
-    # §3c): per call, by its exact overload, which argument holds the message. `{owner, method,
-    # descriptor, message_arg}`, the owner a type symbol. Checked by the loader; read by
-    # `resolve/message_hops.py`, which writes each send's hops under this catalog's `protocol`.
-    message_sends: tuple[dict[str, Any], ...] = ()
+    # The registrations this catalog declares under `matches.dispatch_registrations` (spec
+    # 2026-11-05 §2): per call, by its exact overload, which argument holds the key's class
+    # literal or the equal value, the handler and any predicate, and whether the handler's
+    # return is a value delivered back to its own receiver. `{owner, method, descriptor,
+    # class_arg, value_arg, predicate_arg, handler_arg, returns_value}`, the owner a type
+    # symbol, each position an index or None. Checked by the loader; read by
+    # `resolve/dispatch_registrations.py`.
+    dispatch_registrations: tuple[dict[str, Any], ...] = ()
+
+    # The sends this catalog declares under `matches.dispatch_sends` (spec 2026-11-05 §2):
+    # per call, by its exact overload, which argument holds the value handed over. `{owner,
+    # method, descriptor, value_arg}`, the owner a type symbol. Checked by the loader; read by
+    # `resolve/dispatch_hops.py`, which writes each send's hops under this catalog's
+    # `protocol`.
+    dispatch_sends: tuple[dict[str, Any], ...] = ()
+
+    # The receive sites this catalog declares under `matches.dispatch_receives` (spec
+    # 2026-11-05 §2), for an object key: per call, by its exact overload, the object it
+    # takes from (`receiver`) and where its handler is (`enclosing`, the method making the
+    # call, or `lambda_arg`, a function argument). `{owner, method, descriptor, object,
+    # handler}`, the owner a type symbol. Checked by the loader.
+    dispatch_receives: tuple[dict[str, Any], ...] = ()
 
 
 class CatalogError(ValueError):

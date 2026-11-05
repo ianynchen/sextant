@@ -548,10 +548,13 @@ class YamlCatalogSource:
                     type_model=conformance,
                     # The server's own prefix keys, built above.
                     server_model=servers,
-                    # Spec 2026-11-04 §3b: what each declared registration call means.
-                    message_handlers=_message_handlers(raw["matches"], path),
-                    # Spec 2026-11-04 §3c: which calls send a message, and where it is.
-                    message_sends=_message_sends(raw["matches"], path),
+                    # Spec 2026-11-05 §1-§2: how this catalog's dispatch works, what each
+                    # declared registration call means, which calls hand a value over and
+                    # where it is, and which calls take one from an object.
+                    dispatch=_dispatch(raw, path),
+                    dispatch_registrations=_dispatch_registrations(raw["matches"], path),
+                    dispatch_sends=_dispatch_sends(raw["matches"], path),
+                    dispatch_receives=_dispatch_receives(raw["matches"], path),
                 )
             )
         return catalogs
@@ -758,7 +761,28 @@ def _hoisted(node: Any, path: Path, into: list[dict[str, Any]]) -> None:
             if key in _WRAPPER_KEYS:
                 into.extend(_constructor_identities(entry, key, path))
             else:
+                _check_class_arg(entry, key, path)
                 into.append(_identity(entry, entry.get("owner")))
+
+
+def _check_class_arg(entry: dict[str, Any], key: str, path: Path) -> None:
+    """A `channel_via` entry's optional `class_arg` (spec 2026-11-05 §2): the argument of the
+    same producing call holding the class literal of what the value (a key) addresses, read
+    by the walk beside the value (`values.Answer.carried_class`). An argument index, and only
+    on `channel_via`, the one hop key whose value a key is."""
+    if "class_arg" not in entry:
+        return
+    class_arg = entry["class_arg"]
+    if key != "channel_via" or not isinstance(class_arg, int) or isinstance(class_arg, bool):
+        raise CatalogError(
+            f"loading catalog {path}: a `{key}` entry declares `class_arg: {class_arg!r}`; "
+            f"`class_arg` is an argument index, on a `channel_via` entry only"
+        )
+    if class_arg == entry.get("arg"):
+        raise CatalogError(
+            f"loading catalog {path}: a `{key}` entry reads argument {class_arg} as both the "
+            f"value and its class"
+        )
 
 
 def _constructor_identities(entry: dict[str, Any], key: str, path: Path) -> list[dict[str, Any]]:
@@ -1539,41 +1563,51 @@ def _hand_off_effect(entry: Any, path: Path) -> dict[str, Any]:
 _HANDLER_POSITIONS = ("class_arg", "value_arg", "predicate_arg", "handler_arg")
 
 
-def _message_handlers(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
-    """`matches.message_handlers` (spec 2026-11-04 §3b), checked and converted: each entry
-    `{owner, method, descriptor, class_arg | value_arg, handler_arg, predicate_arg?,
-    returns_message?}`, the owner as a type symbol (the facts' spelling) and every position an
-    argument index the descriptor has. A registration names its message by class or by an
-    equal value, never both, and one with neither is a predicate-only case, so it needs
-    `predicate_arg`. Every key is checked, because a position that reads the wrong argument
-    is a wrong row rather than a missing one. Empty for a catalog declaring none."""
-    declared = matches.get("message_handlers") if isinstance(matches, dict) else None
+def _declared_calls(matches: Any, key: str, path: Path) -> tuple[str, list[dict[str, Any]]]:
+    """A dispatch block's entries, each checked to name its call by `owner`, `method` and a
+    method `descriptor` (D02 §2): the `where` its errors start with, and the entries. Empty
+    for a catalog declaring none."""
+    declared = matches.get(key) if isinstance(matches, dict) else None
+    where = f"loading catalog {path}: `{key}`"
     if declared is None:
-        return ()
-    where = f"loading catalog {path}: `message_handlers`"
+        return where, []
     if not isinstance(declared, list):
         raise CatalogError(f"{where} must be a list, got {declared!r}")
-    entries: list[dict[str, Any]] = []
     for entry in declared:
         if not isinstance(entry, dict) or not all(
-            isinstance(entry.get(key), str) and entry.get(key)
-            for key in ("owner", "method", "descriptor")
+            isinstance(entry.get(name), str) and entry.get(name)
+            for name in ("owner", "method", "descriptor")
         ):
             raise CatalogError(
                 f"{where}: each entry names its call by `owner`, `method` and `descriptor`, "
                 f"got {entry!r}"
             )
-        unknown = sorted(
-            set(entry) - {"owner", "method", "descriptor", "returns_message", *_HANDLER_POSITIONS}
-        )
-        if unknown:
-            raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
         descriptor = str(entry["descriptor"])
         if not descriptor.startswith("(") or ")" not in descriptor:
             raise CatalogError(
                 f"{where}: `{entry['method']}` declares `descriptor: {descriptor!r}`, which "
                 f"is not a method descriptor"
             )
+    return where, declared
+
+
+def _dispatch_registrations(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
+    """`matches.dispatch_registrations` (spec 2026-11-05 §2), checked and converted: each
+    entry `{owner, method, descriptor, class_arg | value_arg, handler_arg, predicate_arg?,
+    returns_value?}`, the owner as a type symbol (the facts' spelling) and every position an
+    argument index the descriptor has. A registration names its key by class or by an equal
+    value, never both, and one with neither is a predicate-only registration, so it needs
+    `predicate_arg`. Every key is checked, because a position that reads the wrong argument
+    is a wrong row rather than a missing one. Empty for a catalog declaring none."""
+    where, declared = _declared_calls(matches, "dispatch_registrations", path)
+    entries: list[dict[str, Any]] = []
+    for entry in declared:
+        unknown = sorted(
+            set(entry) - {"owner", "method", "descriptor", "returns_value", *_HANDLER_POSITIONS}
+        )
+        if unknown:
+            raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
+        descriptor = str(entry["descriptor"])
         arity = len(descriptor_slots(descriptor)[0])
         positions: dict[str, int | None] = {}
         for key in _HANDLER_POSITIONS:
@@ -1591,7 +1625,7 @@ def _message_handlers(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
         if positions["class_arg"] is not None and positions["value_arg"] is not None:
             raise CatalogError(
                 f"{where}: `{entry['method']}` declares both `class_arg` and `value_arg`; a "
-                f"case matches a message by its class or by an equal value, never both"
+                f"registration matches a value by its class or by equality, never both"
             )
         if (
             positions["class_arg"] is None
@@ -1600,17 +1634,17 @@ def _message_handlers(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
         ):
             raise CatalogError(
                 f"{where}: `{entry['method']}` names no `class_arg`, `value_arg` or "
-                f"`predicate_arg`; a case with none of them is not one this word states"
+                f"`predicate_arg`; a registration with none of them is not one this word states"
             )
         used = [value for value in positions.values() if value is not None]
         if len(used) != len(set(used)):
             raise CatalogError(
                 f"{where}: `{entry['method']}` reads one argument for two meanings: {positions}"
             )
-        returns_message = entry.get("returns_message", False)
-        if not isinstance(returns_message, bool):
+        returns_value = entry.get("returns_value", False)
+        if not isinstance(returns_value, bool):
             raise CatalogError(
-                f"{where}: `{entry['method']}` declares `returns_message: {returns_message!r}`, "
+                f"{where}: `{entry['method']}` declares `returns_value: {returns_value!r}`, "
                 f"which is not true or false"
             )
         entries.append(
@@ -1619,51 +1653,33 @@ def _message_handlers(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
                 "method": str(entry["method"]),
                 "descriptor": descriptor,
                 **positions,
-                "returns_message": returns_message,
+                "returns_value": returns_value,
             }
         )
     return tuple(entries)
 
 
-def _message_sends(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
-    """`matches.message_sends` (spec 2026-11-04 §3c), checked and converted: each entry
-    `{owner, method, descriptor, message_arg}`, the owner as a type symbol (the facts'
-    spelling) and `message_arg` the index of the argument holding the message, one the
-    descriptor has. Every key is checked, because a position that reads the wrong argument
-    is a wrong hop rather than a missing one. Empty for a catalog declaring none."""
-    declared = matches.get("message_sends") if isinstance(matches, dict) else None
-    if declared is None:
-        return ()
-    where = f"loading catalog {path}: `message_sends`"
-    if not isinstance(declared, list):
-        raise CatalogError(f"{where} must be a list, got {declared!r}")
+def _dispatch_sends(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
+    """`matches.dispatch_sends` (spec 2026-11-05 §2), checked and converted: each entry
+    `{owner, method, descriptor, value_arg}`, the owner as a type symbol (the facts'
+    spelling) and `value_arg` the index of the argument holding the value handed over, one
+    the descriptor has. Every key is checked, because a position that reads the wrong
+    argument is a wrong hop rather than a missing one. Empty for a catalog declaring none."""
+    where, declared = _declared_calls(matches, "dispatch_sends", path)
     entries: list[dict[str, Any]] = []
     for entry in declared:
-        if not isinstance(entry, dict) or not all(
-            isinstance(entry.get(key), str) and entry.get(key)
-            for key in ("owner", "method", "descriptor")
-        ):
-            raise CatalogError(
-                f"{where}: each entry names its call by `owner`, `method` and `descriptor`, "
-                f"got {entry!r}"
-            )
-        unknown = sorted(set(entry) - {"owner", "method", "descriptor", "message_arg"})
+        unknown = sorted(set(entry) - {"owner", "method", "descriptor", "value_arg"})
         if unknown:
             raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
         descriptor = str(entry["descriptor"])
-        if not descriptor.startswith("(") or ")" not in descriptor:
-            raise CatalogError(
-                f"{where}: `{entry['method']}` declares `descriptor: {descriptor!r}`, which "
-                f"is not a method descriptor"
-            )
-        message_arg = entry.get("message_arg")
+        value_arg = entry.get("value_arg")
         if (
-            not isinstance(message_arg, int)
-            or isinstance(message_arg, bool)
-            or not 0 <= message_arg < len(descriptor_slots(descriptor)[0])
+            not isinstance(value_arg, int)
+            or isinstance(value_arg, bool)
+            or not 0 <= value_arg < len(descriptor_slots(descriptor)[0])
         ):
             raise CatalogError(
-                f"{where}: `{entry['method']}` declares `message_arg: {message_arg!r}`, which "
+                f"{where}: `{entry['method']}` declares `value_arg: {value_arg!r}`, which "
                 f"is not an argument of `{descriptor}`"
             )
         entries.append(
@@ -1671,10 +1687,86 @@ def _message_sends(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
                 "owner": type_descriptor(str(entry["owner"])),
                 "method": str(entry["method"]),
                 "descriptor": descriptor,
-                "message_arg": message_arg,
+                "value_arg": value_arg,
             }
         )
     return tuple(entries)
+
+
+# A receive site's two closed words (spec 2026-11-05 §2): the object it takes a value from,
+# and where the code handling that value is.
+_RECEIVE_OBJECTS = ("receiver",)
+_RECEIVE_HANDLERS = ("enclosing", "lambda_arg")
+
+
+def _dispatch_receives(matches: Any, path: Path) -> tuple[dict[str, Any], ...]:
+    """`matches.dispatch_receives` (spec 2026-11-05 §2), checked and converted: each entry
+    `{owner, method, descriptor, object, handler}`, the owner as a type symbol. `object` says
+    which object the call takes its value from (`receiver`, the one it is called on);
+    `handler` where the code handling it is (`enclosing`, the method making the call, or
+    `lambda_arg`, the function it is given). Empty for a catalog declaring none."""
+    where, declared = _declared_calls(matches, "dispatch_receives", path)
+    entries: list[dict[str, Any]] = []
+    for entry in declared:
+        unknown = sorted(set(entry) - {"owner", "method", "descriptor", "object", "handler"})
+        if unknown:
+            raise CatalogError(f"{where}: `{entry['method']}` declares unknown keys {unknown}")
+        for key, words in (("object", _RECEIVE_OBJECTS), ("handler", _RECEIVE_HANDLERS)):
+            if entry.get(key) not in words:
+                raise CatalogError(
+                    f"{where}: `{entry['method']}` declares `{key}: {entry.get(key)}`; "
+                    f"`{key}` is one of {list(words)}"
+                )
+        entries.append(
+            {
+                "owner": type_descriptor(str(entry["owner"])),
+                "method": str(entry["method"]),
+                "descriptor": str(entry["descriptor"]),
+                "object": str(entry["object"]),
+                "handler": str(entry["handler"]),
+            }
+        )
+    return tuple(entries)
+
+
+# The `dispatch` setting's two closed words (spec 2026-11-05 §1): what picks the receiver,
+# and how many receive.
+_DISPATCH_KEYS = ("type", "object")
+_DISPATCH_MATCHES = ("first", "all", "one")
+_DISPATCH_BLOCKS = ("dispatch_registrations", "dispatch_sends", "dispatch_receives")
+
+
+def _dispatch(raw: dict[str, Any], path: Path) -> dict[str, str] | None:
+    """The catalog's `dispatch: {key, match}` setting (spec 2026-11-05 §1-§2), checked: both
+    words from their closed sets and nothing else. Required where the catalog declares any
+    dispatch block, since every one of them is read by it; None for a catalog declaring
+    neither."""
+    declared = raw.get("dispatch")
+    matches = raw.get("matches")
+    blocks = [block for block in _DISPATCH_BLOCKS if isinstance(matches, dict) and block in matches]
+    where = f"loading catalog {path}"
+    if declared is None:
+        if blocks:
+            raise CatalogError(
+                f"{where}: it declares a dispatch block and no `dispatch` ({blocks}); "
+                f"`dispatch: {{key, match}}` says how they are read (spec 2026-11-05 §2)"
+            )
+        return None
+    if not isinstance(declared, dict) or set(declared) != {"key", "match"}:
+        raise CatalogError(
+            f"{where}: `dispatch` must be `{{key, match}}`, got {declared!r} (spec 2026-11-05 §2)"
+        )
+    if declared["key"] not in _DISPATCH_KEYS:
+        raise CatalogError(
+            f"{where}: `dispatch` declares `key: {declared['key']}`; `key` is one of "
+            f"{list(_DISPATCH_KEYS)}"
+        )
+    if declared["match"] not in _DISPATCH_MATCHES:
+        raise CatalogError(
+            f"{where}: `dispatch` declares `match: {declared['match']}`; `match` is one of "
+            f"{list(_DISPATCH_MATCHES)}"
+        )
+    return {"key": str(declared["key"]), "match": str(declared["match"])}
 
 
 def _arg_index(value: Any, where: str) -> int:

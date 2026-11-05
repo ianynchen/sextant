@@ -823,18 +823,17 @@ genuinely new shape needs a new engine. (Nine as of Phase 2H; `supertype_derived
 `injected_client`, Phase 2O Task 5, are the tenth and eleventh; `derived_resource`, Task 6,
 is the twelfth; `supertype_dispatch`, Task 7b, is the thirteenth; `scheduled_work` and
 `error_advice`, Task 8, are the fourteenth and fifteenth; `scheduled_chain`, the Quartz
-design of 2026-10-28, is the sixteenth; `message_handlers`, the Akka and Pekko design of
-2026-11-04, is the seventeenth.)
+design of 2026-10-28, is the sixteenth. In-process dispatch (the design of 2026-11-05) is
+**no style**: it is a setting and three blocks a catalog of an existing style carries, in its
+own section, §2m. The
+Akka and Pekko design of 2026-11-04 had built a seventeenth style, `message_handlers`, for
+it; the user ruled it framework-specific, and it is gone.)
 
-**Seventeen sections follow, and they are NOT seventeen engines** — §5.3 requires this
+**Sixteen sections follow, and they are NOT sixteen engines** — §5.3 requires this
 document to say which is which rather than let a reader count headings. **Fourteen have an
 engine**, each registered in `application/resolve/endpoints.py`'s `_ENGINES`, which is the list
-a catalog's `style:` is resolved against and the only place the answer lives. The other three
+a catalog's `style:` is resolved against and the only place the answer lives. The other two
 are:
-
-- **`message_handlers` is read by a resolve PASS, not an engine** — its catalogs declare facts
-  `resolve/message_handlers.py` reads after the engines; `derive_endpoints` leaves them out of
-  its loop (`_READ_BY_A_LATER_PASS`), so no run and no skip is reported for one.
 
 - **`protocol_hint` is a resolve PASS, not an engine** — no catalog declares it, and one
   that did would be refused by name. Its own section states this and gives its position in
@@ -1804,7 +1803,7 @@ matches:
 
 Each `methods` row is `{name, arity?, descriptor?, http_method | method_arg | neither,
 url_arg | channel_arg, body_arg?, response_arg?, record_arg?, direction?,
-path_from_argument_type?, channel_via?, message_class_via?, address_arg_2?, lambda_arg?,
+path_from_argument_type?, channel_via?, address_arg_2?, lambda_arg?,
 lambda_steps?, request_url?, address_parts?}`, beside the catalog-level `default_address?` and
 `client_base?`, all described below.
 **`http_method` is a literal when the catalog already knows the verb** — `postForObject` is
@@ -1956,39 +1955,39 @@ and `interface_implementation` (both below) read a `channel`/`channel_arg` posit
 too. **Every entry is also hoisted into §1f's estate-wide identity table**, where the same
 three fields are declared once per producer instead of once per consumer.
 
-**`message_class_via` names where an inbound key's message class is read** (spec
-`2026-11-04-akka-pekko-actors-design.md` §3a, §3d item 6). A Receptionist service key or a
-sharded entity type is a name and a class, two arguments of one producing call
-(`ServiceKey.create(Command.class, "stock")`): `channel_via` reads the name, and
-`message_class_via` — the same `[{owner, method, arg}]` list — names the hops to the class
-literal, read by the same backward walk from `channel_arg` with these entries placed ahead
-of §1f's table (so the producer answers with its class argument). It is **never hoisted**:
-it states which argument is the class, not what the producer's value is. **A class belongs
-to a key only where the two walks' paths agree**: each walk answers per path, and a class is
-paired with a name when one answer's path extends the other's (the crossings both made are
-the nearest ones, the end of the path), so two keys built by one helper from its two callers
-stay apart and each row names only its own class's handlers
-(`resolve/message_hops._paired`). A name no class agrees with is a class not read.
+**A `channel_via` entry may name `class_arg`: where an inbound key's class is read** (spec
+`2026-11-05-in-process-dispatch-design.md` §2, from `2026-11-04-akka-pekko-actors-design.md`
+§3a, §3d item 6). A Receptionist service key or a sharded entity type is a name and a class,
+two arguments of one producing call (`ServiceKey.create(Command.class, "stock")`): the
+entry's `arg` names the name and its `class_arg` the class literal of what the key
+addresses. **The class is read from that same call in the same walk**: where the walk reaches
+the producer through the hoisted entry (§1f), it reads `class_arg` in the calling context
+the name was read in and answers the name carrying the class
+(`values.Answer.carried_class`), so two keys built by one helper from its two callers stay
+apart without any pairing afterwards. A key whose class is not a class literal on any agreeing
+path carries none: a class not read. Checked at load (`yaml_source._check_class_arg`): an
+argument index, other than `arg`, on a `channel_via` entry only. **It is a fact about the
+producer**, like `arg`, so it sits on every entry naming that producer — an outbound row's
+too, where nothing reads it — and reaches a row through the hoisted table even where the row
+names only the key's first step (`init(Entity.of(KEY, …))`, whose `channel_via` names
+`Entity.of` alone, as the type gate requires of a row's entries):
 
 ```yaml
-    - { name: init, arity: 1, descriptor: "(L…/javadsl/Entity;)L…/ActorRef;", channel_arg: 0,
-        channel_via: [{ owner: …javadsl.Entity, method: of, arg: 0 }],
-        message_class_via: [{ owner: …javadsl.Entity, method: of, arg: 0 },
-                            { owner: …javadsl.EntityTypeKey, method: create, arg: 0 }] }
+    - { name: entityRefFor, arity: 2, direction: outbound, channel_arg: 0, descriptor: "…",
+        channel_via: [{ owner: …javadsl.EntityTypeKey, method: create, arg: 1, class_arg: 0 }] }
 ```
 
 The engine still writes the row with the registering method as `handler`; after the
-message handler pass, `resolve/message_hops.record_key_handlers` replaces each inbound row of
-the catalog with one row per handler a message of the class, or of any subtype of it,
-reaches (`message_handlers.served_cases`: the hop's first-match rule asked per candidate
-class, so a row and a hop always agree), the rows differing only in `handler`, as a route
-with two handlers is two rows (§5's insert, through `derive_call_endpoints.sql`). A class
-reaching no handler, or not read, leaves one row with `handler` NULL. Refused at resolve:
-the word on a row that is not inbound or has no `channel_arg`, an entry not `{owner,
-method, arg}` with an integer `arg`, and an inbound row without it in a catalog where
-another inbound row has it (every inbound row of such a catalog is replaced). A row whose
-catalog declares no `message_class_via` — a classic pub-sub `Subscribe`, which takes any
-message — keeps the method that subscribed.
+registration pass, `resolve/dispatch_hops.record_key_handlers` re-runs that one walk per
+registering site and replaces each inbound row of the catalog with one row per handler a
+value of the class, or of any subtype of it, reaches (`dispatch_registrations.served_cases`:
+the hop's match rule asked per candidate class, so a row and a hop always agree), the rows
+differing only in `handler`, as a route with two handlers is two rows (§5's insert, through
+`derive_call_endpoints.sql`). A class reaching no handler, or not read, leaves one row with
+`handler` NULL. Every inbound row of a catalog any of whose entries names `class_arg` is such
+a key row; one with no `channel_arg` is refused at resolve (every inbound row of such a
+catalog is replaced). A row whose catalog names no `class_arg` —
+a classic pub-sub `Subscribe`, which takes any value — keeps the method that subscribed.
 
 **`lambda_arg` and `lambda_steps` read a destination the call site has no position for at
 all** (`OI-74`, W57) — the whole send handed over as one builder lambda:
@@ -4137,7 +4136,7 @@ Each is shape-checked when present; a malformed value refuses the catalog.
 
 **Two more keys name the CLIENT side, and this style's engine does not read them**
 (spec 2026-10-25 §3d). `resolve/rpc_hops.py` does: a call from a generated client stub to an
-RPC the module serves lands on its handler (D01 §3, `rpc_hops`). They sit in this style's
+RPC the module serves lands on its handler (D01 §3, `hops`). They sit in this style's
 `matches` because the pass reads the same `supertype_marker` to find the wire method a stub
 calls. `grpc-java.yml` declares both:
 
@@ -4654,83 +4653,6 @@ chain with neither a kind nor a job is not derived; a row with a NULL handler is
 trace root (`roots.py`).
 
 **Ordering (§3): NOT in the runs-last group**, on the same terms as `scheduled_work`.
-
-### `message_handlers`
-
-The seventeenth style (spec `2026-11-04-akka-pekko-actors-design.md` §3b, §3d items 1-3): a
-**behavior** built by a chain of registrations, each binding a message class — or a value
-equal to a constant — to a handler, tried in order. It mints no endpoint row and has no
-engine: `resolve/message_handlers.py` reads it into `message_handlers` (D01 §3) after the
-engines, and `reachable_handlers` applies the first-match rule.
-
-```yaml
-# pekko-actor-handlers.yml
-style: message_handlers
-requires: [call_site, chain_reconstruction]
-matches:
-  roots:                          # the chain walk's own words (`fluent`), one per builder
-    - { owner: org.apache.pekko.actor.typed.javadsl.Behaviors, method: receive,
-        descriptor: "(Ljava/lang/Class;)Lorg/apache/pekko/actor/typed/javadsl/BehaviorBuilder;" }
-  steps:                          # one per registration overload, each carrying its call
-    - { owner: org.apache.pekko.actor.typed.javadsl.BehaviorBuilder, method: onMessage,
-        descriptor: "(Ljava/lang/Class;Lorg/apache/pekko/japi/function/Function;)L…/BehaviorBuilder;",
-        captures: { case: arg0 }, repeats: [case] }
-  terminal: [build]
-  message_handlers:               # what each registration's arguments mean
-    - { owner: org.apache.pekko.actor.typed.javadsl.BehaviorBuilder, method: onMessage,
-        descriptor: "(Ljava/lang/Class;Lorg/apache/pekko/japi/function/Function;)L…/BehaviorBuilder;",
-        class_arg: 0, handler_arg: 1 }
-```
-
-- **The chain** is the shared walk (`shapes/chains.chain_ends`), receiver to result, in the
-  `fluent` words below. A registration that returns a NEW builder is followed through its
-  result; one returning `this` is a `returns_receiver: true` step, so a builder held in a
-  local and given its cases statement by statement is one chain. Each executable chain end
-  is one behavior. A root's owner also matches a call made through a type inheriting its
-  method (`Dispatch.heirs`, JVMS 5.4.3.3), as for every chain catalog.
-- **`case: argN`** with `repeats: [case]` on every registration step carries the call in
-  chain order; a case's position is its place in that capture. Each step capturing `case`
-  needs exactly one `message_handlers` entry per owner (refused at resolve otherwise).
-- **`message_handlers`** entries are `{owner, method, descriptor, class_arg | value_arg,
-  handler_arg, predicate_arg?, returns_message?}`, checked at load
-  (`yaml_source._message_handlers`): every position an argument the descriptor has, no
-  argument read for two meanings, never both `class_arg` and `value_arg`, and at least one of
-  `class_arg`, `value_arg`, `predicate_arg`.
-  - `class_arg` — the message class, a class literal (`message_type`);
-  - `value_arg` — a constant the message must equal, by identity (`message_value`);
-  - `predicate_arg` — a predicate the case also tests: the case never shadows a later one.
-    With no class and no value (`onCommand(Predicate, h)`) it tests every message;
-  - `handler_arg` — the handler, a method reference or lambda (`combinator._handler_of`);
-  - `returns_message` — the handler's return is a message delivered to its own receiver
-    (`delivers`): `resolve/message_hops.py` continues the hop from each class it returns.
-- **An entry no step names** (`messageAdapter(Class, f)`, `ActorContext.ask`'s reply mapper
-  at argument 4) is a registration made on its own: each of its call sites — through the
-  declared owner or a type inheriting it (`Dispatch.heirs`) — is a behavior of its own,
-  `<caller>#<ordinal>`, holding one case at position 0. A handler argument that is a
-  constructor reference (`Wrapped::new`) names the constructor.
-- **`message_sends`** entries are `{owner, method, descriptor, message_arg}`, checked at load
-  (`yaml_source._message_sends`): `message_arg` an argument the descriptor has, no other key.
-  Each names a call that hands a message to an actor and the argument holding it:
-
-  ```yaml
-    message_sends:
-      - { owner: org.apache.pekko.actor.typed.ActorRef, method: tell,
-          descriptor: "(Ljava/lang/Object;)V", message_arg: 0 }
-      - { owner: org.apache.pekko.cluster.sharding.typed.javadsl.EntityRef, method: ask,
-          descriptor: "(Lorg/apache/pekko/japi/function/Function;Ljava/time/Duration;)L…/CompletionStage;",
-          message_arg: 0 }
-  ```
-
-  `resolve/message_hops.py` reads each call site (owner, an heir of it, name and parameter
-  types) and writes its hops into `rpc_hops` (D01 §3) under the catalog's `protocol`, which a
-  catalog declaring sends or a `returns_message` entry must carry (refused at resolve
-  otherwise) although it mints no endpoint row. The message at `message_arg` is read by its
-  kind: an `instance`'s class; an `enum` constant or a static `field` by identity (its class
-  and its own symbol); a `lambda` through each class its body returns (a constructor
-  reference: its owner). Anything else is not read, and the row says so.
-
-**Ordering (§3):** not in the engine loop at all; the handler pass runs right after
-`rpc_hops`, and the hop pass right after it.
 
 ### `error_advice`
 
@@ -6283,6 +6205,98 @@ selector is `messageSelector` and sits on `@Queue`/`@Topic` rather than on the c
 than the list: `delivery` + a boolean is ambiguous, so Spring AMQP's `exclusive` is
 `kind: exclusive` the same way `@ConsumeEvent`'s `local` is `kind: local`. **The probe runs
 before the catalog line, and where it disagrees the list changes, not the probe.**
+
+## 2m. In-process dispatch — `dispatch` and the `dispatch_*` blocks (not a style)
+
+Spec `2026-11-05-in-process-dispatch-design.md`: code hands a value to a framework or a
+channel, and the framework calls the handler(s) that receive it. No address goes on a wire, so
+it is a trace **hop** (D01 §3 `hops`), never an endpoint row; messaging, which names an address
+a broker routes on, keeps its rows. **It is no style**: a setting and three blocks under
+`matches` that a catalog of an existing style carries, read by passes after the engines.
+
+```yaml
+# pekko-actor-handlers.yml
+style: fluent                     # an ordinary chain catalog
+protocol: actor                   # every hop it gives is written under it
+dispatch: { key: type, match: first }
+requires: [call_site, chain_reconstruction]
+matches:
+  roots:                          # the chain walk's own words, one per builder
+    - { owner: org.apache.pekko.actor.typed.javadsl.Behaviors, method: receive,
+        descriptor: "(Ljava/lang/Class;)Lorg/apache/pekko/actor/typed/javadsl/BehaviorBuilder;" }
+  steps:                          # one per registration overload, each carrying its call
+    - { owner: org.apache.pekko.actor.typed.javadsl.BehaviorBuilder, method: onMessage,
+        descriptor: "(Ljava/lang/Class;Lorg/apache/pekko/japi/function/Function;)L…/BehaviorBuilder;",
+        captures: { case: arg0 }, repeats: [case] }
+  terminal: [build]
+  dispatch_registrations:         # what each registration's arguments mean
+    - { owner: org.apache.pekko.actor.typed.javadsl.BehaviorBuilder, method: onMessage,
+        descriptor: "(Ljava/lang/Class;Lorg/apache/pekko/japi/function/Function;)L…/BehaviorBuilder;",
+        class_arg: 0, handler_arg: 1 }
+  dispatch_sends:                 # where a value is handed over
+    - { owner: org.apache.pekko.actor.typed.ActorRef, method: tell,
+        descriptor: "(Ljava/lang/Object;)V", value_arg: 0 }
+```
+
+- **`dispatch: {key, match}`** — how the catalog's dispatch works, required beside any block
+  below (checked at load, `yaml_source._dispatch`). `key`: `type`, the handed value's class
+  picks the handler (Akka and Pekko, Spring and CDI events), or `object`, the receivers of
+  the same channel object take it (a queue, a channel). `match`: `first`, the first
+  registration in its group the value matches (a behavior tries its cases in order); `all`,
+  every matching registration (listeners); `one`, each value to one receiver decided at run
+  time, so a hop to each.
+- **`dispatch_registrations`** entries are `{owner, method, descriptor, class_arg |
+  value_arg, handler_arg, predicate_arg?, returns_value?}`, checked at load
+  (`yaml_source._dispatch_registrations`): every position an argument the descriptor has, no
+  argument read for two meanings, never both `class_arg` and `value_arg`, and at least one of
+  `class_arg`, `value_arg`, `predicate_arg`.
+  - `class_arg` — the key's class, a class literal (`key_type`);
+  - `value_arg` — a constant the value must equal, by identity (`key_value`);
+  - `predicate_arg` — a predicate the registration also tests: it never shadows a later
+    one. With no class and no value (`onCommand(Predicate, h)`) it tests every value;
+  - `handler_arg` — the handler, a method reference or lambda (`combinator._handler_of`);
+  - `returns_value` — the handler's return is a value handed to its own receiver
+    (`delivers`): `resolve/dispatch_hops.py` continues the hop from each class it returns.
+- **A `fluent` catalog carrying `dispatch_registrations`** describes registrations: its chain
+  ends are registration GROUPS, not endpoint rows. `derive_endpoints` leaves it out of the
+  engine loop whole (`endpoints._reads_by_a_later_pass`: no endpoint validation, no run or
+  skip reported) and `resolve/dispatch_registrations.py` reads it into
+  `dispatch_registrations` (D01 §3) after the engines. The chain is the shared walk
+  (`shapes/chains.chain_ends`), receiver to result, in the `fluent` words: a registration
+  returning a NEW builder is followed through its result; one returning `this` is a
+  `returns_receiver: true` step, so a builder held in a local and given its registrations
+  statement by statement is one chain. Each executable chain end is one group. A root's owner
+  also matches a call made through a type inheriting its method (`Dispatch.heirs`, JVMS
+  5.4.3.3), as for every chain catalog.
+- **`case: argN`** with `repeats: [case]` on every registration step carries the call in
+  chain order; a registration's position is its place in that capture, and its meaning is
+  looked up per call from the block by its exact overload — one capture, never one per field,
+  since an overload without a field would misalign parallel captures. Each step capturing
+  `case` needs exactly one `dispatch_registrations` entry per owner (refused at resolve
+  otherwise).
+- **An entry no step names** (`messageAdapter(Class, f)`, `ActorContext.ask`'s reply mapper
+  at argument 4) is a registration made on its own: each of its call sites — through the
+  declared owner or a type inheriting it (`Dispatch.heirs`) — is a group of its own,
+  `<caller>#<ordinal>`, at position 0. A handler argument that is a constructor reference
+  (`Wrapped::new`) names the constructor.
+- **`dispatch_sends`** entries are `{owner, method, descriptor, value_arg}`, checked at load
+  (`yaml_source._dispatch_sends`): `value_arg` an argument the descriptor has, no other key.
+  A block any style may carry. `resolve/dispatch_hops.py` reads each call site (owner, an heir
+  of it, name and parameter types) and writes its hops into `hops` (D01 §3) under the
+  catalog's `protocol`, which a catalog declaring sends or a `returns_value` entry must carry
+  (refused at resolve otherwise) although it mints no endpoint row. The value at `value_arg`
+  is read by its kind: an `instance`'s class; an `enum` constant or a static `field` by
+  identity (its class and its own symbol); a `lambda` through each class its body returns (a
+  constructor reference: its owner). Anything else is not read, and the row says so.
+- **`dispatch_receives`** entries are `{owner, method, descriptor, object: receiver,
+  handler: enclosing | lambda_arg}`, checked at load (`yaml_source._dispatch_receives`): a
+  call that takes a value from an object key's channel (`take`, `receive`), the object it
+  takes from, and where the code handling the value is — the method making the call, or the
+  function it is given. Loaded and checked now; the object-key pass that reads them is the
+  2026-11-05 plan's Task 4.
+
+**Ordering (§3):** not in the engine loop at all; the registration pass runs right after the
+gRPC hop pass, and the dispatch hop pass right after it.
 
 ## 3. Ordering
 

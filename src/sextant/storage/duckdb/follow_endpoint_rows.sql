@@ -4,7 +4,7 @@
 --
 -- Nothing is decided here. Which rows move, and where to, is decided by the pass that just
 -- ran (`resolve/endpoints.py` after the borrowed-row drop, `resolve/path_prefix.py`,
--- `resolve/protocol_hint.py`, `resolve/self_calls.py`, `resolve/message_hops.py`); this
+-- `resolve/protocol_hint.py`, `resolve/self_calls.py`, `resolve/dispatch_hops.py`); this
 -- file only brings the attached entries back into line with the rows as they now stand. No
 -- parameters, so it is the same statement after every one of them — a pass that rewrites a
 -- row's identity runs it rather than restating, column by column, what it moved.

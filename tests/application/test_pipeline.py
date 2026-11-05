@@ -4680,14 +4680,14 @@ def test_every_resolve_pass_logs_its_seconds_at_info(
         # Where a stub call to a served RPC lands (spec 2026-10-25 §3d): right after the
         # pass above, reading the same inbound rows.
         "record_rpc_hops",
-        # Each behavior's message handler cases (spec 2026-11-04 §3b): right after the hop
-        # pass, which the message hops will join.
-        "record_message_handlers",
-        # Each message send's hops (spec 2026-11-04 §3c): after the cases it reads, into the
-        # table the gRPC pass writes too, reset once before both.
-        "record_message_hops",
+        # Each dispatch registration (spec 2026-11-05 §3): right after the hop pass, which
+        # the dispatch hops will join.
+        "record_dispatch_registrations",
+        # Each dispatch send's hops (spec 2026-11-05 §1): after the registrations it reads,
+        # into the table the gRPC pass writes too, reset once before both.
+        "record_dispatch_hops",
         # Each inbound key row named by its handlers (spec 2026-11-04 §3d item 6): after the
-        # cases, and after `record_self_calls`, which read the key as served off its row.
+        # registrations, and after `record_self_calls`, which read the key as served off its row.
         "record_key_handlers",
         # The module's own server prefix, between the rows existing and anything copying
         # an address (spec 2026-10-18 §3) — `record_roots` and `record_routing_conflicts`

@@ -119,10 +119,10 @@ def inbound_handlers(analyzed: Path) -> list[tuple]:
     return sorted(((row["path"], short(row["handler"])) for row in rows), key=repr)
 
 
-@pytest.mark.pins("message-handlers.a-key-reaches-the-cases-of-its-SUBTYPES")
-@pytest.mark.pins("message-handlers.a-key-reaches-a-VALUE-case-of-its-class")
+@pytest.mark.pins("dispatch-registrations.a-key-reaches-the-cases-of-its-SUBTYPES")
+@pytest.mark.pins("dispatch-registrations.a-key-reaches-a-VALUE-case-of-its-class")
 @pytest.mark.pins("key-handlers.the-registering-method-is-REPLACED")
-@pytest.mark.pins("key-handlers.the-class-is-read-through-message_class_via")
+@pytest.mark.pins("key-handlers.the-class-is-read-at-the-producers-class_arg")
 def test_a_service_key_row_names_each_handler_of_its_class(inbound_handlers):
     """`stock`'s message class is `Stock.Command` (`ServiceKey.create` argument 0, read
     through `KEY`'s `<clinit>`): its row names each handler a `Command` reaches, one row per
@@ -200,12 +200,12 @@ def test_a_key_the_module_does_not_serve_is_an_outbound_row(tmp_path: Path) -> N
 
 @pytest.fixture(scope="module")
 def handler_cases(analyzed: Path) -> dict[str, list[tuple]]:
-    """Every `message_handlers` row one fixture derives, by the behavior's method
-    (`Class#method`, module and signature left out), each `(position, message_type,
-    message_value, predicated, handler's Class#method, delivers)` in position order."""
+    """Every `dispatch_registrations` row one fixture derives, by the group's method
+    (`Class#method`, module and signature left out), each `(position, key_type,
+    key_value, predicated, handler's Class#method, delivers)` in position order."""
     workspace = DuckDbWorkspace(analyzed)
     try:
-        rows = workspace.query("message_handlers")
+        rows = workspace.query("dispatch_registrations")
     finally:
         workspace.close()
 
@@ -217,13 +217,13 @@ def handler_cases(analyzed: Path) -> dict[str, list[tuple]]:
 
     cases: dict[str, list[tuple]] = {}
     for row in rows:
-        behavior = str(row["behavior"])
-        key = method_of(behavior.rsplit("#", 1)[0]) + "@" + behavior.rsplit("#", 1)[1]
+        group = str(row["group"])
+        key = method_of(group.rsplit("#", 1)[0]) + "@" + group.rsplit("#", 1)[1]
         cases.setdefault(key, []).append(
             (
                 row["position"],
-                None if row["message_type"] is None else method_of(str(row["message_type"])),
-                None if row["message_value"] is None else method_of(str(row["message_value"])),
+                None if row["key_type"] is None else method_of(str(row["key_type"])),
+                None if row["key_value"] is None else method_of(str(row["key_value"])),
                 row["predicated"],
                 None if row["handler"] is None else method_of(str(row["handler"])),
                 row["delivers"],
@@ -345,7 +345,7 @@ def actor_hops(analyzed: Path) -> set[tuple]:
     symbol as `handler_cases` writes it (a type without its `#`)."""
     workspace = DuckDbWorkspace(analyzed)
     try:
-        rows = [row for row in workspace.query("rpc_hops") if row["protocol"] == "actor"]
+        rows = [row for row in workspace.query("hops") if row["protocol"] == "actor"]
     finally:
         workspace.close()
 

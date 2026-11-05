@@ -1,5 +1,5 @@
-"""An actor message send is a trace hop to the handler its message's class reaches (spec
-2026-11-04 §3c, §3d items 3, 4 and 7): one `rpc_hops` row per reachable handler, keyed at the
+"""A dispatch send is a trace hop to the handler its value's class reaches (spec 2026-11-05
+§1, 2026-11-04 §3c, §3d items 3, 4 and 7): one `hops` row per reachable handler, keyed at the
 send's own call site, `protocol` the catalog's, `path` the message class (a constant by its
 identity). A class no behavior handles is a stop that names it; a class not read is a stop
 that says so. Never a guessed hop.
@@ -7,7 +7,7 @@ that says so. Never a guessed hop.
 Read over the two compiled fixtures (`fixtures/orders-actors-pekko`, `-akka`, the same
 sources), each analysed once the way a user analyses it, so every assertion is on rows the
 real pipeline derives from javac's bytecode (CP-57's shapes). The loader's refusals of a
-malformed `message_sends` entry are tested on a catalog file directly.
+malformed `dispatch_sends` entry are tested on a catalog file directly.
 """
 
 import re
@@ -19,7 +19,7 @@ from click.testing import CliRunner
 from fixture_build import FIXTURES, compile_fixture
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.query.trace import trace_of
-from sextant.application.resolve.message_hops import _keyed_methods, _paired, _Reading
+from sextant.application.resolve.dispatch_hops import _keyed_methods, _Reading
 from sextant.application.resolve.roots import Root
 from sextant.cli.app import cli
 from sextant.domain.closed_sets import RootKind, TraceStop
@@ -57,12 +57,12 @@ def hops(analyzed: Path) -> set[tuple]:
     `handler(<class>)`, so two lambdas in one method stay apart."""
     workspace = DuckDbWorkspace(analyzed)
     try:
-        cases = workspace.query("message_handlers")
-        rows = [row for row in workspace.query("rpc_hops") if row["protocol"] == "actor"]
+        cases = workspace.query("dispatch_registrations")
+        rows = [row for row in workspace.query("hops") if row["protocol"] == "actor"]
     finally:
         workspace.close()
     by_handler = {
-        str(case["handler"]): _short(str(case["message_type"] or case["message_value"]))
+        str(case["handler"]): _short(str(case["key_type"] or case["key_value"]))
         for case in cases
         if case["handler"] is not None and "#lambda$" in str(case["handler"])
     }
@@ -90,7 +90,7 @@ def _from(hops: set[tuple], caller: str) -> set[tuple]:
     return {(path, handler) for at, _, path, handler, _ in hops if at == caller}
 
 
-@pytest.mark.pins("message-hops.the-hops-are-WRITTEN")
+@pytest.mark.pins("dispatch-hops.the-hops-are-WRITTEN")
 def test_a_tell_reaches_the_first_matching_handler(hops):
     """`stock.tell(new Stock.Release(sku, false))`: `Stock`'s cases for `Release` are a
     predicated one (`p -> p.urgent()`) and then an unpredicated one. The predicate may decline,
@@ -102,7 +102,7 @@ def test_a_tell_reaches_the_first_matching_handler(hops):
     }
 
 
-@pytest.mark.pins("message-hops.the-message-is-at-its-DECLARED-argument")
+@pytest.mark.pins("dispatch-hops.the-value-is-at-its-DECLARED-argument")
 def test_an_actor_ask_sends_what_its_request_returns(hops):
     """`context.ask(Stock.Reply.class, stock, timeout, r -> new Stock.Reserve(…), mapper)`:
     the message is argument 3's request, a `Reserve`, which `Stock`'s first case takes; argument
@@ -112,7 +112,7 @@ def test_an_actor_ask_sends_what_its_request_returns(hops):
     ]
 
 
-@pytest.mark.pins("message-hops.a-LAMBDA-message-is-read-through-its-RETURNS")
+@pytest.mark.pins("dispatch-hops.a-LAMBDA-value-is-read-through-its-RETURNS")
 def test_an_ask_lambda_is_read_through_its_return(hops):
     """`entityRefFor(KEY, id).ask(replyTo -> new OrderEntity.Get(id, replyTo), timeout)`:
     the message is the `new` the lambda returns, never the lambda's erased return type."""
@@ -120,9 +120,9 @@ def test_an_ask_lambda_is_read_through_its_return(hops):
 
 
 @pytest.mark.pins(
-    "message-hops.a-DELIVERING-handler-CONTINUES",
-    "message-hops.a-MERGED-return-is-a-hop-per-CANDIDATE",
-    "message-handlers.a-registration-no-chain-holds-is-its-OWN-behavior",
+    "dispatch-hops.a-DELIVERING-handler-CONTINUES",
+    "dispatch-hops.a-MERGED-return-is-a-hop-per-CANDIDATE",
+    "dispatch-registrations.a-registration-no-chain-holds-is-its-OWN-group",
 )
 def test_a_two_return_mapper_gives_a_hop_per_class(hops):
     """`context.ask`'s reply mapper `(res, ex) -> res != null ? new Reserved(res) : new
@@ -144,8 +144,8 @@ def test_an_adapter_continues_to_the_handler_of_what_it_returns(hops):
 
 
 @pytest.mark.pins(
-    "message-hops.a-CONSTRUCTOR-reference-returns-its-OWNER",
-    "message-handlers.a-CONSTRUCTOR-reference-is-a-handler",
+    "dispatch-hops.a-CONSTRUCTOR-reference-returns-its-OWNER",
+    "dispatch-registrations.a-CONSTRUCTOR-reference-is-a-handler",
 )
 def test_a_constructor_reference_adapter_continues_from_its_super_call(hops):
     """`messageAdapter(Stock.Reply.class, Counted::new)`, the samples' usual adapter: the
@@ -157,7 +157,7 @@ def test_a_constructor_reference_adapter_continues_from_its_super_call(hops):
     assert _from(hops, "Counter$Counted#<init>") == {("Counter$Counted", "Counter#onCounted")}
 
 
-@pytest.mark.pins("message-hops.a-CONSTRUCTOR-reference-returns-its-OWNER")
+@pytest.mark.pins("dispatch-hops.a-CONSTRUCTOR-reference-returns-its-OWNER")
 def test_an_ask_by_constructor_reference_sends_its_class(hops):
     """`AskPattern.ask(counter, Report::new, …)`: the request function is the constructor."""
     assert _from(hops, "Counter#report") == {("Counter$Report", "Counter#onReport")}
@@ -167,7 +167,7 @@ def test_a_pipe_to_self_reaches_the_handler_of_what_its_mapper_returns(hops):
     assert ("Frontend$Loaded", "handler(Frontend$Loaded)") in _from(hops, "Frontend#onStart")
 
 
-@pytest.mark.pins("message-hops.a-CONSTANT-is-sent-with-its-IDENTITY")
+@pytest.mark.pins("dispatch-hops.a-CONSTANT-is-sent-with-its-IDENTITY")
 def test_a_timer_is_a_send_to_the_actor_itself(hops):
     """`timers.startTimerWithFixedDelay(Tick.INSTANCE, …)`: the key-less form, message at
     argument 0, a constant read by identity, so it reaches `onMessageEquals(Tick.INSTANCE,
@@ -183,7 +183,7 @@ def test_a_receive_timeout_is_a_send_to_the_actor_itself(hops):
     assert _from(hops, "Session#<init>") == {("Session$Timeout#INSTANCE.", "Session#onTimeout")}
 
 
-@pytest.mark.pins("message-hops.a-message-NOBODY-handles-is-a-STOP-naming-its-class")
+@pytest.mark.pins("dispatch-hops.a-value-NOBODY-handles-is-a-STOP-naming-its-class")
 def test_a_reply_nobody_handles_is_a_stop(hops):
     """`replyTo.tell(new Summary(…))`: no behavior here takes a `Summary` (the asker reads it
     off its future), so the send is a stop naming the class, with no handler."""
@@ -211,7 +211,7 @@ def test_an_unread_message_class_is_a_stop(hops):
     assert relay[4] == "compiler"
 
 
-@pytest.mark.pins("message-hops.an-UNREAD-class-is-a-STOP-that-says-so")
+@pytest.mark.pins("dispatch-hops.an-UNREAD-class-is-a-STOP-that-says-so")
 def test_an_unread_message_class_reaches_not_even_a_predicate_only_case(tmp_path: Path):
     """A predicate-only case (`onCommand(Predicate, h)`) matches every message whose class is
     known; a message whose class was not read still reaches it nothing: one stop, no path, no
@@ -219,9 +219,9 @@ def test_an_unread_message_class_reaches_not_even_a_predicate_only_case(tmp_path
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     try:
         workspace._connection.execute(
-            "INSERT INTO message_handlers VALUES "
-            "('m Entity#create(sig_1).#0', 0, NULL, NULL, true, 'm Entity#onAny(sig_2).', "
-            "false, 'compiler')"
+            "INSERT INTO dispatch_registrations VALUES "
+            "('m Entity#create(sig_1).#0', 0, NULL, NULL, NULL, true, 'm Entity#onAny(sig_2).', "
+            "false, 'first')"
         )
         reading = _Reading(workspace)
         unread = reading.hops(
@@ -278,9 +278,9 @@ def test_a_trace_names_an_unread_class(analyzed: Path):
     ]
 
 
-@pytest.mark.pins("message-hops.ONE-reset-before-both-writers")
+@pytest.mark.pins("dispatch-hops.ONE-reset-before-both-writers")
 def test_a_second_analysis_replaces_the_hops(tmp_path: Path):
-    """`rpc_hops` has two writers that only insert; the pipeline resets it once before both,
+    """`hops` has two writers that only insert; the pipeline resets it once before both,
     so analysing again leaves one set of rows, not two."""
     root = FIXTURES / _FAMILIES[0]
     compile_fixture(root)
@@ -291,7 +291,7 @@ def test_a_second_analysis_replaces_the_hops(tmp_path: Path):
         assert result.exit_code == 0, result.output
     workspace = DuckDbWorkspace(tmp_path / "workspace.duckdb")
     try:
-        rows = [tuple(row.values()) for row in workspace.query("rpc_hops")]
+        rows = [tuple(row.values()) for row in workspace.query("hops")]
     finally:
         workspace.close()
     assert rows and len(rows) == len(set(rows))
@@ -299,9 +299,10 @@ def test_a_second_analysis_replaces_the_hops(tmp_path: Path):
 
 def _catalog_file(tmp_path: Path, sends: str) -> Path:
     (tmp_path / "sends.yml").write_text(
-        "id: sends\ndisplayName: sends\nstyle: message_handlers\nprotocol: actor\n"
+        "id: sends\ndisplayName: sends\nstyle: fluent\nprotocol: actor\n"
+        "dispatch: {key: type, match: first}\n"
         "requires: [call_site, chain_reconstruction]\n"
-        f"matches:\n  roots: []\n  steps: []\n  terminal: [build]\n  message_sends:\n{sends}"
+        f"matches:\n  roots: []\n  steps: []\n  terminal: [build]\n  dispatch_sends:\n{sends}"
     )
     return tmp_path
 
@@ -311,18 +312,18 @@ def _catalog_file(tmp_path: Path, sends: str) -> Path:
     [
         (
             "    - { owner: a.Ref, method: tell, descriptor: '(Ljava/lang/Object;)V' }\n",
-            "message_arg",
+            "value_arg",
         ),
         (
-            "    - { owner: a.Ref, method: tell, descriptor: '(Ljava/lang/Object;)V', message_arg: 1 }\n",
-            "message_arg: 1",
+            "    - { owner: a.Ref, method: tell, descriptor: '(Ljava/lang/Object;)V', value_arg: 1 }\n",
+            "value_arg: 1",
         ),
         (
-            "    - { owner: a.Ref, method: tell, descriptor: '(Ljava/lang/Object;)V', message_arg: 0, to: 1 }\n",
+            "    - { owner: a.Ref, method: tell, descriptor: '(Ljava/lang/Object;)V', value_arg: 0, to: 1 }\n",
             "unknown keys",
         ),
         (
-            "    - { owner: a.Ref, method: tell, descriptor: 'tell', message_arg: 0 }\n",
+            "    - { owner: a.Ref, method: tell, descriptor: 'tell', value_arg: 0 }\n",
             "descriptor",
         ),
     ],
@@ -332,35 +333,21 @@ def test_a_malformed_send_is_refused_at_load(tmp_path: Path, entry: str, refused
         YamlCatalogSource(_catalog_file(tmp_path, entry)).load()
 
 
-def test_a_send_is_loaded_with_its_message_position(tmp_path: Path):
+def test_a_send_is_loaded_with_its_value_position(tmp_path: Path):
     [catalog] = YamlCatalogSource(
         _catalog_file(
             tmp_path,
-            "    - { owner: a.Ref, method: tell, descriptor: '(Ljava/lang/Object;)V', message_arg: 0 }\n",
+            "    - { owner: a.Ref, method: tell, descriptor: '(Ljava/lang/Object;)V', value_arg: 0 }\n",
         )
     ).load()
-    assert catalog.message_sends == (
+    assert catalog.dispatch_sends == (
         {
             "owner": "a/Ref#",
             "method": "tell",
             "descriptor": "(Ljava/lang/Object;)V",
-            "message_arg": 0,
+            "value_arg": 0,
         },
     )
-
-
-@pytest.mark.pins("key-handlers.a-key-takes-the-class-read-on-its-OWN-path")
-def test_a_key_takes_only_the_class_read_on_its_own_path():
-    """Two keys one helper builds (`ServiceKey.create(c, name)` with both from its callers):
-    the address walk and the class walk each give one path per caller, and a key takes the
-    class read on its own path, where one path extends the other (the crossings both made are
-    the nearest, the end of `Binding.path`). Never the other caller's class. A site whose
-    address no path read is one row with no address, carrying every class read there."""
-    named = [(("x",), "a"), (("y",), "b")]
-    read = [(("x",), "A#"), (("outer", "y"), "B#")]
-    assert _paired(named, read) == {"a": {"A#"}, "b": {"B#"}}
-    assert _paired(named, []) == {"a": {None}, "b": {None}}
-    assert _paired([], read) == {None: {"A#", "B#"}}
 
 
 def _keyed_catalog(tmp_path: Path, methods: str) -> Catalog:
@@ -375,9 +362,9 @@ def _keyed_catalog(tmp_path: Path, methods: str) -> Catalog:
 
 _REGISTER = (
     "    - { name: register, arity: 1, descriptor: '(La/Key;)V', channel_arg: 0,\n"
-    "        channel_via: [{ owner: a.Key, method: create, arg: 1 }]VIA }\n"
+    "        channel_via: [{ owner: a.Key, method: create, arg: 1VIA }] }\n"
 )
-_VIA = ",\n        message_class_via: [{ owner: a.Key, method: create, arg: 0 }]"
+_VIA = ", class_arg: 0"
 
 
 @pytest.mark.parametrize(
@@ -385,26 +372,36 @@ _VIA = ",\n        message_class_via: [{ owner: a.Key, method: create, arg: 0 }]
     [
         (
             _REGISTER.replace("VIA", _VIA)
-            + _REGISTER.replace("VIA", "").replace("register", "serve"),
-            "declaring no `message_class_via` beside one that does",
+            + "    - { name: serve, arity: 1, descriptor: '(La/Key;)V', url_arg: 0 }\n",
+            "reading no `channel_arg`",
         ),
         (
-            _REGISTER.replace("VIA", _VIA).replace("arity: 1,", "arity: 1, direction: outbound,"),
-            "not inbound",
+            _REGISTER.replace("VIA", _VIA.replace("class_arg: 0", "class_arg: first")),
+            "`class_arg: 'first'`",
         ),
         (
-            _REGISTER.replace("VIA", _VIA.replace("arg: 0", "arg: first")),
-            "non-empty list",
+            _REGISTER.replace("VIA", _VIA.replace("class_arg: 0", "class_arg: 1")),
+            "both the value and its class",
         ),
     ],
 )
-def test_a_malformed_message_class_via_is_refused(tmp_path: Path, methods: str, refused: str):
+def test_a_malformed_key_class_is_refused(tmp_path: Path, methods: str, refused: str):
+    """A `channel_via` entry's `class_arg` (spec 2026-11-05 §2) is an argument index other
+    than the value's, checked where the entry is hoisted; and once a catalog's keys name their
+    class, every inbound row reads its key at `channel_arg`, since the key pass replaces them
+    all."""
     with pytest.raises(CatalogError, match=refused):
         _keyed_methods(_keyed_catalog(tmp_path, methods))
 
 
-def test_an_outbound_row_needs_no_message_class_via(tmp_path: Path):
-    methods = _REGISTER.replace("VIA", _VIA) + _REGISTER.replace("VIA", "").replace(
+@pytest.mark.pins("key-handlers.every-INBOUND-row-of-a-keyed-catalog-is-read")
+def test_an_inbound_row_reads_the_class_its_producer_names_elsewhere(tmp_path: Path):
+    """`class_arg` is the producer's: an outbound row may carry it (it changes nothing there),
+    and an inbound row naming only the key's first step still has its class read through the
+    hoisted entry — every inbound row of the catalog is keyed, no outbound one is."""
+    methods = _REGISTER.replace("VIA", "").replace("arg: 1 }", "arg: 0 }").replace(
+        "a.Key", "a.Entity"
+    ) + _REGISTER.replace("VIA", _VIA).replace(
         "arity: 1,", "arity: 1, direction: outbound,"
     ).replace("register", "find")
     assert [method["name"] for method in _keyed_methods(_keyed_catalog(tmp_path, methods))] == [

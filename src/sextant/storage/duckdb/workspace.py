@@ -1058,7 +1058,7 @@ _NAMED_QUERIES = {
                terminal_kind, target_kind
         FROM call_edges ORDER BY caller, ordinal, target, callee
     """,
-    # Spec 2026-10-25 §3d/§5: the `rpc_hops` pass reads the methods that make calls, picks
+    # Spec 2026-10-25 §3d/§5: the gRPC hop pass reads the methods that make calls, picks
     # the ones declared in a client stub class by the one symbol rule (`domain/symbols.py`,
     # the rule it reads a callee's class by), and reads only their edges below — a handful
     # of rows rather than every edge of the module.
@@ -1072,19 +1072,21 @@ _NAMED_QUERIES = {
     # Spec 2026-10-25 §3d: a stub call to a served RPC, and the handler it lands on. Total
     # (NFR-1): one (caller, ordinal) names one wire path, and a path with several handlers
     # is one row per handler.
-    "rpc_hops": """
+    # Named `rpc_hops` until spec 2026-11-05, which made it every hop's table.
+    "hops": """
         SELECT caller, ordinal, protocol, path, handler, evidence
-        FROM rpc_hops
+        FROM hops
         ORDER BY caller, ordinal, handler
     """,
-    # Spec 2026-11-04 §3b: each behavior's cases, in the order the behavior tries them. Every
-    # column orders it (NFR-1): two ends of one root share a behavior id and may each put a
-    # different case at one position, so (behavior, position) alone is not total.
-    "message_handlers": """
-        SELECT behavior, position, message_type, message_value, predicated, handler, delivers,
-               evidence
-        FROM message_handlers
-        ORDER BY behavior, position, message_type, message_value, predicated, handler, delivers
+    # Spec 2026-11-05 §3: each group's registrations, in the order the group tries them.
+    # Every column orders it (NFR-1): two ends of one root share a group id and may each put
+    # a different registration at one position, so (group, position) alone is not total.
+    "dispatch_registrations": """
+        SELECT "group", position, key_type, key_value, key_object, predicated, handler,
+               delivers, match
+        FROM dispatch_registrations
+        ORDER BY "group", position, key_type, key_value, key_object, predicated, handler,
+                 delivers, match
     """,
     # Spec 2026-10-22-boundary-vocabulary-and-diff §5 (FR-24): the six in-process questions
     # `application/query/questions.py` answers, each ONE read (GUIDELINES §8.7) and the walk
@@ -1308,7 +1310,7 @@ _NAMED_QUERIES = {
 #   addresses    `endpoints.path`/`.peer`, `open_questions.path`, `roots.path`,
 #                `endpoint_metadata.path`, `endpoint_conditions.path`,
 #                `scheduled_work.expression`, `resolved_schedules.expression`,
-#                `rpc_hops.path`
+#                `hops.path`
 #   schedules    `resolved_schedules.value` (`redact_schedule_value`: whole by the
 #                keys it was read through, else `redact_text`)
 #   candidates   `open_questions.candidates` (`redact_candidates`)
@@ -1593,22 +1595,23 @@ _EXPORT_QUERIES = {
     # constant out of bytecode to be.
     "call_edges": _NAMED_QUERIES["call_edges"],
     # Spec 2026-10-25 §3e. Symbols, an integer and closed-set words (`evidence` is
-    # `compiler` on every row, an actor message send's included, spec 2026-11-04 §3c), plus
+    # `compiler` on every row, a dispatch send's included, spec 2026-11-04 §3c), plus
     # `path`: the wire path of the inbound row the hop lands on, so it masks by that
-    # column's address map, as `roots.path` does for the same reason (D06 §3). A message
+    # column's address map, as `roots.path` does for the same reason (D06 §3). A dispatch
     # send's `path` is a class or constant symbol, which no address matches. Ordered on the
     # table's own columns, the `endpoints` reasoning, so masking cannot reorder rows.
-    "rpc_hops": f"""
+    "hops": f"""
         SELECT h.caller, h.ordinal, h.protocol, coalesce(a.masked, h.path) AS path,
                h.handler, h.evidence
-        FROM rpc_hops h
+        FROM hops h
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = h.path
         ORDER BY h.caller, h.ordinal, h.handler
     """,
-    # Spec 2026-11-04 §3b. Symbols, an integer and booleans: a class, a constant and a handler
-    # are each named by its symbol, so there is nowhere in it for an address, a config value or
-    # a string constant out of bytecode to be, the `call_edges` reason above.
-    "message_handlers": _NAMED_QUERIES["message_handlers"],
+    # Spec 2026-11-05 §3. Symbols, an integer, booleans and a closed-set word: a class, a
+    # constant, an object's producing call and a handler are each named by its symbol, so
+    # there is nowhere in it for an address, a config value or a string constant out of
+    # bytecode to be, the `call_edges` reason above.
+    "dispatch_registrations": _NAMED_QUERIES["dispatch_registrations"],
     # F3 §4.2. Both carry only symbols, a closed-set value and an integer — no address,
     # config value or bytecode string — so redaction has nothing to reach here, the same
     # reason `call_edges` above is exported whole. W34's ratchet requires them: a table
@@ -1886,14 +1889,14 @@ _NAMED_DERIVATIONS = {
     "resolved_schedules_reset": "reset_resolved_schedules.sql",
     "resolved_schedules_insert": "insert_resolved_schedules.sql",
     # Spec 2026-10-25 §3d, 2026-11-04 §3d item 7. Two writers, `resolve/rpc_hops.py` and
-    # `resolve/message_hops.py`, each running only the insert; the pipeline runs the reset
+    # `resolve/dispatch_hops.py`, each running only the insert; the pipeline runs the reset
     # once, before both.
-    "rpc_hops_reset": "reset_rpc_hops.sql",
-    "rpc_hops_insert": "insert_rpc_hops.sql",
-    # Spec 2026-11-04 §3b. A reset/insert pair owned by its one writing pass, as above:
-    # nothing but `resolve/message_handlers.py` writes here.
-    "message_handlers_reset": "reset_message_handlers.sql",
-    "message_handlers_insert": "insert_message_handlers.sql",
+    "hops_reset": "reset_hops.sql",
+    "hops_insert": "insert_hops.sql",
+    # Spec 2026-11-05 §3. A reset/insert pair owned by its one writing pass, as above:
+    # nothing but `resolve/dispatch_registrations.py` writes here.
+    "dispatch_registrations_reset": "reset_dispatch_registrations.sql",
+    "dispatch_registrations_insert": "insert_dispatch_registrations.sql",
     # 2Q `I1`. A reset/insert pair owned by its one writing pass, exactly as
     # `return_flows` above is and for the same reason.
     "roots_reset": "reset_roots.sql",
@@ -1909,7 +1912,7 @@ _NAMED_DERIVATIONS = {
     "borrowed_endpoints_drop": "drop_borrowed_endpoints.sql",
     "borrowed_error_handlers_drop": "drop_borrowed_error_handlers.sql",
     # Spec 2026-10-25 §3c. Runs from `resolve/self_calls.py`, right after `derive_endpoints`,
-    # and from `resolve/message_hops.record_key_handlers` (spec 2026-11-04 §3d item 6).
+    # and from `resolve/dispatch_hops.record_key_handlers` (spec 2026-11-04 §3d item 6).
     "self_call_endpoints_drop": "drop_self_call_endpoints.sql",
     "call_edges_reset": "reset_call_edges.sql",
     "call_edges_insert": "insert_call_edges.sql",
@@ -2670,7 +2673,7 @@ class DuckDbWorkspace:
         # A schedule's `expression` joins because it is the annotation literal
         # `annotations.args` masks (spec 2026-10-23-configured-schedules, final review):
         # one string, so `redact_text`'s map rather than the grammar's.
-        # `rpc_hops.path` joins for `roots`'s reason (spec 2026-10-25 §3e): it is the wire
+        # `hops.path` joins for `roots`'s reason (spec 2026-10-25 §3e): it is the wire
         # path of the inbound row a hop lands on, carried.
         address_rows = self._connection.execute(
             "SELECT DISTINCT path AS address FROM endpoints WHERE path IS NOT NULL "
@@ -2680,7 +2683,7 @@ class DuckDbWorkspace:
             "UNION SELECT DISTINCT path FROM open_questions WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM roots WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT value FROM value_resolutions WHERE value IS NOT NULL "
-            "UNION SELECT DISTINCT path FROM rpc_hops WHERE path IS NOT NULL "
+            "UNION SELECT DISTINCT path FROM hops WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT expression FROM scheduled_work WHERE expression IS NOT NULL "
             "UNION SELECT DISTINCT expression FROM resolved_schedules "
             "WHERE expression IS NOT NULL "
