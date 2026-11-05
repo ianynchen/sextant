@@ -288,14 +288,8 @@ def test_a_container_parameter_resolves_by_unique_type_then_name(tmp_path: Path)
     assert table.bean_of(_parameter(_CONTAINER_TYPE, "anything")) == BeanRef(
         method=_MODULE + _CONTAINER, name="container", erased_return=_CONTAINER_TYPE
     )
-    # A type nothing declares is `none`, not `ambiguous` — unless the parameter is
-    # NAMED like a declared bean: the fold carries no type hierarchy, so a parameter
-    # declared as the bean's supertype has no type candidate and its name is the one
-    # rung left (the container would match the subtype; the fold matches the name).
+    # A type nothing declares is `none`, not `ambiguous`.
     assert table.bean_of(_parameter("com/acme/Missing#", "nothing")) == Unresolved("none")
-    assert table.bean_of(_parameter("com/acme/Supertype#", "container")) == BeanRef(
-        method=_MODULE + _CONTAINER, name="container", erased_return=_CONTAINER_TYPE
-    )
 
     two = one + _bean(_OTHER_CONTAINER, _CONTAINER_TYPE)
     workspace = _loaded(tmp_path / "two", two)
@@ -306,6 +300,47 @@ def test_a_container_parameter_resolves_by_unique_type_then_name(tmp_path: Path)
     assert table.bean_of(_parameter(_CONTAINER_TYPE, "otherContainer")) == BeanRef(
         method=_MODULE + _OTHER_CONTAINER, name="otherContainer", erased_return=_CONTAINER_TYPE
     )
+
+
+@pytest.mark.pins("beans.the-NAME-rung-reads-only-the-TYPE-s-candidates")
+def test_the_name_rung_reads_only_the_beans_of_the_parameter_s_type(tmp_path: Path):
+    """Task 3 review m3. The container compares names only among the candidates of
+    the parameter's type (`determineAutowireCandidate` runs over the beans
+    `findAutowireCandidates` found for that type), so a bean of an unrelated type
+    that shares the parameter's name is never injected. A bean whose type is a
+    SUBTYPE of the parameter's (the module's type facts or a dependency's class
+    header) is a candidate, and its name is then the rung that chooses it."""
+    supertype = "com/acme/Supertype#"
+    facts = (
+        _bean(_CONTAINER, _CONTAINER_TYPE)
+        + [_method(_HELPER)]
+        + [
+            TypeHeaderFact(
+                document_id="doc_1",
+                symbol="sextant-jvm maven org.springframework.amqp/spring-rabbit 3.1.0 "
+                + _CONTAINER_TYPE,
+                construct_kind=ConstructKind.CLASS,
+                superclass=supertype,
+                origin="org.springframework.amqp:spring-rabbit",
+                version="3.1.0",
+            )
+        ]
+    )
+    workspace = _loaded(tmp_path, facts)
+    table = bean_table(workspace, _catalog(_SPRING), known_channels=frozenset())
+    workspace.close()
+
+    # No bean of `Unrelated`; the bean named `container` is of another type.
+    assert table.bean_of(_parameter("com/acme/Unrelated#", "container")) == Unresolved("none")
+    assert table.bean_of(_parameter("com/acme/Unrelated#", "c", qualifier="container")) == (
+        Unresolved("none")
+    )
+    # The bean's type extends `Supertype`: it is a candidate, and the name chooses it.
+    container = BeanRef(
+        method=_MODULE + _CONTAINER, name="container", erased_return=_CONTAINER_TYPE
+    )
+    assert table.bean_of(_parameter(supertype, "container")) == container
+    assert table.bean_of(_parameter(supertype, "c", qualifier="container")) == container
 
 
 def test_one_primary_among_the_type_candidates_wins_over_the_name_match(tmp_path: Path):

@@ -8548,6 +8548,33 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "values.TWO-RECIPES-of-one-key-are-NON-ENUMERABLE": Guard(
+        what="a parameter the container fills with one of several recipes stops at the "
+        "parameter, unread",
+        why="Task 3 review m1: without the stop, the walk falls through to a hand-written "
+        "caller and reads its value as the one the container injects",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="        if isinstance(injected, Ambiguous):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.the-NAME-rung-reads-only-the-TYPE-s-candidates": Guard(
+        what="the Spring ladder's qualifier and name rungs choose only among the beans of the "
+        "parameter's type or of a subtype of it",
+        why="Task 3 review m3: Spring compares names only over the type's candidates; a bean of "
+        "an unrelated type that shares the name is never injected",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="            if bean.erased_return is not None and self._assignable("
+                "bean.erased_return, erased_type)\n",
+                replace="            if True  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "annotation-registrations.ONLY-a-QUALIFIER-makes-an-observer-KEYLESS": Guard(
         what="only an annotation type meta-annotated by the bean model's qualifier marker makes "
         "an observer keyless",

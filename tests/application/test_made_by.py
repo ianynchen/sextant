@@ -708,3 +708,50 @@ def test_a_parameter_no_recipe_provides_reads_as_it_did_before(tmp_path: Path):
     not the table's, so the walk answers as before the hop, `partial` with no address."""
     facts = [*_interface(API, "orders/{id}"), _named_is_a_qualifier(), *_api_recipe()]
     assert _rows(tmp_path, facts) == {("GET", None, "orders/{id}", "partial")}
+
+
+@pytest.mark.pins("values.TWO-RECIPES-of-one-key-are-NON-ENUMERABLE")
+def test_two_recipes_of_one_key_are_not_read_even_when_a_caller_hands_a_value(tmp_path: Path):
+    """Task 3 review m1. `retrofit(url: String)` is a recipe whose `String` the container fills,
+    and the module has two unqualified `String` recipes. A test also calls `retrofit(...)` by
+    hand with its own address. The container's choice is not in the module, so the walk stops
+    at the parameter (`non_enumerable`) and never reads the hand-written caller's address in
+    its place: the row stays `partial`."""
+    string = "java/lang/String#"
+    descriptor = "(Ljava/lang/String;)Lretrofit2/Retrofit;"
+    maker = _MODULE + method_descriptor(NETWORK, "retrofit", descriptor)
+    by_hand = _method(ORDERS, "byHand")
+    first = _recipe("baseUrl", string)
+    second = _recipe("mirrorUrl", string)
+    facts = [
+        *_interface(API, "orders/{id}"),
+        _named_is_a_qualifier(),
+        *first,
+        MethodReturnFact(document_id="doc_1", method=_symbol(first), ordinal=0,
+                         value=_url("https://one.example/")),
+        *second,
+        MethodReturnFact(document_id="doc_1", method=_symbol(second), ordinal=0,
+                         value=_url("https://two.example/")),
+        SymbolFact(
+            document_id="doc_1", symbol=maker, construct_kind=ConstructKind.METHOD,
+            enclosing=_MODULE + NETWORK,
+            signature=Signature(
+                parameters=[Parameter(name="url", type=TypeRef(symbol=string),
+                                      erased_symbol=string)],
+                returns=TypeRef(symbol=RETROFIT),
+            ),
+        ),
+        AnnotationFact(document_id="doc_1", target=maker, retention="runtime", use=_PROVIDES),
+        _call(maker, BUILDER, "<init>", "()V", 0, receiver=7, result=None),
+        _call(maker, BUILDER, "baseUrl", _BASE_URL, 1, receiver=7, result=13,
+              arguments=[CallArgument(kind="parameter", value=0)]),
+        _call(maker, BUILDER, "build", _BUILD, 2, receiver=13, result=16),
+        MethodReturnFact(document_id="doc_1", method=maker, ordinal=0,
+                         value=CallArgument(kind="unresolved", source=16)),
+        _declared(ORDERS, "byHand"),
+        _call(by_hand, NETWORK, "retrofit", descriptor, 0, receiver=None, result=5,
+              arguments=[_url("https://by-hand.example/")]
+              ).model_copy(update={"invoke_kind": "static"}),
+        *_api_recipe(),
+    ]  # fmt: skip
+    assert _rows(tmp_path, facts) == {("GET", None, "orders/{id}", "partial")}

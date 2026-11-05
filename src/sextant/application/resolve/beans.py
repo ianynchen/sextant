@@ -13,7 +13,9 @@ module's single channel bean by type would name a bean the container never injec
 OTHER reference (a container type no framework bean shares) takes the container's own
 candidate order — the qualifier, else exactly one declared bean of that erased type, else
 the one of several marked primary (two so marked fail the injection: `ambiguous`), else
-the name — cited on the model (`bean-models/spring.yml`, CP-27 row 15).
+the name — cited on the model (`bean-models/spring.yml`, CP-27 row 15). For such a
+reference the qualifier and the name choose only among the candidates of its type: a bean
+of the type or of a subtype of it (`dispatch.ancestry_of`), as the container does.
 
 No rung answers, or a rung has two candidates, is `Unresolved`, and the two are told
 apart: `ambiguous` is a rung that weighed candidates and could not choose, `none` is no
@@ -41,6 +43,7 @@ from typing import Any
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.conditions import annotation_index
+from sextant.application.resolve.dispatch import dispatch_of
 from sextant.domain.symbols import (
     bare_descriptor,
     member_name,
@@ -131,14 +134,21 @@ class DeclaredBeans:
 
 class BeanTable:
     """`bean_table`'s answer: the declared beans under one model, read through that
-    model's channel types and the caller's own channel names."""
+    model's channel types and the caller's own channel names. `ancestors` is every type's
+    direct supertypes (`dispatch.ancestry_of`), read to tell which beans are candidates
+    of a parameter's type."""
 
     def __init__(
-        self, declared: DeclaredBeans, channel_types: frozenset[str], known_channels: frozenset[str]
+        self,
+        declared: DeclaredBeans,
+        channel_types: frozenset[str],
+        known_channels: frozenset[str],
+        ancestors: Mapping[str, Sequence[tuple[str, str, bool]]],
     ) -> None:
         self._declared = declared
         self._channel_types = channel_types
         self._known_channels = known_channels
+        self._ancestors = ancestors
 
     def kind_of(self, erased_type: str) -> str:
         """`channel` for one of the model's `channel_types`, else `other`."""
@@ -148,6 +158,8 @@ class BeanTable:
         """The bean this injected parameter names, by the rungs of its kind."""
         is_channel = self.kind_of(reference.erased_type) == "channel"
         if reference.qualifier is not None:
+            if not is_channel:
+                return self._named_of_type(reference.qualifier, reference.erased_type)
             return self._named_or_known(reference.qualifier, is_channel)
         if is_channel:
             if reference.name is None:
@@ -166,13 +178,14 @@ class BeanTable:
             return primaries[0]
         if len(primaries) > 1:
             return Unresolved("ambiguous")
-        # The name rung reads every declared bean, not only the type candidates: the
-        # fold carries no type hierarchy, so a parameter declared as a supertype of
-        # the bean's erased return has no type candidate at all, and its name is the
-        # one rung left to it. That holds as long as the fold stays hierarchy-free;
-        # with one, this narrows to the candidates the way the container's does.
-        if reference.name is not None and (named := self._named(reference.name)) is not None:
-            return named
+        # The name rung reads only the candidates of the parameter's type, as the
+        # container does (`determineAutowireCandidate` runs over the beans
+        # `findAutowireCandidates` found for the type): a bean of the type or of a
+        # subtype of it. A bean of an unrelated type that shares the name is never it.
+        if reference.name is not None:
+            named = self._named_of_type(reference.name, reference.erased_type)
+            if isinstance(named, BeanRef) or named.reason == "ambiguous":
+                return named
         return Unresolved("ambiguous" if len(by_type) > 1 else "none")
 
     def bean_called(self, method_symbol: str) -> BeanRef | None:
@@ -185,6 +198,32 @@ class BeanTable:
         if found is None:
             return None
         return found[0] if len(found) == 1 else Unresolved("ambiguous")
+
+    def _named_of_type(self, name: str, erased_type: str) -> BeanRef | Unresolved:
+        """The declared bean of that name among the candidates of `erased_type`: `none`
+        where no bean of the name is of the type or of a subtype of it."""
+        found = [
+            bean
+            for bean in self._declared.by_name.get(name, ())
+            if bean.erased_return is not None and self._assignable(bean.erased_return, erased_type)
+        ]
+        if not found:
+            return Unresolved("none")
+        return found[0] if len(found) == 1 else Unresolved("ambiguous")
+
+    def _assignable(self, child: str, declared: str) -> bool:
+        """Whether `child` is `declared` or a subtype of it, by the supertypes the
+        module's type facts and its dependencies' class headers record."""
+        seen: set[str] = set()
+        pending = [child]
+        while pending:
+            current = pending.pop()
+            if current == declared:
+                return True
+            if current not in seen:
+                seen.add(current)
+                pending.extend(ancestor for ancestor, _, _ in self._ancestors.get(current, ()))
+        return False
 
     def _named_or_known(self, name: str, is_channel: bool) -> BeanRef | Unresolved:
         """A declared bean of that name, else — for a CHANNEL reference only — a channel
@@ -264,7 +303,12 @@ def bean_table(workspace: Workspace, catalog: Catalog, known_channels: frozenset
     channel_types = frozenset(
         type_descriptor(name) for name in _strings(model, "channel_types", where)
     )
-    return BeanTable(declared_beans(workspace, model), channel_types, known_channels)
+    return BeanTable(
+        declared_beans(workspace, model),
+        channel_types,
+        known_channels,
+        workspace.once(dispatch_of).ancestors,
+    )
 
 
 def declared_beans(workspace: Workspace, model: dict[str, Any]) -> DeclaredBeans:
@@ -553,7 +597,9 @@ class _Ladder:
         channel_types = frozenset(
             type_descriptor(name) for name in model.get("channel_types") or []
         )
-        self._beans = BeanTable(self._declared, channel_types, frozenset())
+        self._beans = BeanTable(
+            self._declared, channel_types, frozenset(), workspace.once(dispatch_of).ancestors
+        )
 
     def recipe_for(
         self, method: str, parameters: Sequence[Mapping[str, Any]], position: int
