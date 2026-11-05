@@ -97,30 +97,96 @@ def test_accepts_true_for_the_real_fixture():
 
 
 def test_the_offline_argv_carries_offline_before_the_shared_flags():
-    argv = _compose_argv(["./gradlew"], Path("/init.gradle"), Path("/out.json"), offline=True)
+    argv = _compose_argv(["./gradlew"], Path("/init.gradle"), Path("/out"), offline=True)
     assert argv == [
         "./gradlew",
         "--offline",
         "--init-script",
         "/init.gradle",
         "--no-configuration-cache",
+        "--continue",
         "-q",
+        "sextantBuild",
         "sextantModel",
-        "-Psextant.out=/out.json",
+        "-Psextant.outDir=/out",
     ]
 
 
 def test_the_online_retry_argv_drops_offline_but_keeps_the_rest():
-    argv = _compose_argv(["./gradlew"], Path("/init.gradle"), Path("/out.json"), offline=False)
+    argv = _compose_argv(["./gradlew"], Path("/init.gradle"), Path("/out"), offline=False)
     assert argv == [
         "./gradlew",
         "--init-script",
         "/init.gradle",
         "--no-configuration-cache",
+        "--continue",
         "-q",
+        "sextantBuild",
         "sextantModel",
-        "-Psextant.out=/out.json",
+        "-Psextant.outDir=/out",
     ]
+
+
+def _project_record(path: str, name: str) -> dict:
+    return {
+        "path": path,
+        "group": "com.acme",
+        "name": name,
+        "version": "1.0",
+        "dir": f"/repo/{name}",
+        "sourceRoots": [f"/repo/{name}/src/main/java"],
+        "sourceLanguages": {f"/repo/{name}/src/main/java": ["java"]},
+        "resourceRoots": [],
+        "classesDirs": [f"/repo/{name}/build/classes/java/main"],
+        "declaredRelease": 21,
+        "publishing": False,
+        "classpath": [],
+        "target": None,
+        "platform": None,
+    }
+
+
+def test_assemble_reads_one_file_per_project(tmp_path: Path):
+    """Each project's own `sextantModel` task writes its own file (Android design M4), and
+    the root's `sextantBuild` names every project; the detector joins them, in path order."""
+    lib = _project_record(":pricing-lib", "pricing-lib")
+    app = _project_record(":service-app", "service-app")
+    build = {
+        "projects": [
+            {key: record[key] for key in ("path", "group", "name", "version", "dir")}
+            for record in (app, lib)
+        ],
+        "includedBuilds": ["tools"],
+    }
+    (tmp_path / "build.json").write_text(json.dumps(build), encoding="utf-8")
+    (tmp_path / "projects").mkdir()
+    (tmp_path / "projects" / "_service-app.json").write_text(json.dumps([app]), encoding="utf-8")
+    (tmp_path / "projects" / "_pricing-lib.json").write_text(json.dumps([lib]), encoding="utf-8")
+
+    assembled = gradle_module._assemble(tmp_path)
+
+    assert assembled["projects"] == [lib, app]
+    assert assembled["includedBuilds"] == ["tools"]
+
+
+def test_assemble_gives_a_project_with_no_file_one_record_with_empty_lists(tmp_path: Path):
+    identity = {
+        "path": ":docs",
+        "group": "",
+        "name": "docs",
+        "version": "unspecified",
+        "dir": "/repo/docs",
+    }
+    (tmp_path / "build.json").write_text(
+        json.dumps({"projects": [identity], "includedBuilds": []}), encoding="utf-8"
+    )
+
+    [record] = gradle_module._assemble(tmp_path)["projects"]
+
+    assert record["path"] == ":docs"
+    assert record["classesDirs"] == [] and record["sourceRoots"] == []
+    assert record["classpath"] == [] and record["target"] is None
+    assert "buildFailure" not in record
 
 
 # --- the translation from captured JSON to RepositoryModel/ModuleModel -----
@@ -820,28 +886,28 @@ def test_an_offline_plugin_refusal_with_allow_resolve_retries_online_once(
     network might not, so `--allow-resolve` retries it online, as it does a dependency."""
     calls: list[bool] = []
 
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         calls.append(offline)
         if offline:
             return _completed(1, _REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE)
-        out_file.write_text(json.dumps({"projects": []}), encoding="utf-8")
+        _write_empty_build(out_dir)
         return _completed(0, "")
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
-    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", True)
-    assert data == {"projects": []}
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, True)
+    assert data == {"projects": [], "includedBuilds": []}
     assert calls == [True, False]
 
 
 def test_an_offline_plugin_refusal_without_the_flag_reports_gradles_own_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         return _completed(1, _REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE)
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
     with pytest.raises(ValueError, match="could not resolve plugin artifact") as failure:
-        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", False)
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
     assert "distribution not present" not in str(failure.value)
 
 
@@ -852,19 +918,26 @@ def _completed(returncode: int, output: str) -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=output, stderr="")
 
 
+def _write_empty_build(out_dir: Path) -> None:
+    """What `sextantBuild` writes for a build with no projects to read."""
+    (out_dir / "build.json").write_text(
+        json.dumps({"projects": [], "includedBuilds": []}), encoding="utf-8"
+    )
+
+
 def test_a_clean_offline_run_reads_the_output_file_and_asks_for_no_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     calls: list[bool] = []
 
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         calls.append(offline)
-        out_file.write_text(json.dumps({"projects": []}), encoding="utf-8")
+        _write_empty_build(out_dir)
         return _completed(0, "")
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
-    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", False)
-    assert data == {"projects": []}
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
+    assert data == {"projects": [], "includedBuilds": []}
     assert calls == [True]
 
 
@@ -873,7 +946,7 @@ def test_an_offline_refusal_without_allow_resolve_is_refused_with_no_retry(
 ):
     calls: list[bool] = []
 
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         calls.append(offline)
         return _completed(
             1,
@@ -884,7 +957,7 @@ def test_an_offline_refusal_without_allow_resolve_is_refused_with_no_retry(
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
     with pytest.raises(ValueError, match="available for offline mode"):
-        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", False)
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
     assert calls == [True]
 
 
@@ -893,7 +966,7 @@ def test_an_offline_refusal_with_allow_resolve_retries_online_once(
 ):
     calls: list[bool] = []
 
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         calls.append(offline)
         if offline:
             return _completed(
@@ -902,12 +975,12 @@ def test_an_offline_refusal_with_allow_resolve_retries_online_once(
                 "> No cached version of org.springframework:spring-web:6.1.6 available for "
                 "offline mode.\n",
             )
-        out_file.write_text(json.dumps({"projects": []}), encoding="utf-8")
+        _write_empty_build(out_dir)
         return _completed(0, "")
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
-    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", True)
-    assert data == {"projects": []}
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, True)
+    assert data == {"projects": [], "includedBuilds": []}
     assert calls == [True, False]
 
 
@@ -920,12 +993,12 @@ def test_a_build_configuration_failure_is_refused_with_gradles_own_words(
         "> Could not find method sextantModel() for arguments...\n"
     )
 
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         return _completed(1, verbatim)
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
     with pytest.raises(ValueError) as failure:
-        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", False)
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
     assert "Could not find method sextantModel" in str(failure.value)
 
 
@@ -937,12 +1010,12 @@ def test_a_bad_java_home_failure_is_refused_verbatim_not_as_distribution_absent(
     must reach the caller as Gradle's own verbatim words, never relabelled
     "Gradle distribution not present"."""
 
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         return _completed(1, _REAL_BAD_JAVA_HOME_FAILURE)
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
     with pytest.raises(ValueError) as failure:
-        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", False)
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, False)
     assert "JAVA_HOME is set to an invalid directory" in str(failure.value)
     assert "distribution not present" not in str(failure.value)
 
@@ -952,7 +1025,7 @@ def test_distribution_absent_is_recognised_even_on_the_second_attempt(
 ):
     calls: list[bool] = []
 
-    def fake_run_once(gradle_command, path, out_file, offline):
+    def fake_run_once(gradle_command, path, out_dir, offline):
         calls.append(offline)
         if offline:
             return _completed(
@@ -965,7 +1038,7 @@ def test_distribution_absent_is_recognised_even_on_the_second_attempt(
 
     monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
     with pytest.raises(ValueError, match="Gradle distribution not present"):
-        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path / "out.json", True)
+        GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, True)
     assert calls == [True, False]
 
 
@@ -1002,7 +1075,7 @@ def test_a_non_executable_wrapper_is_a_named_refusal(
 
     monkeypatch.setattr(gradle_module.subprocess, "run", fake_run)
     with pytest.raises(ValueError, match="not executable"):
-        GradleDetector._run_once(["./gradlew"], tmp_path, tmp_path / "out.json", True)
+        GradleDetector._run_once(["./gradlew"], tmp_path, tmp_path, True)
 
 
 def test_a_timeout_becomes_a_named_refusal_not_a_hang(
@@ -1016,7 +1089,7 @@ def test_a_timeout_becomes_a_named_refusal_not_a_hang(
 
     monkeypatch.setattr(gradle_module.subprocess, "run", fake_run)
     with pytest.raises(ValueError, match="did not finish within"):
-        GradleDetector._run_once(["./gradlew"], tmp_path, tmp_path / "out.json", True)
+        GradleDetector._run_once(["./gradlew"], tmp_path, tmp_path, True)
 
 
 # --- the init script itself, loaded through the installed package (2M Task

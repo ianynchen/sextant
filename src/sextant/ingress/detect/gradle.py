@@ -3,9 +3,11 @@ reads its build file directly, Gradle has no such file to read — the model a
 `build.gradle(.kts)` describes exists only once Gradle itself has evaluated
 it. So this detector LEARNS the build by running the target repository's own
 `./gradlew`, driven by a read-only init script packaged beside this module
-(`sextant-model.init.gradle`), which walks `allprojects` at task-execution
-time and writes one JSON document to a `-P`-named file — never stdout, which
-Gradle itself, the target build's own scripts, and JVM warnings all pollute.
+(`sextant-model.init.gradle`). Each project's own task writes that project's
+records, and the root project's task names every project, all into a
+`-P`-named folder (Android design M4) — never stdout, which Gradle itself,
+the target build's own scripts, and JVM warnings all pollute. `_assemble`
+joins the files into one document.
 
 **Honesty (2M design §1a).** Invoking `./gradlew` executes the target
 repository's own build code — the same trust already extended when the
@@ -14,9 +16,9 @@ Sextant adds no sandbox around that. Nor is this detector filesystem-read-only
 for the target the way `MavenDetector` is: Gradle writes `.gradle/` state
 into the repository it runs against and may start a background daemon. And
 the probe is not cheap or narrowly scoped (2M Task 3 fix round 1, I4): the
-init script's `sextantModel` task depends on EVERY source-set-owning
-project's own `classes` task, so one invocation compiles the ENTIRE target
-build — every
+init script's `sextantModel` task in EVERY source-set-owning project depends
+on that project's own `classes` task, so one invocation compiles the ENTIRE
+target build — every
 project, including ones the CLI will go on to skip-list — takes however long
 that full compile takes, and one project's compile failure refuses detection
 for the whole repository, not only that project.
@@ -132,13 +134,15 @@ def _init_script() -> Path:
 
 
 def _compose_argv(
-    gradle_command: list[str], init_script: Path, out_file: Path, offline: bool
+    gradle_command: list[str], init_script: Path, out_dir: Path, offline: bool
 ) -> list[str]:
     """The composed argv (2M design §1, pinned): `<gradle> --init-script
-    <ours> --no-configuration-cache -q sextantModel -Psextant.out=<tmpfile>`,
-    with `--offline` prepended for the first attempt only — network posture
-    is the ONE thing that differs between the two attempts `detect` may
-    make."""
+    <ours> --no-configuration-cache --continue -q sextantBuild sextantModel
+    -Psextant.outDir=<tmpdir>`, with `--offline` prepended for the first
+    attempt only — network posture is the ONE thing that differs between the
+    two attempts `detect` may make. `sextantModel` runs in every project, each
+    reading only its own configurations (Android design M4); `--continue` lets
+    the other projects finish when one fails (M5)."""
     argv = [*gradle_command]
     if offline:
         argv.append("--offline")
@@ -146,9 +150,11 @@ def _compose_argv(
         "--init-script",
         str(init_script),
         "--no-configuration-cache",
+        "--continue",
         "-q",
+        "sextantBuild",
         "sextantModel",
-        f"-Psextant.out={out_file}",
+        f"-Psextant.outDir={out_dir}",
     ]
     return argv
 
@@ -188,10 +194,10 @@ def _is_offline_refusal(output: str) -> bool:
     return _OFFLINE_REFUSAL_SUBSTRING in output or _OFFLINE_PLUGIN_REFUSAL_SUBSTRING in output
 
 
-def _read_json(out_file: Path) -> dict[str, Any]:
+def _read_json(out_file: Path) -> Any:
     """The init script's own JSON, read back — wrapped into a named refusal
     for two escape hatches a zero exit code does not rule out (2M Task 3 fix
-    round 1, I6): a `sextantModel` name collision or an overriding build
+    round 1, I6): a `sextantBuild` name collision or an overriding build
     script could exit 0 without ever running OUR task's `doLast`, leaving no
     file to read at all; and the file that IS there might not parse."""
     try:
@@ -199,13 +205,58 @@ def _read_json(out_file: Path) -> dict[str, Any]:
     except FileNotFoundError as missing:
         raise ValueError(
             f"gradle exited successfully but wrote no model to {out_file} — the target "
-            "build may have overridden the sextantModel task"
+            "build may have overridden the sextantBuild task"
         ) from missing
     try:
-        document: dict[str, Any] = json.loads(text)
+        return json.loads(text)
     except json.JSONDecodeError as malformed:
         raise ValueError(f"gradle wrote invalid JSON to {out_file}: {malformed}") from malformed
-    return document
+
+
+def _project_file_name(project_path: str) -> str:
+    """The file a project's own `sextantModel` task writes: its path with every `:` made
+    `_`, so the root project `:` is `_` and `:libs:core` is `_libs_core` — the init
+    script's own rule."""
+    return f"{project_path.replace(':', '_')}.json"
+
+
+def _assemble(out_dir: Path) -> dict[str, Any]:
+    """The one document `_repository_model` reads, joined from the files the init script
+    wrote (Android design M4): `build.json` from the root project's `sextantBuild` names
+    every project and the included builds, and each project's own `sextantModel` wrote a
+    list of records under `projects/`. A project with no file gets one record with empty
+    lists — its build identity only, nothing to scan. Records are in `(path, target)`
+    order, so the document is the same on every run (NFR-1)."""
+    build = _read_json(out_dir / "build.json")
+    try:
+        records: list[dict[str, Any]] = []
+        for project in build["projects"]:
+            project_file = out_dir / "projects" / _project_file_name(str(project["path"]))
+            if project_file.is_file():
+                records.extend(_read_json(project_file))
+                continue
+            records.append(
+                {
+                    **project,
+                    "sourceRoots": [],
+                    "sourceLanguages": {},
+                    "resourceRoots": [],
+                    "classesDirs": [],
+                    "declaredRelease": None,
+                    "publishing": False,
+                    "classpath": [],
+                    "target": None,
+                    "platform": None,
+                }
+            )
+        included_builds = build["includedBuilds"]
+    except KeyError as missing:
+        raise ValueError(
+            f"gradle's own build JSON is missing the {missing} key — the init script "
+            "and this detector may be out of step"
+        ) from missing
+    records.sort(key=lambda record: (str(record["path"]), str(record.get("target") or "")))
+    return {"projects": records, "includedBuilds": included_builds}
 
 
 class GradleDetector:
@@ -228,8 +279,7 @@ class GradleDetector:
     def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
         gradle_command, wrapper_note = self._gradle_command(path)
         with tempfile.TemporaryDirectory() as workdir:
-            out_file = Path(workdir) / "sextant-model.json"
-            data = self._invoke(gradle_command, path, out_file, allow_resolve)
+            data = self._invoke(gradle_command, path, Path(workdir), allow_resolve)
         return self._repository_model(path, data, wrapper_note)
 
     @staticmethod
@@ -314,18 +364,18 @@ class GradleDetector:
         return [on_path], _WRAPPER_FALLBACK_NOTE
 
     def _invoke(
-        self, gradle_command: list[str], path: Path, out_file: Path, allow_resolve: bool
+        self, gradle_command: list[str], path: Path, out_dir: Path, allow_resolve: bool
     ) -> dict[str, Any]:
-        """Runs `sextantModel`, offline first, applying the cold-start
+        """Runs `sextantBuild` and `sextantModel`, offline first, applying the cold-start
         taxonomy (2M design §1) to a failure: distribution-absent is checked
         BEFORE anything else, on either attempt, because it is not a build
         failure at all — Gradle itself never started. An offline dependency
         refusal is retried online exactly once when `allow_resolve` permits
         it; any other failure, and a failed retry, surfaces as Gradle's own
         error verbatim (DR-6)."""
-        first = self._run_once(gradle_command, path, out_file, offline=True)
+        first = self._run_once(gradle_command, path, out_dir, offline=True)
         if first.returncode == 0:
-            return _read_json(out_file)
+            return _assemble(out_dir)
 
         combined = first.stdout + first.stderr
         if _is_distribution_absent(combined):
@@ -333,13 +383,13 @@ class GradleDetector:
         if not (allow_resolve and _is_offline_refusal(combined)):
             raise ValueError(combined.strip())
 
-        second = self._run_once(gradle_command, path, out_file, offline=False)
+        second = self._run_once(gradle_command, path, out_dir, offline=False)
         if second.returncode != 0:
             combined_retry = second.stdout + second.stderr
             if _is_distribution_absent(combined_retry):
                 raise ValueError(_distribution_absent_message(path, combined_retry))
             raise ValueError(combined_retry.strip())
-        return _read_json(out_file)
+        return _assemble(out_dir)
 
     # A cap, not a guess at how long a real build takes (2M Task 3 fix round
     # 1, M3): the init script's own `sextantModel` task compiles the whole
@@ -350,9 +400,9 @@ class GradleDetector:
 
     @staticmethod
     def _run_once(
-        gradle_command: list[str], path: Path, out_file: Path, offline: bool
+        gradle_command: list[str], path: Path, out_dir: Path, offline: bool
     ) -> subprocess.CompletedProcess[str]:
-        argv = _compose_argv(gradle_command, _init_script(), out_file, offline)
+        argv = _compose_argv(gradle_command, _init_script(), out_dir, offline)
         try:
             return subprocess.run(
                 argv,

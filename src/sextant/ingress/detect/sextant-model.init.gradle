@@ -1,12 +1,22 @@
 // Sextant's own read-only probe (2M design §1). A plain Groovy init script —
 // init scripts are always Groovy regardless of the target build's own DSL,
 // which is exactly why one script here reads both Groovy- and Kotlin-DSL
-// Gradle builds. It registers `sextantModel` on the root project; walking
-// `allprojects` happens inside the task's own execution (`doLast`), never at
-// configuration time, because `compileClasspath` cannot be resolved until
-// the task graph is running. The walk writes ONE JSON document to the file
-// named by `-Psextant.out` — never stdout, which Gradle itself, the target
-// build's own scripts, and JVM warnings all pollute. A `sextantModel` name
+// Gradle builds. It registers `sextantModel` on EVERY project and
+// `sextantBuild` on the root project only (Android design M4). Each
+// project's own `sextantModel` resolves only that project's own
+// configurations and writes that project's records; with
+// `org.gradle.parallel=true`, Gradle refuses a task that resolves the
+// configuration of a different project ("without an exclusive lock"), so one
+// root task cannot walk them all. `sextantBuild` reads only project
+// properties (path, group, name, version, folder) of every project and never
+// a configuration. The reads happen inside each task's own execution
+// (`doLast`), never at configuration time, because `compileClasspath`
+// cannot be resolved until the task graph is running. All files go into the
+// folder named by `-Psextant.outDir` — never stdout, which Gradle itself,
+// the target build's own scripts, and JVM warnings all pollute:
+// `build.json` from `sextantBuild`, and `projects/<path>.json` from each
+// `sextantModel`, where `<path>` is the project path with every `:` made
+// `_` (the root project is `_`). A `sextantModel` or `sextantBuild` name
 // collision with the target build surfaces as Gradle's own configuration
 // error (a duplicate task registration) and needs no handling here — it
 // reaches GradleDetector as an ordinary build-configuration-failure refusal.
@@ -19,41 +29,170 @@
 // `.gradle/` state into the repository it runs against and may start a
 // daemon; neither is filesystem-read-only behaviour, and GradleDetector's
 // own docstring says so in those words. Nor is this a narrow, cheap probe
-// (2M Task 3 fix round 1, I4): `sextantModel` depends on EVERY Java-plugin
-// project's own `classes` task (below), so running it compiles the ENTIRE
-// target build in one invocation — every project, including ones the CLI
-// will go on to skip-list — and one project's compile failure fails this
-// whole task, refusing detection for every project, not only that one.
+// (2M Task 3 fix round 1, I4): each Java-plugin project's `sextantModel`
+// depends on that project's own `classes` task (below), so running it
+// compiles the ENTIRE target build in one invocation — every project,
+// including ones the CLI will go on to skip-list — and one project's compile
+// failure fails the invocation, refusing detection for every project, not
+// only that one.
 import groovy.json.JsonOutput
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
 import org.gradle.api.artifacts.component.ProjectComponentIdentifier
 
+// One project record, built from what the caller read off the project's own
+// plugin (Android design M4). Every branch — today only `java` — calls this
+// closure, and only this closure, with the same input map:
+//   sourceSets             language name -> the source directories that
+//                          language's source-directory set registered
+//   resourceDirs           the resource directories
+//   classesDirs            the compiled-classes directories
+//   classpathConfiguration the configuration to resolve as the compile
+//                          classpath, or null
+//   declaredRelease        the Java release the build declares, or null
+//   target, platform       null for a `java` project
+// A project with no compiling plugin passes an empty map and gets a record
+// with empty lists.
+def sextantRecord = { p, Map inputs ->
+    def sourceRoots = []
+    def sourceLanguages = new TreeMap()
+    def resourceRoots = []
+    def classesDirs = []
+    def classpath = []
+    def languageDirs = inputs.sourceSets ?: [:]
+    def resourceDirs = inputs.resourceDirs ?: []
+    def buildDirPath = p.layout.buildDirectory.get().asFile.absolutePath
+    // Every language directory a JVM-language plugin (Java,
+    // Kotlin, Groovy, ...) registered on the source set — the union of
+    // the language sets the caller found is the plugin-agnostic way to read
+    // that — MINUS the resource dirs (reported separately)
+    // and anything under the build directory (annotation
+    // processors register their generated-sources dir here
+    // too, and a generated dir is not a source root any more
+    // than Maven's `target/generated-sources` is).
+    sourceRoots = languageDirs.values().flatten()
+        .findAll { !resourceDirs.contains(it) && !it.absolutePath.startsWith(buildDirPath) }
+        .collect { it.absolutePath }
+        .unique()
+        .sort()
+    // Which plugin's source-directory set registered each source directory
+    // (OI-273 round 2). EVERY directory, generated ones under the build
+    // directory included (fix round 2, review N1): they are not source roots,
+    // but a module whose only code is generated (OpenAPI, jOOQ, protobuf) is
+    // written in the language of the set that compiles them.
+    languageDirs.each { language, dirs ->
+        dirs.each { dir ->
+            def key = dir.absolutePath
+            sourceLanguages[key] = ((sourceLanguages[key] ?: []) + language).unique().sort()
+        }
+    }
+    resourceRoots = resourceDirs.collect { it.absolutePath }.sort()
+    classesDirs = (inputs.classesDirs ?: []).collect { it.absolutePath }.sort()
+    def compileClasspath = inputs.classpathConfiguration
+    if (compileClasspath != null) {
+        compileClasspath.incoming.artifacts.artifacts.each { artifact ->
+            def id = artifact.id.componentIdentifier
+            def entry = [path: artifact.file.absolutePath]
+            // Gradle reports a coordinate only where it HAS one
+            // (2M design §1): a `ModuleComponentIdentifier` is
+            // an external Maven-style dependency. A
+            // `ProjectComponentIdentifier` (2M Task 3 fix round
+            // 1, I3) is an INTER-PROJECT dependency
+            // (`project(":other")`) — internal wiring Gradle
+            // resolved just fine, marked `internal` rather than
+            // given a group/name/version this identifier does
+            // not carry, so GradleDetector can tell it apart
+            // from a genuinely unresolved one. Anything else (a
+            // flat file() dependency) carries neither and
+            // stays path-only.
+            if (id instanceof ModuleComponentIdentifier) {
+                entry.group = id.group
+                entry.name = id.module
+                entry.version = id.version
+            } else if (id instanceof ProjectComponentIdentifier) {
+                entry.internal = true
+                // W55: the project PATH (`:pricing-lib`), which is
+                // the only identity this component id carries — it
+                // has no group/name/version of its own. Recorded so
+                // the detector can join it to that project's own
+                // entry in `projects[]`, which DOES carry a group
+                // and a name, and form the coordinate from those.
+                //
+                // For a grouped project the path only joins, and the
+                // coordinate is its group and name. A project with NO
+                // group has no coordinate (Gradle will not publish it),
+                // so the detector names it by the root project's name
+                // plus this path (OI-273) — the build's own
+                // declarations, the same on every machine.
+                entry.projectPath = id.projectPath
+            }
+            classpath << entry
+        }
+        classpath = classpath.sort { it.path }
+    }
+    [
+        path: p.path,
+        group: p.group.toString(),
+        name: p.name,
+        version: p.version.toString(),
+        dir: p.projectDir.absolutePath,
+        sourceRoots: sourceRoots,
+        sourceLanguages: sourceLanguages,
+        resourceRoots: resourceRoots,
+        classesDirs: classesDirs,
+        declaredRelease: inputs.declaredRelease,
+        publishing: p.plugins.hasPlugin("maven-publish"),
+        classpath: classpath,
+        target: inputs.target,
+        platform: inputs.platform,
+    ]
+}
+
 gradle.rootProject { rp ->
-    def sextantModel = rp.tasks.register("sextantModel") {
+    rp.tasks.register("sextantBuild") {
         // No declared inputs/outputs: this task's whole job is a one-shot
         // read of the evaluated model, and Gradle's own up-to-date checking
         // has nothing to gain from a task that is never meant to be skipped.
         doLast {
-            def outPath = rp.property("sextant.out").toString()
-            def projectRecords = rp.allprojects.sort { it.path }.collect { p ->
-                def hasJava = p.plugins.hasPlugin("java")
-                def sourceRoots = []
-                def sourceLanguages = new TreeMap()
-                def resourceRoots = []
-                def classesDirs = []
-                def classpath = []
-                // The Java release this project's BUILD declares (W3b). Asked of
-                // GRADLE rather than parsed out of a build script, because the
-                // value can come from a convention plugin, a toolchain, or a
-                // property, and only the evaluated model knows which won.
-                //
-                // `options.release` first — it is the modern and unambiguous
-                // one. `targetCompatibility` is the fallback and still what
-                // older builds set; it arrives as a JavaVersion-ish string, so
-                // `1.8` and `8` both have to reduce to 8. A project declaring
-                // neither reports null: an absence, never a default.
-                def declaredRelease = null
-                if (hasJava) {
+            def outDir = new File(rp.property("sextant.outDir").toString())
+            def projects = rp.allprojects.sort { it.path }.collect { p ->
+                [
+                    path: p.path,
+                    group: p.group.toString(),
+                    name: p.name,
+                    version: p.version.toString(),
+                    dir: p.projectDir.absolutePath,
+                ]
+            }
+            // Composite builds (2M design §1c / Task 3 fix round 1, I1):
+            // `includeBuild`d projects are invisible to `allprojects` above —
+            // named here instead, so GradleDetector can state the boundary
+            // as a note rather than dropping it silently.
+            def includedBuilds = gradle.includedBuilds.collect { it.name }.sort()
+            outDir.mkdirs()
+            new File(outDir, "build.json").text = JsonOutput.toJson(
+                [projects: projects, includedBuilds: includedBuilds]
+            )
+        }
+    }
+    rp.allprojects.each { p ->
+        def sextantModel = p.tasks.register("sextantModel") {
+            // No declared inputs/outputs, for the same reason as `sextantBuild`.
+            doLast {
+                def outDir = new File(p.property("sextant.outDir").toString())
+                def inputs = [:]
+                if (p.plugins.hasPlugin("java")) {
+                    def main = p.sourceSets.main
+                    // The Java release this project's BUILD declares (W3b). Asked of
+                    // GRADLE rather than parsed out of a build script, because the
+                    // value can come from a convention plugin, a toolchain, or a
+                    // property, and only the evaluated model knows which won.
+                    //
+                    // `options.release` first — it is the modern and unambiguous
+                    // one. `targetCompatibility` is the fallback and still what
+                    // older builds set; it arrives as a JavaVersion-ish string, so
+                    // `1.8` and `8` both have to reduce to 8. A project declaring
+                    // neither reports null: an absence, never a default.
+                    def declaredRelease = null
                     def compileJava = p.tasks.findByName("compileJava")
                     if (compileJava != null) {
                         declaredRelease = compileJava.options.release.getOrNull()
@@ -66,33 +205,12 @@ gradle.rootProject { rp ->
                             }
                         }
                     }
-                }
-                if (hasJava) {
-                    def main = p.sourceSets.main
-                    def buildDirPath = p.layout.buildDirectory.get().asFile.absolutePath
-                    def resourceDirs = main.resources.srcDirs
-                    // Every language directory a JVM-language plugin (Java,
-                    // Kotlin, Groovy, ...) registered on the `main` source
-                    // set — `allSource` is the plugin-agnostic way to read
-                    // that — MINUS the resource dirs (reported separately)
-                    // and anything under the build directory (annotation
-                    // processors register their generated-sources dir here
-                    // too, and a generated dir is not a source root any more
-                    // than Maven's `target/generated-sources` is).
-                    sourceRoots = main.allSource.srcDirs
-                        .findAll { !resourceDirs.contains(it) && !it.absolutePath.startsWith(buildDirPath) }
-                        .collect { it.absolutePath }
-                        .sort()
-                    // Which plugin's source-directory set registered each source directory
-                    // (OI-273 round 2): `java` for the Java plugin's own, and every
+                    // The source-directory sets on the `main` source set (OI-273
+                    // round 2): `java` for the Java plugin's own, and every
                     // SourceDirectorySet another plugin hung on the source set under the
                     // name it chose (`kotlin`, `groovy`, ...). A directory's NAME says
                     // nothing — `kotlin.srcDirs("src")` is ordinary — and one directory
                     // can be in two sets: the Kotlin plugin adds `src/main/java` to its own.
-                    // EVERY directory, generated ones under the build directory included
-                    // (fix round 2, review N1): they are not source roots, but a module
-                    // whose only code is generated (OpenAPI, jOOQ, protobuf) is written in
-                    // the language of the set that compiles them.
                     def languageSets = [java: main.java]
                     main.extensions.extensionsSchema.each { schema ->
                         def extension = main.extensions.findByName(schema.name)
@@ -116,90 +234,30 @@ gradle.rootProject { rp ->
                             }
                         }
                     }
-                    languageSets.each { language, set ->
-                        set.srcDirs.each { dir ->
-                            def key = dir.absolutePath
-                            sourceLanguages[key] = ((sourceLanguages[key] ?: []) + language).unique().sort()
-                        }
-                    }
-                    resourceRoots = resourceDirs.collect { it.absolutePath }.sort()
-                    classesDirs = main.output.classesDirs.files.collect { it.absolutePath }.sort()
-                    def compileClasspath = p.configurations.findByName("compileClasspath")
-                    if (compileClasspath != null) {
-                        compileClasspath.incoming.artifacts.artifacts.each { artifact ->
-                            def id = artifact.id.componentIdentifier
-                            def entry = [path: artifact.file.absolutePath]
-                            // Gradle reports a coordinate only where it HAS one
-                            // (2M design §1): a `ModuleComponentIdentifier` is
-                            // an external Maven-style dependency. A
-                            // `ProjectComponentIdentifier` (2M Task 3 fix round
-                            // 1, I3) is an INTER-PROJECT dependency
-                            // (`project(":other")`) — internal wiring Gradle
-                            // resolved just fine, marked `internal` rather than
-                            // given a group/name/version this identifier does
-                            // not carry, so GradleDetector can tell it apart
-                            // from a genuinely unresolved one. Anything else (a
-                            // flat file() dependency) carries neither and
-                            // stays path-only.
-                            if (id instanceof ModuleComponentIdentifier) {
-                                entry.group = id.group
-                                entry.name = id.module
-                                entry.version = id.version
-                            } else if (id instanceof ProjectComponentIdentifier) {
-                                entry.internal = true
-                                // W55: the project PATH (`:pricing-lib`), which is
-                                // the only identity this component id carries — it
-                                // has no group/name/version of its own. Recorded so
-                                // the detector can join it to that project's own
-                                // entry in `projects[]`, which DOES carry a group
-                                // and a name, and form the coordinate from those.
-                                //
-                                // For a grouped project the path only joins, and the
-                                // coordinate is its group and name. A project with NO
-                                // group has no coordinate (Gradle will not publish it),
-                                // so the detector names it by the root project's name
-                                // plus this path (OI-273) — the build's own
-                                // declarations, the same on every machine.
-                                entry.projectPath = id.projectPath
-                            }
-                            classpath << entry
-                        }
-                        classpath = classpath.sort { it.path }
-                    }
+                    inputs = [
+                        sourceSets: languageSets.collectEntries { language, set -> [language, set.srcDirs] },
+                        resourceDirs: main.resources.srcDirs,
+                        classesDirs: main.output.classesDirs.files,
+                        classpathConfiguration: p.configurations.findByName("compileClasspath"),
+                        declaredRelease: declaredRelease,
+                        target: null,
+                        platform: null,
+                    ]
                 }
-                [
-                    path: p.path,
-                    group: p.group.toString(),
-                    name: p.name,
-                    version: p.version.toString(),
-                    dir: p.projectDir.absolutePath,
-                    sourceRoots: sourceRoots,
-                    sourceLanguages: sourceLanguages,
-                    resourceRoots: resourceRoots,
-                    classesDirs: classesDirs,
-                    declaredRelease: declaredRelease,
-                    publishing: p.plugins.hasPlugin("maven-publish"),
-                    classpath: classpath,
-                ]
+                def projectsDir = new File(outDir, "projects")
+                projectsDir.mkdirs()
+                new File(projectsDir, p.path.replace(":", "_") + ".json").text = JsonOutput.toJson(
+                    [sextantRecord(p, inputs)]
+                )
             }
-            // Composite builds (2M design §1c / Task 3 fix round 1, I1):
-            // `includeBuild`d projects are invisible to `allprojects` above —
-            // named here instead, so GradleDetector can state the boundary
-            // as a note rather than dropping it silently.
-            def includedBuilds = gradle.includedBuilds.collect { it.name }.sort()
-            new File(outPath).text = JsonOutput.toJson(
-                [projects: projectRecords, includedBuilds: includedBuilds]
-            )
         }
-    }
-    // "The compiled-classes output directories" (2M design §1) means what it
-    // says: the prerequisite is a SUCCESSFUL BUILD, the same precondition
-    // `MavenDetector`'s own docstring states for `mvn`, except Gradle's own
-    // task graph can state it directly rather than asking the caller for a
-    // separate compile step first. `plugins.withId` reacts whether the Java
-    // plugin is already applied or applied later, so this reaches every
-    // Java-plugin project regardless of configuration order.
-    rp.allprojects.each { p ->
+        // "The compiled-classes output directories" (2M design §1) means what it
+        // says: the prerequisite is a SUCCESSFUL BUILD, the same precondition
+        // `MavenDetector`'s own docstring states for `mvn`, except Gradle's own
+        // task graph can state it directly rather than asking the caller for a
+        // separate compile step first. `plugins.withId` reacts whether the Java
+        // plugin is already applied or applied later, so this reaches every
+        // Java-plugin project regardless of configuration order.
         p.plugins.withId("java") {
             sextantModel.configure { dependsOn p.tasks.named("classes") }
         }

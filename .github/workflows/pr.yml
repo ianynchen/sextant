@@ -99,14 +99,16 @@ jobs:
         # is the one opt-in Gradle integration test, and it runs `./gradlew
         # --offline`, so a fresh runner's empty Gradle caches (the wrapper
         # distribution, fixtures/gradle-orders's own dependencies) must be
-        # warm before it does. Running `sextantModel` itself here — the exact
-        # task that test re-runs offline — both fetches those and compiles
-        # both subprojects once, online, the same "successful build first"
-        # precondition `MavenDetector`'s own priming step states for `mvn`.
+        # warm before it does. Running `sextantBuild` and `sextantModel`
+        # themselves here — the exact tasks that test re-runs offline — both
+        # fetches those and compiles both subprojects once, online, the same
+        # "successful build first" precondition `MavenDetector`'s own priming
+        # step states for `mvn`.
         run: |
           cd fixtures/gradle-orders
           ./gradlew --init-script ../../src/sextant/ingress/detect/sextant-model.init.gradle \
-            --no-configuration-cache -q sextantModel -Psextant.out=/tmp/sextant-model-prime.json
+            --no-configuration-cache --continue -q sextantBuild sextantModel \
+            -Psextant.outDir=/tmp/sextant-model-prime
 
       # One step per stage, cheapest first (docs/performance.md P-2): a lint or type
       # failure is visible in seconds instead of after a twenty-minute test run, and the
