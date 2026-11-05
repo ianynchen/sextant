@@ -15,8 +15,9 @@
 // folder named by `-Psextant.outDir` — never stdout, which Gradle itself,
 // the target build's own scripts, and JVM warnings all pollute:
 // `build.json` from `sextantBuild`, and `projects/<path>.json` from each
-// `sextantModel`, where `<path>` is the project path with every `:` made
-// `_` (the root project is `_`). A `sextantModel` or `sextantBuild` name
+// `sextantModel`, where `<path>` is the project path with every `_` made
+// `__` first and then every `:` made `_` (the root project is `_`), so two
+// project paths never give the same file name. A `sextantModel` or `sextantBuild` name
 // collision with the target build surfaces as Gradle's own configuration
 // error (a duplicate task registration) and needs no handling here — it
 // reaches GradleDetector as an ordinary build-configuration-failure refusal.
@@ -246,7 +247,7 @@ gradle.rootProject { rp ->
                 }
                 def projectsDir = new File(outDir, "projects")
                 projectsDir.mkdirs()
-                new File(projectsDir, p.path.replace(":", "_") + ".json").text = JsonOutput.toJson(
+                new File(projectsDir, p.path.replace("_", "__").replace(":", "_") + ".json").text = JsonOutput.toJson(
                     [sextantRecord(p, inputs)]
                 )
             }

@@ -1326,8 +1326,22 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/ingress/detect/gradle.py",
-                find="    if _BUILD_FAILURE_BANNER in output:\n",
+                find="    if any(banner in output for banner in _BUILD_FAILURE_BANNERS):\n",
                 replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "detect.SEVERAL-failed-parts-after-a-download-are-retried-online-under-the-flag": Guard(
+        what='Gradle\'s several-failures banner also rules out "distribution not present"',
+        why='with `--continue`, two or more failed parts end in "Build completed with N '
+        'failures", not the single-failure banner; a fresh machine whose wrapper downloaded '
+        "its distribution was then read as a missing distribution and never retried online "
+        "(Android outbound Task 1 fix round 1)",
+        edits=(
+            Edit(
+                path="sextant/ingress/detect/gradle.py",
+                find='    "FAILURE: Build completed with ",\n',
+                replace="    # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

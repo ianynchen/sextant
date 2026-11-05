@@ -82,11 +82,16 @@ _OFFLINE_REFUSAL_SUBSTRING = "available for offline mode"
 # wording above. The first attempt is always offline, so the cache is all it consulted.
 _OFFLINE_PLUGIN_REFUSAL_SUBSTRING = "could not resolve plugin artifact"
 
-# Gradle's own build-failure banner: printed only once the build ENGINE ran, so its
-# presence proves the distribution was there (OI-273 fix round 1). A wrapper that
+# Gradle's own build-failure banners: printed only once the build ENGINE ran, so either
+# one proves the distribution was there (OI-273 fix round 1). A wrapper that
 # downloaded the distribution successfully prints `Downloading https://...` first, and the
-# build may then fail for any reason of its own.
-_BUILD_FAILURE_BANNER = "FAILURE: Build failed with an exception."
+# build may then fail for any reason of its own. One failed task gives the first banner;
+# with `--continue`, two or more failed tasks give the second, "Build completed with 2
+# failures." (Task 1 fix round 1, measured on Gradle 9.7.1).
+_BUILD_FAILURE_BANNERS = (
+    "FAILURE: Build failed with an exception.",
+    "FAILURE: Build completed with ",
+)
 
 # Positive evidence that Gradle's OWN wrapper bootstrap — never Gradle's real
 # build engine — produced this output (2M Task 3 fix round 1, C2). Verified
@@ -183,7 +188,7 @@ def _is_distribution_absent(output: str) -> bool:
     alone was this detector's first cut and misread a bad `JAVA_HOME` (fix round 1, C2);
     the bootstrap substrings alone misread a SUCCESSFUL download followed by a build
     failure (OI-273 fix round 1). Both together."""
-    if _BUILD_FAILURE_BANNER in output:
+    if any(banner in output for banner in _BUILD_FAILURE_BANNERS):
         return False
     return any(substring in output for substring in _WRAPPER_BOOTSTRAP_SUBSTRINGS)
 
@@ -214,10 +219,11 @@ def _read_json(out_file: Path) -> Any:
 
 
 def _project_file_name(project_path: str) -> str:
-    """The file a project's own `sextantModel` task writes: its path with every `:` made
-    `_`, so the root project `:` is `_` and `:libs:core` is `_libs_core` — the init
+    """The file a project's own `sextantModel` task writes: its path with every `_` made
+    `__` first and then every `:` made `_`, so the root project `:` is `_`, `:libs:core` is
+    `_libs_core` and `:libs_core` is `_libs__core` — two paths never share a file. The init
     script's own rule."""
-    return f"{project_path.replace(':', '_')}.json"
+    return f"{project_path.replace('_', '__').replace(':', '_')}.json"
 
 
 def _assemble(out_dir: Path) -> dict[str, Any]:

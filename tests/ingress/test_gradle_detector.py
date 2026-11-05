@@ -866,6 +866,87 @@ _REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE = (
 )
 
 
+# Captured from a real Gradle 9.7.1 run (Task 1 fix round 1): two projects, each with a
+# dependency the cache lacks, run offline with `--continue` and this detector's own argv. With
+# two or more failed tasks Gradle prints "Build completed with N failures", not the single
+# failure's "Build failed with an exception". The first two lines are the wrapper's download
+# lines, the shape `_REAL_DOWNLOAD_THEN_OFFLINE_PLUGIN_FAILURE` captured: a fresh machine
+# downloads the distribution first and then fails the same way.
+_REAL_DOWNLOAD_THEN_TWO_OFFLINE_FAILURES = (
+    "Downloading https://services.gradle.org/distributions/gradle-9.7.1-bin.zip\n"
+    ".............10%.............20%..............30%.............40%.............50%"
+    "..............60%.............70%..............80%.............90%.............100%\n"
+    "\n"
+    "FAILURE: Build completed with 2 failures.\n"
+    "\n"
+    "1: Task failed with an exception.\n"
+    "-----------\n"
+    "* What went wrong:\n"
+    "Execution failed for task ':a:compileJava' (registered by plugin class 'org.gradle.api.plugins.JavaBasePlugin').\n"
+    "> Could not resolve all files for configuration ':a:compileClasspath'.\n"
+    "   > Could not resolve org.example.sextant:not-cached-a:1.0.0.\n"
+    "     Required by:\n"
+    "         project ':a'\n"
+    "      > No cached version of org.example.sextant:not-cached-a:1.0.0 available for offline mode.\n"
+    "\n"
+    "* Try:\n"
+    "> Run with --stacktrace option to get the stack trace.\n"
+    "> Run with --info or --debug option to get more log output.\n"
+    "> Run with --scan to get full insights from a Build Scan (powered by Develocity).\n"
+    "> Get more help at https://help.gradle.org.\n"
+    "==============================================================================\n"
+    "\n"
+    "2: Task failed with an exception.\n"
+    "-----------\n"
+    "* What went wrong:\n"
+    "Execution failed for task ':b:compileJava' (registered by plugin class 'org.gradle.api.plugins.JavaBasePlugin').\n"
+    "> Could not resolve all files for configuration ':b:compileClasspath'.\n"
+    "   > Could not resolve org.example.sextant:not-cached-b:1.0.0.\n"
+    "     Required by:\n"
+    "         project ':b'\n"
+    "      > No cached version of org.example.sextant:not-cached-b:1.0.0 available for offline mode.\n"
+    "\n"
+    "* Try:\n"
+    "> Run with --stacktrace option to get the stack trace.\n"
+    "> Run with --info or --debug option to get more log output.\n"
+    "> Run with --scan to get full insights from a Build Scan (powered by Develocity).\n"
+    "> Get more help at https://help.gradle.org.\n"
+    "==============================================================================\n"
+    "\n"
+    "BUILD FAILED in 321ms\n"
+)
+
+
+@pytest.mark.pins("detect.SEVERAL-failed-parts-after-a-download-are-retried-online-under-the-flag")
+def test_several_offline_failures_after_a_download_retry_online_under_the_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`--continue` lets every part fail on its own, and Gradle then reports "Build completed
+    with N failures". That banner proves the build engine ran, the same as the single-failure
+    one: the download succeeded, so this is an offline refusal and `--allow-resolve` retries it
+    online — never "Gradle distribution not present"."""
+    calls: list[bool] = []
+
+    def fake_run_once(gradle_command, path, out_dir, offline):
+        calls.append(offline)
+        if offline:
+            return _completed(1, _REAL_DOWNLOAD_THEN_TWO_OFFLINE_FAILURES)
+        _write_empty_build(out_dir)
+        return _completed(0, "")
+
+    monkeypatch.setattr(GradleDetector, "_run_once", staticmethod(fake_run_once))
+    data = GradleDetector()._invoke(["./gradlew"], tmp_path, tmp_path, True)
+    assert data == {"projects": [], "includedBuilds": []}
+    assert calls == [True, False]
+
+
+def test_the_project_file_name_is_distinct_for_every_project_path():
+    """`:a_b` and `:a:b` are two projects; `_` is escaped first, so their files differ."""
+    assert gradle_module._project_file_name(":") == "_.json"
+    assert gradle_module._project_file_name(":a:b") == "_a_b.json"
+    assert gradle_module._project_file_name(":a_b") == "_a__b.json"
+
+
 @pytest.mark.pins("detect.a-download-that-SUCCEEDED-is-not-a-missing-distribution")
 def test_a_download_that_succeeded_before_a_build_failure_is_not_distribution_absent():
     """The wrapper prints `Downloading https://...` and its progress, succeeds, and then
