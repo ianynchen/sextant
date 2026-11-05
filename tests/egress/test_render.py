@@ -354,6 +354,31 @@ def test_outbound_row_with_no_method_renders_unresolved_in_the_endpoint_column()
     ) in text
 
 
+def test_a_partial_http_row_with_no_peer_says_its_server_address_is_not_read():
+    """Android outbound spec M8: a Retrofit row whose builder's `baseUrl` is not read keeps
+    its relative path and has no peer. `none recorded` would read as "the call names no
+    server"; the server is set where the client is made, and was not read."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            {
+                "protocol": "http",
+                "direction": "outbound",
+                "method": "GET",
+                "path": "legacy/invoices/{id}",
+                "handler": "s maven c 1 com/acme/orders/clients/LegacyBillingApi#invoice(String).",
+                "caller": None,
+                "peer": None,
+                "resolution": "partial",
+                "evidence": "compiler",
+            },
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+    )
+    text = render_module_document(MODULE, report, "a3f91c")
+    assert "| `GET legacy/invoices/{id}` | server address not read | " in text
+
+
 def test_kafka_inbound_row_renders_verbless_with_no_unresolved_marker():
     """A protocol in the verbless set (Task 9) defines no verb, so its wire
     identity is `protocol path` — never a bare `None` standing in for a verb

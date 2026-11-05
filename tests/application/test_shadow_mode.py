@@ -394,6 +394,8 @@ _ASKS_PER_CATALOG = {
     "pekko-pubsub-subscribe": (3, 3),
     "pekko-receptionist": (8, 12),
     "quartz": (8, 11),
+    # `made_by` (Android outbound spec M8): `create`'s class argument and `baseUrl`'s address.
+    "retrofit": (2, 2),
     "spring-events": (7, 7),
     "spring-cloud-gateway": (14, 20),
     "spring-cloud-gateway-outbound": (4, 4),
@@ -480,7 +482,8 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # **+17 on 2026-11-05**: the new `kotlinx-channels` (6 sends) and `kotlinx-flows` (6 sends,
     # 5 collectors' function arguments) catalogs, same comment.
     # **+1 on 2026-11-05** (Task 5 fix round): `collectLatest`'s `handler_arg`, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 1485
+    # **+2 on 2026-11-05** (Android M8): `retrofit`'s `made_by` call and its `baseUrl` step.
+    assert sum(asks for asks, _ in counted.values()) == 1487
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

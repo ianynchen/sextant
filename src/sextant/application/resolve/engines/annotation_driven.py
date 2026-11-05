@@ -21,6 +21,7 @@ from sextant.application.resolve.effective_annotations import (
     inherited_rows_over,
     type_hierarchy,
 )
+from sextant.application.resolve.shapes import made_by
 from sextant.application.resolve.shapes.contracts import _body_parameter, _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.inbound_routes import validated_verbless_serves
@@ -82,6 +83,10 @@ def insert(workspace: Workspace, catalog: Catalog) -> None:
     that answer exactly what it was when the whole derivation ran per turn."""
     if not _derives(catalog):
         return
+    # Android outbound spec M8: an annotation-declared client's rows take the server address
+    # of the object that made the client, before the guard below compares them. Nothing for
+    # a catalog declaring no `made_by`.
+    made_by.addressed_candidates(workspace, catalog)
     workspace.derive("endpoints_insert", catalog_id=catalog.id)
     # Optional (D02 §2, amended): a catalog with no `reply` block declares no
     # second-row rule at all — the HTTP catalogs, which never see @SendTo.

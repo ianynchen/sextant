@@ -2825,6 +2825,22 @@ derives nothing, so adding it without the engine change goes red rather than qui
 **Falsified by** any module using `@HTTP` for a non-standard verb; closes when `method_from`
 can name a plain-string attribute and `path_from` can be declared per annotation.
 
+**A Retrofit row has the server address of the object that made its client** (Android
+outbound spec M8, D02 `made_by`). The row follows `create(OrdersApi.class)` to the `Retrofit`
+object it is called on, and that object to the `baseUrl(...)` of its builder, through fields,
+parameters and helper returns; each address is joined to the path by Retrofit's own rule, one
+row per address. Where the address is not read, the row keeps its relative path, has no peer
+and is `partial` ("server address not read"), where it was `resolved` before. Stated bounds,
+each leaving a row `partial`, never wrong: a client made in a dependency-injection provider
+whose `Retrofit` parameter only the container fills (Dagger/Hilt `@Provides`); a client made
+in a generic helper (`fun <T> service(c: Class<T>) = retrofit.create(c)`), whose class
+argument is not a literal at the call; a builder handed to another method between `baseUrl`
+and `build()`; and the `baseUrl(HttpUrl)` / `baseUrl(URL)` overloads. **Not yet applied** to
+`@HttpExchange` (the address is on the `RestClient`/`WebClient` handed to
+`HttpServiceProxyFactory.builderFor(...)` as an argument, usually built in a `@Bean` method)
+or to MicroProfile's programmatic `RestClientBuilder.baseUri(URI)` (the step's argument is a
+`URI` object, not text); the injected MicroProfile client keeps `peer_from`.
+
 | Language | Framework | Library | Shape | Tier |
 |---|---|---|---|---|
 | Java | Feign / Retrofit / @HttpExchange (annotated client interfaces) | Feign `@FeignClient`, Retrofit `@GET`, Spring `@HttpExchange` | `annotation` | ✅ shipped |

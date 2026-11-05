@@ -25,6 +25,13 @@ _NAMED_QUERIES = {
     # `@SendTo` names nothing) ties with every other such row on the first four
     # columns, leaving their order the insert order rather than an ordering.
     "endpoints": "SELECT * FROM endpoints ORDER BY protocol, method, path, handler, caller",
+    # One catalog's staged candidate rows (`derive_endpoints.sql`), for the `made_by` pass
+    # that joins each row's server address before the rows go into `endpoints`
+    # (`resolve/shapes/made_by.py`). Ordered on every column the insert numbers rows by.
+    "endpoint_candidates_of": (
+        "SELECT * FROM endpoint_candidates WHERE catalog_id = ? "
+        "ORDER BY protocol, direction, method, path, handler, caller, peer"
+    ),
     "shapes": "SELECT * FROM shapes ORDER BY shape_id",
     # `ordinal` alone would tie across shapes; `shape_id` first is what makes
     # the ordering total rather than merely stable within one shape (NFR-1).
@@ -1849,6 +1856,7 @@ _NAMED_DERIVATIONS = {
     # once per catalog.
     "endpoints": "derive_endpoints.sql",
     "endpoints_insert": "insert_endpoints.sql",
+    "endpoint_candidates_address": "address_endpoint_candidates.sql",
     "call_endpoints": "derive_call_endpoints.sql",
     "endpoints_reset": "reset_endpoints.sql",
     "endpoint_contracts": "derive_endpoint_contracts.sql",

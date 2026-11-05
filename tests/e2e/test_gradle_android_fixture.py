@@ -119,12 +119,6 @@ def test_the_android_fixture_gives_every_module_and_its_outbound_rows(analysis):
     assert rows["server"] == set()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Retrofit's base address is not joined to the interface's path: each edition "
-    "gives (retrofit, GET, None, orders/{id}, resolved), so the editions cannot be told "
-    "apart (Android outbound Task 5 finding)",
-)
 def test_each_edition_calls_its_own_retrofit_address(analysis):
     """`BuildConfig.API_URL` is a different constant in each edition, and the compiler
     copies it into `Orders`'s static initializer, where `Retrofit.Builder().baseUrl(...)`

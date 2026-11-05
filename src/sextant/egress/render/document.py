@@ -658,11 +658,21 @@ def _peer_cell(endpoint: dict[str, object], redactor: Redactor) -> str:
     `none recorded` is the house phrase for "this evidence carried no such symbol",
     kept rather than a bespoke word for this column: the claim is about what the
     evidence held, never that the callee does not exist.
+
+    **An HTTP row with a read path, no peer and `partial` did try** (Android outbound
+    spec M8): its server address is set somewhere the analysis looked and did not read —
+    a Retrofit client whose builder's `baseUrl` is not read, a client whose base address
+    is set and not read (`fluent`'s `client_base`). That row says so, because `none
+    recorded` would read as "the call names no server".
     """
     peer = endpoint.get("peer")
     if peer is not None:
         return redactor.redact_text(str(peer))
-    return "unresolved" if endpoint.get("path") is None else "none recorded"
+    if endpoint.get("path") is None:
+        return "unresolved"
+    if endpoint.get("protocol") == "http" and endpoint.get("resolution") == "partial":
+        return "server address not read"
+    return "none recorded"
 
 
 def _short_handler(descriptor: str) -> str:
