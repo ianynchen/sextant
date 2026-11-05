@@ -14,21 +14,21 @@ import io.temporal.activity.ActivityInterface;
  * IMPLEMENTOR out before any member rule runs. The interface-over-interface
  * shape is the one place the two words disagree.
  *
- * <p>MEASURED: this interface derives NO row of its own either. No class
- * implements it, but {@link AuditedLedgerActivities} EXTENDS it, and the
- * outbound (SEI) fence subtracts a contract any type in this module implements
- * — an extending interface counts. The flip to inbound then declines, since
- * nothing carries {@code @ActivityImpl}. Net zero, the same read
- * {@link ShippingActivities} gets, for a different reason. The arm's whole
- * value is the row {@link AuditedLedgerActivities} does not publish.
+ * <p>MEASURED: this interface derives its own row, "ledger_Post". No class
+ * implements it; {@link AuditedLedgerActivities} EXTENDS it, and since the
+ * Android outbound fix round 2 (2026-11-05) the outbound (SEI) fence counts
+ * only a CLASS: an extending interface implements nothing. Before, it counted,
+ * and this interface derived nothing. The arm's other value is the row
+ * {@link AuditedLedgerActivities} does not publish, for its own member.
+ * (Comment only: the line count is kept, so the compiled lines are unchanged.)
  */
 @ActivityInterface(namePrefix = "ledger_")
 public interface LedgerActivities {
 
     // Declared HERE, on the type that carries the gate directly -> survives the
-    // member fence. It is the whole contract that is subtracted, one step
-    // later, by the SEI fence above. Were nothing to extend this interface the
-    // name would be `prefixed_capitalized_construct_name`'s composition,
-    // "ledger_Post" (measured by deleting the `extends` and re-analysing).
+    // member fence, and no class implements the contract, so the SEI fence
+    // keeps it too. The name is `prefixed_capitalized_construct_name`'s
+    // composition, "ledger_Post", the same name it had when measured by
+    // deleting the `extends` and re-analysing.
     void post(String entryId);
 }

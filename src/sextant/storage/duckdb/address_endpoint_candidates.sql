@@ -16,21 +16,26 @@
 --
 -- Parameters:
 --   $catalog_id -- the catalog whose candidates are addressed.
---   $rows       -- {handler, served_by, caller, method, was, peer, path, resolution}:
---                  `handler`, `served_by`, `caller`, `method` and `was` (the candidate's own
---                  path) name the candidate; the other three replace its columns. `served_by`
---                  is part of the name because one inherited method is one candidate per
---                  interface that inherits it, and each interface has its own clients.
+--   $rows       -- {handler, served_by, caller, method, was, serving, peer, path,
+--                  resolution}: `handler`, `served_by`, `caller`, `method` and `was` (the
+--                  candidate's own path) name the candidate; the other four replace its
+--                  columns, `serving` its `served_by`. `served_by` is part of the name because
+--                  one inherited method may be one candidate per interface that inherits it;
+--                  `serving` is the interface a copy is called through, which differs from
+--                  the candidate's where a client is made for an interface that inherits
+--                  the method (fix round 2).
 CREATE OR REPLACE TEMP TABLE endpoint_candidates AS
 SELECT c.* FROM endpoint_candidates c WHERE c.catalog_id IS DISTINCT FROM $catalog_id
 UNION ALL BY NAME
-SELECT c.* REPLACE (a.peer AS peer, a.path AS path, a.resolution AS resolution)
+SELECT c.* REPLACE (
+    a.serving AS served_by, a.peer AS peer, a.path AS path, a.resolution AS resolution
+)
 FROM endpoint_candidates c
 JOIN (
     SELECT UNNEST(
         $rows::STRUCT(
             handler VARCHAR, served_by VARCHAR, caller VARCHAR, method VARCHAR, was VARCHAR,
-            peer VARCHAR, path VARCHAR, resolution VARCHAR
+            serving VARCHAR, peer VARCHAR, path VARCHAR, resolution VARCHAR
         )[],
         recursive := true
     )

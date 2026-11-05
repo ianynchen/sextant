@@ -155,12 +155,14 @@ _NAMED_QUERIES = {
     # explicit empty array the same way, which is what "a class implementing
     # none" must mean regardless of which writer produced the fact.
     "implementations": """
-        SELECT payload ->> 'symbol' AS symbol, payload -> 'interfaces' AS interfaces
+        SELECT payload ->> 'symbol' AS symbol, payload -> 'interfaces' AS interfaces,
+               payload ->> 'construct_kind' AS construct_kind
         FROM raw_facts
         WHERE kind = 'symbol' AND json_array_length(payload -> 'interfaces') > 0
           AND document_id IN (SELECT document_id FROM selected_documents)
         UNION ALL
-        SELECT payload ->> 'symbol' AS symbol, payload -> 'interfaces' AS interfaces
+        SELECT payload ->> 'symbol' AS symbol, payload -> 'interfaces' AS interfaces,
+               payload ->> 'construct_kind' AS construct_kind
         FROM raw_facts
         WHERE kind = 'type_header' AND json_array_length(payload -> 'interfaces') > 0
         ORDER BY symbol

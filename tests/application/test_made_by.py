@@ -399,7 +399,8 @@ def test_an_inherited_candidate_takes_only_its_own_interfaces_address(tmp_path: 
         catalog_id="retrofit",
         rows=[
             {"handler": "h#health().", "served_by": served, "caller": None, "method": "GET",
-             "was": "health", "peer": peer, "path": "/health", "resolution": "resolved"}
+             "was": "health", "serving": served, "peer": peer, "path": "/health",
+             "resolution": "resolved"}
             for served, peer in (("a/AuthApi#", "auth.example"), ("a/PublicApi#", "public"))
         ],
     )  # fmt: skip
@@ -412,3 +413,64 @@ def test_an_inherited_candidate_takes_only_its_own_interfaces_address(tmp_path: 
         ("retrofit", "a/AuthApi#", "auth.example", "/health"),
         ("retrofit", "a/PublicApi#", "public", "/health"),
     ]
+
+
+_BASE_API, _AUTH_API = "com/acme/app/BaseApi#", "com/acme/app/AuthApi#"
+
+
+def _extending(sub: str, base: str, kind: ConstructKind = ConstructKind.INTERFACE) -> SymbolFact:
+    """`interface sub : base` (or, with `kind`, a class implementing `base`)."""
+    return SymbolFact(
+        document_id="doc_1", symbol=_MODULE + sub, construct_kind=kind, interfaces=[base]
+    )
+
+
+def _served_rows(tmp_path: Path, facts: list) -> set[tuple]:
+    write_fact_file(tmp_path / "facts" / "App.jsonl", _document(), straight_line(facts))
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    record_return_flows(workspace)
+    record_call_edges(workspace)
+    derive_endpoints(workspace, [_catalog()], capabilities=CAPABILITIES)
+    rows = {
+        (r["served_by"], r["peer"], r["path"], r["resolution"])
+        for r in workspace.query("endpoints")
+        if r["catalog_id"] == "retrofit"
+    }
+    workspace.close()
+    return rows
+
+
+def test_an_extending_interface_gets_the_inherited_calls_with_its_own_address(tmp_path: Path):
+    """Fix round 2 (controller's ruling 2026-11-05). `interface AuthApi : BaseApi` and
+    `create(AuthApi::class.java)`: `BaseApi`'s `@GET("health")` is called through `AuthApi`,
+    so its row is served by `AuthApi` with `AuthApi`'s address. Before, the SEI fence counted
+    `AuthApi` as implementing `BaseApi` and the call had no row at all. Nothing makes
+    `BaseApi` itself, so it keeps no row of its own."""
+    clinit = _method(ORDERS, "<clinit>")
+    facts = [
+        *_interface(_BASE_API, "health"),
+        _extending(_AUTH_API, _BASE_API),
+        _declared(ORDERS, "<clinit>"),
+        *_made_in_one_method(clinit, _url("https://auth.example/"), _AUTH_API),
+    ]
+    assert _served_rows(tmp_path, facts) == {
+        (_MODULE + _AUTH_API, "auth.example", "/health", "resolved")
+    }
+
+
+def test_a_base_interface_nothing_makes_keeps_its_partial_row(tmp_path: Path):
+    """No client is made for `BaseApi` or anything below it: the declaration is the only
+    evidence of the call, so its row stays, `partial`, with no server."""
+    facts = [*_interface(_BASE_API, "health"), _extending(_AUTH_API, _BASE_API)]
+    assert _served_rows(tmp_path, facts) == {(_MODULE + _BASE_API, None, "health", "partial")}
+
+
+def test_a_class_implementing_the_interface_still_fences_it(tmp_path: Path):
+    """The fence's own case, unchanged: a CLASS implementing the interface means the module
+    answers it, so no outbound row derives."""
+    facts = [
+        *_interface(_BASE_API, "health"),
+        _extending("com/acme/app/LocalBase#", _BASE_API, ConstructKind.CLASS),
+    ]
+    assert _served_rows(tmp_path, facts) == set()

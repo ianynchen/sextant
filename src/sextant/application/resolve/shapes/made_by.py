@@ -32,6 +32,7 @@ from urllib.parse import urljoin, urlsplit
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.dispatch import Dispatch, dispatch_of
 from sextant.application.resolve.shapes.arguments import _string_value, _walked_with, split_url
 from sextant.application.resolve.shapes.chains import chain_ends
 from sextant.application.resolve.shapes.mounts import weaker
@@ -51,6 +52,7 @@ from sextant.domain.closed_sets import Resolution
 from sextant.domain.config_keys import carries_expression
 from sextant.domain.symbols import (
     bare_descriptor,
+    method_name,
     owner_of,
     type_descriptor,
     without_type_marker,
@@ -150,36 +152,83 @@ def addressed_candidates(workspace: Workspace, catalog: Catalog) -> None:
     if not candidates:
         return
     bases = _bases_by_interface(workspace, catalog, made_by)
+    dispatch = workspace.once(dispatch_of)
+    symbols = _type_symbols(workspace)
     rows: list[dict[str, Any]] = []
     for candidate in candidates:
-        interface = _interface_of(candidate)
-        addressed = dict.fromkeys(
-            _addressed(candidate, base) for base in bases.get(interface, (_NOT_READ,))
-        )
-        for peer, path, resolution in addressed:
-            rows.append(
-                {
-                    "handler": candidate["handler"],
-                    "served_by": candidate.get("served_by"),
-                    "caller": candidate.get("caller"),
-                    "method": candidate["method"],
-                    "was": candidate["path"],
-                    "peer": peer,
-                    "path": path,
-                    "resolution": resolution,
-                }
-            )
+        for serving, made in _clients_of(candidate, bases, dispatch, symbols):
+            for peer, path, resolution in dict.fromkeys(
+                _addressed(candidate, base) for base in made
+            ):
+                rows.append(
+                    {
+                        "handler": candidate["handler"],
+                        "served_by": candidate.get("served_by"),
+                        "caller": candidate.get("caller"),
+                        "method": candidate["method"],
+                        "was": candidate["path"],
+                        "serving": serving,
+                        "peer": peer,
+                        "path": path,
+                        "resolution": resolution,
+                    }
+                )
     workspace.derive("endpoint_candidates_address", catalog_id=catalog.id, rows=rows)
+
+
+def _clients_of(
+    candidate: Mapping[str, Any],
+    bases: Mapping[str | None, tuple[_Base, ...]],
+    dispatch: Dispatch,
+    symbols: Mapping[str, str],
+) -> list[tuple[Any, tuple[_Base, ...]]]:
+    """The interfaces a candidate row is called through, each as the `served_by` its row
+    carries and the addresses of the objects made for it (fix round 2, the controller's ruling
+    of 2026-11-05).
+
+    A method an interface declares is called through that interface and through every
+    interface that inherits it without declaring its own (`Dispatch.heirs`, JVMS 5.4.3.3):
+    `create(AuthApi.class)` makes a client whose `health()` is `BaseApi`'s. So each such
+    interface that a `made_by` call names gets a row of its own, served by it, with its own
+    objects' addresses. The declaring interface keeps a row of its own where a call makes it
+    directly; where only interfaces below it are made, its calls are theirs, and a row of its
+    own would claim a client nothing made. Where NO interface on the way is made, the row is
+    kept as it is, at `partial` with no server: the declaration is the only evidence of the
+    call, and dropping it would lose a call the code declares."""
+    interface = _interface_of(candidate)
+    # An outbound row names its interface method as the CALLER (D01 §3: `caller` with
+    # `handler` NULL), an inbound one as the handler.
+    declared = candidate.get("caller") or candidate.get("handler")
+    heirs = (
+        dispatch.heirs(interface, method_name(bare_descriptor(str(declared))))
+        if interface is not None and declared is not None
+        else []
+    )
+    made: list[tuple[Any, tuple[_Base, ...]]] = [
+        (symbols.get(heir, heir), bases[heir]) for heir in heirs if heir in bases
+    ]
+    if interface in bases or not made:
+        made.insert(0, (candidate.get("served_by"), bases.get(interface, (_NOT_READ,))))
+    return made
+
+
+def _type_symbols(workspace: Workspace) -> dict[str, str]:
+    """Each type that lists interfaces, by bare descriptor, as the module spells its symbol:
+    the `served_by` a row made through an inheriting interface carries."""
+    return {
+        bare_descriptor(str(row["symbol"])): str(row["symbol"])
+        for row in workspace.query("implementations")
+    }
 
 
 def _interface_of(candidate: Mapping[str, Any]) -> str | None:
     """The interface a candidate row is declared on: the type that serves it (an inherited
-    method's row is served by the interface that inherits it), else its handler's owner."""
+    method's row is served by the interface that inherits it), else its method's owner."""
     served = candidate.get("served_by")
     if served:
         return bare_descriptor(str(served))
-    handler = candidate.get("handler")
-    return None if handler is None else owner_of(bare_descriptor(str(handler)))
+    declared = candidate.get("caller") or candidate.get("handler")
+    return None if declared is None else owner_of(bare_descriptor(str(declared)))
 
 
 def _bases_by_interface(

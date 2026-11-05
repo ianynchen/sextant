@@ -682,15 +682,16 @@ def _server_address_not_read(endpoint: dict[str, object]) -> bool:
 
     - the path starts with the unread-host marker (`<host>`, `url_of`): the call's own
       address has a server part, and that part was not read;
-    - the row is an annotation-declared client (a handler, no caller) with a relative path:
-      the declaration's path is read whole, so `partial` there says only that the address of
-      the object that made the client was not read (`made_by`)."""
+    - the row is an annotation-declared client with a relative path: it names the type that
+      serves it (`served_by`, written only by the annotation derivation; a call row has
+      none), its path is the declaration's text read whole, so `partial` there says only
+      that the address of the object that made the client was not read (`made_by`)."""
     if endpoint.get("protocol") != "http" or endpoint.get("resolution") != "partial":
         return False
     path = str(endpoint.get("path"))
     if path.startswith(_UNREADABLE_HOST):
         return True
-    declared = endpoint.get("handler") is not None and endpoint.get("caller") is None
+    declared = endpoint.get("served_by") is not None
     return declared and not urlsplit(path).scheme and not path.startswith("//")
 
 

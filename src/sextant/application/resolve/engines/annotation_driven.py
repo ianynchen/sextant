@@ -26,7 +26,7 @@ from sextant.application.resolve.shapes.contracts import _body_parameter, _paylo
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.inbound_routes import validated_verbless_serves
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
-from sextant.domain.closed_sets import Direction
+from sextant.domain.closed_sets import ConstructKind, Direction
 from sextant.domain.paths import serves_urls
 from sextant.domain.symbols import bare_descriptor, is_type_descriptor, member_name, owner_of
 
@@ -1232,9 +1232,19 @@ def _declared_on(catalog: Catalog) -> str | None:
     return None if declared is None else str(declared)
 
 
+# The construct kinds that list `interfaces` and implement none of them (Android outbound
+# fix round 2, the controller's ruling of 2026-11-05): an interface's `interfaces` are the
+# interfaces it EXTENDS, and an annotation type's is the platform's own annotation root.
+# Neither answers a call, so neither is the module implementing the interface the fence
+# asks about.
+_IMPLEMENTS_NOTHING = frozenset({str(ConstructKind.INTERFACE), str(ConstructKind.ANNOTATION)})
+
+
 def _locally_implemented(workspace: Workspace) -> list[str]:
     """Every interface this module's own classes declare they implement (D00
-    §5a's `implemented_interfaces`), as BARE descriptors.
+    §5a's `implemented_interfaces`), as BARE descriptors. Only a class counts: an interface
+    extending another implements nothing, and a Retrofit interface extending a base one
+    left the base's calls fenced off, with no row and nothing saying so (fix round 2).
 
     The same strip `interface_implementation._implemented_interfaces` and
     `config_join._implemented_interfaces` make, for the same reason: each
@@ -1245,6 +1255,7 @@ def _locally_implemented(workspace: Workspace) -> list[str]:
     found = {
         bare_descriptor(str(entry))
         for row in workspace.query("implementations")
+        if row.get("construct_kind") not in _IMPLEMENTS_NOTHING
         for entry in json.loads(str(row["interfaces"]))
     }
     return sorted(found)

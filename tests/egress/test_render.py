@@ -366,8 +366,11 @@ def test_a_partial_http_row_with_no_peer_says_its_server_address_is_not_read():
                 "direction": "outbound",
                 "method": "GET",
                 "path": "legacy/invoices/{id}",
-                "handler": "s maven c 1 com/acme/orders/clients/LegacyBillingApi#invoice(String).",
-                "caller": None,
+                # The real row's shape: an outbound annotation row names its interface
+                # method as the caller, and the interface as `served_by`.
+                "handler": None,
+                "caller": "s maven c 1 com/acme/orders/clients/LegacyBillingApi#invoice(String).",
+                "served_by": "s maven c 1 com/acme/orders/clients/LegacyBillingApi#",
                 "peer": None,
                 "resolution": "partial",
                 "evidence": "compiler",
@@ -390,7 +393,7 @@ def test_a_partial_http_row_with_no_peer_says_its_server_address_is_not_read():
 )
 def test_a_partial_call_whose_server_was_not_the_unread_part_says_none_recorded(path: str):
     """Review fix round 1, Important 3: `server address not read` only where the row's own
-    evidence says the server was the unread part. A call row (a caller, no handler) that is
+    evidence says the server was the unread part. A call row (no `served_by`) that is
     `partial` for any other reason keeps `none recorded`."""
     report = ResolveReport(
         facts_loaded=1,

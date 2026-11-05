@@ -368,15 +368,17 @@ def _metadata_row(row: dict) -> tuple[str, str, str, str | None, str, object, st
     )
 
 
-def test_temporal_shapes_nine_rows(temporal: tuple[list[dict], list[dict]]):
+def test_temporal_shapes_ten_rows(temporal: tuple[list[dict], list[dict]]):
     """task-6 report table, arms 1-4, 6-8, 11-12: every naming branch and both partitions,
     as rows. Workflow/signal/query/update read `declaring_type_scoped_name` off the
     CONTRACT (`OrderWorkflow`), never the implementor; activities read
     `prefixed_capitalized_construct_name`, prefix skipped where an explicit
     `@ActivityMethod(name=...)` is given (`Charge`) and applied where it is not
-    (`billing_RefundCard`)."""
+    (`billing_RefundCard`, `ledger_Post`). `ledger_Post` is the tenth since the Android
+    outbound fix round 2: the SEI fence no longer counts an extending interface
+    (`test_a_sub_interface_of_an_activity_contract_derives_nothing`)."""
     endpoints, _ = temporal
-    assert len(endpoints) == 9
+    assert len(endpoints) == 10
     assert {_endpoint_row(r) for r in endpoints} == {
         ("temporal", "inbound", "workflow", "OrderWorkflow", "processOrder"),
         ("temporal", "inbound", "signal", "OrderWorkflow/cancel", "cancel"),
@@ -387,6 +389,7 @@ def test_temporal_shapes_nine_rows(temporal: tuple[list[dict], list[dict]]):
         ("temporal", "outbound", "workflow", "ShipOrder", "ship"),
         ("temporal", "outbound", "workflow", "PaymentsWorkflow", "processPayment"),
         ("temporal", "outbound", "workflow", "OrderWorkflow", "startUntyped"),
+        ("temporal", "outbound", "activity", "ledger_Post", "post"),
     }
 
 
@@ -481,17 +484,21 @@ def test_a_sub_interface_of_an_activity_contract_derives_nothing(
     `namePrefix`, an activity name no worker polls for, at `resolved`/`compiler`. Before
     this arm existed that swap moved no shipped output and failed no test.
 
-    `LedgerActivities` itself derives nothing either, for a different fence: no class
-    implements it, but an interface in this module EXTENDS it, so the outbound (SEI) fence
-    subtracts the contract and the flip to inbound declines. Asserted, so that a change
-    which starts publishing the base cannot hide behind this test's other half."""
+    `LedgerActivities` itself derives its own `post` as `ledger_Post`, and only that row.
+    Until the Android outbound fix round 2 (the controller's ruling of 2026-11-05) it derived
+    nothing: the outbound (SEI) fence counted the EXTENDING interface as implementing the
+    contract. An interface implements nothing and answers nothing, so only a class counts
+    now, and no class implements `LedgerActivities`. Asserted both ways, so the base row
+    cannot hide behind this test's other half."""
     endpoints, _ = temporal
     members = {_member(r["handler"]) for r in endpoints if r["handler"]} | {
         _member(r["caller"]) for r in endpoints if r["caller"]
     }
     assert "audit" not in members
-    assert "post" not in members
-    assert not any(str(r["path"]).startswith("ledger_") for r in endpoints if r["path"])
+    ledger = [r for r in endpoints if r["path"] and str(r["path"]).startswith("ledger_")]
+    assert [(r["direction"], r["path"], _member(r["caller"])) for r in ledger] == [
+        ("outbound", "ledger_Post", "post")
+    ]
 
 
 def test_shipping_activities_pair_derives_nothing(temporal: tuple[list[dict], list[dict]]):
