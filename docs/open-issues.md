@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-321 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-322 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -323,7 +323,8 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-317 | [SEXTANT-311](https://app.plane.so/portolan/browse/SEXTANT-311/) | Spring constructor injection: the value walk crosses @Bean method parameters only |
 | OI-318 | [SEXTANT-312](https://app.plane.so/portolan/browse/SEXTANT-312/) | Koin and Metro: no recipe model (Koin is a lookup call; Metro needs its own bean-model file) |
 | OI-319 | [SEXTANT-313](https://app.plane.so/portolan/browse/SEXTANT-313/) | Value walk: a recipe whose every return is off the path answers not_readable, where the caller loop answers nothing (no real input reaches it) |
-| OI-320 | (to create) | Dagger recipe hop: a platform annotation (@Deprecated, Android @SuppressLint) on a @Provides method leaves its type's unqualified slots unread_type (safe direction) |
+| OI-320 | [SEXTANT-314](https://app.plane.so/portolan/browse/SEXTANT-314/) | Dagger recipe hop: a platform annotation (@Deprecated, Android @SuppressLint) on a @Provides method leaves its type's unqualified slots unread_type (safe direction) |
+| OI-321 | [SEXTANT-315](https://app.plane.so/portolan/browse/SEXTANT-315/) | One reason list everywhere: configuration values, method lookup and hand-off reasons become a general reason plus a detail (ruled B, 2026-11-05) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
