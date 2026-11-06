@@ -149,8 +149,8 @@ CREATE TABLE IF NOT EXISTS resolved_config (
     -- (`values._REASONS`): `external` for a key the deployment sets or a remote import,
     -- `cycle` for a placeholder chain that loops.
     unresolved_reason TEXT,
-    -- Text for a person that names the key and the place (`orders.url is not set for
-    -- prod`). NULL exactly when `unresolved_reason` is. No code branches on it.
+    -- Text for a person that names the key and the place (`orders.url is not set`).
+    -- The environment is a column of the row. NULL exactly when `unresolved_reason` is. No code branches on it.
     unresolved_detail TEXT
 );
 

@@ -870,12 +870,12 @@ def test_coverage_section_names_environments_and_the_unresolved_key_with_its_rea
             "value": None,
             "environment": "prod",
             "unresolved_reason": "external",
-            "unresolved_detail": "only.in.default is not set for prod",
+            "unresolved_detail": "only.in.default is not set",
         },
     ]
     text = render_module_document(MODULE, REPORT, "a3f91c", resolved_config=resolved_config)
     assert "Environments resolved: `default`, `prod`." in text
-    assert "only.in.default — external in prod (only.in.default is not set for prod)" in text
+    assert "only.in.default — external in prod (only.in.default is not set)" in text
     # The row that DID resolve must not also read as unresolved.
     assert "billing.url" not in text.split("## Coverage", 1)[1].split("## Structure", 1)[0]
 
@@ -1570,9 +1570,7 @@ def _configured(
         "keys": json.dumps(list(keys)),
         "value": value,
         "unresolved_reason": reason,
-        "unresolved_detail": (
-            None if reason is None else detail or f"{keys[0]} is not set for {environment}"
-        ),
+        "unresolved_detail": (None if reason is None else detail or f"{keys[0]} is not set"),
     }
 
 

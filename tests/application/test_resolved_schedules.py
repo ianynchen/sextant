@@ -278,8 +278,8 @@ def test_a_key_set_nowhere_is_missing_in_every_environment(tmp_path: Path):
         (SWEEP, "fixedRate", "${orders.purge.rate}", "prod", None, EXTERNAL),
     ]
     assert [r["unresolved_detail"] for r in details] == [
-        "orders.purge.rate is not set for default",
-        "orders.purge.rate is not set for prod",
+        "orders.purge.rate is not set",
+        "orders.purge.rate is not set",
     ]
     assert (job["expression"], job["resolution"]) == ("${orders.purge.rate}", "unresolved")
 

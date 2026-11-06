@@ -759,7 +759,7 @@ because an SSE stream really is a route a client GETs; only its protocol changed
 carries the same `key` and `environment` with `value` NULL, an `unresolved_reason` — one
 word of the general reason list (`values._REASONS`: `external`, `non_enumerable`,
 `not_readable`, `escapes`, `no_writer`, `cycle`) — and an `unresolved_detail`, text for a
-person that names the key and the place (`orders.url is not set for prod`; no code branches
+person that names the key and the place (`orders.url is not set`; no code branches
 on it). A key the deployment sets (absent from the files, an environment variable, a
 config-server or `spring.config.import` import) is `external`; a placeholder chain that
 loops is `cycle`; an outbound expression carrying more than one placeholder, which the

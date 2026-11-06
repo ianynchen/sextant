@@ -300,7 +300,7 @@ def test_the_digest_lists_unresolved_config_keys_with_their_reason():
             "value": None,
             "environment": "prod",
             "unresolved_reason": "external",
-            "unresolved_detail": "billing.url is not set for prod",
+            "unresolved_detail": "billing.url is not set",
         },
         {
             "key": "orders.url",
@@ -310,7 +310,7 @@ def test_the_digest_lists_unresolved_config_keys_with_their_reason():
         },
     ]
     brief = _compose(_Workspace(resolved_config=resolved_config))
-    assert "billing.url — external in prod (billing.url is not set for prod)" in brief.prompt
+    assert "billing.url — external in prod (billing.url is not set)" in brief.prompt
     assert "orders.url" not in brief.prompt
 
 

@@ -1204,7 +1204,7 @@ def test_a_conditional_placeholder_job_states_its_configured_value_first_then_it
                 "keys": '["jobs.nightly.cron"]',
                 "value": value,
                 "unresolved_reason": None if value else "external",
-                "unresolved_detail": None if value else "jobs.nightly.cron is not set for staging",
+                "unresolved_detail": None if value else "jobs.nightly.cron is not set",
             }
             for environment, value in (
                 ("default", "0 0 1 * * *"),

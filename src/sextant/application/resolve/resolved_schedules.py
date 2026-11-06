@@ -35,6 +35,7 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.config import (
     Unresolved,
     config_model_of,
+    not_set,
     placeholder_rule,
     substitute,
 )
@@ -71,7 +72,7 @@ def record_resolved_schedules(workspace: Workspace, catalogs: list[Catalog]) -> 
         by_environment.setdefault(str(row["environment"]), []).append(row)
     rows: list[dict[str, object]] = []
     for environment in sorted(by_environment):
-        lookup = _environment_lookup(by_environment[environment], key_matching, environment)
+        lookup = _environment_lookup(by_environment[environment], key_matching)
         for job in jobs:
             asked: list[str] = []
             value, reason = substitute(
@@ -118,7 +119,7 @@ def _recording(
 
 
 def _environment_lookup(
-    config: list[dict[str, object]], key_matching: str, environment: str
+    config: list[dict[str, object]], key_matching: str
 ) -> Callable[[str], tuple[str | None, Unresolved | None]]:
     """`substitute`'s lookup over ONE environment's resolved rows. Where relaxed matching
     folds two configured spellings onto one key, the first row in the `resolved_config`
@@ -142,15 +143,13 @@ def _environment_lookup(
                 None,
                 Unresolved(
                     str(row["unresolved_reason"] or EXTERNAL),
-                    str(row["unresolved_detail"] or f"{row['key']} is not set for {environment}"),
+                    str(row["unresolved_detail"] or not_set(str(row["key"]))),
                 ),
             )
         )
         index.setdefault(keyed(str(row["key"])), answer)
 
     def lookup(ref_key: str) -> tuple[str | None, Unresolved | None]:
-        return index.get(
-            keyed(ref_key), (None, Unresolved(EXTERNAL, f"{ref_key} is not set for {environment}"))
-        )
+        return index.get(keyed(ref_key), (None, Unresolved(EXTERNAL, not_set(ref_key))))
 
     return lookup

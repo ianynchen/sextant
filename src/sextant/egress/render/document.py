@@ -2079,11 +2079,10 @@ def _untied(row: Mapping[str, object], part: str) -> bool:
 
 
 def _schedule_reason(row: Mapping[str, object], redactor: Redactor) -> str:
-    """A configured value's reason and detail, the detail without its trailing
-    ` for <environment>`: the entry already names the environments, so two that fail the same
-    way read as one entry (`` not set in `default`, `prod` (external: orders.rate is not set) ``)."""
+    """A configured value's reason and detail. The detail does not name the environment, so two
+    environments that fail the same way read as one entry
+    (`` not set in `default`, `prod` (external: orders.rate is not set) ``)."""
     detail = redactor.redact_text(str(row["unresolved_detail"]))
-    detail = detail.removesuffix(f" for {row['environment']}")
     return f"{row['unresolved_reason']}: {detail}"
 
 

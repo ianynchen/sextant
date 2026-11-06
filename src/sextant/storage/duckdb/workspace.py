@@ -658,7 +658,8 @@ _NAMED_QUERIES = {
     # expression in `path` with `peer` NULL). The single `unresolved_reason`
     # column reports `path`'s answer first, `peer`'s only when `path` had
     # nothing to say, so one column still names why a row did not resolve
-    # for an environment; `unresolved_detail` is the same answer's text.
+    # for an environment; `unresolved_detail` is the same answer's text. The fallback
+    # sentence `<key> is not set` is `resolve/config.py::not_set`, written again here.
     #
     # With no resolved environments at all the join is empty and so is this
     # answer: "the same rows, unresolved" and "no environments to resolve
@@ -717,13 +718,13 @@ _NAMED_QUERIES = {
                                  || ' placeholders, and the join fills only one'
                         WHEN path_placeholders = 1 AND path_value IS NULL
                             THEN coalesce(path_detail,
-                                          path_key || ' is not set for ' || environment) END,
+                                          path_key || ' is not set') END,
                    CASE WHEN peer_placeholders > 1
                             THEN 'the address ' || peer || ' has ' || peer_placeholders
                                  || ' placeholders, and the join fills only one'
                         WHEN peer_placeholders = 1 AND peer_value IS NULL
                             THEN coalesce(peer_detail,
-                                          peer_key || ' is not set for ' || environment) END
+                                          peer_key || ' is not set') END
                ) AS unresolved_detail
         FROM joined
         ORDER BY environment, protocol, method, path, peer, caller

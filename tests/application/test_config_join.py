@@ -263,9 +263,7 @@ def _workspace(
                     "source": "invented.yml" if value is not None else None,
                     "environment": environment,
                     "unresolved_reason": None if value is not None else EXTERNAL,
-                    "unresolved_detail": (
-                        None if value is not None else f"{key} is not set for {environment}"
-                    ),
+                    "unresolved_detail": (None if value is not None else f"{key} is not set"),
                 }
                 for key, environment, value in config
             ],
@@ -1103,14 +1101,14 @@ def test_an_address_whose_key_is_missing_for_one_environment_only_says_so(
     assert rows["default"]["unresolved_reason"] is None
     assert rows["prod"]["resolved_path"] is None
     assert rows["prod"]["unresolved_reason"] == EXTERNAL
-    assert rows["prod"]["unresolved_detail"] == "acme.base is not set for prod"
+    assert rows["prod"]["unresolved_detail"] == "acme.base is not set"
 
 
 def test_an_address_whose_config_row_is_a_cycle_forwards_that_rows_reason_and_detail(
     tmp_path: Path,
 ):
     """The join copies the config row's own reason and detail. Both differ from the join's
-    fallback (`external`, "<key> is not set for <environment>"), so a join that dropped the
+    fallback (`external`, "<key> is not set"), so a join that dropped the
     copy would fail here."""
     workspace = _workspace(tmp_path)
     workspace.derive(
@@ -1158,7 +1156,7 @@ def test_an_address_whose_key_has_no_row_in_an_environment_is_external_there(tmp
     workspace.close()
 
     assert rows["prod"]["unresolved_reason"] == EXTERNAL
-    assert rows["prod"]["unresolved_detail"] == "acme.base is not set for prod"
+    assert rows["prod"]["unresolved_detail"] == "acme.base is not set"
     assert rows["default"]["unresolved_detail"] is None
 
 

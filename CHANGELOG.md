@@ -547,7 +547,7 @@ here would restate those documents rather than add anything.
   `resolved_config`, `resolved_schedules` and the `resolved_peers` answer, `unresolved_reason`
   now holds only `external`, `cycle` or `not_readable` (before: `missing_key`, `environment`,
   `remote_source`, `placeholder_cycle`, `multi_placeholder`), and a new `unresolved_detail`
-  column names the key and the place (`orders.url is not set for prod`). The brief and the
+  column names the key and the place (`orders.url is not set`). The brief and the
   document show the reason, then the detail. The graph attributes of `boundary-property` gain
   `unresolved_detail`. No row resolves differently. `GRAPH_SCHEMA_VERSION` 15 → 16 and
   `BOUNDARY_VOCABULARY_VERSION` 4 → 5: a workspace of the older vintage is refused and

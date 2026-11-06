@@ -76,6 +76,12 @@ from sextant.application.resolve.values import CYCLE, EXTERNAL
 from sextant.domain.config_keys import normalize_key
 
 
+def not_set(key: str) -> str:
+    """The detail for a key that no configuration gives. The environment is a column of the
+    row, so the text does not repeat it. `resolved_peers` (SQL) writes the same sentence."""
+    return f"{key} is not set"
+
+
 class Unresolved(NamedTuple):
     """Why a placeholder could not be filled: a `reason` from the general list
     (`values._REASONS`) and a `detail` for a person."""
@@ -354,7 +360,7 @@ def _resolve_row(
             "source": None,
             "environment": profile,
             "unresolved_reason": EXTERNAL,
-            "unresolved_detail": f"{key} is not set for {profile}",
+            "unresolved_detail": not_set(key),
         }
     raw_value, source_file = merged[key]
     if remote_prefixes and raw_value.startswith(remote_prefixes):
@@ -574,7 +580,7 @@ def _resolve_reference(
         # sources declare no environment import (Spring's 2F model declares none),
         # so a `${}` default chain ending in what looks like an env-var name
         # (`${SOME_VAR}`) is still plain `external` here, not a finer split.
-        return None, Unresolved(EXTERNAL, f"{ref_key} is not set for {profile}")
+        return None, Unresolved(EXTERNAL, not_set(ref_key))
     if target in stack:
         return None, Unresolved(CYCLE, _cycle_detail(stack[stack.index(target) :], target))
     raw_value, _source = merged[target]

@@ -207,7 +207,7 @@ def test_a_missing_placeholder_with_no_default_resolves_external(tmp_path: Path)
     row = _row(rows, "k", "default")
     assert row["value"] is None
     assert row["unresolved_reason"] == EXTERNAL
-    assert row["unresolved_detail"] == "missing is not set for default"
+    assert row["unresolved_detail"] == "missing is not set"
 
 
 def test_a_default_holding_a_placeholder_resolves_through_the_layered_map(tmp_path: Path):
@@ -260,7 +260,7 @@ def test_an_undefined_env_shaped_placeholder_is_external_like_any_absent_referen
     row = _row(rows, "k", "default")
     assert row["value"] is None
     assert row["unresolved_reason"] == EXTERNAL
-    assert row["unresolved_detail"] == "SOME_ENV_VAR is not set for default"
+    assert row["unresolved_detail"] == "SOME_ENV_VAR is not set"
 
 
 # --- key_matching scopes LOOKUPS only, never the layering merge -----------
@@ -361,7 +361,7 @@ def test_a_key_resolved_in_one_profile_is_external_in_another_where_undeclared(
     missing = _row(rows, "only.default", "prod")
     assert missing["value"] is None
     assert missing["unresolved_reason"] == EXTERNAL
-    assert missing["unresolved_detail"] == "only.default is not set for prod"
+    assert missing["unresolved_detail"] == "only.default is not set"
 
 
 # --- Pass 2's own contract: unconditional, empty in, empty out ------------

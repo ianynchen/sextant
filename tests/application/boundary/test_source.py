@@ -663,7 +663,7 @@ def test_the_remaining_kinds_carry_their_columns_and_evidence(
                 environment="default")  # fmt: skip
         _insert(workspace, "resolved_config", key="orders.url", value=None, source="application.yml",
                 environment="prod", unresolved_reason="external",
-                unresolved_detail="orders.url is not set for prod")  # fmt: skip
+                unresolved_detail="orders.url is not set")  # fmt: skip
         _insert(workspace, "scheduled_work", handler="J#run().", trigger="cron", expression="0 * * * * *",
                 resolution="resolved", evidence="compiler", catalog_id="spring-scheduling")  # fmt: skip
         _insert(workspace, "error_handlers", handler="A#bad().", advice="A#", declared_by="Advice#",
@@ -677,7 +677,7 @@ def test_the_remaining_kinds_carry_their_columns_and_evidence(
     )
     assert (default["value"], default["unresolved_reason"]) == ("http://x", None)
     assert (prod["value"], prod["unresolved_reason"]) == (None, "external")
-    assert prod["unresolved_detail"] == "orders.url is not set for prod"
+    assert prod["unresolved_detail"] == "orders.url is not set"
     assert default["evidence"]["source"] == "application.yml"
     assert [r["environment"] for r in source.rows(KINDS["boundary-property"])] == [
         "default",
