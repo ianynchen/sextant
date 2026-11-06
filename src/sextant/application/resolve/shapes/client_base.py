@@ -341,10 +341,6 @@ def _index(value: Any, where: str) -> None:
         raise CatalogError(f"{where} is an argument index, a non-negative integer, got {value!r}")
 
 
-# Where a client's base cannot be read although the code that sets it is reached: a setter
-# handed a value the code computes, a block the ladder does not declare, a relative setter
-# (not modelled, CP-54 row 86). The same word `metadata.KNOWN_GAPS` publishes for the class.
-UNTRACED = "computed_base_addresses_not_traced"
 # Where an engine stamps the position it READ an argument at, `(caller, ordinal, slot)` —
 # the key `chains._captured_at` writes, and what the walk names a position by.
 _READ_AT = "captured_at"
@@ -382,7 +378,7 @@ def client_base(
     - **a derived client (`parent: receiver`) whose block sets none inherits** its
       receiver's base (row 80), the receiver walked the same way;
     - **a construction reached with no declared setter reached gives NO base**
-      (`UNTRACED`), exactly as an unreached one does. Ktor sends such a client's relative
+      (`not_readable`), exactly as an unreached one does. Ktor sends such a client's relative
       call to its builder's origin, `http://localhost` (rows 50, 57), but that the client
       has no base cannot be proven from the bytecode: the set of forms that set one —
       `install(DefaultRequest)`, a caller-supplied `block()`, a helper the block calls — is
@@ -403,8 +399,11 @@ def client_base(
     callers. The producer records no path, so where those callers hand in DIFFERENT bases
     nothing says which one this client was built with: every path must agree, and where
     they do not the answer is `non_enumerable` rather than a pairing across paths (ruling
-    M-1). Every other end is the walk's own reason, or `UNTRACED` where the code setting
-    the base is reached and not read.
+    M-1). Every other end is the walk's own reason, or `not_readable` where the code setting
+    the base is reached and not read: a setter handed a value the code computes, a block the
+    ladder does not declare, a relative setter (not modelled, CP-54 row 86). One of the value
+    walk's reasons (ruling 2026-11-05); `metadata.KNOWN_GAPS` publishes the class as the gap
+    `computed_base_addresses_not_traced`.
     """
     if values is None:
         return None, NOT_READABLE
@@ -509,7 +508,7 @@ class _Ladder:
         if rung is None:
             # The declared owner and method under an overload no rung declares: the call is
             # reached, and what its block means is not measured.
-            return None, UNTRACED
+            return None, NOT_READABLE
         base, reason = self._block_base(site, rung)
         if reason is not None:
             return None, reason
@@ -519,7 +518,7 @@ class _Ladder:
             return self.base_of(site, RECEIVER, seen)
         # No declared setter was reached. Not "no base": absence cannot be proven from the
         # bytecode, so the base is unread, as for an unreached construction.
-        return None, UNTRACED
+        return None, NOT_READABLE
 
     def _block_base(
         self, site: Mapping[str, Any], rung: Mapping[str, Any]
@@ -530,7 +529,7 @@ class _Ladder:
         position = int(rung["block_arg"])
         block = arguments[position] if position < len(arguments) else None
         if not isinstance(block, Mapping) or block.get("kind") != "lambda":
-            return None, UNTRACED
+            return None, NOT_READABLE
         body = with_descriptor(str(site["caller"]), str(block.get("symbol")))
         # The block's own receiver: the body's parameter after the values it captured
         # (`CallArgument.captures`, D00 §5).
@@ -540,13 +539,13 @@ class _Ladder:
             if _matches(inner, self._setter):
                 address, reason = self._setter_value(inner)
                 if address is None or not (_has_host(address) or carries_expression(address)):
-                    return None, reason or UNTRACED
+                    return None, reason or NOT_READABLE
                 base = address
                 continue
             if self._may_move_base(inner) or self._hands_off(inner, receiver):
-                return None, UNTRACED
+                return None, NOT_READABLE
             if _hands_to_supplied_code(inner, receiver):
-                return None, UNTRACED
+                return None, NOT_READABLE
             nested = self._rung_of(inner)
             if nested is None or nested.get("parent") is not None:
                 continue
@@ -574,7 +573,7 @@ class _Ladder:
             stated = answer.kind == LITERAL and answer.literal_kind == STRING
             keyed = answer.kind == EXPRESSION and carries_expression(str(answer.value))
             if not (stated or keyed):
-                return None, UNTRACED
+                return None, NOT_READABLE
             texts.append(str(answer.value))
         distinct = list(dict.fromkeys(texts))
         if not distinct:

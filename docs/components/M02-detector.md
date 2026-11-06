@@ -354,8 +354,8 @@ empty tuple, never a guess.
 ## Honesty obligations
 
 - Modules whose kind is `undetermined`, and why.
-- Classpath entries that failed to resolve — every unresolved entry becomes
-  `unindexed_dependency` at some call site later, and this is where it can still be fixed
+- Classpath entries that failed to resolve — every unresolved entry becomes an
+  `external` call site later, and this is where it can still be fixed
   with a setting.
 - Dependencies matching no first-party pattern but sharing a group prefix with one, as a
   likely misconfiguration.

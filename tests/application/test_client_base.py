@@ -666,10 +666,7 @@ def test_a_client_with_no_declared_base_stays_relative(tmp_path: Path):
     for a construction not reached at all (ruling reversed, Task 10 fix round 2)."""
     facts = [*_top_level("client", 1, []), *_on("client", _fn("local"), "orders")]
     assert _client_rows(tmp_path, facts) == [(_fn("local"), None, "orders", "unresolved")]
-    assert _why(tmp_path / "why", facts, _fn("local")) == (
-        None,
-        "computed_base_addresses_not_traced",
-    )
+    assert _why(tmp_path / "why", facts, _fn("local")) == (None, "not_readable")
 
 
 @pytest.mark.pins("ktor.the-ENGINE-LESS-factory-is-a-ladder-rung")
@@ -695,10 +692,7 @@ def test_an_undeclared_factory_overload_leaves_the_call_relative(tmp_path: Path)
         *_on("client", _fn("quotes"), "quotes"),
     ]
     assert _client_rows(tmp_path, facts) == [(_fn("quotes"), None, "quotes", "unresolved")]
-    assert _why(tmp_path / "why", facts, _fn("quotes")) == (
-        None,
-        "computed_base_addresses_not_traced",
-    )
+    assert _why(tmp_path / "why", facts, _fn("quotes")) == (None, "not_readable")
 
 
 @pytest.mark.pins("ktor.a-RELATIVE-setter-after-an-absolute-one-declines")
@@ -727,10 +721,7 @@ def test_the_last_absolute_setter_is_the_base_and_a_relative_one_after_it_declin
     assert _client_rows(tmp_path / "moved", moved) == [
         (_fn("orders"), None, "orders", "unresolved")
     ]
-    assert _why(tmp_path / "why", moved, _fn("orders")) == (
-        None,
-        "computed_base_addresses_not_traced",
-    )
+    assert _why(tmp_path / "why", moved, _fn("orders")) == (None, "not_readable")
 
 
 _MADE = _MODULE + method_descriptor(

@@ -244,8 +244,9 @@ something.
 - Counts by resolution tier, which are how much of this graph to trust.
 - Every catalog skipped, and the capability that was missing.
 - Configuration keys unresolved, distinguishing redacted from missing.
-- Call sites `unresolved`, grouped by reason — and `unindexed_dependency` reported
-  separately, because it is the only reason fixable with a setting.
+- Call sites `unresolved`, grouped by reason — and an `external` site whose code is in a
+  classpath entry that failed to resolve reported separately, because it is the only one
+  fixable with a setting.
 - Findings withheld because of unresolved sites in scope.
 
 ## Open decisions

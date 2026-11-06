@@ -2433,7 +2433,7 @@ the block, crosses to that method's callers. The base each construction answers 
 makes. The reader answers ONE base or none:
 
 - **the construction is reached and no declared setter is**: no base, with
-  `computed_base_addresses_not_traced`, exactly as for an unreached construction. **A client with
+  `not_readable`, exactly as for an unreached construction. **A client with
   no declared base is not assumed to send to `localhost`: absence cannot be proven from the
   bytecode.** Ktor does send such a client to its builder's origin, `http://localhost` (CP-54 rows
   50, 57), and an earlier ruling published that; it was reversed (Task 10 fix round 2) because the
@@ -2465,7 +2465,8 @@ makes. The reader answers ONE base or none:
   `no_writer`, …);
 - **reached and not read** — a block the ladder does not declare, a setter handed a computed
   value or a relative address, an overload no rung declares — no base, with
-  `computed_base_addresses_not_traced`;
+  `not_readable` (the class is the gap `computed_base_addresses_not_traced`; the reason is
+  one of the value walk's, ruling 2026-11-05);
 - **several paths, several bases** (`madeClient(base)` called with two): no base, with
   `non_enumerable`. The producer records no path, so nothing says which base one client was
   built with, and pairing them across paths is ruling M-1's fabrication.
@@ -2832,11 +2833,16 @@ matches:
   cross-method `source` read is a fabrication path. Every chain end must agree or the field
   is `unresolved`; ONE hop — a `bean_via` met inside the collecting walk is a poison there.
   An unresolved bean reference is the reader's own failure, overwritable by a later literal
-  (Spring's setters are last-wins), never a catalog poison. The reason travels:
-  `bean_none`, `bean_ambiguous`, `bean_unread` (the one candidate's hierarchy was not read),
-  `bean_second_hop`, `bean_across_bodies` (a `bean_via` inside
-  a lambda body — a parameter index there is into the LAMBDA's signature), `bean_no_chain`,
-  `bean_field_uncaptured`, `bean_chains_disagree`. A catalog spelling `bean_via` with no
+  (Spring's setters are last-wins), never a catalog poison. The reason travels, and it is
+  one of the value walk's reasons (`values._REASONS`; ruling 2026-11-05: no reason word of
+  the bean fold's own): `external` where no recipe of the module answers (the container
+  makes the value), where the one candidate's hierarchy goes into code that is not scanned,
+  and for a channel the container makes under its name; `non_enumerable` where several
+  beans are candidates and no rung chooses, or where the bean's chain ends disagree;
+  `not_readable` for a reference shape the fold does not read (a field, a literal, a call
+  to a method that declares no bean), a `bean_via` inside a lambda body (a parameter index
+  there is into the LAMBDA's signature), a bean method with no chain, no end capturing the
+  field, and a captured value that is not a string. A catalog spelling `bean_via` with no
   `bean_model` is refused at load; the table is built once per run only then.
 - **`method_annotation: {annotation, arg, into}` on a root** — the CONSTRUCTING method's
   own annotation supplies a capture: `@ServiceActivator(inputChannel = "ch")` on the `@Bean`

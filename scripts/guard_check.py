@@ -10193,7 +10193,7 @@ GUARDS: dict[str, Guard] = {
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",
                 find="        # bytecode, so the base is unread, as for an unreached construction.\n"
-                "        return None, UNTRACED\n",
+                "        return None, NOT_READABLE\n",
                 replace="        # bytecode, so the base is unread, as for an unreached construction.\n"
                 '        return "http://localhost", None  # guard disabled by scripts/guard_check.py\n',
             ),

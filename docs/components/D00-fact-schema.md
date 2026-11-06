@@ -191,9 +191,13 @@ goes in `ext`, never into a widened set.
 
 **`evidence`** — `compiler`, `syntax`, `name_match`, `declared`, `human`, `llm`
 
-**`unresolved_reason`** — `interface_dispatch`, `abstract_dispatch`, `reflection`,
-`di_container`, `dynamic_proxy`, `config_placeholder`, `unindexed_dependency`,
-`scanner_gap`
+**`unresolved_reason`** — `not_readable`, `non_enumerable`, `escapes`, `no_writer`,
+`external`, `cycle`: the shared value walk's set (`values._REASONS`, D01 §1d). Ruled
+2026-11-05: why a value is not resolved comes from this one list, and no reason word names
+a framework, an engine or a mechanism. The eight words this set held before (no pass
+produced any of them) map to it: `interface_dispatch`, `abstract_dispatch` →
+`non_enumerable`; `reflection`, `scanner_gap` → `not_readable`; `di_container`,
+`dynamic_proxy`, `config_placeholder`, `unindexed_dependency` → `external`.
 
 **`method_resolution`** — `declared_here`, `inherited`, `ancestor_not_scanned`,
 `owner_not_scanned`, `no_declaration_found`. Why a call site's target does or does not
