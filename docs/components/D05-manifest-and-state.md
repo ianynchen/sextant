@@ -159,7 +159,7 @@ it, never by presentation.
   "coverage": { "sources": 1283, "covered": 1283, "uncovered": 0, "partial": false,
                 "reach": { "body_read": 465, "boundary": 971 },
                 "resolution": { "resolved": 1434, "narrowed": 2 },
-                "method_resolution": { "declared_here": 191, "owner_not_scanned": 320 },
+                "method_resolution": { "external": 320, "resolved": 191 },
                 "format_unresolved": 3, "inbound_total": 12,
                 "peer_unresolved": 1, "outbound_total": 7 },
   "gaps": ["call_graph_not_implemented"],

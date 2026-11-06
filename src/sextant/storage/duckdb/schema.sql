@@ -145,11 +145,13 @@ CREATE TABLE IF NOT EXISTS resolved_config (
     -- for this environment at all, so no file ever won it (D01).
     source            TEXT,
     environment       TEXT,
-    -- NULL exactly when `value` is non-NULL. One of D01's closed five-value
-    -- set (`missing_key`, `environment`, `remote_source`,
-    -- `placeholder_cycle`, `multi_placeholder`) — the last reserved for the
-    -- peer-resolution join, never emitted by this pass.
-    unresolved_reason TEXT
+    -- NULL exactly when `value` is non-NULL. One word of the general reason list
+    -- (`values._REASONS`): `external` for a key the deployment sets or a remote import,
+    -- `cycle` for a placeholder chain that loops.
+    unresolved_reason TEXT,
+    -- Text for a person that names the key and the place (`orders.url is not set`).
+    -- The environment is a column of the row. NULL exactly when `unresolved_reason` is. No code branches on it.
+    unresolved_detail TEXT
 );
 
 -- The 2K hand-off ledger (2G design §6): one row per question a programmatic
@@ -320,8 +322,10 @@ CREATE TABLE IF NOT EXISTS resolved_schedules (
     -- resolved configuration, or the annotation's own `:default` where none sets the
     -- key. NULL exactly when `unresolved_reason` is set.
     value             TEXT,
-    -- D01's closed set (`missing_key`, `placeholder_cycle`, ...), from the lookup.
-    unresolved_reason TEXT
+    -- One word of the general reason list (`values._REASONS`), from the lookup.
+    unresolved_reason TEXT,
+    -- Text for a person, from the same lookup. NULL exactly when `unresolved_reason` is.
+    unresolved_detail TEXT
 );
 
 -- The second non-wire table (2O design §4b): which exceptions a module answers
@@ -841,11 +845,13 @@ CREATE TABLE IF NOT EXISTS method_resolution (
     -- NULL when there is none in this workspace, and `reason` then says which kind of
     -- none it is. A row NEVER carries both a NULL here and a reason claiming success.
     declaring_class  TEXT,
-    -- D00 §4's `method_resolution` set: `declared_here`, `inherited`,
-    -- `ancestor_not_scanned`, `owner_not_scanned`, `no_declaration_found`. **A stated
-    -- reason, always** — the single word this table replaces meant four of them at once,
-    -- and three are things a reader would act on differently.
-    reason           TEXT
+    -- NULL when a body was found (`declaring_class` then says where; equal to `class`
+    -- means declared here). Otherwise one word of the general list (`values._REASONS`):
+    -- `external` when the type that would hold the declaration is not in the scanned
+    -- code, `not_readable` when every type reached was read and none declares it.
+    reason           TEXT,
+    -- A sentence for a person that names the type. No code reads it.
+    detail           TEXT
 );
 
 CREATE TABLE IF NOT EXISTS call_edges (

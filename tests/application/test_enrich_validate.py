@@ -40,14 +40,15 @@ QUESTION = {
 }
 
 # One unresolved `resolved_config` row (D01's closed five-reason set):
-# `spring.config.import`, unresolved for `remote_source` in `default` — the
+# `spring.config.import`, unresolved for `external` in `default` — the
 # exact shape 2N design §2 verified the identity against.
 CONFIG_ROW = {
     "key": "spring.config.import",
     "value": None,
     "source": "application.yml",
     "environment": "default",
-    "unresolved_reason": "remote_source",
+    "unresolved_reason": "external",
+    "unresolved_detail": "spring.config.import is imported from a remote source",
 }
 
 
@@ -402,7 +403,7 @@ def _config_verdict(**overrides: object) -> dict[str, object]:
             "key": "spring.config.import",
             "source": "application.yml",
             "environment": "default",
-            "kind": "remote_source",
+            "kind": "external",
         },
         "assessment": "likely a Config Server import",
         "because": "the profile declares `spring.config.import=configserver:`",
@@ -442,7 +443,7 @@ def test_a_config_verdict_answering_a_phantom_row_is_refused(tmp_path: Path):
         "key": "spring.config.import",
         "source": "application.yml",
         "environment": "docker",  # only "default" is unresolved in this workspace
-        "kind": "remote_source",
+        "kind": "external",
     }
     _, refusals = validate_overlay(
         _overlay(_config_verdict(question=question)), _Workspace(), tmp_path
@@ -481,7 +482,7 @@ def test_a_userinfo_bearing_config_source_matches_after_the_same_redaction_the_b
             "key": "spring.config.import",
             "source": redacted_source,
             "environment": "default",
-            "kind": "remote_source",
+            "kind": "external",
         }
     )
 
@@ -504,7 +505,7 @@ def test_an_unanswered_config_verdict_still_has_to_answer_a_real_row(tmp_path: P
             "key": "spring.config.import",
             "source": "application.yml",
             "environment": "gone",
-            "kind": "remote_source",
+            "kind": "external",
         },
     )
     del claim["because"]

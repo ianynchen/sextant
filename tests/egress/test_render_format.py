@@ -991,13 +991,24 @@ def test_a_handler_pass_through_question_names_the_handler_and_the_unread_code()
                         "caller": "com/acme/Routes#wire().",
                         "handler": "com/acme/Routes#check().",
                         "unread": [
-                            {"how": "handed_to", "name": "com/acme/base/HttpUtils#nextRoute()."}
+                            {
+                                "reason": "escapes",
+                                "detail": (
+                                    "hands the request's context to "
+                                    "com/acme/base/HttpUtils#nextRoute()., where it is not followed"
+                                ),
+                            }
                         ],
                     },
                     {
                         "caller": "com/acme/Routes#wire().",
                         "handler": None,
-                        "unread": [{"how": "produced_by", "name": "com/acme/Routes#factory()."}],
+                        "unread": [
+                            {
+                                "reason": "not_readable",
+                                "detail": "is built by com/acme/Routes#factory()., whose body is not read",
+                            }
+                        ],
                     },
                 ]
             ),
@@ -1007,11 +1018,11 @@ def test_a_handler_pass_through_question_names_the_handler_and_the_unread_code()
     text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
     assert (
         "- `PUT /u2/:id` — handler_pass_through: com/acme/Routes#check(). (registered by "
-        "com/acme/Routes#wire().) hands the request's context to "
-        "com/acme/base/HttpUtils#nextRoute()., where it is not followed here, so whether it "
+        "com/acme/Routes#wire().) — escapes: hands the request's context to "
+        "com/acme/base/HttpUtils#nextRoute()., where it is not followed, so whether it "
         "passes the request on is not known; a handler object (registered by "
-        "com/acme/Routes#wire().) is built by com/acme/Routes#factory()., whose body is not "
-        "read here, so whether it passes the request on is not known"
+        "com/acme/Routes#wire().) — not_readable: is built by com/acme/Routes#factory()., whose "
+        "body is not read, so whether it passes the request on is not known"
     ) in text
 
 

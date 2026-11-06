@@ -41,8 +41,8 @@ import org.objectweb.asm.Type;
  * module names.
  *
  * <p><b>What it deliberately is not.</b> No method or field of a dependency class is read,
- * so no call edge, declaration or body arrives: {@code method_resolution}'s
- * {@code owner_not_scanned} is untouched, and a dependency type stays "not scanned" to every
+ * so no call edge, declaration or body arrives: method lookup
+ * ({@code method_resolution}) is untouched, and a dependency type stays "not scanned" to every
  * consumer that asks whether its METHODS were — only its place in the hierarchy becomes known.
  * These facts are a kind of their own rather than {@code symbol}/{@code annotation} facts, so
  * no engine that mints endpoint rows from declarations can see a library's {@code @RestController}

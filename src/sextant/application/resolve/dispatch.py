@@ -66,7 +66,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sextant.application.ports.workspace import Workspace
-from sextant.domain.closed_sets import MethodResolution
 from sextant.domain.symbols import bare_descriptor, method_descriptor, method_name, owner_of
 
 # D00 §5's dispatch forms, as the extractor spells them (`MethodFlow.invokeKind`).
@@ -86,6 +85,9 @@ DYNAMIC = "dynamic"
 THROW = "throw"
 # Names that are never inherited, so an ancestor walk for one is always wrong (JLS 8.8).
 _NOT_INHERITED = frozenset({"<init>", "<clinit>"})
+# Where every class and interface lookup ends (JVMS 5.4.3.3, 5.4.3.4). A wire name of the
+# platform, recorded in the two language-confinement tests.
+_OBJECT = "java/lang/Object#"
 
 
 @dataclass(frozen=True)
@@ -128,9 +130,11 @@ class Dispatch:
                 names[owner].add(method_name(symbol))
         object.__setattr__(self, "declared_names", dict(names))
 
-    def resolve(self, owner: str, name: str, descriptor: str) -> tuple[str | None, str]:
-        """Which type declares the method a site names, and — always — why (JVMS
-        5.4.3.3).
+    def resolve(self, owner: str, name: str, descriptor: str) -> tuple[str | None, str | None]:
+        """Which type declares the method a site names, and — where none does — the
+        first type the search could not read (JVMS 5.4.3.3). A declaring type means the
+        body is in the workspace, so the second part is None. With no declaring type and
+        no unread type, the search read everything it reached and found no declaration.
 
         **The defect this replaces.** The old rule asked whether the OWNER declared the
         method and answered `[]` otherwise, which is the same answer a genuinely
@@ -151,8 +155,7 @@ class Dispatch:
 
         The two arms are therefore walked separately and in order.
         """
-        declaring, reason, _ = self._search(owner, name, descriptor)
-        return declaring, reason
+        return self._search(owner, name, descriptor)
 
     def heirs(self, owner: str, name: str) -> list[str]:
         """The types a call naming `name` through them runs `owner`'s method for (JVMS
@@ -188,28 +191,28 @@ class Dispatch:
         """Where `resolve`'s search LEFT the workspace: the first type, in JVMS 5.4.3.3's
         order, that it reached and could not read — the owner itself, else the first
         unread class on the superclass chain, else the first unread superinterface. None
-        wherever `resolve` answers anything but `owner_not_scanned` or
-        `ancestor_not_scanned`.
+        wherever the search found a declaration or read everything it reached,
+        the platform's root type included.
 
-        `resolve` says THAT the declaration is in something unread; a reader whose catalog
+        `resolve` carries the same answer as its second part. A reader whose catalog
         states what one particular jar type does with the call (a framework template
-        calling a subclass method) needs to know WHICH. One search answers both, so the two
-        can never disagree about the order."""
-        return self._search(owner, name, descriptor)[2]
+        calling a subclass method) needs to know WHICH unread type. One search answers
+        both, so the two can never disagree about the order."""
+        return self._search(owner, name, descriptor)[1]
 
-    def _search(self, owner: str, name: str, descriptor: str) -> tuple[str | None, str, str | None]:
+    def _search(self, owner: str, name: str, descriptor: str) -> tuple[str | None, str | None]:
         """`resolve`'s answer, and `boundary`'s beside it."""
         if method_descriptor(owner, name, descriptor) in self.declared:
-            return owner, MethodResolution.DECLARED_HERE, None
+            return owner, None
         if owner not in self.scanned:
             # Never read this type at all. The genuine third-party boundary: the call IS
             # the terminal, and nothing further is knowable from this workspace.
-            return None, MethodResolution.OWNER_NOT_SCANNED, owner
+            return None, owner
         if name in _NOT_INHERITED:
             # A constructor is not inherited (JLS 8.8), so walking ancestors for one
             # could only ever produce a wrong answer. No corpus has yet contained a call
             # that would, which is why this is stated rather than discovered later.
-            return None, MethodResolution.NO_DECLARATION_FOUND, None
+            return None, None
 
         # The first type the search could not read, in search order (`boundary`).
         unscanned: str | None = None
@@ -230,7 +233,7 @@ class Dispatch:
                 unscanned = parent
                 break
             if method_descriptor(parent, name, descriptor) in self.declared:
-                return parent, MethodResolution.INHERITED, None
+                return parent, None
             current = parent
 
         # Step 3: the superinterfaces of the class and of every superclass on that
@@ -252,14 +255,19 @@ class Dispatch:
                 unscanned = unscanned or interface
                 continue
             if method_descriptor(interface, name, descriptor) in self.declared:
-                return interface, MethodResolution.INHERITED, None
+                return interface, None
             frontier.extend(a for a, _kind, _ in self.ancestors.get(interface, ()))
 
         if unscanned is not None:
             # We know MORE than "external": the body is inherited from something we did
             # not open, and `type_hierarchy` names which type that is.
-            return None, MethodResolution.ANCESTOR_NOT_SCANNED, unscanned
-        return None, MethodResolution.NO_DECLARATION_FOUND, None
+            return None, unscanned
+        # Last place, for a class (JVMS 5.4.3.3) and for an interface (5.4.3.4) alike:
+        # the platform's root type. The extractor writes no superclass fact for it, so no chain
+        # above reached it. Read, it answers; unread, it is the type the search left at.
+        if method_descriptor(_OBJECT, name, descriptor) in self.declared:
+            return _OBJECT, None
+        return None, None if _OBJECT in self.scanned else _OBJECT
 
     def candidates(self, site: dict[str, object]) -> list[str]:
         """Every method `site` can run and whose body this workspace read, as
@@ -280,7 +288,7 @@ class Dispatch:
         # The DECLARING type, not the named one (F3 §4.2). `Owner#setId` names `Owner`
         # and is declared on `BaseEntity`; asking only about the named owner returned
         # nothing and read as a third-party boundary.
-        declaring, _reason = self.resolve(owner, name, descriptor)
+        declaring, _ = self.resolve(owner, name, descriptor)
         if declaring is None:
             return []
         declared_method = method_descriptor(declaring, name, descriptor)
@@ -480,7 +488,8 @@ def ancestry_of(workspace: Workspace) -> tuple[dict[str, list[tuple[str, str, bo
 
     `scanned` holds every type with a class file here. An ancestor absent from it is why
     a method can be genuinely unreachable while its subtype is fully known — the
-    `ancestor_not_scanned` answer, which the single old word could not express.
+    answer `resolve` gives with an unread ancestor, which the single old word could not
+    express.
     """
     scanned = {bare_descriptor(str(row["symbol"])) for row in workspace.query("declared_symbols")}
     direct: dict[str, list[tuple[str, str, bool]]] = defaultdict(list)

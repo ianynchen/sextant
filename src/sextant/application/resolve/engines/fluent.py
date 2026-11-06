@@ -1236,7 +1236,7 @@ class _Judged:
 
     symbol: str | None
     outcome: str
-    # Why an `unreadable` handler is, `(how, name)` each (`pass_through.HANDED_TO`, …), for
+    # Why an `unreadable` handler is, `(reason, detail)` each (`pass_through.Unread`), for
     # its question.
     unread: tuple[tuple[str, str], ...] = ()
     # Where dispatch can run several bodies and none passes on: each answering body, judged
@@ -1400,7 +1400,7 @@ def _judged_of(
     if len(handler.alternatives) > 1:
         # The no-body reason belongs to the method that has no body, never to an alternative
         # whose own body was read.
-        bodiless = handler.unread[1] if handler.unread is not None else None
+        bodiless = handler.bodiless
         alternatives = tuple(
             _Judged(
                 symbol,

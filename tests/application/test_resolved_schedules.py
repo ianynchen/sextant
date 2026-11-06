@@ -22,6 +22,7 @@ from sextant.application.resolve.resolved_schedules import (
     record_resolved_schedules,
     redact_schedule_value,
 )
+from sextant.application.resolve.values import CYCLE, EXTERNAL
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -268,14 +269,34 @@ def test_a_key_set_nowhere_is_missing_in_every_environment(tmp_path: Path):
         },
     )
     rows = _rows(workspace)
+    details = workspace.query("resolved_schedules")
     [job] = workspace.query("scheduled_work")
     workspace.close()
 
     assert rows == [
-        (SWEEP, "fixedRate", "${orders.purge.rate}", "default", None, "missing_key"),
-        (SWEEP, "fixedRate", "${orders.purge.rate}", "prod", None, "missing_key"),
+        (SWEEP, "fixedRate", "${orders.purge.rate}", "default", None, EXTERNAL),
+        (SWEEP, "fixedRate", "${orders.purge.rate}", "prod", None, EXTERNAL),
+    ]
+    assert [r["unresolved_detail"] for r in details] == [
+        "orders.purge.rate is not set",
+        "orders.purge.rate is not set",
     ]
     assert (job["expression"], job["resolution"]) == ("${orders.purge.rate}", "unresolved")
+
+
+def test_a_key_that_is_a_cycle_gives_the_schedule_its_reason_and_chain(tmp_path: Path):
+    workspace = _resolved(
+        tmp_path,
+        {"cron": "${a.cron}"},
+        {"application.yml": {"a.cron": "${b.cron}", "b.cron": "${a.cron}"}},
+    )
+    [row] = workspace.query("resolved_schedules")
+    workspace.close()
+
+    assert (row["unresolved_reason"], row["unresolved_detail"]) == (
+        CYCLE,
+        "a.cron refers to b.cron, which refers back to a.cron",
+    )
 
 
 @pytest.mark.parametrize(
@@ -335,7 +356,7 @@ def test_an_exact_matching_model_does_not_fold_spellings(tmp_path: Path):
     rows = _rows(workspace)
     workspace.close()
 
-    assert rows == [(SWEEP, "cron", "${orders.sweep-cron}", "default", None, "missing_key")]
+    assert rows == [(SWEEP, "cron", "${orders.sweep-cron}", "default", None, EXTERNAL)]
 
 
 def test_an_expression_with_two_placeholders_resolves_only_when_both_do(tmp_path: Path):
@@ -371,7 +392,7 @@ def test_an_expression_with_one_missing_placeholder_is_unresolved_whole(tmp_path
     rows = _rows(workspace)
     workspace.close()
 
-    assert rows == [(SWEEP, "cron", expression, "default", None, "missing_key")]
+    assert rows == [(SWEEP, "cron", expression, "default", None, EXTERNAL)]
 
 
 def test_two_placeholder_crons_on_one_method_are_attributed_to_their_own_expression(

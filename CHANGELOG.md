@@ -199,6 +199,15 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **An address with several placeholders, or a default, is filled** (OI-322, and OI-179). The per-environment address
+  answer (`resolved_peers`) filled only an address with one placeholder: `${host}:${port}`
+  read `not_readable`, and `${orders.url:http://fallback}` read "is not set" where its
+  default answers. It now uses the one placeholder rule configuration files and schedules
+  use (`resolve/config.py::substitute`): every placeholder is filled, a default is taken,
+  and the config model's key matching applies. A missing key fails the whole address with
+  that key's own reason. The answer is now `resolve/resolved_peers.py` in place of the SQL
+  named query; nothing is stored. No test fixture carries such an address today.
+
 - **The Spring ladder's qualifier and name rungs read only the candidates of the parameter's type**
   (OI-304 Task 4). Spring compares a qualifier or a parameter name only among the beans of the
   parameter's type or a subtype of it; a bean of an unrelated type with the same name is no longer
@@ -542,6 +551,35 @@ here would restate those documents rather than add anything.
 
 ### Changed
 
+- **The pass-through question uses the same general reason list** (OI-321, spec
+  `2026-11-05-one-reason-list-design.md` §3c). Each `unread` entry of a `handler_pass_through`
+  question is now `{reason, detail}` in place of `{how, name}`. `handed_to` and `stored_in` are
+  `escapes`; `produced_by`, `of_type`, `from_field`, `no_body` and `argument` are `external`
+  where the body that would answer is not in the scanned code (the building call's owner, or
+  an ancestor it inherits the method from, is not read: the same search method lookup makes),
+  and `not_readable` where it is there and not followed. The document shows the reason, then
+  the stored detail (`reason: detail`, in the configuration, schedule and pass-through lines
+  alike). No handler outcome changes. `sextant module diff` reports a change in a
+  `boundary-property`'s `unresolved_detail`, which is one of its attributes. A guard test
+  (`tests/application/test_one_reason_list.py`) fails on any stored reason outside the list.
+- **Method lookup uses the same general reason list** (OI-321, spec
+  `2026-11-05-one-reason-list-design.md` §3b). In `method_resolution`, `reason` is now empty
+  when a body was found (`declaring_class` equal to `class` means declared here) and `external`
+  or `not_readable` otherwise, with a new `detail` column naming the type. `declared_here`,
+  `inherited`, `ancestor_not_scanned`, `owner_not_scanned` and `no_declaration_found` are gone.
+  The coverage line counts `resolved` and the reason. No lookup changes. Rides
+  `GRAPH_SCHEMA_VERSION` 16.
+- **A configuration value that could not be resolved says why with the one general reason
+  list, plus a detail** (OI-321, spec `2026-11-05-one-reason-list-design.md` §3a). In
+  `resolved_config`, `resolved_schedules` and the `resolved_peers` answer, `unresolved_reason`
+  now holds only `external`, `cycle` or `not_readable` (before: `missing_key`, `environment`,
+  `remote_source`, `placeholder_cycle`, `multi_placeholder`), and a new `unresolved_detail`
+  column names the key and the place (`orders.url is not set`). The brief and the
+  document show the reason, then the detail. The graph attributes of `boundary-property` gain
+  `unresolved_detail`. No row resolves differently. `GRAPH_SCHEMA_VERSION` 15 → 16 and
+  `BOUNDARY_VOCABULARY_VERSION` 4 → 5: a workspace of the older vintage is refused and
+  re-analysed. A saved enrichment verdict about a configuration key names the old reason in its
+  identity, so it reads as stale until `enrich` is run again.
 - **Quarkus Reactive Routes follow Vert.x Web's rules** (the same dispatcher, spec
   2026-10-30-vertx-web §3a). A `@Route` with no `methods` is one row marked as serving every
   method, where it was six rows; a `@Route(regex = …)` is a pattern row with the regex

@@ -848,7 +848,7 @@ def test_inbound_media_column_shows_a_dash_on_either_or_both_null_sides():
 
 def test_coverage_section_names_environments_and_the_unresolved_key_with_its_reason():
     """2F Task 9, the renderer half of I-1's ledgered carry: the fixture's own
-    `only.in.default` key resolves in `default` and reads `missing_key` in
+    `only.in.default` key resolves in `default` and reads `external` in
     `prod` — D01's own "unresolved for prod, resolved for dev" example
     (`resolve/config.py`), so the line has to name the reason AND the
     environment, never a bare "unresolved"."""
@@ -869,12 +869,13 @@ def test_coverage_section_names_environments_and_the_unresolved_key_with_its_rea
             "key": "only.in.default",
             "value": None,
             "environment": "prod",
-            "unresolved_reason": "missing_key",
+            "unresolved_reason": "external",
+            "unresolved_detail": "only.in.default is not set",
         },
     ]
     text = render_module_document(MODULE, REPORT, "a3f91c", resolved_config=resolved_config)
     assert "Environments resolved: `default`, `prod`." in text
-    assert "only.in.default — missing_key in prod" in text
+    assert "only.in.default — external: only.in.default is not set (in prod)" in text
     # The row that DID resolve must not also read as unresolved.
     assert "billing.url" not in text.split("## Coverage", 1)[1].split("## Structure", 1)[0]
 
@@ -1380,7 +1381,7 @@ def test_coverage_reports_how_much_was_understood_not_only_how_many_files(tmp_pa
             "partial_documents": 0,
             "reach": {"body_read": 465, "boundary": 968},
             "resolution": {"resolved": 1431, "narrowed": 2},
-            "method_resolution": {"declared_here": 191, "owner_not_scanned": 318},
+            "method_resolution": {"resolved": 191, "external": 318},
         },
     )
 
@@ -1388,7 +1389,7 @@ def test_coverage_reports_how_much_was_understood_not_only_how_many_files(tmp_pa
 
     assert "Calls whose callee body this workspace read: 465 of 1433 (32%)" in text
     assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1431." in text
-    assert "Method lookup, by outcome (methods): declared_here 191, owner_not_scanned 318." in text
+    assert "Method lookup, by outcome (methods): external 318, resolved 191." in text
 
 
 def test_a_module_with_no_call_graph_reports_no_percentage_of_nothing(tmp_path: Path):
@@ -1558,6 +1559,7 @@ def _configured(
     expression: str = SWEEP_CRON,
     trigger: str = "cron",
     keys: tuple[str, ...] = ("orders.sweep.cron",),
+    detail: str | None = None,
 ) -> dict[str, object]:
     return {
         "handler": handler,
@@ -1568,6 +1570,7 @@ def _configured(
         "keys": json.dumps(list(keys)),
         "value": value,
         "unresolved_reason": reason,
+        "unresolved_detail": (None if reason is None else detail or f"{keys[0]} is not set"),
     }
 
 
@@ -1641,23 +1644,27 @@ def test_an_environment_the_value_cannot_be_read_in_states_its_reason():
     text = _schedules_document(
         [_job(SWEEP, rate, trigger="fixedRate")],
         [
-            _configured("default", None, "missing_key", expression=rate, trigger="fixedRate"),
-            _configured("prod", None, "missing_key", expression=rate, trigger="fixedRate"),
+            _configured("default", None, "external", expression=rate, trigger="fixedRate"),
+            _configured("prod", None, "external", expression=rate, trigger="fixedRate"),
         ],
     )
     assert (
-        "  - as configured in this repository: not set in `default`, `prod` (missing_key)\n"
+        "  - as configured in this repository: not set in `default`, `prod` "
+        "(external: orders.sweep.cron is not set)\n"
     ) in text
 
 
 def test_a_set_and_an_unset_environment_are_one_line():
     text = _schedules_document(
         [_job(SWEEP, SWEEP_CRON)],
-        [_configured("default", "0 0 * * * *"), _configured("prod", None, "placeholder_cycle")],
+        [
+            _configured("default", "0 0 * * * *"),
+            _configured("prod", None, "cycle", detail="orders.sweep.cron refers back to itself"),
+        ],
     )
     assert (
         "  - as configured in this repository: `0 0 * * * *` in `default`; "
-        "not set in `prod` (placeholder_cycle)\n"
+        "not set in `prod` (cycle: orders.sweep.cron refers back to itself)\n"
     ) in text
 
 

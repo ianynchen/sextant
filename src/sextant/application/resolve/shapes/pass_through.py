@@ -36,9 +36,17 @@ from typing import Any, Literal
 
 from sextant.application.ports.catalogs import CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.dispatch import Dispatch
+from sextant.application.resolve.dispatch import _OBJECT, Dispatch
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
-from sextant.application.resolve.values import RECEIVER, ValueIndex, producer_paths, producers_of
+from sextant.application.resolve.values import (
+    ESCAPES,
+    EXTERNAL,
+    NOT_READABLE,
+    RECEIVER,
+    ValueIndex,
+    producer_paths,
+    producers_of,
+)
 from sextant.domain.symbols import (
     bare_descriptor,
     dotted_package,
@@ -54,16 +62,29 @@ PASSES_ON: Outcome = "passes_on"
 ANSWERS: Outcome = "answers"
 UNREADABLE: Outcome = "unreadable"
 
-# Why a handler is not readable here: what an `unread` entry's name IS, so a reason never
-# calls the call that built a handler a hand-off. Each is `(how, name)`.
-HANDED_TO = "handed_to"  # the context is handed to a method or constructor not followed
-STORED_IN = "stored_in"  # the context is written to a field
-PRODUCED_BY = "produced_by"  # the handler object is built by a call whose body is not read
-OF_TYPE = "of_type"  # the handler object's declared type is not one the module reads
-FROM_FIELD = "from_field"  # the handler object comes from a field of no readable type
-NO_BODY = "no_body"  # the handler method has no body read here and no module override
-UNREAD_ARGUMENT = "argument"  # the handler argument of a registering method is not read
+# Why a handler is not readable here: what an `unread` entry says, as `(reason, detail)`. The
+# reason is one of the general list (`values`); the detail is one sentence for a person, made
+# once, here, where the answer is made. No code reads it.
 Unread = tuple[str, str]
+
+_HANDED_TO = "hands the request's context to {}, where it is not followed"
+_STORED_IN = "stores the request's context in {}, where it is not followed"
+_PRODUCED_BY = "is built by {}, whose body is not read"
+_OF_TYPE = "is declared as {}, a type whose handler is not read"
+_FROM_FIELD = "comes from {}, whose declared type is not a handler read here"
+_NO_BODY = "runs {}, which has no body read here and no module override"
+_UNREAD_ARGUMENT = "is an argument of {} that is not read"
+
+
+def _escapes(phrase: str, name: str) -> Unread:
+    """The context goes where the walk does not follow it."""
+    return (ESCAPES, phrase.format(name))
+
+
+def _not_followed(outside: bool, phrase: str, name: str) -> Unread:
+    """Code the walk does not follow: `external` where the body that would answer is not in the
+    scanned code (`outside`), `not_readable` where it is there and not followed."""
+    return (EXTERNAL if outside else NOT_READABLE, phrase.format(name))
 
 
 @dataclass(frozen=True)
@@ -92,6 +113,8 @@ class Handler:
     # `symbols`, a handler method with no body, which makes the handler unreadable unless one
     # of the others passes on.
     unread: Unread | None = None
+    # The handler method with no body that `unread` is about, beside `symbols`.
+    bodiless: str | None = None
     # The bodies that may be the one answering, where dispatch can run more than one — a
     # bodiless method's several implementations, a method and its overrides, or several
     # objects the argument may be. Several is the narrowed case: one row each (`fluent`).
@@ -181,7 +204,7 @@ class HandlerReader:
             named = str(argument.get("symbol"))
             symbol = self._method_symbols.get(named)
             if symbol is None:
-                return Handler(outcome=UNREADABLE, unread=(NO_BODY, named))
+                return Handler(outcome=UNREADABLE, unread=self._no_body(named))
             # A lambda's body takes what it captured first; the context follows. A private or
             # static method (every synthetic lambda body among them) runs exactly; any other is
             # dispatched on the type the reference names, as a virtual call is.
@@ -196,7 +219,7 @@ class HandlerReader:
         at = self._index.sites.get((site[0], site[1])) if site is not None else None
         if at is None or site is None:
             where = site[0] if site is not None else "a registering method"
-            return Handler(outcome=UNREADABLE, unread=(UNREAD_ARGUMENT, where))
+            return Handler(outcome=UNREADABLE, unread=self._unread_argument(where))
         handlers = []
         unmade = False
         for end in producers_of(self._index, at, site[2], self._declared):
@@ -208,14 +231,13 @@ class HandlerReader:
             descriptor = str(made["descriptor"])
             constructed = name == "<init>"
             built = owner if constructed else returned_type(descriptor)
-            maker = method_descriptor(owner, name, descriptor)
-            handlers.append(self._object(built, maker, constructed=constructed))
+            handlers.append(self._object(built, (owner, name, descriptor), constructed=constructed))
         if unmade or not handlers:
             arguments = at.get("arguments") or ()
             argument = arguments[site[2]] if site[2] < len(arguments) else None
             declared = self._declared_type(site[0], argument, set())
             handlers.extend(
-                declared or [Handler(outcome=UNREADABLE, unread=(UNREAD_ARGUMENT, site[0]))]
+                declared or [Handler(outcome=UNREADABLE, unread=self._unread_argument(site[0]))]
             )
         return _either(handlers)
 
@@ -250,11 +272,12 @@ class HandlerReader:
             else:
                 bodiless.append(symbol)
         if not found:
-            return Handler(outcome=UNREADABLE, unread=(NO_BODY, bodiless[0]))
+            return Handler(outcome=UNREADABLE, unread=self._no_body(bodiless[0]))
         return Handler(
             tuple(dict.fromkeys([*alternatives, *found])),
             context=context,
-            unread=(NO_BODY, bodiless[0]) if bodiless else None,
+            unread=self._no_body(bodiless[0]) if bodiless else None,
+            bodiless=bodiless[0] if bodiless else None,
             alternatives=tuple(alternatives),
         )
 
@@ -302,14 +325,18 @@ class HandlerReader:
             return handed or [
                 Handler(
                     outcome=UNREADABLE,
-                    unread=(UNREAD_ARGUMENT, method) if typed is None else (OF_TYPE, str(typed)),
+                    unread=(
+                        self._unread_argument(method)
+                        if typed is None
+                        else self._of_type(str(typed))
+                    ),
                 )
             ]
         if kind == "field" and argument.get("symbol") is not None:
             field = str(argument["symbol"])
             typed = self._field_types().get(field)
             found = None if typed is None else self._typed(typed, constructed=False)
-            return [found or Handler(outcome=UNREADABLE, unread=(FROM_FIELD, field))]
+            return [found or Handler(outcome=UNREADABLE, unread=self._from_field(field, typed))]
         if argument.get("source") is not None:
             handlers = []
             for ordinal in self._index.producers.get((method, int(argument["source"])), ()):
@@ -322,23 +349,76 @@ class HandlerReader:
                 # class's body; a factory's declared return is a type, dispatched.
                 constructed = name == "<init>"
                 built = owner if constructed else returned_type(descriptor)
-                maker = method_descriptor(owner, name, descriptor)
-                handlers.append(self._object(built, maker, constructed=constructed))
+                handlers.append(
+                    self._object(built, (owner, name, descriptor), constructed=constructed)
+                )
             return handlers
         return []
 
-    def _object(self, built: str | None, maker: str | None, *, constructed: bool) -> Handler:
-        """A handler object of type `built` (made by `maker`, where a call made it; exactly
+    def _object(
+        self, built: str | None, made: tuple[str, str, str] | None, *, constructed: bool
+    ) -> Handler:
+        """A handler object of type `built` (made by the call `made`, `(owner, name,
+        descriptor)`, where a call made it; exactly
         that class where `constructed`): the framework's own passes on; a type of this
         module, or one it extends, runs its handler method; any other was produced where this
         analysis does not read."""
-        if maker is not None:
-            unread: Unread = (PRODUCED_BY, maker)
+        if made is not None:
+            # The body of the call that built it is outside the scanned code where method
+            # lookup (`Dispatch.boundary`) leaves the workspace searching for it: an unread
+            # owner, or an unread ancestor it inherits the method from.
+            unread = _not_followed(
+                self._dispatch.boundary(*made) is not None,
+                _PRODUCED_BY,
+                method_descriptor(*made),
+            )
         else:
-            unread = (OF_TYPE, built or "an unread type")
+            unread = self._of_type(built)
         return self._typed(built, constructed=constructed) or Handler(
             outcome=UNREADABLE, unread=unread
         )
+
+    def _no_body(self, symbol: str) -> Unread:
+        """A handler method with no body read: `external` where its type is not scanned. A
+        method found through a scanned type (`_runs`) is always `not_readable`; `external` is
+        reached by a method reference or lambda whose type is not scanned."""
+        owner = owner_of(bare_descriptor(symbol))
+        return _not_followed(
+            owner is not None and owner not in self._dispatch.scanned, _NO_BODY, symbol
+        )
+
+    def _of_type(self, built: str | None) -> Unread:
+        """A handler object of a type nothing here reads a handler of."""
+        return _not_followed(self._inherits_unread(built), _OF_TYPE, built or "an unread type")
+
+    def _from_field(self, field: str, declared: str | None) -> Unread:
+        """A handler object from a field, by the field's declared type where it has one, else by
+        the type that owns the field (a static field of a library class is `external`)."""
+        if declared is not None:
+            outside = self._inherits_unread(declared)
+        else:
+            owner = owner_of(bare_descriptor(field))
+            outside = owner is not None and owner not in self._dispatch.scanned
+        return _not_followed(outside, _FROM_FIELD, field)
+
+    def _inherits_unread(self, built: str | None) -> bool:
+        """Whether the handler method of the type `built` would be found in code that is not
+        scanned: the type is unread, or the search for a handler method of it
+        (`Dispatch.boundary`, no descriptor, so nothing declares it) leaves the workspace at an
+        unread ancestor. The platform root type is not an answer for a handler method."""
+        if built is None:
+            return False
+        if built not in self._dispatch.scanned:
+            return True
+        return any(
+            self._dispatch.boundary(built, name, "") not in (None, _OBJECT)
+            for name in sorted(self._rule.handler_methods)
+        )
+
+    def _unread_argument(self, where: str) -> Unread:
+        """An argument of a registering method that nothing read gives a value for. The method
+        is in the scanned code, so the answer is there and not followed."""
+        return (NOT_READABLE, _UNREAD_ARGUMENT.format(where))
 
     def _typed(self, built: str | None, *, constructed: bool) -> Handler | None:
         """What a type says on its own: a type of a `framework_handlers` package passes on; a
@@ -386,6 +466,7 @@ def _either(handlers: list[Handler]) -> Handler:
     return Handler(
         tuple(dict.fromkeys(s for h in handlers for s in h.symbols)),
         unread=bodiless,
+        bodiless=next((h.bodiless for h in handlers if h.bodiless is not None), None),
         alternatives=tuple(dict.fromkeys(s for h in handlers for s in h.alternatives)),
     )
 
@@ -470,7 +551,7 @@ def _handed_on(
     outside: list[Unread] = []
     while stack:
         method, parameter = stack.pop()
-        outside.extend((STORED_IN, field) for field in stored.get((method, parameter), ()))
+        outside.extend(_escapes(_STORED_IN, field) for field in stored.get((method, parameter), ()))
         for site in by_method.get(method, ()):
             key = (method, int(site["ordinal"]))
             for slot, argument in enumerate(site.get("arguments") or ()):
@@ -487,8 +568,8 @@ def _handed_on(
                         stack.append(target)
                 if site["name"] == "<init>" or (not targets and key not in index.reached):
                     outside.append(
-                        (
-                            HANDED_TO,
+                        _escapes(
+                            _HANDED_TO,
                             method_descriptor(
                                 str(site.get("owner")), str(site["name"]), str(site["descriptor"])
                             ),
@@ -525,7 +606,7 @@ def file_unread(
     candidate = {
         "handler": row["handler"],
         "caller": row["caller"],
-        "unread": [{"how": how, "name": name} for how, name in unread],
+        "unread": [{"reason": reason, "detail": detail} for reason, detail in unread],
     }
     if candidate not in question["candidates"]:
         question["candidates"].append(candidate)
@@ -556,21 +637,7 @@ def unread_rows(
     return rows
 
 
-# What each kind of `unread` name says, in the evidence trail.
-_UNREAD_PHRASES = {
-    HANDED_TO: "hands the request's context to {}, where it is not followed",
-    STORED_IN: "stores the request's context in {}, where it is not followed",
-    PRODUCED_BY: "is built by {}, whose body is not read",
-    OF_TYPE: "is declared as {}, a type whose handler is not read",
-    FROM_FIELD: "comes from {}, whose declared type is not a handler read here",
-    NO_BODY: "runs {}, which has no body read here and no module override",
-    UNREAD_ARGUMENT: "is an argument of {} that is not read",
-}
-
-
 def _unread_sentence(candidate: Mapping[str, Any]) -> str:
     handler = candidate["handler"] or "a handler object"
-    reasons = ", and ".join(
-        _UNREAD_PHRASES[entry["how"]].format(entry["name"]) for entry in candidate["unread"]
-    )
+    reasons = ", and ".join(entry["detail"] for entry in candidate["unread"])
     return f"{handler}, registered by {candidate['caller']}, {reasons}"

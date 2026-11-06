@@ -130,6 +130,7 @@ from sextant.application.resolve.beans import declared_beans
 from sextant.application.resolve.conditions import annotation_index, enclosing_type_of
 from sextant.application.resolve.dispatch import Dispatch, dispatch_of
 from sextant.application.resolve.effective_annotations import composed_mapping_rows
+from sextant.application.resolve.values import EXTERNAL
 from sextant.domain.redaction import Redactor
 from sextant.domain.symbols import (
     bare_descriptor,
@@ -1603,7 +1604,7 @@ def _profiles_model(catalogs: list[Catalog]) -> Mapping[str, Any]:
 
 def _config_by_environment(workspace: Workspace) -> dict[str, dict[str, str | None]]:
     """`resolved_config` as environment -> key -> value; a key resolved to no value (a
-    placeholder nobody filled, a `missing_key` row) is present with `None`, which
+    placeholder nobody filled, an `external` row) is present with `None`, which
     `_holds` reads as `unresolved` for a `property` — distinct from a key never seen."""
     config: dict[str, dict[str, str | None]] = {}
     for row in workspace.query("resolved_config"):
@@ -1612,12 +1613,12 @@ def _config_by_environment(workspace: Workspace) -> dict[str, dict[str, str | No
         value = row["value"]
         reason = row.get("unresolved_reason")
         bucket = config.setdefault(environment, {})
-        if value is None and reason == "missing_key" and row.get("source") is None:
+        if value is None and reason == EXTERNAL and row.get("source") is None:
             # The config layer writes one row per key per environment even where that
             # environment never defines it, so the gap is visible; here "never defined" is
             # the ABSENT case `match_if_missing` decides, not an unfilled value. `source`
             # tells the two apart (D01: NULL only when no file ever declared the key): a
-            # DECLARED key whose `${REF}` nobody filled resolves `missing_key` too, with
+            # DECLARED key whose `${REF}` nobody filled resolves `external` too, with
             # its file as `source`, and the framework would see SOME value there — so it
             # stays, as `None`, and reads `unresolved`.
             continue

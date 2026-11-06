@@ -117,7 +117,7 @@ _KIND_LIST = (
         table="resolved_config",
         where=None,
         identity=("key", "environment"),
-        attributes=("value", "unresolved_reason"),
+        attributes=("value", "unresolved_reason", "unresolved_detail"),
         evidence=("source",),
         grounded_in_code=False,
     ),

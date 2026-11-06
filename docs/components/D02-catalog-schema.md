@@ -5573,13 +5573,13 @@ the two separators (`selection_separator`, `composition_separator`) that give th
 and composition semantics described in prose here a spelling a second framework family
 can override.
 
-**Job 3, peer resolution, is a JOIN and never a write** — the `resolved_peers` named
-query ([D01](D01-graph-schema.md)): every client-side row's `${...}`-bearing `peer` and
-`path` expressions, substituted against `resolved_config` once per environment. A literal
-passes through as itself; a single placeholder is substituted; an expression carrying more
-than one surfaces with `unresolved_reason: multi_placeholder` — the one reason M04's pass
-2 never emits, because it is a property of an endpoint expression rather than of a
-configuration value. Endpoint rows are untouched, in every environment.
+**Job 3, peer resolution, is a JOIN and never a write** — `resolved_peers`
+(`resolve/resolved_peers.py`, [D01](D01-graph-schema.md)): every client-side row's `peer`
+and `path` expressions, substituted against `resolved_config` once per environment by the
+one placeholder rule (§2i's delimiters, `default_separator` and `key_matching`). A literal
+passes through as itself, and every placeholder is filled. A key with no value and no
+default fails the whole expression with that key's own reason and detail. Endpoint rows are untouched, in
+every environment.
 
 ---
 
@@ -5935,8 +5935,9 @@ config-server or `spring.config.import`-shaped value — Spring's own model decl
 `["configserver:", "optional:configserver:"]`. The pass checks a key's WINNING raw
 value (before any placeholder substitution — an import URL is a literal, never itself a
 `${...}` reference) against this list; a match resolves [D01](D01-graph-schema.md)'s
-`remote_source` reason rather than a value the pass could never truthfully read from
-files alone. A model declaring no `remote_prefixes` simply never emits the reason.
+`external` reason (its detail names the matched prefix) rather than a value the pass could
+never truthfully read from files alone. A model declaring no `remote_prefixes` simply never
+emits it.
 
 ---
 

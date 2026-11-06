@@ -31,7 +31,7 @@ Three jobs, two of them here:
   already minted, which is why this style runs LAST in the engine loop
   (`resolve/endpoints.py`, the `protocol_hint` ordering precedent, D02 §3):
   a stamp cannot enrich a row that does not exist yet.
-* The third — peer resolution — is a named query (`resolved_peers`), never
+* The third — peer resolution — is a read (`resolve/resolved_peers.py`), never
   a write: endpoint rows keep their expressions, `resolved_config` keeps the
   values, and nothing here rewrites a row per environment.
 
@@ -677,7 +677,7 @@ def _selected_entries(
     # distinction fix round 1 (I-2) turns on. "Nobody said anything" and
     # "somebody said: nothing" are opposite statements, and only the first is
     # the framework default. A key declared but resolvable in no environment
-    # (every row a `missing_key`) is still nobody saying anything, so it takes
+    # (every row `external`) is still nobody saying anything, so it takes
     # the default; a key that resolved to an empty value, or to separators
     # alone, is an explicit select-NOTHING and must derive nothing. Falling
     # through to `candidates` there would bind every bean in the module

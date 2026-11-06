@@ -89,14 +89,15 @@ them. `scanned` says whether this workspace read the ancestor's own class file, 
 the column that separates a genuine third-party boundary from a body we simply did not
 open.
 
-**`method_resolution`** carries `class`, `name`, `descriptor`, `declaring_class` and
-`reason` — one row per distinct triple an EFFECTIVE CALL SITE names, not per method
+**`method_resolution`** carries `class`, `name`, `descriptor`, `declaring_class`,
+`reason` and `detail` — one row per distinct triple an EFFECTIVE CALL SITE names, not per method
 declared and not per triple the bytecode wrote: a compiler-emitted `$default` bridge is
 re-targeted to the sibling it stands for before this is asked, so the triple here is the
 one the author's call resolves through (spec 2026-09-22 §1a). The
-reason is always present and comes from D00 §4's `method_resolution` set. Read
-`declaring_class IS NULL` with the reason beside it: three different kinds of "no body
-here" used to be one word, and one of the three was false.
+`reason` is NULL where a body was found, and otherwise one word of the general list in
+D00 §4 (`external` or `not_readable`) with a `detail` that names the type. Read
+`declaring_class IS NULL` with the reason beside it: different kinds of "no body here"
+used to be one word, and one of them was false.
 
 > Both are computed in the pass that writes `call_edges`, from the same `Dispatch` —
 > "which method can this site run" is answered once (§3's dispatch rule), and a second
@@ -756,19 +757,20 @@ because an SSE stream really is a route a client GETs; only its protocol changed
 **`resolved_config` is one row per key per environment.** A resolved row carries `key`,
 `value`, `source` — the file that won precedence for that key in that profile's layering
 ([D02](D02-catalog-schema.md)'s `config_model`) — and `environment`. An unresolved row
-carries the same `key` and `environment` with `value` NULL and a `reason` from a closed
-five-value set: `missing_key`, `environment` (the value comes from an environment variable
-or a launch flag — universal across ecosystems, and never resolvable from files alone),
-`remote_source` (a config-server or `spring.config.import` URL), `placeholder_cycle`, and
-`multi_placeholder` — used only by the peer-resolution join below, never by the resolution
-pass itself, for an outbound expression carrying more than one placeholder, substitutable
-only piecewise. "Unresolved for `prod`, resolved for `dev`" is expressible and meaningful:
+carries the same `key` and `environment` with `value` NULL, an `unresolved_reason` — one
+word of the general reason list (`values._REASONS`: `external`, `non_enumerable`,
+`not_readable`, `escapes`, `no_writer`, `cycle`) — and an `unresolved_detail`, text for a
+person that names the key and the place (`orders.url is not set`; no code branches
+on it). A key the deployment sets (absent from the files, an environment variable, a
+config-server or `spring.config.import` import) is `external`; a placeholder chain that
+loops is `cycle`. "Unresolved for `prod`, resolved for `dev`" is expressible and meaningful:
 the same key carries a resolved row in one environment and an unresolved one in another,
 never one row forced to answer for both.
 
-**Peer resolution is a join, never a write.** A named query joins outbound endpoint rows'
-`${...}`-bearing `peer`/`path` expressions against `resolved_config`, per environment,
-substituting single-placeholder expressions and answering `multi_placeholder` for the rest.
+**Peer resolution is a join, never a write.** `resolve/resolved_peers.py` joins client-side
+endpoint rows' `peer`/`path` expressions against `resolved_config`, per environment, filling
+every placeholder by the one placeholder rule (`${key:default}` included). A key with no
+value and no default fails the whole expression with that key's reason and an `unresolved_detail`.
 Endpoint rows are untouched — `resolved_config` carries values, endpoints keep expressions,
 and nothing rewrites an endpoint row per environment.
 
@@ -1106,8 +1108,14 @@ handler is not readable here (Vert.x spec §3b: it hands the request's context t
 whose body is in another jar, or stores it in a field or hands it to a constructor, where the
 walk cannot follow it, or is an object another jar builds whose declared type is not one of
 the framework's own handlers), the row's handler (NULL for such an object), the method that
-registered it and where the context went unfollowed — the method, field or constructor —
-(empty where nothing names it) — on ONE row
+registered it and where the context went unfollowed (empty where nothing names it), each
+entry `{reason, detail}`: `reason` one word of the general list (`values._REASONS`) —
+`escapes` where the context is handed to a method or constructor, or stored in a field, that
+the walk does not follow; `external` or `not_readable` where a handler object or method is not
+read, by whether the body that would answer is in the scanned code (the same search as
+method lookup: an unread owner, or an unread ancestor the method is inherited from, is
+`external`) — and `detail` a sentence naming the method,
+field or type — on ONE row
 per `(protocol, method, path)` of the `partial` rows it explains, which is that row's reason,
 since no endpoint column carries one; a `mount_prefix` candidate holds `mount`,
 `mount_ordinal`, `argument`, `at`, `at_ordinal`, `read` and `caller` — an inbound row served
@@ -1196,8 +1204,9 @@ repository cannot know.
 the job rather than in it (spec 2026-10-23-configured-schedules, option A): one row per
 (`scheduled_work` row whose expression holds the config model's placeholder opener,
 environment of `resolved_config`), carrying `handler`, `trigger`, `name`, `expression`,
-`environment`, `keys`, `value` and `unresolved_reason` — the last one of the closed set
-`resolved_config` uses, `value` NULL exactly when it is set. `keys` is a JSON array of every
+`environment`, `keys`, `value`, `unresolved_reason` and `unresolved_detail` — the last two
+as `resolved_config` has them (the general reason list, and text for a person), `value` NULL
+exactly when a reason is set. `keys` is a JSON array of every
 key the substitution asked that environment's configuration for, in the order it asked: a
 schedule is the value of the key that configures it, so every exit masks `value` whole where
 one of them names a secret, as `resolved_config` masks that key's own value. The first four are the job's
@@ -1352,7 +1361,7 @@ compared by nothing).
 | `endpoint` | `endpoints`, inbound | protocol, method, path: the exposed address, which is a topic for a broker, the operation name for GraphQL, the operation's QName for SOAP | the request and response body as field sets by wire name, the same two bodies as descriptors with every type symbol erased, consumes, produces, format, the requirement set (`endpoint_metadata`), the condition set (`endpoint_conditions`), resolution | handler symbols, documents |
 | `dependency` | `endpoints`, outbound | protocol, method, path, peer | the two bodies as for `endpoint`, format, the header set (`endpoint_metadata`), the condition set (`endpoint_conditions`, through the caller's bean), resolution | caller symbols, documents |
 | `data-contract` | `shapes` and `shape_fields` | the shape symbol (`shape_id`) | `content_hash`, and the field set as wire name to wire type, format, required, nullable | the declaring document, `origin_tier` |
-| `boundary-property` | `resolved_config` | key, environment | value (as the exit masks it), `unresolved_reason` | source file |
+| `boundary-property` | `resolved_config` | key, environment | value (as the exit masks it), `unresolved_reason`, `unresolved_detail` | source file |
 | `schedule` | `scheduled_work` | handler, trigger, name | expression, resolution, refused | catalog |
 | `error-handler` | `error_handlers` | handler, exception | advice, scope, status, response shape | catalog |
 

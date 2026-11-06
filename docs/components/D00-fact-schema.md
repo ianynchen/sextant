@@ -199,12 +199,13 @@ produced any of them) map to it: `interface_dispatch`, `abstract_dispatch` →
 `non_enumerable`; `reflection`, `scanner_gap` → `not_readable`; `di_container`,
 `dynamic_proxy`, `config_placeholder`, `unindexed_dependency` → `external`.
 
-**`method_resolution`** — `declared_here`, `inherited`, `ancestor_not_scanned`,
-`owner_not_scanned`, `no_declaration_found`. Why a call site's target does or does not
-reach a body (JVMS 5.4.3.3, F3 §4.2). Distinct from `unresolved_reason` above, which
-says why a TRACE stopped; this says what the method lookup itself found. One word used
-to do the first four jobs at once, and the third of them — a method declared on a
-superclass the workspace HAS scanned — was false rather than imprecise.
+**`method_resolution`** — has no list of its own (ruled 2026-11-05). A found body (JVMS
+5.4.3.3, F3 §4.2) has no reason, and `declaring_class` names the type that declares it.
+Any other answer has one word of the general list above and a `detail`: `external` when a
+type the search needs is not in the scanned code (the owner, or an ancestor the detail
+names), `not_readable` when every type it reached was read and none declares the method.
+One word used to do these jobs at once, and a method declared on a superclass the
+workspace HAS scanned was reported as not found, which was false rather than imprecise.
 
 **`construct_kind`** — `class`, `interface`, `annotation`, `struct`, `trait`, `protocol`, `enum`,
 `record`, `alias`, `method`, `function`, `constructor`, `accessor`, `field`, `module`
@@ -363,7 +364,7 @@ Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 | `relationship` | Subject, object, relationship kind | Hierarchy, dispatch, class diagrams |
 | `occurrence` | Symbol, range, enclosing symbol, role | Type-reference edges, `uses` |
 | `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |
-| `type_header` | **A DEPENDENCY type's place in the hierarchy, read from its class-file header in the resolved classpath** (2026-10-21, user decision A): symbol (the library's own coordinate and version), construct kind, superclass, interfaces, class-level annotations in the `annotation` fact's own `use` shape, and the `origin` jar. Emitted for every type the module's own classes refer to and did not compile, then transitively up each one's superclass and interfaces; a type in no jar on the classpath (the JDK's) gets none, so the catalog's declared roots stay the JDK boundary. **No member of the type is read** — no method, field, body or call site — so `owner_not_scanned` is untouched and the type stays "not scanned" to every consumer asking about its methods. **A kind of its own, deliberately**: were these `symbol`/`annotation` facts, the engines minting endpoint rows would see a library's `@RestController` or `CrudRepository` as this module's (measured risk). Only the type lattice reads them: `superclasses`, `implementations`, and `error_advice`'s class-annotation lookup | `type_hierarchy`, `supertype_dispatch`, the throwable walk, `@ResponseStatus` on a handled exception's class |
+| `type_header` | **A DEPENDENCY type's place in the hierarchy, read from its class-file header in the resolved classpath** (2026-10-21, user decision A): symbol (the library's own coordinate and version), construct kind, superclass, interfaces, class-level annotations in the `annotation` fact's own `use` shape, and the `origin` jar. Emitted for every type the module's own classes refer to and did not compile, then transitively up each one's superclass and interfaces; a type in no jar on the classpath (the JDK's) gets none, so the catalog's declared roots stay the JDK boundary. **No member of the type is read** — no method, field, body or call site — so method lookup is untouched and the type stays "not scanned" to every consumer asking about its methods. **A kind of its own, deliberately**: were these `symbol`/`annotation` facts, the engines minting endpoint rows would see a library's `@RestController` or `CrudRepository` as this module's (measured risk). Only the type lattice reads them: `superclasses`, `implementations`, and `error_advice`'s class-annotation lookup | `type_hierarchy`, `supertype_dispatch`, the throwable walk, `@ResponseStatus` on a handled exception's class |
 | `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, `receiver_parameter` (the receiver as the enclosing method's parameter N where it is one, absent otherwise), `receiver_field` (the static field a `getstatic` receiver was read from, absent otherwise), `dominator`, `on_every_exit`, `post_dominator`, `reaches_return` and `loop_group` (the call's place in the method's control flow, rule 9), structured `arguments` | Call edges, dispatch, traces, endpoints |
 | — | The invoke-kind set includes **`throw`**: a throw site is a call-site-shaped observation whose target is the thrown exception type. It is what gives traces their `throws` terminal. | Trace terminals, blast radius |
 | `field_write` | The writing method's symbol, the assigned field's symbol, and EITHER the source parameter's ordinal OR the value it was written from — a constant, or the call whose result it is | The field resolution ladder (2F), the value walk's sixth edge |

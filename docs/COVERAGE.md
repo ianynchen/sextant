@@ -540,7 +540,7 @@ the gap list:
   rung 3 emits the DECLARED field's own spelling (`getBaseUrl` → `${billing.baseUrl}`),
   but `resolved_config`'s join compares keys exactly — a properties class whose field is
   `baseUrl` and whose config key is written `base-url` produces an expression no
-  environment resolves (`missing_key`, correctly, though the value exists).
+  environment resolves (`external`, correctly, though the value exists).
 - **The ladder's `@Value`-parameter rung answers in the `fluent` engine too, since
   2026-09-21** (spec 2026-09-21 §6 M12). `fluent` never handed the ladder a caller, so a
   chain reading the method's OWN `@Value("${svc.url}")` parameter — `webClient.get().uri(url)`
@@ -555,16 +555,16 @@ the gap list:
   first (by symbol order) carrying the argument annotation at that index —
   deterministic, never a guess, but a first match rather than a proof.
 - **The `${}` placeholder delimiters are engine constants**, shared between the field
-  ladder's own synthesis (rung 3) and `resolved_peers`' substitution query — a framework
-  whose placeholder syntax differs would need the pair threaded onto `field_sources`
-  rather than reading it from the catalog, the way every other config_model detail is.
+  ladder's own synthesis (rung 3) writes `${}` itself, while `resolved_peers` reads the
+  config model's pair — a framework whose placeholder syntax differs would need the pair
+  threaded onto `field_sources` so the two agree.
 - **Media stamping requires agreement across every environment.** Kafka's
   serializer-to-format table (§4.1) stamps `consumes`/`produces` only where every
   environment's own serializer key resolves to the SAME class; a per-environment split —
   JSON in `default`, Avro in `prod` — leaves both columns NULL rather than picking one
   environment's answer over another's.
 - **A `resolved_config` row imported from a remote source is never fetched.** A
-  `spring.config.import`-shaped value resolves `unresolved_reason: remote_source`,
+  `spring.config.import`-shaped value resolves `unresolved_reason: external`,
   naming where the value lives, never what it is.
 
 ### 2c. What `✅ ASM` in the Scanner column claims
@@ -1056,10 +1056,11 @@ their own key names.
 - **dispatch** — the `resolution` distribution the design names. Per edge, and it can only
   ever hold `resolved` or `narrowed`: `call_edges` writes `NARROWED if len(callees) > 1 else
   RESOLVED`, so a third bucket is impossible by construction.
-- **method lookup** — `method_resolution`'s reasons, which say WHY a body was missed:
-  `owner_not_scanned` is a scanning decision (339 of the fixture's 565 METHODS, 425 of
-  jhipster's 675), while `no_declaration_found` would be a defect. None of the four corpora
-  has one.
+- **method lookup** — `method_resolution`'s reasons, which say WHY a body was missed
+  (a found body counts as `resolved`): `external` is a scanning decision (339 of the
+  fixture's 565 METHODS, 425 of jhipster's 675), while `not_readable` would be a defect.
+  None of the four corpora has one. (The figures were measured under the earlier words
+  `owner_not_scanned` and `no_declaration_found`; `ancestor_not_scanned` is `external` too.)
 
 **FR-17 clause 3 asks for the distribution of call SITES, and what ships is per edge.** The
 two differ where dispatch narrowed: `spring-petclinic-rest`'s 68 narrowed edges are 34
@@ -1797,9 +1798,12 @@ whose method is declared on a superclass it DID scan all produced the same answe
 callee, `resolved`, "the call IS the terminal". The third is false — the body is in the
 workspace, one hop up.
 
-`method_resolution` states the reason for every method an EFFECTIVE call site names, from
-a closed set of four: `declared_here`, `inherited` (with the declaring class),
-`ancestor_not_scanned` and `owner_not_scanned`. Effective, not raw (spec 2026-09-22 §1a):
+`method_resolution` states the answer for every method an EFFECTIVE call site names. A
+found body has no reason and names its declaring class (equal to the class: declared
+there; otherwise inherited). A body not found has `external` or `not_readable` and a detail. The table
+below was measured under the earlier four words (`declared_here`, `inherited`,
+`ancestor_not_scanned` and `owner_not_scanned`), which are now `resolved` (the first two)
+and `external` (the last two). Effective, not raw (spec 2026-09-22 §1a):
 a compiler-emitted `$default` bridge is re-targeted to the sibling it stands for before
 this is asked, so the reason a reader sees is the one the author's call resolves through.
 **The numbers below are unmoved by that change, measured rather than assumed**: neither
@@ -3994,7 +3998,7 @@ Not protocols, but genuine entry points that would otherwise fall out of the che
 |---|---|---|---|---|
 | Java | Spring scheduling (@Scheduled) | `@Scheduled` — `cron`, `fixedRate(String)`, `fixedDelay(String)` | `annotation` | ✅ **shipped** (2O Task 8) — into `scheduled_work`, its own table, never `endpoints`: a method the framework calls on a clock speaks no protocol and has no address. Handler, trigger kind, expression **verbatim** |
 | Java | Spring scheduling (@Scheduled) | `@Schedules` — two or more `@Scheduled` on one method, folded by javac | `annotation` (nested) | ✅ shipped — through capability 9.16. The catalog REQUIRES that capability rather than degrading: on a scanner without it a two-schedule method would carry no readable trigger while its single-schedule neighbour carried its own, so the whole catalog is skipped **visibly** instead |
-| Java | Spring scheduling (@Scheduled) | `@Scheduled(cron = "${orders.sweep.cron}")` — a property placeholder | `annotation` | ✅ **shipped** (2026-10-23, spec `docs/superpowers/specs/2026-10-23-configured-schedules-design.md`, option A). The `scheduled_work` row stays **`unresolved`, expression carried verbatim**: the schedule that runs is the deployment's, which a deployment overwrites. Beside it, `resolved_schedules` holds what THIS REPOSITORY configures — one row per (job whose expression holds a placeholder, environment of `resolved_config`), keyed by the job's `handler`, `trigger` and `expression`, substituted by the one placeholder rule (`resolve/config.py::substitute`, the config model's own delimiters, `:default` and key matching) — and the document states it under the job's row: *as configured in this repository: `0 0 * * * *` in `default`; `0 */5 * * * *` in `prod`*, or *not set in `prod` (missing_key)*. Pinned live on `fixtures/orders-service` (`scheduling/OrderSweeper`: a key set in a profile file only, beside the annotation's default, and a key set nowhere) by `tests/e2e/test_vertical_slice.py::test_a_configured_schedule_is_stated_per_environment_in_the_document`, and by the guards `schedules.a-PLACEHOLDER-expression-is-read-per-environment`, `schedules.an-ANNOTATION-default-applies-where-no-environment-sets-the-key`, `schedules.a-configured-VALUE-is-masked-on-export` and `schedules.the-DOCUMENT-states-a-schedules-configured-values`. SpEL `#{…}` is not evaluated and gets no rows (spec §4) |
+| Java | Spring scheduling (@Scheduled) | `@Scheduled(cron = "${orders.sweep.cron}")` — a property placeholder | `annotation` | ✅ **shipped** (2026-10-23, spec `docs/superpowers/specs/2026-10-23-configured-schedules-design.md`, option A). The `scheduled_work` row stays **`unresolved`, expression carried verbatim**: the schedule that runs is the deployment's, which a deployment overwrites. Beside it, `resolved_schedules` holds what THIS REPOSITORY configures — one row per (job whose expression holds a placeholder, environment of `resolved_config`), keyed by the job's `handler`, `trigger` and `expression`, substituted by the one placeholder rule (`resolve/config.py::substitute`, the config model's own delimiters, `:default` and key matching) — and the document states it under the job's row: *as configured in this repository: `0 0 * * * *` in `default`; `0 */5 * * * *` in `prod`*, or *not set in `prod` (external: orders.sweep.cron is not set)*. Pinned live on `fixtures/orders-service` (`scheduling/OrderSweeper`: a key set in a profile file only, beside the annotation's default, and a key set nowhere) by `tests/e2e/test_vertical_slice.py::test_a_configured_schedule_is_stated_per_environment_in_the_document`, and by the guards `schedules.a-PLACEHOLDER-expression-is-read-per-environment`, `schedules.an-ANNOTATION-default-applies-where-no-environment-sets-the-key`, `schedules.a-configured-VALUE-is-masked-on-export` and `schedules.the-DOCUMENT-states-a-schedules-configured-values`. SpEL `#{…}` is not evaluated and gets no rows (spec §4) |
 | Java | Spring scheduling (@Scheduled) | `@Scheduled(cron = "-")` — `@Scheduled.CRON_DISABLED` | `annotation` | ✅ shipped — **derives NOTHING** (`OI-2`, closed). CP-14 reads the constant off the annotation at spring-context 6.1.6, 6.2.19 and 7.0.9 and finds the post-processor comparing `cron()` against it immediately before `scheduleCronTask` and before nothing else, so the framework registers no task. `cron` is the only attribute with a sentinel: CP-14 row 3 enumerates every string comparison in that class and finds one |
 | Java | Spring scheduling (@Scheduled) | `@Scheduled(cron = "-", fixedDelay = 1000)` — a disabled cron BESIDE a live rate | `annotation` | **Boundary — OVER-reports one row (`OI-34`).** CP-14 rows 4-5: the "a schedule was declared" flag is written before the sentinel comparison and read into a failing `Assert.isTrue` after it, so the container refuses to start — while we drop the cron row and publish the `fixedDelay` one. Not encoded: every conjunct this style has is per ATTRIBUTE, and refusing the declaration as a whole is a rule the grammar does not have (§8.1 rule 4). **Falsified by** such a declaration exporting a `scheduled_work` row |
 | Java | Spring scheduling (@Scheduled) | `@Scheduled` naming two trigger attributes at once, or none — what the container does at startup with such a declaration | `annotation` | **Boundary — one row per attribute written, and none where none is.** Whether the container refuses to start is a startup question a repository cannot answer, so each declared trigger is reported as the code fact it is. A declaration naming no trigger derives nothing: there is no expression to carry |

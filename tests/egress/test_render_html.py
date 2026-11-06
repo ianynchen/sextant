@@ -727,7 +727,8 @@ def test_a_config_shaped_verdict_renders_in_html_too():
                 "value": None,
                 "source": "application.yml",
                 "environment": "default",
-                "unresolved_reason": "remote_source",
+                "unresolved_reason": "external",
+                "unresolved_detail": "spring.config.import is imported from a remote source",
             }
         ],
         overlay=_overlay(_config_verdict()),
@@ -735,7 +736,7 @@ def test_a_config_shaped_verdict_renders_in_html_too():
     document = _html(sections)
     assert (
         "LLM assessment</strong> for <code>spring.config.import application.yml "
-        "default</code> (remote_source): likely a Config Server import"
+        "default</code> (external): likely a Config Server import"
     ) in document
 
 

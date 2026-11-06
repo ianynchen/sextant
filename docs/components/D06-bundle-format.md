@@ -400,7 +400,7 @@ detail entry under the table stating what this repository configures for it per 
 from `resolved_schedules` (spec 2026-10-23-configured-schedules §3c): *as configured in this
 repository: `0 0 * * * *` in `default`; `0 */5 * * * *` in `prod`*, environments that read the
 same value sharing one entry, an unreadable one stating its reason (*not set in `prod`
-(missing_key)*). The block is headed by the job's handler, trigger and expression, and each
+(external: …)*). The block is headed by the job's handler, trigger and expression, and each
 value is masked as the bundle masks it — whole where a key it was read through names a
 secret, by the render redactor's text rule otherwise (`redact_schedule_value`).
 

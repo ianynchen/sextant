@@ -286,7 +286,7 @@ def test_the_pass_writes_one_row_per_condition_and_environment_through_the_shipp
 @pytest.mark.pins("conditions.a-DECLARED-placeholder-nobody-filled-is-unresolved")
 def test_a_declared_key_nobody_filled_is_unresolved_not_absent(tmp_path: Path):
     """Review fix (Major 1). `orders.legacy: ${ORDERS_LEGACY}` with nothing filling the
-    reference resolves `missing_key` in the config layer — the same reason as a key the
+    reference resolves `external` in the config layer — the same reason as a key the
     environment never declares — but WITH its file as `source`. The framework would see some
     value there and this analysis does not know which: `unresolved`, never the absent case
     `match_if_missing` decides.

@@ -47,7 +47,12 @@ def _confined_sources() -> list[Path]:
 # would fall back to the class-file major, a worse answer than the pom states.
 # `tests/architecture/test_source_rules.py` records the same exception against
 # its own rule, for the same reason.
-_RECORDED = {("ingress/detect/maven.py", '"java.version",')}
+# `application/resolve/dispatch.py` names the platform's root type, where every method
+# lookup ends (JVMS 5.4.3.3). It is a wire name like `java.version`, not a language branch.
+_RECORDED = {
+    ("ingress/detect/maven.py", '"java.version",'),
+    ("application/resolve/dispatch.py", '_OBJECT = "java/lang/Object#"'),
+}
 
 
 def _hits(path: Path) -> list[str]:

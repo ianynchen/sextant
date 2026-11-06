@@ -8,17 +8,18 @@
 -- Python-built engine's STRUCT-parameter insert.
 --
 -- Parameters:
---   $rows -- {key, value, source, environment, unresolved_reason} rows, one
---             per key per profile the pass resolved (D01: "resolved_config
---             is one row per key per environment"). `value` is NULL exactly
---             when `unresolved_reason` is set, one of D01's closed
---             five-value set minus `multi_placeholder`, which only the
---             peer-resolution join emits, never this pass.
-INSERT INTO resolved_config (key, value, source, environment, unresolved_reason)
-SELECT r.key, r.value, r.source, r.environment, r.unresolved_reason
+--   $rows -- {key, value, source, environment, unresolved_reason,
+--             unresolved_detail} rows, one per key per profile the pass resolved
+--             (D01: "resolved_config is one row per key per environment"). `value`
+--             is NULL exactly when `unresolved_reason` is set, one word of the
+--             general reason list (`values._REASONS`); `unresolved_detail` says where,
+--             for a person.
+INSERT INTO resolved_config (key, value, source, environment, unresolved_reason,
+                             unresolved_detail)
+SELECT r.key, r.value, r.source, r.environment, r.unresolved_reason, r.unresolved_detail
 FROM (SELECT UNNEST(
     $rows::STRUCT(
         key VARCHAR, value VARCHAR, source VARCHAR, environment VARCHAR,
-        unresolved_reason VARCHAR
+        unresolved_reason VARCHAR, unresolved_detail VARCHAR
     )[]
 ) AS r);

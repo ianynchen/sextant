@@ -9,13 +9,15 @@ from click.testing import CliRunner
 
 from fixture_build import compile_fixture
 from sextant.application.enrich.validate import validate_overlay
+from sextant.application.resolve.resolved_peers import resolved_peers
 from sextant.cli.app import cli
 from sextant.domain.enrichment import load_overlay
 from sextant.domain.factfile import read_fact_file, redact_config_entry_line
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.sextant_config import read_redaction_rules
-from sextant.resources import instructions_path
+from sextant.resources import catalogs_dir, instructions_path
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]
@@ -192,14 +194,14 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # 2F Task 9: the coverage section names environments resolved, every
     # unresolved `resolved_config` key with its reason and environment (the
     # fixture's own layering pin — `only.in.default` resolves in `default`,
-    # is `missing_key` in `prod`), and every unresolved config_join row by
+    # is `external` in `prod`), and every unresolved config_join row by
     # catalog and site (I-1) — `orphanConsumer`'s missing binding key has no
     # `resolved_config` row of its own (never declared in any file), so it
     # is named through its handler instead, and the composed `pipeA|pipeB`
     # entry through neither, since the composed expression is not a column
     # any row carries.
     assert "Environments resolved: `default`, `prod`." in document
-    assert "only.in.default — missing_key in prod" in document
+    assert "only.in.default — external: only.in.default is not set (in prod)" in document
     # F2, review round 1: the disclosed lead-in — the list below spans
     # every engine's own unresolved rows (the fixture's own live proof:
     # non-config_join catalogs appear in it too), not config_join alone.
@@ -428,8 +430,10 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
         # declared methods looked up (`NotificationSender#send`, `PricingPolicy#price` and the three
         # `<init>` the configuration builds) and one more on an owner never scanned
         # (`RestTemplate.<init>()`).
-        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 210, "
-        "inherited 2, owner_not_scanned 428."
+        # One general reason list (spec 2026-11-05 §3b): `external` is the old
+        # `ancestor_not_scanned` 33 and `owner_not_scanned` 428; `resolved` is the old
+        # `declared_here` 210 and `inherited` 2. No lookup moved.
+        "Method lookup, by outcome (methods): external 461, resolved 212."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half
@@ -1491,7 +1495,7 @@ def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_i
         soap = [row for row in workspace.query("endpoints") if row["protocol"] == "soap"]
         peers = [
             (str(row["environment"]), row["resolved_peer"], row["unresolved_reason"])
-            for row in workspace.query("resolved_peers")
+            for row in resolved_peers(workspace, YamlCatalogSource(catalogs_dir()).load())
             if row["protocol"] == "soap"
         ]
     finally:
@@ -2389,7 +2393,8 @@ def test_a_configured_schedule_is_stated_per_environment_in_the_document(full_ru
     ) in document
     assert (
         f"- {purge} — fixedRate `${{orders.purge.rate}}`\n"
-        "  - as configured in this repository: not set in `default`, `prod` (missing_key)\n"
+        "  - as configured in this repository: not set in `default`, `prod` "
+        "(external: orders.purge.rate is not set)\n"
     ) in document
     [parquet] = list(full_run.rglob("resolved_schedules.parquet"))
     rows = duckdb.sql(
@@ -2397,8 +2402,8 @@ def test_a_configured_schedule_is_stated_per_environment_in_the_document(full_ru
         f"FROM read_parquet('{parquet}') ORDER BY handler, trigger, expression, environment"
     ).fetchall()
     assert rows == [
-        ("fixedRate", "${orders.purge.rate}", "default", None, "missing_key"),
-        ("fixedRate", "${orders.purge.rate}", "prod", None, "missing_key"),
+        ("fixedRate", "${orders.purge.rate}", "default", None, "external"),
+        ("fixedRate", "${orders.purge.rate}", "prod", None, "external"),
         ("cron", "${orders.sweep.cron:0 0 * * * *}", "default", "0 0 * * * *", None),
         ("cron", "${orders.sweep.cron:0 0 * * * *}", "prod", "0 */5 * * * *", None),
     ]

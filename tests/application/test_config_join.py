@@ -1,7 +1,7 @@
 """Tests for the `config_join` engine (D02 §2's eighth style, reading §2d's
 `address_from_config` and `media_from_config` vocabularies), plus the two
 things that surround it: `merge_endpoints.sql`'s media carry and the
-`resolved_peers` named query.
+`resolved_peers` per-environment reader.
 
 Everything here is built by hand — invented interfaces, invented
 configuration keys, invented serializer class names — for the reason every
@@ -30,7 +30,9 @@ from sextant.application.resolve.config import resolve_config
 from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import config_join
 from sextant.application.resolve.open_questions import reset_open_questions
+from sextant.application.resolve.resolved_peers import resolved_peers
 from sextant.application.resolve.service_identity import record_service_identity_gaps
+from sextant.application.resolve.values import CYCLE, EXTERNAL
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -220,7 +222,7 @@ def _workspace(
     """A workspace holding the given symbol facts and the given already
     resolved configuration — `(key, environment, value)`, a `None` value
     meaning the environment has the key but never resolved it (D01's
-    unresolved-with-a-reason row, spelled `missing_key` here).
+    unresolved-with-a-reason row, spelled `external` here).
 
     `coordinates=None` writes no module fact at all, which is what every test
     below that reaches the engine DIRECTLY wants: the dependency gate lives in
@@ -261,7 +263,8 @@ def _workspace(
                     "value": value,
                     "source": "invented.yml" if value is not None else None,
                     "environment": environment,
-                    "unresolved_reason": None if value is not None else "missing_key",
+                    "unresolved_reason": None if value is not None else EXTERNAL,
+                    "unresolved_detail": (None if value is not None else f"{key} is not set"),
                 }
                 for key, environment, value in config
             ],
@@ -1070,7 +1073,7 @@ def test_a_single_placeholder_address_resolves_once_per_environment(tmp_path: Pa
         ],
     )
     _seed(workspace, {"protocol": "http", "path": "${acme.base}/invoices", "caller": "c"})
-    rows = {row["environment"]: row for row in workspace.query("resolved_peers")}
+    rows = {row["environment"]: row for row in resolved_peers(workspace, [])}
     workspace.close()
 
     assert rows["default"]["resolved_path"] == "http://acme.internal/invoices"
@@ -1092,32 +1095,159 @@ def test_an_address_whose_key_is_missing_for_one_environment_only_says_so(
         config=[("acme.base", "default", "http://acme.internal"), ("acme.base", "prod", None)],
     )
     _seed(workspace, {"protocol": "http", "path": "${acme.base}/invoices", "caller": "c"})
-    rows = {row["environment"]: row for row in workspace.query("resolved_peers")}
+    rows = {row["environment"]: row for row in resolved_peers(workspace, [])}
     workspace.close()
 
     assert rows["default"]["resolved_path"] == "http://acme.internal/invoices"
     assert rows["default"]["unresolved_reason"] is None
     assert rows["prod"]["resolved_path"] is None
-    assert rows["prod"]["unresolved_reason"] == "missing_key"
+    assert rows["prod"]["unresolved_reason"] == EXTERNAL
+    assert rows["prod"]["unresolved_detail"] == "acme.base is not set"
 
 
-def test_an_address_carrying_two_placeholders_is_substitutable_only_piecewise(
+def test_an_address_whose_config_row_is_a_cycle_forwards_that_rows_reason_and_detail(
     tmp_path: Path,
 ):
-    """D01's fifth unresolved reason, and the only one M04's pass 2 never
-    emits: `multi_placeholder` belongs to this join alone, because it is a
-    property of an ENDPOINT expression rather than of a configuration
-    value."""
+    """The join copies the config row's own reason and detail. Both differ from the join's
+    fallback (`external`, "<key> is not set"), so a join that dropped the
+    copy would fail here."""
+    workspace = _workspace(tmp_path)
+    workspace.derive(
+        "resolved_config_insert",
+        rows=[
+            {
+                "key": "acme.base",
+                "value": None,
+                "source": "invented.yml",
+                "environment": "prod",
+                "unresolved_reason": CYCLE,
+                "unresolved_detail": "acme.base refers to acme.alt, which refers back to acme.base",
+            }
+        ],
+    )
+    _seed(workspace, {"protocol": "http", "path": "${acme.base}/invoices", "caller": "c"})
+    [row] = resolved_peers(workspace, [])
+    workspace.close()
+
+    assert row["unresolved_reason"] == CYCLE
+    assert row["unresolved_detail"] == (
+        "acme.base refers to acme.alt, which refers back to acme.base"
+    )
+
+
+def test_an_address_whose_key_has_no_row_in_an_environment_is_external_there(tmp_path: Path):
+    """The key is declared for `default` only, so `prod` has no row for it at all: the join
+    says the same thing it says for a row with no value."""
+    workspace = _workspace(tmp_path, config=[("acme.base", "default", "http://acme.internal")])
+    workspace.derive(
+        "resolved_config_insert",
+        rows=[
+            {
+                "key": "other",
+                "value": "x",
+                "source": "invented.yml",
+                "environment": "prod",
+                "unresolved_reason": None,
+                "unresolved_detail": None,
+            }
+        ],
+    )
+    _seed(workspace, {"protocol": "http", "path": "${acme.base}/invoices", "caller": "c"})
+    rows = {row["environment"]: row for row in resolved_peers(workspace, [])}
+    workspace.close()
+
+    assert rows["prod"]["unresolved_reason"] == EXTERNAL
+    assert rows["prod"]["unresolved_detail"] == "acme.base is not set"
+    assert rows["default"]["unresolved_detail"] is None
+
+
+def test_an_address_carrying_two_placeholders_fills_both(tmp_path: Path):
+    """OI-322: every placeholder in an address is filled, by the one placeholder rule
+    (`resolve/config.py::substitute`), not only the first."""
     workspace = _workspace(
         tmp_path,
-        config=[("acme.base", "default", "http://acme.internal"), ("acme.leaf", "default", "x")],
+        config=[("acme.host", "default", "acme.internal"), ("acme.port", "default", "8443")],
     )
-    _seed(workspace, {"protocol": "http", "path": "${acme.base}/${acme.leaf}", "caller": "c"})
-    [row] = workspace.query("resolved_peers")
+    _seed(
+        workspace,
+        {"protocol": "http", "path": "https://${acme.host}:${acme.port}/x", "caller": "c"},
+    )
+    [row] = resolved_peers(workspace, [])
+    workspace.close()
+
+    assert row["resolved_path"] == "https://acme.internal:8443/x"
+    assert row["unresolved_reason"] is None
+    assert row["unresolved_detail"] is None
+
+
+def test_an_address_with_one_of_two_placeholders_missing_names_the_missing_key(
+    tmp_path: Path,
+):
+    """A single missing key fails the whole address (no partly filled text), and the
+    answer names that key, as the one-placeholder case does."""
+    workspace = _workspace(tmp_path, config=[("acme.host", "default", "acme.internal")])
+    _seed(workspace, {"protocol": "http", "path": "${acme.host}:${acme.port}", "caller": "c"})
+    [row] = resolved_peers(workspace, [])
     workspace.close()
 
     assert row["resolved_path"] is None
-    assert row["unresolved_reason"] == "multi_placeholder"
+    assert row["unresolved_reason"] == EXTERNAL
+    assert row["unresolved_detail"] == "acme.port is not set"
+
+
+def test_an_address_placeholder_with_a_default_takes_the_default_where_the_key_is_missing(
+    tmp_path: Path,
+):
+    """`${key:default}` reads here as it reads in a configuration file (CP-48 row 7):
+    where the key has no value the default is the answer."""
+    workspace = _workspace(
+        tmp_path,
+        config=[("acme.base", "default", "http://acme.internal"), ("acme.base", "prod", None)],
+    )
+    _seed(
+        workspace,
+        {"protocol": "http", "path": "${acme.base:http://fallback}/invoices", "caller": "c"},
+    )
+    rows = {row["environment"]: row for row in resolved_peers(workspace, [])}
+    workspace.close()
+
+    assert rows["default"]["resolved_path"] == "http://acme.internal/invoices"
+    assert rows["prod"]["resolved_path"] == "http://fallback/invoices"
+    assert rows["prod"]["unresolved_reason"] is None
+
+
+def test_a_peer_placeholder_is_filled_and_the_paths_reason_is_reported_first(
+    tmp_path: Path,
+):
+    """`peer` is filled as `path` is. Where both fail, the one reason column names
+    `path`'s answer, and `peer`'s only where `path` had nothing to say."""
+    workspace = _workspace(tmp_path, config=[("acme.host", "default", "acme.internal")])
+    _seed(
+        workspace,
+        {"protocol": "http", "path": "/a", "peer": "${acme.host}", "caller": "c1"},
+        {"protocol": "http", "path": "${acme.p}", "peer": "${acme.q}", "caller": "c2"},
+        {"protocol": "http", "path": "/b", "peer": "${acme.q}", "caller": "c3"},
+    )
+    rows = {row["caller"]: row for row in resolved_peers(workspace, [])}
+    workspace.close()
+
+    assert rows["c1"]["resolved_peer"] == "acme.internal"
+    assert rows["c1"]["unresolved_reason"] is None
+    assert rows["c2"]["unresolved_detail"] == "acme.p is not set"
+    assert rows["c3"]["resolved_path"] == "/b"
+    assert rows["c3"]["unresolved_detail"] == "acme.q is not set"
+
+
+def test_an_address_reads_keys_by_the_config_models_own_matching(tmp_path: Path):
+    """The shipped Spring model matches keys relaxed (D02 §2i), so `${acme.base-url}`
+    finds `acme.baseUrl` as Spring's own binder would."""
+    workspace = _workspace(tmp_path, config=[("acme.baseUrl", "default", "http://acme")])
+    _seed(workspace, {"protocol": "http", "path": "${acme.base-url}/x", "caller": "c"})
+    spring = [c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "spring-web"]
+    [row] = resolved_peers(workspace, spring)
+    workspace.close()
+
+    assert row["resolved_path"] == "http://acme/x"
 
 
 def test_an_address_with_no_placeholder_passes_through_with_its_literal(
@@ -1131,7 +1261,7 @@ def test_an_address_with_no_placeholder_passes_through_with_its_literal(
         workspace,
         {"protocol": "http", "path": "/exports", "peer": "acme.internal", "caller": "c"},
     )
-    [row] = workspace.query("resolved_peers")
+    [row] = resolved_peers(workspace, [])
     workspace.close()
 
     assert row["resolved_path"] == "/exports"
@@ -1152,7 +1282,7 @@ def test_a_merged_both_row_is_answered_like_the_outbound_row_it_absorbed(
         {"protocol": "http", "direction": "both", "path": "${acme.base}/orders", "caller": "c"},
         {"protocol": "http", "direction": "inbound", "path": "/exposed"},
     )
-    rows = workspace.query("resolved_peers")
+    rows = resolved_peers(workspace, [])
     workspace.close()
 
     assert [row["resolved_path"] for row in rows] == ["http://acme.internal/orders"]
@@ -3339,7 +3469,7 @@ def test_a_route_with_no_path_predicate_serves_every_path(tmp_path: Path):
 def test_an_item_that_differs_between_environments_is_one_question_and_no_row(tmp_path: Path):
     """The existing `config_join` rule applied per item: every key the item is read
     from passes through `_agreed`, and one that environments answer differently — or
-    that only one environment declares, since `resolved_config` carries a `missing_key`
+    that only one environment declares, since `resolved_config` carries an `external`
     row for the other — is not one route. No row for that item (the other item is
     untouched), and one `environment_divergence` question from `gaps`, keyed on the
     item, with every disagreeing key and its per-environment values as candidates."""

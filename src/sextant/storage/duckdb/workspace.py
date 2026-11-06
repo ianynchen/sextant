@@ -611,12 +611,13 @@ _NAMED_QUERIES = {
                count(*) AS edges
         FROM call_edges GROUP BY 1 ORDER BY 1
     """,
-    # WHY a body was not reached, which is what makes the reach rate actionable: an owner
-    # in an unscanned jar is a scanning decision, `no_declaration_found` is a defect.
+    # WHY a body was not reached, which is what makes the reach rate actionable: `external`
+    # (a type in an unscanned jar) is a scanning decision, `not_readable` is a defect. A
+    # found body has no reason and counts as `resolved`.
     # Keyed per (class, name, descriptor) rather than per edge — that is the grain the
     # lookup itself answers at (JVMS 5.4.3.3, F3 §4.2).
     "method_resolution_distribution": """
-        SELECT reason AS bucket, count(*) AS methods
+        SELECT coalesce(reason, 'resolved') AS bucket, count(*) AS methods
         FROM method_resolution GROUP BY 1 ORDER BY 1
     """,
     # `resolve/config.py`'s own input: every config_entry, in declaration
@@ -629,88 +630,8 @@ _NAMED_QUERIES = {
     # `environment, key` so "unresolved for prod, resolved for dev" reads as
     # two adjacent rows rather than an arbitrary interleaving (NFR-1).
     "resolved_config": """
-        SELECT key, value, source, environment, unresolved_reason
+        SELECT key, value, source, environment, unresolved_reason, unresolved_detail
         FROM resolved_config ORDER BY environment, key
-    """,
-    # The per-environment answer for every address expression a client-side
-    # row carries — a JOIN, never a write (2F design §3, job 3): endpoint
-    # rows keep their expressions, `resolved_config` keeps the values, and
-    # nothing rewrites a row per environment. One row per (client-side
-    # endpoint, environment).
-    #
-    # `direction <> 'inbound'` rather than `= 'outbound'`: a `both` row is a
-    # path the module both exposes and CALLS (D02 §3's merge), so it carries
-    # a caller's address expression exactly as an outbound row does — an
-    # equality test would silently drop every merged one.
-    #
-    # A placeholder count, not a regex alternation, decides the three cases:
-    # `${` occurs zero times (a literal, which passes straight through with
-    # its own value), once (substituted from `resolved_config` for this
-    # environment), or more (`multi_placeholder` — D01's own reason for an
-    # expression that is substitutable only piecewise, the one reason M04's
-    # pass 2 never emits because it belongs to this join alone). `length`
-    # minus the length with the opening delimiter removed, over the
-    # delimiter's own length, IS that count.
-    #
-    # `path` and `peer` are resolved independently — a row may carry an
-    # expression in either or both (D01 §3: `peer` is the target hint,
-    # `path` the address, and 2F's base composition puts a whole unsplit
-    # expression in `path` with `peer` NULL). The single `unresolved_reason`
-    # column reports `path`'s answer first, `peer`'s only when `path` had
-    # nothing to say, so one column still names why a row did not resolve
-    # for an environment.
-    #
-    # With no resolved environments at all the join is empty and so is this
-    # answer: "the same rows, unresolved" and "no environments to resolve
-    # against" are different claims, and only the first one would be a lie.
-    "resolved_peers": """
-        WITH environments AS (SELECT DISTINCT environment FROM resolved_config),
-        candidates AS (
-            SELECT protocol, direction, method, path, peer, caller, catalog_id
-            FROM endpoints
-            WHERE direction <> 'inbound'
-        ),
-        paired AS (
-            SELECT c.*, e.environment,
-                   ((length(coalesce(c.path, '')) -
-                     length(replace(coalesce(c.path, ''), '${', ''))) / 2)::INTEGER
-                       AS path_placeholders,
-                   ((length(coalesce(c.peer, '')) -
-                     length(replace(coalesce(c.peer, ''), '${', ''))) / 2)::INTEGER
-                       AS peer_placeholders,
-                   regexp_extract(coalesce(c.path, ''), '\\$\\{([^}]*)\\}', 1) AS path_key,
-                   regexp_extract(coalesce(c.peer, ''), '\\$\\{([^}]*)\\}', 1) AS peer_key
-            FROM candidates c CROSS JOIN environments e
-        ),
-        joined AS (
-            SELECT p.*,
-                   pk.value AS path_value, pk.unresolved_reason AS path_reason,
-                   qk.value AS peer_value, qk.unresolved_reason AS peer_reason
-            FROM paired p
-            LEFT JOIN resolved_config pk
-                   ON pk.key = p.path_key AND pk.environment = p.environment
-            LEFT JOIN resolved_config qk
-                   ON qk.key = p.peer_key AND qk.environment = p.environment
-        )
-        SELECT protocol, direction, method, path, peer, caller, catalog_id, environment,
-               CASE WHEN path_placeholders = 0 THEN path
-                    WHEN path_placeholders > 1 THEN NULL
-                    WHEN path_value IS NULL THEN NULL
-                    ELSE replace(path, '${' || path_key || '}', path_value) END AS resolved_path,
-               CASE WHEN peer_placeholders = 0 THEN peer
-                    WHEN peer_placeholders > 1 THEN NULL
-                    WHEN peer_value IS NULL THEN NULL
-                    ELSE replace(peer, '${' || peer_key || '}', peer_value) END AS resolved_peer,
-               coalesce(
-                   CASE WHEN path_placeholders > 1 THEN 'multi_placeholder'
-                        WHEN path_placeholders = 1 AND path_value IS NULL
-                            THEN coalesce(path_reason, 'missing_key') END,
-                   CASE WHEN peer_placeholders > 1 THEN 'multi_placeholder'
-                        WHEN peer_placeholders = 1 AND peer_value IS NULL
-                            THEN coalesce(peer_reason, 'missing_key') END
-               ) AS unresolved_reason
-        FROM joined
-        ORDER BY environment, protocol, method, path, peer, caller
     """,
     # The 2K hand-off ledger (2G design §6). Ordered by the wire identity the
     # row carries, `question` breaking a tie where one endpoint raises both
@@ -773,7 +694,8 @@ _NAMED_QUERIES = {
     # (NFR-1): a job has one row per environment, and two schedules of one kind on one
     # method (`@Schedules`) differ in `expression`, two named triggers in `name`.
     "resolved_schedules": """
-        SELECT handler, trigger, name, expression, environment, keys, value, unresolved_reason
+        SELECT handler, trigger, name, expression, environment, keys, value, unresolved_reason,
+               unresolved_detail
         FROM resolved_schedules
         ORDER BY handler, trigger, name, expression, environment
     """,
@@ -819,8 +741,9 @@ _NAMED_QUERIES = {
         ORDER BY shape_id, content_hash, origin_tier
     """,
     "boundary_property": """
-        SELECT key, environment, value, unresolved_reason, source FROM resolved_config
-        ORDER BY key, environment, value, unresolved_reason, source
+        SELECT key, environment, value, unresolved_reason, unresolved_detail, source
+        FROM resolved_config
+        ORDER BY key, environment, value, unresolved_reason, unresolved_detail, source
     """,
     "boundary_schedule": """
         SELECT handler, trigger, name, expression, resolution, refused, catalog_id
@@ -1477,7 +1400,7 @@ _EXPORT_QUERIES = {
     # value pattern's is not.
     "resolved_config": f"""
         SELECT c.key, coalesce(m.masked, c.value) AS value, c.source, c.environment,
-               c.unresolved_reason
+               c.unresolved_reason, c.unresolved_detail
         FROM resolved_config c
         LEFT JOIN {_REDACTED_CONFIG_VALUES} m ON m.key = c.key AND m.value = c.value
         ORDER BY c.environment, c.key
@@ -1519,7 +1442,7 @@ _EXPORT_QUERIES = {
         SELECT s.handler, s.trigger, coalesce(n.masked, s.name) AS name,
                coalesce(a.masked, s.expression) AS expression,
                s.environment, s.keys, coalesce(v.masked, s.value) AS value,
-               s.unresolved_reason
+               s.unresolved_reason, s.unresolved_detail
         FROM resolved_schedules s
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = s.expression
         LEFT JOIN {_REDACTED_ADDRESSES} n ON n.address = s.name

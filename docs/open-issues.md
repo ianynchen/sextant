@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-322 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-323 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -187,7 +187,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-178 | [SEXTANT-26](https://app.plane.so/portolan/browse/SEXTANT-26/) | the URL userinfo strip can eat the next value in compact raw text |
 | OI-179 | [SEXTANT-33](https://app.plane.so/portolan/browse/SEXTANT-33/) | `resolved_peers`' SQL substitution cannot read a `:default` |
 | OI-180 | [SEXTANT-34](https://app.plane.so/portolan/browse/SEXTANT-34/) | `config_join._channel_name` is a second placeholder walk beside `substitute` |
-| OI-181 | [SEXTANT-35](https://app.plane.so/portolan/browse/SEXTANT-35/) | a relaxed-key collision reads a different spelling in `resolved_schedules` than in `resolve_config` |
+| OI-181 | [SEXTANT-35](https://app.plane.so/portolan/browse/SEXTANT-35/) | a relaxed-key collision reads a different spelling in `resolved_schedules` (and, since OI-322, `resolved_peers`) than in `resolve_config` |
 | OI-182 | [SEXTANT-36](https://app.plane.so/portolan/browse/SEXTANT-36/) | only the first declared config model is read for a scheduled expression, and `resolved_config` has no model column |
 | OI-183 | [SEXTANT-37](https://app.plane.so/portolan/browse/SEXTANT-37/) | the boundary vocabulary's `schedule` identity collides under `@Schedules` |
 | OI-184 | [SEXTANT-46](https://app.plane.so/portolan/browse/SEXTANT-46/) | `substitute` does not model two `PlaceholderParser` behaviours CP-48 read: the whole-inside lookup and the escape character |
@@ -325,6 +325,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-319 | [SEXTANT-313](https://app.plane.so/portolan/browse/SEXTANT-313/) | Value walk: a recipe whose every return is off the path answers not_readable, where the caller loop answers nothing (no real input reaches it) |
 | OI-320 | [SEXTANT-314](https://app.plane.so/portolan/browse/SEXTANT-314/) | Dagger recipe hop: a platform annotation (@Deprecated, Android @SuppressLint) on a @Provides method leaves its type's unqualified slots unread_type (safe direction) |
 | OI-321 | [SEXTANT-315](https://app.plane.so/portolan/browse/SEXTANT-315/) | One reason list everywhere: configuration values, method lookup and hand-off reasons become a general reason plus a detail (ruled B, 2026-11-05) |
+| OI-322 | [SEXTANT-316](https://app.plane.so/portolan/browse/SEXTANT-316/) | Peer join fills one placeholder only: an address with two (${host}:${port}) is never resolved |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

@@ -35,21 +35,18 @@ from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.shapes.chains import _method_symbols
 from sextant.application.resolve.shapes.pass_through import (
     ANSWERS,
-    HANDED_TO,
-    NO_BODY,
-    OF_TYPE,
     PASSES_ON,
-    STORED_IN,
     UNREADABLE,
     Handler,
     HandlerReader,
     PassThroughRule,
+    _not_followed,
     exact_methods,
     file_unread,
     handler_outcomes,
     unread_rows,
 )
-from sextant.application.resolve.values import value_index
+from sextant.application.resolve.values import ESCAPES, EXTERNAL, NOT_READABLE, value_index
 from sextant.domain.closed_sets import ConstructKind
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -261,6 +258,9 @@ def _anonymous_facts() -> list:
 _AUTH = _PKG + "Auth#"
 _AUTH_IMPL = _PKG + "AuthImpl#"
 _BARE = _PKG + "Bare#"
+# A class of this module whose superclass is in a jar this analysis does not read.
+_FROM_JAR = _PKG + "FromJar#"
+_UNSCANNED = "com/other/Lib#"
 _BASE = _PKG + "BaseHandler#"
 _SUB = _PKG + "SubHandler#"
 
@@ -348,6 +348,13 @@ def _hierarchy_facts() -> list:
         ),
         _type(_BARE),
         _declared(_BARE, "check", _TAKES),
+        _type(_FROM_JAR),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_MODULE + _FROM_JAR,
+            construct_kind=ConstructKind.CLASS,
+            superclass="com/other/BaseHandler#",
+        ),
         _type(_BASE),
         _declared(_BASE, "handle", _TAKES),
         _void(_BASE, "handle", _TAKES),
@@ -388,7 +395,7 @@ def outcomes(walked) -> tuple[dict, dict]:
     )
 
 
-def _reader(walked) -> HandlerReader:
+def _reader(walked, field_types=dict) -> HandlerReader:
     rule = PassThroughRule(_PASSES_ON, ("io.vertx.ext.web.handler",), frozenset({"handle"}))
     parameters = {
         _WIRE: ({"erased_symbol": _BASE},),
@@ -399,7 +406,7 @@ def _reader(walked) -> HandlerReader:
         rule,
         _method_symbols(walked),
         parameters,
-        dict,
+        field_types,
         dispatch_of(walked),
         exact_methods(walked),
     )
@@ -445,7 +452,10 @@ def test_a_handler_method_with_no_body_and_no_override_is_unreadable(walked):
     handler = _reader(walked).of({"kind": "lambda", "symbol": bare, "captures": 0}, None)
     assert (handler.outcome, handler.unread) == (
         UNREADABLE,
-        (NO_BODY, _symbol(_BARE, "check", _TAKES)),
+        (
+            NOT_READABLE,
+            f"runs {_symbol(_BARE, 'check', _TAKES)}, which has no body read here and no module override",
+        ),
     )
 
 
@@ -517,8 +527,8 @@ def test_a_question_on_a_row_whose_path_is_unread_carries_no_path():
     never the text `None`."""
     questions: dict = {}
     row = {"protocol": "http", "method": "GET", "path": None, "handler": None, "caller": "c"}
-    file_unread(questions, row, ((HANDED_TO, "x"),))
-    file_unread(questions, {**row, "path": "/a"}, ((HANDED_TO, "y"),))
+    file_unread(questions, row, ((ESCAPES, "x"),))
+    file_unread(questions, {**row, "path": "/a"}, ((ESCAPES, "y"),))
     assert [(q["method"], q["path"]) for q in unread_rows(questions)] == [
         ("GET", None),
         ("GET", "/a"),
@@ -532,8 +542,8 @@ def test_a_question_carries_the_markers_of_the_row_it_is_filed_against():
     never `(unresolved) /plain`."""
     questions: dict = {}
     row = {"protocol": "http", "method": None, "path": "/plain", "handler": None, "caller": "c"}
-    file_unread(questions, {**row, "method_kind": "any"}, ((HANDED_TO, "x"),))
-    file_unread(questions, {**row, "path": "/r", "path_kind": "pattern"}, ((HANDED_TO, "y"),))
+    file_unread(questions, {**row, "method_kind": "any"}, ((ESCAPES, "x"),))
+    file_unread(questions, {**row, "path": "/r", "path_kind": "pattern"}, ((ESCAPES, "y"),))
     assert [(q["path"], q["method_kind"], q["path_kind"]) for q in unread_rows(questions)] == [
         ("/plain", "any", None),
         ("/r", None, "pattern"),
@@ -542,7 +552,110 @@ def test_a_question_carries_the_markers_of_the_row_it_is_filed_against():
 
 def test_a_handler_object_built_elsewhere_and_not_the_frameworks_is_unreadable(walked):
     handler = _reader(walked).of({"kind": "instance", "symbol": "com/other/Thing#"}, None)
-    assert (handler.outcome, handler.unread) == (UNREADABLE, (OF_TYPE, "com/other/Thing#"))
+    assert (handler.outcome, handler.unread) == (
+        UNREADABLE,
+        (
+            EXTERNAL,
+            "is declared as com/other/Thing#, a type whose handler is not read",
+        ),
+    )
+
+
+def test_a_handler_object_of_a_scanned_type_with_no_handler_is_not_readable_not_external(walked):
+    """The type is in the scanned code and nothing there is a handler: the answer is here and
+    not followed (`not_readable`), where an unscanned type is `external`."""
+    handler = _reader(walked).of({"kind": "instance", "symbol": _ROUTES}, None)
+    assert (handler.outcome, handler.unread) == (
+        UNREADABLE,
+        (NOT_READABLE, f"is declared as {_ROUTES}, a type whose handler is not read"),
+    )
+
+
+def test_a_handler_from_a_field_of_an_unscanned_class_is_external_else_not_readable(walked):
+    """No declared type is recorded for the field: the class that owns it decides."""
+    field = {"kind": "field", "symbol": _UNSCANNED + "HANDLER."}
+    [outside] = _reader(walked)._declared_type(_WIRE, field, set())
+    assert outside.unread == (
+        EXTERNAL,
+        f"comes from {_UNSCANNED}HANDLER., whose declared type is not a handler read here",
+    )
+    held = {"kind": "field", "symbol": _ROUTES + "held."}
+    [inside] = _reader(walked)._declared_type(_WIRE, held, set())
+    assert inside.unread[0] == NOT_READABLE
+
+
+def test_a_handler_from_a_field_is_decided_by_its_declared_type_when_it_has_one(walked):
+    field = _ROUTES + "held."
+    outside = _reader(walked, lambda: {field: "com/other/Thing#"})
+    [unscanned] = outside._declared_type(_WIRE, {"kind": "field", "symbol": field}, set())
+    assert unscanned.unread[0] == EXTERNAL
+    inside = _reader(walked, lambda: {field: _ROUTES})
+    [scanned] = inside._declared_type(_WIRE, {"kind": "field", "symbol": field}, set())
+    assert scanned.unread[0] == NOT_READABLE
+
+
+def test_a_handler_argument_nothing_reads_is_not_readable(walked):
+    handler = _reader(walked).of({"kind": "parameter", "value": 0}, None)
+    assert (handler.outcome, handler.unread) == (
+        UNREADABLE,
+        (NOT_READABLE, "is an argument of a registering method that is not read"),
+    )
+
+
+def test_a_handler_method_of_an_unscanned_class_with_no_body_is_external(walked):
+    reference = {"kind": "lambda", "symbol": _UNSCANNED + "run().", "captures": 0}
+    handler = _reader(walked).of(reference, None)
+    assert (handler.outcome, handler.unread) == (
+        UNREADABLE,
+        (
+            EXTERNAL,
+            f"runs {_UNSCANNED}run()., which has no body read here and no module override",
+        ),
+    )
+
+
+def test_a_handler_built_by_a_method_is_decided_by_where_its_body_is(walked):
+    """The body of the building call decides, as method lookup does: an unread owner, or a
+    method inherited from an unread ancestor, is `external`; a body declared here is not
+    followed (`not_readable`)."""
+    reader = _reader(walked)
+    thing = "com/other/Thing#"
+    unread_owner = reader._object(thing, (_UNSCANNED, "make", "()V"), constructed=False)
+    inherited = reader._object(thing, (_FROM_JAR, "make", "()V"), constructed=False)
+    declared = reader._object(thing, (_BARE, "check", _TAKES), constructed=False)
+    assert (unread_owner.unread[0], inherited.unread[0], declared.unread[0]) == (
+        EXTERNAL,
+        EXTERNAL,
+        NOT_READABLE,
+    )
+    assert declared.unread[1].startswith("is built by ")
+
+
+def test_a_handler_object_whose_handler_is_inherited_from_an_unread_class_is_external(walked):
+    """`new MyHandler()`, `MyHandler` in the module, its `handle` from a base class in a jar
+    not read: the body is outside the scanned code. A scanned class with no handler anywhere
+    in its read ancestry is `not_readable`."""
+    reader = _reader(walked)
+    inherited = reader.of({"kind": "instance", "symbol": _FROM_JAR}, None)
+    assert (inherited.outcome, inherited.unread[0]) == (UNREADABLE, EXTERNAL)
+    here = reader.of({"kind": "instance", "symbol": _ROUTES}, None)
+    assert here.unread[0] == NOT_READABLE
+
+
+def test_a_handler_from_a_field_typed_as_a_class_with_an_unread_base_is_external(walked):
+    field = _ROUTES + "held."
+    reader = _reader(walked, lambda: {field: _FROM_JAR})
+    [found] = reader._declared_type(_WIRE, {"kind": "field", "symbol": field}, set())
+    assert found.unread[0] == EXTERNAL
+
+
+def test_the_reason_of_code_not_followed_follows_whether_the_body_is_outside():
+    phrase = "is built by {}, whose body is not read"
+    assert _not_followed(False, phrase, "m") == (
+        NOT_READABLE,
+        "is built by m, whose body is not read",
+    )
+    assert _not_followed(True, phrase, "m") == (EXTERNAL, "is built by m, whose body is not read")
 
 
 @pytest.mark.pins("pass_through.a-next-reached-on-the-received-context-passes-on")
@@ -563,7 +676,10 @@ def test_a_context_handed_to_a_body_outside_the_module_is_unreadable(outcomes):
     read, and the method is named so a reader can say why."""
     found, unread = outcomes
     assert found[_handler("outside")] == UNREADABLE
-    assert unread[_handler("outside")] == ((HANDED_TO, method_descriptor(_LIB, "forward", _TAKES)),)
+    forward = method_descriptor(_LIB, "forward", _TAKES)
+    assert unread[_handler("outside")] == (
+        (ESCAPES, f"hands the request's context to {forward}, where it is not followed"),
+    )
 
 
 @pytest.mark.pins("pass_through.only-an-argument-is-a-hand-off")
@@ -597,7 +713,9 @@ def test_a_context_written_to_a_field_is_not_readable_here(outcomes):
     the walk cannot tell — never an answering row (ruling 2026-10-31)."""
     found, unread = outcomes
     assert found[_handler("stores")] == UNREADABLE
-    assert unread[_handler("stores")] == ((STORED_IN, _ROUTES + "held."),)
+    assert unread[_handler("stores")] == (
+        (ESCAPES, f"stores the request's context in {_ROUTES}held., where it is not followed"),
+    )
 
 
 @pytest.mark.pins("pass_through.a-context-handed-to-a-constructor-is-unreadable")
@@ -606,8 +724,9 @@ def test_a_context_handed_to_a_constructor_is_not_readable_here(outcomes):
     body reads here."""
     found, unread = outcomes
     assert found[_handler("wraps")] == UNREADABLE
+    wrapper = method_descriptor(_WRAPPER, "<init>", _TAKES)
     assert unread[_handler("wraps")] == (
-        (HANDED_TO, method_descriptor(_WRAPPER, "<init>", _TAKES)),
+        (ESCAPES, f"hands the request's context to {wrapper}, where it is not followed"),
     )
 
 
@@ -841,7 +960,8 @@ def test_two_unreadable_handler_objects_from_two_methods_are_two_rows(tmp_path: 
     assert [(p, h, res) for p, h, res, _ in rows] == [("/x", None, "partial")] * 2
     assert {r[3] for r in rows} == {_register("one"), _register("two")}
     assert "Lib#first" in question["candidates"] and "Lib#second" in question["candidates"]
-    assert '"how":"produced_by"' in question["candidates"]
+    assert '"reason":"external"' in question["candidates"]
+    assert '"how"' not in question["candidates"]
 
 
 _AUTH_IFACE = "com/acme/vertx/Auth#"
@@ -957,11 +1077,15 @@ def test_a_no_body_reason_stays_on_the_method_that_has_no_body():
     handler = Handler(
         (first, second, bodiless),
         alternatives=(first, second),
-        unread=(NO_BODY, bodiless),
+        unread=(NOT_READABLE, "runs m#bare()., which has no body read here"),
+        bodiless=bodiless,
     )
     judged = _judged_of(handler, {first: ANSWERS, second: ANSWERS, bodiless: ANSWERS}, {})
     assert [(a.symbol, a.outcome, a.unread) for a in judged.alternatives] == [
         (first, ANSWERS, ()),
         (second, ANSWERS, ()),
     ]
-    assert (judged.outcome, judged.unread) == (UNREADABLE, ((NO_BODY, bodiless),))
+    assert (judged.outcome, judged.unread) == (
+        UNREADABLE,
+        ((NOT_READABLE, "runs m#bare()., which has no body read here"),),
+    )

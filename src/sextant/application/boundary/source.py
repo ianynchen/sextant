@@ -256,7 +256,7 @@ class BoundarySource:
         return {
             "key": members[0]["key"],
             "environment": members[0]["environment"],
-            **_attributes(members, "value", "unresolved_reason"),
+            **_attributes(members, "value", "unresolved_reason", "unresolved_detail"),
             "evidence": {"symbols": [], "documents": [], **_attributes(members, "source")},
             "origin": "module_output",
         }

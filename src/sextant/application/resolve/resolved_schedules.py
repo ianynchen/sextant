@@ -32,8 +32,13 @@ from collections.abc import Callable, Sequence
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.config import config_model_of, placeholder_rule, substitute
-from sextant.domain.config_keys import normalize_key
+from sextant.application.resolve.config import (
+    Unresolved,
+    config_model_of,
+    environment_lookup,
+    placeholder_rule,
+    substitute,
+)
 from sextant.domain.redaction import REDACTED, Redactor
 
 
@@ -65,7 +70,7 @@ def record_resolved_schedules(workspace: Workspace, catalogs: list[Catalog]) -> 
         by_environment.setdefault(str(row["environment"]), []).append(row)
     rows: list[dict[str, object]] = []
     for environment in sorted(by_environment):
-        lookup = _environment_lookup(by_environment[environment], key_matching)
+        lookup = environment_lookup(by_environment[environment], key_matching)
         for job in jobs:
             asked: list[str] = []
             value, reason = substitute(
@@ -80,7 +85,8 @@ def record_resolved_schedules(workspace: Workspace, catalogs: list[Catalog]) -> 
                     "environment": environment,
                     "keys": json.dumps(list(dict.fromkeys(asked))),
                     "value": value,
-                    "unresolved_reason": reason,
+                    "unresolved_reason": None if reason is None else reason.reason,
+                    "unresolved_detail": None if reason is None else reason.detail,
                 }
             )
     if rows:
@@ -99,43 +105,12 @@ def redact_schedule_value(redactor: Redactor, keys: Sequence[str], value: str) -
 
 
 def _recording(
-    lookup: Callable[[str], tuple[str | None, str | None]], asked: list[str]
-) -> Callable[[str], tuple[str | None, str | None]]:
+    lookup: Callable[[str], tuple[str | None, Unresolved | None]], asked: list[str]
+) -> Callable[[str], tuple[str | None, Unresolved | None]]:
     """`lookup`, noting in `asked` every key it is asked for."""
 
-    def recorded(ref_key: str) -> tuple[str | None, str | None]:
+    def recorded(ref_key: str) -> tuple[str | None, Unresolved | None]:
         asked.append(ref_key)
         return lookup(ref_key)
 
     return recorded
-
-
-def _environment_lookup(
-    config: list[dict[str, object]], key_matching: str
-) -> Callable[[str], tuple[str | None, str | None]]:
-    """`substitute`'s lookup over ONE environment's resolved rows. Where relaxed matching
-    folds two configured spellings onto one key, the first row in the `resolved_config`
-    named query's order (`ORDER BY environment, key`) wins — the alphabetically first
-    spelling. That DIVERGES from `resolve/config.py::_normalized_index`, which takes the
-    first in merged-layering order; a known divergence, logged rather than matched here,
-    because `resolved_config` keeps no layering order to match it with. A row resolved to
-    no value answers its own reason; a key no row names is `missing_key`, as
-    `resolve_config` answers a reference to a key its layering never declared."""
-
-    def keyed(key: str) -> str:
-        return normalize_key(key) if key_matching == "relaxed" else key
-
-    index: dict[str, tuple[str | None, str | None]] = {}
-    for row in config:
-        value = row["value"]
-        answer = (
-            (str(value), None)
-            if value is not None
-            else (None, str(row["unresolved_reason"] or "missing_key"))
-        )
-        index.setdefault(keyed(str(row["key"])), answer)
-
-    def lookup(ref_key: str) -> tuple[str | None, str | None]:
-        return index.get(keyed(ref_key), (None, "missing_key"))
-
-    return lookup

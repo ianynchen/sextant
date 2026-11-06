@@ -5,7 +5,7 @@
 //   * `sweep`'s key is set in application-prod.yml ONLY, so `prod` reads `0 */5 * * * *`
 //     and `default` falls back to the annotation's own `:0 0 * * * *`;
 //   * `purge`'s key is set nowhere and carries no default, so every environment reads
-//     `missing_key`.
+//     `external`.
 //
 // The bodies are empty on purpose: what is pinned is the schedule, not the work.
 package com.acme.orders.scheduling;

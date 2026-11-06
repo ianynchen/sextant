@@ -1253,18 +1253,6 @@ _REFUSAL_PHRASES = {
     "wildcard_mount_point": "refuses a mount point that ends in the wildcard it adds",
 }
 
-# `handler_pass_through`'s reasons, one per kind of `unread` name its writer files
-# (`resolve/shapes/pass_through.py`, whose evidence trail says the same).
-_PASS_THROUGH_PHRASES = {
-    "handed_to": "hands the request's context to {}, where it is not followed here",
-    "stored_in": "stores the request's context in {}, where it is not followed here",
-    "produced_by": "is built by {}, whose body is not read here",
-    "of_type": "is declared as {}, a type whose handler is not read here",
-    "from_field": "comes from {}, whose declared type is not a handler read here",
-    "no_body": "runs {}, which has no body read here and no module override",
-    "argument": "is an argument of {} that is not read here",
-}
-
 
 def _candidate_line(question: str, candidate: dict[str, object]) -> str:
     """One open question's candidate, in the same prose the writing pass
@@ -1432,16 +1420,16 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
     if question == "handler_pass_through":
         # Vert.x spec §3b: an inbound row whose handler is not readable here, filed by
         # `resolve/shapes/pass_through.py::file_unread` and verified against that writer's
-        # own `candidates` line. Each `unread` entry says what its name IS — where the
-        # context went unfollowed, what built the handler object, or the handler method with
-        # no body — so a builder is never called a hand-off.
+        # own `candidates` line. Each `unread` entry carries its own reason and its own
+        # detail, made where the answer is made: where the context went unfollowed, what
+        # built the handler object, or the handler method with no body.
         handler = candidate["handler"] or "a handler object"
         reasons = ", and ".join(
-            _PASS_THROUGH_PHRASES[str(entry["how"])].format(entry["name"])
+            f"{entry['reason']}: {entry['detail']}"
             for entry in cast(list[dict[str, str]], candidate["unread"])
         )
         return (
-            f"{handler} (registered by {candidate['caller']}) {reasons}, so whether it "
+            f"{handler} (registered by {candidate['caller']}) — {reasons}, so whether it "
             f"passes the request on is not known"
         )
     if question == "mount_prefix":
@@ -1590,7 +1578,7 @@ def assemble_module_document(
     ]
     coverage_items += _type_header_items(report.coverage, module)
     coverage_items += _understanding_items(report.coverage)
-    coverage_items += _config_coverage_items(resolved_config)
+    coverage_items += _config_coverage_items(resolved_config, redactor)
     coverage_items += _unresolved_derivation_items(report.endpoints)
     # Per-environment peer AUTHORITIES — one substituted address per
     # environment for a resolved outbound row — are the system-scope
@@ -2078,10 +2066,19 @@ def _untied(row: Mapping[str, object], part: str) -> bool:
     return isinstance(untied, (list, tuple)) and part in untied
 
 
+def _schedule_reason(row: Mapping[str, object], redactor: Redactor) -> str:
+    """A configured value's reason and detail. The detail does not name the environment, so two
+    environments that fail the same way read as one entry
+    (`` not set in `default`, `prod` (external: orders.rate is not set) ``)."""
+    detail = redactor.redact_text(str(row["unresolved_detail"]))
+    return f"{row['unresolved_reason']}: {detail}"
+
+
 def _configured_values(rows: Sequence[dict[str, object]], redactor: Redactor) -> str:
     """One job's per-environment values, in the rows' environment order: environments that
     read the same thing share one entry (`` `v` in `a`, `b` ``), and one whose value could
-    not be read says so with its reason (`` not set in `prod` (missing_key) ``). A value is
+    not be read says so with its reason and detail (`` not set in `prod` (external: orders.rate
+    is not set) ``). A value is
     masked by this exit's redactor before it is compared — whole where a key it was read
     through names a secret (`redact_schedule_value`, the decision the bundle takes too) —
     so two environments that differ only in what the redactor hides read as the one entry
@@ -2091,7 +2088,7 @@ def _configured_values(rows: Sequence[dict[str, object]], redactor: Redactor) ->
         value = row["value"]
         keys = json.loads(str(row["keys"]))
         shown = None if value is None else redact_schedule_value(redactor, keys, str(value))
-        reason = None if value is not None else str(row["unresolved_reason"])
+        reason = None if value is not None else _schedule_reason(row, redactor)
         environments.setdefault((shown, reason), []).append(f"`{row['environment']}`")
     entries = []
     for (shown, reason), names in environments.items():
@@ -3147,6 +3144,7 @@ def _understanding_items(coverage: dict[str, object]) -> list[tuple[Run, ...]]:
 
 def _config_coverage_items(
     resolved_config: Sequence[dict[str, object]],
+    redactor: Redactor,
 ) -> list[tuple[Run, ...]]:
     """Coverage's own view of pass 2 (2F design §2): which profiles resolved,
     and which declared keys did not — named with their reason and
@@ -3168,7 +3166,8 @@ def _config_coverage_items(
         items.append(
             _runs(
                 f"Configuration key unresolved: {row['key']} — "
-                f"{row['unresolved_reason']} in {row['environment']}."
+                f"{row['unresolved_reason']}: {redactor.redact_text(str(row['unresolved_detail']))} "
+                f"(in {row['environment']})."
             )
         )
     return items

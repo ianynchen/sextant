@@ -21,8 +21,7 @@ def normalize_key(key: str) -> str:
 
 
 # D01's own placeholder form — the expression an endpoint row carries until
-# the per-environment join resolves it (`resolved_peers`, whose SQL matches on
-# exactly this delimiter pair). Rungs 1 and 2 return an expression the facts
+# the per-environment join resolves it (`resolve/resolved_peers.py`). Rungs 1 and 2 return an expression the facts
 # already spell; rung 3 SYNTHESISES one from a prefix and a property name, so
 # it is the one rung that has to write the delimiters itself.
 #
@@ -30,9 +29,8 @@ def normalize_key(key: str) -> str:
 # relaxed-binding rule below is applied unconditionally: `placeholders` and
 # `key_matching` are declared on the framework FAMILY's base catalog, and a
 # client catalog — the only thing this ladder is handed — cannot see them.
-# `resolved_peers`' own SQL already hard-codes this same pair, so one form is
-# assumed in exactly two places rather than one; a non-`${}` ecosystem has to
-# thread the pair onto `field_sources` and into that query together.
+# The join reads the config model's own delimiters, so a non-`${}` ecosystem has
+# to thread the pair onto `field_sources` to make the two agree.
 _PLACEHOLDER = ("${", "}")
 
 
