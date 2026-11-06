@@ -28,6 +28,14 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A Python scanner reads the structure of `.py` source** (OI-208 plan 1 task 4, spec
+  `2026-11-06-python-reader-design.md` §3a). Modules, classes, `<clinit>` bodies, `__init__` as
+  `<init>`, module-level names as static fields with their `field_write`, typed signatures from
+  the written annotations, and decorators as the calls they are. A file Python cannot parse is
+  listed as uncovered with its reason, and the rest of the module is scanned. A Python module's
+  import roots are what is scanned, and its module fact names the `c3` lookup rule. Calls in
+  function bodies, control flow and library types are not read yet.
+
 - **A Retrofit client that Dagger or Hilt makes has its server address** (OI-304, spec
   `2026-11-05-di-recipe-hop-design.md`). A parameter the container fills (a `@Provides` method's,
   or an `@Inject` constructor's) now receives the value of the one recipe the container chooses for

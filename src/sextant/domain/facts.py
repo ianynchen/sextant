@@ -179,6 +179,10 @@ class Document(BaseModel):
     type_headers_unlocated: int = 0
 
 
+# How a method is looked up on a type (D00 §5 `module`): one named rule per language family.
+type Lookup = Literal["jvm", "c3"]
+
+
 class ModuleFact(BaseModel):
     model_config = {"frozen": True}
     kind: Literal["module"] = "module"
@@ -200,7 +204,7 @@ class ModuleFact(BaseModel):
     # How a method is looked up on a type in this module: `jvm` for the JVM's own rule,
     # `c3` for Python's method resolution order. It is the module's, not the document's,
     # because the resolver reads it per module and every JVM module keeps `jvm`.
-    lookup: Literal["jvm", "c3"] = "jvm"
+    lookup: Lookup = "jvm"
     # The reactor siblings this analysis scanned for their TYPES (F4 §5.2, W24), as
     # their coordinates, sorted. Carried on the module fact because its consumer runs at
     # RESOLVE and there is nothing else there that can tell them apart.

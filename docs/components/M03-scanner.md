@@ -228,6 +228,53 @@ table silently misses the other. Measured elsewhere as the one real case where a
 tier saw something the bytecode already held. The constant-value attribute. Source file and
 line numbers. Kotlin metadata for nullability.
 
+### The Python scanner
+
+`ingress/extract/python` reads `.py` source with the standard library's `ast` (spec
+`2026-11-06-python-reader-design.md` §3a). It never imports or runs the code it reads, and
+it downloads nothing. It accepts `{python}`, ranks 0, and declares `typed_signatures`,
+`annotation_args`, `type_annotations` and `value_ids`; `control_flow` joins when the flow
+fields are written.
+
+**Input.** Python runs from source, so the module's import roots are what is read: the
+scan stage hands them over as `classes_dir` and `more_classes_dirs` when the build writes
+no output directory. Every `.py` file under them is one document, written to
+`<relative path>.jsonl`. Version-control folders, tool caches, `node_modules`,
+`site-packages` and every folder that holds `pyvenv.cfg` are not entered.
+
+**One file at a time.** An import binds a name by PATH only: `from app.models import
+Order` is the class `app/models/Order#`, or the module `app/models/Order` when such a file
+is in the import roots. The other file's body is not read. A name that two branches bind
+differently is a closed list of both, in written order.
+
+**What it writes** (spec §3a, D00 §1 and §5a):
+
+- `module` symbol per file, `class` (or `protocol`, `enum`) per class, with the written
+  parents as `superclass` and then `interfaces`, in written order;
+- `<clinit>` per module and class body, `<init>` for `__init__`, one `method` per `def`;
+- a static `field` per name a module or class body assigns, and a `field_write` from that
+  body's `<clinit>`;
+- typed signatures from the written annotations (rule 1); `self` and `cls` are receivers,
+  not parameters;
+- decorators as `call_site` facts in the enclosing body's `<clinit>`: each decorator
+  expression in written order, then each application from the bottom up, with the
+  function as a `lambda` argument or the class as a `class` argument. A call on a value
+  is `__call__` with that value's id as `receiver`.
+
+A call's owner is named where the file can tell: a class of the file is its `<init>`; a
+function of the file, or a member of another module, is a static call on that module's
+type. Whether an imported member is a class is in a file this scanner does not read, so
+the resolver decides. A call on a name the file assigns names the static field
+(`receiver_field`) and leaves the owner to the resolver (D00 §5's virtual call with a
+receiver).
+
+**A file Python cannot parse** goes on the uncovered list with the reason, and the rest
+of the module is scanned. The grammar is the one of the Python that runs Sextant, and the
+reason names that version: a file written for a newer Python than that is not read.
+
+Calls in function bodies, keyword arguments, returns, control-flow fields, library type
+files and typeshed are later parts of this scanner.
+
 ### Artifact readers
 
 Configuration, build files, Kubernetes manifests, Helm charts, OpenAPI documents, protobuf

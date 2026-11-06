@@ -577,6 +577,8 @@ class PythonDetector:
             dependency_versions=versions,
             dependency_archives=archives,
             environment=environment_folder,
+            # Python finds a method by its method resolution order (spec §3b).
+            lookup="c3",
         )
         return model, notes
 

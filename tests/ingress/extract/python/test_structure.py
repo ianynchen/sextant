@@ -1,0 +1,299 @@
+"""`PythonScanner` part 1 (spec 2026-11-06 §3a): the structure of one Python file as the
+existing facts — modules and classes as types, a body as `<clinit>`, module-level names as
+static fields, decorators as the calls they are. Every tree is built in `tmp_path`; nothing
+is imported or run."""
+
+from pathlib import Path
+
+from sextant.application.ports.scanner import ScanRequest
+from sextant.domain.factfile import read_fact_tree
+from sextant.domain.facts import (
+    AnnotationFact,
+    CallArgument,
+    CallSiteFact,
+    Document,
+    FieldWriteFact,
+    SymbolFact,
+)
+from sextant.domain.symbols import PY_SIGNATURE, bare_descriptor, disambiguator_of
+from sextant.ingress.extract.python.scanner import PythonScanner
+
+DIS = disambiguator_of(PY_SIGNATURE)
+
+
+def _write(path: Path, text: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _scan(tmp_path: Path, files: dict[str, str], *, coordinates: str = ".", version: str = "."):
+    root = tmp_path / "src"
+    for relative, text in files.items():
+        _write(root / relative, text)
+    out = tmp_path / "facts"
+    report = PythonScanner().scan(
+        ScanRequest(
+            module_id="shop",
+            coordinates=coordinates,
+            version=version,
+            classes_dir=root,
+            out_dir=out,
+        )
+    )
+    return report, read_fact_tree(out)
+
+
+def _facts(tree, kind):
+    return [fact for _, _, facts in tree for fact in facts if isinstance(fact, kind)]
+
+
+def _symbols(tree) -> dict[str, list[SymbolFact]]:
+    found: dict[str, list[SymbolFact]] = {}
+    for fact in _facts(tree, SymbolFact):
+        found.setdefault(bare_descriptor(fact.symbol), []).append(fact)
+    return found
+
+
+def test_scanner_declares_what_it_reads_and_accepts_python():
+    scanner = PythonScanner()
+
+    assert scanner.accepts({"python"})
+    assert not scanner.accepts({"java"})
+    assert scanner.rank() == 0
+    assert scanner.capabilities() == {
+        "typed_signatures",
+        "annotation_args",
+        "type_annotations",
+        "value_ids",
+    }
+
+
+def test_a_module_is_a_type_and_its_top_level_function_is_its_method(tmp_path: Path):
+    report, tree = _scan(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/api/__init__.py": "",
+            "app/api/items.py": "def create_item(): pass\n",
+        },
+        coordinates="shop",
+        version="1.0.0",
+    )
+
+    symbols = _symbols(tree)
+    assert "app/api/items#" in symbols
+    method = symbols[f"app/api/items#create_item({DIS})."][0]
+    assert method.symbol == f"sextant-python pypi shop 1.0.0 app/api/items#create_item({DIS})."
+    assert method.enclosing == "sextant-python pypi shop 1.0.0 app/api/items#"
+    assert report.documents == 3
+
+
+def test_a_package_init_is_the_module_of_its_package_path(tmp_path: Path):
+    _, tree = _scan(tmp_path, {"app/api/__init__.py": "def ping(): pass\n"})
+
+    assert f"app/api#ping({DIS})." in _symbols(tree)
+
+
+def test_a_class_is_a_type_beside_its_module_and_a_nested_class_uses_dollar(tmp_path: Path):
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/api/items.py": (
+                "class OrderService:\n"
+                "    def create(self): pass\n"
+                "    class Inner:\n"
+                "        def run(self): pass\n"
+            )
+        },
+    )
+
+    symbols = _symbols(tree)
+    assert symbols["app/api/items/OrderService#"][0].enclosing.endswith(" app/api/items#")
+    assert f"app/api/items/OrderService#create({DIS})." in symbols
+    assert f"app/api/items/OrderService$Inner#run({DIS})." in symbols
+
+
+def test_module_body_is_clinit_and_its_names_are_static_fields_written_there(tmp_path: Path):
+    _, tree = _scan(
+        tmp_path,
+        {"app/main.py": "from fastapi import FastAPI\n\napp = FastAPI()\n"},
+    )
+
+    writes = _facts(tree, FieldWriteFact)
+    assert [(w.field, bare_descriptor(w.written_by or "")) for w in writes] == [
+        ("app/main#app.", f"app/main#<clinit>({DIS})."),
+    ]
+    field = _symbols(tree)["app/main#app."][0]
+    assert field.construct_kind == "field"
+    assert field.modifiers["static"] is True
+    # The value is the result of the call that built it, by value id.
+    call = next(c for c in _facts(tree, CallSiteFact) if c.target.name == "FastAPI")
+    assert writes[0].value == CallArgument(kind="unresolved", source=call.result)
+    assert call.target.owner == "fastapi#"
+
+
+def test_init_is_init_method(tmp_path: Path):
+    _, tree = _scan(
+        tmp_path,
+        {"app/svc.py": "class OrderService:\n    def __init__(self, repo: int): pass\n"},
+    )
+
+    init = _symbols(tree)[f"app/svc/OrderService#<init>({DIS})."][0]
+    assert init.construct_kind == "constructor"
+    assert init.signature is not None
+    # `self` is the receiver, not a parameter (D00 §5 numbering).
+    assert [p.name for p in init.signature.parameters] == ["repo"]
+
+
+def test_property_getter_and_setter_are_two_members(tmp_path: Path):
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "class C:\n"
+                "    @property\n"
+                "    def x(self) -> int: return 1\n"
+                "    @x.setter\n"
+                "    def x(self, value: int) -> None: pass\n"
+            )
+        },
+    )
+
+    symbols = _symbols(tree)
+    assert len(symbols[f"app/m/C#x({DIS})."]) == 1
+    assert len(symbols[f"app/m/C#x=({DIS})."]) == 1
+
+
+def test_overload_stubs_are_types_not_bodies(tmp_path: Path):
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from typing import overload\n"
+                "@overload\n"
+                "def f(x: int) -> int: ...\n"
+                "@overload\n"
+                "def f(x: str) -> str: ...\n"
+                "def f(x): return x\n"
+            )
+        },
+    )
+
+    facts = _symbols(tree)[f"app/m#f({DIS})."]
+    stubs = [f for f in facts if f.modifiers.get("abstract")]
+    bodies = [f for f in facts if not f.modifiers.get("abstract")]
+    assert len(stubs) == 2
+    assert [s.signature.returns.symbol for s in stubs if s.signature and s.signature.returns] == [
+        "builtins/int#",
+        "builtins/str#",
+    ]
+    assert [(b.line_start, b.line_end) for b in bodies] == [(6, 6)]
+
+
+def test_conditional_double_definition_is_two_bodies(tmp_path: Path):
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "import sys\n"
+                "if sys.platform == 'win32':\n"
+                "    def f(): return 1\n"
+                "else:\n"
+                "    def f(): return 2\n"
+            )
+        },
+    )
+
+    facts = _symbols(tree)[f"app/m#f({DIS})."]
+    assert [(f.line_start, f.modifiers.get("abstract")) for f in facts] == [(3, False), (5, False)]
+
+
+def test_written_type_has_evidence_declared(tmp_path: Path):
+    """A type the code writes is recorded as written, bound through the file's own
+    imports, and nothing is inferred. The document says the facts were read from
+    source (`class_major` 0, D00 §2), which is what makes the type `declared` (D00 §5d's
+    rule: a source origin is `declared`)."""
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.models import Order\ndef f(order: Order) -> 'Order': return order\n"
+            ),
+            "app/models.py": "class Order: pass\n",
+        },
+    )
+
+    method = _symbols(tree)[f"app/m#f({DIS})."][0]
+    assert method.signature is not None
+    assert method.signature.parameters[0].type.symbol == "app/models/Order#"
+    assert method.signature.returns is not None
+    assert method.signature.returns.symbol == "app/models/Order#"
+    documents: list[Document] = [document for _, document, _ in tree]
+    assert {(d.language, d.class_major) for d in documents} == {("python", 0)}
+
+
+def test_decorator_is_written_as_two_calls(tmp_path: Path):
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/items.py": (
+                "from fastapi import APIRouter\n"
+                "router = APIRouter()\n"
+                "@router.get('/x')\n"
+                "def f(): pass\n"
+            )
+        },
+    )
+
+    calls = [c for c in _facts(tree, CallSiteFact) if c.target.name != "APIRouter"]
+    get, apply = calls
+    assert get.target.name == "get"
+    assert get.invoke_kind == "virtual"
+    assert get.receiver_field == "app/items#router."
+    assert get.arguments == [CallArgument(kind="string", value="/x")]
+    assert apply.receiver == get.result
+    assert apply.arguments == [
+        CallArgument(kind="lambda", symbol=f"app/items#f({DIS}).", captures=0)
+    ]
+    assert get.ordinal < apply.ordinal
+    assert {bare_descriptor(c.caller) for c in calls} == {f"app/items#<clinit>({DIS})."}
+    assert _facts(tree, AnnotationFact) == []
+
+
+def test_try_import_fallback_binds_a_closed_list(tmp_path: Path):
+    """Review Focus 2: two bindings, a closed list, never the first one silently."""
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/codec.py": (
+                "try:\n"
+                "    import ujson as json\n"
+                "except ImportError:\n"
+                "    import json\n"
+                "codec = json\n"
+            )
+        },
+    )
+
+    (write,) = _facts(tree, FieldWriteFact)
+    assert write.value == CallArgument(
+        kind="merge",
+        candidates=[
+            CallArgument(kind="class", symbol="ujson#"),
+            CallArgument(kind="class", symbol="json#"),
+        ],
+    )
+
+
+def test_unparsable_file_is_uncovered_and_the_rest_is_scanned(tmp_path: Path):
+    """Review Focus 5: a Python 2 file is reported with its reason; the rest is read."""
+    report, tree = _scan(
+        tmp_path,
+        {"app/old.py": "print 'hello'\n", "app/new.py": "def f(): pass\n"},
+    )
+
+    assert len(report.uncovered) == 1
+    assert report.uncovered[0].startswith("app/old.py: ")
+    assert f"app/new#f({DIS})." in _symbols(tree)
+    assert [document.relative_path for _, document, _ in tree] == ["app/new.py"]

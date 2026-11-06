@@ -188,3 +188,22 @@ def test_the_catalog_hash_changes_when_any_model_beside_the_catalogs_changes(tmp
         hashes.append(api._catalog_hash(tmp_path))
 
     assert len(set(hashes)) == len(hashes), "an edit to one of the model directories went unseen"
+
+
+def test_a_python_project_is_scanned_from_its_import_roots(tmp_path: Path):
+    """A Python module writes no build output: the scan reads its import roots, and its
+    module fact names Python's lookup rule (spec 2026-11-06 §3b, §3e)."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "shop"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    package = tmp_path / "src" / "shop"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "orders.py").write_text("def create(): pass\n", encoding="utf-8")
+
+    api.analyze(tmp_path)
+
+    facts = tmp_path / ".sextant" / "facts"
+    assert '"lookup":"c3"' in (facts / "module.jsonl").read_text(encoding="utf-8")
+    orders = (facts / "shop" / "orders.py.jsonl").read_text(encoding="utf-8")
+    assert "sextant-python pypi shop 1.0.0 shop/orders#create(" in orders

@@ -20,12 +20,27 @@ tool — no indexer is involved. See [ARCHITECTURE.md](../ARCHITECTURE.md) DR-1.
 
 sextant-jvm  maven  com.acme/orders  2.1.0  com/acme/OrderService#save().
 sextant-jvm  maven  com.acme/orders  2.1.0  com/acme/OrderService#save(+1).
-sextant-python  .  .  .  shop/orders#OrderService#save(sig_…).
+sextant-python  .  .  .  shop/orders/OrderService#save(sig_…).
+sextant-python  pypi  shop-orders  1.4.0  shop/orders#create_order(sig_…).
 ```
 
 The scheme is `sextant-jvm` for JVM code and `sextant-python` for Python code. Python has no
 overloads, so every Python method has the one signature `(*)`. All Python methods therefore
 share one disambiguator, and a call joins its callee by name.
+
+**A Python module (file) is a namespace for its classes and a type for its own members**
+(ruling R4, 2026-11-06). For the file `shop/orders.py`:
+
+- a module-level function is `shop/orders#create_order(sig_…).`;
+- the module body is `shop/orders#<clinit>(sig_…).`;
+- a module-level name is the static field `shop/orders#app.`;
+- a class is `shop/orders/OrderService#`, and its method `shop/orders/OrderService#save(sig_…).`;
+- a nested class is `shop/orders/Outer$Inner#`, as on the JVM.
+
+So `owner_of` (the text up to the first `#`) always gives the owning type. A package's
+`__init__.py` is the module of its package path (`shop#` for `shop/__init__.py`). A published
+module writes `sextant-python pypi <name> <version> …`, with its PEP 503 name; an unpublished
+one writes `.` for the three fields.
 
 **Descriptor grammar**, unchanged from SCIP:
 
@@ -721,6 +736,18 @@ would be indistinguishable from an annotation genuinely written with none, which
 silent truncation §8 forbids. Strictly additive: an engine that does not consult a nested
 use sees exactly the keys it saw before, since a nested value previously produced no key
 at all.
+
+**A Python type reference is the type the code writes** (spec 2026-11-06 §3a, rule 1). Its
+name is bound through the file's own imports, by path: the other file is not read.
+`Optional[X]` and `X | None` are `X` with `nullable: true`. A union is the arguments of
+`typing/Union#`. `type[X]` is `X`. `Annotated[X, …]` is `X`. A type variable is its bare name,
+as on the JVM. A name the file does not bind gives no type. An unannotated parameter is
+`typing/Any#`, the typing specification's rule. A name that two branches bind differently
+(`try: import ujson as json` / `except ImportError: import json`) is a closed list: as a
+type it is the union of both, and as a value it is a `merge` argument with one candidate
+each. **Evidence:** every type a Python document states is written in source, so it is
+`declared`, the word §5d gives a source origin. The document says so: `language` is the
+source language and `class_major` is 0. No reference carries an evidence field of its own.
 
 ### 5b. The wire-type vocabulary
 

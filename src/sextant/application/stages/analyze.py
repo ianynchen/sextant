@@ -238,7 +238,10 @@ def analyze(
     # two inbound Pub/Sub endpoints, 143 against a fresh workspace's 141 on identical
     # source. BEFORE the scan, for the reason above and for one more: after it, this
     # would delete what the scan had just written.
-    discard_scanned_facts(fact_root, *module.output_dirs)
+    # A module whose build writes no output runs from its source, so its source roots are
+    # what the scanner reads (a Python module's import roots, spec 2026-11-06 §3e).
+    scanned_dirs = module.output_dirs or module.source_roots
+    discard_scanned_facts(fact_root, *scanned_dirs)
     # EVERY output directory the build reports, read in ONE scan (OI-273): Gradle's
     # `classesDirs` is a set, one directory per compiling plugin. The first may not exist
     # at all (a plugin with nothing to compile never creates it), and on a module with
@@ -248,7 +251,7 @@ def analyze(
     # reported directory that does not exist holds no classes and is skipped. Where none
     # exists the first is still handed over, so the scanner's own refusal names it, as it
     # always has (Maven reports one).
-    present = tuple(d for d in module.output_dirs if d.is_dir()) or module.output_dirs[:1]
+    present = tuple(d for d in scanned_dirs if d.is_dir()) or scanned_dirs[:1]
     scan_report = scanner.scan(
         ScanRequest(
             module_id=module.module_id,
@@ -543,6 +546,10 @@ def _write_module_fact(fact_root: Path, module: ModuleModel) -> None:
         dependency_source=module.dependency_source,
         dependency_source_reason=module.dependency_source_reason,
     )
+    # Written only where the detector names its language's rule; the fact's default
+    # stands for every other module.
+    if module.lookup is not None:
+        fact = fact.model_copy(update={"lookup": module.lookup})
     write_fact_file(fact_root / f"{_MODULE_DOCUMENT}.jsonl", document, [fact])
 
 

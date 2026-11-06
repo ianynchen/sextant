@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Protocol
 
 from sextant.application.ports.selection import NoAdapterError
+from sextant.domain.facts import Lookup
 from sextant.domain.symbols import NOT_APPLICABLE
 
 
@@ -188,6 +189,9 @@ class ModuleModel:
     # §3e): a folder that holds `pyvenv.cfg`. None for a build system that has no such
     # folder, and for a module with no environment on this machine.
     environment: Path | None = None
+    # How a method is looked up on this module's types (D00 §5 `module.lookup`): set by a
+    # detector whose language has its own rule. None keeps the module fact's default.
+    lookup: Lookup | None = None
 
 
 @dataclass(frozen=True)

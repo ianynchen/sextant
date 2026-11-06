@@ -143,7 +143,7 @@ from sextant.application.ports.detector import (
 )
 from sextant.application.ports.enrichment import EnrichmentAgentError
 from sextant.application.ports.progress import NullProgress, Progress
-from sextant.application.ports.scanner import select_scanner
+from sextant.application.ports.scanner import Scanner, select_scanner
 from sextant.application.ports.selection import NoAdapterError
 from sextant.application.query.questions import QUESTIONS as _QUESTIONS
 from sextant.application.query.questions import QuestionRefused, answer
@@ -200,6 +200,7 @@ from sextant.ingress.detect.sextant_config import (
 )
 from sextant.ingress.extract.jvm.generated_naming import JvmGeneratedNaming
 from sextant.ingress.extract.jvm.scanner import AsmScanner
+from sextant.ingress.extract.python.scanner import PythonScanner
 from sextant.ingress.interpret.descriptors import interpret_descriptors
 from sextant.ingress.read.registry import READERS
 from sextant.resources import catalogs_dir, extractor_jar, instructions_path
@@ -489,10 +490,10 @@ def _skip_reason(module: ModuleModel) -> str | None:
     return None
 
 
-def _scanners() -> list[AsmScanner]:
+def _scanners() -> list[Scanner]:
     """The one scanner registry: what the scan stage chooses from, and what `_skip_reason`
     asks before a module is analysed, so the two can never disagree."""
-    return [AsmScanner(extractor_jar())]
+    return [AsmScanner(extractor_jar()), PythonScanner()]
 
 
 def _module_json_row(outcome: ModuleOutcome) -> dict[str, object]:
