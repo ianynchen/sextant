@@ -41,6 +41,12 @@ here would restate those documents rather than add anything.
   Every `return` and the implicit `return None` are `method_return` facts, and `self.x = …` is a
   `field_write`. A keyword argument is bound to its position where the file writes the callee's
   parameters; elsewhere it keeps its name in the new optional argument key `keyword` (D00 §5).
+- **The Python scanner states each call's place in its body's control flow** (OI-208 plan 1
+  task 6). Every Python `call_site` carries `dominator`, `on_every_exit`, `post_dominator`,
+  `reaches_return` and `loop_group` with the JVM meanings (D00 §5 rule 9), for `if`, loops,
+  `break`/`continue`, `try`/`except`/`else`/`finally`, `with`, `return`, `raise`, `assert`,
+  `match`, `and`/`or`, conditional expressions and comprehensions. A name two branches set
+  differently is now a `merge` of both values, where it was `unresolved`.
 
 - **A Retrofit client that Dagger or Hilt makes has its server address** (OI-304, spec
   `2026-11-05-di-recipe-hop-design.md`). A parameter the container fills (a `@Provides` method's,

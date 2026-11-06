@@ -1289,6 +1289,24 @@ above:
 - A module-level name that branches bind to several imports (`try: import ujson as json` /
   `except ImportError: import json`) is a static field with one `field_write` per import, so
   a call on it names the field as `receiver_field`. As an argument it is a `merge`.
+- A name that two paths set to different values is a `merge` of them where they join (an
+  `if`, a `match`, a `try`, a loop that no `break` or `continue` leaves), as a JVM frame slot
+  two branches wrote; `unresolved` where a path does not set it.
+- Rule 9's five fields are read off each body's own graph (a module or class body, a
+  function, a `lambda`), built from the syntax tree: a call is a node before it runs and one
+  after it completed, as above. Every expression may raise, so inside a `try` every
+  statement and call has an edge to the handlers, except the point after a call that is all
+  of its statement (`a()`, `x = a()`, `return a()`), as the JVM's handler is entered only
+  where `a` did not complete. A `with` block's manager may swallow what the block raised, so
+  the code after the block can follow any point of it. A `finally` is copied for each way
+  out of its `try`, as javac copies it; a call in it is one site, which runs on every exit
+  where one of its copies does and reaches a return only where every copy does. `raise`, an
+  exception a `with` or `finally` raises again, and a failing `assert` lead nowhere, as an
+  `ATHROW` does; `python -O` may drop an `assert`. A comprehension is a loop. A generator
+  expression runs when it is consumed, possibly after the body returned, so its calls have
+  no `post_dominator` and do not reach a return. `yield` and `await` are not exits. A call
+  after a `return` is written (the JVM writes no unreachable site) with no `dominator`,
+  `post_dominator` or `loop_group`, and `on_every_exit` and `reaches_return` false.
 
 **`method_return` is a fact of its own, one per return instruction** (capability 9.18) —
 what a method hands back:

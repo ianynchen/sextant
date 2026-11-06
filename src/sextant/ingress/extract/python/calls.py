@@ -24,8 +24,10 @@ parameter list (a function or a class constructor of this file, by a `static` or
 call). Elsewhere it keeps its name in `keyword` (ruling R2), and the resolver binds it.
 
 A local name holds the last value written to it on this path. Where two paths join with
-different values, the name is `unresolved` (the flow fields, and `merge` at joins, are read
-by the next part of this scanner).
+different values, the name is a `merge` of them, as a JVM frame slot two branches wrote; it
+is `unresolved` where a path does not set it or sets a value not followed, and after a loop
+that a `break` or a `continue` leaves. Each call's place in its body's control flow (D00 §5
+rule 9) is read by `flow.py`, which the statements below drive.
 
 Every `return` is a `method_return`, plus the implicit `return None` where the end of the
 body is reachable. A generator returns a generator object, so its one `method_return` is
@@ -53,6 +55,7 @@ from sextant.domain.facts import (
     Signature,
 )
 from sextant.domain.symbols import PY_SIGNATURE, method_descriptor, names_a_type
+from sextant.ingress.extract.python.flow import Flow
 from sextant.ingress.extract.python.imports import (
     Binding,
     ModuleIndex,
@@ -172,6 +175,8 @@ class Scope:
     # The first written parent of the class, where `super()` starts: `builtins/object#`
     # where none is written, None where the first parent is not a class name.
     super_owner: str | None = None
+    # This reading of the body's control flow (one per body, D00 §5 rule 9).
+    flow: Flow = field(default_factory=Flow)
 
 
 @dataclass(frozen=True)
@@ -371,6 +376,12 @@ class BodyReader:
             self._return(_UNKNOWN, inner)
         elif _falls_through(node.body):
             self._return(CallArgument(kind="null"), inner)
+        self._positions(inner)
+
+    def _positions(self, scope: Scope) -> None:
+        """Each call of the body read, with its place in the body's control flow."""
+        for index, fields in scope.flow.positions():
+            self.facts[index] = self.facts[index].model_copy(update=fields)
 
     def _frame(
         self,
@@ -461,6 +472,8 @@ class BodyReader:
 
     def _statement(self, node: ast.stmt, scope: Scope) -> None:
         frame = scope.frame
+        if not _raises_nothing(node):
+            scope.flow.statement()
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             self._function(node, scope)
         elif isinstance(node, ast.ClassDef):
@@ -475,16 +488,25 @@ class BodyReader:
                     self._store(target, value, scope)
                     if isinstance(node.value, ast.List) and isinstance(target, ast.Name):
                         frame.mutable.add(target.id)
+            if _only_a_call(node):
+                scope.flow.quiet()
         elif isinstance(node, ast.AugAssign):
             self._augmented(node, scope)
         elif isinstance(node, ast.Expr):
             self._value(node.value, scope)
+            if _only_a_call(node):
+                scope.flow.quiet()
         elif isinstance(node, ast.Return):
             value = (
                 CallArgument(kind="null") if node.value is None else self._value(node.value, scope)
             )
             if frame is not None and not frame.generator:
                 self._return(value, scope)
+            if _only_a_call(node):
+                scope.flow.quiet()
+            scope.flow.jump("return")
+        elif isinstance(node, ast.Break | ast.Continue):
+            scope.flow.jump("break" if isinstance(node, ast.Break) else "continue")
         elif isinstance(node, ast.If):
             self._value(node.test, scope)
             self._branches([node.body, node.orelse], scope)
@@ -495,28 +517,52 @@ class BodyReader:
             self._loop(node.body, node.orelse, scope, test=node.test)
         elif isinstance(node, ast.With | ast.AsyncWith):
             enter = _ASYNC_ENTER if isinstance(node, ast.AsyncWith) else _ENTER
+            managers = []
             for item in node.items:
                 manager = self._value(item.context_expr, scope)
                 entered = self._invoke(self._on_value(manager, enter, scope), [], scope)
                 if item.optional_vars is not None:
                     self._store(item.optional_vars, entered, scope)
+                managers.append(scope.flow.with_block())
             self._statements(node.body, scope)
+            for exit_point in reversed(managers):
+                scope.flow.with_end(exit_point)
         elif isinstance(node, ast.Try | ast.TryStar):
             self._try(node, scope)
         elif isinstance(node, ast.Match):
             self._value(node.subject, scope)
+            # A case's guard runs where its pattern matched; where the pattern or the guard
+            # fails, the next case is tried.
+            flow = scope.flow
+            starts: list[int | None] = []
+            untried = flow.here()
             for case in node.cases:
+                flow.at(untried)
                 if case.guard is not None:
                     self._value(case.guard, scope)
-            self._branches([case.body for case in node.cases] + [[]], scope)
+                starts.append(flow.here())
+                irrefutable = isinstance(case.pattern, ast.MatchAs) and case.pattern.pattern is None
+                untried = flow.join(
+                    [
+                        None if irrefutable else untried,
+                        flow.here() if case.guard is not None else None,
+                    ]
+                )
+            self._branches([case.body for case in node.cases] + [[]], scope, [*starts, untried])
         elif isinstance(node, ast.Raise):
             for part in (node.exc, node.cause):
                 if part is not None:
                     self._value(part, scope)
+            scope.flow.raises()
         elif isinstance(node, ast.Assert):
+            # `python -O` drops it; else a false test raises.
+            skipped = scope.flow.here()
             self._value(node.test, scope)
+            passed = scope.flow.here()
             if node.msg is not None:
                 self._value(node.msg, scope)
+            scope.flow.raises()
+            scope.flow.join([skipped, passed])
         elif isinstance(node, ast.Delete):
             for target in node.targets:
                 self._store(target, _UNKNOWN, scope)
@@ -568,21 +614,38 @@ class BodyReader:
                 )
             self._write_field(descriptor, _reference(binding.targets[0]), scope)
 
-    def _branches(self, bodies: list[list[ast.stmt]], scope: Scope) -> None:
-        """Each body runs from the same names; after them, a name keeps a value only
-        where every body that reaches the end gives it the same one."""
+    def _branches(
+        self,
+        bodies: list[list[ast.stmt]],
+        scope: Scope,
+        starts: list[int | None] | None = None,
+    ) -> None:
+        """Each body runs from the same names, and from `starts` in the control flow (by
+        default, from where the branch is); after them, a name keeps a value only where
+        every body that reaches the end gives it the same one, and is a `merge` where they
+        give different ones."""
         frame = scope.frame
+        flow = scope.flow
+        if starts is None:
+            starts = [flow.here()] * len(bodies)
+        points: list[int | None] = []
         if frame is None:
-            for body in bodies:
+            for body, start in zip(bodies, starts, strict=True):
+                flow.at(start)
                 self._statements(body, scope)
+                points.append(flow.here())
+            flow.join(points)
             return
         before = frame.values
         ends = []
-        for body in bodies:
+        for body, start in zip(bodies, starts, strict=True):
+            flow.at(start)
             frame.values = dict(before)
             self._statements(body, scope)
+            points.append(flow.here())
             if _falls_through(body):
                 ends.append(frame.values)
+        flow.join(points)
         frame.values = _join(ends) if ends else dict(before)
 
     def _loop(
@@ -601,24 +664,35 @@ class BodyReader:
         if frame is not None:
             for name in _assigned(_own_nodes(body)) & set(frame.values):
                 frame.values[name] = _UNKNOWN
+        loop = scope.flow.loop()
         if test is not None:
             self._value(test, scope)
+        scope.flow.loop_tested(loop, endless=isinstance(test, ast.Constant) and bool(test.value))
         if target is not None:
             self._store(target, _UNKNOWN, scope)
         self._statements(body, scope)
+        scope.flow.loop_body_end(loop)
         if frame is not None:
-            frame.values = _join([before, frame.values])
+            # A `break` or a `continue` leaves with a value the end of the body does not
+            # show, so a name that differs is not known.
+            frame.values = _join([before, frame.values], merge=not _breaks(body, continues=True))
         self._statements(orelse, scope)
+        scope.flow.loop_end(loop)
 
     def _try(self, node: ast.Try | ast.TryStar, scope: Scope) -> None:
         frame = scope.frame
+        flow = scope.flow
         before = dict(frame.values) if frame is not None else {}
+        attempt = flow.try_body(has_finally=bool(node.finalbody))
         self._statements(node.body, scope)
+        flow.try_else(attempt)
         self._statements(node.orelse, scope)
+        flow.try_handlers(attempt)
         ends = (
             [frame.values] if frame is not None and _falls_through(node.body + node.orelse) else []
         )
         for handler in node.handlers:
+            flow.handler(attempt)
             if frame is not None:
                 # A handler starts from any point of the body.
                 frame.values = dict(before)
@@ -626,14 +700,18 @@ class BodyReader:
                     frame.values[name] = _UNKNOWN
             if handler.type is not None:
                 self._value(handler.type, scope)
+            flow.handler_matched(attempt, catches_all=handler.type is None)
             if handler.name is not None:
                 self._store(ast.Name(id=handler.name, ctx=ast.Store()), _UNKNOWN, scope)
             self._statements(handler.body, scope)
+            flow.handler_end(attempt)
             if frame is not None and _falls_through(handler.body):
                 ends.append(frame.values)
         if frame is not None:
             frame.values = _join(ends) if ends else before
+        flow.try_finally(attempt)
         self._statements(node.finalbody, scope)
+        flow.try_end(attempt)
 
     def _store(
         self, target: ast.expr, value: CallArgument, scope: Scope, *, evaluate: bool = True
@@ -753,6 +831,7 @@ class BodyReader:
         `source` is its receiver, as `new` does on the JVM (D00 §5)."""
         constructs = callee.invoke_kind == "special" and callee.target.name == INIT
         result = None if constructs else scope.body.value_id()
+        scope.flow.site(scope.body.ordinal, len(self.facts))
         self.facts.append(
             CallSiteFact(
                 document_id=self._context.document_id,
@@ -947,9 +1026,21 @@ class BodyReader:
             return self._lambda(node, scope)
         if isinstance(node, ast.IfExp):
             self._value(node.test, scope)
-            return _merge([self._value(node.body, scope), self._value(node.orelse, scope)])
+            tested = scope.flow.here()
+            chosen = self._value(node.body, scope)
+            ends = [scope.flow.here()]
+            scope.flow.at(tested)
+            other = self._value(node.orelse, scope)
+            scope.flow.join([*ends, scope.flow.here()])
+            return _merge([chosen, other])
         if isinstance(node, ast.BoolOp):
-            return _merge([self._value(value, scope) for value in node.values])
+            # Each value is read only where the ones before it did not decide.
+            values, ends = [], []
+            for operand in node.values:
+                values.append(self._value(operand, scope))
+                ends.append(scope.flow.here())
+            scope.flow.join(ends)
+            return _merge(values)
         if isinstance(node, ast.Await):
             return self._value(node.value, scope)
         if isinstance(node, ast.NamedExpr):
@@ -1014,6 +1105,7 @@ class BodyReader:
             frame=frame,
         )
         self._return(self._value(node.body, inner), inner)
+        self._positions(inner)
         return CallArgument(kind="lambda", symbol=descriptor, captures=0)
 
     def _comprehension(
@@ -1022,15 +1114,31 @@ class BodyReader:
         """A comprehension runs in the method that holds it (PEP 709). Its own names
         hold one element at a time, and are gone after it."""
         frame = scope.frame
+        flow = scope.flow
         saved = (dict(frame.values), set(frame.local_names)) if frame is not None else None
+        # Each `for` is a loop; an `if` that is false takes its next element. A generator
+        # expression runs its elements when it is consumed, possibly after this body ended.
+        lazy = isinstance(node, ast.GeneratorExp)
+        loops = []
         for generator in node.generators:
             self._value(generator.iter, scope)
+            loops.append(flow.loop())
+            flow.loop_tested(loops[-1])
+            if lazy and len(loops) == 1:
+                flow.defer(True)
             self._store(generator.target, _UNKNOWN, scope, evaluate=False)
             for condition in generator.ifs:
                 self._value(condition, scope)
+                flow.loop_test(loops[-1])
         parts = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
         for part in parts:
             self._value(part, scope)
+        if lazy:
+            flow.defer(False)
+        # An exhausted inner loop takes the outer loop's next element.
+        for loop in reversed(loops):
+            flow.loop_body_end(loop)
+        flow.loop_end(loops[0])
         if frame is not None and saved is not None:
             frame.values, frame.local_names = saved
         return _UNKNOWN
@@ -1185,13 +1293,20 @@ def _merge(candidates: list[CallArgument]) -> CallArgument:
     return folded[0] if len(folded) == 1 else CallArgument(kind="merge", candidates=folded)
 
 
-def _join(ends: list[dict[str, CallArgument]]) -> dict[str, CallArgument]:
+def _join(ends: list[dict[str, CallArgument]], *, merge: bool = True) -> dict[str, CallArgument]:
     """The names after several paths meet: a value where every path gives the same one,
-    else `unresolved`."""
+    else a `merge` of each path's value, as a JVM frame slot two branches wrote (D00 §5).
+    A name some path does not set, or sets to a value this scanner did not follow, is
+    `unresolved`, and so is every difference where `merge` is False."""
     joined: dict[str, CallArgument] = {}
     for name in dict.fromkeys(key for end in ends for key in end):
         values = [end.get(name, _UNKNOWN) for end in ends]
-        joined[name] = values[0] if all(value == values[0] for value in values) else _UNKNOWN
+        if all(value == values[0] for value in values):
+            joined[name] = values[0]
+        elif not merge or any(value == _UNKNOWN for value in values):
+            joined[name] = _UNKNOWN
+        else:
+            joined[name] = _merge([c for value in values for c in (value.candidates or [value])])
     return joined
 
 
@@ -1352,10 +1467,11 @@ def _statement_falls_through(node: ast.stmt) -> bool:
     return True
 
 
-def _breaks(body: list[ast.stmt]) -> bool:
-    """Whether a `break` of this loop is in `body` (not of a loop inside it)."""
+def _breaks(body: list[ast.stmt], *, continues: bool = False) -> bool:
+    """Whether a `break` (or, with `continues`, a `continue`) of this loop is in `body`
+    (not of a loop inside it)."""
     for node in body:
-        if isinstance(node, ast.Break):
+        if isinstance(node, ast.Break) or (continues and isinstance(node, ast.Continue)):
             return True
         inner: list[ast.stmt] = []
         if isinstance(node, ast.If):
@@ -1367,6 +1483,28 @@ def _breaks(body: list[ast.stmt]) -> bool:
             inner = node.body
         elif isinstance(node, ast.Match):
             inner = [s for case in node.cases for s in case.body]
-        if _breaks(inner):
+        if _breaks(inner, continues=continues):
             return True
     return False
+
+
+def _raises_nothing(node: ast.stmt) -> bool:
+    """Whether a statement can raise nothing of its own: `pass`, a jump, `global`, a
+    docstring, or a `return` of a name or a constant."""
+    if isinstance(node, ast.Pass | ast.Break | ast.Continue | ast.Global | ast.Nonlocal):
+        return True
+    if isinstance(node, ast.Expr):
+        return isinstance(node.value, ast.Constant)
+    if isinstance(node, ast.Return):
+        return node.value is None or isinstance(node.value, ast.Constant | ast.Name)
+    return False
+
+
+def _only_a_call(node: ast.Expr | ast.Assign | ast.AnnAssign | ast.Return) -> bool:
+    """Whether the statement is one call and nothing that may raise after it: `a()`,
+    `x = a()`, `return a()`."""
+    if isinstance(node, ast.Assign | ast.AnnAssign):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not all(isinstance(target, ast.Name) for target in targets):
+            return False
+    return isinstance(node.value, ast.Call)

@@ -233,8 +233,9 @@ line numbers. Kotlin metadata for nullability.
 `ingress/extract/python` reads `.py` source with the standard library's `ast` (spec
 `2026-11-06-python-reader-design.md` §3a). It never imports or runs the code it reads, and
 it downloads nothing. It accepts `{python}`, ranks 0, and declares `typed_signatures`,
-`annotation_args`, `type_annotations` and `value_ids`; `control_flow` joins when the flow
-fields are written.
+`annotation_args`, `type_annotations` and `value_ids`. It writes D00 §5's rule 9 flow fields,
+as the JVM scanner does, and like it does not declare `control_flow`, which is the regions a
+sequence diagram needs (above).
 
 **Input.** Python runs from source, so the module's import roots are what is read: the
 detector reports them as the module's `output_dirs`, and the scan stage hands them over as
@@ -307,7 +308,8 @@ it names only its receiver. An import that branches of a function bind different
 same closed list as at module level.
 
 A local name holds the last value written to it on the path; where paths join with
-different values it is `unresolved`. A list held in a local is read once as written, and
+different values it is a `merge` of them, and `unresolved` where a path does not set it or
+sets a value not followed, and after a loop a `break` or `continue` leaves. A list held in a local is read once as written, and
 `unresolved` after that, because the code it was handed to can change it.
 
 Every `return` is a `method_return`, plus `return None` where the end of the body is
@@ -318,7 +320,20 @@ another object is not written. A module-level name that branches bind to several
 a static field with one `field_write` per import, and a module-level alias of an imported
 name (`DecodeError = jwt.DecodeError`) is bound as that import is.
 
-Control-flow fields, library type files and typeshed are later parts of this scanner.
+**Each call's place in its body's control flow** (`flow.py`, D00 §5 rule 9): `dominator`,
+`on_every_exit`, `post_dominator`, `reaches_return` and `loop_group` on every `call_site`,
+with the JVM meanings. The graph is built from the syntax tree while the body is read, a
+call as two nodes (before it runs, after it completed), with the JVM pass's algorithms on
+it. Every expression may raise, so inside a `try` every statement and call has an edge to
+the handlers, except after a call that is all of its statement (`a()`, `x = a()`,
+`return a()`); a `with` block's manager may swallow what it raised or raise it again; a
+`finally` is copied for each way out, as javac copies it; `raise`, a re-raise and a failing
+`assert` lead nowhere, as an `ATHROW` does. `python -O` may drop an `assert`. A
+comprehension is a loop; a generator expression's calls have no `post_dominator` and do not
+reach a return, since it may run after the body returned. A call after a `return` is
+written with no place: no `dominator`, `post_dominator` or `loop_group`, both flags false.
+
+Library type files and typeshed are later parts of this scanner.
 
 ### Artifact readers
 

@@ -106,7 +106,9 @@ class _Writer(BodyReader):
         self._symbol(owner, ConstructKind.MODULE, None, 1, last_line)
         clinit = self._clinit(owner, 1, last_line)
         self._collect_signatures(tree.body)
-        self._statements(tree.body, Scope(owner, types, self._body(clinit)))
+        scope = Scope(owner, types, self._body(clinit))
+        self._statements(tree.body, scope)
+        self._positions(scope)
 
     def _clinit(self, owner: str, start: int, end: int) -> str:
         descriptor = method_descriptor(owner, CLINIT, PY_SIGNATURE)
@@ -186,6 +188,7 @@ class _Writer(BodyReader):
             else (None if len(self.not_read) > unread else type_symbol(Target(BUILTINS, "object"))),
         )
         self._statements(node.body, body)
+        self._positions(body)
         self._bind_nested(
             node.name, self._apply(callees, CallArgument(kind="class", symbol=owner), scope), scope
         )

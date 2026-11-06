@@ -27,8 +27,9 @@ _SCANNER_ID = "sextant-python-scanner"
 _PACKAGE_MANAGER = "pypi"
 _SUFFIX = ".py"
 _NO_REDACTION_HASH = "sha256:none"
-# What this backend reads (M03 "Capabilities"). `control_flow` joins when the flow
-# fields are written.
+# What this backend reads (M03 "Capabilities"). The rule 9 flow fields are written, as
+# by the JVM scanner, which does not declare `control_flow` either: that capability is the
+# regions a sequence diagram needs (M03 "The hard part: control flow").
 _CAPABILITIES = frozenset({"typed_signatures", "annotation_args", "type_annotations", "value_ids"})
 
 
