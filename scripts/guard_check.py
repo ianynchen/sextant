@@ -1241,9 +1241,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/stages/analyze.py",
-                find="    present = tuple(d for d in scanned_dirs if d.is_dir()) or "
-                "scanned_dirs[:1]\n",
-                replace="    present = scanned_dirs[:1]  # guard disabled by "
+                find="    present = tuple(d for d in module.output_dirs if d.is_dir()) or "
+                "module.output_dirs[:1]\n",
+                replace="    present = module.output_dirs[:1]  # guard disabled by "
                 "scripts/guard_check.py\n",
             ),
         ),

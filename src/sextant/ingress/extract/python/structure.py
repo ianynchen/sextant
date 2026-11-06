@@ -36,6 +36,7 @@ from sextant.domain.facts import (
     Parameter,
     Signature,
     SymbolFact,
+    TypeParameter,
 )
 from sextant.domain.symbols import PY_SIGNATURE, method_descriptor, names_a_type
 from sextant.ingress.extract.python.imports import (
@@ -49,8 +50,9 @@ from sextant.ingress.extract.python.typing_rules import (
     BUILTINS,
     UNANNOTATED,
     TypeScope,
-    type_ref,
+    type_parameter_name,
     type_symbol,
+    written_type,
 )
 
 INIT = "<init>"
@@ -153,7 +155,8 @@ class _Writer:
     def _class(self, node: ast.ClassDef, scope: _Scope) -> None:
         path = f"{scope.class_path}.{node.name}" if scope.class_path else node.name
         owner = type_symbol(Target(self._context.here, path))
-        parents = [self._parent(base, scope.types) for base in node.bases]
+        generic = scope.types.with_type_parameters(node.type_params)
+        parents = [self._parent(base, generic) for base in node.bases]
         written = [parent for parent in parents if parent is not None]
         kind = ConstructKind.CLASS
         if any(
@@ -179,6 +182,7 @@ class _Writer:
                 line_end=node.end_lineno or node.lineno,
                 superclass=self._full(written[0]) if written else None,
                 interfaces=[self._full(parent) for parent in written[1:]],
+                type_parameters=_type_parameters(node.type_params, generic),
             )
         )
         class_names = bind_names(
@@ -188,7 +192,7 @@ class _Writer:
             index=self._context.index,
             owner=path,
         )
-        types = replace(scope.types, class_names=class_names, self_type=owner)
+        types = replace(generic, class_names=class_names, self_type=owner)
         clinit = self._clinit(owner, node.lineno, node.end_lineno or node.lineno)
         self._statements(node.body, _Scope(owner, types, _Body(clinit), path))
 
@@ -227,7 +231,7 @@ class _Writer:
         value = None if node.value is None else self._value(node.value, scope)
         written = None
         if isinstance(node, ast.AnnAssign):
-            written = type_ref(node.annotation, scope.types)
+            written = written_type(node.annotation, scope.types)
         for target in targets:
             named = target if isinstance(target, ast.Name) else None
             for name in _names(target):
@@ -278,13 +282,15 @@ class _Writer:
         descriptor = method_descriptor(scope.owner, name, PY_SIGNATURE)
         self._decorate(node, CallArgument(kind="lambda", symbol=descriptor, captures=0), scope)
         receiver_taken = in_class and not is_static
+        generic = scope.types.with_type_parameters(node.type_params)
         self._symbol(
             descriptor,
             kind,
             scope.owner,
             node.lineno,
             node.end_lineno or node.lineno,
-            signature=self._signature(node, scope.types, skip_first=receiver_taken),
+            signature=self._signature(node, generic, skip_first=receiver_taken),
+            type_parameters=_type_parameters(node.type_params, generic),
             modifiers={
                 "abstract": abstract,
                 "static": not receiver_taken,
@@ -305,8 +311,10 @@ class _Writer:
         parameters = []
         for argument in ordered:
             found = (
-                type_ref(argument.annotation, types) if argument.annotation is not None else None
-            ) or UNANNOTATED
+                UNANNOTATED
+                if argument.annotation is None
+                else written_type(argument.annotation, types)
+            )
             parameters.append(
                 Parameter(
                     name=argument.arg,
@@ -314,7 +322,7 @@ class _Writer:
                     erased_symbol=found.symbol if names_a_type(found.symbol) else ANY,
                 )
             )
-        returns = type_ref(node.returns, types) if node.returns is not None else None
+        returns = written_type(node.returns, types) if node.returns is not None else None
         return Signature(parameters=parameters, returns=returns)
 
     # -- decorators and calls ------------------------------------------------------------
@@ -436,6 +444,7 @@ class _Writer:
         *,
         signature: Signature | None = None,
         modifiers: dict[str, bool] | None = None,
+        type_parameters: list[TypeParameter] | None = None,
     ) -> None:
         self.facts.append(
             SymbolFact(
@@ -447,8 +456,24 @@ class _Writer:
                 line_start=start,
                 line_end=end,
                 modifiers=modifiers or {},
+                type_parameters=type_parameters or [],
             )
         )
+
+
+def _type_parameters(written: list[ast.type_param], scope: TypeScope) -> list[TypeParameter]:
+    """PEP 695 type parameters as the JVM's `type_parameters` (D00 §5a): the name, and
+    the written bound where there is one. A constraint list is not a bound."""
+    found = []
+    for parameter in written:
+        bound = getattr(parameter, "bound", None)
+        bounds = (
+            [written_type(bound, scope)]
+            if bound is not None and not isinstance(bound, ast.Tuple)
+            else []
+        )
+        found.append(TypeParameter(name=type_parameter_name(parameter), bounds=bounds))
+    return found
 
 
 def _target(owner: str, name: str) -> CallTarget:

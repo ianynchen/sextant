@@ -741,8 +741,10 @@ at all.
 name is bound through the file's own imports, by path: the other file is not read.
 `Optional[X]` and `X | None` are `X` with `nullable: true`. A union is the arguments of
 `typing/Union#`. `type[X]` is `X`. `Annotated[X, …]` is `X`. A type variable is its bare name,
-as on the JVM. A name the file does not bind gives no type. An unannotated parameter is
-`typing/Any#`, the typing specification's rule. A name that two branches bind differently
+as on the JVM, and a PEP 695 type parameter (`def f[S]`, `class C[T]`) is also written in
+the declaration's `type_parameters`. An annotation the file writes and does not bind keeps
+its written text, bare (`Mystery`): it names no type (`names_a_type`) and is never
+`typing/Any#`. An unannotated parameter is `typing/Any#`, the typing specification's rule. A name that two branches bind differently
 (`try: import ujson as json` / `except ImportError: import json`) is a closed list: as a
 type it is the union of both, and as a value it is a `merge` argument with one candidate
 each. **Evidence:** every type a Python document states is written in source, so it is

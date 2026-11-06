@@ -53,12 +53,15 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import pathspec
+
 from sextant.application.ports.detector import (
     LibraryRoot,
     ModuleModel,
     NoModulesFound,
     RepositoryModel,
 )
+from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.symbols import NOT_APPLICABLE
 
 _PYPROJECT = "pyproject.toml"
@@ -67,6 +70,7 @@ _SETUP_PY = "setup.py"
 _PIPFILE = "Pipfile"
 _PACKAGE_MARKER = "__init__.py"
 _ENVIRONMENT_MARKER = "pyvenv.cfg"
+_GITIGNORE = ".gitignore"
 
 # The folder names `python -m venv`, uv and Poetry give an environment beside the
 # build file, in the order they are tried. A folder is an environment only when it
@@ -125,17 +129,53 @@ def _is_build_file(name: str) -> bool:
     )
 
 
+def is_skipped_folder(parent: str, name: str) -> bool:
+    """Whether the folder `name` under `parent` holds no code of a module: a tool cache,
+    version control, installed packages, or an environment (it holds `pyvenv.cfg`). The
+    detector and the scanner share this rule."""
+    return name in _SKIPPED_FOLDERS or os.path.isfile(
+        os.path.join(parent, name, _ENVIRONMENT_MARKER)
+    )
+
+
 def _walk(root: Path) -> Iterator[tuple[Path, list[str]]]:
     """Every folder under `root` that the detector may read, with its file names, in
-    sorted order. Skipped folders and environments are not entered."""
+    sorted order. Skipped folders and environments are not entered, and neither is a
+    path `.sextantignore` excludes (D04 §3) or a `.gitignore` file at or below `root`
+    names: a git-ignored clone or worktree is not part of the project. `root` itself is
+    always read."""
+    ignore = IgnoreRules.load(root)
+    git: list[tuple[Path, pathspec.GitIgnoreSpec]] = []
     for current, folders, files in os.walk(root):
+        here = Path(current)
+        if _GITIGNORE in files:
+            lines = (here / _GITIGNORE).read_text(encoding="utf-8", errors="replace")
+            git.append((here, pathspec.GitIgnoreSpec.from_lines(lines.splitlines())))
         folders[:] = sorted(
             folder
             for folder in folders
-            if folder not in _SKIPPED_FOLDERS
-            and not os.path.isfile(os.path.join(current, folder, _ENVIRONMENT_MARKER))
+            if not is_skipped_folder(current, folder)
+            and not _excluded(here / folder, root, ignore, git, folder=True)
         )
-        yield Path(current), sorted(files)
+        yield here, sorted(name for name in files if not _excluded(here / name, root, ignore, git))
+
+
+def _excluded(
+    path: Path,
+    root: Path,
+    ignore: IgnoreRules,
+    git: list[tuple[Path, "pathspec.GitIgnoreSpec"]],
+    *,
+    folder: bool = False,
+) -> bool:
+    suffix = "/" if folder else ""
+    if ignore.matches(path.relative_to(root)):
+        return True
+    return any(
+        spec.match_file(path.relative_to(base).as_posix() + suffix)
+        for base, spec in git
+        if path.is_relative_to(base)
+    )
 
 
 class _UnreadableBuildFile(ValueError):
@@ -563,6 +603,7 @@ class PythonDetector:
             if environment is not None and (site_packages := environment.site_packages)
             else ()
         )
+        import_roots = files.import_roots(has_python)
         model = ModuleModel(
             module_id=module_id,
             coordinates=coordinates,
@@ -570,8 +611,9 @@ class PythonDetector:
             root=folder,
             kind=kind,
             languages=frozenset({"python"}) if own_python else frozenset(),
-            source_roots=files.import_roots(has_python),
-            output_dirs=(),
+            source_roots=import_roots,
+            # Python runs from source: the import roots are what the scanner reads.
+            output_dirs=import_roots,
             packaging="wheel",
             dependency_coordinates=dependencies,
             dependency_versions=versions,

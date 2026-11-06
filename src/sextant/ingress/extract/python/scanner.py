@@ -14,8 +14,10 @@ from sextant.application.ports.scanner import ScanReport, ScanRequest
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import Document
+from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.symbols import NOT_APPLICABLE, PYTHON_SCHEME
 from sextant.domain.version import FACT_SCHEMA_VERSION, SEXTANT_VERSION
+from sextant.ingress.detect.python import is_skipped_folder
 from sextant.ingress.extract.python.imports import ModuleIndex, module_path
 from sextant.ingress.extract.python.structure import FileContext, file_facts
 
@@ -27,12 +29,6 @@ _NO_REDACTION_HASH = "sha256:none"
 # What this backend reads (M03 "Capabilities"). `control_flow` joins when the flow
 # fields are written.
 _CAPABILITIES = frozenset({"typed_signatures", "annotation_args", "type_annotations", "value_ids"})
-# Folders that hold no code of the module: tool caches, version control, installed
-# packages. A folder that holds `pyvenv.cfg` is an environment and is skipped too.
-_SKIPPED_FOLDERS = frozenset(
-    {".git", ".sextant", "__pycache__", "node_modules", "site-packages", ".tox", ".nox"}
-)
-_ENVIRONMENT_MARKER = "pyvenv.cfg"
 
 
 class PythonScanner:
@@ -50,7 +46,9 @@ class PythonScanner:
 
     def scan(self, request: ScanRequest) -> ScanReport:
         roots = [request.classes_dir, *request.more_classes_dirs]
-        files = [(root, relative) for root in roots for relative in _python_files(root)]
+        files = [
+            (root, relative) for root in roots for relative in _python_files(root, request.ignore)
+        ]
         index = ModuleIndex(frozenset(_module_paths(relative for _, relative in files)))
         manager = NOT_APPLICABLE if request.coordinates == NOT_APPLICABLE else _PACKAGE_MANAGER
         prefix = f"{PYTHON_SCHEME} {manager} {request.coordinates} {request.version} "
@@ -61,7 +59,12 @@ class PythonScanner:
             if not here:
                 uncovered.append(f"{relative}: a package file at an import root has no name")
                 continue
-            content = (root / relative).read_bytes()
+            try:
+                content = (root / relative).read_bytes()
+            except OSError as failure:
+                # A broken link, or a file this process may not read.
+                uncovered.append(f"{relative}: not readable: {failure.strerror or failure}")
+                continue
             try:
                 tree = ast.parse(content, filename=relative)
             except (SyntaxError, ValueError, RecursionError) as failure:
@@ -97,20 +100,38 @@ class PythonScanner:
         )
 
 
-def _python_files(root: Path) -> list[str]:
-    """Every `.py` file under `root`, relative and `/`-separated, in sorted order."""
+def _python_files(root: Path, ignore: IgnoreRules | None) -> list[str]:
+    """Every `.py` file under `root` that `ignore` does not exclude, relative and
+    `/`-separated, in sorted order. Folders are skipped by the detector's own rule. A
+    git-ignored file is read: generated code (`*_pb2.py`) is often git-ignored and is
+    part of the module."""
     found: list[str] = []
     for current, folders, files in os.walk(root):
         folders[:] = sorted(
             folder
             for folder in folders
-            if folder not in _SKIPPED_FOLDERS
-            and not folder.startswith(".")
-            and not os.path.isfile(os.path.join(current, folder, _ENVIRONMENT_MARKER))
+            if not is_skipped_folder(current, folder)
+            and not _ignored(Path(current) / folder, root, ignore)
         )
         base = Path(current).relative_to(root)
-        found.extend((base / name).as_posix() for name in sorted(files) if name.endswith(_SUFFIX))
+        found.extend(
+            (base / name).as_posix()
+            for name in sorted(files)
+            if name.endswith(_SUFFIX) and not _ignored(Path(current) / name, root, ignore)
+        )
     return sorted(found)
+
+
+def _ignored(path: Path, root: Path, ignore: IgnoreRules | None) -> bool:
+    """`.sextantignore`'s answer for `path`, matched against the repository root as
+    `resource_files.list_files` matches it. A root outside the repository root is
+    matched by its path from `root`, so the built-in layer still applies."""
+    if ignore is None:
+        return False
+    repo_root = ignore.repo_root
+    if path.is_relative_to(repo_root):
+        return ignore.matches(path.relative_to(repo_root))
+    return ignore.matches(path.relative_to(root))
 
 
 def _module_paths(relatives: Iterable[str]) -> set[str]:

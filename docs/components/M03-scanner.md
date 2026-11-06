@@ -237,10 +237,13 @@ it downloads nothing. It accepts `{python}`, ranks 0, and declares `typed_signat
 fields are written.
 
 **Input.** Python runs from source, so the module's import roots are what is read: the
-scan stage hands them over as `classes_dir` and `more_classes_dirs` when the build writes
-no output directory. Every `.py` file under them is one document, written to
-`<relative path>.jsonl`. Version-control folders, tool caches, `node_modules`,
-`site-packages` and every folder that holds `pyvenv.cfg` are not entered.
+detector reports them as the module's `output_dirs`, and the scan stage hands them over as
+`classes_dir` and `more_classes_dirs`. Every `.py` file under them is one document, written
+to `<relative path>.jsonl`. Folders on the detector's skip list are not entered, and a path
+`.sextantignore` or its built-in layer excludes is not read (`ScanRequest.ignore`, matched
+as `resource_files.list_files` matches). A git-ignored file IS read: generated code such as
+`*_pb2.py` is often git-ignored and is part of the module. A file that cannot be opened (a
+broken link) goes on the uncovered list with its reason.
 
 **One file at a time.** An import binds a name by PATH only: `from app.models import
 Order` is the class `app/models/Order#`, or the module `app/models/Order` when such a file

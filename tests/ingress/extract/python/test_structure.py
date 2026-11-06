@@ -14,8 +14,11 @@ from sextant.domain.facts import (
     Document,
     FieldWriteFact,
     SymbolFact,
+    TypeParameter,
+    TypeRef,
 )
-from sextant.domain.symbols import PY_SIGNATURE, bare_descriptor, disambiguator_of
+from sextant.domain.ignorefile import IgnoreRules
+from sextant.domain.symbols import PY_SIGNATURE, bare_descriptor, disambiguator_of, names_a_type
 from sextant.ingress.extract.python.scanner import PythonScanner
 
 DIS = disambiguator_of(PY_SIGNATURE)
@@ -27,7 +30,14 @@ def _write(path: Path, text: str) -> Path:
     return path
 
 
-def _scan(tmp_path: Path, files: dict[str, str], *, coordinates: str = ".", version: str = "."):
+def _scan(
+    tmp_path: Path,
+    files: dict[str, str],
+    *,
+    coordinates: str = ".",
+    version: str = ".",
+    ignore: IgnoreRules | None = None,
+):
     root = tmp_path / "src"
     for relative, text in files.items():
         _write(root / relative, text)
@@ -39,6 +49,7 @@ def _scan(tmp_path: Path, files: dict[str, str], *, coordinates: str = ".", vers
             version=version,
             classes_dir=root,
             out_dir=out,
+            ignore=ignore,
         )
     )
     return report, read_fact_tree(out)
@@ -296,4 +307,77 @@ def test_unparsable_file_is_uncovered_and_the_rest_is_scanned(tmp_path: Path):
     assert len(report.uncovered) == 1
     assert report.uncovered[0].startswith("app/old.py: ")
     assert f"app/new#f({DIS})." in _symbols(tree)
+    assert [document.relative_path for _, document, _ in tree] == ["app/new.py"]
+
+
+def test_pep_695_type_parameters_are_type_variables(tmp_path: Path):
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "def ident[S](x: S) -> S: return x\nclass Box[T]:\n    def get(self) -> T: ...\n"
+            )
+        },
+    )
+
+    symbols = _symbols(tree)
+    ident = symbols[f"app/m#ident({DIS})."][0]
+    assert ident.signature is not None
+    assert ident.signature.parameters[0].type == TypeRef(symbol="S")
+    assert ident.signature.returns == TypeRef(symbol="S")
+    assert ident.type_parameters == [TypeParameter(name="S")]
+    get = symbols[f"app/m/Box#get({DIS})."][0]
+    assert get.signature is not None and get.signature.returns == TypeRef(symbol="T")
+    assert symbols["app/m/Box#"][0].type_parameters == [TypeParameter(name="T")]
+
+
+def test_a_written_annotation_the_file_cannot_name_is_not_any(tmp_path: Path):
+    """An annotation the file writes and does not bind keeps its written text; it is not
+    the `typing/Any#` an unannotated parameter has, and it names no type."""
+    _, tree = _scan(tmp_path, {"app/m.py": "def f(x: Mystery, y) -> Mystery: pass\n"})
+
+    method = _symbols(tree)[f"app/m#f({DIS})."][0]
+    assert method.signature is not None
+    written, unannotated = method.signature.parameters
+    assert written.type.symbol == "Mystery"
+    assert not names_a_type(written.type.symbol)
+    assert unannotated.type.symbol == "typing/Any#"
+    assert method.signature.returns is not None
+    assert method.signature.returns.symbol == "Mystery"
+
+
+def test_an_ignored_file_is_not_read(tmp_path: Path):
+    """`.sextantignore` and its built-in layer govern the scan as every other walk."""
+    (tmp_path / ".sextantignore").write_text("src/app/legacy/\n", encoding="utf-8")
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/secrets/x.py": "TOKEN = 'abc'\n",
+            "app/legacy/old.py": "def f(): pass\n",
+            "app/new.py": "def f(): pass\n",
+        },
+        ignore=IgnoreRules.load(tmp_path),
+    )
+
+    assert [document.relative_path for _, document, _ in tree] == ["app/new.py"]
+
+
+def test_a_git_ignored_generated_file_in_the_module_is_scanned(tmp_path: Path):
+    _write(tmp_path / ".gitignore", "*_pb2.py\n")
+    _, tree = _scan(
+        tmp_path,
+        {"app/orders_pb2.py": "class Order: pass\n"},
+        ignore=IgnoreRules.load(tmp_path),
+    )
+
+    assert "app/orders_pb2/Order#" in _symbols(tree)
+
+
+def test_a_file_that_cannot_be_opened_is_uncovered_and_the_rest_is_scanned(tmp_path: Path):
+    (tmp_path / "src" / "app").mkdir(parents=True)
+    (tmp_path / "src" / "app" / "broken.py").symlink_to(tmp_path / "missing.py")
+    report, tree = _scan(tmp_path, {"app/new.py": "def f(): pass\n"})
+
+    assert len(report.uncovered) == 1
+    assert report.uncovered[0].startswith("app/broken.py: ")
     assert [document.relative_path for _, document, _ in tree] == ["app/new.py"]

@@ -18,7 +18,7 @@ line gives.
 
 import ast
 import builtins
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from sextant.domain.facts import TypeRef
 from sextant.ingress.extract.python.imports import (
@@ -48,19 +48,31 @@ _DEPTH = 32
 @dataclass(frozen=True)
 class TypeScope:
     """What a written type is read against: the module's names, the enclosing class
-    body's names (a method's annotations are read in its class body), and the class
-    `Self` stands for."""
+    body's names (a method's annotations are read in its class body), the PEP 695 type
+    parameters of the enclosing class and function, and the class `Self` stands for."""
 
     names: dict[str, Binding]
     here: str
     index: ModuleIndex = field(default_factory=lambda: ModuleIndex(frozenset()))
     class_names: dict[str, Binding] = field(default_factory=dict)
     self_type: str | None = None
+    type_parameters: dict[str, Binding] = field(default_factory=dict)
+
+    def with_type_parameters(self, written: list[ast.type_param]) -> "TypeScope":
+        """This scope with `written` (`def f[S]`, `class C[T]`) bound as type
+        variables, which hide every other binding of their names."""
+        if not written:
+            return self
+        own = {
+            name: Binding((Target(self.here, name, "type_variable"),))
+            for name in map(type_parameter_name, written)
+        }
+        return replace(self, type_parameters={**self.type_parameters, **own})
 
     def lookup(self, node: ast.expr) -> tuple[Target, ...]:
-        """The targets a written name or dotted name refers to: the class body first,
-        then the module, then the builtins."""
-        for names in (self.class_names, self.names):
+        """The targets a written name or dotted name refers to: the type parameters
+        first, then the class body, then the module, then the builtins."""
+        for names in (self.type_parameters, self.class_names, self.names):
             found = resolve(node, names, self.index)
             if found:
                 return found
@@ -72,9 +84,27 @@ class TypeScope:
         return ()
 
 
+def type_parameter_name(parameter: ast.type_param) -> str:
+    """A PEP 695 type parameter's name; each of its three kinds has one."""
+    assert isinstance(parameter, ast.TypeVar | ast.ParamSpec | ast.TypeVarTuple)
+    return parameter.name
+
+
 def type_ref(node: ast.expr, scope: TypeScope) -> TypeRef | None:
     """The written type `node` names, or None where the file does not say."""
     return _read(node, scope, _DEPTH)
+
+
+def written_type(node: ast.expr, scope: TypeScope) -> TypeRef:
+    """The type of a WRITTEN annotation. Where the file does not name it, the
+    annotation's own text, bare: it names no type (`symbols.names_a_type`), and it is
+    kept apart from `UNANNOTATED`, which is what a parameter with no annotation has."""
+    found = type_ref(node, scope)
+    if found is not None:
+        return found
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return TypeRef(symbol=node.value.strip())
+    return TypeRef(symbol=ast.unparse(node))
 
 
 def type_symbol(target: Target) -> str:

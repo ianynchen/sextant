@@ -178,7 +178,13 @@ Python.
 - **Import roots** (`source_roots`): the package settings of setuptools (`package-dir`,
   `packages.find.where`, and the same keys in `setup.cfg`), hatch (`packages`) or Poetry
   (`packages.from`); else `src/` when it holds Python files; else the module folder.
-  `output_dirs` is empty and `packaging` is `wheel`.
+  `output_dirs` are the same folders, because Python runs from source and they are what the
+  scanner reads; `packaging` is `wheel`. `lookup` is `c3` (D00 §5 `module`).
+- **Which folders are searched for modules.** The detector's skip list (version control, tool
+  caches, `node_modules`, every folder that holds `pyvenv.cfg`), every path `.sextantignore`
+  excludes, and every path a `.gitignore` file at or below the analysed folder names are not
+  entered: a git-ignored clone or worktree is not part of the project. The analysed folder
+  itself is always read. Git's global excludes file is not read.
 - **Environment** (`ModuleModel.environment`): `.venv`, `venv` or `env` beside the build file
   when it holds `pyvenv.cfg` (Poetry's `in-project = true` folder is `.venv`); for a uv
   workspace member, the same names at the workspace root (uv's documented default; the

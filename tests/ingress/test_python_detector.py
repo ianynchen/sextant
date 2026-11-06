@@ -51,7 +51,8 @@ def test_pyproject_project_table_gives_name_and_version(tmp_path: Path):
     assert module.root == tmp_path
     assert module.languages == frozenset({"python"})
     assert module.source_roots == (tmp_path,)
-    assert module.output_dirs == ()
+    # Python runs from source: the import roots are what is scanned.
+    assert module.output_dirs == (tmp_path,)
     assert module.packaging == "wheel"
     assert module.dependency_coordinates == ("fastapi", "httpx")
 
@@ -469,3 +470,24 @@ def test_uv_workspace_exclude_removes_a_member(tmp_path: Path):
 
     assert by_id["core"].environment == tmp_path / ".venv"
     assert by_id["old"].environment is None
+
+
+def test_a_git_ignored_folder_holding_a_project_is_not_a_module(tmp_path: Path):
+    """A git-ignored clone or worktree is not part of the project."""
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "shop"\nversion = "1.0"\n')
+    _write(tmp_path / "shop" / "__init__.py")
+    _write(tmp_path / ".gitignore", "clones/\n")
+    _write(tmp_path / "clones" / "other" / "pyproject.toml", '[project]\nname = "other"\n')
+    _write(tmp_path / "clones" / "other" / "other.py")
+
+    assert [m.module_id for m in PythonDetector().detect(tmp_path).modules] == ["shop"]
+
+
+def test_a_sextantignored_folder_holding_a_project_is_not_a_module(tmp_path: Path):
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "shop"\nversion = "1.0"\n')
+    _write(tmp_path / "shop" / "__init__.py")
+    _write(tmp_path / ".sextantignore", "vendor/\n")
+    _write(tmp_path / "vendor" / "lib" / "pyproject.toml", '[project]\nname = "lib"\n')
+    _write(tmp_path / "vendor" / "lib" / "lib.py")
+
+    assert [m.module_id for m in PythonDetector().detect(tmp_path).modules] == ["shop"]
