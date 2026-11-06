@@ -18,6 +18,7 @@ from sextant.domain.facts import (
     Fact,
     FieldWriteFact,
     MethodReturnFact,
+    ModuleFact,
     Parameter,
     Signature,
     SymbolFact,
@@ -811,4 +812,47 @@ def test_an_annotation_element_carries_its_declared_default():
             document_id="d", symbol="mod com/acme/A#go(sig_1).", construct_kind=ConstructKind.METHOD
         ).annotation_default
         is None
+    )
+
+
+def _python_call(invoke_kind="virtual", receiver=3):
+    return CallSiteFact(
+        document_id="doc_1",
+        caller="sextant-python . . . a/b#f(sig_00000000).",
+        target=CallTarget(owner=None, name="create", descriptor="(*)"),
+        invoke_kind=invoke_kind,
+        ordinal=1,
+        receiver=receiver,
+    )
+
+
+def test_a_virtual_call_with_a_receiver_may_leave_its_owner_to_the_resolver():
+    call_site = _python_call()
+
+    assert call_site.target.owner is None
+
+
+def test_a_call_with_no_owner_and_no_receiver_is_refused():
+    with pytest.raises(ValueError):
+        _python_call(receiver=None)
+
+
+def test_a_static_call_with_no_owner_is_refused():
+    with pytest.raises(ValueError):
+        _python_call(invoke_kind="static")
+
+
+def test_module_lookup_defaults_to_jvm():
+    module = ModuleFact(
+        document_id="doc_1",
+        module_id="com.acme:orders",
+        module_kind="maven",
+        languages=["java"],
+        source_roots=[],
+        output_dirs=[],
+    )
+
+    assert module.lookup == "jvm"
+    assert (
+        ModuleFact.model_validate({**module.model_dump(mode="json"), "lookup": "c3"}).lookup == "c3"
     )

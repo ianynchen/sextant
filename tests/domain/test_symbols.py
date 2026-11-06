@@ -3,6 +3,7 @@ import hashlib
 import pytest
 
 from sextant.domain.symbols import (
+    PY_SIGNATURE,
     Symbol,
     bare_descriptor,
     descriptor_parameter_types,
@@ -242,3 +243,7 @@ def test_short_class_name_reads_a_nested_class_with_a_dot_and_drops_a_generated_
 ):
     """CP-44 row 6 (`ClassUtils.getShortName`): after the package, cut at `$$`, `$` as `.`."""
     assert short_class_name(symbol) == expected
+
+
+def test_every_python_method_shares_one_disambiguator():
+    assert method_descriptor("a/b#", "f", PY_SIGNATURE) == "a/b#f(" + disambiguator_of("(*)") + ")."

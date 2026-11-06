@@ -20,7 +20,12 @@ tool — no indexer is involved. See [ARCHITECTURE.md](../ARCHITECTURE.md) DR-1.
 
 sextant-jvm  maven  com.acme/orders  2.1.0  com/acme/OrderService#save().
 sextant-jvm  maven  com.acme/orders  2.1.0  com/acme/OrderService#save(+1).
+sextant-python  .  .  .  shop/orders#OrderService#save(sig_…).
 ```
+
+The scheme is `sextant-jvm` for JVM code and `sextant-python` for Python code. Python has no
+overloads, so every Python method has the one signature `(*)`. All Python methods therefore
+share one disambiguator, and a call joins its callee by name.
 
 **Descriptor grammar**, unchanged from SCIP:
 
@@ -358,7 +363,7 @@ Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 
 | Kind | Carries | Consumed by |
 |---|---|---|
-| `module` | Identifier, kind, languages, source sets, output directories, **classpath tiering**, active catalogs, and **who answered for the dependency set** (`dependency_source`: `maven` where the build tool's own resolved compile classpath did, transitives included; `declared` where this analysis read the POM chain itself, with `dependency_source_reason` saying why the build tool did not — 2026-10-21) | Dispatch tiering, noise filtering, coverage |
+| `module` | Identifier, kind, languages, source sets, output directories, **classpath tiering**, `lookup` (`jvm` by default; `c3` where methods are found by Python's method resolution order), active catalogs, and **who answered for the dependency set** (`dependency_source`: `maven` where the build tool's own resolved compile classpath did, transitives included; `declared` where this analysis read the POM chain itself, with `dependency_source_reason` saying why the build tool did not — 2026-10-21) | Dispatch tiering, noise filtering, coverage |
 | `symbol` | Identifier, construct kind, enclosing symbol, **typed signature** (§5a), visibility, **declaration modifiers** (§5a), range | Symbol graph, shapes, endpoints, class diagrams |
 | — | **`visibility` is four-valued** (`G-73`): `public`, `protected`, `package` or `private` — the four access levels a declaration can have, closed by `Visibility` (NFR-5). For a NESTED type this is the class file's OWN word, which is the coarse one: a `private` or `protected` nested type states that modifier in `InnerClasses` (JVMS 4.7.6) only, and the class file itself writes a private nested type package-private and a protected one public. Recovering the source modifier is `OI-51`; until then a nested type's visibility is its outer word. | Member-exposure rules (D02's `mapping.members`), endpoint derivation |
 | `relationship` | Subject, object, relationship kind | Hierarchy, dispatch, class diagrams |
@@ -940,6 +945,11 @@ The full shape, verbatim:
    {"kind": "unresolved", "source": 7},
    {"kind": "class", "symbol": "com/acme/orders/contracts/OrderView#"}]}
 ```
+
+**`target.owner` may be absent for one case:** a `virtual` call that has a `receiver`. A
+Python call on a value does not know the value's type when the scanner reads it. The scanner
+leaves the owner out, and the resolver binds it later from the receiver's value id. Every
+other `invoke_kind`, and a `virtual` call with no receiver, must name an owner.
 
 **`target.descriptor`** makes the target unambiguous. `owner.name` alone collides; two
 methods named `execute` are not the same method.

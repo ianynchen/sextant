@@ -88,6 +88,12 @@ SEXTANT_VERSION = version("sextant")
 #             takes an absent `on_every_exit` as "not computed": it would read every
 #             call as undecided rather than as one on a branch or not, so it is
 #             refused and re-extracted, never read as "no branches".
+#     7       `call_site` may leave `target.owner` out when it is a `virtual` call with a
+#             `receiver` (the resolver binds the owner later, from the receiver), and
+#             `module` gains `lookup` (`jvm` or `c3`; spec 2026-11-06-python-reader §3a,
+#             §3b, approved by the user 2026-11-06). A fact set of the older vintage has
+#             no `lookup`, so a reader could not tell which lookup rule a module uses; it
+#             is refused and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -219,6 +225,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 6
+FACT_SCHEMA_VERSION = 7
 GRAPH_SCHEMA_VERSION = 16
 BOUNDARY_VOCABULARY_VERSION = 5

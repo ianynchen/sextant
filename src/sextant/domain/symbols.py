@@ -6,6 +6,14 @@ from dataclasses import dataclass
 
 NOT_APPLICABLE = "."
 
+# The scheme of a Python symbol (D00 §1), beside `sextant-jvm`.
+PYTHON_SCHEME = "sextant-python"
+
+# Python has no overloads, so every Python method carries the one signature
+# `(*)`. It goes through `disambiguator_of` like any JVM descriptor, so every
+# Python method shares one disambiguator and a call joins its callee by name.
+PY_SIGNATURE = "(*)"
+
 # D00 §5a's type marker: the character a TYPE descriptor ends at, and the one a
 # member descriptor carries its owner's name up to. Named here because this
 # module is the seam that reads the symbol grammar

@@ -197,6 +197,10 @@ class ModuleFact(BaseModel):
     # the archive — one scan of a jar serves modules that target different
     # releases.
     declared_release: int | None = None
+    # How a method is looked up on a type in this module: `jvm` for the JVM's own rule,
+    # `c3` for Python's method resolution order. It is the module's, not the document's,
+    # because the resolver reads it per module and every JVM module keeps `jvm`.
+    lookup: Literal["jvm", "c3"] = "jvm"
     # The reactor siblings this analysis scanned for their TYPES (F4 §5.2, W24), as
     # their coordinates, sorted. Carried on the module fact because its consumer runs at
     # RESOLVE and there is nothing else there that can tell them apart.
@@ -533,7 +537,14 @@ class CallSiteFact(BaseModel):
                 f"both — got invoke_kind={self.invoke_kind!r} with "
                 f"name={self.target.name!r}, descriptor={self.target.descriptor!r}"
             )
-        if self.invoke_kind != "throw" and self.target.owner is None:
+        # A Python call on a value names no owner: the resolver binds one later, from
+        # the receiver's value id. Only a virtual call with a receiver may leave it out.
+        leaves_owner_to_resolver = self.invoke_kind == "virtual" and self.receiver is not None
+        if (
+            self.invoke_kind != "throw"
+            and self.target.owner is None
+            and not leaves_owner_to_resolver
+        ):
             raise ValueError("a dispatching call site must name an owner")
         return self
 
