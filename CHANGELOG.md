@@ -542,6 +542,13 @@ here would restate those documents rather than add anything.
 
 ### Changed
 
+- **The pass-through question uses the same general reason list** (OI-321, spec
+  `2026-11-05-one-reason-list-design.md` §3c). Each `unread` entry of a `handler_pass_through`
+  question is now `{reason, detail}` in place of `{how, name}`. `handed_to` and `stored_in` are
+  `escapes`; `produced_by`, `of_type`, `from_field`, `no_body` and `argument` are `external`
+  where the method or type is not in the scanned code, and `not_readable` where it is. The
+  document shows the stored detail and the reason. No handler outcome changes. A guard test
+  (`tests/application/test_one_reason_list.py`) fails on any stored reason outside the list.
 - **Method lookup uses the same general reason list** (OI-321, spec
   `2026-11-05-one-reason-list-design.md` §3b). In `method_resolution`, `reason` is now empty
   when a body was found (`declaring_class` equal to `class` means declared here) and `external`

@@ -32,6 +32,7 @@ from typing import Any
 import pytest
 
 from fixture_build import compile_fixture
+from reason_guard import value_answers_outside_the_list
 from sextant import api
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.detector import ModuleModel, RepositoryModel
@@ -178,6 +179,12 @@ def analyzed(tmp_path_factory: pytest.TempPathFactory, fixture_facts: Path) -> d
         finally:
             workspace.close()
     return runs
+
+
+def test_every_values_reason_is_one_word_of_the_general_list(analyzed):
+    """The guard of `test_one_reason_list.py` over the shadow run's `values` answers."""
+    assert analyzed[True].rows
+    assert value_answers_outside_the_list(analyzed[True].rows) == []
 
 
 def test_the_shadow_flag_reaches_the_walk_through_the_analyze_stage(analyzed):

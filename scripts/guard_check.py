@@ -2548,7 +2548,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_PASS_THROUGH,
-                find="        outside.extend((STORED_IN, field) for field in stored.get((method, "
+                find="        outside.extend(_escapes(_STORED_IN, field) for field in stored.get((method, "
                 "parameter), ()))\n",
                 replace="        pass  # guard disabled by scripts/guard_check.py\n",
             ),
@@ -2614,14 +2614,15 @@ GUARDS: dict[str, Guard] = {
     ),
     "pass_through.a-producer-is-named-as-a-producer": Guard(
         what="an unreadable handler object names the call that BUILT it as its producer "
-        "(`produced_by`), never as a hand-off (Vert.x plan, Task 10, review round 1)",
+        "(`is built by …`), never as a hand-off (Vert.x plan, Task 10, review round 1)",
         why="without it the reason says the handler hands its context to the factory that "
         "made it, a call the context never reaches",
         edits=(
             Edit(
                 path=_PASS_THROUGH,
-                find="            unread: Unread = (PRODUCED_BY, maker)\n",
-                replace="            unread = (HANDED_TO, maker)  # guard disabled by scripts/guard_check.py\n",
+                find="            unread = _not_followed(self._dispatch.scanned, owner_of(maker), "
+                "_PRODUCED_BY, maker)\n",
+                replace="            unread = _escapes(_HANDED_TO, maker)  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

@@ -35,21 +35,18 @@ from sextant.application.resolve.return_flow import record_return_flows
 from sextant.application.resolve.shapes.chains import _method_symbols
 from sextant.application.resolve.shapes.pass_through import (
     ANSWERS,
-    HANDED_TO,
-    NO_BODY,
-    OF_TYPE,
     PASSES_ON,
-    STORED_IN,
     UNREADABLE,
     Handler,
     HandlerReader,
     PassThroughRule,
+    _not_followed,
     exact_methods,
     file_unread,
     handler_outcomes,
     unread_rows,
 )
-from sextant.application.resolve.values import value_index
+from sextant.application.resolve.values import ESCAPES, EXTERNAL, NOT_READABLE, value_index
 from sextant.domain.closed_sets import ConstructKind
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -445,7 +442,10 @@ def test_a_handler_method_with_no_body_and_no_override_is_unreadable(walked):
     handler = _reader(walked).of({"kind": "lambda", "symbol": bare, "captures": 0}, None)
     assert (handler.outcome, handler.unread) == (
         UNREADABLE,
-        (NO_BODY, _symbol(_BARE, "check", _TAKES)),
+        (
+            NOT_READABLE,
+            f"runs {_symbol(_BARE, 'check', _TAKES)}, which has no body read here and no module override",
+        ),
     )
 
 
@@ -517,8 +517,8 @@ def test_a_question_on_a_row_whose_path_is_unread_carries_no_path():
     never the text `None`."""
     questions: dict = {}
     row = {"protocol": "http", "method": "GET", "path": None, "handler": None, "caller": "c"}
-    file_unread(questions, row, ((HANDED_TO, "x"),))
-    file_unread(questions, {**row, "path": "/a"}, ((HANDED_TO, "y"),))
+    file_unread(questions, row, ((ESCAPES, "x"),))
+    file_unread(questions, {**row, "path": "/a"}, ((ESCAPES, "y"),))
     assert [(q["method"], q["path"]) for q in unread_rows(questions)] == [
         ("GET", None),
         ("GET", "/a"),
@@ -532,8 +532,8 @@ def test_a_question_carries_the_markers_of_the_row_it_is_filed_against():
     never `(unresolved) /plain`."""
     questions: dict = {}
     row = {"protocol": "http", "method": None, "path": "/plain", "handler": None, "caller": "c"}
-    file_unread(questions, {**row, "method_kind": "any"}, ((HANDED_TO, "x"),))
-    file_unread(questions, {**row, "path": "/r", "path_kind": "pattern"}, ((HANDED_TO, "y"),))
+    file_unread(questions, {**row, "method_kind": "any"}, ((ESCAPES, "x"),))
+    file_unread(questions, {**row, "path": "/r", "path_kind": "pattern"}, ((ESCAPES, "y"),))
     assert [(q["path"], q["method_kind"], q["path_kind"]) for q in unread_rows(questions)] == [
         ("/plain", "any", None),
         ("/r", None, "pattern"),
@@ -542,7 +542,36 @@ def test_a_question_carries_the_markers_of_the_row_it_is_filed_against():
 
 def test_a_handler_object_built_elsewhere_and_not_the_frameworks_is_unreadable(walked):
     handler = _reader(walked).of({"kind": "instance", "symbol": "com/other/Thing#"}, None)
-    assert (handler.outcome, handler.unread) == (UNREADABLE, (OF_TYPE, "com/other/Thing#"))
+    assert (handler.outcome, handler.unread) == (
+        UNREADABLE,
+        (
+            EXTERNAL,
+            "is declared as com/other/Thing#, a type whose handler is not read",
+        ),
+    )
+
+
+def test_a_handler_object_of_a_scanned_type_with_no_handler_is_not_readable_not_external(walked):
+    """The type is in the scanned code and nothing there is a handler: the answer is here and
+    not followed (`not_readable`), where an unscanned type is `external`."""
+    handler = _reader(walked).of({"kind": "instance", "symbol": _ROUTES}, None)
+    assert (handler.outcome, handler.unread) == (
+        UNREADABLE,
+        (NOT_READABLE, f"is declared as {_ROUTES}, a type whose handler is not read"),
+    )
+
+
+def test_the_reason_of_code_not_followed_follows_whether_its_type_is_scanned():
+    phrase = "is built by {}, whose body is not read"
+    assert _not_followed({"p/A#"}, "p/A#", phrase, "m") == (
+        NOT_READABLE,
+        "is built by m, whose body is not read",
+    )
+    assert _not_followed({"p/A#"}, "q/B#", phrase, "m") == (
+        EXTERNAL,
+        "is built by m, whose body is not read",
+    )
+    assert _not_followed({"p/A#"}, None, phrase, "m")[0] == NOT_READABLE
 
 
 @pytest.mark.pins("pass_through.a-next-reached-on-the-received-context-passes-on")
@@ -563,7 +592,10 @@ def test_a_context_handed_to_a_body_outside_the_module_is_unreadable(outcomes):
     read, and the method is named so a reader can say why."""
     found, unread = outcomes
     assert found[_handler("outside")] == UNREADABLE
-    assert unread[_handler("outside")] == ((HANDED_TO, method_descriptor(_LIB, "forward", _TAKES)),)
+    forward = method_descriptor(_LIB, "forward", _TAKES)
+    assert unread[_handler("outside")] == (
+        (ESCAPES, f"hands the request's context to {forward}, where it is not followed"),
+    )
 
 
 @pytest.mark.pins("pass_through.only-an-argument-is-a-hand-off")
@@ -597,7 +629,9 @@ def test_a_context_written_to_a_field_is_not_readable_here(outcomes):
     the walk cannot tell — never an answering row (ruling 2026-10-31)."""
     found, unread = outcomes
     assert found[_handler("stores")] == UNREADABLE
-    assert unread[_handler("stores")] == ((STORED_IN, _ROUTES + "held."),)
+    assert unread[_handler("stores")] == (
+        (ESCAPES, f"stores the request's context in {_ROUTES}held., where it is not followed"),
+    )
 
 
 @pytest.mark.pins("pass_through.a-context-handed-to-a-constructor-is-unreadable")
@@ -606,8 +640,9 @@ def test_a_context_handed_to_a_constructor_is_not_readable_here(outcomes):
     body reads here."""
     found, unread = outcomes
     assert found[_handler("wraps")] == UNREADABLE
+    wrapper = method_descriptor(_WRAPPER, "<init>", _TAKES)
     assert unread[_handler("wraps")] == (
-        (HANDED_TO, method_descriptor(_WRAPPER, "<init>", _TAKES)),
+        (ESCAPES, f"hands the request's context to {wrapper}, where it is not followed"),
     )
 
 
@@ -841,7 +876,8 @@ def test_two_unreadable_handler_objects_from_two_methods_are_two_rows(tmp_path: 
     assert [(p, h, res) for p, h, res, _ in rows] == [("/x", None, "partial")] * 2
     assert {r[3] for r in rows} == {_register("one"), _register("two")}
     assert "Lib#first" in question["candidates"] and "Lib#second" in question["candidates"]
-    assert '"how":"produced_by"' in question["candidates"]
+    assert '"reason":"external"' in question["candidates"]
+    assert '"how"' not in question["candidates"]
 
 
 _AUTH_IFACE = "com/acme/vertx/Auth#"
@@ -957,11 +993,15 @@ def test_a_no_body_reason_stays_on_the_method_that_has_no_body():
     handler = Handler(
         (first, second, bodiless),
         alternatives=(first, second),
-        unread=(NO_BODY, bodiless),
+        unread=(NOT_READABLE, "runs m#bare()., which has no body read here"),
+        bodiless=bodiless,
     )
     judged = _judged_of(handler, {first: ANSWERS, second: ANSWERS, bodiless: ANSWERS}, {})
     assert [(a.symbol, a.outcome, a.unread) for a in judged.alternatives] == [
         (first, ANSWERS, ()),
         (second, ANSWERS, ()),
     ]
-    assert (judged.outcome, judged.unread) == (UNREADABLE, ((NO_BODY, bodiless),))
+    assert (judged.outcome, judged.unread) == (
+        UNREADABLE,
+        ((NOT_READABLE, "runs m#bare()., which has no body read here"),),
+    )

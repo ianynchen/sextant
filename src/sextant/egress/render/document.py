@@ -1253,18 +1253,6 @@ _REFUSAL_PHRASES = {
     "wildcard_mount_point": "refuses a mount point that ends in the wildcard it adds",
 }
 
-# `handler_pass_through`'s reasons, one per kind of `unread` name its writer files
-# (`resolve/shapes/pass_through.py`, whose evidence trail says the same).
-_PASS_THROUGH_PHRASES = {
-    "handed_to": "hands the request's context to {}, where it is not followed here",
-    "stored_in": "stores the request's context in {}, where it is not followed here",
-    "produced_by": "is built by {}, whose body is not read here",
-    "of_type": "is declared as {}, a type whose handler is not read here",
-    "from_field": "comes from {}, whose declared type is not a handler read here",
-    "no_body": "runs {}, which has no body read here and no module override",
-    "argument": "is an argument of {} that is not read here",
-}
-
 
 def _candidate_line(question: str, candidate: dict[str, object]) -> str:
     """One open question's candidate, in the same prose the writing pass
@@ -1432,12 +1420,12 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
     if question == "handler_pass_through":
         # Vert.x spec §3b: an inbound row whose handler is not readable here, filed by
         # `resolve/shapes/pass_through.py::file_unread` and verified against that writer's
-        # own `candidates` line. Each `unread` entry says what its name IS — where the
-        # context went unfollowed, what built the handler object, or the handler method with
-        # no body — so a builder is never called a hand-off.
+        # own `candidates` line. Each `unread` entry carries its own reason and its own
+        # detail, made where the answer is made: where the context went unfollowed, what
+        # built the handler object, or the handler method with no body.
         handler = candidate["handler"] or "a handler object"
         reasons = ", and ".join(
-            _PASS_THROUGH_PHRASES[str(entry["how"])].format(entry["name"])
+            f"{entry['detail']} ({entry['reason']})"
             for entry in cast(list[dict[str, str]], candidate["unread"])
         )
         return (

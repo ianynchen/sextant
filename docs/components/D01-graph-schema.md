@@ -1109,8 +1109,12 @@ handler is not readable here (Vert.x spec §3b: it hands the request's context t
 whose body is in another jar, or stores it in a field or hands it to a constructor, where the
 walk cannot follow it, or is an object another jar builds whose declared type is not one of
 the framework's own handlers), the row's handler (NULL for such an object), the method that
-registered it and where the context went unfollowed — the method, field or constructor —
-(empty where nothing names it) — on ONE row
+registered it and where the context went unfollowed (empty where nothing names it), each
+entry `{reason, detail}`: `reason` one word of the general list (`values._REASONS`) —
+`escapes` where the context is handed to a method or constructor, or stored in a field, that
+the walk does not follow; `external` or `not_readable` where a handler object or method is not
+read, by whether its type is in the scanned code — and `detail` a sentence naming the method,
+field or type — on ONE row
 per `(protocol, method, path)` of the `partial` rows it explains, which is that row's reason,
 since no endpoint column carries one; a `mount_prefix` candidate holds `mount`,
 `mount_ordinal`, `argument`, `at`, `at_ordinal`, `read` and `caller` — an inbound row served

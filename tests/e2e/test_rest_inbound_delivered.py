@@ -12,6 +12,7 @@ import pytest
 from click.testing import CliRunner
 
 from fixture_build import FIXTURES, compile_fixture
+from reason_guard import unread_outside_the_list
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.values import producers_of, value_index
 from sextant.cli.app import cli
@@ -2542,14 +2543,34 @@ def test_vertx_a_context_handed_to_another_module_is_partial(vertx_inbound, vert
         ("PUT", "PassThroughRoutes#check", "partial")
     ]
     reason = _reason_of(check[0], vertx_tables)
-    assert '{"how":"handed_to","name":"com/acme/vertx/base/HttpUtils#nextRoute(' in reason, reason
+    assert '"reason":"escapes"' in reason, reason
+    assert "hands the request's context to com/acme/vertx/base/HttpUtils#nextRoute(" in reason
     plain = [r for r in rows if r["path"] == "/plain"]
     assert [r["resolution"] for r in plain] == ["partial"], plain
     # The base factory BUILT the handler: it is named as its producer, never as a hand-off.
     reason = _reason_of(plain[0], vertx_tables)
-    assert '{"how":"produced_by","name":"com/acme/vertx/PassThroughRoutes#baseFactory(' in reason
-    assert "handed_to" not in reason, reason
+    assert "is built by com/acme/vertx/PassThroughRoutes#baseFactory(" in reason, reason
+    assert '"reason":"not_readable"' in reason, reason
+    assert "hands the request's context" not in reason, reason
     assert not [r for r in rows if r["path"] == "/cors"]
+
+
+def test_vertx_every_pass_through_reason_is_one_word_of_the_general_list(vertx_tables):
+    """The guard of `tests/application/test_one_reason_list.py`, over the one fixture that
+    files pass-through questions: each `unread` entry is `{reason, detail}`, and the reason
+    one of `values._REASONS`."""
+    questions = [
+        q for q in vertx_tables["open_questions"] if q["question"] == "handler_pass_through"
+    ]
+    assert questions
+    assert unread_outside_the_list(vertx_tables["open_questions"]) == []
+    reasons = {
+        entry["reason"]
+        for q in questions
+        for candidate in json.loads(q["candidates"])
+        for entry in candidate["unread"]
+    }
+    assert {"escapes", "not_readable"} <= reasons
 
 
 def test_vertx_an_anonymous_handler_class_runs_its_handle(vertx_inbound):
