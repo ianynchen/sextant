@@ -383,8 +383,8 @@ config_model:
     default_separator: ":"
     by: scripts/probes/cp48_placeholder_nesting.md
   key_matching: relaxed          # relaxed | exact
-  # `spring.config.import`-shaped prefixes (2F design §2's `remote_source`
-  # reason): a winning value starting with one of these names a config-server
+  # `spring.config.import`-shaped prefixes (2F design §2's remote import,
+  # `external`): a winning value starting with one of these names a config-server
   # import, not a value this pass can ever resolve from files alone.
   remote_prefixes: ["configserver:", "optional:configserver:"]
 

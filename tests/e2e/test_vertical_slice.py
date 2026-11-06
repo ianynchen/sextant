@@ -192,14 +192,14 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # 2F Task 9: the coverage section names environments resolved, every
     # unresolved `resolved_config` key with its reason and environment (the
     # fixture's own layering pin — `only.in.default` resolves in `default`,
-    # is `missing_key` in `prod`), and every unresolved config_join row by
+    # is `external` in `prod`), and every unresolved config_join row by
     # catalog and site (I-1) — `orphanConsumer`'s missing binding key has no
     # `resolved_config` row of its own (never declared in any file), so it
     # is named through its handler instead, and the composed `pipeA|pipeB`
     # entry through neither, since the composed expression is not a column
     # any row carries.
     assert "Environments resolved: `default`, `prod`." in document
-    assert "only.in.default — missing_key in prod" in document
+    assert "only.in.default — external in prod (only.in.default is not set for prod)" in document
     # F2, review round 1: the disclosed lead-in — the list below spans
     # every engine's own unresolved rows (the fixture's own live proof:
     # non-config_join catalogs appear in it too), not config_join alone.
@@ -2389,7 +2389,9 @@ def test_a_configured_schedule_is_stated_per_environment_in_the_document(full_ru
     ) in document
     assert (
         f"- {purge} — fixedRate `${{orders.purge.rate}}`\n"
-        "  - as configured in this repository: not set in `default`, `prod` (missing_key)\n"
+        "  - as configured in this repository: not set in `default` "
+        "(external: orders.purge.rate is not set for default); not set in `prod` "
+        "(external: orders.purge.rate is not set for prod)\n"
     ) in document
     [parquet] = list(full_run.rglob("resolved_schedules.parquet"))
     rows = duckdb.sql(
@@ -2397,8 +2399,8 @@ def test_a_configured_schedule_is_stated_per_environment_in_the_document(full_ru
         f"FROM read_parquet('{parquet}') ORDER BY handler, trigger, expression, environment"
     ).fetchall()
     assert rows == [
-        ("fixedRate", "${orders.purge.rate}", "default", None, "missing_key"),
-        ("fixedRate", "${orders.purge.rate}", "prod", None, "missing_key"),
+        ("fixedRate", "${orders.purge.rate}", "default", None, "external"),
+        ("fixedRate", "${orders.purge.rate}", "prod", None, "external"),
         ("cron", "${orders.sweep.cron:0 0 * * * *}", "default", "0 0 * * * *", None),
         ("cron", "${orders.sweep.cron:0 0 * * * *}", "prod", "0 */5 * * * *", None),
     ]

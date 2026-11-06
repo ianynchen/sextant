@@ -1356,6 +1356,7 @@ def _workspace_with_config_values(tmp_path: Path) -> DuckDbWorkspace:
                 "source": "application.yml",
                 "environment": "default",
                 "unresolved_reason": None,
+                "unresolved_detail": None,
             },
             {
                 "key": "orders.internal.dsn",
@@ -1363,6 +1364,7 @@ def _workspace_with_config_values(tmp_path: Path) -> DuckDbWorkspace:
                 "source": "application.yml",
                 "environment": "default",
                 "unresolved_reason": None,
+                "unresolved_detail": None,
             },
             {
                 "key": "soap.billing.uri",
@@ -1370,6 +1372,7 @@ def _workspace_with_config_values(tmp_path: Path) -> DuckDbWorkspace:
                 "source": "application.yml",
                 "environment": "default",
                 "unresolved_reason": None,
+                "unresolved_detail": None,
             },
         ],
     )
@@ -2468,9 +2471,9 @@ def test_a_configured_schedule_value_is_masked_on_export(tmp_path: Path):
     workspace._connection.execute(
         "INSERT INTO resolved_schedules VALUES "
         "('mod com/acme/A#sweep(sig_1).', 'cron', NULL, '${orders.sweep.cron}', 'prod', "
-        "'[\"orders.sweep.cron\"]', ?, NULL), "
+        "'[\"orders.sweep.cron\"]', ?, NULL, NULL), "
         "('mod com/acme/A#sweep(sig_1).', 'cron', NULL, '${orders.sweep.cron}', 'default', "
-        "'[\"orders.sweep.cron\"]', '0 0 * * * *', NULL)",
+        "'[\"orders.sweep.cron\"]', '0 0 * * * *', NULL, NULL)",
         [secret],
     )
     bundle = tmp_path / "bundle"
@@ -2504,7 +2507,7 @@ def test_a_schedule_expression_is_masked_on_export(tmp_path: Path):
     workspace._connection.execute(
         "INSERT INTO resolved_schedules VALUES "
         "('mod com/acme/A#sweep(sig_1).', 'cron', NULL, ?, 'prod', '[\"orders.sweep.cron\"]', "
-        "'0 0 * * * *', NULL)",
+        "'0 0 * * * *', NULL, NULL)",
         [expression],
     )
     bundle = tmp_path / "bundle"
@@ -2541,7 +2544,7 @@ def test_a_schedule_name_is_masked_on_export(tmp_path: Path):
     workspace._connection.execute(
         "INSERT INTO resolved_schedules VALUES "
         "('mod com/acme/A#sweep(sig_1).', 'cron', ?, '${k}', 'prod', '[\"k\"]', "
-        "'0 0 * * * *', NULL)",
+        "'0 0 * * * *', NULL, NULL)",
         [name],
     )
     bundle = tmp_path / "bundle"

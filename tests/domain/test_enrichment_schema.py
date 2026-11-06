@@ -82,7 +82,7 @@ CONFIG_VERDICT = {
         "key": "spring.config.import",
         "source": "application.yml",
         "environment": "default",
-        "kind": "remote_source",
+        "kind": "external",
     },
     "assessment": "likely a Config Server import",
     "because": "the profile declares `spring.config.import=configserver:`",
@@ -95,7 +95,7 @@ CONFIG_VERDICT_NULL_SOURCE = {
         "key": "server.port",
         "source": None,
         "environment": "docker",
-        "kind": "missing_key",
+        "kind": "external",
     },
     "assessment": "unanswered",
     "searched": "grepped every profile-scoped application-*.yml; the key is declared nowhere",
@@ -262,7 +262,7 @@ def test_a_config_shaped_verdict_question_is_accepted():
 
 
 def test_a_config_verdict_with_a_null_source_is_accepted():
-    """A `missing_key` row was never declared in any file, so no file ever
+    """An `external` row for an undeclared key was never declared in any file, so no file ever
     won it (D01) — `source` is nullable, and a verdict about such a row
     states that explicitly rather than being unable to name one."""
     claim = VerdictClaim.model_validate(CONFIG_VERDICT_NULL_SOURCE)

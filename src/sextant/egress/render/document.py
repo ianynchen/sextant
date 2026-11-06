@@ -2081,7 +2081,8 @@ def _untied(row: Mapping[str, object], part: str) -> bool:
 def _configured_values(rows: Sequence[dict[str, object]], redactor: Redactor) -> str:
     """One job's per-environment values, in the rows' environment order: environments that
     read the same thing share one entry (`` `v` in `a`, `b` ``), and one whose value could
-    not be read says so with its reason (`` not set in `prod` (missing_key) ``). A value is
+    not be read says so with its reason and detail (`` not set in `prod` (external: orders.rate
+    is not set for prod) ``). A value is
     masked by this exit's redactor before it is compared — whole where a key it was read
     through names a secret (`redact_schedule_value`, the decision the bundle takes too) —
     so two environments that differ only in what the redactor hides read as the one entry
@@ -2091,7 +2092,11 @@ def _configured_values(rows: Sequence[dict[str, object]], redactor: Redactor) ->
         value = row["value"]
         keys = json.loads(str(row["keys"]))
         shown = None if value is None else redact_schedule_value(redactor, keys, str(value))
-        reason = None if value is not None else str(row["unresolved_reason"])
+        reason = (
+            None
+            if value is not None
+            else f"{row['unresolved_reason']}: {redactor.redact_text(str(row['unresolved_detail']))}"
+        )
         environments.setdefault((shown, reason), []).append(f"`{row['environment']}`")
     entries = []
     for (shown, reason), names in environments.items():
@@ -3168,7 +3173,7 @@ def _config_coverage_items(
         items.append(
             _runs(
                 f"Configuration key unresolved: {row['key']} — "
-                f"{row['unresolved_reason']} in {row['environment']}."
+                f"{row['unresolved_reason']} in {row['environment']} ({row['unresolved_detail']})."
             )
         )
     return items

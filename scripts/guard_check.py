@@ -3223,15 +3223,15 @@ GUARDS: dict[str, Guard] = {
     "conditions.a-DECLARED-placeholder-nobody-filled-is-unresolved": Guard(
         what="a `property` key an environment DECLARES as `${REF}` that nothing fills is "
         "`unresolved` there, never decided by `match_if_missing`",
-        why="the config layer resolves that row `missing_key` too, but WITH its file as "
+        why="the config layer resolves that row `external` too, but WITH its file as "
         "`source`; dropped like a never-declared key, `orders.legacy: ${ORDERS_LEGACY}` read "
         "as absent and the controller as `false · resolved` — a verdict about a value the "
         "framework would see and this analysis does not (review fix, 2026-10-22)",
         edits=(
             Edit(
                 path="sextant/application/resolve/bean_conditions.py",
-                find='        if value is None and reason == "missing_key" and row.get("source") is None:\n',
-                replace='        if value is None and reason == "missing_key":  # guard disabled\n',
+                find='        if value is None and reason == EXTERNAL and row.get("source") is None:\n',
+                replace="        if value is None and reason == EXTERNAL:  # guard disabled\n",
             ),
         ),
     ),
@@ -6589,7 +6589,7 @@ GUARDS: dict[str, Guard] = {
         "`default_separator` — the one placeholder rule `resolve_config` applies",
         why="read without the separator, the default is part of the key, so the ordinary "
         '`@Scheduled(cron = "${orders.sweep.cron:0 0 * * * *}")` — a schedule the '
-        "annotation itself fixes wherever configuration is silent — reads `missing_key` in "
+        "annotation itself fixes wherever configuration is silent — reads `external` in "
         "every environment",
         edits=(
             Edit(

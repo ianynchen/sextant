@@ -134,14 +134,14 @@ def _config_verdict(key: str = "spring.config.import", anchor: str = "beside-ope
             "key": key,
             "source": "application.yml",
             "environment": "default",
-            "kind": "remote_source",
+            "kind": "external",
         },
         assessment="likely a Config Server import",
         because="the profile declares `spring.config.import=configserver:`",
     )
 
 
-# One unresolved `resolved_config` row (D01's closed five-reason set) — the
+# One unresolved `resolved_config` row (the general reason list) — the
 # exact row `_config_verdict` above answers.
 CONFIG_ROWS = [
     {
@@ -149,7 +149,8 @@ CONFIG_ROWS = [
         "value": None,
         "source": "application.yml",
         "environment": "default",
-        "unresolved_reason": "remote_source",
+        "unresolved_reason": "external",
+        "unresolved_detail": "spring.config.import is imported from a remote source",
     },
 ]
 

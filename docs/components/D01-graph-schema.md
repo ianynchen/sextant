@@ -756,19 +756,21 @@ because an SSE stream really is a route a client GETs; only its protocol changed
 **`resolved_config` is one row per key per environment.** A resolved row carries `key`,
 `value`, `source` — the file that won precedence for that key in that profile's layering
 ([D02](D02-catalog-schema.md)'s `config_model`) — and `environment`. An unresolved row
-carries the same `key` and `environment` with `value` NULL and a `reason` from a closed
-five-value set: `missing_key`, `environment` (the value comes from an environment variable
-or a launch flag — universal across ecosystems, and never resolvable from files alone),
-`remote_source` (a config-server or `spring.config.import` URL), `placeholder_cycle`, and
-`multi_placeholder` — used only by the peer-resolution join below, never by the resolution
-pass itself, for an outbound expression carrying more than one placeholder, substitutable
-only piecewise. "Unresolved for `prod`, resolved for `dev`" is expressible and meaningful:
+carries the same `key` and `environment` with `value` NULL, an `unresolved_reason` — one
+word of the general reason list (`values._REASONS`: `external`, `non_enumerable`,
+`not_readable`, `escapes`, `no_writer`, `cycle`) — and an `unresolved_detail`, text for a
+person that names the key and the place (`orders.url is not set for prod`; no code branches
+on it). A key the deployment sets (absent from the files, an environment variable, a
+config-server or `spring.config.import` import) is `external`; a placeholder chain that
+loops is `cycle`; an outbound expression carrying more than one placeholder, which the
+peer-resolution join below fills only one of, is `not_readable`. "Unresolved for `prod`, resolved for `dev`" is expressible and meaningful:
 the same key carries a resolved row in one environment and an unresolved one in another,
 never one row forced to answer for both.
 
 **Peer resolution is a join, never a write.** A named query joins outbound endpoint rows'
 `${...}`-bearing `peer`/`path` expressions against `resolved_config`, per environment,
-substituting single-placeholder expressions and answering `multi_placeholder` for the rest.
+substituting single-placeholder expressions and answering `not_readable` for the rest, with
+an `unresolved_detail` beside the reason.
 Endpoint rows are untouched — `resolved_config` carries values, endpoints keep expressions,
 and nothing rewrites an endpoint row per environment.
 
@@ -1196,8 +1198,9 @@ repository cannot know.
 the job rather than in it (spec 2026-10-23-configured-schedules, option A): one row per
 (`scheduled_work` row whose expression holds the config model's placeholder opener,
 environment of `resolved_config`), carrying `handler`, `trigger`, `name`, `expression`,
-`environment`, `keys`, `value` and `unresolved_reason` — the last one of the closed set
-`resolved_config` uses, `value` NULL exactly when it is set. `keys` is a JSON array of every
+`environment`, `keys`, `value`, `unresolved_reason` and `unresolved_detail` — the last two
+as `resolved_config` has them (the general reason list, and text for a person), `value` NULL
+exactly when a reason is set. `keys` is a JSON array of every
 key the substitution asked that environment's configuration for, in the order it asked: a
 schedule is the value of the key that configures it, so every exit masks `value` whole where
 one of them names a secret, as `resolved_config` masks that key's own value. The first four are the job's
@@ -1352,7 +1355,7 @@ compared by nothing).
 | `endpoint` | `endpoints`, inbound | protocol, method, path: the exposed address, which is a topic for a broker, the operation name for GraphQL, the operation's QName for SOAP | the request and response body as field sets by wire name, the same two bodies as descriptors with every type symbol erased, consumes, produces, format, the requirement set (`endpoint_metadata`), the condition set (`endpoint_conditions`), resolution | handler symbols, documents |
 | `dependency` | `endpoints`, outbound | protocol, method, path, peer | the two bodies as for `endpoint`, format, the header set (`endpoint_metadata`), the condition set (`endpoint_conditions`, through the caller's bean), resolution | caller symbols, documents |
 | `data-contract` | `shapes` and `shape_fields` | the shape symbol (`shape_id`) | `content_hash`, and the field set as wire name to wire type, format, required, nullable | the declaring document, `origin_tier` |
-| `boundary-property` | `resolved_config` | key, environment | value (as the exit masks it), `unresolved_reason` | source file |
+| `boundary-property` | `resolved_config` | key, environment | value (as the exit masks it), `unresolved_reason`, `unresolved_detail` | source file |
 | `schedule` | `scheduled_work` | handler, trigger, name | expression, resolution, refused | catalog |
 | `error-handler` | `error_handlers` | handler, exception | advice, scope, status, response shape | catalog |
 

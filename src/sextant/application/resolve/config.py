@@ -33,10 +33,10 @@ that SAME layered map for its own profile, `:default` (D02 §2i's
 `default_separator`) taken when the referenced key cannot be resolved — itself
 resolved against the same map where it holds a placeholder, as Spring's parser
 resolves it (CP-48 row 7) — and a key already on the substitution stack,
-reached through a default or not, reported as `placeholder_cycle` rather than
+reached through a default or not, reported as `cycle` rather than
 looped forever. A key entirely absent from a
 profile's own layering — never a placeholder failure, just genuinely
-undeclared for that profile — resolves `missing_key` too: D01's own
+undeclared for that profile — resolves `external` too (the deployment sets it): D01's own
 "unresolved for prod, resolved for dev" example is exactly this case, not a
 degraded placeholder.
 
@@ -51,36 +51,38 @@ own key template is compared against one — D02 §2i, Task 8's field ladder).
 A model declaring `billing.url` and `billing.URL` as separate keys keeps
 BOTH as separate rows, unconditionally.
 
-**What this pass does not do.** `environment` and `remote_source` both need
-a model to declare something pass 2 has nothing to interpret otherwise: an
-env-var import, or a `spring.config.import`-shaped prefix list. Spring's own
-2F model declares the latter (`remote_prefixes`) and none of the former, so
-`environment` is unreachable this phase — one comment marks it rather than
-one un-exercised branch. `multi_placeholder` is never emitted here at all;
-it is reserved for the peer-resolution join (D01), which substitutes into an
-ENDPOINT expression, not a config value.
+**What this pass does not do.** An environment-variable import needs a model to
+declare something pass 2 has nothing to interpret otherwise; Spring's own 2F model
+declares none, so an absent reference is `external` with no finer reading. A
+`not_readable` answer for a many-placeholder address is never given here at all; it
+belongs to the peer-resolution join (D01), which substitutes into an ENDPOINT
+expression, not a config value.
+
+**Every unresolved row has two parts** (spec 2026-11-05-one-reason-list §2): `reason`,
+one word of the general list (`values._REASONS`), and `detail`, text for a person that
+names the key and the place. No code branches on the detail.
 """
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.values import CYCLE, EXTERNAL
 
 # The relaxed-binding rule this pass has always used, now in `domain` because
 # 2K's redactor needs the same one and cannot import this module — see
 # `domain/config_keys.py`. Moved, not copied.
 from sextant.domain.config_keys import normalize_key
 
-# D01's closed five-value unresolved-reason set. `multi_placeholder` is
-# listed for completeness only — this pass, by design, never emits it.
-UNRESOLVED_REASONS = (
-    "missing_key",
-    "environment",
-    "remote_source",
-    "placeholder_cycle",
-    "multi_placeholder",
-)
+
+class Unresolved(NamedTuple):
+    """Why a placeholder could not be filled: a `reason` from the general list
+    (`values._REASONS`) and a `detail` for a person."""
+
+    reason: str
+    detail: str
+
 
 _DEFAULT_PLACEHOLDERS = {"open": "${", "close": "}", "default_separator": ":"}
 
@@ -223,7 +225,7 @@ def _resolve_model(
 
     # The full key universe this model's sources ever declare, across every
     # profile — what lets a key present in `default` but absent from `prod`
-    # still resolve a `missing_key` row FOR `prod`, rather than silently
+    # still resolve an `external` row FOR `prod`, rather than silently
     # having no row there at all (D01's "unresolved for prod, resolved for
     # dev" example). The activation key itself (`from_document_key`) is
     # excluded (M-c, fix round 1): it is a DIRECTIVE that says which profile
@@ -351,7 +353,8 @@ def _resolve_row(
             "value": None,
             "source": None,
             "environment": profile,
-            "unresolved_reason": "missing_key",
+            "unresolved_reason": EXTERNAL,
+            "unresolved_detail": f"{key} is not set for {profile}",
         }
     raw_value, source_file = merged[key]
     if remote_prefixes and raw_value.startswith(remote_prefixes):
@@ -359,25 +362,30 @@ def _resolve_row(
         # is checked on the WINNING raw value, before any placeholder
         # substitution — the config-server case is a literal import
         # string, never itself a placeholder reference.
+        # The detail names the prefix that matched, not the whole value: a config-server
+        # URL can carry credentials, and a detail is printed at every exit.
+        prefix = next(p for p in remote_prefixes if raw_value.startswith(p))
         return {
             "key": key,
             "value": None,
             "source": source_file,
             "environment": profile,
-            "unresolved_reason": "remote_source",
+            "unresolved_reason": EXTERNAL,
+            "unresolved_detail": f"{key} is imported from a remote source (prefix {prefix})",
         }
     resolved, reason = substitute(
         raw_value,
         placeholders,
-        _layered_lookup(merged, normalized_index, placeholders, key_matching, [key]),
+        _layered_lookup(merged, normalized_index, placeholders, key_matching, profile, [key]),
     )
-    if resolved is None:
+    if reason is not None:
         return {
             "key": key,
             "value": None,
             "source": source_file,
             "environment": profile,
-            "unresolved_reason": reason,
+            "unresolved_reason": reason.reason,
+            "unresolved_detail": reason.detail,
         }
     return {
         "key": key,
@@ -385,18 +393,19 @@ def _resolve_row(
         "source": source_file,
         "environment": profile,
         "unresolved_reason": None,
+        "unresolved_detail": None,
     }
 
 
 def substitute(
     raw: str,
     placeholders: Mapping[str, str],
-    lookup: Callable[[str], tuple[str | None, str | None]],
-) -> tuple[str | None, str | None]:
+    lookup: Callable[[str], tuple[str | None, Unresolved | None]],
+) -> tuple[str | None, Unresolved | None]:
     """The project's one placeholder rule: `${key:default}` substitution with
     D02 §2i's `placeholders` delimiters and `default_separator`, read the way
     Spring's own `PlaceholderParser` reads them (CP-48, `spring-core` 7.0.9).
-    `lookup(ref_key)` returns `(value, None)` or `(None, reason)` — what a key
+    `lookup(ref_key)` returns `(value, None)` or `(None, Unresolved)` — what a key
     MEANS (the layered map, one environment's resolved rows) is the caller's.
 
     A placeholder ends at the closer that BALANCES it, the `nest` opener counted
@@ -408,7 +417,7 @@ def substitute(
     through the SAME lookup (row 7) — `${a:${b}}` is `b`'s value — so a cycle
     through a default is the lookup's to report, as any other cycle is (row 8).
 
-    Returns `(resolved_string, None)` on success or `(None, reason)` on
+    Returns `(resolved_string, None)` on success or `(None, Unresolved)` on
     failure — a single embedded failure fails the WHOLE value; this pass
     never emits a partially-substituted string, the same "unresolved is an
     answer" discipline every other engine keeps for a declared capture that
@@ -477,8 +486,8 @@ def _placeholder_end(text: str, index: int, close_: str, nest: str) -> int:
 
 
 def _resolved_parts(
-    parts: _Parts, separator: str, lookup: Callable[[str], tuple[str | None, str | None]]
-) -> tuple[str | None, str | None]:
+    parts: _Parts, separator: str, lookup: Callable[[str], tuple[str | None, Unresolved | None]]
+) -> tuple[str | None, Unresolved | None]:
     """Every piece of `parts` resolved and joined, or the first failure's reason."""
     resolved: list[str] = []
     for part in parts:
@@ -493,8 +502,8 @@ def _resolved_parts(
 
 
 def _resolved_placeholder(
-    inside: _Parts, separator: str, lookup: Callable[[str], tuple[str | None, str | None]]
-) -> tuple[str | None, str | None]:
+    inside: _Parts, separator: str, lookup: Callable[[str], tuple[str | None, Unresolved | None]]
+) -> tuple[str | None, Unresolved | None]:
     """One placeholder: its key's parts resolved and looked up, and where `lookup` cannot
     answer, its default's parts resolved through the same lookup (CP-48 row 7). The
     separator splits the first piece of TEXT holding it, never a nested placeholder's own
@@ -524,17 +533,18 @@ def _layered_lookup(
     normalized_index: dict[str, str],
     placeholders: dict[str, str],
     key_matching: str,
+    profile: str,
     stack: list[str],
-) -> Callable[[str], tuple[str | None, str | None]]:
+) -> Callable[[str], tuple[str | None, Unresolved | None]]:
     """`resolve_config`'s own lookup for `substitute`: a `${ref_key}` resolved
     against the layered map `_layer` built for one profile, recursively.
     `stack` carries the chain of merged-map keys currently being resolved,
     INCLUDING the top-level key being answered for — a self-reference is
     caught the same way a longer cycle is, on the very first lookup."""
 
-    def lookup(ref_key: str) -> tuple[str | None, str | None]:
+    def lookup(ref_key: str) -> tuple[str | None, Unresolved | None]:
         return _resolve_reference(
-            ref_key, merged, normalized_index, placeholders, key_matching, stack
+            ref_key, merged, normalized_index, placeholders, key_matching, profile, stack
         )
 
     return lookup
@@ -546,8 +556,9 @@ def _resolve_reference(
     normalized_index: dict[str, str],
     placeholders: dict[str, str],
     key_matching: str,
+    profile: str,
     stack: list[str],
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, Unresolved | None]:
     """One `${ref_key}` lookup: relaxed or exact per the model's own
     `key_matching` — `ref_key` itself is normalized here the same way
     `_normalized_index` normalized every merged key, so a relaxed model
@@ -559,20 +570,30 @@ def _resolve_reference(
     target = normalized_index.get(lookup)
     if target is None:
         # RULING (2F design §2): any unresolvable placeholder whose key is
-        # simply absent resolves `missing_key` — `environment` is reserved
-        # for a key the model's OWN sources declare as an environment
-        # import, which Spring's 2F model declares none of. A `${}` default
-        # chain ending in what looks like an env-var name (`${SOME_VAR}`)
-        # is still `missing_key` here, not a finer, unimplemented split.
-        return None, "missing_key"
+        # simply absent is `external`: the deployment sets it. The model's OWN
+        # sources declare no environment import (Spring's 2F model declares none),
+        # so a `${}` default chain ending in what looks like an env-var name
+        # (`${SOME_VAR}`) is still plain `external` here, not a finer split.
+        return None, Unresolved(EXTERNAL, f"{ref_key} is not set for {profile}")
     if target in stack:
-        return None, "placeholder_cycle"
+        return None, Unresolved(CYCLE, _cycle_detail(stack[stack.index(target) :], target))
     raw_value, _source = merged[target]
     return substitute(
         raw_value,
         placeholders,
-        _layered_lookup(merged, normalized_index, placeholders, key_matching, stack + [target]),
+        _layered_lookup(
+            merged, normalized_index, placeholders, key_matching, profile, stack + [target]
+        ),
     )
+
+
+def _cycle_detail(chain: list[str], target: str) -> str:
+    """A cycle as a person reads it: each key refers to the next, and the last refers back
+    to `target`, the key the chain began at (`a refers to b, which refers back to a`)."""
+    if len(chain) == 1:
+        return f"{target} refers back to itself"
+    followed = ", which refers to ".join(chain[1:])
+    return f"{chain[0]} refers to {followed}, which refers back to {target}"
 
 
 def _match_source(pattern: str, filename: str, allow_placeholder: bool) -> str | None:

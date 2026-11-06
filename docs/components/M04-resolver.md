@@ -78,7 +78,7 @@ reason from a value that is missing, or somebody goes looking for a setting that
 every client-side endpoint and every environment, what that row's own address expression
 substitutes to — a `${…}` placeholder read against `resolved_config` for that environment,
 never a rewrite of the endpoint row itself. An expression carrying more than one
-placeholder answers `multi_placeholder`, the one unresolved reason this join alone emits.
+placeholder answers `not_readable`, the one unresolved answer this join alone gives.
 
 ### 3. Symbol graph
 

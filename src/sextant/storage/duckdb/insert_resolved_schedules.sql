@@ -8,19 +8,19 @@
 --
 -- Parameters:
 --   $rows -- {handler, trigger, name, expression, environment, keys, value,
---             unresolved_reason} rows, one per (placeholder job, environment of
---             `resolved_config`); the first four are the job's `scheduled_work` columns
---             verbatim, `keys` a JSON array of the keys the substitution asked for.
---             `value` is NULL exactly when `unresolved_reason` is set, one of D01's
---             closed set.
+--             unresolved_reason, unresolved_detail} rows, one per (placeholder job,
+--             environment of `resolved_config`); the first four are the job's
+--             `scheduled_work` columns verbatim, `keys` a JSON array of the keys the substitution asked for.
+--             `value` is NULL exactly when `unresolved_reason` is set, one word of the
+--             general reason list (`values._REASONS`); `unresolved_detail` says where.
 INSERT INTO resolved_schedules (handler, trigger, name, expression, environment, keys, value,
-                                unresolved_reason)
+                                unresolved_reason, unresolved_detail)
 SELECT r.handler, r.trigger, r.name, r.expression, r.environment, r.keys, r.value,
-       r.unresolved_reason
+       r.unresolved_reason, r.unresolved_detail
 FROM (SELECT UNNEST(
     $rows::STRUCT(
         handler VARCHAR, trigger VARCHAR, name VARCHAR, expression VARCHAR,
         environment VARCHAR,
-        keys VARCHAR, value VARCHAR, unresolved_reason VARCHAR
+        keys VARCHAR, value VARCHAR, unresolved_reason VARCHAR, unresolved_detail VARCHAR
     )[]
 ) AS r);

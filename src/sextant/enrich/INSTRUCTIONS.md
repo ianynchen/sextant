@@ -230,7 +230,7 @@ endpoint — same claim shape, a different set of fields. Answered:
   "kind": "verdict",
   "evidence": "llm",
   "anchor": "beside-open-question",
-  "question": {"key": "spring.config.import", "source": "application.yml", "environment": "default", "kind": "remote_source"},
+  "question": {"key": "spring.config.import", "source": "application.yml", "environment": "default", "kind": "external"},
   "assessment": "a Spring Cloud Config server — `application.yml`'s `spring.config.import` value is a `configserver:` reference, not a local file, so nothing in this module resolves it further",
   "because": "`grep`ping the module for `spring.config.import` finds only this one declaration, in `application.yml`, and `read_file` shows its value starts with `configserver:`"
 }
@@ -243,7 +243,7 @@ Unanswered:
   "kind": "verdict",
   "evidence": "llm",
   "anchor": "beside-open-question",
-  "question": {"key": "spring.config.import", "source": "application.yml", "environment": "docker", "kind": "remote_source"},
+  "question": {"key": "spring.config.import", "source": "application.yml", "environment": "docker", "kind": "external"},
   "assessment": "unanswered",
   "searched": "grepped every `application*.yml`/`application*.properties` file visible in the module for a docker-profile override of `spring.config.import`; none exists beyond the `default` environment's own row"
 }

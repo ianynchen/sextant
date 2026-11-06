@@ -4069,7 +4069,7 @@ def test_the_peer_join_answers_every_client_row_per_environment(
     `path`: a literal address passes through unchanged in every environment,
     and the three `${billing.url}` rows substitute per environment — the
     same row, two answers, which is the whole reason peers resolve as a join
-    rather than a write. `multi_placeholder` stays unit-tested
+    rather than a write. the `not_readable` many-placeholder answer stays unit-tested
     (`test_config_join.py`): no live row carries two placeholders."""
     workspace, report = resolved_fixture
     rows = workspace.query("resolved_peers")

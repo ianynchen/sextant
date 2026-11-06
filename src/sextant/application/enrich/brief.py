@@ -219,6 +219,9 @@ def _open_question_lines(workspace: Workspace, redactor: Redactor) -> list[str]:
             sort_keys=True,
         )
         lines.append(f"- {identity}")
+        detail = row.get("unresolved_detail")
+        if detail:
+            lines.append(f"  - why this is open: {redactor.redact_text(str(detail))}")
     return lines
 
 
@@ -257,7 +260,10 @@ def _doubtful_rows_digest(workspace: Workspace, redactor: Redactor) -> list[str]
         for row in doubtful_config:
             key = row.get("key")
             redacted_key = None if key is None else redactor.redact_text(str(key))
+            detail = row.get("unresolved_detail")
+            shown = "" if not detail else f" ({redactor.redact_text(str(detail))})"
             lines.append(
-                f"- {redacted_key} — {row.get('unresolved_reason')} in {row.get('environment')}"
+                f"- {redacted_key} — {row.get('unresolved_reason')} in "
+                f"{row.get('environment')}{shown}"
             )
     return lines or ["None recorded."]

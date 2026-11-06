@@ -298,6 +298,7 @@ def _workspace(
                     "source": "invented.yml",
                     "environment": environment,
                     "unresolved_reason": None,
+                    "unresolved_detail": None,
                 }
                 for key, environment, value in config
             ],

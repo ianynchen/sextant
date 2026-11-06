@@ -677,7 +677,7 @@ def _selected_entries(
     # distinction fix round 1 (I-2) turns on. "Nobody said anything" and
     # "somebody said: nothing" are opposite statements, and only the first is
     # the framework default. A key declared but resolvable in no environment
-    # (every row a `missing_key`) is still nobody saying anything, so it takes
+    # (every row `external`) is still nobody saying anything, so it takes
     # the default; a key that resolved to an empty value, or to separators
     # alone, is an explicit select-NOTHING and must derive nothing. Falling
     # through to `candidates` there would bind every bean in the module

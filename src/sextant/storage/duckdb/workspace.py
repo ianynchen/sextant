@@ -629,7 +629,7 @@ _NAMED_QUERIES = {
     # `environment, key` so "unresolved for prod, resolved for dev" reads as
     # two adjacent rows rather than an arbitrary interleaving (NFR-1).
     "resolved_config": """
-        SELECT key, value, source, environment, unresolved_reason
+        SELECT key, value, source, environment, unresolved_reason, unresolved_detail
         FROM resolved_config ORDER BY environment, key
     """,
     # The per-environment answer for every address expression a client-side
@@ -646,9 +646,9 @@ _NAMED_QUERIES = {
     # A placeholder count, not a regex alternation, decides the three cases:
     # `${` occurs zero times (a literal, which passes straight through with
     # its own value), once (substituted from `resolved_config` for this
-    # environment), or more (`multi_placeholder` — D01's own reason for an
-    # expression that is substitutable only piecewise, the one reason M04's
-    # pass 2 never emits because it belongs to this join alone). `length`
+    # environment), or more (`not_readable`: the join fills one placeholder, so an
+    # expression with several is not followed — the one answer M04's pass 2 never
+    # gives, because it belongs to this join alone). `length`
     # minus the length with the opening delimiter removed, over the
     # delimiter's own length, IS that count.
     #
@@ -658,7 +658,7 @@ _NAMED_QUERIES = {
     # expression in `path` with `peer` NULL). The single `unresolved_reason`
     # column reports `path`'s answer first, `peer`'s only when `path` had
     # nothing to say, so one column still names why a row did not resolve
-    # for an environment.
+    # for an environment; `unresolved_detail` is the same answer's text.
     #
     # With no resolved environments at all the join is empty and so is this
     # answer: "the same rows, unresolved" and "no environments to resolve
@@ -685,7 +685,9 @@ _NAMED_QUERIES = {
         joined AS (
             SELECT p.*,
                    pk.value AS path_value, pk.unresolved_reason AS path_reason,
-                   qk.value AS peer_value, qk.unresolved_reason AS peer_reason
+                   pk.unresolved_detail AS path_detail,
+                   qk.value AS peer_value, qk.unresolved_reason AS peer_reason,
+                   qk.unresolved_detail AS peer_detail
             FROM paired p
             LEFT JOIN resolved_config pk
                    ON pk.key = p.path_key AND pk.environment = p.environment
@@ -702,13 +704,27 @@ _NAMED_QUERIES = {
                     WHEN peer_value IS NULL THEN NULL
                     ELSE replace(peer, '${' || peer_key || '}', peer_value) END AS resolved_peer,
                coalesce(
-                   CASE WHEN path_placeholders > 1 THEN 'multi_placeholder'
+                   CASE WHEN path_placeholders > 1 THEN 'not_readable'
                         WHEN path_placeholders = 1 AND path_value IS NULL
-                            THEN coalesce(path_reason, 'missing_key') END,
-                   CASE WHEN peer_placeholders > 1 THEN 'multi_placeholder'
+                            THEN coalesce(path_reason, 'external') END,
+                   CASE WHEN peer_placeholders > 1 THEN 'not_readable'
                         WHEN peer_placeholders = 1 AND peer_value IS NULL
-                            THEN coalesce(peer_reason, 'missing_key') END
-               ) AS unresolved_reason
+                            THEN coalesce(peer_reason, 'external') END
+               ) AS unresolved_reason,
+               coalesce(
+                   CASE WHEN path_placeholders > 1
+                            THEN 'the address ' || path || ' has ' || path_placeholders
+                                 || ' placeholders, and the join fills only one'
+                        WHEN path_placeholders = 1 AND path_value IS NULL
+                            THEN coalesce(path_detail,
+                                          path_key || ' is not set for ' || environment) END,
+                   CASE WHEN peer_placeholders > 1
+                            THEN 'the address ' || peer || ' has ' || peer_placeholders
+                                 || ' placeholders, and the join fills only one'
+                        WHEN peer_placeholders = 1 AND peer_value IS NULL
+                            THEN coalesce(peer_detail,
+                                          peer_key || ' is not set for ' || environment) END
+               ) AS unresolved_detail
         FROM joined
         ORDER BY environment, protocol, method, path, peer, caller
     """,
@@ -773,7 +789,8 @@ _NAMED_QUERIES = {
     # (NFR-1): a job has one row per environment, and two schedules of one kind on one
     # method (`@Schedules`) differ in `expression`, two named triggers in `name`.
     "resolved_schedules": """
-        SELECT handler, trigger, name, expression, environment, keys, value, unresolved_reason
+        SELECT handler, trigger, name, expression, environment, keys, value, unresolved_reason,
+               unresolved_detail
         FROM resolved_schedules
         ORDER BY handler, trigger, name, expression, environment
     """,
@@ -819,8 +836,9 @@ _NAMED_QUERIES = {
         ORDER BY shape_id, content_hash, origin_tier
     """,
     "boundary_property": """
-        SELECT key, environment, value, unresolved_reason, source FROM resolved_config
-        ORDER BY key, environment, value, unresolved_reason, source
+        SELECT key, environment, value, unresolved_reason, unresolved_detail, source
+        FROM resolved_config
+        ORDER BY key, environment, value, unresolved_reason, unresolved_detail, source
     """,
     "boundary_schedule": """
         SELECT handler, trigger, name, expression, resolution, refused, catalog_id
@@ -1477,7 +1495,7 @@ _EXPORT_QUERIES = {
     # value pattern's is not.
     "resolved_config": f"""
         SELECT c.key, coalesce(m.masked, c.value) AS value, c.source, c.environment,
-               c.unresolved_reason
+               c.unresolved_reason, c.unresolved_detail
         FROM resolved_config c
         LEFT JOIN {_REDACTED_CONFIG_VALUES} m ON m.key = c.key AND m.value = c.value
         ORDER BY c.environment, c.key
@@ -1519,7 +1537,7 @@ _EXPORT_QUERIES = {
         SELECT s.handler, s.trigger, coalesce(n.masked, s.name) AS name,
                coalesce(a.masked, s.expression) AS expression,
                s.environment, s.keys, coalesce(v.masked, s.value) AS value,
-               s.unresolved_reason
+               s.unresolved_reason, s.unresolved_detail
         FROM resolved_schedules s
         LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = s.expression
         LEFT JOIN {_REDACTED_ADDRESSES} n ON n.address = s.name

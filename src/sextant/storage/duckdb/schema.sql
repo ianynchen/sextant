@@ -145,11 +145,13 @@ CREATE TABLE IF NOT EXISTS resolved_config (
     -- for this environment at all, so no file ever won it (D01).
     source            TEXT,
     environment       TEXT,
-    -- NULL exactly when `value` is non-NULL. One of D01's closed five-value
-    -- set (`missing_key`, `environment`, `remote_source`,
-    -- `placeholder_cycle`, `multi_placeholder`) — the last reserved for the
-    -- peer-resolution join, never emitted by this pass.
-    unresolved_reason TEXT
+    -- NULL exactly when `value` is non-NULL. One word of the general reason list
+    -- (`values._REASONS`): `external` for a key the deployment sets or a remote import,
+    -- `cycle` for a placeholder chain that loops.
+    unresolved_reason TEXT,
+    -- Text for a person that names the key and the place (`orders.url is not set for
+    -- prod`). NULL exactly when `unresolved_reason` is. No code branches on it.
+    unresolved_detail TEXT
 );
 
 -- The 2K hand-off ledger (2G design §6): one row per question a programmatic
@@ -320,8 +322,10 @@ CREATE TABLE IF NOT EXISTS resolved_schedules (
     -- resolved configuration, or the annotation's own `:default` where none sets the
     -- key. NULL exactly when `unresolved_reason` is set.
     value             TEXT,
-    -- D01's closed set (`missing_key`, `placeholder_cycle`, ...), from the lookup.
-    unresolved_reason TEXT
+    -- One word of the general reason list (`values._REASONS`), from the lookup.
+    unresolved_reason TEXT,
+    -- Text for a person, from the same lookup. NULL exactly when `unresolved_reason` is.
+    unresolved_detail TEXT
 );
 
 -- The second non-wire table (2O design §4b): which exceptions a module answers

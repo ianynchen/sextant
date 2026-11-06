@@ -540,7 +540,7 @@ the gap list:
   rung 3 emits the DECLARED field's own spelling (`getBaseUrl` → `${billing.baseUrl}`),
   but `resolved_config`'s join compares keys exactly — a properties class whose field is
   `baseUrl` and whose config key is written `base-url` produces an expression no
-  environment resolves (`missing_key`, correctly, though the value exists).
+  environment resolves (`external`, correctly, though the value exists).
 - **The ladder's `@Value`-parameter rung answers in the `fluent` engine too, since
   2026-09-21** (spec 2026-09-21 §6 M12). `fluent` never handed the ladder a caller, so a
   chain reading the method's OWN `@Value("${svc.url}")` parameter — `webClient.get().uri(url)`
@@ -564,7 +564,7 @@ the gap list:
   JSON in `default`, Avro in `prod` — leaves both columns NULL rather than picking one
   environment's answer over another's.
 - **A `resolved_config` row imported from a remote source is never fetched.** A
-  `spring.config.import`-shaped value resolves `unresolved_reason: remote_source`,
+  `spring.config.import`-shaped value resolves `unresolved_reason: external`,
   naming where the value lives, never what it is.
 
 ### 2c. What `✅ ASM` in the Scanner column claims

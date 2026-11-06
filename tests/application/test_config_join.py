@@ -31,6 +31,7 @@ from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import config_join
 from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.service_identity import record_service_identity_gaps
+from sextant.application.resolve.values import EXTERNAL, NOT_READABLE
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -261,7 +262,10 @@ def _workspace(
                     "value": value,
                     "source": "invented.yml" if value is not None else None,
                     "environment": environment,
-                    "unresolved_reason": None if value is not None else "missing_key",
+                    "unresolved_reason": None if value is not None else EXTERNAL,
+                    "unresolved_detail": (
+                        None if value is not None else f"{key} is not set for {environment}"
+                    ),
                 }
                 for key, environment, value in config
             ],
@@ -1098,16 +1102,42 @@ def test_an_address_whose_key_is_missing_for_one_environment_only_says_so(
     assert rows["default"]["resolved_path"] == "http://acme.internal/invoices"
     assert rows["default"]["unresolved_reason"] is None
     assert rows["prod"]["resolved_path"] is None
-    assert rows["prod"]["unresolved_reason"] == "missing_key"
+    assert rows["prod"]["unresolved_reason"] == EXTERNAL
+    assert rows["prod"]["unresolved_detail"] == "acme.base is not set for prod"
+
+
+def test_an_address_whose_key_has_no_row_in_an_environment_is_external_there(tmp_path: Path):
+    """The key is declared for `default` only, so `prod` has no row for it at all: the join
+    says the same thing it says for a row with no value."""
+    workspace = _workspace(tmp_path, config=[("acme.base", "default", "http://acme.internal")])
+    workspace.derive(
+        "resolved_config_insert",
+        rows=[
+            {
+                "key": "other",
+                "value": "x",
+                "source": "invented.yml",
+                "environment": "prod",
+                "unresolved_reason": None,
+                "unresolved_detail": None,
+            }
+        ],
+    )
+    _seed(workspace, {"protocol": "http", "path": "${acme.base}/invoices", "caller": "c"})
+    rows = {row["environment"]: row for row in workspace.query("resolved_peers")}
+    workspace.close()
+
+    assert rows["prod"]["unresolved_reason"] == EXTERNAL
+    assert rows["prod"]["unresolved_detail"] == "acme.base is not set for prod"
+    assert rows["default"]["unresolved_detail"] is None
 
 
 def test_an_address_carrying_two_placeholders_is_substitutable_only_piecewise(
     tmp_path: Path,
 ):
-    """D01's fifth unresolved reason, and the only one M04's pass 2 never
-    emits: `multi_placeholder` belongs to this join alone, because it is a
-    property of an ENDPOINT expression rather than of a configuration
-    value."""
+    """The one unresolved answer M04's pass 2 never gives: it belongs to this join alone,
+    because it is a property of an ENDPOINT expression rather than of a configuration value.
+    The join fills one placeholder and the code is there, so it is `not_readable`."""
     workspace = _workspace(
         tmp_path,
         config=[("acme.base", "default", "http://acme.internal"), ("acme.leaf", "default", "x")],
@@ -1117,7 +1147,10 @@ def test_an_address_carrying_two_placeholders_is_substitutable_only_piecewise(
     workspace.close()
 
     assert row["resolved_path"] is None
-    assert row["unresolved_reason"] == "multi_placeholder"
+    assert row["unresolved_reason"] == NOT_READABLE
+    assert row["unresolved_detail"] == (
+        "the address ${acme.base}/${acme.leaf} has 2 placeholders, and the join fills only one"
+    )
 
 
 def test_an_address_with_no_placeholder_passes_through_with_its_literal(

@@ -237,8 +237,8 @@ class ConfigQuestionRef(BaseModel):
     `environment` disambiguates rows that share every other column — the live
     rows this shape was verified against differ from each other ONLY by it
     (`spring.config.import` unresolved in both `default` and `docker`).
-    `source` is nullable and required rather than defaulted: a `missing_key`
-    row was never declared in any file, so no file ever won it (D01) and there
+    `source` is nullable and required rather than defaulted: an `external`
+    row for an undeclared key was never declared in any file, so no file ever won it (D01) and there
     is nothing to name, but every config verdict states that explicitly
     rather than relying on an omitted field to mean it."""
 

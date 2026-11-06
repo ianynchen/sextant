@@ -49,7 +49,7 @@ FIXTURE = Path(__file__).parents[3] / "fixtures" / "orders-service"
 _MODULE = "sextant-jvm maven com.acme/orders-service 1.0.0 "
 
 _METADATA = {
-    "schema_version": 15,
+    "schema_version": 16,
     "boundary_vocabulary_version": 4,
     "catalog_hash": "sha256:catalogs",
     "module": {
@@ -662,7 +662,8 @@ def test_the_remaining_kinds_carry_their_columns_and_evidence(
         _insert(workspace, "resolved_config", key="orders.url", value="http://x", source="application.yml",
                 environment="default")  # fmt: skip
         _insert(workspace, "resolved_config", key="orders.url", value=None, source="application.yml",
-                environment="prod", unresolved_reason="missing_key")  # fmt: skip
+                environment="prod", unresolved_reason="external",
+                unresolved_detail="orders.url is not set for prod")  # fmt: skip
         _insert(workspace, "scheduled_work", handler="J#run().", trigger="cron", expression="0 * * * * *",
                 resolution="resolved", evidence="compiler", catalog_id="spring-scheduling")  # fmt: skip
         _insert(workspace, "error_handlers", handler="A#bad().", advice="A#", declared_by="Advice#",
@@ -675,7 +676,8 @@ def test_the_remaining_kinds_carry_their_columns_and_evidence(
         for e in ("prod", "default")
     )
     assert (default["value"], default["unresolved_reason"]) == ("http://x", None)
-    assert (prod["value"], prod["unresolved_reason"]) == (None, "missing_key")
+    assert (prod["value"], prod["unresolved_reason"]) == (None, "external")
+    assert prod["unresolved_detail"] == "orders.url is not set for prod"
     assert default["evidence"]["source"] == "application.yml"
     assert [r["environment"] for r in source.rows(KINDS["boundary-property"])] == [
         "default",
@@ -720,7 +722,7 @@ def test_a_workspace_is_found_by_its_directory_or_its_modules(
         assert source.producer == {
             "sextant_version": "0.1.0",
             "fact_schema_version": 2,
-            "graph_schema_version": 15,
+            "graph_schema_version": 16,
             "boundary_vocabulary_version": 4,
             "catalog_hash": "sha256:catalogs",
         }

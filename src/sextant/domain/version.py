@@ -181,6 +181,14 @@ SEXTANT_VERSION = version("sextant")
 #             with `rpc_hops` → `hops`, before 15 was released). A workspace of the older
 #             vintage has no such table, so a reader of the registrations would find none, and
 #             it is refused and re-analysed.
+#     16      `resolved_config` and `resolved_schedules` gain `unresolved_detail` (text for a
+#             person), and their `unresolved_reason` takes only the general reason list
+#             (`external`, `cycle`, `not_readable`, ...) in place of `missing_key`,
+#             `environment`, `remote_source`, `placeholder_cycle` and `multi_placeholder`
+#             (spec 2026-11-05-one-reason-list §3a, §4; approved by the user 2026-11-05).
+#             The `resolved_peers` answer and the D01 `boundary-property` attributes follow.
+#             A workspace of the older vintage has no detail column and says the old words,
+#             so it is refused and re-analysed.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -203,5 +211,5 @@ SEXTANT_VERSION = version("sextant")
 #             consumer reading a schedule without it would take a refused one for work that
 #             runs.
 FACT_SCHEMA_VERSION = 6
-GRAPH_SCHEMA_VERSION = 15
+GRAPH_SCHEMA_VERSION = 16
 BOUNDARY_VOCABULARY_VERSION = 4

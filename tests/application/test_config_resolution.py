@@ -14,7 +14,13 @@ from pathlib import Path
 import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
-from sextant.application.resolve.config import placeholder_rule, resolve_config, substitute
+from sextant.application.resolve.config import (
+    Unresolved,
+    placeholder_rule,
+    resolve_config,
+    substitute,
+)
+from sextant.application.resolve.values import CYCLE, EXTERNAL
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import ConfigEntryFact, Document
@@ -194,13 +200,14 @@ def test_a_missing_placeholder_with_a_default_takes_the_default(tmp_path: Path):
     assert row["unresolved_reason"] is None
 
 
-def test_a_missing_placeholder_with_no_default_resolves_missing_key(tmp_path: Path):
+def test_a_missing_placeholder_with_no_default_resolves_external(tmp_path: Path):
     files = {"app.yml": [("k", "${missing}", 0)]}
     model = {"sources": [{"pattern": "app.yml"}], "profiles": {"default_profile": "default"}}
     rows = _resolve(tmp_path, files, model)
     row = _row(rows, "k", "default")
     assert row["value"] is None
-    assert row["unresolved_reason"] == "missing_key"
+    assert row["unresolved_reason"] == EXTERNAL
+    assert row["unresolved_detail"] == "missing is not set for default"
 
 
 def test_a_default_holding_a_placeholder_resolves_through_the_layered_map(tmp_path: Path):
@@ -213,40 +220,47 @@ def test_a_default_holding_a_placeholder_resolves_through_the_layered_map(tmp_pa
     assert (row["value"], row["unresolved_reason"]) == ("literal-value", None)
 
 
-def test_a_cycle_through_a_default_is_still_a_placeholder_cycle(tmp_path: Path):
+def test_a_cycle_through_a_default_is_still_a_cycle(tmp_path: Path):
     """CP-48 row 8: `a: ${b:${a}}` with no `b` resolves its default inside `a`'s own chain
     and comes back to `a` — Spring's `Circular placeholder reference`."""
     files = {"app.yml": [("a", "${b:${a}}", 0)]}
     model = {"sources": [{"pattern": "app.yml"}], "profiles": {"default_profile": "default"}}
     rows = _resolve(tmp_path, files, model)
     row = _row(rows, "a", "default")
-    assert (row["value"], row["unresolved_reason"]) == (None, "placeholder_cycle")
+    assert (row["value"], row["unresolved_reason"]) == (None, CYCLE)
+    assert row["unresolved_detail"] == "a refers back to itself"
 
 
-def test_a_two_key_cycle_resolves_placeholder_cycle_for_both_keys(tmp_path: Path):
+def test_a_two_key_cycle_resolves_cycle_for_both_keys_each_naming_its_chain(tmp_path: Path):
     files = {"app.yml": [("a", "${b}", 0), ("b", "${a}", 0)]}
     model = {"sources": [{"pattern": "app.yml"}], "profiles": {"default_profile": "default"}}
     rows = _resolve(tmp_path, files, model)
-    assert _row(rows, "a", "default")["unresolved_reason"] == "placeholder_cycle"
-    assert _row(rows, "b", "default")["unresolved_reason"] == "placeholder_cycle"
+    assert _row(rows, "a", "default")["unresolved_reason"] == CYCLE
+    assert _row(rows, "b", "default")["unresolved_reason"] == CYCLE
+    assert (
+        _row(rows, "a", "default")["unresolved_detail"] == "a refers to b, which refers back to a"
+    )
+    assert (
+        _row(rows, "b", "default")["unresolved_detail"] == "b refers to a, which refers back to b"
+    )
     assert _row(rows, "a", "default")["value"] is None
     assert _row(rows, "b", "default")["value"] is None
 
 
-def test_an_undefined_env_shaped_placeholder_is_still_missing_key_not_environment(
+def test_an_undefined_env_shaped_placeholder_is_external_like_any_absent_reference(
     tmp_path: Path,
 ):
-    """RULING (2F design §2): `environment` is reserved for a key the
-    model's own sources declare as an environment import — this model (like
-    Spring's 2F one) declares none, so a `${SOME_ENV_VAR}` chain ending in
-    what LOOKS like an env-var name still resolves the same `missing_key`
-    every other absent reference does, never the finer, undeclared reason."""
+    """RULING (2F design §2): the model's own sources declare no environment import (like
+    Spring's 2F one), so a `${SOME_ENV_VAR}` chain ending in what LOOKS like an env-var name
+    resolves the same `external` every other absent reference does, its detail naming the
+    key and the profile, never a finer, undeclared reading."""
     files = {"app.yml": [("k", "${SOME_ENV_VAR}", 0)]}
     model = {"sources": [{"pattern": "app.yml"}], "profiles": {"default_profile": "default"}}
     rows = _resolve(tmp_path, files, model)
     row = _row(rows, "k", "default")
     assert row["value"] is None
-    assert row["unresolved_reason"] == "missing_key"
+    assert row["unresolved_reason"] == EXTERNAL
+    assert row["unresolved_detail"] == "SOME_ENV_VAR is not set for default"
 
 
 # --- key_matching scopes LOOKUPS only, never the layering merge -----------
@@ -299,10 +313,10 @@ def test_custom_placeholder_delimiters_are_honored_and_the_default_spelling_is_i
     assert row_c["unresolved_reason"] is None
 
 
-# --- remote_source: a config-server import URL, never resolved from files -
+# --- external: a config-server import URL, never resolved from files -
 
 
-def test_a_value_matching_a_declared_remote_prefix_resolves_remote_source(tmp_path: Path):
+def test_a_value_matching_a_declared_remote_prefix_resolves_external(tmp_path: Path):
     files = {"app.yml": [("k", "remote:https://config.example/app", 0)]}
     model = {
         "sources": [{"pattern": "app.yml"}],
@@ -312,19 +326,20 @@ def test_a_value_matching_a_declared_remote_prefix_resolves_remote_source(tmp_pa
     rows = _resolve(tmp_path, files, model)
     row = _row(rows, "k", "default")
     assert row["value"] is None
-    assert row["unresolved_reason"] == "remote_source"
+    assert row["unresolved_reason"] == EXTERNAL
+    assert row["unresolved_detail"] == "k is imported from a remote source (prefix remote:)"
     assert row["source"] == "app.yml"
 
 
 # --- "unresolved for prod, resolved for dev" is expressible ---------------
 
 
-def test_a_key_resolved_in_one_profile_is_missing_key_in_another_where_undeclared(
+def test_a_key_resolved_in_one_profile_is_external_in_another_where_undeclared(
     tmp_path: Path,
 ):
     """D01: "resolved for `dev`, unresolved for `prod` is expressible and
     meaningful" — the same key carries a resolved row in one profile's
-    layering and an unresolved `missing_key` row in another's, never one
+    layering and an unresolved `external` row in another's, never one
     row forced to answer for both."""
     files = {
         "app.yml": [
@@ -342,9 +357,11 @@ def test_a_key_resolved_in_one_profile_is_missing_key_in_another_where_undeclare
     resolved = _row(rows, "only.default", "default")
     assert resolved["value"] == "v1"
     assert resolved["unresolved_reason"] is None
+    assert resolved["unresolved_detail"] is None
     missing = _row(rows, "only.default", "prod")
     assert missing["value"] is None
-    assert missing["unresolved_reason"] == "missing_key"
+    assert missing["unresolved_reason"] == EXTERNAL
+    assert missing["unresolved_detail"] == "only.default is not set for prod"
 
 
 # --- Pass 2's own contract: unconditional, empty in, empty out ------------
@@ -408,7 +425,7 @@ def test_exact_key_matching_rejects_a_relaxed_spelling_placeholder_lookup(tmp_pa
     rows = _resolve(tmp_path, files, model)
     row = _row(rows, "ref", "default")
     assert row["value"] is None
-    assert row["unresolved_reason"] == "missing_key"
+    assert row["unresolved_reason"] == EXTERNAL
 
 
 # --- The filename marker: undashed `{profile}`, and gated by from_filename -
@@ -428,7 +445,7 @@ def test_an_undashed_profile_placeholder_names_the_whole_filename_component(tmp_
     rows = _resolve(tmp_path, files, model)
     assert {row["environment"] for row in rows} == {"default", "prod"}
     assert _row(rows, "k", "prod")["value"] == "v"
-    assert _row(rows, "k", "default")["unresolved_reason"] == "missing_key"
+    assert _row(rows, "k", "default")["unresolved_reason"] == EXTERNAL
 
 
 def test_filename_profile_splitting_only_applies_when_from_filename_is_declared(
@@ -482,10 +499,10 @@ _DOLLAR_BRACES = {"open": "${", "close": "}", "default_separator": ":"}
 
 
 def _dict_lookup(values: dict[str, str]):
-    def lookup(ref_key: str) -> tuple[str | None, str | None]:
+    def lookup(ref_key: str) -> tuple[str | None, Unresolved | None]:
         if ref_key in values:
             return values[ref_key], None
-        return None, "missing_key"
+        return None, Unresolved(EXTERNAL, f"{ref_key} is not set")
 
     return lookup
 
@@ -524,7 +541,10 @@ def test_a_nested_default_whose_key_is_missing_takes_its_own_default_or_fails():
     and with none it is unresolvable, which fails the whole value."""
     lookup = _dict_lookup({})
     assert substitute("${a:${b:x}}", _DOLLAR_BRACES, lookup) == ("x", None)
-    assert substitute("${a:${b}}", _DOLLAR_BRACES, lookup) == (None, "missing_key")
+    assert substitute("${a:${b}}", _DOLLAR_BRACES, lookup) == (
+        None,
+        Unresolved(EXTERNAL, "b is not set"),
+    )
     assert substitute("${a:p-${b:q}-r}", _DOLLAR_BRACES, lookup) == ("p-q-r", None)
 
 
@@ -561,7 +581,10 @@ def test_a_placeholder_in_a_key_is_resolved_first():
     key's parts resolved before it is looked up."""
     lookup = _dict_lookup({"env": "prod", "prod.cron": "0 0 1 * * *"})
     assert substitute("${${env}.cron}", _DOLLAR_BRACES, lookup) == ("0 0 1 * * *", None)
-    assert substitute("${${missing}.cron:d}", _DOLLAR_BRACES, lookup) == (None, "missing_key")
+    assert substitute("${${missing}.cron:d}", _DOLLAR_BRACES, lookup) == (
+        None,
+        Unresolved(EXTERNAL, "missing is not set"),
+    )
 
 
 def test_substitute_splits_a_default_at_the_first_separator_only():
@@ -575,7 +598,10 @@ def test_substitute_replaces_every_reference_in_the_string():
 
 def test_substitute_fails_the_whole_value_when_one_reference_is_unresolved():
     lookup = _dict_lookup({"a": "1"})
-    assert substitute("${a} and ${missing}", _DOLLAR_BRACES, lookup) == (None, "missing_key")
+    assert substitute("${a} and ${missing}", _DOLLAR_BRACES, lookup) == (
+        None,
+        Unresolved(EXTERNAL, "missing is not set"),
+    )
 
 
 def test_substitute_treats_an_unclosed_opener_as_literal():

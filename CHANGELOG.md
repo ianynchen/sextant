@@ -542,6 +542,15 @@ here would restate those documents rather than add anything.
 
 ### Changed
 
+- **A configuration value that could not be resolved says why with the one general reason
+  list, plus a detail** (OI-321, spec `2026-11-05-one-reason-list-design.md` §3a). In
+  `resolved_config`, `resolved_schedules` and the `resolved_peers` answer, `unresolved_reason`
+  now holds only `external`, `cycle` or `not_readable` (before: `missing_key`, `environment`,
+  `remote_source`, `placeholder_cycle`, `multi_placeholder`), and a new `unresolved_detail`
+  column names the key and the place (`orders.url is not set for prod`). The brief and the
+  document show the reason, then the detail. The graph attributes of `boundary-property` gain
+  `unresolved_detail`. No row resolves differently. `GRAPH_SCHEMA_VERSION` 15 → 16: a workspace
+  of the older vintage is refused and re-analysed.
 - **Quarkus Reactive Routes follow Vert.x Web's rules** (the same dispatcher, spec
   2026-10-30-vertx-web §3a). A `@Route` with no `methods` is one row marked as serving every
   method, where it was six rows; a `@Route(regex = …)` is a pattern row with the regex

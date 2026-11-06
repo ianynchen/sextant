@@ -179,7 +179,10 @@ def _workspace(
                     "value": value,
                     "source": "invented.yml" if value is not None else None,
                     "environment": environment,
-                    "unresolved_reason": None if value is not None else "missing_key",
+                    "unresolved_reason": None if value is not None else "external",
+                    "unresolved_detail": None
+                    if value is not None
+                    else f"{key} is not set for {environment}",
                 }
                 for key, environment, value in config
             ],

@@ -1203,7 +1203,8 @@ def test_a_conditional_placeholder_job_states_its_configured_value_first_then_it
                 "environment": environment,
                 "keys": '["jobs.nightly.cron"]',
                 "value": value,
-                "unresolved_reason": None if value else "missing_key",
+                "unresolved_reason": None if value else "external",
+                "unresolved_detail": None if value else "jobs.nightly.cron is not set for staging",
             }
             for environment, value in (
                 ("default", "0 0 1 * * *"),
@@ -1218,7 +1219,7 @@ def test_a_conditional_placeholder_job_states_its_configured_value_first_then_it
     assert _block(document, "Jobs#nightly") == (
         f"- `com/acme/Jobs#nightly().` — cron `{cron}`\n"
         "  - as configured in this repository: `0 0 1 * * *` in `default`, `prod`; "
-        "not set in `staging` (missing_key)\n"
+        "not set in `staging` (external: jobs.nightly.cron is not set for staging)\n"
         "  - Exists only when: the configuration key `jobs.enabled` is `true`\n"
         f"{OF_ENVIRONMENTS}\n"
     )
