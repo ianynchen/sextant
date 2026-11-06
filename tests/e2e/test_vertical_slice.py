@@ -428,8 +428,10 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
         # declared methods looked up (`NotificationSender#send`, `PricingPolicy#price` and the three
         # `<init>` the configuration builds) and one more on an owner never scanned
         # (`RestTemplate.<init>()`).
-        "Method lookup, by outcome (methods): ancestor_not_scanned 33, declared_here 210, "
-        "inherited 2, owner_not_scanned 428."
+        # One general reason list (spec 2026-11-05 §3b): `external` is the old
+        # `ancestor_not_scanned` 33 and `owner_not_scanned` 428; `resolved` is the old
+        # `declared_here` 210 and `inherited` 2. No lookup moved.
+        "Method lookup, by outcome (methods): external 461, resolved 212."
     ) in document
 
     # W43 closes G-33's asymmetry: this module RECEIVED STOMP and sent none, so half

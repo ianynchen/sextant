@@ -611,12 +611,13 @@ _NAMED_QUERIES = {
                count(*) AS edges
         FROM call_edges GROUP BY 1 ORDER BY 1
     """,
-    # WHY a body was not reached, which is what makes the reach rate actionable: an owner
-    # in an unscanned jar is a scanning decision, `no_declaration_found` is a defect.
+    # WHY a body was not reached, which is what makes the reach rate actionable: `external`
+    # (a type in an unscanned jar) is a scanning decision, `not_readable` is a defect. A
+    # found body has no reason and counts as `resolved`.
     # Keyed per (class, name, descriptor) rather than per edge — that is the grain the
     # lookup itself answers at (JVMS 5.4.3.3, F3 §4.2).
     "method_resolution_distribution": """
-        SELECT reason AS bucket, count(*) AS methods
+        SELECT coalesce(reason, 'resolved') AS bucket, count(*) AS methods
         FROM method_resolution GROUP BY 1 ORDER BY 1
     """,
     # `resolve/config.py`'s own input: every config_entry, in declaration

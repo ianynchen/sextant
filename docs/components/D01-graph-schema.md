@@ -89,14 +89,15 @@ them. `scanned` says whether this workspace read the ancestor's own class file, 
 the column that separates a genuine third-party boundary from a body we simply did not
 open.
 
-**`method_resolution`** carries `class`, `name`, `descriptor`, `declaring_class` and
-`reason` — one row per distinct triple an EFFECTIVE CALL SITE names, not per method
+**`method_resolution`** carries `class`, `name`, `descriptor`, `declaring_class`,
+`reason` and `detail` — one row per distinct triple an EFFECTIVE CALL SITE names, not per method
 declared and not per triple the bytecode wrote: a compiler-emitted `$default` bridge is
 re-targeted to the sibling it stands for before this is asked, so the triple here is the
 one the author's call resolves through (spec 2026-09-22 §1a). The
-reason is always present and comes from D00 §4's `method_resolution` set. Read
-`declaring_class IS NULL` with the reason beside it: three different kinds of "no body
-here" used to be one word, and one of the three was false.
+`reason` is NULL where a body was found, and otherwise one word of the general list in
+D00 §4 (`external` or `not_readable`) with a `detail` that names the type. Read
+`declaring_class IS NULL` with the reason beside it: different kinds of "no body here"
+used to be one word, and one of them was false.
 
 > Both are computed in the pass that writes `call_edges`, from the same `Dispatch` —
 > "which method can this site run" is answered once (§3's dispatch rule), and a second

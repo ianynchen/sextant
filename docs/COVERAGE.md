@@ -1056,10 +1056,11 @@ their own key names.
 - **dispatch** — the `resolution` distribution the design names. Per edge, and it can only
   ever hold `resolved` or `narrowed`: `call_edges` writes `NARROWED if len(callees) > 1 else
   RESOLVED`, so a third bucket is impossible by construction.
-- **method lookup** — `method_resolution`'s reasons, which say WHY a body was missed:
-  `owner_not_scanned` is a scanning decision (339 of the fixture's 565 METHODS, 425 of
-  jhipster's 675), while `no_declaration_found` would be a defect. None of the four corpora
-  has one.
+- **method lookup** — `method_resolution`'s reasons, which say WHY a body was missed
+  (a found body counts as `resolved`): `external` is a scanning decision (339 of the
+  fixture's 565 METHODS, 425 of jhipster's 675), while `not_readable` would be a defect.
+  None of the four corpora has one. (The figures were measured under the earlier words
+  `owner_not_scanned` and `no_declaration_found`; `ancestor_not_scanned` is `external` too.)
 
 **FR-17 clause 3 asks for the distribution of call SITES, and what ships is per edge.** The
 two differ where dispatch narrowed: `spring-petclinic-rest`'s 68 narrowed edges are 34
@@ -1797,9 +1798,12 @@ whose method is declared on a superclass it DID scan all produced the same answe
 callee, `resolved`, "the call IS the terminal". The third is false — the body is in the
 workspace, one hop up.
 
-`method_resolution` states the reason for every method an EFFECTIVE call site names, from
-a closed set of four: `declared_here`, `inherited` (with the declaring class),
-`ancestor_not_scanned` and `owner_not_scanned`. Effective, not raw (spec 2026-09-22 §1a):
+`method_resolution` states the answer for every method an EFFECTIVE call site names. A
+found body has no reason and names its declaring class (equal to the class: declared
+there; otherwise inherited). A body not found has `external` and a detail. The table
+below was measured under the earlier four words (`declared_here`, `inherited`,
+`ancestor_not_scanned` and `owner_not_scanned`), which are now `resolved` (the first two)
+and `external` (the last two). Effective, not raw (spec 2026-09-22 §1a):
 a compiler-emitted `$default` bridge is re-targeted to the sibling it stands for before
 this is asked, so the reason a reader sees is the one the author's call resolves through.
 **The numbers below are unmoved by that change, measured rather than assumed**: neither

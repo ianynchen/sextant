@@ -186,7 +186,11 @@ SEXTANT_VERSION = version("sextant")
 #             (`external`, `cycle`, `not_readable`, ...) in place of `missing_key`,
 #             `environment`, `remote_source`, `placeholder_cycle` and `multi_placeholder`
 #             (spec 2026-11-05-one-reason-list §3a, §4; approved by the user 2026-11-05).
-#             The `resolved_peers` answer and the D01 `boundary-property` attributes follow.
+#             `method_resolution` follows the same rule: `reason` is NULL for a found body
+#             and `external` or `not_readable` otherwise, with a new `detail` column in place of
+#             `declared_here`, `inherited`, `ancestor_not_scanned`, `owner_not_scanned` and
+#             `no_declaration_found`. The `resolved_peers` answer and the D01 `boundary-property`
+#             attributes follow.
 #             A workspace of the older vintage has no detail column and says the old words,
 #             so it is refused and re-analysed.
 #

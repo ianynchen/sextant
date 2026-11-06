@@ -15,8 +15,9 @@ to hold is a test that stops working the moment the corpus changes.
 from pathlib import Path
 
 from fixture_build import compile_fixture
+from sextant.application.resolve.call_edges import _record_resolution
 from sextant.application.resolve.dispatch import Dispatch
-from sextant.domain.closed_sets import MethodResolution
+from sextant.application.resolve.values import EXTERNAL, NOT_READABLE
 from sextant.domain.symbols import bare_descriptor, method_descriptor
 
 VOID = "()V"
@@ -46,7 +47,7 @@ def _dispatch(
 def test_a_method_the_owner_declares_resolves_to_the_owner():
     dispatch = _dispatch(declares={"p/A#": ["foo"]}, ancestors={})
 
-    assert dispatch.resolve("p/A#", "foo", VOID) == ("p/A#", MethodResolution.DECLARED_HERE)
+    assert dispatch.resolve("p/A#", "foo", VOID) == ("p/A#", None)
 
 
 def test_a_method_on_a_scanned_superclass_resolves_to_it():
@@ -56,7 +57,7 @@ def test_a_method_on_a_scanned_superclass_resolves_to_it():
         ancestors={"p/Owner#": [("p/Base#", "extends", True)]},
     )
 
-    assert dispatch.resolve("p/Owner#", "setId", VOID) == ("p/Base#", MethodResolution.INHERITED)
+    assert dispatch.resolve("p/Owner#", "setId", VOID) == ("p/Base#", None)
 
 
 def test_the_superclass_chain_is_exhausted_before_any_interface():
@@ -76,7 +77,7 @@ def test_the_superclass_chain_is_exhausted_before_any_interface():
         },
     )
 
-    assert dispatch.resolve("p/A#", "foo", VOID) == ("p/C#", MethodResolution.INHERITED)
+    assert dispatch.resolve("p/A#", "foo", VOID) == ("p/C#", None)
 
 
 def test_an_interface_answers_when_no_superclass_declares_the_method():
@@ -89,7 +90,7 @@ def test_an_interface_answers_when_no_superclass_declares_the_method():
         },
     )
 
-    assert dispatch.resolve("p/A#", "foo", VOID) == ("p/I#", MethodResolution.INHERITED)
+    assert dispatch.resolve("p/A#", "foo", VOID) == ("p/I#", None)
 
 
 def test_an_owner_this_workspace_never_read_is_the_third_party_boundary():
@@ -97,7 +98,7 @@ def test_an_owner_this_workspace_never_read_is_the_third_party_boundary():
 
     assert dispatch.resolve("java/util/List#", "size", VOID) == (
         None,
-        MethodResolution.OWNER_NOT_SCANNED,
+        "java/util/List#",
     )
 
 
@@ -120,12 +121,12 @@ def test_an_unscanned_ancestor_is_told_apart_from_an_unscanned_owner():
 
     assert dispatch.resolve("p/Builder#", "fields", VOID) == (
         None,
-        MethodResolution.ANCESTOR_NOT_SCANNED,
+        "org/apache/avro/SpecificRecordBuilderBase#",
     )
 
 
 def test_a_scanned_owner_whose_whole_closure_declares_nothing_says_so():
-    """Not `owner_not_scanned`, which would claim a third-party boundary for a type we
+    """Not `external` for the owner, which would claim a third-party boundary for a type we
     read. The first draft returned that word here — the set had no member for "we looked
     everywhere we could and found nothing", and a missing member invites the reuse."""
     dispatch = _dispatch(
@@ -135,7 +136,7 @@ def test_a_scanned_owner_whose_whole_closure_declares_nothing_says_so():
 
     assert dispatch.resolve("p/A#", "missing", VOID) == (
         None,
-        MethodResolution.NO_DECLARATION_FOUND,
+        None,
     )
 
 
@@ -151,8 +152,107 @@ def test_a_constructor_is_never_resolved_to_an_ancestors():
 
     assert dispatch.resolve("p/A#", "<init>", VOID) == (
         None,
-        MethodResolution.NO_DECLARATION_FOUND,
+        None,
     )
+
+
+class _Recorder:
+    """What `_record_resolution` hands the workspace, kept instead of stored."""
+
+    def __init__(self) -> None:
+        self.rows: list[dict[str, object]] = []
+
+    def derive(self, name: str, **arguments: object) -> None:
+        if name == "method_resolution_insert":
+            self.rows = list(arguments["rows"])  # type: ignore[call-overload]
+
+
+def _site(owner: str, name: str) -> dict[str, object]:
+    return {"owner": owner, "name": name, "descriptor": VOID, "invoke_kind": "virtual"}
+
+
+def test_a_found_method_row_has_no_reason_and_no_detail():
+    dispatch = _dispatch(
+        declares={"p/Base#": ["setId"]}, ancestors={"p/Owner#": [("p/Base#", "extends", True)]}
+    )
+    recorder = _Recorder()
+
+    _record_resolution(recorder, dispatch, [_site("p/Owner#", "setId")])  # type: ignore[arg-type]
+
+    assert recorder.rows == [
+        {
+            "class": "p/Owner#",
+            "name": "setId",
+            "descriptor": VOID,
+            "declaring_class": "p/Base#",
+            "reason": None,
+            "detail": None,
+        }
+    ]
+
+
+def test_an_owner_never_read_is_external_and_the_detail_names_it():
+    dispatch = _dispatch(declares={}, ancestors={})
+    recorder = _Recorder()
+
+    _record_resolution(recorder, dispatch, [_site("java/util/List#", "size")])  # type: ignore[arg-type]
+
+    (row,) = recorder.rows
+    assert row["declaring_class"] is None
+    assert row["reason"] == EXTERNAL
+    assert row["detail"] == "java/util/List is not in the scanned code"
+
+
+def test_an_unread_ancestor_is_external_and_the_detail_names_the_ancestor():
+    dispatch = _dispatch(
+        declares={"p/Builder#": ["ownMethod"]},
+        ancestors={"p/Builder#": [("org/avro/Base#", "extends", False)]},
+        scanned={"p/Builder#"},
+    )
+    recorder = _Recorder()
+
+    _record_resolution(recorder, dispatch, [_site("p/Builder#", "fields")])  # type: ignore[arg-type]
+
+    (row,) = recorder.rows
+    assert row["reason"] == EXTERNAL
+    assert (
+        row["detail"]
+        == "p/Builder is read, but its ancestor org/avro/Base is not in the scanned code"
+    )
+
+
+def test_a_read_closure_without_the_declaration_is_not_readable():
+    dispatch = _dispatch(
+        declares={"p/A#": ["other"], "p/Base#": ["another"]},
+        ancestors={"p/A#": [("p/Base#", "extends", True)]},
+    )
+    recorder = _Recorder()
+
+    _record_resolution(recorder, dispatch, [_site("p/A#", "missing")])  # type: ignore[arg-type]
+
+    (row,) = recorder.rows
+    assert row["reason"] == NOT_READABLE
+    assert row["detail"] == "no declaration of missing(..) in p/A or its scanned ancestors"
+
+
+def test_the_coverage_distribution_counts_found_bodies_as_resolved(tmp_path: Path):
+    from sextant.storage.duckdb.workspace import DuckDbWorkspace
+
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    base = {"name": "m", "descriptor": VOID}
+    rows = [
+        {**base, "class": "p/A#", "declaring_class": "p/A#", "reason": None, "detail": None},
+        {**base, "class": "p/B#", "declaring_class": "p/A#", "reason": None, "detail": None},
+        {**base, "class": "p/C#", "declaring_class": None, "reason": EXTERNAL, "detail": "x"},
+    ]
+    workspace.derive("method_resolution_insert", rows=rows)
+
+    counted = {
+        row["bucket"]: row["methods"] for row in workspace.query("method_resolution_distribution")
+    }
+    workspace.close()
+
+    assert counted == {"resolved": 2, EXTERNAL: 1}
 
 
 # --- W23 / G-48: `return_flows` and the inherited accessor -------------------

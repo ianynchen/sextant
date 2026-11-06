@@ -1381,7 +1381,7 @@ def test_coverage_reports_how_much_was_understood_not_only_how_many_files(tmp_pa
             "partial_documents": 0,
             "reach": {"body_read": 465, "boundary": 968},
             "resolution": {"resolved": 1431, "narrowed": 2},
-            "method_resolution": {"declared_here": 191, "owner_not_scanned": 318},
+            "method_resolution": {"resolved": 191, "external": 318},
         },
     )
 
@@ -1389,7 +1389,7 @@ def test_coverage_reports_how_much_was_understood_not_only_how_many_files(tmp_pa
 
     assert "Calls whose callee body this workspace read: 465 of 1433 (32%)" in text
     assert "Dispatch, by outcome (call edges): narrowed 2, resolved 1431." in text
-    assert "Method lookup, by outcome (methods): declared_here 191, owner_not_scanned 318." in text
+    assert "Method lookup, by outcome (methods): external 318, resolved 191." in text
 
 
 def test_a_module_with_no_call_graph_reports_no_percentage_of_nothing(tmp_path: Path):

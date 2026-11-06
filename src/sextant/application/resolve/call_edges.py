@@ -84,8 +84,9 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import DYNAMIC, THROW, Dispatch, dispatch_of
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.terminals import TerminalRules, classify
+from sextant.application.resolve.values import EXTERNAL, NOT_READABLE
 from sextant.domain.closed_sets import Evidence, Resolution
-from sextant.domain.symbols import bare_descriptor, method_descriptor
+from sextant.domain.symbols import bare_descriptor, method_descriptor, without_type_marker
 
 
 def record_call_edges(workspace: Workspace, catalogs: Sequence[Catalog] = ()) -> None:
@@ -157,7 +158,8 @@ def _record_resolution(
     workspace: Workspace, dispatch: Dispatch, sites: list[dict[str, object]]
 ) -> None:
     """`method_resolution` — one row per distinct (class, name, descriptor) an EFFECTIVE
-    call site names, with the declaring type and always a reason.
+    call site names, with the declaring type. A found body has no reason; any other
+    answer has one general reason and a detail (spec 2026-11-05 §3b).
 
     **Effective, not raw** (spec 2026-09-22 §1a): `sites` is the projection, so a
     compiler-emitted `$default` bridge is named by nothing here and gets no row — the
@@ -170,7 +172,7 @@ def _record_resolution(
     per-site view is `call_edges`, which already has one row per site.
     """
     workspace.derive("method_resolution_reset")
-    asked: dict[tuple[str, str, str], tuple[str | None, str]] = {}
+    asked: dict[tuple[str, str, str], tuple[str | None, str | None]] = {}
     # A `dynamic` site's target names the bootstrap factory rather than a callee, so
     # resolving it would look up a method nobody calls — the same reason
     # `Dispatch.candidates` declines to answer for one. Filtered in the comprehension
@@ -200,12 +202,38 @@ def _record_resolution(
             "name": name,
             "descriptor": descriptor,
             "declaring_class": declaring,
-            "reason": reason,
+            **_not_found(owner, name, declaring, unread),
         }
-        for (owner, name, descriptor), (declaring, reason) in sorted(asked.items())
+        for (owner, name, descriptor), (declaring, unread) in sorted(asked.items())
     ]
     if rows:
         workspace.derive("method_resolution_insert", rows=rows)
+
+
+def _not_found(
+    owner: str, name: str, declaring: str | None, unread: str | None
+) -> dict[str, str | None]:
+    """The `reason` and `detail` of one lookup. A found body has neither. A type the
+    search could not read means the answer is outside the scanned code: `external`.
+    When the search read every type it reached and none declares the method, the code is
+    here and we did not find the declaration: `not_readable`. No code reads the detail."""
+    if declaring is not None:
+        return {"reason": None, "detail": None}
+    owner_name = without_type_marker(owner)
+    if unread is None:
+        return {
+            "reason": NOT_READABLE,
+            "detail": f"no declaration of {name}(..) in {owner_name} or its scanned ancestors",
+        }
+    if unread == owner:
+        return {"reason": EXTERNAL, "detail": f"{owner_name} is not in the scanned code"}
+    return {
+        "reason": EXTERNAL,
+        "detail": (
+            f"{owner_name} is read, but its ancestor {without_type_marker(unread)} "
+            "is not in the scanned code"
+        ),
+    }
 
 
 def _rows_for(

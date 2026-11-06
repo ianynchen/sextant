@@ -118,8 +118,8 @@ def coverage_of(workspace: Workspace) -> dict[str, object]:
     and says almost nothing: naming the target a compiler wrote is easy, and reading its
     BODY is the work. `reach` is the number that answers the question the row was added
     for (`mall-admin` 78%, the other three 32%), and `method_resolution` says WHY a body
-    was missed — an owner in an unscanned jar is a scanning decision, while
-    `no_declaration_found` would be a defect.
+    was missed — `external` (a type in an unscanned jar) is a scanning decision, while
+    `not_readable` would be a defect, and a found body counts as `resolved`.
 
     Shipping the distribution alone would satisfy the row's letter and leave the standing
     instrument reading 100% forever.
@@ -131,7 +131,7 @@ def coverage_of(workspace: Workspace) -> dict[str, object]:
         ("method_resolution", "method_resolution_distribution", "methods"),
     ):
         # Sorted by the query, and a dict of counts rather than a list of rows: a reader
-        # asks "how many `owner_not_scanned`", never "what was the third bucket". The
+        # asks "how many `external`", never "what was the third bucket". The
         # bucket names differ per distribution and each is the column's own vocabulary —
         # `resolution` can only ever hold `resolved` or `narrowed`, because `call_edges`
         # writes `NARROWED if len(callees) > 1 else RESOLVED` and nothing else.

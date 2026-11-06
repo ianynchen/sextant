@@ -845,11 +845,13 @@ CREATE TABLE IF NOT EXISTS method_resolution (
     -- NULL when there is none in this workspace, and `reason` then says which kind of
     -- none it is. A row NEVER carries both a NULL here and a reason claiming success.
     declaring_class  TEXT,
-    -- D00 §4's `method_resolution` set: `declared_here`, `inherited`,
-    -- `ancestor_not_scanned`, `owner_not_scanned`, `no_declaration_found`. **A stated
-    -- reason, always** — the single word this table replaces meant four of them at once,
-    -- and three are things a reader would act on differently.
-    reason           TEXT
+    -- NULL when a body was found (`declaring_class` then says where; equal to `class`
+    -- means declared here). Otherwise one word of the general list (`values._REASONS`):
+    -- `external` when the type that would hold the declaration is not in the scanned
+    -- code, `not_readable` when every type reached was read and none declares it.
+    reason           TEXT,
+    -- A sentence for a person that names the type. No code reads it.
+    detail           TEXT
 );
 
 CREATE TABLE IF NOT EXISTS call_edges (

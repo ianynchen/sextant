@@ -542,6 +542,13 @@ here would restate those documents rather than add anything.
 
 ### Changed
 
+- **Method lookup uses the same general reason list** (OI-321, spec
+  `2026-11-05-one-reason-list-design.md` §3b). In `method_resolution`, `reason` is now empty
+  when a body was found (`declaring_class` equal to `class` means declared here) and `external`
+  or `not_readable` otherwise, with a new `detail` column naming the type. `declared_here`,
+  `inherited`, `ancestor_not_scanned`, `owner_not_scanned` and `no_declaration_found` are gone.
+  The coverage line counts `resolved` and the reason. No lookup changes. Rides
+  `GRAPH_SCHEMA_VERSION` 16.
 - **A configuration value that could not be resolved says why with the one general reason
   list, plus a detail** (OI-321, spec `2026-11-05-one-reason-list-design.md` §3a). In
   `resolved_config`, `resolved_schedules` and the `resolved_peers` answer, `unresolved_reason`
