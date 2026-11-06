@@ -255,6 +255,17 @@ class ModuleFact(BaseModel):
     dependency_versions: dict[str, str] = Field(default_factory=dict)
 
 
+class ParentsUnread(BaseModel):
+    """Why a class's parents were not all read: a `reason`, one word of the general reason
+    list (`application/resolve/values.py` `_REASONS`), and a `detail`, text for a person.
+    No code branches on the detail. The domain layer cannot import that list, so the
+    word is not checked here; the scanner that writes it uses the list's own words."""
+
+    model_config = {"frozen": True}
+    reason: str
+    detail: str
+
+
 class SymbolFact(BaseModel):
     model_config = {"frozen": True}
     kind: Literal["symbol"] = "symbol"
@@ -312,6 +323,12 @@ class SymbolFact(BaseModel):
     # `implemented_interfaces`: erased interface symbols a class declares,
     # in declaration order. Empty for a class implementing none.
     interfaces: list[str] = Field(default_factory=list)
+    # A Python class only: set where the scanner stopped reading the written bases at one it
+    # could not name as a class (`Base = declarative_base()`). `superclass` and
+    # `interfaces` then hold the bases before that one, and method lookup treats the
+    # class as "parents not read", never as "no parents". Absent on every class whose
+    # bases were all read, and on every other language's type.
+    parents_unread: ParentsUnread | None = None
     # Capability 9.14: mirrors `supertype`'s PTR-carrier rule one level over,
     # applied to `implements` instead of `extends`. `interfaces` above erases
     # `CrudRepository<Order, Long>` to a bare symbol; this is the only place

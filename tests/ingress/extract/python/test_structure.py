@@ -13,6 +13,7 @@ from sextant.domain.facts import (
     CallSiteFact,
     Document,
     FieldWriteFact,
+    ParentsUnread,
     SymbolFact,
     TypeParameter,
     TypeRef,
@@ -441,3 +442,55 @@ def test_bases_after_an_unnamed_one_are_not_written(tmp_path: Path):
     assert document.partial_reason == (
         "C: base 2 'f()' is not a class name this file can read; parents from here on are not read"
     )
+
+
+def test_a_base_that_is_a_value_says_its_parents_are_not_readable(tmp_path: Path):
+    """The SQLAlchemy shape: the class carries `parents_unread`, so method lookup does not
+    take it for a class with no parents."""
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/models.py": (
+                "from sqlalchemy.orm import declarative_base\n"
+                "from app.mixins import TimestampMixin\n"
+                "Base = declarative_base()\n"
+                "class User(Base, TimestampMixin): pass\n"
+            ),
+            "app/mixins.py": "class TimestampMixin: pass\n",
+        },
+    )
+
+    user, _ = _class_and_document(tree, "app/models/User#")
+    assert user.parents_unread == ParentsUnread(
+        reason="not_readable",
+        detail="base 1 'Base' is a value, not a class name; parents from here on are not read",
+    )
+
+
+def test_a_base_from_an_import_the_file_cannot_read_says_external(tmp_path: Path):
+    _, tree = _scan(
+        tmp_path,
+        {"app/m.py": "from vendor import *\nclass A: pass\nclass C(A, Mystery): pass\n"},
+    )
+
+    c, _ = _class_and_document(tree, "app/m/C#")
+    assert c.superclass is not None and c.superclass.endswith(" app/m/A#")
+    assert c.parents_unread == ParentsUnread(
+        reason="external",
+        detail="base 2 'Mystery' comes from an import this file cannot read; "
+        "parents from here on are not read",
+    )
+
+
+def test_a_class_with_every_base_named_has_no_parents_unread(tmp_path: Path):
+    _, tree = _scan(tmp_path, {"app/m.py": "class A: pass\nclass B: pass\nclass C(A, B): pass\n"})
+
+    c, _ = _class_and_document(tree, "app/m/C#")
+    assert c.parents_unread is None
+
+
+def test_the_two_reason_words_are_words_of_the_general_list():
+    from sextant.application.resolve import values
+    from sextant.ingress.extract.python import structure
+
+    assert {structure._NOT_READABLE, structure._EXTERNAL} <= set(values._REASONS)

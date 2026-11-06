@@ -29,6 +29,7 @@ from sextant.domain.facts import (
     Fact,
     FieldWriteFact,
     Parameter,
+    ParentsUnread,
     Signature,
     SymbolFact,
     TypeParameter,
@@ -55,6 +56,12 @@ from sextant.ingress.extract.python.typing_rules import (
 )
 
 _SETTER_SUFFIX = "="
+
+# Two words of the general reason list (`application/resolve/values.py` `_REASONS`).
+# An ingress module cannot import that layer, so they are spelled here; a test holds
+# them to the list.
+_NOT_READABLE = "not_readable"
+_EXTERNAL = "external"
 
 _ENUM_BASES = frozenset({"Enum", "IntEnum", "StrEnum", "Flag", "IntFlag"})
 
@@ -123,7 +130,7 @@ class _Writer(BodyReader):
         owner = type_symbol(Target(self._context.here, path))
         generic = scope.types.with_type_parameters(node.type_params)
         unread = len(self.not_read)
-        written = self._parents(node, generic)
+        written, parents_unread = self._parents(node, generic)
         kind = ConstructKind.CLASS
         if any(
             is_typing(target, "Protocol")
@@ -151,6 +158,7 @@ class _Writer(BodyReader):
                 line_end=node.end_lineno or node.lineno,
                 superclass=self._full(written[0]) if written else None,
                 interfaces=[self._full(parent) for parent in written[1:]],
+                parents_unread=parents_unread,
                 type_parameters=_type_parameters(node.type_params, generic),
             )
         )
@@ -182,25 +190,41 @@ class _Writer(BodyReader):
             node.name, self._apply(callees, CallArgument(kind="class", symbol=owner), scope), scope
         )
 
-    def _parents(self, node: ast.ClassDef, types: TypeScope) -> list[str]:
+    def _parents(
+        self, node: ast.ClassDef, types: TypeScope
+    ) -> tuple[list[str], ParentsUnread | None]:
         """The written parents' symbols, in written order, up to the first one this file
         cannot name as a class: a value (`Base = declarative_base()`), a call, or a name
         it does not bind. Nothing after that one is written, so no later parent moves
-        into its place, and the document says the class's parents were not all read.
-        `object` is the root every class has, and is not written, as the JVM's root is
-        not (D00 §5 `superclass`)."""
+        into its place. The class then carries `parents_unread` (`not_readable` for a
+        value, a call or two different bindings; `external` for a name no statement of
+        the file binds, as a star import leaves it), and the document says the class's
+        parents were not all read. `object` is the root every class has, and is not
+        written, as the JVM's root is not (D00 §5 `superclass`)."""
         written: list[str] = []
         for position, base in enumerate(node.bases, 1):
             targets = types.lookup(_unsubscripted(base))
             if len(targets) != 1 or targets[0].kind in ("variable", "function"):
+                text = ast.unparse(base)
+                if not targets and isinstance(_unsubscripted(base), ast.Name | ast.Attribute):
+                    reason = _EXTERNAL
+                    detail = f"base {position} '{text}' comes from an import this file cannot read"
+                elif len(targets) > 1:
+                    reason = _NOT_READABLE
+                    detail = f"base {position} '{text}' is bound two ways, so it names no one class"
+                else:
+                    reason = _NOT_READABLE
+                    detail = f"base {position} '{text}' is a value, not a class name"
                 self.not_read.append(
-                    f"{node.name}: base {position} '{ast.unparse(base)}' is not a class name "
+                    f"{node.name}: base {position} '{text}' is not a class name "
                     "this file can read; parents from here on are not read"
                 )
-                break
+                return written, ParentsUnread(
+                    reason=reason, detail=f"{detail}; parents from here on are not read"
+                )
             if targets[0] != Target(BUILTINS, "object"):
                 written.append(type_symbol(targets[0]))
-        return written
+        return written, None
 
     # -- module and class names ----------------------------------------------------------
 
