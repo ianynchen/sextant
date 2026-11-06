@@ -62,14 +62,16 @@ class Returned:
 class LibraryNames(Protocol):
     """What the scanned environment's libraries and typeshed say (`libraries.py`)."""
 
-    def member(self, target: Target, name: str) -> Target | None:
-        """`target.name` as the library defines it, or None where no library read says."""
+    def member(self, target: Target, name: str) -> tuple[Target, ...] | None:
+        """`target.name` as the library defines it, or None where no library read says:
+        one target, or the closed list where the library's branches bind it differently."""
         ...
 
     def call_returns(
-        self, owner: str, name: str, arguments: Sequence[CallArgument]
+        self, owner: str, name: str, arguments: Sequence[CallArgument], *, unpacked: bool = False
     ) -> Returned | None:
-        """What the call `owner.name(arguments)` returns, or None where nothing says."""
+        """What the call `owner.name(arguments)` returns, or None where nothing says.
+        `unpacked`: the call unpacks `*args`, so how many arguments it has is not known."""
         ...
 
 
@@ -113,13 +115,16 @@ def module_path(relative: str) -> tuple[str, bool]:
     return without, False
 
 
-def member_of(target: Target, name: str, index: ModuleIndex, *, more_follow: bool) -> Target:
+def member_of(
+    target: Target, name: str, index: ModuleIndex, *, more_follow: bool
+) -> tuple[Target, ...]:
     """`target.name`: a submodule where one exists by path, else a member. For a library
     module, which this scanner cannot list, a name with more names after it is taken
     as a module (`fastapi.routing.APIRouter`), and so is a library member with a name
     after it (`from fastapi import routing`, then `routing.APIRouter`). Where a library
     read says (`libraries.py`), its answer is taken: a submodule, or the member's defining
-    symbol (`fastapi.APIRouter` is `fastapi.routing.APIRouter`)."""
+    symbol (`fastapi.APIRouter` is `fastapi.routing.APIRouter`), or the closed list of
+    them where the library's branches bind the name differently."""
     if index.libraries is not None and not index.owns(target.module):
         found = index.libraries.member(target, name)
         if found is not None:
@@ -128,13 +133,13 @@ def member_of(target: Target, name: str, index: ModuleIndex, *, more_follow: boo
         submodule = f"{target.module}/{target.member.replace('.', '/')}"
         return member_of(Target(submodule), name, index, more_follow=more_follow)
     if target.member is not None:
-        return Target(target.module, f"{target.member}.{name}")
+        return (Target(target.module, f"{target.member}.{name}"),)
     candidate = f"{target.module}/{name}" if target.module else name
     if index.is_module(candidate):
-        return Target(candidate)
+        return (Target(candidate),)
     if more_follow and not index.owns(target.module):
-        return Target(candidate)
-    return Target(target.module, name)
+        return (Target(candidate),)
+    return (Target(target.module, name),)
 
 
 def bind_names(
@@ -183,8 +188,8 @@ class _Binder:
                 for alias in node.names:
                     if alias.name == "*":
                         continue
-                    target = member_of(Target(base), alias.name, self._index, more_follow=False)
-                    names[alias.asname or alias.name] = _one(target)
+                    targets = member_of(Target(base), alias.name, self._index, more_follow=False)
+                    names[alias.asname or alias.name] = Binding(targets)
         elif isinstance(node, ast.ClassDef):
             names[node.name] = self._own(node.name, "class")
         elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -318,11 +323,18 @@ def resolve(node: ast.expr, names: dict[str, Binding], index: ModuleIndex) -> tu
         return ()
     chain.reverse()
     found: list[Target] = []
-    for target in names[node.id].targets:
+    for start in names[node.id].targets:
+        reached: tuple[Target, ...] = (start,)
         for position, name in enumerate(chain):
-            target = member_of(target, name, index, more_follow=position < len(chain) - 1)
-        if target not in found:
-            found.append(target)
+            follow = position < len(chain) - 1
+            reached = tuple(
+                one
+                for target in reached
+                for one in member_of(target, name, index, more_follow=follow)
+            )
+        for target in reached:
+            if target not in found:
+                found.append(target)
     return tuple(found)
 
 

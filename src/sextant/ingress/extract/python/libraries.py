@@ -33,11 +33,12 @@ are read.
 """
 
 import ast
+import builtins
 import hashlib
 import re
 import sys
 import tomllib
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -120,16 +121,25 @@ class _Source:
         return self.path.relative_to(self.provider.root).as_posix()
 
 
+# One way a library module binds a name: `("own", kind)` for a definition, `("from", module,
+# name)` for an imported name and `("module", path)` for an imported module.
+type _Entry = tuple[str, ...]
+
+
 @dataclass
 class _Table:
-    """The names one library module binds at its top level, without following them:
-    `("own", kind)` for a definition, `("from", module, name)` for an imported name and
-    `("module", path)` for an imported module; and the modules it star-imports."""
+    """The names one library module binds at its top level, without following them. A
+    name that branches bind differently (a platform test, a `try` with an `except
+    ImportError` fallback) has each binding, in written order: a closed list, as
+    `imports.py` reads a name of the scanned module. Also the modules it star-imports,
+    its `__all__` where it writes one, and the value of each name it assigns."""
 
     source: _Source
     tree: ast.Module
-    names: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    names: dict[str, tuple[_Entry, ...]] = field(default_factory=dict)
     stars: list[str] = field(default_factory=list)
+    exports: frozenset[str] | None = None
+    values: dict[str, list[ast.expr]] = field(default_factory=dict)
     # Read on first use: the names as the scanner binds them, for a written type.
     scope: TypeScope | None = None
 
@@ -140,11 +150,16 @@ type _Function = tuple[_Table, Target, list[ast.FunctionDef | ast.AsyncFunctionD
 class Libraries:
     """The libraries of one scan (one environment), read lazily and each module once."""
 
-    def __init__(self, archives: Sequence[LibraryRoot], typeshed: Path) -> None:
+    def __init__(
+        self,
+        archives: Sequence[LibraryRoot],
+        typeshed: Path,
+        environment: Path | None = None,
+    ) -> None:
         self._typeshed = typeshed
         self._commit = (typeshed / "COMMIT").read_text(encoding="utf-8").strip()
-        site = archives[0].archive if archives else None
-        self._python = _python_version(site)
+        self._site = _site_packages(environment) or (archives[0].archive if archives else None)
+        self._python = _python_version(environment, self._site)
         self._stdlib = _stdlib_versions(typeshed / "stdlib" / "VERSIONS")
         self._stubs = {
             _normalize(folder.name): folder
@@ -155,6 +170,15 @@ class Libraries:
         for library in archives:
             for top in _top_level_names(library):
                 self._installed.setdefault(top, library)
+        self._declared = frozenset(self._installed)
+        # Every other distribution of the environment, by import name: read only where a
+        # re-export of a declared one leads, and listed on first need.
+        self._others: dict[str, LibraryRoot] | None = None
+        # Where a name the scan follows is defined in a distribution that is not installed.
+        self.notes: list[str] = []
+        # Set while a library's own file is read: its names may lead into any installed
+        # distribution, where a name of the scanned module starts only from a declared one.
+        self._inside = False
         self._providers: dict[str, _Provider | None] = {}
         self._sources: dict[str, _Source | None] = {}
         self._tables: dict[str, _Table | None] = {}
@@ -167,18 +191,21 @@ class Libraries:
 
     # -- the scanner's questions (`imports.LibraryNames`) ------------------------------
 
-    def member(self, target: Target, name: str) -> Target | None:
+    def member(self, target: Target, name: str) -> tuple[Target, ...] | None:
+        top = target.module.partition("/")[0]
+        if not self._inside and top not in self._declared and top not in self._stdlib:
+            return None
         if target.member is None:
             submodule = f"{target.module}/{name}" if target.module else name
             if self._source(submodule) is not None:
-                return Target(submodule)
-            return self._defining(target.module, name, set())
+                return (Target(submodule),)
+            return self._defining(target.module, name, set()) or None
         if self._is_class(target.module, target.member):
-            return Target(target.module, f"{target.member}.{name}")
+            return (Target(target.module, f"{target.member}.{name}"),)
         return None
 
     def call_returns(
-        self, owner: str, name: str, arguments: Sequence[CallArgument]
+        self, owner: str, name: str, arguments: Sequence[CallArgument], *, unpacked: bool = False
     ) -> Returned | None:
         key = (owner, name)
         if key not in self._functions:
@@ -188,11 +215,18 @@ class Libraries:
             return None
         table, target, defined = known
         recording, self._recording = self._recording, False
+        inside, self._inside = self._inside, True
         try:
-            scope = self._scope(table)
-            found = _choose(defined, list(arguments), scope, method=target.member is not None)
+            found = self._choose(
+                defined,
+                list(arguments),
+                self._scope(table),
+                method=target.member is not None,
+                unpacked=unpacked or any(a.keyword == _UNPACKED for a in arguments),
+            )
         finally:
             self._recording = recording
+            self._inside = inside
         if found is None or not all(self._names_a_class(t.symbol) for t in found.types):
             # A type variable (`-> _T`), a special form or a name no library read defines:
             # what the call returns depends on more than the signature says.
@@ -219,6 +253,162 @@ class Libraries:
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name
         ]
         return (table, target, defined) if defined else None
+
+    # -- overloads -----------------------------------------------------------------------
+
+    def _choose(
+        self,
+        defined: list[ast.FunctionDef | ast.AsyncFunctionDef],
+        arguments: list[CallArgument],
+        scope: TypeScope,
+        *,
+        method: bool,
+        unpacked: bool,
+    ) -> Returned | None:
+        """The return of the one overload the arguments choose, else the closed list of
+        the returns of those they leave. A function with no `@overload` that branches
+        define differently is several definitions: each is one of the closed list."""
+        overloads = [node for node in defined if _is_overload(node)]
+        alternatives = not overloads
+        candidates = overloads or defined
+        if unpacked:
+            # `*args` or `**options`: how many arguments, and which names, is not known.
+            return self._returned(candidates, scope)
+        matches: list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, dict[int, ast.expr | None]]]
+        matches = []
+        # Per match, the positions whose fit this rule cannot decide.
+        undecided: set[int] = set()
+        for node in candidates:
+            bound = _bind_arguments(node, arguments, method=method)
+            if bound is None:
+                continue
+            fits = {
+                position: self._fits(_value(arguments[position]), annotation, scope, _DEPTH)
+                for position, annotation in bound.items()
+                if position != _RECEIVER and _value(arguments[position]) is not _UNKNOWN_VALUE
+            }
+            if any(fit is False for fit in fits.values()):
+                continue
+            undecided |= {position for position, fit in fits.items() if fit is None}
+            matches.append((node, bound))
+        if not matches:
+            return None
+        if alternatives:
+            return self._returned([node for node, _ in matches], scope)
+        # An argument of unknown type, or one whose fit is not decided here (an alias or a
+        # protocol this rule does not read), decides nothing where every match gives its
+        # parameter the same written type; then the first match is the one a type checker
+        # takes. The receiver is one such argument: an overload that writes a type for
+        # `self` (`def lower(self: LiteralString)`) is chosen by it.
+        unknown = [p for p, argument in enumerate(arguments) if _value(argument) is _UNKNOWN_VALUE]
+        deciding = any(
+            len({_text(bound.get(position)) for _, bound in matches}) > 1
+            for position in [_RECEIVER, *unknown, *sorted(undecided)]
+        )
+        return self._returned([node for node, _ in (matches if deciding else matches[:1])], scope)
+
+    def _returned(
+        self, chosen: list[ast.FunctionDef | ast.AsyncFunctionDef], scope: TypeScope
+    ) -> Returned | None:
+        types: list[TypeRef] = []
+        for node in chosen:
+            returned = written_type(node.returns, scope) if node.returns is not None else None
+            if returned is None:
+                return None
+            if returned not in types:
+                types.append(returned)
+        return Returned(tuple(types), "narrowed" if len(types) > 1 else "resolved")
+
+    def _fits(
+        self, value: object, annotation: ast.expr | None, scope: TypeScope, depth: int
+    ) -> bool | None:
+        """Whether a literal argument fits the written type: True, False, or None where
+        this rule cannot say (a protocol, a type variable, a class it does not read). An
+        alias is read through to what it names, in its own module."""
+        if annotation is None:
+            return True
+        if depth == 0:
+            return None
+        if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+            return _any_fits(
+                [self._fits(value, part, scope, depth - 1) for part in _alternatives(annotation)]
+            )
+        if isinstance(annotation, ast.Constant):
+            if annotation.value is None:
+                return value is None
+            if isinstance(annotation.value, str):
+                try:
+                    written = ast.parse(annotation.value.strip(), mode="eval").body
+                except SyntaxError:
+                    return None
+                return self._fits(value, written, scope, depth - 1)
+            return None
+        if isinstance(annotation, ast.Subscript):
+            return self._fits_form(value, annotation, scope, depth)
+        if not _is_name(annotation):
+            return None
+        targets = scope.lookup(annotation)
+        if len(targets) != 1:
+            return None
+        target = targets[0]
+        if target.module == BUILTINS:
+            return _fits_builtin(value, target.member or "")
+        if target.module in _TYPING and target.member in ("Any", "LiteralString"):
+            return target.member == "Any" or isinstance(value, str) or value is _SOME_TEXT
+        alias = self._alias(target)
+        if alias is None:
+            return None
+        written, alias_scope = alias
+        return self._fits(value, written, alias_scope, depth - 1)
+
+    def _fits_form(
+        self, value: object, annotation: ast.Subscript, scope: TypeScope, depth: int
+    ) -> bool | None:
+        written = (
+            list(annotation.slice.elts)
+            if isinstance(annotation.slice, ast.Tuple)
+            else [annotation.slice]
+        )
+        targets = scope.lookup(annotation.value) if _is_name(annotation.value) else ()
+        if len(targets) != 1:
+            return None
+        target = targets[0]
+        if target.module in _TYPING:
+            if target.member == "Literal":
+                if value is _SOME_TEXT:
+                    return None
+                return any(
+                    isinstance(part, ast.Constant)
+                    and type(part.value) is type(value)
+                    and part.value == value
+                    for part in written
+                )
+            if target.member == "Optional":
+                return _any_fits([value is None, self._fits(value, written[0], scope, depth - 1)])
+            if target.member == "Union":
+                return _any_fits([self._fits(value, part, scope, depth - 1) for part in written])
+            if target.member == "Annotated":
+                return self._fits(value, written[0], scope, depth - 1)
+            return None
+        # A generic class (`list[str]`): the literal fits its class or does not.
+        return self._fits(value, annotation.value, scope, depth - 1)
+
+    def _alias(self, target: Target) -> tuple[ast.expr, TypeScope] | None:
+        """What a library name assigned once to a type names (`OpenTextMode = ...`), with
+        the names of its module; None where it is not one such name."""
+        if target.member is None or "." in target.member:
+            return None
+        defined = self._defining(target.module, target.member, set())
+        if len(defined) != 1 or defined[0].member is None:
+            return None
+        table = self._table(defined[0].module)
+        if table is None:
+            return None
+        values = table.values.get(defined[0].member, [])
+        entries = table.names.get(defined[0].member, ())
+        if len(values) != 1 or entries != (("own", "variable"),):
+            return None
+        return values[0], self._scope(table)
 
     # -- the facts -----------------------------------------------------------------------
 
@@ -264,10 +454,12 @@ class Libraries:
         prefix = f"{PYTHON_SCHEME} {manager} {provider.package} {provider.version} "
         context = FileContext(module, source.is_package, self._index, prefix, document.document_id)
         recording, self._recording = self._recording, False
+        inside, self._inside = self._inside, True
         try:
             read = file_facts(table.tree, context, len(content.splitlines()) or 1)
         finally:
             self._recording = recording
+            self._inside = inside
         # Signatures and types only: the bodies (calls, values, returns) are not written.
         symbols = [fact for fact in read.facts if isinstance(fact, SymbolFact)]
         facts: list[Fact] = list(symbols)
@@ -284,33 +476,63 @@ class Libraries:
 
     # -- reading -------------------------------------------------------------------------
 
-    def _defining(self, module: str, name: str, seen: set[tuple[str, str]]) -> Target | None:
-        """Where `module.name` is defined, through the module's imports and star imports;
-        None where no library read says, or where two star imports both define it."""
+    def _defining(self, module: str, name: str, seen: set[tuple[str, str]]) -> tuple[Target, ...]:
+        """Where `module.name` is defined, through the module's imports and star imports:
+        one target, or the closed list where branches bind it differently. Empty where no
+        library read says."""
         if (module, name) in seen:
-            return None
+            return ()
         seen.add((module, name))
         table = self._table(module)
         if table is None:
-            return None
-        entry = table.names.get(name)
-        if entry is None:
-            found = {
-                one
+            return ()
+        entries = table.names.get(name)
+        if entries is None:
+            # A star import gives the names its module lists in `__all__`, or with no
+            # `__all__` every name not starting with `_`.
+            return _distinct(
+                target
                 for star in table.stars
-                if (one := self._defining(star, name, set(seen))) is not None
-            }
-            return found.pop() if len(found) == 1 else None
+                if self._exports(star, name)
+                for target in self._defining(star, name, set(seen))
+            )
+        return _distinct(
+            target for entry in entries for target in self._entry(module, name, entry, seen)
+        )
+
+    def _entry(
+        self, module: str, name: str, entry: _Entry, seen: set[tuple[str, str]]
+    ) -> tuple[Target, ...]:
         if entry[0] == "own":
             self._record(module)
-            return Target(module, name)
+            return (Target(module, name),)
         if entry[0] == "module":
-            return Target(entry[1]) if self._source(entry[1]) is not None else None
+            return (Target(entry[1]),) if self._source(entry[1]) is not None else ()
         base, original = entry[1], entry[2]
         submodule = f"{base}/{original}" if base else original
         if self._source(submodule) is not None:
-            return Target(submodule)
+            return (Target(submodule),)
+        top = base.partition("/")[0]
+        if base and self._provider(top) is None:
+            # Defined in a distribution this environment does not hold: the name is the
+            # one the library's own import gives, and the scan says it was not read.
+            if self._recording:
+                note = (
+                    f"{module.replace('/', '.')}.{name}: defined in {top}, "
+                    "which is not installed in the scanned environment"
+                )
+                if note not in self.notes:
+                    self.notes.append(note)
+            return (Target(base, original),)
         return self._defining(base, original, seen)
+
+    def _exports(self, module: str, name: str) -> bool:
+        table = self._table(module)
+        if table is None:
+            return False
+        if table.exports is not None:
+            return name in table.exports
+        return not name.startswith("_")
 
     def _is_class(self, module: str, member: str) -> bool:
         table = self._table(module)
@@ -452,44 +674,155 @@ class Libraries:
                     library.version,
                     f"{_PACKAGE_MANAGER}/{library.coordinate}",
                 )
+        elif (other := self._other_distributions().get(top)) is not None:
+            provider = _Provider(
+                other.archive,
+                other.coordinate,
+                other.coordinate,
+                other.version,
+                f"{_PACKAGE_MANAGER}/{other.coordinate}",
+            )
         self._providers[top] = provider
         return provider
+
+    def _other_distributions(self) -> dict[str, LibraryRoot]:
+        """Every distribution of the environment the module does not declare, by import
+        name, from each `*.dist-info` (`METADATA`'s name and version, `RECORD`'s files)."""
+        if self._others is None:
+            self._others = {}
+            for info in sorted(self._site.glob("*.dist-info")) if self._site else []:
+                name, version = _name_and_version(info)
+                if name is None or version is None:
+                    continue
+                library = LibraryRoot(coordinate=name, version=version, archive=info.parent)
+                for top in _top_level_names(library):
+                    if top not in self._installed:
+                        self._others.setdefault(top, library)
+        return self._others
 
 
 # -- the top-level names of a library module ----------------------------------------------
 
 
 def _bind(body: list[ast.stmt], table: _Table, package: str, python: tuple[int, int]) -> None:
-    for node in _statements(body, python):
-        if isinstance(node, ast.ClassDef):
-            table.names[node.name] = ("own", "class")
-        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            table.names[node.name] = ("own", "function")
-        elif isinstance(node, ast.Assign | ast.AnnAssign | ast.TypeAlias):
-            targets = node.targets if isinstance(node, ast.Assign) else [_alias_name(node)]
-            for target in targets:
-                if isinstance(target, ast.Name):
-                    table.names[target.id] = ("own", "variable")
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.asname is not None:
-                    table.names[alias.asname] = ("module", alias.name.replace(".", "/"))
-                else:
-                    head = alias.name.partition(".")[0]
-                    table.names[head] = ("module", head)
-        elif isinstance(node, ast.ImportFrom):
-            base = _from_base(node, package)
-            if base is None:
+    table.names = _bound(body, {}, table, package, python)
+
+
+def _bound(
+    body: list[ast.stmt],
+    names: dict[str, tuple[_Entry, ...]],
+    table: _Table,
+    package: str,
+    python: tuple[int, int],
+) -> dict[str, tuple[_Entry, ...]]:
+    """The names after `body` ran, read as `imports.py` reads a module: a later binding
+    replaces an earlier one, and branches that bind a name differently add up. An `if` on
+    the Python version is decided."""
+    names = dict(names)
+    for node in body:
+        if isinstance(node, ast.If):
+            decided = _version_test(node.test, python)
+            if decided is None:
+                branches = [
+                    _bound(node.body, names, table, package, python),
+                    _bound(node.orelse, names, table, package, python),
+                ]
+                names = _either(names, branches)
+            else:
+                chosen = node.body if decided else node.orelse
+                names = _bound(chosen, names, table, package, python)
+        elif isinstance(node, ast.Try | ast.TryStar):
+            tried = _bound(
+                node.orelse,
+                _bound(node.body, names, table, package, python),
+                table,
+                package,
+                python,
+            )
+            handled = [_bound(h.body, names, table, package, python) for h in node.handlers]
+            names = _bound(
+                node.finalbody, _either(names, [tried, *handled]), table, package, python
+            )
+        else:
+            for name, entry in _bindings(node, table, package):
+                names[name] = (entry,)
+    return names
+
+
+def _bindings(node: ast.stmt, table: _Table, package: str) -> list[tuple[str, _Entry]]:
+    if isinstance(node, ast.ClassDef):
+        return [(node.name, ("own", "class"))]
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+        return [(node.name, ("own", "function"))]
+    if isinstance(node, ast.Assign | ast.AnnAssign | ast.TypeAlias | ast.AugAssign):
+        targets = node.targets if isinstance(node, ast.Assign) else [_alias_name(node)]
+        found: list[tuple[str, _Entry]] = []
+        for target in targets:
+            if not isinstance(target, ast.Name):
                 continue
-            for alias in node.names:
-                if alias.name == "*":
-                    table.stars.append(base)
-                else:
-                    table.names[alias.asname or alias.name] = ("from", base, alias.name)
+            if target.id == "__all__":
+                table.exports = _listed(node.value, table.exports, isinstance(node, ast.AugAssign))
+                continue
+            if node.value is not None and not isinstance(node, ast.AugAssign):
+                table.values.setdefault(target.id, []).append(node.value)
+            found.append((target.id, ("own", "variable")))
+        return found
+    if isinstance(node, ast.Import):
+        imported: list[tuple[str, _Entry]] = [
+            (alias.asname, ("module", alias.name.replace(".", "/")))
+            if alias.asname is not None
+            else (alias.name.partition(".")[0], ("module", alias.name.partition(".")[0]))
+            for alias in node.names
+        ]
+        return imported
+    if isinstance(node, ast.ImportFrom):
+        base = _from_base(node, package)
+        if base is None:
+            return []
+        named: list[tuple[str, _Entry]] = []
+        for alias in node.names:
+            if alias.name == "*":
+                table.stars.append(base)
+            else:
+                named.append((alias.asname or alias.name, ("from", base, alias.name)))
+        return named
+    return []
 
 
-def _alias_name(node: ast.AnnAssign | ast.TypeAlias) -> ast.expr:
-    return node.target if isinstance(node, ast.AnnAssign) else node.name
+def _listed(
+    value: ast.expr | None, before: frozenset[str] | None, added: bool
+) -> frozenset[str] | None:
+    """The names an `__all__` list or tuple of strings gives; None where it is not one."""
+    if not isinstance(value, ast.List | ast.Tuple) or not all(
+        isinstance(e, ast.Constant) and isinstance(e.value, str) for e in value.elts
+    ):
+        return None
+    listed = frozenset(str(e.value) for e in value.elts if isinstance(e, ast.Constant))
+    return (before or frozenset()) | listed if added else listed
+
+
+def _either(
+    before: dict[str, tuple[_Entry, ...]], branches: list[dict[str, tuple[_Entry, ...]]]
+) -> dict[str, tuple[_Entry, ...]]:
+    """`imports._either` for a library's names: a name a branch did not touch keeps its
+    binding from before on that branch; different bindings are a closed list."""
+    merged: dict[str, tuple[_Entry, ...]] = {}
+    for name in dict.fromkeys(key for branch in branches for key in branch):
+        entries: list[_Entry] = []
+        for branch in branches:
+            for entry in branch.get(name, before.get(name, ())):
+                if entry not in entries:
+                    entries.append(entry)
+        merged[name] = tuple(entries)
+    return {**before, **merged}
+
+
+def _distinct(targets: Iterable[Target]) -> tuple[Target, ...]:
+    return tuple(dict.fromkeys(targets))
+
+
+def _alias_name(node: ast.AnnAssign | ast.TypeAlias | ast.AugAssign) -> ast.expr:
+    return node.name if isinstance(node, ast.TypeAlias) else node.target
 
 
 def _from_base(node: ast.ImportFrom, package: str) -> str | None:
@@ -560,9 +893,24 @@ def _normalize(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def _python_version(site: Path | None) -> tuple[int, int]:
-    """The environment's Python, from its `lib/python3.12/site-packages` path; the
-    running one where there is no environment."""
+def _site_packages(environment: Path | None) -> Path | None:
+    if environment is None:
+        return None
+    found = sorted((environment / "lib").glob("python*/site-packages"))
+    return found[0] if found else None
+
+
+def _python_version(environment: Path | None, site: Path | None) -> tuple[int, int]:
+    """The environment's Python: `pyvenv.cfg`'s `version_info` (uv) or `version` (venv),
+    else its `lib/python3.12/site-packages` path; the running one where there is no
+    environment."""
+    config = environment / "pyvenv.cfg" if environment is not None else None
+    if config is not None and config.is_file():
+        for line in config.read_text(encoding="utf-8", errors="replace").splitlines():
+            key, _, value = line.partition("=")
+            found = re.match(r"\s*(\d+)\.(\d+)", value)
+            if key.strip() in ("version_info", "version") and found is not None:
+                return int(found.group(1)), int(found.group(2))
     if site is not None:
         found = re.fullmatch(r"python(\d+)\.(\d+)t?", site.parent.name)
         if found is not None:
@@ -610,6 +958,21 @@ def _top_level_names(library: LibraryRoot) -> list[str]:
     return []
 
 
+def _name_and_version(info: Path) -> tuple[str | None, str | None]:
+    """`Name` (PEP 503) and `Version` from a `*.dist-info/METADATA`."""
+    headers: dict[str, str] = {}
+    metadata = info / "METADATA"
+    if metadata.is_file():
+        for line in metadata.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                break
+            key, _, value = line.partition(":")
+            if key in ("Name", "Version") and key not in headers:
+                headers[key] = value.strip()
+    name = headers.get("Name")
+    return (_normalize(name) if name else None), headers.get("Version")
+
+
 def _covers(stub: Path, top: str) -> bool:
     return (stub / top).is_dir() or (stub / f"{top}.pyi").is_file()
 
@@ -621,48 +984,6 @@ def _stub_version(stub: Path) -> str:
 
 
 # -- overloads ------------------------------------------------------------------------------
-
-
-def _choose(
-    defined: list[ast.FunctionDef | ast.AsyncFunctionDef],
-    arguments: list[CallArgument],
-    scope: TypeScope,
-    *,
-    method: bool,
-) -> Returned | None:
-    overloads = [node for node in defined if _is_overload(node)] or defined[-1:]
-    matches: list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, dict[int, ast.expr | None]]] = []
-    for node in overloads:
-        bound = _bind_arguments(node, arguments, method=method)
-        if bound is None:
-            continue
-        if any(
-            _refuses(arguments[position], annotation, scope)
-            for position, annotation in bound.items()
-            if position != _RECEIVER
-        ):
-            continue
-        matches.append((node, bound))
-    if not matches:
-        return None
-    # An argument of unknown type decides nothing where every match gives its parameter
-    # the same written type; then the first match is the one a type checker takes.
-    # The receiver is one such argument: its type is not known here, and an overload that
-    # writes a type for `self` (`def lower(self: LiteralString)`) is chosen by it.
-    unknown = [p for p, argument in enumerate(arguments) if _value(argument) is _UNKNOWN_VALUE]
-    deciding = any(
-        len({_text(bound.get(position)) for _, bound in matches}) > 1
-        for position in [_RECEIVER, *unknown]
-    )
-    chosen = matches if deciding else matches[:1]
-    types: list[TypeRef] = []
-    for node, _ in chosen:
-        returned = written_type(node.returns, scope) if node.returns is not None else None
-        if returned is None:
-            return None
-        if returned not in types:
-            types.append(returned)
-    return Returned(tuple(types), "narrowed" if len(types) > 1 else "resolved")
 
 
 def _is_overload(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -725,6 +1046,13 @@ def _bind_arguments(
 
 
 _UNKNOWN_VALUE = object()
+# A text argument whose value is not known (an f-string): it is a `str`, of no one literal.
+_SOME_TEXT = object()
+_TYPING = frozenset({"typing", "typing_extensions"})
+# A bound on how far a written type and its aliases are followed.
+_DEPTH = 16
+# A keyword argument unpacked from a mapping (`f(**options)`), as `calls.py` writes it.
+_UNPACKED = "**"
 # Where `_bind_arguments` puts the receiver's written type (`self`), beside the arguments'
 # positions.
 _RECEIVER = -1
@@ -737,51 +1065,37 @@ def _value(argument: CallArgument) -> object:
     if argument.kind == "null":
         return None
     if argument.kind == "concat":
-        return ""
+        return _SOME_TEXT
     return argument.value
 
 
-def _refuses(argument: CallArgument, annotation: ast.expr | None, scope: TypeScope) -> bool:
-    """Whether a literal argument certainly does not fit the written type. A type this
-    rule does not read (a class, an alias) is taken to fit."""
-    value = _value(argument)
-    if value is _UNKNOWN_VALUE or annotation is None:
-        return False
-    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
-        return _refuses(argument, annotation.left, scope) and _refuses(
-            argument, annotation.right, scope
-        )
-    if isinstance(annotation, ast.Constant):
-        return annotation.value is None and value is not None
-    if isinstance(annotation, ast.Subscript):
-        targets = scope.lookup(annotation.value) if _is_name(annotation.value) else ()
-        written = (
-            list(annotation.slice.elts)
-            if isinstance(annotation.slice, ast.Tuple)
-            else [annotation.slice]
-        )
-        if len(targets) != 1 or targets[0].module not in ("typing", "typing_extensions"):
-            return False
-        form = targets[0].member
-        if form == "Literal":
-            return not any(
-                isinstance(part, ast.Constant)
-                and type(part.value) is type(value)
-                and part.value == value
-                for part in written
-            )
-        if form == "Optional":
-            return value is not None and _refuses(argument, written[0], scope)
-        if form == "Union":
-            return all(_refuses(argument, part, scope) for part in written)
-        return False
-    if _is_name(annotation):
-        targets = scope.lookup(annotation)
-        if len(targets) != 1 or targets[0].module != BUILTINS:
-            return False
-        accepted = _ACCEPTS.get(targets[0].member or "")
-        return accepted is not None and not isinstance(value, accepted)
-    return False
+def _any_fits(fits: list[bool | None]) -> bool | None:
+    """One of several types: fits where one fits, refuses where every one refuses."""
+    if any(fit is True for fit in fits):
+        return True
+    return False if all(fit is False for fit in fits) else None
+
+
+def _fits_builtin(value: object, name: str) -> bool | None:
+    """A literal against a builtin class: by Python's own class of the value, with the
+    typing specification's promotions (`int` where `float` is written)."""
+    if name == "object":
+        return True
+    if value is _SOME_TEXT:
+        value = ""
+    accepted = _ACCEPTS.get(name)
+    if accepted is not None:
+        return isinstance(value, accepted)
+    written = getattr(builtins, name, None)
+    if isinstance(written, type):
+        return isinstance(value, written)
+    return None
+
+
+def _alternatives(node: ast.expr) -> list[ast.expr]:
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return [*_alternatives(node.left), *_alternatives(node.right)]
+    return [node]
 
 
 def _is_name(node: ast.expr) -> bool:

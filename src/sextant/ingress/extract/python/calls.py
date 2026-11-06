@@ -887,7 +887,12 @@ class BodyReader:
             else:
                 positional.append(self._value(argument, scope))
         keywords = [(k.arg, self._value(k.value, scope)) for k in node.keywords]
-        return self._invoke(callee, self._arguments(callee, node, positional, keywords), scope)
+        return self._invoke(
+            callee,
+            self._arguments(callee, node, positional, keywords),
+            scope,
+            unpacked=any(isinstance(a, ast.Starred) for a in node.args),
+        )
 
     def _arguments(
         self,
@@ -911,7 +916,14 @@ class BodyReader:
             value.model_copy(update={"keyword": name or _UNPACKED}) for name, value in keywords
         ]
 
-    def _invoke(self, callee: Callee, arguments: list[CallArgument], scope: Scope) -> CallArgument:
+    def _invoke(
+        self,
+        callee: Callee,
+        arguments: list[CallArgument],
+        scope: Scope,
+        *,
+        unpacked: bool = False,
+    ) -> CallArgument:
         """Write the call; the value it gives. A constructor gives the `instance` whose
         `source` is its receiver, as `new` does on the JVM (D00 §5)."""
         constructs = callee.invoke_kind == "special" and callee.target.name == INIT
@@ -934,7 +946,7 @@ class BodyReader:
         )
         scope.body.ordinal += 1
         if result is not None:
-            returned = self._library_returns(callee, arguments)
+            returned = self._library_returns(callee, arguments, unpacked=unpacked)
             if returned is not None:
                 scope.body.returned[result] = returned
             return CallArgument(kind="unresolved", source=result)
@@ -1028,17 +1040,24 @@ class BodyReader:
         if owner.member is not None or index.libraries is None or index.owns(owner.module):
             return None
         found = index.libraries.member(owner, name)
-        if found is None or found.member is None or "." in found.member:
+        # A closed list (the library's branches bind the name differently) names no one
+        # module: the call keeps the owner its own line writes.
+        if found is None or len(found) != 1:
             return None
-        return found
+        (defined,) = found
+        if defined.member is None or "." in defined.member:
+            return None
+        return defined
 
-    def _library_returns(self, callee: Callee, arguments: list[CallArgument]) -> str | None:
+    def _library_returns(
+        self, callee: Callee, arguments: list[CallArgument], *, unpacked: bool
+    ) -> str | None:
         """The class a library call returns, where its written signature chooses one."""
         libraries = self._context.index.libraries
         owner = callee.target.owner
         if libraries is None or owner is None or callee.target.name is None:
             return None
-        found = libraries.call_returns(owner, str(callee.target.name), arguments)
+        found = libraries.call_returns(owner, str(callee.target.name), arguments, unpacked=unpacked)
         if found is None or found.resolution != "resolved" or len(found.types) != 1:
             return None
         symbol = found.types[0].symbol

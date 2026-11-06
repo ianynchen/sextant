@@ -300,6 +300,7 @@ def analyze(
             # module's question.
             dependency_archives=module.dependency_archives,
             ignore=ignore,
+            environment=module.environment,
         )
     )
     # Each opted-into library (D04 §2a) is scanned by the SAME scanner, through

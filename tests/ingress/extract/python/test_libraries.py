@@ -13,6 +13,7 @@ from sextant.domain.factfile import read_fact_tree
 from sextant.domain.facts import CallArgument, CallSiteFact, SymbolFact
 from sextant.domain.symbols import bare_descriptor
 from sextant.ingress.detect.python import PythonDetector
+from sextant.ingress.extract.python.imports import Target
 from sextant.ingress.extract.python.libraries import Libraries
 from sextant.ingress.extract.python.scanner import PythonScanner
 from sextant.resources import typeshed_dir
@@ -253,3 +254,227 @@ def test_a_library_call_result_names_the_owner_of_the_next_call(tmp_path: Path):
     assert check.receiver == run.result
     assert check_again.target.owner is None
     assert check_again.receiver == run_again.result
+
+
+# Fix round 1.
+
+
+def _returns(found) -> tuple[str, list[tuple[str, list[str]]]] | None:
+    if found is None:
+        return None
+    return found.resolution, [(t.symbol, [a.symbol for a in t.arguments]) for t in found.types]
+
+
+def test_an_alias_is_read_to_its_literals_so_a_binary_mode_opens_a_binary_file():
+    """`open(path, 'rb')`: the text overload's `mode: OpenTextMode` is an alias of
+    `Literal[...]` unions, read through, so `'rb'` does not fit it and the binary reading
+    overload is the one chosen. A mode of unknown type leaves the closed list."""
+    libraries = Libraries((), typeshed_dir())
+
+    binary = libraries.call_returns(
+        "builtins#", "open", [_argument("string", "x"), _argument("string", "rb")]
+    )
+    text = libraries.call_returns("builtins#", "open", [_argument("string", "x")])
+    unknown = libraries.call_returns(
+        "builtins#", "open", [_argument("string", "x"), _argument("unresolved")]
+    )
+
+    assert _returns(binary) == ("resolved", [("_io/BufferedReader#", [])])
+    assert _returns(text) == ("resolved", [("_io/TextIOWrapper#", [])])
+    assert unknown is not None and unknown.resolution == "narrowed"
+
+
+def test_a_parameter_type_the_rule_cannot_read_leaves_the_closed_list(tmp_path: Path):
+    """The first overload's `Shape` is a protocol: whether `5` fits it is not decided
+    here, so the first overload is not taken as certain."""
+    shapes = _install(
+        tmp_path / "site",
+        "shapes",
+        "1.0",
+        {
+            "shapes/py.typed": "",
+            "shapes/__init__.py": (
+                "from typing import Protocol, overload\n"
+                "class Shape(Protocol):\n    def area(self) -> float: ...\n"
+                "class A: ...\nclass B: ...\n"
+                "@overload\ndef make(x: Shape) -> A: ...\n"
+                "@overload\ndef make(x: int) -> B: ...\n"
+                "def make(x): ...\n"
+            ),
+        },
+    )
+    libraries = Libraries((shapes,), typeshed_dir())
+
+    found = libraries.call_returns("shapes#", "make", [_argument("int", 5)])
+
+    assert _returns(found) == ("narrowed", [("shapes/A#", []), ("shapes/B#", [])])
+
+
+_OBSERVERS = {
+    "obslib/py.typed": "",
+    "obslib/__init__.py": (
+        "import sys\n"
+        "if sys.platform.startswith('linux'):\n    from .inotify import Observer\n"
+        "elif sys.platform == 'darwin':\n    from .fsevents import Observer\n"
+        "else:\n    from .polling import Observer\n"
+        "try:\n    from ._speedups import parse\nexcept ImportError:\n    from ._pure import parse\n"
+        "if sys.platform == 'win32':\n    def watch() -> int: ...\n"
+        "else:\n    def watch() -> str: ...\n"
+    ),
+    "obslib/inotify.py": "class Observer:\n    def start(self) -> None: ...\n",
+    "obslib/fsevents.py": "class Observer:\n    def start(self) -> None: ...\n",
+    "obslib/polling.py": "class Observer:\n    def start(self) -> None: ...\n",
+    "obslib/_speedups.py": "def parse(text): ...\n",
+    "obslib/_pure.py": "def parse(text): ...\n",
+}
+
+
+def test_a_name_a_library_binds_in_several_branches_is_a_closed_list(tmp_path: Path):
+    """`Observer` is imported from one of three modules by platform, `parse` from one of
+    two by `ImportError`: each is the closed list of its bindings, never the last one;
+    and a function defined in both branches returns the closed list of their types."""
+    observers = _install(tmp_path / "site", "obslib", "1.0", _OBSERVERS)
+
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/w.py": (
+                "from obslib import Observer, parse\n"
+                "def h(o: Observer):\n    o.start()\n    parse('x')\n"
+            )
+        },
+        (observers,),
+    )
+    libraries = Libraries((observers,), typeshed_dir())
+
+    (handler,) = [
+        fact
+        for _, _, facts in tree
+        for fact in facts
+        if isinstance(fact, SymbolFact) and bare_descriptor(fact.symbol).startswith("app/w#h")
+    ]
+    assert handler.signature is not None
+    written = handler.signature.parameters[0].type
+    assert written.symbol == "typing/Union#"
+    assert [a.symbol for a in written.arguments] == [
+        "obslib/inotify/Observer#",
+        "obslib/fsevents/Observer#",
+        "obslib/polling/Observer#",
+    ]
+    start, parse = _sites(tree, "app/w#h")
+    assert start.target.owner is None
+    assert parse.target.owner != "obslib/_pure#"
+    assert _returns(libraries.call_returns("obslib#", "watch", [])) == (
+        "narrowed",
+        [("builtins/int#", []), ("builtins/str#", [])],
+    )
+
+
+def test_a_reexport_is_followed_into_an_installed_distribution_not_declared(tmp_path: Path):
+    """`fapi.Request` is `starlite.requests.Request`: starlite is installed (fapi needs
+    it) but not declared, and the chain is followed into it. Where the defining
+    distribution is not installed, the name is the one the library's import gives, and
+    the scan says the definition is not read."""
+    site = tmp_path / "site"
+    fapi = _install(
+        site,
+        "fapi",
+        "1.0",
+        {
+            "fapi/py.typed": "",
+            "fapi/__init__.py": (
+                "from starlite.requests import Request as Request\n"
+                "from gone.things import Thing as Thing\n"
+            ),
+        },
+    )
+    _install(
+        site,
+        "starlite",
+        "1.0",
+        {
+            "starlite/py.typed": "",
+            "starlite/__init__.py": "",
+            "starlite/requests.py": "class Request:\n    pass\n",
+        },
+    )
+
+    report, tree = _scan(
+        tmp_path,
+        {"app/w.py": "from fapi import Request, Thing\ndef h(r: Request, t: Thing): ...\n"},
+        (fapi,),
+    )
+
+    (handler,) = [
+        fact
+        for _, _, facts in tree
+        for fact in facts
+        if isinstance(fact, SymbolFact) and bare_descriptor(fact.symbol).startswith("app/w#h")
+    ]
+    assert handler.signature is not None
+    assert [p.type.symbol for p in handler.signature.parameters] == [
+        "starlite/requests/Request#",
+        "gone/things/Thing#",
+    ]
+    assert _library_symbols(tree)["starlite/requests/Request#"] == "starlite"
+    assert (
+        "fapi.Thing: defined in gone, which is not installed in the scanned environment"
+        in report.uncovered
+    )
+
+
+def test_an_unpacked_argument_list_leaves_the_closed_list(tmp_path: Path):
+    """`*args` and `**options` make the arguments' number and names unknown, so the
+    overloads the count would choose between are all left."""
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/r.py": (
+                "import subprocess\n"
+                "def go(options, args):\n"
+                "    a = subprocess.run(['ls'], **options)\n"
+                "    a.check_returncode()\n"
+                "    b = subprocess.run(*args)\n"
+                "    b.check_returncode()\n"
+            )
+        },
+        (),
+    )
+
+    _, check, _, check_again = _sites(tree, "app/r#go")
+    assert check.target.owner is None
+    assert check_again.target.owner is None
+
+
+def test_the_environments_python_decides_the_standard_library(tmp_path: Path):
+    """An environment on Python 3.11 with no declared library installed: `distutils`
+    (removed in 3.12) is its standard library, read by the environment's version."""
+    environment = tmp_path / "env"
+    _write(environment / "pyvenv.cfg", "home = /usr/bin\nversion_info = 3.11.9\n")
+    (environment / "lib" / "python3.11" / "site-packages").mkdir(parents=True)
+
+    libraries = Libraries((), typeshed_dir(), environment)
+
+    assert libraries.member(Target("distutils"), "core") == (Target("distutils/core"),)
+
+
+def test_a_star_import_honours_all_and_skips_private_names(tmp_path: Path):
+    """`from .impl import *` re-exports what `impl.__all__` lists, or with no `__all__`
+    every name not starting with `_`."""
+    stars = _install(
+        tmp_path / "site",
+        "stars",
+        "1.0",
+        {
+            "stars/py.typed": "",
+            "stars/__init__.py": "from .listed import *\nfrom .plain import *\n",
+            "stars/listed.py": "__all__ = ['Shown']\nclass Shown: ...\nclass Hidden: ...\n",
+            "stars/plain.py": "class Public: ...\nclass _Private: ...\n",
+        },
+    )
+    libraries = Libraries((stars,), typeshed_dir())
+
+    assert libraries.member(Target("stars"), "Shown") == (Target("stars/listed", "Shown"),)
+    assert libraries.member(Target("stars"), "Public") == (Target("stars/plain", "Public"),)
+    assert libraries.member(Target("stars"), "Hidden") is None
+    assert libraries.member(Target("stars"), "_Private") is None

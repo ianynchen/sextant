@@ -39,6 +39,11 @@ class ScanRequest:
     # output and library archives, which the rules do not govern (2K design §2). None reads
     # every file, as before.
     ignore: IgnoreRules | None = None
+    # The installed environment the module's libraries are read from
+    # (`ModuleModel.environment`, a Python module's): its Python decides the standard
+    # library, and a library re-export is followed into any distribution it holds. None
+    # for a JVM module and wherever no environment was found.
+    environment: Path | None = None
 
 
 class ScanError(RuntimeError):

@@ -56,7 +56,7 @@ class PythonScanner:
         # The libraries are read from the module's own scan only: an opted-in library's
         # scan reads that library's files whole (D04 §2a).
         libraries = (
-            Libraries(request.dependency_archives, typeshed_dir())
+            Libraries(request.dependency_archives, typeshed_dir(), request.environment)
             if request.origin is None
             else None
         )
@@ -114,6 +114,7 @@ class PythonScanner:
                 write_fact_file(target, document, library_facts)
                 documents += 1
                 facts += len(library_facts)
+            uncovered.extend(libraries.notes)
         return ScanReport(
             documents=documents,
             facts=facts,

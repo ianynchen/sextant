@@ -347,20 +347,34 @@ in the libraries of the scan, read lazily, each module once:
 
 A type file (`.pyi`) is read before a source file. Nothing is imported or run, and nothing
 is downloaded. A `sys.version_info` test in a type file is read against the environment's
-Python; a `sys.platform` test gives both branches.
+Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path); a
+`sys.platform` test gives both branches.
 
 - **A library name is its defining symbol.** A re-export is followed through the library's
-  own imports, and a star import where only one module defines the name:
-  `from fastapi import APIRouter` names `fastapi/routing/APIRouter#`, and `requests.get(…)`
-  is the static call `requests/api#get`. A library that is not installed has no symbols, so
-  the name stays as the import line writes it, and the detector notes `<name> is not
-  installed in the scanned environment`.
+  own imports, into any distribution the environment holds (`fastapi.Request` is
+  `starlette/requests/Request#`, though only fastapi is declared), and through a star
+  import, which gives the names its module's `__all__` lists, or every name not starting
+  with `_`. `from fastapi import APIRouter` names `fastapi/routing/APIRouter#`, and
+  `requests.get(…)` is the static call `requests/api#get`. A name the library binds
+  differently in branches (a platform test, an `except ImportError` fallback) is the
+  closed list of its bindings, as a name of the module is. A declared library that is not
+  installed has no symbols, so the name stays as the import line writes it, and the
+  detector notes `<name> is not installed in the scanned environment`. Where a re-export's
+  defining distribution is not installed, the name is the one the library's import gives,
+  and the uncovered list says `<module>.<name>: defined in <top>, which is not installed in
+  the scanned environment`. Only a declared distribution starts a lookup: a name the
+  module imports from an undeclared one is not read.
 - **A library call's result has the class its signature returns.** The overload is the
-  first one the argument types match, as a type checker chooses. Where an argument of
-  unknown type (the receiver among them) is given different parameter types by the
-  overloads that match, the answer is the closed list of what they return (`narrowed`),
-  and a call on the result leaves its owner to the resolver, as before. A type variable or
-  a special form names no class, and also leaves the owner.
+  first one the argument types match, as a type checker chooses. A literal is checked
+  against the written type, an alias read through to what it names (`OpenTextMode` to its
+  `Literal[...]` members, so `open(p, 'rb')` is a `BufferedReader`). Where an argument of
+  unknown type (the receiver among them), or one whose fit this rule cannot decide (a
+  protocol, a type variable, a class it does not read), is given different parameter types
+  by the overloads that match, the answer is the closed list of what they return
+  (`narrowed`); so is a call that unpacks `*args` or `**options`, and a function the
+  library's branches define differently. A call on a `narrowed` result leaves its owner to
+  the resolver. A type variable or a special form names no class, and also leaves the
+  owner.
 - **Each library module a name led to is written**, after the module's own files, as one
   document of its `symbol` facts (classes with their written parents, functions and their
   `@overload` stubs with typed signatures, fields), under `facts/lib/pypi/<name>/` or
