@@ -57,8 +57,12 @@ here would restate those documents rather than add anything.
   `escapes`. `call_edges` draws one edge per bound type, and one `unresolved` row with no
   target for a call nothing bound. A class imported from another file and called is read as
   its construction, and a name of one used as a value as that class. The edges are redrawn
-  after each round that bound something, at most eight rounds. JVM facts always name an owner,
-  so no JVM row changes. `GRAPH_SCHEMA_VERSION` 16 → 17: the export carries the new table.
+  after each round that bound something, at most eight rounds; rounds after the first walk only
+  the sites a new caller can change. A keyword argument fills the parameter of its name, and a
+  parameter no argument can be said to fill is `not_readable`, never a neighbour's value. A
+  parameter written as a union binds to each member. JVM facts always name an owner and pass
+  arguments by position, so no JVM row changes. `GRAPH_SCHEMA_VERSION` 16 → 17: the export
+  carries the new table.
 - **The Python scanner reads library signatures and types, and Python lookup follows C3**
   (OI-208 plan 1 task 7). Libraries are read from the project's installed environment, and the
   standard library and stub-only libraries (`requests`) from a pinned typeshed copy shipped in the

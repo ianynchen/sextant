@@ -311,3 +311,171 @@ def test_a_name_bound_to_two_classes_on_two_branches_binds_each_narrowed(tmp_pat
     assert sorted(str(row["owner"]) for row in rows) == [_CLIENT, _SESSION]
     assert {row["resolution"] for row in rows} == {"narrowed"}
     workspace.close()
+
+
+def test_a_keyword_argument_fills_the_parameter_of_its_name(tmp_path: Path):
+    """Fix round 1, ruling R2: `h(y=Session(), x=Client())` fills `x` with the `Client`.
+    Slot for slot, `x` would read the `Session` handed to `y`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "h.py": "def h(x, y):\n    x.get('/')\n",
+            "b.py": "from app.a import Session, Client\n"
+            "from app.h import h\n"
+            "def f():\n    h(y=Session(), x=Client())\n",
+        },
+    )
+    site = _site(workspace, "app/h#h(sig_dd69782a).", "get")
+    assert [(row["owner"], row["resolution"]) for row in _bound(workspace, site)] == [
+        (_CLIENT, "resolved")
+    ]
+    workspace.close()
+
+
+def test_a_keyword_naming_no_parameter_fills_none(tmp_path: Path):
+    """A keyword that names no parameter feeds none: `h(q=Session())` leaves `x` to its
+    default, which is `not_readable` on that caller's path, never the `Session`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "h.py": "def h(x=None, **rest):\n    x.get('/')\n",
+            "b.py": "from app.a import Session, Client\n"
+            "from app.h import h\n"
+            "def f():\n    h(q=Session())\n"
+            "def g():\n    h(Client(), q=Session())\n",
+        },
+    )
+    site = _site(workspace, "app/h#h(sig_dd69782a).", "get")
+    rows = _bound(workspace, site)
+    assert sorted((str(row["owner"]), str(row["reason"])) for row in rows) == [
+        ("None", "not_readable"),
+        (_CLIENT, "None"),
+    ]
+    unfilled = next(row for row in rows if row["owner"] is None)
+    assert "parameter 0" in str(unfilled["detail"])
+    assert {row["resolution"] for row in rows if row["owner"]} == {"partial"}
+    workspace.close()
+
+
+def test_an_unpacked_mapping_decides_no_parameter(tmp_path: Path):
+    """`h(**options)` may fill any parameter: `x` is `not_readable` on that path."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "h.py": "def h(x):\n    x.get('/')\n",
+            "b.py": "from app.h import h\ndef f(options):\n    h(**options)\n",
+        },
+    )
+    site = _site(workspace, "app/h#h(sig_dd69782a).", "get")
+    assert [(row["owner"], row["reason"]) for row in _bound(workspace, site)] == [
+        (None, "not_readable")
+    ]
+    workspace.close()
+
+
+def test_a_union_parameter_binds_each_member_narrowed(tmp_path: Path):
+    """Carried item (c): `s: Session | Client` is a closed list of two types, one row each,
+    `narrowed`, evidence `syntax`; with `| None`, None has no method, and the detail says so."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "b.py": "from typing import Union\n"
+            "from app.a import Session, Client\n"
+            "def u(s: Union[Session, Client]):\n    s.get('/')\n"
+            "def v(s: Session | Client | None):\n    s.get('/')\n",
+        },
+    )
+    for method in ("app/b#u(sig_dd69782a).", "app/b#v(sig_dd69782a)."):
+        rows = _bound(workspace, _site(workspace, method, "get"))
+        assert sorted((str(row["owner"]), row["resolution"], row["evidence"]) for row in rows) == [
+            (_CLIENT, "narrowed", "syntax"),
+            (_SESSION, "narrowed", "syntax"),
+        ]
+    nullable = _bound(workspace, _site(workspace, "app/b#v(sig_dd69782a).", "get"))
+    assert all("None" in str(row["detail"]) for row in nullable)
+    workspace.close()
+
+
+def test_a_union_with_object_is_no_closed_list(tmp_path: Path):
+    """`Session | object` may be any value: no row names `Session` as the whole list."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "b.py": "from app.a import Session\ndef w(s: Session | object):\n    s.get('/')\n",
+        },
+    )
+    rows = _bound(workspace, _site(workspace, "app/b#w(sig_dd69782a).", "get"))
+    assert {row["owner"] for row in rows} == {None}
+    workspace.close()
+
+
+def test_a_class_name_the_module_rebinds_is_a_variable_not_the_class(tmp_path: Path):
+    """`Session = Client` after `class Session` makes `app/a#Session.` a variable with a
+    writer: `Session()` imported from it is no construction of the class `Session`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A + "Session = Client\n",
+            "b.py": "from app.a import Session\ndef f():\n    s = Session()\n    s.get('/')\n",
+        },
+    )
+    site = _site(workspace, "app/b#f(sig_dd69782a).", "get")
+    assert _SESSION not in {row["owner"] for row in _bound(workspace, site)}
+    workspace.close()
+
+
+def test_a_path_the_walk_cannot_hold_keeps_the_site_open(tmp_path: Path):
+    """One caller hands `h` a `Client`; the other a value that went through one helper on
+    two calls, which no path can hold. The `Client` row is not the whole list: `partial`,
+    beside a `not_readable` row saying why."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "b.py": "from app.a import Session, Client\n"
+            "def wrap(x):\n    return x\n"
+            "def h(c):\n    c.get('/')\n"
+            "def f():\n    h(Client())\n"
+            "def g():\n    h(wrap(wrap(Session())))\n",
+        },
+    )
+    site = _site(workspace, "app/b#h(sig_dd69782a).", "get")
+    rows = _bound(workspace, site)
+    assert (_CLIENT, "partial") in {(row["owner"], row["resolution"]) for row in rows}
+    assert any(row["reason"] == "not_readable" for row in rows)
+    workspace.close()
+
+
+def test_the_rounds_rewalk_only_what_a_new_edge_can_change(tmp_path: Path):
+    """R25: rounds after the first re-walk only the sites whose walk crossed, or ended at, a
+    method that gained a caller; the table is the one a full re-walk each round writes."""
+    files = {
+        "a.py": _A + "class Runner:\n    def run(self, s):\n        s.get('/r')\n"
+        "def use(c):\n    c.get('/c')\n",
+        "b.py": "from app.a import Runner, Session, Client, use\n"
+        "def main():\n    r = Runner()\n    r.run(Session())\n    use(Client())\n",
+        # The eight-round chain of the cap test, so every round and the cap are compared.
+        "k.py": "".join(
+            f"class K{n}:\n    def run(self, x):\n        x.run(K{n + 2}())\n" for n in range(1, 10)
+        )
+        + "".join(f"class K{n}:\n    def run(self, x):\n        pass\n" for n in (10, 11))
+        + "def main():\n    K1().run(K2())\n",
+    }
+    tables = []
+    for incremental in (True, False):
+        facts = _facts(tmp_path / str(incremental), files)
+        workspace = DuckDbWorkspace(tmp_path / f"{incremental}.duckdb")
+        workspace.load_facts(facts)
+        workspace.derive("bound_receivers_reset")
+        record_return_flows(workspace)
+        record_call_edges(workspace)
+        counts = bind_until_settled(workspace, incremental=incremental)
+        tables.append((counts, workspace.query("bound_receivers"), workspace.query("call_edges")))
+        workspace.close()
+    assert len(tables[0][0]) == 8
+    assert tables[0] == tables[1]

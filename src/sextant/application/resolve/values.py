@@ -684,6 +684,54 @@ class ValueIndex:
     # from its receiver returns (`_Walk._bound_returns`), and which type a binding nothing
     # writes names (`_Walk._named_type`). None, neither is asked and the walk reads as before.
     dispatch: Dispatch | None = dataclass_field(default=None, compare=False, repr=False)
+    # **Arguments are bound to parameters by NAME as well as by position** (ruling R2, spec
+    # 2026-11-06 §3a) where the module's calls may name them: a keyword argument fills the
+    # callee's parameter of that name, positional ones fill parameters in order. True for a
+    # module whose lookup rule is `c3`; every JVM argument is positional, slot for slot, so
+    # there the slot IS the parameter and nothing below is consulted.
+    by_name: bool = False
+    # The methods declaring a variadic positional parameter (`modifiers.varargs`), whose
+    # position in the list the facts do not give: a positional argument to one fills no
+    # parameter that can be decided.
+    varargs: frozenset[str] = frozenset()
+    # `argument_slots`' answers, per (caller, ordinal, callee), for as long as this lives.
+    slots_memo: dict[Any, Any] = dataclass_field(default_factory=dict, compare=False, repr=False)
+
+    def argument_slots(self, caller: str, ordinal: int, callee: str) -> tuple[int, ...]:
+        """For each of `callee`'s parameters, the argument slot of the call at
+        `(caller, ordinal)` that fills it, or `UNFILLED` where none can be said to (R2): a
+        parameter the call leaves to its default, one a `**` mapping may fill, one of a
+        callee whose variadic parameter's place is not known, or of a callee whose parameter
+        names are not known. Slot for slot where arguments are not bound by name."""
+        key = (caller, ordinal, callee)
+        found = self.slots_memo.get(key)
+        if found is None:
+            site = self.sites.get((caller, ordinal))
+            arguments = (site or {}).get("arguments") or []
+            names = self.parameters.get(callee)
+            if not self.by_name:
+                found = tuple(range(len(arguments)))
+            elif names is None:
+                found = ()
+            else:
+                found = parameter_slots(arguments, names, callee in self.varargs)
+            self.slots_memo[key] = found
+        return found
+
+    def argument_slot(self, caller: str, ordinal: int, callee: str, parameter: int) -> int:
+        """`argument_slots` for one parameter: `UNFILLED` past the end."""
+        slots = self.argument_slots(caller, ordinal, callee)
+        if not self.by_name and parameter >= len(slots):
+            return parameter
+        return slots[parameter] if 0 <= parameter < len(slots) else UNFILLED
+
+    def parameter_of(self, caller: str, ordinal: int, callee: str, slot: int) -> int | None:
+        """The parameter of `callee` the argument at `slot` of that call fills, or None
+        where it fills none that can be named (an extra keyword, a `**` mapping)."""
+        if not self.by_name:
+            return slot
+        slots = self.argument_slots(caller, ordinal, callee)
+        return slots.index(slot) if slot in slots else None
 
     def __post_init__(self) -> None:
         constructed = frozenset(
@@ -724,6 +772,50 @@ class ValueIndex:
 # new object at the same address is simply a different key, and no clearing discipline has
 # to be remembered by anybody.
 _INDEX_BY_WORKSPACE: "WeakKeyDictionary[Workspace, ValueIndex]" = WeakKeyDictionary()
+
+
+# A parameter no argument of a call can be said to fill (`ValueIndex.argument_slots`).
+UNFILLED = -1
+# The `keyword` D00 §5 writes on a keyword argument unpacked from a mapping (`f(**options)`).
+_UNPACKED_MAPPING = "**"
+
+
+def parameter_slots(
+    arguments: Sequence[Mapping[str, Any]], names: Sequence[str | None], variadic: bool
+) -> tuple[int, ...]:
+    """Which argument slot fills each parameter named `names`, in order (ruling R2): the
+    positional arguments (no `keyword`) the parameters in order, and each keyword argument
+    the parameter of its name. `UNFILLED` for a parameter neither fills, for every parameter
+    a positional argument may fill when the callee is `variadic` (where its variadic
+    parameter sits is not in the facts), and for every parameter not filled by name when a
+    `**` mapping is passed (it may hold any of them). A keyword naming no parameter fills
+    none: the callee takes it through its keyword mapping, or refuses it."""
+    filled = [UNFILLED] * len(names)
+    positional = [slot for slot, entry in enumerate(arguments) if entry.get("keyword") is None]
+    if not variadic:
+        for position, slot in enumerate(positional[: len(names)]):
+            filled[position] = slot
+    unpacked = False
+    for slot, entry in enumerate(arguments):
+        keyword = entry.get("keyword")
+        if keyword is None:
+            continue
+        if keyword == _UNPACKED_MAPPING:
+            unpacked = True
+            continue
+        if keyword in names:
+            position = list(names).index(keyword)
+            if filled[position] == UNFILLED:
+                filled[position] = slot
+    if unpacked or (variadic and positional):
+        # Only what a keyword filled by name is decided.
+        named = {
+            list(names).index(entry["keyword"])
+            for entry in arguments
+            if entry.get("keyword") not in (None, _UNPACKED_MAPPING) and entry["keyword"] in names
+        }
+        filled = [slot if position in named else UNFILLED for position, slot in enumerate(filled)]
+    return tuple(filled)
 
 
 def reset_value_index() -> None:
@@ -800,6 +892,10 @@ def value_index(
     returns: dict[tuple[str, int], list[tuple[int, str]]] = {}
     callers: dict[tuple[str, int], list[tuple[str, int, int]]] = {}
     writers: dict[str, list[tuple[str, int]]] = {}
+    dispatch = workspace.once(dispatch_of)
+    # A module whose calls may name their arguments binds them by name (R2), from the edges
+    # and the callees' parameter names below, never slot for slot.
+    by_name = dispatch.lookup == "c3"
     for edge in workspace.query("value_edges"):
         kind = str(edge["kind"])
         method = str(edge["from_method"])
@@ -816,7 +912,7 @@ def value_index(
             returns.setdefault(value, []).append(
                 (int(str(edge["to_ordinal"])), str(edge["to_symbol"]))
             )
-        elif kind == "bound_to_parameter":
+        elif kind == "bound_to_parameter" and not by_name:
             parameter = (str(edge["to_symbol"]), int(str(edge["to_index"])))
             callers.setdefault(parameter, []).append(
                 (method, int(str(edge["to_ordinal"])), parameter[1])
@@ -879,7 +975,11 @@ def value_index(
 
     parameters: dict[str, tuple[str | None, ...]] = {}
     parameter_types: dict[str, tuple[str | None, ...]] = {}
+    varargs: set[str] = set()
     for row in workspace.query("method_declarations"):
+        modifiers = row.get("modifiers")
+        if isinstance(modifiers, dict) and modifiers.get("varargs"):
+            varargs.add(str(row["symbol"]))
         declared = row.get("signature")
         if declared is None:
             continue
@@ -963,6 +1063,8 @@ def value_index(
         )
 
     edges = [row for row in workspace.query("call_edges") if row["callee"] is not None]
+    if by_name:
+        bind_by_name(callers, edges, sites, parameters, frozenset(varargs))
     reached = frozenset((str(row["caller"]), int(str(row["ordinal"]))) for row in edges)
     writing = (
         {method for entries in writers.values() for method, _ in entries}
@@ -1031,8 +1133,40 @@ def value_index(
             if bean_models is None
             else injected_parameters(workspace, bean_models, value_annotations)
         ),
-        dispatch=workspace.once(dispatch_of),
+        dispatch=dispatch,
+        by_name=by_name,
+        varargs=frozenset(varargs),
     )
+
+
+def bind_by_name(
+    callers: dict[tuple[str, int], list[tuple[str, int, int]]],
+    edges: Sequence[Mapping[str, Any]],
+    sites: Mapping[tuple[str, int], Mapping[str, Any]],
+    parameters: Mapping[str, tuple[str | None, ...]],
+    varargs: AbstractSet[str],
+) -> None:
+    """`bound_to_parameter` where arguments are bound by name (R2): each edge's callee's
+    parameters, each with the argument slot `parameter_slots` says fills it, or `UNFILLED`
+    — a caller whose call fills that parameter with nothing the walk can name, which it
+    answers `not_readable` on that path rather than with a neighbour's value. A callee whose
+    parameter names are not known binds none. One entry per (call, callee), in the edges'
+    order, as `value_edges` orders `bound_to_parameter`; a `dynamic` site binds none there."""
+    seen: set[tuple[str, int, str]] = set()
+    for row in edges:
+        if str(row["invoke_kind"]) == "dynamic":
+            continue
+        caller, ordinal, callee = str(row["caller"]), int(str(row["ordinal"])), str(row["callee"])
+        if (caller, ordinal, callee) in seen:
+            continue
+        seen.add((caller, ordinal, callee))
+        names = parameters.get(callee)
+        site = sites.get((caller, ordinal))
+        if names is None or site is None:
+            continue
+        slots = parameter_slots(site.get("arguments") or [], names, callee in varargs)
+        for position, slot in enumerate(slots):
+            callers.setdefault((callee, position), []).append((caller, ordinal, slot))
 
 
 def _stated_hands(
@@ -1648,6 +1782,7 @@ def producer_paths(
     which_object: bool = False,
     counting: Counting = None,
     read_sites: AbstractSet[tuple[str, int]] = frozenset(),
+    dropped: list[Producer] | None = None,
 ) -> tuple[tuple[Producer, Path], ...]:
     """`producers_of`, with the PATH each producer was reached by, one pair per distinct
     path — for a reader that goes on to read other positions on that same path.
@@ -1669,7 +1804,11 @@ def producer_paths(
     routes and then mounted is the router its producer made, routes and all. It ignores no
     call that hands back a DIFFERENT object: that object is the call's result, and a walk
     from it ends at that call, so the identity ends there. Off, the default, every reader
-    keeps the window it had."""
+    keeps the window it had.
+
+    `dropped`, where handed a list, receives the end of every path left out because it
+    entered one helper through two of its calls — so a reader can tell a complete answer
+    from one missing a path."""
     walk = _Walk(
         index,
         declared=declared,
@@ -1694,6 +1833,10 @@ def producer_paths(
         entered = _entered(trail, index)
         if entered is not None:
             found.append((producer, Path(entered, frozenset(entered) - frozenset(trail))))
+        elif dropped is not None:
+            # A path no `Path` can hold (one helper entered through two calls) is left out of
+            # the answer; a caller that must know the answer is incomplete asks for these.
+            dropped.append(producer)
     return tuple(dict.fromkeys(found))
 
 
@@ -3464,7 +3607,7 @@ class _Walk:
                 outcome,
             )
             for callee in callees
-            for steps, outcome in self._entered_window(callee, slot)
+            for steps, outcome in self._window_at(method, ordinal, callee, slot)
         ]
         alike = tuple(dict.fromkeys((steps, outcome) for _, steps, outcome in found))
         if len(alike) == 1:
@@ -3477,6 +3620,15 @@ class _Walk:
                 if (merged := _combine((_Step(context, callee),), steps)) is not None
             )
         )
+
+    def _window_at(self, method: str, ordinal: int, callee: str, slot: int) -> tuple[_Window, ...]:
+        """`_entered_window` for the parameter of `callee` the argument at `slot` fills (R2:
+        by name where the module's calls name arguments); `escapes` where it fills none that
+        can be named, since then what the callee does with it is not read."""
+        parameter = self._index.parameter_of(method, ordinal, callee, slot)
+        if parameter is None:
+            return (((), ESCAPES),)
+        return self._entered_window(callee, parameter)
 
     def _captured(self, method: str, ordinal: int, slot: int) -> tuple[_Window, ...]:
         """A value handed to a `dynamic` site (spec 2026-11-02 rule 2 as amended in fix round
@@ -4305,7 +4457,10 @@ class _Walk:
         """
         frame = self._frame_in(frames, method)
         if frame is not None:
-            return self._resolve((_SLOT, frame[0], frame[1], index), trail, frames)
+            slot = self._index.argument_slot(frame[0], frame[1], method, index)
+            if slot == UNFILLED:
+                return _only(trail, self._unfilled(method, index))
+            return self._resolve((_SLOT, frame[0], frame[1], slot), trail, frames)
         if method in self._stop_at_parameters_of:
             return _only(trail, Answer(kind=_PRODUCED, value=Producer(parameter=(method, index))))
         # **A parameter the container fills receives what the container's recipe makes** (spec
@@ -4329,8 +4484,18 @@ class _Walk:
                 # This path already crossed out of `method` through a different call, so
                 # this caller is not on it. Another slot's path holds that caller.
                 continue
+            if argument == UNFILLED:
+                reached.append((merged, self._unfilled(method, index)))
+                continue
             reached.extend(self._resolve((_SLOT, caller, ordinal, argument), merged, frames))
         return tuple(reached)
+
+    @staticmethod
+    def _unfilled(method: str, index: int) -> Answer:
+        """A parameter a caller's call fills with nothing that can be named (R2): its default,
+        a `**` mapping, or a place the facts do not decide. `not_readable`, naming the
+        parameter, so a reader can say which one."""
+        return Answer(kind=UNRESOLVED, reason=NOT_READABLE, parameter=(method, index))
 
     def _filled_by(
         self, method: str, index: int, recipe: str, trail: _Trail, frames: "_Frames"

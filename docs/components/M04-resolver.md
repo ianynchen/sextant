@@ -167,10 +167,25 @@ Two readings the walk applies for a call one file cannot know, both inert on the
 
 A call whose owner the facts leave out returns, on each path, what the method its bound type
 runs returns (`values._Walk._bound_returns`), so a chain through such calls binds in one walk.
-A bound call becomes an edge, and an edge is a caller, so the pipeline runs
-`record_call_edges`, `bind_receivers`, `record_call_edges` until a round binds nothing new, at
-most eight rounds; a receiver still unbound when the eighth round bound something is
-`not_readable "receiver of <name> not followed after 8 rounds"`.
+A receiver that is a parameter whose written type is a union (`Session | Client`) is each
+member, one row each, `narrowed`; a `None` member is left out and the detail says so, and a
+union holding the unknown type or the root type is no closed list.
+
+**Arguments are bound by name** (ruling R2) where the module's lookup rule is `c3`: a keyword
+argument fills the callee's parameter of its name, positional ones fill parameters in order,
+and a parameter no argument can be said to fill — its default, a `**` mapping, a positional
+argument to a callee with a variadic parameter (whose place the facts do not give) — is
+`not_readable` on that caller's path, naming the parameter (`values.parameter_slots`). Every
+JVM argument is positional, slot for slot.
+
+A bound call becomes an edge, and an edge is a caller, so binding runs in rounds until one
+binds nothing new, at most eight; a receiver still unbound when the eighth round bound
+something is `not_readable "receiver of <name> not followed after 8 rounds"`. After the first
+round only a site whose walk read the callers of a method a newly bound call reaches is walked
+again (R25), over the walk's index with those callers added from the same dispatch answer;
+`call_edges` is drawn once more after the last round. The table is the one a whole re-walk
+over `call_edges` redrawn each round leaves (`bind_until_settled(incremental=False)`, measured
+equal on polar).
 
 **None of the above is built.** The pass as designed — `dispatch`, `dispatch_site`, RTA
 narrowing, the indexed-boundary tier — does not exist in `src/`, and neither does the

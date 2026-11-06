@@ -24,6 +24,7 @@ from sextant.domain.symbols import (
     bare_descriptor,
     descriptor_slots,
     is_type_descriptor,
+    member_field,
     member_type,
     method_descriptor,
     owner_of,
@@ -177,12 +178,22 @@ def _class_calls(workspace: Workspace, sites: list[dict[str, Any]]) -> dict[tupl
             named[(str(owner), str(name))] = candidate
     if not named:
         return {}
-    types = {
-        bare
-        for row in workspace.query("declared_symbols")
-        if is_type_descriptor(bare := bare_descriptor(str(row["symbol"])))
-    } | {bare_descriptor(str(row["symbol"])) for row in workspace.query("type_headers")}
-    return {key: type_ for key, type_ in named.items() if type_ in types}
+    declared = {bare_descriptor(str(row["symbol"])) for row in workspace.query("declared_symbols")}
+    types = {symbol for symbol in declared if is_type_descriptor(symbol)} | {
+        bare_descriptor(str(row["symbol"])) for row in workspace.query("type_headers")
+    }
+    # A name the module writes, or declares as a field, is a variable, whatever it held
+    # first: `Session = Client` after `class Session` makes `Session()` a call of its value.
+    variables = declared | {
+        bare_descriptor(str(row["field"]))
+        for row in workspace.query("field_writes")
+        if row["field"] is not None
+    }
+    return {
+        key: type_
+        for key, type_ in named.items()
+        if type_ in types and member_field(*key) not in variables
+    }
 
 
 def _as_construction(row: dict[str, Any], classes: dict[tuple[str, str], str]) -> dict[str, Any]:

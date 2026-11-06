@@ -14,6 +14,13 @@ PYTHON_SCHEME = "sextant-python"
 # Python method shares one disambiguator and a call joins its callee by name.
 PY_SIGNATURE = "(*)"
 
+# The typing specification's two types that are not one type (D00 §5a, spec 2026-11-06 §3a):
+# a union, whose arguments are the closed list of what the value may be, and the unknown
+# type, which may be anything. Named once, here, for the scanner that writes them and the
+# resolver that binds a receiver to a union's members.
+UNION_TYPE = "typing/Union#"
+ANY_TYPE = "typing/Any#"
+
 # D00 §5a's type marker: the character a TYPE descriptor ends at, and the one a
 # member descriptor carries its owner's name up to. Named here because this
 # module is the seam that reads the symbol grammar
@@ -496,6 +503,12 @@ def member_type(owner: str, name: str) -> str | None:
     if not owner.endswith(_TYPE_MARKER):
         return None
     return f"{owner.removesuffix(_TYPE_MARKER)}/{name}{_TYPE_MARKER}"
+
+
+def member_field(owner: str, name: str) -> str:
+    """The field descriptor of member `name` of the type `owner`: `app/a#` and `Session`
+    give `app/a#Session.` (D00 §5a)."""
+    return f"{owner}{name}."
 
 
 def field_type(field: str) -> str | None:

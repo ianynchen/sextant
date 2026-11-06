@@ -251,6 +251,11 @@ class Dispatch:
         # something we did not open, and `type_hierarchy` names which type that is.
         return None, end
 
+    @property
+    def root(self) -> str:
+        """The type every type is, at the end of every lookup order of this module's rule."""
+        return _C3_ROOT if self.lookup == "c3" else _OBJECT
+
     def lookup_order(self, owner: str) -> list[str]:
         """The types a method is searched on for `owner`, in order, `owner` first: the
         JVM's order for a `jvm` module, C3 for a `c3` one. It ends early where a type in

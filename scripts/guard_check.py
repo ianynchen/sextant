@@ -4902,15 +4902,11 @@ GUARDS: dict[str, Guard] = {
                 path=_VALUES,
                 find="        frame = self._frame_in(frames, method)\n"
                 "        if frame is not None:\n"
-                "            return self._resolve((_SLOT, frame[0], frame[1], index), trail, "
-                "frames)\n"
-                "        if method in self._stop_at_parameters_of:\n",
+                "            slot = self._index.argument_slot(frame[0], frame[1], method, index)\n",
                 replace="        frame = None if method in self._stop_at_parameters_of else "
                 "self._frame_in(frames, method)  # guard disabled by scripts/guard_check.py\n"
                 "        if frame is not None:\n"
-                "            return self._resolve((_SLOT, frame[0], frame[1], index), trail, "
-                "frames)\n"
-                "        if method in self._stop_at_parameters_of:\n",
+                "            slot = self._index.argument_slot(frame[0], frame[1], method, index)\n",
             ),
         ),
     ),

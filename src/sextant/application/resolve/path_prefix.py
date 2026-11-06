@@ -496,7 +496,7 @@ def _from_parameter(
     for caller, ordinal, argument in index.callers.get((method, position), ()):
         site = index.sites.get((caller, ordinal))
         arguments = (site or {}).get("arguments") or []
-        if argument < len(arguments):
+        if 0 <= argument < len(arguments):
             # The walk's own convention (`_Walk._parameter`): parameter N is the argument the
             # binding names at the site that bound it.
             found |= _origins(index, caller, arguments[argument], seen)

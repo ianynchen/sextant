@@ -21,6 +21,7 @@ import builtins
 from dataclasses import dataclass, field, replace
 
 from sextant.domain.facts import TypeRef
+from sextant.domain.symbols import ANY_TYPE, UNION_TYPE
 from sextant.ingress.extract.python.imports import (
     Binding,
     ModuleIndex,
@@ -30,8 +31,8 @@ from sextant.ingress.extract.python.imports import (
 )
 
 BUILTINS = "builtins"
-UNION = "typing/Union#"
-ANY = "typing/Any#"
+UNION = UNION_TYPE
+ANY = ANY_TYPE
 NONE = "builtins/None#"
 # The type a Python value has where no type is written: the typing specification's own
 # rule for an unannotated parameter.
