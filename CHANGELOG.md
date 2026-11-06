@@ -22,7 +22,9 @@ here would restate those documents rather than add anything.
   or a `tools/pyproject.toml`) now detects as multi-module: `--workspace` is refused for it and
   `modules.json` is written, as for any multi-module repository. Modules that share a folder get
   a results folder each (`<folder>/.sextant/<name>`), and modules with one id keep both, the id
-  followed by `@<folder>`.
+  followed by `@<folder>`. A detector that fails (a malformed `pom.xml`, a Gradle run that
+  fails) still stops detection with its own message; only a detector with no module to report
+  is passed over when another found some.
 
 ### Added
 

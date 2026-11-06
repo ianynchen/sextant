@@ -218,14 +218,17 @@ def test_a_jvm_repository_with_a_python_project_is_multi_module(tmp_path: Path):
     assert model.multi_module is True
 
 
-def test_a_detector_that_fails_is_a_note_when_another_found_modules(tmp_path: Path):
+def test_a_detector_failure_stops_detection_even_when_another_found_modules(tmp_path: Path):
     _write(tmp_path / "pom.xml")
-    maven = _StubBuild("pom.xml", [_module(tmp_path, "com.acme:app")])
+    _write(tmp_path / "tools" / "pyproject.toml", '[project]\nname = "tools"\n')
+    _write(tmp_path / "tools" / "run.py")
 
-    model = detect_repository([maven, _StubFailing()], tmp_path)
+    class _MavenFailing(_StubBuild):
+        def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
+            raise ValueError("pom.xml is not well formed")
 
-    assert [m.module_id for m in model.modules] == ["com.acme:app"]
-    assert any("_StubFailing" in note and "bad toml" in note for note in model.notes)
+    with pytest.raises(ValueError, match="not well formed"):
+        detect_repository([_MavenFailing("pom.xml", []), PythonDetector()], tmp_path)
 
 
 def test_a_failure_is_a_refusal_when_no_detector_found_a_module(tmp_path: Path):

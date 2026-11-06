@@ -226,9 +226,11 @@ build file at any depth.
   go in `<folder>/.sextant/<results_name>` (Android design M6), the module id with every
   character that is not a letter, digit, `.`, `_` or `-` changed to `-`. A module alone in its
   folder keeps `<folder>/.sextant`. The `@` and `/` of an id never reach a folder name.
-- **A detector that fails** (an unreadable root `pyproject.toml`) is a note, "<detector> could
-  not read this repository: <error>", when another detector found modules. It is a refusal
-  only when no detector found any module.
+- **A detector that fails stops detection.** Only `NoModulesFound` (a detector with nothing
+  to report) is tolerated when another detector found modules. Any other error (a malformed
+  `pom.xml`, a Gradle run that fails, an unreadable root `pyproject.toml`) is raised with its
+  own message, so a partial answer never looks complete. The user can point Sextant at a
+  sub-folder.
 - **A JVM repository with a Python project is multi-module.** A project file marks a module
   (user ruling), so a Maven repository with a root `requirements.txt` and scripts, or a
   `tools/pyproject.toml`, has two modules. `--workspace` is refused for it and `modules.json`

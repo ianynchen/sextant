@@ -259,30 +259,21 @@ def detect_repository(
     if not accepting:
         raise NoAdapterError(f"no detector recognises {path} as a repository it can read")
     models: list[RepositoryModel] = []
-    failures: list[tuple[str, Exception]] = []
+    refusals: list[NoModulesFound] = []
     extra_notes: list[str] = []
     for detector in accepting:
         try:
             model = detector.detect(path, allow_resolve=allow_resolve)
         except NoModulesFound as none_found:
-            failures.append((type(detector).__name__, none_found))
+            refusals.append(none_found)
             extra_notes.extend(none_found.notes)
-            continue
-        except (ValueError, SyntaxError, OSError) as failure:
-            failures.append((type(detector).__name__, failure))
             continue
         if model.modules:
             models.append(model)
     if not models:
-        if failures:
-            raise failures[0][1]
+        if refusals:
+            raise refusals[0]
         raise NoAdapterError(f"no detector found a module in {path}")
-    # A detector that failed is a note when another found modules: an unreadable
-    # `pyproject.toml` must not stop a Maven repository being analysed. One that only
-    # found no module has said so in its own notes.
-    for name, error in failures:
-        if not isinstance(error, NoModulesFound):
-            extra_notes.append(f"{name} could not read this repository: {error}")
     modules = _with_own_results(
         _with_unique_ids(path, [module for model in models for module in model.modules])
     )
