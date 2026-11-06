@@ -130,7 +130,7 @@ def test_a_scanned_owner_whose_whole_closure_declares_nothing_says_so():
     read. The first draft returned that word here — the set had no member for "we looked
     everywhere we could and found nothing", and a missing member invites the reuse."""
     dispatch = _dispatch(
-        declares={"p/A#": ["other"], "p/Base#": ["another"]},
+        declares={"p/A#": ["other"], "p/Base#": ["another"], "java/lang/Object#": []},
         ancestors={"p/A#": [("p/Base#", "extends", True)]},
     )
 
@@ -138,6 +138,50 @@ def test_a_scanned_owner_whose_whole_closure_declares_nothing_says_so():
         None,
         None,
     )
+
+
+def test_a_method_nothing_here_declares_ends_at_object_which_is_not_read():
+    """JVMS 5.4.3.3 and 5.4.3.4 both end at `java/lang/Object`. The extractor writes no
+    superclass fact for it, so the search names it as the first unread type. A module
+    interface calling `equals` is `invokeinterface I.equals`, which real code produces."""
+    dispatch = _dispatch(
+        declares={"p/I#": ["other"]},
+        ancestors={"p/C#": [("p/I#", "implements", True)]},
+    )
+
+    assert dispatch.resolve("p/I#", "equals", VOID) == (None, "java/lang/Object#")
+    assert dispatch.resolve("p/C#", "hashCode", VOID) == (None, "java/lang/Object#")
+
+
+def test_an_object_method_on_an_interface_is_external_naming_object():
+    dispatch = _dispatch(declares={"p/I#": ["other"]}, ancestors={})
+    recorder = _Recorder()
+
+    for name in ("equals", "hashCode", "toString"):
+        _record_resolution(recorder, dispatch, [_site("p/I#", name)])  # type: ignore[arg-type]
+        (row,) = recorder.rows
+        assert row["reason"] == EXTERNAL
+        assert (
+            row["detail"]
+            == "p/I is read, but its ancestor java/lang/Object is not in the scanned code"
+        )
+
+
+def test_an_object_that_is_read_answers_with_its_own_declaration():
+    dispatch = _dispatch(declares={"java/lang/Object#": ["equals"], "p/I#": []}, ancestors={})
+    dispatch.scanned.add("p/I#")
+
+    assert dispatch.resolve("p/I#", "equals", VOID) == ("java/lang/Object#", None)
+
+
+def test_an_array_owner_is_named_as_an_array_in_the_detail():
+    dispatch = _dispatch(declares={}, ancestors={})
+    recorder = _Recorder()
+
+    _record_resolution(recorder, dispatch, [_site("p/Role#[]", "clone")])  # type: ignore[arg-type]
+
+    (row,) = recorder.rows
+    assert row["detail"] == "p/Role[] is not in the scanned code"
 
 
 def test_a_constructor_is_never_resolved_to_an_ancestors():
@@ -223,7 +267,7 @@ def test_an_unread_ancestor_is_external_and_the_detail_names_the_ancestor():
 
 def test_a_read_closure_without_the_declaration_is_not_readable():
     dispatch = _dispatch(
-        declares={"p/A#": ["other"], "p/Base#": ["another"]},
+        declares={"p/A#": ["other"], "p/Base#": ["another"], "java/lang/Object#": []},
         ancestors={"p/A#": [("p/Base#", "extends", True)]},
     )
     recorder = _Recorder()

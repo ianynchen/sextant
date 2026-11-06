@@ -202,7 +202,7 @@ def _record_resolution(
             "name": name,
             "descriptor": descriptor,
             "declaring_class": declaring,
-            **_not_found(owner, name, declaring, unread),
+            **_reason_and_detail(owner, name, declaring, unread),
         }
         for (owner, name, descriptor), (declaring, unread) in sorted(asked.items())
     ]
@@ -210,7 +210,12 @@ def _record_resolution(
         workspace.derive("method_resolution_insert", rows=rows)
 
 
-def _not_found(
+def _type_name(descriptor: str) -> str:
+    """A type descriptor for a person: `p/Role#[]` reads `p/Role[]`, `p/Role#` reads `p/Role`."""
+    return without_type_marker(descriptor.replace("#[]", "[]"))
+
+
+def _reason_and_detail(
     owner: str, name: str, declaring: str | None, unread: str | None
 ) -> dict[str, str | None]:
     """The `reason` and `detail` of one lookup. A found body has neither. A type the
@@ -219,7 +224,7 @@ def _not_found(
     here and we did not find the declaration: `not_readable`. No code reads the detail."""
     if declaring is not None:
         return {"reason": None, "detail": None}
-    owner_name = without_type_marker(owner)
+    owner_name = _type_name(owner)
     if unread is None:
         return {
             "reason": NOT_READABLE,
@@ -230,7 +235,7 @@ def _not_found(
     return {
         "reason": EXTERNAL,
         "detail": (
-            f"{owner_name} is read, but its ancestor {without_type_marker(unread)} "
+            f"{owner_name} is read, but its ancestor {_type_name(unread)} "
             "is not in the scanned code"
         ),
     }

@@ -85,6 +85,9 @@ DYNAMIC = "dynamic"
 THROW = "throw"
 # Names that are never inherited, so an ancestor walk for one is always wrong (JLS 8.8).
 _NOT_INHERITED = frozenset({"<init>", "<clinit>"})
+# Where every class and interface lookup ends (JVMS 5.4.3.3, 5.4.3.4). A wire name of the
+# platform, recorded in the two language-confinement tests.
+_OBJECT = "java/lang/Object#"
 
 
 @dataclass(frozen=True)
@@ -188,7 +191,8 @@ class Dispatch:
         """Where `resolve`'s search LEFT the workspace: the first type, in JVMS 5.4.3.3's
         order, that it reached and could not read — the owner itself, else the first
         unread class on the superclass chain, else the first unread superinterface. None
-        wherever the search found a declaration or read everything it reached.
+        wherever the search found a declaration or read everything it reached,
+        the platform's root type included.
 
         `resolve` carries the same answer as its second part. A reader whose catalog
         states what one particular jar type does with the call (a framework template
@@ -258,7 +262,12 @@ class Dispatch:
             # We know MORE than "external": the body is inherited from something we did
             # not open, and `type_hierarchy` names which type that is.
             return None, unscanned
-        return None, None
+        # Last place, for a class (JVMS 5.4.3.3) and for an interface (5.4.3.4) alike:
+        # the platform's root type. The extractor writes no superclass fact for it, so no chain
+        # above reached it. Read, it answers; unread, it is the type the search left at.
+        if method_descriptor(_OBJECT, name, descriptor) in self.declared:
+            return _OBJECT, None
+        return None, None if _OBJECT in self.scanned else _OBJECT
 
     def candidates(self, site: dict[str, object]) -> list[str]:
         """Every method `site` can run and whose body this workspace read, as
@@ -279,7 +288,7 @@ class Dispatch:
         # The DECLARING type, not the named one (F3 §4.2). `Owner#setId` names `Owner`
         # and is declared on `BaseEntity`; asking only about the named owner returned
         # nothing and read as a third-party boundary.
-        declaring, _reason = self.resolve(owner, name, descriptor)
+        declaring, _ = self.resolve(owner, name, descriptor)
         if declaring is None:
             return []
         declared_method = method_descriptor(declaring, name, descriptor)

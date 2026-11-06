@@ -262,6 +262,9 @@ def test_jvm_names_stay_in_the_jvm_extractor():
         "domain/facts.py": {"classpath"},
         "ingress/detect/gradle.py": {"classpath"},
         "ingress/detect/maven.py": {"java", "classpath"},
+        # The platform's root type, where every method lookup ends (JVMS 5.4.3.3). Its name
+        # is a wire name, like `java.version`; it is not a language branch.
+        "application/resolve/dispatch.py": {"java"},
     }
 
     found = offenders(files, JVM_NAMES)
