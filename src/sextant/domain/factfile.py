@@ -2,6 +2,7 @@
 record is the first line, so a fact file is self-describing."""
 
 import json
+import re
 import shutil
 from collections.abc import Iterable
 from pathlib import Path
@@ -104,6 +105,10 @@ def config_fact_target(fact_root: Path, relative_path: str) -> Path:
 # Maven groupId may contain and outside a JVM package name, so no coordinate and no
 # class path can reach this directory.
 _UNPUBLISHED = "(unpublished)"
+# A Python distribution's coordinate, its PEP 503 normalized name, and the folder its
+# opted-in facts go under. Lower case only, so a Gradle module id (`Acme`) is not one.
+_PYPI_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_PYPI = "pypi"
 
 
 def library_fact_root(fact_root: Path, coordinate: str, *, unpublished: bool = False) -> Path:
@@ -123,6 +128,10 @@ def library_fact_root(fact_root: Path, coordinate: str, *, unpublished: bool = F
         if not coordinate or "/" in coordinate or "\\" in coordinate:
             raise ValueError(f"not a module id: {coordinate!r}")
         return fact_root / "lib" / _UNPUBLISHED / coordinate
+    if _PYPI_NAME.fullmatch(coordinate):
+        # A Python distribution (D04 §2a): its PEP 503 name is its whole coordinate. A
+        # folder of its own, so no Maven group can share a directory with it.
+        return fact_root / "lib" / _PYPI / coordinate
     if ":" not in coordinate or "/" in coordinate or "\\" in coordinate:
         raise ValueError(f"not a library coordinate: {coordinate!r}")
     group, _, artifact = coordinate.partition(":")

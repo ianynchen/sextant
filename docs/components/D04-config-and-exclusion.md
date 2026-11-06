@@ -127,7 +127,10 @@ enrich:
 ```
 
 `extract_libraries` names dependencies whose **own bytecode** is scanned alongside the
-module's output. Every fact it produces records the coordinate as its `origin`
+module's output. For a Python module each entry is a distribution name (`fastapi`, PEP 503
+normalized), and its own source files in the module's installed environment are scanned:
+one the module does not declare, or the environment does not hold, is named with its
+reason. Every fact it produces records the coordinate as its `origin`
 ([D00](D00-fact-schema.md) §2), lands under `facts/lib/<groupId>/<artifactId>/`, and is
 marked in the rendered document as coming from that library.
 

@@ -214,9 +214,10 @@ def test_the_lookup_rule_is_read_from_the_module_fact(tmp_path: Path):
 
 def test_an_f_string_site_is_not_a_lambda_once_typeshed_names_str_format(tmp_path: Path):
     """Ruling R19(b): an f-string is a `dynamic` `builtins/str#format` site with no
-    `implementation`. Once typeshed gives `builtins/str#format` a symbol in the workspace,
-    `lambda_edges` still holds no row for it: a dynamic site is followed only through the
-    body it creates, and an f-string creates none."""
+    `implementation`. With typeshed read, `builtins/str#` is a type in the workspace (a
+    `type_header`, fix round 2), and `lambda_edges` still holds no row for the site: a
+    dynamic site is followed only through the body it creates, and an f-string creates
+    none."""
     from sextant.application.resolve.call_edges import record_call_edges
     from sextant.domain.symbols import bare_descriptor
 
@@ -235,7 +236,7 @@ def test_an_f_string_site_is_not_a_lambda_once_typeshed_names_str_format(tmp_pat
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
     workspace.load_facts(facts)
     record_call_edges(workspace)
-    declared = {bare_descriptor(str(row["symbol"])) for row in workspace.query("declared_symbols")}
+    headers = {bare_descriptor(str(row["symbol"])) for row in workspace.query("type_headers")}
     sites = [
         row
         for row in workspace.query("call_sites")
@@ -244,8 +245,31 @@ def test_an_f_string_site_is_not_a_lambda_once_typeshed_names_str_format(tmp_pat
     lambda_edges = workspace.query("lambda_edges")
     workspace.close()
 
-    assert any(symbol.startswith("builtins/str#format(") for symbol in declared)
+    assert "builtins/str#" in headers
     assert [(row["owner"], row["name"], row["invoke_kind"]) for row in sites] == [
         ("builtins/str#", "format", "dynamic")
     ]
     assert lambda_edges == []
+
+
+def test_c3_reads_library_parents_from_headers_and_ends_external_at_a_library_type():
+    """Fix round 2 (ruling A): a library class is a `type_header`, so its parents are
+    known and its methods are not. `class D(LibBase, Mine)`: C3 places the module's
+    `Mine` after `LibBase` and `LibBase`'s own parent, and the lookup ends at `LibBase`,
+    the first type it cannot read, with `external` — never `Mine.m` past it."""
+    dispatch = Dispatch(
+        bodies={},
+        declared={method_descriptor("p/Mine#", "m", PY_SIGNATURE)},
+        subtypes={},
+        ancestors={
+            "p/D#": _python("lib/LibBase#", "p/Mine#"),
+            "lib/LibBase#": _python("lib/LibRoot#"),
+        },
+        scanned={"p/D#", "p/Mine#"},
+        lookup="c3",
+        headers=frozenset({"lib/LibBase#", "lib/LibRoot#"}),
+    )
+
+    assert dispatch.lookup_order("p/D#") == ["p/D#", "lib/LibBase#"]
+    assert dispatch.resolve("p/D#", "m", PY_SIGNATURE) == (None, "lib/LibBase#")
+    assert dispatch.resolve("p/Mine#", "m", PY_SIGNATURE) == ("p/Mine#", None)

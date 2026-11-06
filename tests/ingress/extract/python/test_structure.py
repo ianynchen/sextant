@@ -311,7 +311,8 @@ def test_unparsable_file_is_uncovered_and_the_rest_is_scanned(tmp_path: Path):
     assert len(report.uncovered) == 1
     assert report.uncovered[0].startswith("app/old.py: ")
     assert f"app/new#f({DIS})." in _symbols(tree)
-    assert [document.relative_path for _, document, _ in tree] == ["app/new.py"]
+    # The header document (D00 §2 `header_only`) is not a file of the module.
+    assert [d.relative_path for _, d, _ in tree if not d.header_only] == ["app/new.py"]
 
 
 def test_pep_695_type_parameters_are_type_variables(tmp_path: Path):
@@ -363,7 +364,8 @@ def test_an_ignored_file_is_not_read(tmp_path: Path):
         ignore=IgnoreRules.load(tmp_path),
     )
 
-    assert [document.relative_path for _, document, _ in tree] == ["app/new.py"]
+    # The header document (D00 §2 `header_only`) is not a file of the module.
+    assert [d.relative_path for _, d, _ in tree if not d.header_only] == ["app/new.py"]
 
 
 def test_a_git_ignored_generated_file_in_the_module_is_scanned(tmp_path: Path):
@@ -384,7 +386,8 @@ def test_a_file_that_cannot_be_opened_is_uncovered_and_the_rest_is_scanned(tmp_p
 
     assert len(report.uncovered) == 1
     assert report.uncovered[0].startswith("app/broken.py: ")
-    assert [document.relative_path for _, document, _ in tree] == ["app/new.py"]
+    # The header document (D00 §2 `header_only`) is not a file of the module.
+    assert [d.relative_path for _, d, _ in tree if not d.header_only] == ["app/new.py"]
 
 
 def _class_and_document(tree, descriptor: str):

@@ -132,6 +132,9 @@ class Dispatch:
     # The Python classes whose written parents stop early (`SymbolFact.parents_unread`):
     # their C3 order ends where the parent not read would come in.
     parents_unread: frozenset[str] = frozenset()
+    # The library types known by a `type_header` alone (D00 §5): their parents are read,
+    # so C3 places them, and their methods are not, so a lookup ends at one.
+    headers: frozenset[str] = frozenset()
     # A bare type to the names of the methods it declares, every overload one name: `heirs`'
     # question, built once from `declared` with the `Dispatch` rather than by scanning every
     # declared symbol per type per call (GUIDELINES §8.7). Derived, so a `Dispatch` built by
@@ -330,10 +333,15 @@ class Dispatch:
         linear = self._linear(owner, set())
         if linear is None:
             return [owner], None
-        order = [type_ for type_ in linear if isinstance(type_, str)]
-        unread = [type_[0] for type_ in linear if not isinstance(type_, str)]
-        if unread:
-            return order, unread[0]
+        order: list[str] = []
+        for type_ in linear:
+            if not isinstance(type_, str):
+                return order, type_[0]
+            order.append(type_)
+            if type_ != owner and type_ not in self.scanned:
+                # A type whose methods were not read (a library's, known by its header
+                # alone): what it declares is not known, so the lookup ends at it.
+                return order, type_
         if owner != _C3_ROOT:
             order.append(_C3_ROOT)
         return order, None if _C3_ROOT in self.scanned else _C3_ROOT
@@ -345,8 +353,8 @@ class Dispatch:
             return self._linears[type_]
         if type_ in visiting:
             return None
-        if type_ not in self.scanned:
-            # Its parents were never read.
+        if type_ not in self.scanned and type_ not in self.headers:
+            # Its parents were never read: neither its own facts nor a header.
             return [type_, (type_,)]
         visiting.add(type_)
         parents: _Linear = [ancestor for ancestor, _, _ in self.ancestors.get(type_, ())]
@@ -432,6 +440,9 @@ def dispatch_of(workspace: Workspace) -> Dispatch:
         lookup="c3" if rules == {"c3"} else "jvm",
         parents_unread=frozenset(
             bare_descriptor(str(row["symbol"])) for row in workspace.query("parents_unread")
+        ),
+        headers=frozenset(
+            bare_descriptor(str(row["symbol"])) for row in workspace.query("type_headers")
         ),
     )
 

@@ -10,7 +10,12 @@ from pathlib import Path
 from sextant.application.ports.detector import LibraryRoot
 from sextant.application.ports.scanner import ScanRequest
 from sextant.domain.factfile import read_fact_tree
-from sextant.domain.facts import CallArgument, CallSiteFact, SymbolFact
+from sextant.domain.facts import (
+    CallArgument,
+    CallSiteFact,
+    SymbolFact,
+    TypeHeaderFact,
+)
 from sextant.domain.symbols import bare_descriptor
 from sextant.ingress.detect.python import PythonDetector
 from sextant.ingress.extract.python.imports import Target
@@ -68,14 +73,20 @@ def _sites(tree, method_prefix: str) -> list[CallSiteFact]:
 
 
 def _library_symbols(tree) -> dict[str, str | None]:
-    """Each library symbol, bare, with the `origin` of the document it is in."""
+    """Each library type's header (D00 §5 `type_header`), bare, with its `origin`. A
+    library writes no document and no `symbol` fact of its own: the test says so too."""
+    assert not any(document.origin is not None for _, document, _ in tree)
     return {
-        bare_descriptor(fact.symbol): document.origin
-        for _, document, facts in tree
-        if document.origin is not None
+        bare_descriptor(fact.symbol): fact.origin
+        for _, _, facts in tree
         for fact in facts
-        if isinstance(fact, SymbolFact)
+        if isinstance(fact, TypeHeaderFact)
     }
+
+
+def _header_document(tree):
+    (found,) = [document for _, document, _ in tree if document.header_only]
+    return found
 
 
 _FASTAPI = {
@@ -153,6 +164,8 @@ def test_uninstalled_library_has_no_symbols_and_is_reported(tmp_path: Path):
     (call,) = _sites(tree, "shop#<clinit>")
     assert (call.target.owner, call.target.name) == ("fastapi#", "APIRouter")
     assert not any(origin == "fastapi" for origin in _library_symbols(tree).values())
+    # `fastapi#`, the owner its import line gives, is in no library the scan holds.
+    assert _header_document(tree).type_headers_unlocated >= 1
 
 
 _REQUESTS = {
@@ -187,13 +200,10 @@ def test_typeshed_gives_requests_types_with_provenance(tmp_path: Path):
     library = _library_symbols(tree)
     stubs = f"typeshed@{COMMIT}/requests@~=2.33.0"
     assert library["requests/models/Response#"] == stubs
-    documents = {
-        document.relative_path: document
-        for _, document, _ in tree
-        if document.origin is not None and document.origin.startswith("typeshed@")
-    }
-    assert documents["requests/models.pyi"].origin == stubs
-    assert documents["requests/models.pyi"].origin_tier == "dependency"
+    assert library["requests/api#"] == stubs
+    header = _header_document(tree)
+    assert header.origin_tier == "dependency"
+    assert header.relative_path == "<environment>"
 
 
 def _argument(kind: str, value: object = None, keyword: str | None = None) -> CallArgument:
@@ -478,3 +488,180 @@ def test_a_star_import_honours_all_and_skips_private_names(tmp_path: Path):
     assert libraries.member(Target("stars"), "Public") == (Target("stars/plain", "Public"),)
     assert libraries.member(Target("stars"), "Hidden") is None
     assert libraries.member(Target("stars"), "_Private") is None
+
+
+# Fix round 2: library types are type headers, as on the JVM (ruling A).
+
+
+def test_library_types_are_headers_up_their_bases_and_nothing_else(tmp_path: Path):
+    """Every library type the module names gets one `type_header` in the one
+    `header_only` document, then each of its bases transitively, with the written bases
+    mapped as a module class's are (first `superclass`, the rest `interfaces`). No
+    member, no library document, no library `symbol`. `object` is the boundary, and a
+    named type no library holds is counted as not located."""
+    shapes = _install(
+        tmp_path / "site",
+        "shapes",
+        "1.0",
+        {
+            "shapes/py.typed": "",
+            "shapes/__init__.py": "from .child import Child as Child\n",
+            "shapes/child.py": (
+                "from .base import Base, Mixin\n"
+                "class Child(Base, Mixin):\n    def area(self) -> float: ...\n"
+            ),
+            "shapes/base.py": "class Root: ...\nclass Base(Root): ...\nclass Mixin: ...\n",
+        },
+    )
+
+    report, tree = _scan(
+        tmp_path,
+        {
+            "app/main.py": (
+                "from shapes import Child\n"
+                "from missing import Gone\n"
+                "class Mine(Child): ...\n"
+                "def f(g: Gone): ...\n"
+            )
+        },
+        (shapes,),
+    )
+
+    headers = {
+        bare_descriptor(fact.symbol): fact
+        for _, _, facts in tree
+        for fact in facts
+        if isinstance(fact, TypeHeaderFact)
+    }
+    child = headers["shapes/child/Child#"]
+    assert child.origin == "shapes" and child.version == "1.0"
+    assert child.construct_kind == "class"
+    assert child.annotations == []
+    assert bare_descriptor(str(child.superclass)) == "shapes/base/Base#"
+    assert [bare_descriptor(i) for i in child.interfaces] == ["shapes/base/Mixin#"]
+    assert bare_descriptor(str(headers["shapes/base/Base#"].superclass)) == "shapes/base/Root#"
+    assert headers["shapes/base/Root#"].superclass is None
+    assert "builtins/object#" not in headers
+    assert not any(bare_descriptor(s).startswith("shapes/child/Child#area") for s in headers)
+    assert not any(document.origin is not None for _, document, _ in tree)
+    assert not [
+        fact
+        for _, document, facts in tree
+        if document.header_only
+        for fact in facts
+        if not isinstance(fact, TypeHeaderFact)
+    ]
+    assert _header_document(tree).type_headers_unlocated >= 1
+    assert report.documents == 1
+
+
+def test_a_library_class_whose_bases_are_not_all_read_gets_no_header(tmp_path: Path):
+    """`class Model(Base)` where `Base = declarative_base()`: the class's parents are not
+    all read (Task 5b's rule), and `type_header` has no key to say so, so no header is
+    written for it — a lookup reaching it ends there with `external` — and the scan
+    names why."""
+    orm = _install(
+        tmp_path / "site",
+        "orm",
+        "1.0",
+        {
+            "orm/py.typed": "",
+            "orm/__init__.py": "Base = make_base()\nclass Model(Base): ...\n",
+        },
+    )
+
+    report, tree = _scan(
+        tmp_path, {"app/m.py": "from orm import Model\nclass Mine(Model): ...\n"}, (orm,)
+    )
+
+    assert "orm/Model#" not in _library_symbols(tree)
+    assert any(note.startswith("orm.Model: ") for note in report.uncovered)
+
+
+def test_a_call_into_a_library_method_is_external_and_coverage_counts_module_files(
+    tmp_path: Path,
+):
+    """The module's own documents are what `coverage.documents` counts, the header
+    document aside; the `symbols` view holds no library entry; and a call into a library
+    method answers `external` in `method_resolution`, as for an unscanned jar type."""
+    from sextant.application.resolve.call_edges import record_call_edges
+    from sextant.storage.duckdb.workspace import DuckDbWorkspace
+
+    requests = _install(tmp_path / "site", "requests", "2.33.1", _REQUESTS)
+    _scan(
+        tmp_path,
+        {"app/client.py": "import requests\ndef fetch(url):\n    return requests.get(url)\n"},
+        (requests,),
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    record_call_edges(workspace)
+    (coverage,) = workspace.query("coverage")
+    symbols = {bare_descriptor(str(row["symbol"])) for row in workspace.query("declared_symbols")}
+    resolutions = [row for row in workspace.query("method_resolution") if row["name"] == "get"]
+    headers = workspace.query("type_headers")
+    workspace.close()
+
+    assert coverage["documents"] == 1
+    assert coverage["type_headers"] == len(headers) > 0
+    assert all(symbol.startswith("app/") for symbol in symbols)
+    (get,) = resolutions
+    assert get["reason"] == "external"
+
+
+def _opting(tmp_path: Path, extract: str | None):
+    project = tmp_path / "project"
+    _write(
+        project / "pyproject.toml",
+        '[project]\nname = "shop"\nversion = "1"\ndependencies = ["fastapi", "httpx"]\n',
+    )
+    _write(project / "shop" / "__init__.py", "")
+    if extract is not None:
+        _write(project / ".sextant.yml", extract)
+    environment = project / ".venv"
+    _write(environment / "pyvenv.cfg", "home = /usr/bin\n")
+    site = environment / "lib" / "python3.12" / "site-packages"
+    _install(site, "fastapi", "0.115.0", _FASTAPI)
+    _install(site, "httpx", "0.27.0", {"httpx/__init__.py": "def get(u): return u\n"})
+    return PythonDetector().detect(project).modules[0], site
+
+
+def test_a_library_opted_into_is_scanned_whole(tmp_path: Path):
+    """R21, D04 §2a: `extract_libraries: [fastapi]` gives the module a library root, and
+    the library's own scan reads its files (bodies included) and no other
+    distribution's, every document with `origin: fastapi` in the dependency tier."""
+    module, site = _opting(tmp_path, "extract_libraries:\n  - fastapi\n")
+
+    (library,) = module.library_roots
+    assert (library.coordinate, library.version, library.archive) == ("fastapi", "0.115.0", site)
+
+    out = tmp_path / "lib-facts"
+    PythonScanner().scan(
+        ScanRequest(
+            module_id="shop",
+            coordinates=library.coordinate,
+            version=library.version,
+            classes_dir=library.archive,
+            out_dir=out,
+            origin=library.coordinate,
+        )
+    )
+    tree = read_fact_tree(out)
+    assert sorted(document.relative_path for _, document, _ in tree) == [
+        "fastapi/__init__.py",
+        "fastapi/routing.py",
+    ]
+    assert {(document.origin, document.origin_tier) for _, document, _ in tree} == {
+        ("fastapi", "dependency")
+    }
+    assert any(fact.kind == "method_return" for _, _, facts in tree for fact in facts)
+
+
+def test_a_library_not_opted_into_has_no_root(tmp_path: Path):
+    """Without `extract_libraries`, nothing of a library's bodies is read: only its
+    headers (above)."""
+    module, _ = _opting(tmp_path, None)
+    assert module.library_roots == ()
+    module, _ = _opting(tmp_path / "other", "extract_libraries:\n  - flask\n")
+    assert module.library_roots == ()
+    assert module.libraries_not_resolved == ("flask: the module declares no such dependency",)

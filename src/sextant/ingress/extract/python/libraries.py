@@ -14,14 +14,18 @@ or downloaded: a library file is parsed with `ast`, as a module file is.
   no types (no `py.typed` marker) is read from its typeshed stub package where typeshed
   has one (`requests`).
 - **Defining symbols:** a library name is always its defining symbol. A re-export is
-  followed through the library's own imports (`from .routing import APIRouter`), and a
-  star import is followed where one module only defines the name.
+  followed through the library's own imports (`from .routing import APIRouter`), into any
+  distribution the environment holds, and through star imports (`__all__`, else every
+  name not starting with `_`). A name the library binds differently in branches is the
+  closed list of its bindings.
 - **Lazily:** only the modules a name of the scanned module leads to are read, and each
-  once. A read module's facts are written beside the module's own, with `origin` naming
-  the distribution, or `typeshed@<commit>/<stub package>@<version>`. They are the
-  signatures and types only: `symbol` facts (classes with their written parents,
-  functions and their `@overload` stubs with typed signatures, fields). Bodies are not
-  written. A class's parents are read too, so a lookup can continue through them.
+  once. Their signatures are used inside the scanner only, to type the module's own call
+  sites, values and returns.
+- **Headers, as on the JVM (ruled A, 2026-11-06):** what is written of a library is one
+  `type_header` (D00 §5) per library type the module refers to, then transitively up its
+  bases, each with its `origin` (the distribution, or `typeshed@<commit>/<stub
+  package>@<version>`). No library member, document or `symbol` fact is written: a
+  library's bodies are read only when the module opts in (`extract_libraries`, D04 §2a).
 - **Overloads:** a call's return type is the one overload the argument types choose, as
   a type checker chooses: the first that matches. An argument whose type is not known,
   where the overloads that match give it different parameter types, leaves the closed
@@ -34,7 +38,6 @@ are read.
 
 import ast
 import builtins
-import hashlib
 import re
 import sys
 import tomllib
@@ -43,16 +46,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from sextant.application.ports.detector import LibraryRoot
-from sextant.domain.closed_sets import OriginTier
-from sextant.domain.facts import CallArgument, Document, Fact, SymbolFact, TypeRef
+from sextant.domain.closed_sets import ConstructKind
+from sextant.domain.facts import (
+    CallArgument,
+    CallSiteFact,
+    Fact,
+    FieldWriteFact,
+    MethodReturnFact,
+    SymbolFact,
+    TypeHeaderFact,
+    TypeRef,
+)
 from sextant.domain.symbols import (
     NOT_APPLICABLE,
     PYTHON_SCHEME,
     bare_descriptor,
-    names_a_type,
+    is_type_descriptor,
     without_type_marker,
 )
-from sextant.domain.version import FACT_SCHEMA_VERSION, SEXTANT_VERSION
 from sextant.ingress.extract.python.calls import FileContext
 from sextant.ingress.extract.python.imports import (
     Binding,
@@ -63,24 +74,25 @@ from sextant.ingress.extract.python.imports import (
 )
 from sextant.ingress.extract.python.structure import file_facts
 from sextant.ingress.extract.python.typing_rules import (
-    ANY,
     BUILTINS,
     TypeScope,
     written_type,
 )
 
-_SCANNER_ID = "sextant-python-scanner"
-_LANGUAGE = "python"
 _PACKAGE_MANAGER = "pypi"
-_NO_REDACTION_HASH = "sha256:none"
 _TYPED_MARKER = "py.typed"
 _STUB_METADATA = "METADATA.toml"
 _SOURCE_SUFFIXES = (".pyi", ".py")
 # One line of typeshed's `stdlib/VERSIONS`: `module: 3.7-` or `module: 3.0-3.11`.
 _VERSIONS_LINE = re.compile(r"\s*([\w.]+)\s*:\s*(\d+\.\d+)\s*-\s*(\d+\.\d+)?")
-# The folder under the fact root that library facts are written to (`facts/lib/`, which the
-# analysis clears before every scan, so a library no longer read leaves nothing behind).
-_LIBRARY_FOLDER = "lib"
+# Python's root type: every class has it and no base list writes it, so it gets no header,
+# as the JVM's root type gets none (D00 §5 `type_header`).
+_C3_ROOT = "builtins/object#"
+# The kinds of library declaration a header is written for: a type (a Python module is a
+# type, ruling R4), never a member.
+_TYPE_KINDS = frozenset(
+    {ConstructKind.CLASS, ConstructKind.PROTOCOL, ConstructKind.ENUM, ConstructKind.MODULE}
+)
 # The kinds of argument whose type a call site states, with the Python value they hold.
 _LITERAL_KINDS = frozenset({"string", "int", "long", "boolean", "null", "concat"})
 # The builtin classes a literal argument is checked against, and the literal types each
@@ -99,14 +111,12 @@ _ACCEPTS: dict[str, tuple[type, ...]] = {
 class _Provider:
     """Where the files of one top-level import name come from, and what their facts
     record: the folder import paths are relative to, the `origin`, and the package and
-    version that prefix their symbols."""
+    version that prefix their symbols and name their headers."""
 
     root: Path
     origin: str
     package: str
     version: str
-    # The folder under `facts/lib/` its facts are written to.
-    folder: str
 
 
 @dataclass(frozen=True)
@@ -115,10 +125,6 @@ class _Source:
     path: Path
     is_package: bool
     provider: _Provider
-
-    @property
-    def relative(self) -> str:
-        return self.path.relative_to(self.provider.root).as_posix()
 
 
 # One way a library module binds a name: `("own", kind)` for a definition, `("from", module,
@@ -168,7 +174,7 @@ class Libraries:
         }
         self._installed: dict[str, LibraryRoot] = {}
         for library in archives:
-            for top in _top_level_names(library):
+            for top in top_level_names(library):
                 self._installed.setdefault(top, library)
         self._declared = frozenset(self._installed)
         # Every other distribution of the environment, by import name: read only where a
@@ -182,12 +188,25 @@ class Libraries:
         self._providers: dict[str, _Provider | None] = {}
         self._sources: dict[str, _Source | None] = {}
         self._tables: dict[str, _Table | None] = {}
+        # The file names in each folder a module was looked for in, read once.
+        self._listings: dict[Path, frozenset[str]] = {}
         self._index = ModuleIndex(frozenset(), self)
-        # The modules whose facts are written, in the order a name first led to them.
-        self._needed: dict[str, None] = {}
+        # Each library module's own `symbol` facts, read once: where a header's construct
+        # kind and written bases come from. They are not written.
+        self._symbols: dict[str, dict[str, SymbolFact]] = {}
         # A call's callee, read once however many calls name it (GUIDELINES §8.7).
         self._functions: dict[tuple[str, str], _Function | None] = {}
         self._recording = True
+
+    @property
+    def identity(self) -> str:
+        """What the header read reads: the declared distributions and their versions, the
+        environment's Python and the typeshed commit, one per line."""
+        lines = [f"typeshed {self._commit}", f"python {self._python[0]}.{self._python[1]}"]
+        lines += sorted(
+            {f"{library.coordinate} {library.version}" for library in self._installed.values()}
+        )
+        return "\n".join(lines)
 
     # -- the scanner's questions (`imports.LibraryNames`) ------------------------------
 
@@ -231,8 +250,6 @@ class Libraries:
             # A type variable (`-> _T`), a special form or a name no library read defines:
             # what the call returns depends on more than the signature says.
             return None
-        for returned in found.types:
-            self._record_type(returned.symbol)
         return found
 
     def _function(self, owner: str, name: str) -> _Function | None:
@@ -412,67 +429,89 @@ class Libraries:
 
     # -- the facts -----------------------------------------------------------------------
 
-    def documents(
-        self, module_id: str, out_dir: Path
-    ) -> Iterator[tuple[Path, Document, list[Fact]]]:
-        """Each library module a name of the scan led to, as a document of its
-        signatures and types, with the fact file it is written to. A class's parents are
-        added as they are found, so the walk ends where the parents leave every library."""
-        done: set[str] = set()
-        while pending := [module for module in self._needed if module not in done]:
-            for module in pending:
-                done.add(module)
-                written = self._document(module, module_id, out_dir)
-                if written is not None:
-                    yield written
+    def headers(
+        self, referenced: Iterable[str], own: set[str], document_id: str
+    ) -> tuple[list[TypeHeaderFact], int, list[str]]:
+        """A `type_header` (D00 §5) for every library type the module refers to, then
+        transitively up each one's written bases, as the JVM scanner reads a classpath:
+        the symbol, construct kind, `superclass` and `interfaces` mapped from the bases as
+        the scanner maps a module class's (first base `superclass`, the rest `interfaces`,
+        `object` not written), no annotation (a decorator is a call), and the `origin`.
+        Also how many referenced types no library holds (`type_headers_unlocated`), and a
+        line for each library class whose bases are not all read: `type_header` has no
+        key to say so, so it gets no header, and a lookup reaching it ends there."""
+        facts: list[TypeHeaderFact] = []
+        unlocated = 0
+        not_read: list[str] = []
+        seen = set(own) | {_C3_ROOT}
+        queue = [symbol for symbol in sorted(set(referenced)) if symbol not in seen]
+        seen.update(queue)
+        while queue:
+            symbol = queue.pop(0)
+            found = self._declaration(symbol)
+            if found is None:
+                unlocated += 1
+                continue
+            declared, provider = found
+            if declared.parents_unread is not None:
+                not_read.append(
+                    f"{without_type_marker(symbol).replace('/', '.').replace('$', '.')}: "
+                    f"{declared.parents_unread.detail}; no type header is written for it"
+                )
+                continue
+            facts.append(
+                TypeHeaderFact(
+                    document_id=document_id,
+                    symbol=declared.symbol,
+                    construct_kind=declared.construct_kind,
+                    superclass=declared.superclass,
+                    interfaces=declared.interfaces,
+                    origin=provider.origin,
+                    version=provider.version,
+                )
+            )
+            for parent in [declared.superclass, *declared.interfaces]:
+                bare = bare_descriptor(parent) if parent is not None else None
+                if bare is not None and bare not in seen:
+                    seen.add(bare)
+                    queue.append(bare)
+        return facts, unlocated, not_read
 
-    def _document(
-        self, module: str, module_id: str, out_dir: Path
-    ) -> tuple[Path, Document, list[Fact]] | None:
-        table = self._table(module)
+    def _declaration(self, symbol: str) -> tuple[SymbolFact, _Provider] | None:
+        """The library's own `symbol` fact for the type `symbol` (a class or a module),
+        read as the scanner reads a module file, and where it was read from."""
+        target = self._target_of(symbol)
+        if target is None:
+            return None
+        table = self._table(target.module)
         if table is None:
             return None
-        source = table.source
-        provider = source.provider
-        content = source.path.read_bytes()
-        relative = source.relative
-        document = Document(
-            document_id=hashlib.sha256(f"{provider.origin}/{relative}".encode()).hexdigest(),
-            relative_path=relative,
-            module_id=module_id,
-            language=_LANGUAGE,
-            sextant_version=SEXTANT_VERSION,
-            fact_schema_version=FACT_SCHEMA_VERSION,
-            scanner_id=_SCANNER_ID,
-            content_hash="sha256:" + hashlib.sha256(content).hexdigest(),
-            origin_entry=str(provider.root),
-            origin_tier=OriginTier.DEPENDENCY,
-            redaction_set_hash=_NO_REDACTION_HASH,
-            origin=provider.origin,
-        )
-        manager = NOT_APPLICABLE if provider.package == NOT_APPLICABLE else _PACKAGE_MANAGER
-        prefix = f"{PYTHON_SCHEME} {manager} {provider.package} {provider.version} "
-        context = FileContext(module, source.is_package, self._index, prefix, document.document_id)
-        recording, self._recording = self._recording, False
-        inside, self._inside = self._inside, True
-        try:
-            read = file_facts(table.tree, context, len(content.splitlines()) or 1)
-        finally:
-            self._recording = recording
-            self._inside = inside
-        # Signatures and types only: the bodies (calls, values, returns) are not written.
-        symbols = [fact for fact in read.facts if isinstance(fact, SymbolFact)]
-        facts: list[Fact] = list(symbols)
-        for fact in symbols:
-            for parent in [fact.superclass, *fact.interfaces]:
-                if parent is not None:
-                    self._record_type(bare_descriptor(parent))
-        if read.not_read:
-            document = document.model_copy(
-                update={"partial": True, "partial_reason": "\n".join(read.not_read)}
-            )
-        target = out_dir / _LIBRARY_FOLDER / provider.folder / f"{relative}.jsonl"
-        return target, document, facts
+        declared = self._module_symbols(table).get(symbol)
+        if declared is None or declared.construct_kind not in _TYPE_KINDS:
+            return None
+        return declared, table.source.provider
+
+    def _module_symbols(self, table: _Table) -> dict[str, SymbolFact]:
+        module = table.source.module
+        if module not in self._symbols:
+            source = table.source
+            provider = source.provider
+            manager = NOT_APPLICABLE if provider.package == NOT_APPLICABLE else _PACKAGE_MANAGER
+            prefix = f"{PYTHON_SCHEME} {manager} {provider.package} {provider.version} "
+            context = FileContext(module, source.is_package, self._index, prefix, "")
+            recording, self._recording = self._recording, False
+            inside, self._inside = self._inside, True
+            try:
+                read = file_facts(table.tree, context, 1)
+            finally:
+                self._recording = recording
+                self._inside = inside
+            self._symbols[module] = {
+                bare_descriptor(fact.symbol): fact
+                for fact in read.facts
+                if isinstance(fact, SymbolFact)
+            }
+        return self._symbols[module]
 
     # -- reading -------------------------------------------------------------------------
 
@@ -504,7 +543,6 @@ class Libraries:
         self, module: str, name: str, entry: _Entry, seen: set[tuple[str, str]]
     ) -> tuple[Target, ...]:
         if entry[0] == "own":
-            self._record(module)
             return (Target(module, name),)
         if entry[0] == "module":
             return (Target(entry[1]),) if self._source(entry[1]) is not None else ()
@@ -572,18 +610,6 @@ class Libraries:
             and self._is_class(target.module, target.member)
         )
 
-    def _record(self, module: str) -> None:
-        if self._recording:
-            self._needed.setdefault(module)
-
-    def _record_type(self, symbol: str) -> None:
-        """Write the facts of the module that defines the class `symbol`."""
-        if not names_a_type(symbol) or symbol == ANY:
-            return
-        target = self._target_of(symbol)
-        if target is not None and target.member is not None:
-            self._needed.setdefault(target.module)
-
     def _scope(self, table: _Table) -> TypeScope:
         if table.scope is None:
             source = table.source
@@ -622,11 +648,24 @@ class Libraries:
             ]
             candidates += [(base / f"__init__{suffix}", True) for suffix in _SOURCE_SUFFIXES]
             for path, is_package in candidates:
-                if path.is_file():
+                if self._is_file(path):
                     found = _Source(module, path, is_package, provider)
                     break
         self._sources[module] = found
         return found
+
+    def _is_file(self, path: Path) -> bool:
+        """Whether `path` is a file, its name matched exactly: on a file system that
+        ignores case (macOS), `Child.py` must not find `child.py`."""
+        folder = path.parent
+        if folder not in self._listings:
+            try:
+                self._listings[folder] = frozenset(
+                    entry.name for entry in folder.iterdir() if entry.is_file()
+                )
+            except OSError:
+                self._listings[folder] = frozenset()
+        return path.name in self._listings[folder]
 
     def _available(self, module: str, provider: _Provider) -> bool:
         """Whether the environment's Python has a standard library module (typeshed's
@@ -652,7 +691,6 @@ class Libraries:
                 f"typeshed@{self._commit}/stdlib@{version}",
                 NOT_APPLICABLE,
                 NOT_APPLICABLE,
-                "typeshed/stdlib",
             )
         elif top in self._installed:
             library = self._installed[top]
@@ -664,7 +702,6 @@ class Libraries:
                     f"typeshed@{self._commit}/{stub.name}@{_stub_version(stub)}",
                     library.coordinate,
                     library.version,
-                    f"typeshed/{stub.name}",
                 )
             else:
                 provider = _Provider(
@@ -672,7 +709,6 @@ class Libraries:
                     library.coordinate,
                     library.coordinate,
                     library.version,
-                    f"{_PACKAGE_MANAGER}/{library.coordinate}",
                 )
         elif (other := self._other_distributions().get(top)) is not None:
             provider = _Provider(
@@ -680,7 +716,6 @@ class Libraries:
                 other.coordinate,
                 other.coordinate,
                 other.version,
-                f"{_PACKAGE_MANAGER}/{other.coordinate}",
             )
         self._providers[top] = provider
         return provider
@@ -695,10 +730,56 @@ class Libraries:
                 if name is None or version is None:
                     continue
                 library = LibraryRoot(coordinate=name, version=version, archive=info.parent)
-                for top in _top_level_names(library):
+                for top in top_level_names(library):
                     if top not in self._installed:
                         self._others.setdefault(top, library)
         return self._others
+
+
+# -- the types the module refers to -------------------------------------------------------
+
+
+def referenced_types(facts: Iterable[Fact]) -> set[str]:
+    """Every type symbol, bare, that the module's own facts name: a call's owner, a class
+    or an instance argument, a written base, a parameter or return type and its type
+    arguments. The JVM scanner reads the same from a class file's constant pool."""
+    found: set[str] = set()
+    for fact in facts:
+        if isinstance(fact, SymbolFact):
+            for parent in [fact.superclass, *fact.interfaces]:
+                if parent is not None:
+                    found.add(parent)
+            if fact.signature is not None:
+                for parameter in fact.signature.parameters:
+                    _type_symbols(parameter.type, found)
+                    if parameter.erased_symbol is not None:
+                        found.add(parameter.erased_symbol)
+                if fact.signature.returns is not None:
+                    _type_symbols(fact.signature.returns, found)
+            for type_parameter in fact.type_parameters:
+                for bound in type_parameter.bounds:
+                    _type_symbols(bound, found)
+        elif isinstance(fact, CallSiteFact):
+            if fact.target.owner is not None:
+                found.add(fact.target.owner)
+            for argument in fact.arguments:
+                _argument_symbols(argument, found)
+        elif isinstance(fact, MethodReturnFact | FieldWriteFact) and fact.value is not None:
+            _argument_symbols(fact.value, found)
+    return {bare for bare in map(bare_descriptor, found) if is_type_descriptor(bare)}
+
+
+def _type_symbols(written: TypeRef, into: set[str]) -> None:
+    into.add(written.symbol)
+    for argument in written.arguments:
+        _type_symbols(argument, into)
+
+
+def _argument_symbols(argument: CallArgument, into: set[str]) -> None:
+    if argument.kind in ("class", "instance") and argument.symbol is not None:
+        into.add(argument.symbol)
+    for nested in [*(argument.candidates or []), *(argument.elements or [])]:
+        _argument_symbols(nested, into)
 
 
 # -- the top-level names of a library module ----------------------------------------------
@@ -936,7 +1017,7 @@ def _version(text: str) -> tuple[int, int]:
     return int(major), int(minor)
 
 
-def _top_level_names(library: LibraryRoot) -> list[str]:
+def top_level_names(library: LibraryRoot) -> list[str]:
     """The import names a distribution installs, from its `RECORD`: the first part of
     each `.py`, `.pyi` or package path it lists."""
     coordinate = _normalize(library.coordinate)

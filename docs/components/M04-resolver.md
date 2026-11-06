@@ -123,6 +123,25 @@ Java's own resolution rules have to be respected: the superclass chain before in
 default methods, bridge methods so a generic override is not missed, package-private
 methods overridden only within a package.
 
+**One lookup order per type** (`resolve/dispatch.py` `Dispatch.lookup_order`, spec
+2026-11-06 §3b). Which type declares the method a call names is the first type in the
+owner's lookup order that declares it. The order is one of two named rules, chosen by the
+module fact's `lookup` (D00 §5, DR-6):
+- `jvm` — JVMS 5.4.3.3: the class, its superclass chain to exhaustion, then the
+  superinterfaces breadth-first, then `java/lang/Object`; constructors and static
+  initializers are not inherited. An unread type is a position in the order that is never
+  asked; the first one is the boundary.
+- `c3` — Python's method resolution order: C3 linearization over the written parents, in
+  written order (`superclass`, then `interfaces`), then `builtins/object`. `__init__` is
+  inherited. A library type is placed by its `type_header`, and the order ends at it,
+  since its methods are not read. A parent not read (`parents_unread`, or a type with
+  neither facts nor a header) ends the order where it would come in, as far as the order
+  is certain without it. A hierarchy C3 cannot order is only the class itself.
+
+Where the order ends at an unread type, the lookup answers `external` with that type in
+the detail (`method_resolution`); where it read every type and none declares the method,
+`not_readable`.
+
 **None of the above is built.** The pass as designed — `dispatch`, `dispatch_site`, RTA
 narrowing, the indexed-boundary tier — does not exist in `src/`, and neither does the
 `edges` layer it would sit beside. What DOES exist is 2Q `G3`'s subset

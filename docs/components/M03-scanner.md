@@ -375,13 +375,25 @@ Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path
   library's branches define differently. A call on a `narrowed` result leaves its owner to
   the resolver. A type variable or a special form names no class, and also leaves the
   owner.
-- **Each library module a name led to is written**, after the module's own files, as one
-  document of its `symbol` facts (classes with their written parents, functions and their
-  `@overload` stubs with typed signatures, fields), under `facts/lib/pypi/<name>/` or
-  `facts/lib/typeshed/<stub package>/`, with `origin_tier: dependency` and `origin` set
-  (D00 §2). The modules that define a class's parents are written too, so a lookup can
-  continue through them. Bodies are not written: no call, value or return of a library.
-  An opted-in library's bodies (D04 §2a) are not read for Python yet.
+- **What is written of a library is its type headers, as on the JVM** (ruled A,
+  2026-11-06; D00 §5 `type_header`). After the module's own files, one synthetic
+  `header_only` document, `__type_headers__.jsonl` labelled `<environment>`, holds a
+  `type_header` for every library type the module's facts name (a call's owner, a class
+  or instance argument, a written base, a parameter or return type), then for each of its
+  written bases, transitively: the defining symbol, the construct kind, the first base as
+  `superclass` and the rest as `interfaces` (as a module class's), no annotation, and the
+  `origin`. A named type no library holds counts in `type_headers_unlocated`; `object` is
+  the boundary and gets none. A library class whose bases are not all read gets none
+  either, with a line on the uncovered list. No library member, document or `symbol` fact
+  is written, so library methods are not "found" (`method_resolution` answers `external`),
+  `coverage.documents` counts the module's files only, and the `symbols` view holds the
+  module's own. Library signatures are used only inside the scanner, to type the module's
+  own calls (above).
+- **An opted-in library's bodies** (`extract_libraries`, D04 §2a) are read whole, as a
+  jar is: the detector reports the environment's `site-packages` as the library root of
+  each named distribution the module declares and has installed, and the library's own
+  scan reads only that distribution's files (its `RECORD`), into `facts/lib/pypi/<name>/`
+  with `origin: <name>` and the dependency tier.
 
 ### Artifact readers
 

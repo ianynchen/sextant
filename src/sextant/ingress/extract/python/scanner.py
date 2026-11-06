@@ -10,17 +10,22 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 
+from sextant.application.ports.detector import LibraryRoot
 from sextant.application.ports.scanner import ScanReport, ScanRequest
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import write_fact_file
-from sextant.domain.facts import Document
+from sextant.domain.facts import Document, Fact, SymbolFact
 from sextant.domain.ignorefile import IgnoreRules
-from sextant.domain.symbols import NOT_APPLICABLE, PYTHON_SCHEME
+from sextant.domain.symbols import NOT_APPLICABLE, PYTHON_SCHEME, bare_descriptor
 from sextant.domain.version import FACT_SCHEMA_VERSION, SEXTANT_VERSION
 from sextant.ingress.detect.python import is_skipped_folder
 from sextant.ingress.extract.python.calls import FileContext
 from sextant.ingress.extract.python.imports import ModuleIndex, module_path
-from sextant.ingress.extract.python.libraries import Libraries
+from sextant.ingress.extract.python.libraries import (
+    Libraries,
+    referenced_types,
+    top_level_names,
+)
 from sextant.ingress.extract.python.structure import file_facts
 from sextant.resources import typeshed_dir
 
@@ -29,6 +34,9 @@ _SCANNER_ID = "sextant-python-scanner"
 _PACKAGE_MANAGER = "pypi"
 _SUFFIX = ".py"
 _NO_REDACTION_HASH = "sha256:none"
+# The header document's file, the JVM scanner's own name, and its path label.
+_HEADER_FILE = "__type_headers__.jsonl"
+_HEADER_LABEL = "<environment>"
 # What this backend reads (M03 "Capabilities"). The rule 9 flow fields are written, as
 # by the JVM scanner, which does not declare `control_flow` either: that capability is the
 # regions a sequence diagram needs (M03 "The hard part: control flow").
@@ -53,6 +61,17 @@ class PythonScanner:
         files = [
             (root, relative) for root in roots for relative in _python_files(root, request.ignore)
         ]
+        if request.origin is not None:
+            # An opted-in library (D04 §2a) is handed its environment's `site-packages`:
+            # only the files of that distribution are its own.
+            names = set(
+                top_level_names(LibraryRoot(request.origin, request.version, request.classes_dir))
+            )
+            files = [
+                (root, relative)
+                for root, relative in files
+                if relative.partition("/")[0].removesuffix(_SUFFIX) in names
+            ]
         # The libraries are read from the module's own scan only: an opted-in library's
         # scan reads that library's files whole (D04 §2a).
         libraries = (
@@ -65,6 +84,10 @@ class PythonScanner:
         prefix = f"{PYTHON_SCHEME} {manager} {request.coordinates} {request.version} "
         documents = facts = 0
         uncovered: list[str] = []
+        # The module's types, and every type its facts name: what the header read starts
+        # from (D00 §5 `type_header`).
+        own: set[str] = set()
+        referenced: set[str] = set()
         for root, relative in files:
             here, is_package = module_path(relative)
             if not here:
@@ -106,15 +129,23 @@ class PythonScanner:
             write_fact_file(request.out_dir / f"{relative}.jsonl", document, read.facts)
             documents += 1
             facts += len(read.facts)
+            if libraries is not None:
+                own.update(_declared(read.facts))
+                referenced |= referenced_types(read.facts)
         if libraries is not None:
-            # After every module file: each one may lead to more library modules.
-            for target, document, library_facts in libraries.documents(
-                request.module_id, request.out_dir
-            ):
-                write_fact_file(target, document, library_facts)
-                documents += 1
-                facts += len(library_facts)
+            # After every module file, as the JVM scanner reads its classpath: the one
+            # synthetic document of every library type's header. It is not a file this
+            # module holds, so `documents` does not count it.
+            document_id = hashlib.sha256(f"type-headers:{request.module_id}".encode()).hexdigest()
+            headers, unlocated, not_read = libraries.headers(referenced, own, document_id)
+            write_fact_file(
+                request.out_dir / _HEADER_FILE,
+                _header_document(request, document_id, libraries.identity, unlocated),
+                list(headers),
+            )
+            facts += len(headers)
             uncovered.extend(libraries.notes)
+            uncovered.extend(not_read)
         return ScanReport(
             documents=documents,
             facts=facts,
@@ -122,6 +153,35 @@ class PythonScanner:
             capabilities=tuple(sorted(_CAPABILITIES)),
             uncovered=tuple(uncovered),
         )
+
+
+def _declared(facts: list[Fact]) -> set[str]:
+    return {bare_descriptor(fact.symbol) for fact in facts if isinstance(fact, SymbolFact)}
+
+
+def _header_document(
+    request: ScanRequest, document_id: str, identity: str, unlocated: int
+) -> Document:
+    """The one `header_only` document (D00 §2), shaped as the JVM scanner's: the dependency
+    tier, no `origin` of its own (each header names its own), and a label for a path,
+    `<environment>`, because there is no file: the content hash is of what was read (the
+    environment's distributions and the typeshed commit). The JVM's label is
+    `<classpath>`; a Python module has an environment, not a classpath."""
+    return Document(
+        document_id=document_id,
+        relative_path=_HEADER_LABEL,
+        module_id=request.module_id,
+        language=_LANGUAGE,
+        sextant_version=SEXTANT_VERSION,
+        fact_schema_version=FACT_SCHEMA_VERSION,
+        scanner_id=_SCANNER_ID,
+        content_hash="sha256:" + hashlib.sha256(identity.encode()).hexdigest(),
+        origin_entry=_HEADER_LABEL,
+        origin_tier=OriginTier.DEPENDENCY,
+        redaction_set_hash=_NO_REDACTION_HASH,
+        header_only=True,
+        type_headers_unlocated=unlocated,
+    )
 
 
 def _python_files(root: Path, ignore: IgnoreRules | None) -> list[str]:

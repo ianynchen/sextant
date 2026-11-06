@@ -205,6 +205,11 @@ Python.
   the `site-packages` folder. Where an environment was found, each declared name it does not
   hold is a note, `<name> is not installed in the scanned environment`: that library has no
   symbols (M03 "Libraries").
+- **Opted-in libraries** (`.sextant.yml` `extract_libraries`, D04 §2a): each named
+  distribution the module declares and its environment holds is a `library_roots` entry,
+  its archive the `site-packages` folder; any other is in `libraries_not_resolved` with its
+  reason (`<name>: the module declares no such dependency`, `<name>: not installed in the
+  scanned environment`).
 - **Notes.** Every top folder of Python files in no module ("python files in a folder with no
   project file, not analysed: <folder>"), every `sys.path.insert`/`append` found by a text
   search of the `.py` files beside a build file (the change is not followed).

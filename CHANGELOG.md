@@ -53,12 +53,18 @@ here would restate those documents rather than add anything.
   wheel (`resources/typeshed`, commit in `COMMIT`); nothing is imported, run or downloaded. A
   library name is its defining symbol (`fastapi.APIRouter` is `fastapi/routing/APIRouter#`), a
   library call's result has the class its signature returns (the overload the argument types
-  choose), and each library module a name leads to is written as `symbol` facts with `origin`
-  set to the distribution or `typeshed@<commit>/<stub package>@<version>`. A declared library
-  missing from the environment is named by the detector (`fastapi is not installed in the
-  scanned environment`). Method lookup is one order per type (`Dispatch.lookup_order`): the
-  JVM's, unchanged, or C3 for a `c3` module, where `__init__` is inherited and a class whose
-  parents were not all read ends the order with `external`.
+  choose, an alias read through to its literals), and a name a library binds differently in
+  branches is the closed list of its bindings. As on the JVM, what is written of a library is
+  a `type_header` for every library type the module names, then up its bases, in one
+  `header_only` document labelled `<environment>`, with `origin` set to the distribution or
+  `typeshed@<commit>/<stub package>@<version>`; no library member or document is written, so
+  a call into a library method answers `external`. A library's bodies are read only when the
+  module opts in (`extract_libraries: [<distribution>]`, D04 §2a). A declared library missing
+  from the environment is named by the detector (`fastapi is not installed in the scanned
+  environment`). Method lookup is one order per type (`Dispatch.lookup_order`): the JVM's,
+  unchanged, or C3 for a `c3` module, where `__init__` is inherited, a library type is placed
+  by its header and ends the order, and a class whose parents were not all read ends the
+  order with `external`.
 
 - **A Retrofit client that Dagger or Hilt makes has its server address** (OI-304, spec
   `2026-11-05-di-recipe-hop-design.md`). A parameter the container fills (a `@Provides` method's,

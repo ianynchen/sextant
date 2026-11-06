@@ -63,6 +63,7 @@ from sextant.application.ports.detector import (
 )
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.symbols import NOT_APPLICABLE
+from sextant.ingress.detect.sextant_config import read_python_extract_libraries
 
 _PYPROJECT = "pyproject.toml"
 _SETUP_CFG = "setup.cfg"
@@ -559,6 +560,30 @@ class PythonDetector:
         return workspaces
 
     @staticmethod
+    def _library_roots(
+        folder: Path,
+        dependencies: tuple[str, ...],
+        versions: dict[str, str],
+        site_packages: Path | None,
+    ) -> tuple[tuple[LibraryRoot, ...], tuple[str, ...]]:
+        """The libraries `.sextant.yml` names (D04 §2a, as for a jar): each one the module
+        declares and its environment holds, whose bodies are then read whole; and each
+        one that is not, with the reason. The archive is the `site-packages` folder; the
+        scan reads only the files the distribution's `RECORD` lists."""
+        roots: list[LibraryRoot] = []
+        unresolved: list[str] = []
+        for name in read_python_extract_libraries(folder):
+            if name not in dependencies:
+                unresolved.append(f"{name}: the module declares no such dependency")
+            elif name not in versions or site_packages is None:
+                unresolved.append(f"{name}: not installed in the scanned environment")
+            else:
+                roots.append(
+                    LibraryRoot(coordinate=name, version=versions[name], archive=site_packages)
+                )
+        return tuple(roots), tuple(unresolved)
+
+    @staticmethod
     def _module_of(
         root: Path,
         files: _BuildFiles,
@@ -602,13 +627,17 @@ class PythonDetector:
                 for name in dependencies
                 if name not in installed
             )
+        site_packages = environment.site_packages if environment is not None else None
         archives = (
             tuple(
                 LibraryRoot(coordinate=name, version=installed_version, archive=site_packages)
                 for name, installed_version in versions.items()
             )
-            if environment is not None and (site_packages := environment.site_packages)
+            if site_packages is not None
             else ()
+        )
+        library_roots, libraries_not_resolved = PythonDetector._library_roots(
+            folder, dependencies, versions, site_packages
         )
         import_roots = files.import_roots(has_python)
         model = ModuleModel(
@@ -625,6 +654,8 @@ class PythonDetector:
             dependency_coordinates=dependencies,
             dependency_versions=versions,
             dependency_archives=archives,
+            library_roots=library_roots,
+            libraries_not_resolved=libraries_not_resolved,
             environment=environment_folder,
             # Python finds a method by its method resolution order (spec §3b).
             lookup="c3",
