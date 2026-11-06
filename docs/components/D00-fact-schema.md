@@ -1289,9 +1289,13 @@ above:
 - A module-level name that branches bind to several imports (`try: import ujson as json` /
   `except ImportError: import json`) is a static field with one `field_write` per import, so
   a call on it names the field as `receiver_field`. As an argument it is a `merge`.
-- A name that two paths set to different values is a `merge` of them where they join (an
-  `if`, a `match`, a `try`, a loop that no `break` or `continue` leaves), as a JVM frame slot
-  two branches wrote; `unresolved` where a path does not set it.
+- A name that two paths set to different values is a `merge` of them where they join, as a
+  JVM frame slot two branches wrote; `unresolved` where a path does not set it. Only paths
+  that reach the join count (a branch ending in `break`, `continue`, `return` or `raise`
+  does not). A loop ends with the values from before it, from the end of its body and from
+  each `continue`; after its `else`, those or the values at a `break`. Where an exception
+  may enter a handler or a `finally`, or a `with` may swallow it, a name the block set holds
+  its value from before the block (where it had one) or any value the block gave it.
 - Rule 9's five fields are read off each body's own graph (a module or class body, a
   function, a `lambda`), built from the syntax tree: a call is a node before it runs and one
   after it completed, as above. Every expression may raise, so inside a `try` every

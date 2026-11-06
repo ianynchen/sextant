@@ -9,7 +9,7 @@ from pathlib import Path
 
 from sextant.application.ports.scanner import ScanRequest
 from sextant.domain.factfile import read_fact_tree
-from sextant.domain.facts import CallArgument, CallSiteFact
+from sextant.domain.facts import CallArgument, CallSiteFact, MethodReturnFact
 from sextant.domain.symbols import PY_SIGNATURE, bare_descriptor, disambiguator_of
 from sextant.ingress.extract.python.scanner import PythonScanner
 
@@ -17,7 +17,7 @@ DIS = disambiguator_of(PY_SIGNATURE)
 
 
 # The functions the bodies call, so each call names its function (`app/lib#a`).
-_IMPORTS = "from app.lib import a, b, c, d, e, g, h, k, items, more, use, setup, make, run\n"
+_IMPORTS = "from app.lib import a, b, c, d, e, g, h, k, items, more, use, setup, make, run, old\n"
 
 
 def _scan(tmp_path: Path, text: str):
@@ -405,3 +405,148 @@ def test_every_body_writes_the_fields(tmp_path: Path):
     sites = [f for f in facts if isinstance(f, CallSiteFact)]
     assert len(sites) == 5
     assert all(s.on_every_exit is not None and s.reaches_return is not None for s in sites)
+
+
+# -- values where paths join (fix round 1): a value that can arrive is never left out -------
+
+
+def _s(text: str) -> CallArgument:
+    return CallArgument(kind="string", value=text)
+
+
+def _used(facts) -> CallArgument:
+    (argument,) = _sites(facts)["use"].arguments
+    return argument
+
+
+def _candidates(argument: CallArgument) -> list[CallArgument]:
+    assert argument.kind == "merge", argument
+    return argument.candidates or []
+
+
+def test_a_continue_in_an_inner_loops_else_belongs_to_the_outer_loop(tmp_path: Path):
+    facts = _scan(
+        tmp_path,
+        "def f():\n"
+        "    v = 'x'\n"
+        "    for i in items():\n"
+        "        v = 'y'\n"
+        "        for j in more():\n"
+        "            if c(j):\n"
+        "                break\n"
+        "        else:\n"
+        "            continue\n"
+        "        v = 'z'\n"
+        "    use(v)\n",
+    )
+
+    used = _used(facts)
+    assert used == CallArgument(kind="unresolved") or _s("y") in _candidates(used)
+
+
+def test_a_break_skips_the_loops_else(tmp_path: Path):
+    facts = _scan(
+        tmp_path,
+        "def f():\n"
+        "    v = 'x'\n"
+        "    for i in items():\n"
+        "        if c(i):\n"
+        "            v = 'y'\n"
+        "            break\n"
+        "    else:\n"
+        "        v = 'z'\n"
+        "    use(v)\n",
+    )
+
+    assert sorted(c.value for c in _candidates(_used(facts))) == ["y", "z"]
+
+
+def test_a_finally_may_be_entered_before_the_body_assigned(tmp_path: Path):
+    facts = _scan(
+        tmp_path,
+        "def f():\n    conn = None\n    try:\n        conn = make()\n        a(conn)\n"
+        "    finally:\n        use(conn)\n",
+    )
+
+    used = _used(facts)
+    if used != CallArgument(kind="unresolved"):
+        made = CallArgument(kind="unresolved", source=_sites(facts)["make"].result)
+        assert sorted(map(repr, _candidates(used))) == sorted(
+            map(repr, [CallArgument(kind="null"), made])
+        )
+
+
+def test_a_handler_may_be_entered_before_the_body_assigned(tmp_path: Path):
+    facts = _scan(
+        tmp_path,
+        "class E(Exception): pass\n"
+        "def f():\n    v = 'x'\n    try:\n        v = 'y'\n        a()\n"
+        "    except E:\n        use(v)\n",
+    )
+
+    used = _used(facts)
+    assert used == CallArgument(kind="unresolved") or sorted(
+        c.value for c in _candidates(used)
+    ) == ["x", "y"]
+
+
+def test_a_with_that_swallows_keeps_the_value_from_before_it(tmp_path: Path):
+    facts = _scan(
+        tmp_path,
+        "from contextlib import suppress\n"
+        "def f():\n    v = old()\n    with suppress(KeyError):\n        v = make()\n    use(v)\n",
+    )
+
+    sites = _sites(facts)
+    sources = {c.source for c in _candidates(_used(facts))}
+    assert sources == {sites["old"].result, sites["make"].result}
+
+
+def test_a_name_unbound_before_a_with_has_only_the_values_it_was_given(tmp_path: Path):
+    facts = _scan(
+        tmp_path,
+        "def f(p):\n    with open(p) as fh:\n        data = fh.read()\n    use(data)\n",
+    )
+
+    sites = _sites(facts)
+    assert _used(facts) == CallArgument(kind="unresolved", source=sites["read"].result)
+
+
+def test_a_branch_that_continues_does_not_reach_the_join(tmp_path: Path):
+    facts = _scan(
+        tmp_path,
+        "def f():\n"
+        "    for i in items():\n"
+        "        v = 'x'\n"
+        "        if c():\n"
+        "            v = 'y'\n"
+        "            continue\n"
+        "        use(v)\n",
+    )
+
+    assert _used(facts) == _s("x")
+
+
+def test_a_match_whose_last_case_is_irrefutable_has_no_fall_through(tmp_path: Path):
+    facts = _scan(
+        tmp_path,
+        "def f(n):\n    match n:\n        case 1:\n            v = 'a'\n"
+        "        case _:\n            v = 'b'\n    use(v)\n",
+    )
+
+    assert _candidates(_used(facts)) == [_s("a"), _s("b")]
+
+
+def test_a_break_in_an_inner_loops_else_ends_an_endless_loop(tmp_path: Path):
+    facts = _scan(
+        tmp_path,
+        "def f():\n    while True:\n        for x in items():\n            a(x)\n"
+        "        else:\n            break\n",
+    )
+
+    returns = [
+        r
+        for r in facts
+        if isinstance(r, MethodReturnFact) and bare_descriptor(r.method).startswith("app/m#f(")
+    ]
+    assert [r.value for r in returns] == [CallArgument(kind="null")]

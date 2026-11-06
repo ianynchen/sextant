@@ -308,8 +308,10 @@ it names only its receiver. An import that branches of a function bind different
 same closed list as at module level.
 
 A local name holds the last value written to it on the path; where paths join with
-different values it is a `merge` of them, and `unresolved` where a path does not set it or
-sets a value not followed, and after a loop a `break` or `continue` leaves. A list held in a local is read once as written, and
+different values it is a `merge` of them (only paths that reach the join count; a loop's
+`continue`s and `break`s, and the values an exception may leave a `try` or a swallowing
+`with` with, are paths), and `unresolved` where a path does not set it or sets a value not
+followed. A list held in a local is read once as written, and
 `unresolved` after that, because the code it was handed to can change it.
 
 Every `return` is a `method_return`, plus `return None` where the end of the body is

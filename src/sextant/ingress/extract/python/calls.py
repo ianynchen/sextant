@@ -25,8 +25,9 @@ call). Elsewhere it keeps its name in `keyword` (ruling R2), and the resolver bi
 
 A local name holds the last value written to it on this path. Where two paths join with
 different values, the name is a `merge` of them, as a JVM frame slot two branches wrote; it
-is `unresolved` where a path does not set it or sets a value not followed, and after a loop
-that a `break` or a `continue` leaves. Each call's place in its body's control flow (D00 §5
+is `unresolved` where a path does not set it or sets a value not followed. Every path that
+reaches the join counts: a loop's `continue`s and `break`s, and the values an exception may
+leave a `try` or a swallowing `with` with. Each call's place in its body's control flow (D00 §5
 rule 9) is read by `flow.py`, which the statements below drive.
 
 Every `return` is a `method_return`, plus the implicit `return None` where the end of the
@@ -157,6 +158,19 @@ class Frame:
     mutable: set[str] = field(default_factory=set)
     # What the body's imports bind, branches read as at module level.
     bindings: dict[str, Binding] = field(default_factory=dict)
+    # Per loop being read, innermost last: the names at each `break` and each `continue`.
+    jumps: list["LoopJumps"] = field(default_factory=list)
+    # Per protected block being read (a `try`, a `with`), innermost last: every value each
+    # name was given in it, which an exception may leave the block with.
+    writes: list[dict[str, list[CallArgument]]] = field(default_factory=list)
+
+
+@dataclass
+class LoopJumps:
+    """The names where a loop's `break`s and `continue`s leave from."""
+
+    breaks: list[dict[str, CallArgument]] = field(default_factory=list)
+    continues: list[dict[str, CallArgument]] = field(default_factory=list)
 
 
 @dataclass
@@ -506,6 +520,10 @@ class BodyReader:
                 scope.flow.quiet()
             scope.flow.jump("return")
         elif isinstance(node, ast.Break | ast.Continue):
+            if frame is not None and frame.jumps and scope.flow.here() is not None:
+                jumps = frame.jumps[-1]
+                taken = jumps.breaks if isinstance(node, ast.Break) else jumps.continues
+                taken.append(dict(frame.values))
             scope.flow.jump("break" if isinstance(node, ast.Break) else "continue")
         elif isinstance(node, ast.If):
             self._value(node.test, scope)
@@ -518,6 +536,7 @@ class BodyReader:
         elif isinstance(node, ast.With | ast.AsyncWith):
             enter = _ASYNC_ENTER if isinstance(node, ast.AsyncWith) else _ENTER
             managers = []
+            before = self._protect(scope)
             for item in node.items:
                 manager = self._value(item.context_expr, scope)
                 entered = self._invoke(self._on_value(manager, enter, scope), [], scope)
@@ -525,8 +544,14 @@ class BodyReader:
                     self._store(item.optional_vars, entered, scope)
                 managers.append(scope.flow.with_block())
             self._statements(node.body, scope)
+            # A manager may swallow what the block raised, and the code after the block
+            # then runs with any value the block gave a name before it raised.
+            swallowed = self._raised(before, scope)
             for exit_point in reversed(managers):
                 scope.flow.with_end(exit_point)
+            if frame is not None and swallowed is not None:
+                ended = [frame.values] if scope.flow.here() is not None else []
+                frame.values = _join([swallowed, *ended])
         elif isinstance(node, ast.Try | ast.TryStar):
             self._try(node, scope)
         elif isinstance(node, ast.Match):
@@ -643,7 +668,7 @@ class BodyReader:
             frame.values = dict(before)
             self._statements(body, scope)
             points.append(flow.here())
-            if _falls_through(body):
+            if flow.here() is not None:
                 ends.append(frame.values)
         flow.join(points)
         frame.values = _join(ends) if ends else dict(before)
@@ -658,60 +683,115 @@ class BodyReader:
         test: ast.expr | None = None,
     ) -> None:
         """A loop body runs zero or more times, so a name it writes holds no one value at
-        its start, and after it holds the value from before or from the body."""
+        its start. Where the loop ends, a name holds its value from before, from the end of
+        the body or from a `continue`; after the `else`, that value or one from a
+        `break`, which skips the `else`."""
         frame = scope.frame
+        flow = scope.flow
         before = dict(frame.values) if frame is not None else {}
+        jumps = LoopJumps()
         if frame is not None:
             for name in _assigned(_own_nodes(body)) & set(frame.values):
                 frame.values[name] = _UNKNOWN
-        loop = scope.flow.loop()
+            frame.jumps.append(jumps)
+        loop = flow.loop()
         if test is not None:
             self._value(test, scope)
-        scope.flow.loop_tested(loop, endless=isinstance(test, ast.Constant) and bool(test.value))
+        flow.loop_tested(loop, endless=isinstance(test, ast.Constant) and bool(test.value))
         if target is not None:
             self._store(target, _UNKNOWN, scope)
         self._statements(body, scope)
-        scope.flow.loop_body_end(loop)
         if frame is not None:
-            # A `break` or a `continue` leaves with a value the end of the body does not
-            # show, so a name that differs is not known.
-            frame.values = _join([before, frame.values], merge=not _breaks(body, continues=True))
+            frame.jumps.pop()
+            ended = [frame.values] if flow.here() is not None else []
+            frame.values = _join([before, *jumps.continues, *ended])
+        flow.loop_body_end(loop)
         self._statements(orelse, scope)
-        scope.flow.loop_end(loop)
+        if frame is not None:
+            ended = [frame.values] if flow.here() is not None else []
+            if jumps.breaks or ended:
+                frame.values = _join([*jumps.breaks, *ended])
+        flow.loop_end(loop)
 
     def _try(self, node: ast.Try | ast.TryStar, scope: Scope) -> None:
         frame = scope.frame
         flow = scope.flow
-        before = dict(frame.values) if frame is not None else {}
+        before = self._protect(scope)
+        jumped = [(len(j.breaks), len(j.continues)) for j in frame.jumps] if frame else []
         attempt = flow.try_body(has_finally=bool(node.finalbody))
         self._statements(node.body, scope)
+        # A handler starts from any point of the body.
+        handled = self._raised(before, scope, keep=True)
         flow.try_else(attempt)
         self._statements(node.orelse, scope)
         flow.try_handlers(attempt)
-        ends = (
-            [frame.values] if frame is not None and _falls_through(node.body + node.orelse) else []
-        )
+        ends = [frame.values] if frame is not None and flow.here() is not None else []
         for handler in node.handlers:
             flow.handler(attempt)
-            if frame is not None:
-                # A handler starts from any point of the body.
-                frame.values = dict(before)
-                for name in _assigned(_own_nodes(node.body)) & set(before):
-                    frame.values[name] = _UNKNOWN
+            if frame is not None and handled is not None:
+                frame.values = dict(handled)
             if handler.type is not None:
                 self._value(handler.type, scope)
             flow.handler_matched(attempt, catches_all=handler.type is None)
             if handler.name is not None:
                 self._store(ast.Name(id=handler.name, ctx=ast.Store()), _UNKNOWN, scope)
             self._statements(handler.body, scope)
-            flow.handler_end(attempt)
-            if frame is not None and _falls_through(handler.body):
+            if frame is not None and flow.here() is not None:
                 ends.append(frame.values)
-        if frame is not None:
-            frame.values = _join(ends) if ends else before
+            flow.handler_end(attempt)
+        # The `finally` also runs on the way out of an exception, a `return`, a `break` or
+        # a `continue`, from any point of the body, the `else` and the handlers.
+        raised = self._raised(before, scope)
+        if frame is not None and before is not None:
+            normal = _join(ends) if ends else dict(before)
+            if node.finalbody and raised is not None:
+                frame.values = _join([*ends, raised])
+            else:
+                frame.values = normal
         flow.try_finally(attempt)
         self._statements(node.finalbody, scope)
         flow.try_end(attempt)
+        if frame is not None and before is not None and node.finalbody:
+            # After it, only the normal way out goes on; the names the `finally` sets have
+            # the values it gave them.
+            assigned = _assigned(_own_nodes(node.finalbody))
+            finished = frame.values
+            frame.values = {
+                **normal,
+                **{name: finished.get(name, _UNKNOWN) for name in assigned},
+            }
+            for jumps, (breaks, continues) in zip(frame.jumps, jumped, strict=False):
+                for state in [*jumps.breaks[breaks:], *jumps.continues[continues:]]:
+                    state.update({name: _UNKNOWN for name in assigned})
+
+    def _protect(self, scope: Scope) -> dict[str, CallArgument] | None:
+        """Start a block an exception may leave from any point: the names now, and a
+        record of every value the block gives a name. None outside a function."""
+        frame = scope.frame
+        if frame is None:
+            return None
+        frame.writes.append({})
+        # A name an import binds holds a value this scanner does not follow.
+        return {**{name: _UNKNOWN for name in frame.imported}, **frame.values}
+
+    def _raised(
+        self, before: dict[str, CallArgument] | None, scope: Scope, *, keep: bool = False
+    ) -> dict[str, CallArgument] | None:
+        """The names where an exception left the block `_protect` started: each one the
+        block set holds its value from before (where it had one) or any value the block
+        gave it. With `keep`, the block goes on being recorded."""
+        frame = scope.frame
+        if frame is None or before is None:
+            return None
+        writes = frame.writes[-1] if keep else frame.writes.pop()
+        if not keep and frame.writes:
+            # The enclosing block saw these values given too.
+            for name, values in writes.items():
+                frame.writes[-1].setdefault(name, []).extend(values)
+        state = dict(before)
+        for name, values in writes.items():
+            state[name] = _one_of([before[name], *values] if name in before else values)
+        return state
 
     def _store(
         self, target: ast.expr, value: CallArgument, scope: Scope, *, evaluate: bool = True
@@ -729,6 +809,8 @@ class BodyReader:
             frame.imported.pop(target.id, None)
             frame.values[target.id] = value
             frame.mutable.discard(target.id)
+            if frame.writes:
+                frame.writes[-1].setdefault(target.id, []).append(value)
         elif isinstance(target, ast.Tuple | ast.List):
             # Each name takes a part of the value, which this scanner does not split.
             for element in target.elts:
@@ -1293,21 +1375,24 @@ def _merge(candidates: list[CallArgument]) -> CallArgument:
     return folded[0] if len(folded) == 1 else CallArgument(kind="merge", candidates=folded)
 
 
-def _join(ends: list[dict[str, CallArgument]], *, merge: bool = True) -> dict[str, CallArgument]:
+def _join(ends: list[dict[str, CallArgument]]) -> dict[str, CallArgument]:
     """The names after several paths meet: a value where every path gives the same one,
     else a `merge` of each path's value, as a JVM frame slot two branches wrote (D00 §5).
-    A name some path does not set, or sets to a value this scanner did not follow, is
-    `unresolved`, and so is every difference where `merge` is False."""
+    A name some path does not set is `unresolved`."""
     joined: dict[str, CallArgument] = {}
     for name in dict.fromkeys(key for end in ends for key in end):
-        values = [end.get(name, _UNKNOWN) for end in ends]
-        if all(value == values[0] for value in values):
-            joined[name] = values[0]
-        elif not merge or any(value == _UNKNOWN for value in values):
-            joined[name] = _UNKNOWN
-        else:
-            joined[name] = _merge([c for value in values for c in (value.candidates or [value])])
+        joined[name] = _one_of([end.get(name, _UNKNOWN) for end in ends])
     return joined
+
+
+def _one_of(values: list[CallArgument]) -> CallArgument:
+    """One of `values`: itself where they are all one, `unresolved` where one of them is a
+    value this scanner did not follow, else their `merge`."""
+    if all(value == values[0] for value in values):
+        return values[0]
+    if any(value == _UNKNOWN for value in values):
+        return _UNKNOWN
+    return _merge([c for value in values for c in (value.candidates or [value])])
 
 
 def _owner(annotation: ast.expr, types: TypeScope) -> str | None:
@@ -1467,15 +1552,18 @@ def _statement_falls_through(node: ast.stmt) -> bool:
     return True
 
 
-def _breaks(body: list[ast.stmt], *, continues: bool = False) -> bool:
-    """Whether a `break` (or, with `continues`, a `continue`) of this loop is in `body`
-    (not of a loop inside it)."""
+def _breaks(body: list[ast.stmt]) -> bool:
+    """Whether a `break` of this loop is in `body`: anywhere in it but a nested function,
+    a class, or the body of a nested loop (whose `break`s are its own; its `else` is
+    this loop's)."""
     for node in body:
-        if isinstance(node, ast.Break) or (continues and isinstance(node, ast.Continue)):
+        if isinstance(node, ast.Break):
             return True
         inner: list[ast.stmt] = []
         if isinstance(node, ast.If):
             inner = [*node.body, *node.orelse]
+        elif isinstance(node, ast.For | ast.AsyncFor | ast.While):
+            inner = node.orelse
         elif isinstance(node, ast.Try | ast.TryStar):
             handlers = [s for handler in node.handlers for s in handler.body]
             inner = [*node.body, *handlers, *node.orelse, *node.finalbody]
@@ -1483,7 +1571,7 @@ def _breaks(body: list[ast.stmt], *, continues: bool = False) -> bool:
             inner = node.body
         elif isinstance(node, ast.Match):
             inner = [s for case in node.cases for s in case.body]
-        if _breaks(inner, continues=continues):
+        if _breaks(inner):
             return True
     return False
 
