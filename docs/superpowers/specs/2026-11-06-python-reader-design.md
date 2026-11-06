@@ -10,7 +10,6 @@ kept beside this file as `2026-11-06-python-reader-review-first-principles.md` a
 Marks:
 - **(ruled):** the user decided it.
 - **(my call):** my decision; the user can reject it.
-- **(DECIDE):** open for the user.
 
 ## 1. Intent
 
@@ -166,7 +165,6 @@ not applied to Python.
 | `httpx.Client(base_url=)` | `client_model`/`client_base` (§1g) |
 | `.request("GET", url)` | `verb_arg` |
 | `.model_dump()` as a body | value-model data, not a per-method rule |
-| `subprocess.run([...])` | `single_call` (if §6 keeps program starts) |
 
 ### 3d. Configuration values (my call, reusing the JVM's)
 
@@ -259,7 +257,7 @@ A `sys.path` change in code is not followed (zulip, 15 files). Names it would ma
 - **The first plan task** measures reads per resolve on polar before building the passes, and stops
   for a ruling if the budget cannot be met.
 
-## 6. Command-line commands and program starts (DECIDE)
+## 6. Command-line commands and program starts (ruled A, 2026-11-06)
 
 Both reviews found that v1's two new protocol words are the weakest part:
 
@@ -290,15 +288,15 @@ Options:
   - **Pro:** the smallest first release.
   - **Con:** it goes against "start with Sextant" (ruled).
 
-**My recommendation: A.** It reuses an existing slot, closes OI-22, and does what "start with
-Sextant" was for, which is testing the reader on code we know. B can follow when a real pair of
-programs needs to link.
+**Ruled A** (user, 2026-11-06). It reuses an existing slot, closes OI-22, and does what "start
+with Sextant" was for, which is testing the reader on code we know. B can follow when a real pair of
+programs needs to link. Program starts are logged as their own open issue.
 
 ## 7. Done when
 
 1. **Sextant reads itself.** Every call in Sextant's own code has a known target, or a reason. The
-   §2 call table is produced by the real resolver, before and after receiver binding. If §6 is A:
-   6 command roots, each with traces and `request_params` checked by hand.
+   §2 call table is produced by the real resolver, before and after receiver binding. 6 command
+   roots, each with traces and `request_params` checked by hand.
 2. **A FastAPI test project** (`fixtures/orders-fastapi`, our own) covering every row of §3c and §3d:
    - routers built by a factory with `type[...]`;
    - module-level singletons;
