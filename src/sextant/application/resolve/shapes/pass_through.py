@@ -370,7 +370,9 @@ class HandlerReader:
         )
 
     def _no_body(self, symbol: str) -> Unread:
-        """A handler method with no body read: `external` where its type is not scanned."""
+        """A handler method with no body read: `external` where its type is not scanned. A
+        method found through a scanned type (`_runs`) is always `not_readable`; `external` is
+        reached by a method reference or lambda whose type is not scanned."""
         return _not_followed(
             self._dispatch.scanned, owner_of(bare_descriptor(symbol)), _NO_BODY, symbol
         )
@@ -380,8 +382,10 @@ class HandlerReader:
         return _not_followed(self._dispatch.scanned, built, _OF_TYPE, built or "an unread type")
 
     def _from_field(self, field: str, declared: str | None) -> Unread:
-        """A handler object from a field, by the field's declared type where it has one."""
-        return _not_followed(self._dispatch.scanned, declared, _FROM_FIELD, field)
+        """A handler object from a field, by the field's declared type where it has one, else by
+        the type that owns the field (a static field of a library class is `external`)."""
+        owner = declared if declared is not None else owner_of(bare_descriptor(field))
+        return _not_followed(self._dispatch.scanned, owner, _FROM_FIELD, field)
 
     def _unread_argument(self, where: str) -> Unread:
         """An argument of a registering method that nothing read gives a value for. The method
@@ -434,6 +438,7 @@ def _either(handlers: list[Handler]) -> Handler:
     return Handler(
         tuple(dict.fromkeys(s for h in handlers for s in h.symbols)),
         unread=bodiless,
+        bodiless=next((h.bodiless for h in handlers if h.bodiless is not None), None),
         alternatives=tuple(dict.fromkeys(s for h in handlers for s in h.alternatives)),
     )
 

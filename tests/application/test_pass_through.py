@@ -385,7 +385,7 @@ def outcomes(walked) -> tuple[dict, dict]:
     )
 
 
-def _reader(walked) -> HandlerReader:
+def _reader(walked, field_types=dict) -> HandlerReader:
     rule = PassThroughRule(_PASSES_ON, ("io.vertx.ext.web.handler",), frozenset({"handle"}))
     parameters = {
         _WIRE: ({"erased_symbol": _BASE},),
@@ -396,7 +396,7 @@ def _reader(walked) -> HandlerReader:
         rule,
         _method_symbols(walked),
         parameters,
-        dict,
+        field_types,
         dispatch_of(walked),
         exact_methods(walked),
     )
@@ -559,6 +559,65 @@ def test_a_handler_object_of_a_scanned_type_with_no_handler_is_not_readable_not_
         UNREADABLE,
         (NOT_READABLE, f"is declared as {_ROUTES}, a type whose handler is not read"),
     )
+
+
+_UNSCANNED = "com/other/Lib#"
+
+
+def test_a_handler_from_a_field_of_an_unscanned_class_is_external_else_not_readable(walked):
+    """No declared type is recorded for the field: the class that owns it decides."""
+    field = {"kind": "field", "symbol": _UNSCANNED + "HANDLER."}
+    [outside] = _reader(walked)._declared_type(_WIRE, field, set())
+    assert outside.unread == (
+        EXTERNAL,
+        f"comes from {_UNSCANNED}HANDLER., whose declared type is not a handler read here",
+    )
+    held = {"kind": "field", "symbol": _ROUTES + "held."}
+    [inside] = _reader(walked)._declared_type(_WIRE, held, set())
+    assert inside.unread[0] == NOT_READABLE
+
+
+def test_a_handler_from_a_field_is_decided_by_its_declared_type_when_it_has_one(walked):
+    field = _ROUTES + "held."
+    outside = _reader(walked, lambda: {field: "com/other/Thing#"})
+    [unscanned] = outside._declared_type(_WIRE, {"kind": "field", "symbol": field}, set())
+    assert unscanned.unread[0] == EXTERNAL
+    inside = _reader(walked, lambda: {field: _ROUTES})
+    [scanned] = inside._declared_type(_WIRE, {"kind": "field", "symbol": field}, set())
+    assert scanned.unread[0] == NOT_READABLE
+
+
+def test_a_handler_argument_nothing_reads_is_not_readable(walked):
+    handler = _reader(walked).of({"kind": "parameter", "value": 0}, None)
+    assert (handler.outcome, handler.unread) == (
+        UNREADABLE,
+        (NOT_READABLE, "is an argument of a registering method that is not read"),
+    )
+
+
+def test_a_handler_method_of_an_unscanned_class_with_no_body_is_external(walked):
+    reference = {"kind": "lambda", "symbol": _UNSCANNED + "run().", "captures": 0}
+    handler = _reader(walked).of(reference, None)
+    assert (handler.outcome, handler.unread) == (
+        UNREADABLE,
+        (
+            EXTERNAL,
+            f"runs {_UNSCANNED}run()., which has no body read here and no module override",
+        ),
+    )
+
+
+def test_a_handler_object_built_by_a_call_is_decided_by_the_class_of_the_call(walked):
+    """The factory's own class decides, whatever the type it returns."""
+    reader = _reader(walked)
+    outside = reader._object(
+        "com/other/Thing#", method_descriptor(_UNSCANNED, "make", "()V"), constructed=False
+    )
+    inside = reader._object(
+        "com/other/Thing#", method_descriptor(_ROUTES, "make", "()V"), constructed=False
+    )
+    assert (outside.unread[0], inside.unread[0]) == (EXTERNAL, NOT_READABLE)
+    assert "is built by" in inside.unread[1]
 
 
 def test_the_reason_of_code_not_followed_follows_whether_its_type_is_scanned():

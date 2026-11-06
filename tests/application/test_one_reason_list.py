@@ -1,12 +1,13 @@
 """One reason list everywhere (spec 2026-11-05-one-reason-list-design §4, §5).
 
 Every "not resolved" answer carries one word of `values._REASONS` and a detail. This guard
-reads each place that stores such a word, on a fixture the e2e suite already analyses, and
+reads each place that stores such a word, on the fixtures the suite already analyses, and
 fails on any other word. A found answer has no reason (NULL), and a NULL reason is allowed
 only there. The pass-through `unread[]` entries are read by the Vert.x e2e run
 (`tests/e2e/test_rest_inbound_delivered.py`) and the `values` answers by the shadow run
 (`tests/application/test_shadow_mode.py`), which hold that data already cached; all use the
-functions of `tests/reason_guard.py`.
+functions of `tests/reason_guard.py`. The tables are read on `orders-service` only. The other
+fixtures are covered by the per-task sweep of every fixture, not by this test.
 """
 
 import json
@@ -44,6 +45,13 @@ def tables(analyzed_orders_service: Path) -> dict[str, list[dict[str, Any]]]:
         workspace.close()
 
 
+def _peer_found(row: Mapping[str, Any]) -> bool:
+    """An address that was written (`path`, `peer`) and came out empty was not resolved."""
+    return (row["path"] is None or row["resolved_path"] is not None) and (
+        row["peer"] is None or row["resolved_peer"] is not None
+    )
+
+
 def _all_wrong(tables: Mapping[str, list[dict[str, Any]]]) -> list[str]:
     return [
         *outside_the_list(
@@ -57,14 +65,15 @@ def _all_wrong(tables: Mapping[str, list[dict[str, Any]]]) -> list[str]:
             tables["resolved_schedules"],
             "resolved_schedules",
             "unresolved_reason",
-            found=lambda row: row["unresolved_reason"] is None,
+            found=lambda row: row["value"] is not None,
             detail="unresolved_detail",
         ),
         *outside_the_list(
             tables["resolved_peers"],
             "resolved_peers",
             "unresolved_reason",
-            found=lambda row: row["unresolved_reason"] is None,
+            found=_peer_found,
+            detail="unresolved_detail",
         ),
         *outside_the_list(
             tables["method_resolution"],
@@ -154,3 +163,28 @@ def test_the_graph_property_attributes_carry_the_same_words(analyzed_orders_serv
         )
         == []
     )
+
+
+def test_an_unresolved_schedule_with_no_reason_fails_the_guard(tables):
+    """`found` comes from the value column, never from the reason."""
+    planted = {n: [dict(r) for r in rows] for n, rows in tables.items()}
+    row = next(r for r in planted["resolved_schedules"] if r["unresolved_reason"] is not None)
+    row["unresolved_reason"] = None
+    assert any("resolved_schedules" in line for line in _all_wrong(planted))
+
+
+def test_an_unresolved_peer_with_no_reason_fails_the_guard(tables):
+    """No peer is unresolved on this fixture, so one is made: a written path that came out
+    empty, beside no reason."""
+    planted = {n: [dict(r) for r in rows] for n, rows in tables.items()}
+    row = next(r for r in planted["resolved_peers"] if r["path"] is not None)
+    row["resolved_path"] = None
+    assert any("resolved_peers" in line for line in _all_wrong(planted))
+
+
+def test_a_peer_detail_beside_no_reason_fails_the_guard(tables):
+    planted = {n: [dict(r) for r in rows] for n, rows in tables.items()}
+    row = next((r for r in planted["resolved_peers"] if r["unresolved_reason"] is None), None)
+    assert row is not None
+    row["unresolved_detail"] = "x"
+    assert any("resolved_peers" in line for line in _all_wrong(planted))
