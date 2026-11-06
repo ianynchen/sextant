@@ -1,6 +1,6 @@
 # One reason list everywhere: a general reason plus a detail — design
 
-**Status: DRAFT, for the user's approval.** Plane OI-321 = SEXTANT-315. Ruled B on 2026-11-05.
+**Status: APPROVED 2026-11-05 (user: "Approve, build it").** Plane OI-321 = SEXTANT-315. Ruled B on 2026-11-05.
 Branch `fix/one-reason-list`, cut from `cov/hilt-provides` (PR #94), which carries the first
 half of the work (commit e59f0017: the `bean_*` codes and the client reader's code now use the
 general list).
@@ -51,7 +51,7 @@ A "found" answer has no reason. A success is not a reason.
 `multi_placeholder` exists only because the join fills a single placeholder. That is our
 limit, not something the code does. Filling each placeholder would remove this reason
 completely ("removing the cause beats detecting it"). That change moves rows, so it is
-logged as its own item and is not part of this design.
+logged as its own item (OI-322 = SEXTANT-316) and is not part of this design.
 
 ### 3b. Which method a call reaches
 
