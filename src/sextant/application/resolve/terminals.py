@@ -177,9 +177,9 @@ def classify(
         return {"terminal_kind": str(TerminalKind.THROWS), "target_kind": None}
     if callee is not None:
         return {"terminal_kind": None, "target_kind": None}
-    # `target` is NULL only on a throw row whose type was unread, and that row returned
-    # above; `call_edges._rows_for` writes no other row without a target. The guard here
-    # states the type, not a path that runs.
+    # `target` is NULL on a throw row whose type was unread, which returned above, and on
+    # a call whose owner the facts left to the resolver and nothing bound
+    # (`call_edges._site_rows`): a terminal, looked at, whose target is not known.
     kind, target_kind = (None, None) if rules is None or target is None else rules.of(target)
     return {
         # `unresolved` rather than NULL: this IS a terminal, and it was looked at. A

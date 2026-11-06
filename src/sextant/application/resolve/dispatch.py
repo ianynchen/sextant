@@ -389,6 +389,11 @@ class Dispatch:
         bootstrap factory, so composing a descriptor from it would look up a
         method nobody calls. Callers handle that form themselves.
         """
+        if site["owner"] is None:
+            # A call whose owner the facts leave to the resolver (D00 §5) names no type to
+            # look the method up on until it is bound (`resolve/receiver_binding.py`), and a
+            # bound reader asks again with the bound owner in its place.
+            return []
         name, descriptor = str(site["name"]), str(site["descriptor"])
         owner = bare_descriptor(str(site["owner"]))
         # The DECLARING type, not the named one (F3 §4.2). `Owner#setId` names `Owner`
@@ -416,7 +421,7 @@ class Dispatch:
             found = list(self.default_bodies.get(declared_method, ()))
         if site["invoke_kind"] not in VIRTUAL_DISPATCH:
             return found
-        for subtype in self.subtypes.get(bare_descriptor(str(site["owner"])), ()):
+        for subtype in self.subtypes.get(owner, ()):
             for override in self.bodies.get(method_descriptor(subtype, name, descriptor), ()):
                 if override not in found:
                     found.append(override)

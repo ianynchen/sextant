@@ -142,6 +142,36 @@ Where the order ends at an unread type, the lookup answers `external` with that 
 the detail (`method_resolution`); where it read every type and none declares the method,
 `not_readable`.
 
+**Receiver binding** (`resolve/receiver_binding.py`, spec 2026-11-06 §3b). A `virtual` call
+whose facts name no owner (D00 §5) is bound from what produced its receiver, on the value
+walk (`values.producer_paths`, `which_object`): a construction to its class, a call to what
+its callee returns, a parameter to the arguments at its callers, a field to its writes. Each
+path the walk reaches the receiver by is one row of the derived table `bound_receivers`
+(`caller`, `ordinal`, `path_id`, `owner`, `evidence` `syntax`, `resolution`, and `reason`/
+`detail` where the path names no type) — per path, never combined (ruling M-1). Several types
+from a closed list are `narrowed`; a path that ends without a type is `external` (a parameter
+nothing in the scanned code calls), `escapes` (a parameter of a function the module hands on
+as a value, or a path that crossed out of one) or the walk's own reason, and the site's bound
+rows are then `partial`. It never writes a fact: `call_edges` reads the fact's owner where it
+names one and these rows' where it does not, one edge per owner, evidence `syntax`; a site
+nothing bound is one row with no target, `unresolved`.
+
+Two readings the walk applies for a call one file cannot know, both inert on the JVM:
+- **a static call naming a type is its construction** (`effective_calls`): the file that
+  writes `Session()` for a class imported from another cannot see it is a class, so the call
+  `app/a#Session` reads as `special` `<init>` on `app/a/Session#` where the workspace holds
+  that type, and its `result` is an instance of it;
+- **a binding nothing writes that names a type is that type** (`values._Walk._named_type`):
+  an imported class used as a value is read as a module field (`app/a#Session.`), declared as
+  no field.
+
+A call whose owner the facts leave out returns, on each path, what the method its bound type
+runs returns (`values._Walk._bound_returns`), so a chain through such calls binds in one walk.
+A bound call becomes an edge, and an edge is a caller, so the pipeline runs
+`record_call_edges`, `bind_receivers`, `record_call_edges` until a round binds nothing new, at
+most eight rounds; a receiver still unbound when the eighth round bound something is
+`not_readable "receiver of <name> not followed after 8 rounds"`.
+
 **None of the above is built.** The pass as designed — `dispatch`, `dispatch_site`, RTA
 narrowing, the indexed-boundary tier — does not exist in `src/`, and neither does the
 `edges` layer it would sit beside. What DOES exist is 2Q `G3`'s subset

@@ -416,7 +416,12 @@ def _installer_sites(
     `routing_conflicts` already reads for the same question), and it is built only when a
     call NAMES the method, so a module with no such call pays nothing for it.
     """
-    named = [site for site in sites if str(site["name"]) == declared["name"]]
+    # A call whose owner the facts leave to the resolver (D00 §5) names no owner to match.
+    named = [
+        site
+        for site in sites
+        if str(site["name"]) == declared["name"] and site["owner"] is not None
+    ]
     if not named:
         return []
     owners = frozenset(declared["owners"])
@@ -568,7 +573,9 @@ def _declares(site: dict[str, Any], declared: dict[str, Any]) -> bool:
     """
     if str(site["name"]) != declared["name"]:
         return False
-    return not declared["owners"] or str(site["owner"]) in declared["owners"]
+    return not declared["owners"] or (
+        site["owner"] is not None and str(site["owner"]) in declared["owners"]
+    )
 
 
 def _matches_a_package(

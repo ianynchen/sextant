@@ -124,16 +124,91 @@ def record_call_edges(workspace: Workspace, catalogs: Sequence[Catalog] = ()) ->
     # and asking them per site would repeat two queries for each of mall-admin's 24,591
     # edges.
     rules = TerminalRules(workspace, list(catalogs))
+    # A call the facts leave without an owner (D00 §5) is read with the owner each path of
+    # its receiver was bound to (`resolve/receiver_binding.py`), one edge per owner: the
+    # sites as each of their owners makes them. Empty on every JVM module.
+    bound = _bound_owners(workspace)
     rows: list[dict[str, object]] = []
     for site in sites:
-        rows.extend(_rows_for(site, dispatch, rules))
+        rows.extend(_site_rows(site, dispatch, rules, bound))
     if rows:
         workspace.derive("call_edges_insert", rows=rows)
     # F3 §4.2's two tables, written from the SAME pass and the same `Dispatch` — "which
     # method can this site run" is answered once (this module's own docstring), and a
     # second pass would be a second answer that could disagree with the edges above.
     _record_hierarchy(workspace, dispatch)
-    _record_resolution(workspace, dispatch, sites)
+    _record_resolution(workspace, dispatch, [one for site in sites for one in _owned(site, bound)])
+
+
+# The one invoke kind whose owner the facts may leave to the resolver (D00 §5).
+_VIRTUAL = "virtual"
+
+# A bound site's owners, in the order `bound_receivers` lists them, and the site's tier.
+_Bound = dict[tuple[str, int], tuple[tuple[str, ...], str]]
+
+
+def _bound_owners(workspace: Workspace) -> _Bound:
+    """Each bound call site's distinct owners, first-seen order (NFR-1), with the
+    resolution its binding rows carry."""
+    owners: dict[tuple[str, int], dict[str, None]] = {}
+    tiers: dict[tuple[str, int], str] = {}
+    for row in workspace.query("bound_receivers"):
+        if row["owner"] is None:
+            continue
+        key = (str(row["caller"]), int(str(row["ordinal"])))
+        owners.setdefault(key, {})[str(row["owner"])] = None
+        tiers[key] = str(row["resolution"])
+    return {key: (tuple(found), tiers[key]) for key, found in owners.items()}
+
+
+def _unowned(site: dict[str, object]) -> bool:
+    """A call the facts leave to the resolver to bind: `virtual`, with no owner."""
+    return site["owner"] is None and str(site["invoke_kind"]) == _VIRTUAL
+
+
+def _owned(site: dict[str, object], bound: _Bound) -> list[dict[str, object]]:
+    """`site` as each owner makes it: itself where its facts name one, once per bound owner
+    where they do not, and not at all where nothing bound it."""
+    if not _unowned(site):
+        return [site]
+    owners, _ = bound.get((str(site["caller"]), int(str(site["ordinal"]))), ((), ""))
+    return [{**site, "owner": owner} for owner in owners]
+
+
+def _site_rows(
+    site: dict[str, object], dispatch: Dispatch, rules: TerminalRules, bound: _Bound
+) -> list[dict[str, object]]:
+    """`_rows_for`, and for a call the facts leave without an owner, the rows of each owner
+    it was bound to, as one site: its tier is over every owner's edges, `partial` where the
+    binding was, and its evidence is the binding's (`syntax`, a type worked out by a rule).
+    A site nothing bound is one row naming no target and reaching no body, `unresolved`:
+    the call is in the code, and what it calls is not known."""
+    if not _unowned(site):
+        return _rows_for(site, dispatch, rules)
+    key = (str(site["caller"]), int(str(site["ordinal"])))
+    owners, tier = bound.get(key, ((), str(Resolution.UNRESOLVED)))
+    if not owners:
+        return [
+            {
+                "caller": key[0],
+                "ordinal": key[1],
+                "invoke_kind": str(site["invoke_kind"]),
+                "target": None,
+                "callee": None,
+                "result": None if site["result"] is None else int(str(site["result"])),
+                "resolution": str(Resolution.UNRESOLVED),
+                "evidence": str(Evidence.COMPILER),
+                **classify(rules, None, None, str(site["invoke_kind"])),
+            }
+        ]
+    rows = [row for owned in _owned(site, bound) for row in _rows_for(owned, dispatch, rules)]
+    if tier == str(Resolution.PARTIAL):
+        resolution = Resolution.PARTIAL
+    else:
+        resolution = Resolution.NARROWED if len(rows) > 1 else Resolution.RESOLVED
+    return [
+        {**row, "resolution": str(resolution), "evidence": str(Evidence.SYNTAX)} for row in rows
+    ]
 
 
 def _record_hierarchy(workspace: Workspace, dispatch: Dispatch) -> None:

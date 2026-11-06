@@ -199,6 +199,13 @@ SEXTANT_VERSION = version("sextant")
 #             attributes follow.
 #             A workspace of the older vintage has no detail column and says the old words,
 #             so it is refused and re-analysed.
+#     17      `bound_receivers`, a new derived table: the owner bound to each call whose facts
+#             leave it to the resolver (a `virtual` call with a `receiver` and no owner), one
+#             row per path of the value walk (spec 2026-11-06-python-reader §3b), and
+#             `call_edges` draws one edge per bound owner, or one row with a NULL `target` at
+#             `unresolved` where nothing was bound. A workspace of the older vintage has no
+#             such table and draws such a call to a target named after no owner, so it is
+#             refused and re-analysed.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -226,5 +233,5 @@ SEXTANT_VERSION = version("sextant")
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
 FACT_SCHEMA_VERSION = 7
-GRAPH_SCHEMA_VERSION = 16
+GRAPH_SCHEMA_VERSION = 17
 BOUNDARY_VOCABULARY_VERSION = 5

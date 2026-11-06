@@ -141,6 +141,19 @@ rows, none picked.
   `invoke_kind` rides on the row so a reader is never told the body runs at that line: it
   is created there and runs later, elsewhere, if at all. A `dynamic` site that creates no
   body — string concatenation compiles to one — contributes no row at all.
+- **A call whose facts name no owner** (D00 §5, a Python call on a value) is drawn with the
+  owners `bound_receivers` holds for it, one edge per owner, `evidence` `syntax` (a type
+  worked out by a rule), and the site's tier `partial` where its binding is. A site nothing
+  bound is ONE row with `target` and `callee` NULL, `resolution` `unresolved` and
+  `terminal_kind` `unresolved`: the call is in the code, and what it calls is not known.
+- **`bound_receivers`** (spec `2026-11-06-python-reader-design.md` §3b,
+  `resolve/receiver_binding.py`) is the owner such a call was bound to, one row per PATH the
+  value walk reached its receiver by: `caller`, `ordinal`, `path_id` (the path's crossings,
+  outermost first, joined by ` > `), `owner` (the type, NULL where the path names none),
+  `evidence` (`syntax`), `resolution` (the site's: `resolved`, `narrowed` for several types
+  from a closed list, `partial` where some path names none; `unresolved` on a row with no
+  owner), `reason` (one word of the general list, NULL on a bound row) and `detail` (text for
+  a person). A derived table, never a fact; empty on a JVM module. Exported as the named query.
 - **It is not `return_flows` with more columns.** That table is the VALUE chain and exists
   only where a call produced one; this is the CONTROL chain, and a write, a publish or a
   delete is frequently the whole point of the work a trace is about. Which method a site
@@ -1578,6 +1591,7 @@ own cadence.
 | 13 | `endpoints` gains `path_kind` (`pattern` where the path is a regular expression, not an address) and `method_kind` (`any` where the row serves every HTTP method) (spec `2026-10-30-vertx-web-design.md` §3a). The linker never links a pattern path by path and links a call of any verb to an any-method row; a NULL `method` without the marker still means no verb was read. `roots` and `open_questions` carry both markers from the endpoint row they name, so a trace heading or an open question on such a row reads as the row does. The export carries all of them | refused by its stamp exactly as at 5 to 12, so a pattern is never read as an address from an older vintage |
 | 14 | `scheduled_work` gains `refused`: why the framework refuses the call that schedules a job, NULL where it accepts it, read from the catalog's `hand_off_effects` (spec `2026-11-02-per-path-truth-design.md` rule 7, the column ruled by the user 2026-11-02). A refused row's handler is not a root. The export carries the column, and the boundary vocabulary moves to 4 (`schedule` gains the attribute) [ruled 2026-11-02 by the user] | refused by its stamp exactly as at 5 to 13, so a refused schedule is never read from an older vintage as one that runs |
 | 15 | `message_handlers`, a new derived table: each behavior's message handler cases in the order the behavior tries them (spec `2026-11-04-akka-pekko-actors-design.md` §3b, approved by the user with the design). The export carries it. Renamed before release (spec `2026-11-05-in-process-dispatch-design.md` §3): `dispatch_registrations`, columns `group`, `position`, `key_type`, `key_value`, `key_object`, `predicated`, `handler`, `delivers`, `match`, `mechanism`, and `rpc_hops` renamed `hops`; still 15, since no 15 was released | refused by its stamp exactly as at 5 to 14, so a workspace without the table is re-analysed rather than read as one that builds no behavior |
+| 17 | `bound_receivers`, a new derived table: the owner of each call the facts leave to the resolver, one row per path (spec `2026-11-06-python-reader-design.md` §3b); `call_edges` gains rows with a NULL `target` and `resolution` `unresolved` for such a call nothing bound. The export carries the table | refused by its stamp exactly as at 5 to 16, so a workspace without the table is re-analysed rather than read as one with nothing to bind |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the

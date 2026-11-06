@@ -87,6 +87,9 @@ from sextant.application.resolve.dispatch import DYNAMIC, Dispatch, dispatch_of
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.domain.closed_sets import Evidence, Resolution
 
+# A construction's name at a call site (D00 §5).
+_INIT = "<init>"
+
 
 def record_return_flows(workspace: Workspace) -> None:
     """Derives `return_flows` — one row per (call site, candidate callee,
@@ -128,6 +131,12 @@ def _rows_for(
     """
     result = site["result"]
     if result is None or site["invoke_kind"] == DYNAMIC:
+        return []
+    # A construction's result is the object it built, never what its initialiser returns
+    # (spec 2026-11-06 §3b): a class called as a function is read as its `<init>`
+    # (`effective_calls`), and that body's `return None` is not the value the caller holds.
+    # A JVM `<init>` has no `result`, so it never reaches this.
+    if site["name"] == _INIT:
         return []
     # Only candidates that hand a value back: `dispatch` keeps every body it
     # read, `void` ones included, because its question is "did we read a body".

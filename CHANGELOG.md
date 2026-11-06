@@ -47,6 +47,18 @@ here would restate those documents rather than add anything.
   `break`/`continue`, `try`/`except`/`else`/`finally`, `with`, `return`, `raise`, `assert`,
   `match`, `and`/`or`, conditional expressions and comprehensions. A name two branches set
   differently is now a `merge` of both values, where it was `unresolved`.
+- **The resolver binds a Python call on a value to the type of its receiver, per path**
+  (OI-208 plan 1 task 8, spec `2026-11-06-python-reader-design.md` §3b). A call whose facts
+  name no owner is followed back on the value walk — a construction to its class, a call to
+  what its callee returns, a parameter to the arguments at its callers, a field to its writes —
+  and each path's type is a row of the new derived table `bound_receivers`, never a fact.
+  Several types from a closed list (two callers, an import bound on two branches) are
+  `narrowed`; a parameter nothing calls is `external`, one of a function handed on as a value
+  `escapes`. `call_edges` draws one edge per bound type, and one `unresolved` row with no
+  target for a call nothing bound. A class imported from another file and called is read as
+  its construction, and a name of one used as a value as that class. The edges are redrawn
+  after each round that bound something, at most eight rounds. JVM facts always name an owner,
+  so no JVM row changes. `GRAPH_SCHEMA_VERSION` 16 → 17: the export carries the new table.
 - **The Python scanner reads library signatures and types, and Python lookup follows C3**
   (OI-208 plan 1 task 7). Libraries are read from the project's installed environment, and the
   standard library and stub-only libraries (`requests`) from a pinned typeshed copy shipped in the

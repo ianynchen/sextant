@@ -107,7 +107,7 @@ columnar need per fact kind is stated.
                 "catalog_hash": "…" },
   "environments": ["dev", "staging", "prod"],
   "coverage": { "documents": 1283, "partial_documents": 0, "partial": false },
-  "contents": { "facts": true, "graph": true, "tables": ["annotations", "call_edges", "call_sites",
+  "contents": { "facts": true, "graph": true, "tables": ["annotations", "bound_receivers", "call_edges", "call_sites",
                                                           "config_entries", "dispatch_registrations",
                                                           "documents", "endpoints",
                                                           "error_handlers", "field_writes", "hops",

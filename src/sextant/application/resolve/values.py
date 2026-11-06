@@ -135,12 +135,14 @@ from weakref import WeakKeyDictionary
 
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.beans import Ambiguous, Injection, ProvidedBy, injected_parameters
-from sextant.application.resolve.dispatch import dispatch_of
+from sextant.application.resolve.dispatch import DYNAMIC, Dispatch, dispatch_of
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.domain.config_keys import carries_expression
 from sextant.domain.symbols import (
     bare_descriptor,
     descriptor_slots,
+    field_type,
+    is_type_descriptor,
     method_descriptor,
     method_name,
     owner_of,
@@ -205,6 +207,9 @@ SYMBOL = "symbol"
 # The one slot that is not an argument index (§1b: one entry point, not two — a receiver
 # is a slot like any other, and splitting them is how a third form gets added later).
 RECEIVER = "receiver"
+
+# A construction's name at a call site (D00 §5).
+_INIT = "<init>"
 
 # D00 §5's argument grammar, read as answers. `long` answers `int` because the
 # distinction is a storage width and not a kind of value a consumer branches on; a catalog
@@ -674,6 +679,11 @@ class ValueIndex:
     # `Injection` (`beans.injected_parameters`, spec 2026-11-05 di-recipe-hop §2), read from
     # every bean model. `_parameter` reads it before `callers`.
     injected: Mapping[tuple[str, int], Injection] = dataclass_field(default_factory=dict)
+    # Which method a call can run (`resolve/dispatch.py`), for the two questions the facts of
+    # one file leave to the resolver (spec 2026-11-06 §3b): what a call whose owner is bound
+    # from its receiver returns (`_Walk._bound_returns`), and which type a binding nothing
+    # writes names (`_Walk._named_type`). None, neither is asked and the walk reads as before.
+    dispatch: Dispatch | None = dataclass_field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         constructed = frozenset(
@@ -975,7 +985,7 @@ def value_index(
     unscanned = frozenset(
         (str(row.get("owner")), str(row["name"]))
         for key, row in sites.items()
-        if key not in reached
+        if key not in reached and row.get("owner") is not None
     )
     return ValueIndex(
         sites=sites,
@@ -1021,6 +1031,7 @@ def value_index(
             if bean_models is None
             else injected_parameters(workspace, bean_models, value_annotations)
         ),
+        dispatch=workspace.once(dispatch_of),
     )
 
 
@@ -1555,6 +1566,23 @@ class Path:
                 found.append(int(at))
         return tuple(found)
 
+    def labels(self) -> tuple[str, ...]:
+        """The path as `Binding.path` carries one: each crossing's label, outermost first."""
+        return _path(self.trail)
+
+    def crossed_out_of(self) -> tuple[str, ...]:
+        """The methods this path crossed out of to one of their callers (`_Walk._parameter`),
+        nearest first — never a helper it descended into, whose call is written as one
+        (`entered`). A reader asking whether a calling context the module does not show could
+        have run a method reads them (`resolve/receiver_binding.py`)."""
+        return tuple(
+            dict.fromkeys(
+                str(step.context[1])
+                for step in self.trail
+                if step.context[0] == _CALLER_OF and step not in self.entered
+            )
+        )
+
     def two_calls_of_one_helper(self, other: "Path") -> bool:
         """Whether the two paths disagree ONLY on which call entered a helper — each value
         handed back by its own call of one helper (`id(job)` beside `id(trigger)`), which one
@@ -1926,7 +1954,7 @@ def _never_returns(index: ValueIndex, method: str, ordinal: int) -> bool:
     normal return (review 3, m2): its static target, as the call site spells it. A virtual
     call whose override does return is read the same way, which errs towards `partial`."""
     row = index.sites.get((method, ordinal))
-    if row is None or not row.get("name") or not row.get("descriptor"):
+    if row is None or not row.get("name") or not row.get("descriptor") or row["owner"] is None:
         return False
     target = method_descriptor(str(row["owner"]), str(row["name"]), str(row["descriptor"]))
     return target in index.never_return
@@ -1979,6 +2007,16 @@ def _only(trail: _Trail, answer: Answer) -> tuple[_Reached, ...]:
 
 def _unresolved(reason: str) -> Answer:
     return Answer(kind=UNRESOLVED, reason=reason)
+
+
+def bound_owner(answer: Answer) -> str | None:
+    """The type a receiver answer binds a call to (spec 2026-11-06 §3b): a `symbol` literal
+    naming a TYPE — the class a value was built from, or the class itself — and nothing
+    else. A symbol naming a member is no owner."""
+    if answer.kind != LITERAL or answer.literal_kind != SYMBOL:
+        return None
+    named = str(answer.value)
+    return named if is_type_descriptor(named) else None
 
 
 def _used_at(origin: _Position) -> int | None:
@@ -2446,13 +2484,18 @@ class _Walk:
             field = site.get("receiver_field")
             if field is not None:
                 return self._resolve((_BINDING, str(field)), trail, frames)
-            receiver = site.get("receiver")
-            if receiver is not None:
-                return self._through(method, int(str(receiver)), ordinal, trail, frames)
+            # A receiver that is the method's parameter is that parameter, whether or not the
+            # facts also name a value id for it: a call left for the resolver to bind must name
+            # a receiver (D00 §5), so a call on an untyped parameter carries both, and the id
+            # is produced by nothing. A JVM site never names both (`receiver_parameter` is the
+            # other half of a null `receiver` there), so for it the order is no change.
             parameter = site.get("receiver_parameter")
-            if parameter is None:
+            if parameter is not None:
+                return self._through_parameter(method, int(str(parameter)), ordinal, trail, frames)
+            receiver = site.get("receiver")
+            if receiver is None:
                 return _only(trail, _unresolved(NOT_READABLE))
-            return self._through_parameter(method, int(str(parameter)), ordinal, trail, frames)
+            return self._through(method, int(str(receiver)), ordinal, trail, frames)
         arguments = site["arguments"] or []
         if not isinstance(slot, int) or not 0 <= slot < len(arguments):
             # A slot this site does not have, and **this is the guard that holds the
@@ -3544,7 +3587,7 @@ class _Walk:
             return False
         descriptor = site.get("descriptor")
         returned = returned_type(str(descriptor)) if descriptor else None
-        if returned is None:
+        if returned is None or site.get("owner") is None:
             return False
         owner = str(site.get("owner"))
         seen = {owner}
@@ -3799,12 +3842,73 @@ class _Walk:
         # that argument, never from what it was invoked on.
         if self._preserves_receiver(site):
             return self._through_receiver(site, trail, frames)
+        # **A construction that hands its object back is that object** (spec 2026-11-06 §3b):
+        # a call of a class, read as its `<init>` by the projection (`effective_calls`), with
+        # the `result` a JVM construction never has, holds an instance of the class it names —
+        # what an `instance` entry answers for a `new`. After every identity arm, as a `new`'s
+        # symbol answer is after its identified construction (`_entry`).
+        if row is not None and row["name"] == _INIT and row.get("owner") is not None:
+            return _only(trail, Answer(kind=LITERAL, value=str(row["owner"]), literal_kind=SYMBOL))
+        # **A call whose owner the facts left to the resolver returns what the method its
+        # receiver's type runs returns**, on each path the receiver is read by.
+        if row is not None and row.get("owner") is None and row.get("invoke_kind") != DYNAMIC:
+            return self._bound_returns(site, row, value, trail, frames)
         # Nothing identifies it. Whether its BODY was read is what separates the two
         # reasons, and `call_edges` is the table that says so — it writes a row per site
         # with a NULL callee at the third-party boundary. MEASURED on `mall-admin`: 1,411
         # of 2,065 value-producing sites are that boundary, so `external` is the common
         # answer and not the corner case.
         return _only(trail, _unresolved(NOT_READABLE if site in self._index.reached else EXTERNAL))
+
+    def _bound_returns(
+        self,
+        site: tuple[str, int],
+        row: Mapping[str, Any],
+        value: int,
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...]:
+        """What a call with no owner in its facts hands back (spec 2026-11-06 §3b): its
+        receiver, read on this path, names the type whose method runs (`bound_owner`); the
+        answer is that method's returns, read in its frame, on the receiver's own path — so
+        a helper called with a `Session` on one path and a `Client` on another returns what
+        `Session`'s method returns on the first and `Client`'s on the second, never both on
+        either (ruling M-1). The step written is a return crossing's, as `_value` writes for
+        a call `return_flows` names. A receiver path naming no type answers its own reason;
+        a type whose method has no body read here answers `external` where the lookup left
+        the scanned code, and `not_readable` where it did not."""
+        method, ordinal = site
+        dispatch = self._index.dispatch
+        reached: list[_Reached] = []
+        for path, answer in self._resolve((_SLOT, method, ordinal, RECEIVER), trail, frames):
+            owner = bound_owner(answer)
+            if owner is None or dispatch is None:
+                reached.append(
+                    (path, answer if answer.kind == UNRESOLVED else _unresolved(NOT_READABLE))
+                )
+                continue
+            bound = {**row, "owner": owner}
+            found = False
+            for callee in dispatch.candidates(bound):
+                for return_ordinal, entry in self._index.returned_values.get(callee, ()):
+                    found = True
+                    step = _Step((_RETURN_OF, method, value), f"{callee} returns {return_ordinal}")
+                    merged = _combine(path, (step,))
+                    if merged is None:
+                        continue
+                    reached.extend(
+                        self._entry(
+                            entry,
+                            callee,
+                            (_RETURN_OF, callee, return_ordinal),
+                            merged,
+                            frames + ((callee, (method, ordinal)),),
+                        )
+                    )
+            if not found:
+                unread = dispatch.boundary(owner, str(row["name"]), str(row["descriptor"]))
+                reached.append((path, _unresolved(NOT_READABLE if unread is None else EXTERNAL)))
+        return tuple(reached)
 
     def _through_receiver(
         self, site: tuple[str, int], trail: _Trail, frames: "_Frames"
@@ -4302,6 +4406,9 @@ class _Walk:
         constants = self._index.constants.get(symbol, ())
         produced = self._index.produced.get(symbol, ())
         if not written and not constants and not produced:
+            named = self._named_type(symbol)
+            if named is not None:
+                return _only(trail, Answer(kind=LITERAL, value=named, literal_kind=SYMBOL))
             return _only(trail, _unresolved(NO_WRITER))
         if unseen:
             return self._from_outside(symbol, trail, frames)
@@ -4310,6 +4417,25 @@ class _Walk:
             if scoped is not None:
                 return scoped
         return self._binding_writes(written, constants, produced, symbol, trail, frames)
+
+    def _named_type(self, symbol: str) -> str | None:
+        """The type a binding nothing writes IS, where it is one (spec 2026-11-06 §3b): a
+        name a file imports from another and uses as a value is read as that module's field
+        (`app/a#Session.`), because the file cannot see that the name is a class, and no field
+        of that name exists. So a binding with no write, declared as no field, whose name is
+        a type of its owner's module (`field_type`) that the workspace declares or holds a
+        header for, is that type — the answer a `class` entry gives. None anywhere else, so
+        `no_writer` keeps its meaning: a declared field, or a name that is no type. On the JVM
+        a read field is declared wherever its class was read, and no type is named after a
+        member of a class (`member_type`), so nothing there reaches this."""
+        dispatch = self._index.dispatch
+        bare = bare_descriptor(symbol)
+        if dispatch is None or bare in dispatch.scanned:
+            return None
+        named = field_type(bare)
+        if named is None or (named not in dispatch.scanned and named not in dispatch.headers):
+            return None
+        return named
 
     def _from_outside(self, symbol: str, trail: _Trail, frames: "_Frames") -> tuple[_Reached, ...]:
         """**A field read on an object from outside what was scanned borrows no other
@@ -4374,10 +4500,20 @@ class _Walk:
             # it held a class constant. One unreadable write is one unreadable answer, which
             # is also what the parameter arm does with a writer it cannot follow.
             literal_kind = _LITERAL_KINDS.get(str(entry.get("kind")))
+            # A write of a name that is a type (`_named_type`: an import a file binds on a
+            # branch, `try: from a import Session as S`) is that type, the answer its read
+            # would give.
+            named = (
+                self._named_type(str(entry["symbol"]))
+                if entry.get("kind") == "field" and entry.get("symbol") is not None
+                else None
+            )
             if literal_kind is not None and entry.get("value") is not None:
                 reached.append(
                     (trail, Answer(kind=LITERAL, value=entry["value"], literal_kind=literal_kind))
                 )
+            elif named is not None:
+                reached.append((trail, Answer(kind=LITERAL, value=named, literal_kind=SYMBOL)))
             else:
                 reached.append((trail, _unresolved(NOT_READABLE)))
         for method, index in written:

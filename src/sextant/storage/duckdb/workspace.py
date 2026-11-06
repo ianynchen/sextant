@@ -1031,6 +1031,13 @@ _NAMED_QUERIES = {
                terminal_kind, target_kind
         FROM call_edges ORDER BY caller, ordinal, target, callee
     """,
+    # Spec 2026-11-06 §3b: the owner bound to each call the facts left to the resolver, one
+    # row per path. `path_id` and `owner` complete the order, so two paths of one site read
+    # alike twice (NFR-1); `call_edges` reads it to draw one edge per owner.
+    "bound_receivers": """
+        SELECT caller, ordinal, path_id, owner, evidence, resolution, reason, detail
+        FROM bound_receivers ORDER BY caller, ordinal, path_id, owner NULLS LAST, reason
+    """,
     # Spec 2026-10-25 §3d/§5: the gRPC hop pass reads the methods that make calls, picks
     # the ones declared in a client stub class by the one symbol rule (`domain/symbols.py`,
     # the rule it reads a callee's class by), and reads only their edges below — a handful
@@ -1567,6 +1574,10 @@ _EXPORT_QUERIES = {
     # value. There is nowhere in it for an address, a config value or a string
     # constant out of bytecode to be.
     "call_edges": _NAMED_QUERIES["call_edges"],
+    # Spec 2026-11-06 §3b. Symbols, an integer, closed-set words, a path of symbols and
+    # ordinals, and a detail naming them: no column holds a value the code was handed, so the
+    # named query exports verbatim, the `call_edges` reasoning.
+    "bound_receivers": _NAMED_QUERIES["bound_receivers"],
     # Spec 2026-10-25 §3e. Symbols, an integer and closed-set words (`evidence` is
     # `compiler` on every row, a dispatch send's included, spec 2026-11-04 §3c), plus
     # `path`: the wire path of the inbound row the hop lands on, so it masks by that
@@ -1893,6 +1904,8 @@ _NAMED_DERIVATIONS = {
     # Spec 2026-10-25 §3c. Runs from `resolve/self_calls.py`, right after `derive_endpoints`,
     # and from `resolve/dispatch_hops.record_key_handlers` (spec 2026-11-04 §3d item 6).
     "self_call_endpoints_drop": "drop_self_call_endpoints.sql",
+    "bound_receivers_reset": "reset_bound_receivers.sql",
+    "bound_receivers_insert": "insert_bound_receivers.sql",
     "call_edges_reset": "reset_call_edges.sql",
     "call_edges_insert": "insert_call_edges.sql",
     "type_hierarchy_reset": "reset_type_hierarchy.sql",
