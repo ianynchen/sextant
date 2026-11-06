@@ -210,6 +210,11 @@ SEXTANT_VERSION = version("sextant")
 #             rule 7, the `scheduled_work.refused` column ruled by the user 2026-11-02). A
 #             consumer reading a schedule without it would take a refused one for work that
 #             runs.
+#     5       `boundary-property`'s attributes gain `unresolved_detail`, and its
+#             `unresolved_reason` takes only the general reason list (spec
+#             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
+#             consumer comparing two bundles would otherwise read a change of wording as a
+#             change of the value.
 FACT_SCHEMA_VERSION = 6
 GRAPH_SCHEMA_VERSION = 16
-BOUNDARY_VOCABULARY_VERSION = 4
+BOUNDARY_VOCABULARY_VERSION = 5

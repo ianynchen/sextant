@@ -31,7 +31,7 @@ from sextant.application.resolve.endpoints import derive_endpoints
 from sextant.application.resolve.engines import config_join
 from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.service_identity import record_service_identity_gaps
-from sextant.application.resolve.values import EXTERNAL, NOT_READABLE
+from sextant.application.resolve.values import CYCLE, EXTERNAL, NOT_READABLE
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -221,7 +221,7 @@ def _workspace(
     """A workspace holding the given symbol facts and the given already
     resolved configuration — `(key, environment, value)`, a `None` value
     meaning the environment has the key but never resolved it (D01's
-    unresolved-with-a-reason row, spelled `missing_key` here).
+    unresolved-with-a-reason row, spelled `external` here).
 
     `coordinates=None` writes no module fact at all, which is what every test
     below that reaches the engine DIRECTLY wants: the dependency gate lives in
@@ -1104,6 +1104,36 @@ def test_an_address_whose_key_is_missing_for_one_environment_only_says_so(
     assert rows["prod"]["resolved_path"] is None
     assert rows["prod"]["unresolved_reason"] == EXTERNAL
     assert rows["prod"]["unresolved_detail"] == "acme.base is not set for prod"
+
+
+def test_an_address_whose_config_row_is_a_cycle_forwards_that_rows_reason_and_detail(
+    tmp_path: Path,
+):
+    """The join copies the config row's own reason and detail. Both differ from the join's
+    fallback (`external`, "<key> is not set for <environment>"), so a join that dropped the
+    copy would fail here."""
+    workspace = _workspace(tmp_path)
+    workspace.derive(
+        "resolved_config_insert",
+        rows=[
+            {
+                "key": "acme.base",
+                "value": None,
+                "source": "invented.yml",
+                "environment": "prod",
+                "unresolved_reason": CYCLE,
+                "unresolved_detail": "acme.base refers to acme.alt, which refers back to acme.base",
+            }
+        ],
+    )
+    _seed(workspace, {"protocol": "http", "path": "${acme.base}/invoices", "caller": "c"})
+    [row] = workspace.query("resolved_peers")
+    workspace.close()
+
+    assert row["unresolved_reason"] == CYCLE
+    assert row["unresolved_detail"] == (
+        "acme.base refers to acme.alt, which refers back to acme.base"
+    )
 
 
 def test_an_address_whose_key_has_no_row_in_an_environment_is_external_there(tmp_path: Path):
@@ -3372,7 +3402,7 @@ def test_a_route_with_no_path_predicate_serves_every_path(tmp_path: Path):
 def test_an_item_that_differs_between_environments_is_one_question_and_no_row(tmp_path: Path):
     """The existing `config_join` rule applied per item: every key the item is read
     from passes through `_agreed`, and one that environments answer differently — or
-    that only one environment declares, since `resolved_config` carries a `missing_key`
+    that only one environment declares, since `resolved_config` carries an `external`
     row for the other — is not one route. No row for that item (the other item is
     untouched), and one `environment_divergence` question from `gaps`, keyed on the
     item, with every disagreeing key and its per-environment values as candidates."""

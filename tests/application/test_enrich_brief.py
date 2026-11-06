@@ -159,24 +159,29 @@ def test_unresolved_config_rows_join_open_questions_as_copyable_identity_rows():
             "value": None,
             "source": "application.yml",
             "environment": "default",
-            "unresolved_reason": "remote_source",
+            "unresolved_reason": "external",
+            "unresolved_detail": "spring.config.import is imported from a remote source",
         },
         {
             "key": "spring.config.import",
             "value": None,
             "source": "application.yml",
             "environment": "docker",
-            "unresolved_reason": "remote_source",
+            "unresolved_reason": "external",
+            "unresolved_detail": "spring.config.import is imported from a remote source",
         },
     ]
     brief = _compose(_Workspace(resolved_config=resolved_config))
+    assert "  - why this is open: spring.config.import is imported from a remote source" in (
+        brief.prompt
+    )
     for environment in ("default", "docker"):
         expected = json.dumps(
             {
                 "key": "spring.config.import",
                 "source": "application.yml",
                 "environment": environment,
-                "kind": "remote_source",
+                "kind": "external",
             },
             sort_keys=True,
         )
@@ -191,12 +196,12 @@ def test_an_unresolved_config_rows_missing_source_renders_null_honestly():
             "value": None,
             "source": None,
             "environment": "prod",
-            "unresolved_reason": "missing_key",
+            "unresolved_reason": "external",
         }
     ]
     brief = _compose(_Workspace(resolved_config=resolved_config))
     expected = json.dumps(
-        {"key": "billing.url", "source": None, "environment": "prod", "kind": "missing_key"},
+        {"key": "billing.url", "source": None, "environment": "prod", "kind": "external"},
         sort_keys=True,
     )
     assert expected in brief.prompt
@@ -230,7 +235,7 @@ def test_a_config_rows_key_and_source_are_redacted_before_they_reach_the_prompt(
             "value": None,
             "source": "https://user:pass@billing.example.com/config.yml",
             "environment": "prod",
-            "unresolved_reason": "missing_key",
+            "unresolved_reason": "external",
         }
     ]
     brief = _compose(_Workspace(resolved_config=resolved_config), redactor)
@@ -255,7 +260,7 @@ def test_open_questions_and_config_rows_coexist_clearly_distinguishable():
             "value": None,
             "source": "application.yml",
             "environment": "default",
-            "unresolved_reason": "remote_source",
+            "unresolved_reason": "external",
         }
     ]
     brief = _compose(_Workspace(open_questions=open_questions, resolved_config=resolved_config))
@@ -268,7 +273,7 @@ def test_open_questions_and_config_rows_coexist_clearly_distinguishable():
             "key": "spring.config.import",
             "source": "application.yml",
             "environment": "default",
-            "kind": "remote_source",
+            "kind": "external",
         },
         sort_keys=True,
     )
@@ -294,7 +299,8 @@ def test_the_digest_lists_unresolved_config_keys_with_their_reason():
             "key": "billing.url",
             "value": None,
             "environment": "prod",
-            "unresolved_reason": "missing_key",
+            "unresolved_reason": "external",
+            "unresolved_detail": "billing.url is not set for prod",
         },
         {
             "key": "orders.url",
@@ -304,7 +310,7 @@ def test_the_digest_lists_unresolved_config_keys_with_their_reason():
         },
     ]
     brief = _compose(_Workspace(resolved_config=resolved_config))
-    assert "billing.url — missing_key in prod" in brief.prompt
+    assert "billing.url — external in prod (billing.url is not set for prod)" in brief.prompt
     assert "orders.url" not in brief.prompt
 
 
@@ -321,7 +327,7 @@ def test_the_digest_and_open_questions_print_one_spelling_of_a_redacted_config_k
             "value": None,
             "source": "application.yml",
             "environment": "prod",
-            "unresolved_reason": "missing_key",
+            "unresolved_reason": "external",
         }
     ]
     brief = _compose(_Workspace(resolved_config=resolved_config), redactor)
@@ -375,7 +381,7 @@ def test_composing_the_same_inputs_twice_is_byte_identical():
                 "value": None,
                 "source": "application.yml",
                 "environment": "default",
-                "unresolved_reason": "remote_source",
+                "unresolved_reason": "external",
             }
         ],
     )

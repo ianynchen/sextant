@@ -549,8 +549,10 @@ here would restate those documents rather than add anything.
   `remote_source`, `placeholder_cycle`, `multi_placeholder`), and a new `unresolved_detail`
   column names the key and the place (`orders.url is not set for prod`). The brief and the
   document show the reason, then the detail. The graph attributes of `boundary-property` gain
-  `unresolved_detail`. No row resolves differently. `GRAPH_SCHEMA_VERSION` 15 → 16: a workspace
-  of the older vintage is refused and re-analysed.
+  `unresolved_detail`. No row resolves differently. `GRAPH_SCHEMA_VERSION` 15 → 16 and
+  `BOUNDARY_VOCABULARY_VERSION` 4 → 5: a workspace of the older vintage is refused and
+  re-analysed. A saved enrichment verdict about a configuration key names the old reason in its
+  identity, so it reads as stale until `enrich` is run again.
 - **Quarkus Reactive Routes follow Vert.x Web's rules** (the same dispatcher, spec
   2026-10-30-vertx-web §3a). A `@Route` with no `methods` is one row marked as serving every
   method, where it was six rows; a `@Route(regex = …)` is a pattern row with the regex

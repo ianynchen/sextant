@@ -1559,6 +1559,7 @@ def _configured(
     expression: str = SWEEP_CRON,
     trigger: str = "cron",
     keys: tuple[str, ...] = ("orders.sweep.cron",),
+    detail: str | None = None,
 ) -> dict[str, object]:
     return {
         "handler": handler,
@@ -1569,7 +1570,9 @@ def _configured(
         "keys": json.dumps(list(keys)),
         "value": value,
         "unresolved_reason": reason,
-        "unresolved_detail": None if reason is None else f"{keys[0]} is unreadable",
+        "unresolved_detail": (
+            None if reason is None else detail or f"{keys[0]} is not set for {environment}"
+        ),
     }
 
 
@@ -1649,18 +1652,21 @@ def test_an_environment_the_value_cannot_be_read_in_states_its_reason():
     )
     assert (
         "  - as configured in this repository: not set in `default`, `prod` "
-        "(external: orders.sweep.cron is unreadable)\n"
+        "(external: orders.sweep.cron is not set)\n"
     ) in text
 
 
 def test_a_set_and_an_unset_environment_are_one_line():
     text = _schedules_document(
         [_job(SWEEP, SWEEP_CRON)],
-        [_configured("default", "0 0 * * * *"), _configured("prod", None, "cycle")],
+        [
+            _configured("default", "0 0 * * * *"),
+            _configured("prod", None, "cycle", detail="orders.sweep.cron refers back to itself"),
+        ],
     )
     assert (
         "  - as configured in this repository: `0 0 * * * *` in `default`; "
-        "not set in `prod` (cycle: orders.sweep.cron is unreadable)\n"
+        "not set in `prod` (cycle: orders.sweep.cron refers back to itself)\n"
     ) in text
 
 

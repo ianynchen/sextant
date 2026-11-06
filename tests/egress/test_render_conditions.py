@@ -1219,7 +1219,7 @@ def test_a_conditional_placeholder_job_states_its_configured_value_first_then_it
     assert _block(document, "Jobs#nightly") == (
         f"- `com/acme/Jobs#nightly().` — cron `{cron}`\n"
         "  - as configured in this repository: `0 0 1 * * *` in `default`, `prod`; "
-        "not set in `staging` (external: jobs.nightly.cron is not set for staging)\n"
+        "not set in `staging` (external: jobs.nightly.cron is not set)\n"
         "  - Exists only when: the configuration key `jobs.enabled` is `true`\n"
         f"{OF_ENVIRONMENTS}\n"
     )

@@ -2389,9 +2389,8 @@ def test_a_configured_schedule_is_stated_per_environment_in_the_document(full_ru
     ) in document
     assert (
         f"- {purge} — fixedRate `${{orders.purge.rate}}`\n"
-        "  - as configured in this repository: not set in `default` "
-        "(external: orders.purge.rate is not set for default); not set in `prod` "
-        "(external: orders.purge.rate is not set for prod)\n"
+        "  - as configured in this repository: not set in `default`, `prod` "
+        "(external: orders.purge.rate is not set)\n"
     ) in document
     [parquet] = list(full_run.rglob("resolved_schedules.parquet"))
     rows = duckdb.sql(
