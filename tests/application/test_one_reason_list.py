@@ -25,6 +25,9 @@ from reason_guard import (
 )
 from sextant.application.boundary.source import BoundarySource
 from sextant.application.boundary.vocabulary import KINDS
+from sextant.application.resolve.resolved_peers import resolved_peers
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace, open_read_only
 
 
@@ -33,13 +36,11 @@ def tables(analyzed_orders_service: Path) -> dict[str, list[dict[str, Any]]]:
     workspace = DuckDbWorkspace(analyzed_orders_service / "workspace.duckdb")
     try:
         return {
-            name: [dict(row) for row in workspace.query(name)]
-            for name in (
-                "resolved_config",
-                "resolved_schedules",
-                "resolved_peers",
-                "method_resolution",
-            )
+            **{
+                name: [dict(row) for row in workspace.query(name)]
+                for name in ("resolved_config", "resolved_schedules", "method_resolution")
+            },
+            "resolved_peers": resolved_peers(workspace, YamlCatalogSource(catalogs_dir()).load()),
         }
     finally:
         workspace.close()

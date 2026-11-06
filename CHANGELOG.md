@@ -199,6 +199,15 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **An address with several placeholders is filled** (OI-322). The per-environment address
+  answer (`resolved_peers`) filled only an address with one placeholder: `${host}:${port}`
+  read `not_readable`, and `${orders.url:http://fallback}` read "is not set" where its
+  default answers. It now uses the one placeholder rule configuration files and schedules
+  use (`resolve/config.py::substitute`): every placeholder is filled, a default is taken,
+  and the config model's key matching applies. A missing key fails the whole address with
+  that key's own reason. The answer is now `resolve/resolved_peers.py` in place of the SQL
+  named query; nothing is stored. No test fixture carries such an address today.
+
 - **The Spring ladder's qualifier and name rungs read only the candidates of the parameter's type**
   (OI-304 Task 4). Spring compares a qualifier or a parameter name only among the beans of the
   parameter's type or a subtype of it; a bean of an unrelated type with the same name is no longer

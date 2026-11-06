@@ -763,15 +763,14 @@ word of the general reason list (`values._REASONS`: `external`, `non_enumerable`
 person that names the key and the place (`orders.url is not set`; no code branches
 on it). A key the deployment sets (absent from the files, an environment variable, a
 config-server or `spring.config.import` import) is `external`; a placeholder chain that
-loops is `cycle`; an outbound expression carrying more than one placeholder, which the
-peer-resolution join below fills only one of, is `not_readable`. "Unresolved for `prod`, resolved for `dev`" is expressible and meaningful:
+loops is `cycle`. "Unresolved for `prod`, resolved for `dev`" is expressible and meaningful:
 the same key carries a resolved row in one environment and an unresolved one in another,
 never one row forced to answer for both.
 
-**Peer resolution is a join, never a write.** A named query joins outbound endpoint rows'
-`${...}`-bearing `peer`/`path` expressions against `resolved_config`, per environment,
-substituting single-placeholder expressions and answering `not_readable` for the rest, with
-an `unresolved_detail` beside the reason.
+**Peer resolution is a join, never a write.** `resolve/resolved_peers.py` joins client-side
+endpoint rows' `peer`/`path` expressions against `resolved_config`, per environment, filling
+every placeholder by the one placeholder rule (`${key:default}` included). A key with no
+value fails the whole expression with that key's reason and an `unresolved_detail`.
 Endpoint rows are untouched — `resolved_config` carries values, endpoints keep expressions,
 and nothing rewrites an endpoint row per environment.
 

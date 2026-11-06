@@ -555,9 +555,9 @@ the gap list:
   first (by symbol order) carrying the argument annotation at that index —
   deterministic, never a guess, but a first match rather than a proof.
 - **The `${}` placeholder delimiters are engine constants**, shared between the field
-  ladder's own synthesis (rung 3) and `resolved_peers`' substitution query — a framework
-  whose placeholder syntax differs would need the pair threaded onto `field_sources`
-  rather than reading it from the catalog, the way every other config_model detail is.
+  ladder's own synthesis (rung 3) writes `${}` itself, while `resolved_peers` reads the
+  config model's pair — a framework whose placeholder syntax differs would need the pair
+  threaded onto `field_sources` so the two agree.
 - **Media stamping requires agreement across every environment.** Kafka's
   serializer-to-format table (§4.1) stamps `consumes`/`produces` only where every
   environment's own serializer key resolves to the SAME class; a per-environment split —

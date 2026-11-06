@@ -5573,13 +5573,13 @@ the two separators (`selection_separator`, `composition_separator`) that give th
 and composition semantics described in prose here a spelling a second framework family
 can override.
 
-**Job 3, peer resolution, is a JOIN and never a write** — the `resolved_peers` named
-query ([D01](D01-graph-schema.md)): every client-side row's `${...}`-bearing `peer` and
-`path` expressions, substituted against `resolved_config` once per environment. A literal
-passes through as itself; a single placeholder is substituted; an expression carrying more
-than one surfaces with `unresolved_reason: not_readable` — the one answer M04's pass
-2 never gives, because it is a property of an endpoint expression rather than of a
-configuration value — and an `unresolved_detail` saying how many placeholders it holds. Endpoint rows are untouched, in every environment.
+**Job 3, peer resolution, is a JOIN and never a write** — `resolved_peers`
+(`resolve/resolved_peers.py`, [D01](D01-graph-schema.md)): every client-side row's `peer`
+and `path` expressions, substituted against `resolved_config` once per environment by the
+one placeholder rule (§2i's delimiters, `default_separator` and `key_matching`). A literal
+passes through as itself, and every placeholder is filled. A key with no value fails the
+whole expression with that key's own reason and detail. Endpoint rows are untouched, in
+every environment.
 
 ---
 

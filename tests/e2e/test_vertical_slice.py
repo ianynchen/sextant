@@ -9,13 +9,15 @@ from click.testing import CliRunner
 
 from fixture_build import compile_fixture
 from sextant.application.enrich.validate import validate_overlay
+from sextant.application.resolve.resolved_peers import resolved_peers
 from sextant.cli.app import cli
 from sextant.domain.enrichment import load_overlay
 from sextant.domain.factfile import read_fact_file, redact_config_entry_line
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.redaction import REDACTED, RedactionRules, Redactor
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.sextant_config import read_redaction_rules
-from sextant.resources import instructions_path
+from sextant.resources import catalogs_dir, instructions_path
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 REPO = Path(__file__).parents[2]
@@ -1493,7 +1495,7 @@ def test_the_soap_client_call_stands_beside_the_operation_it_names_and_carries_i
         soap = [row for row in workspace.query("endpoints") if row["protocol"] == "soap"]
         peers = [
             (str(row["environment"]), row["resolved_peer"], row["unresolved_reason"])
-            for row in workspace.query("resolved_peers")
+            for row in resolved_peers(workspace, YamlCatalogSource(catalogs_dir()).load())
             if row["protocol"] == "soap"
         ]
     finally:

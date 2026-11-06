@@ -31,7 +31,7 @@ Three jobs, two of them here:
   already minted, which is why this style runs LAST in the engine loop
   (`resolve/endpoints.py`, the `protocol_hint` ordering precedent, D02 §3):
   a stamp cannot enrich a row that does not exist yet.
-* The third — peer resolution — is a named query (`resolved_peers`), never
+* The third — peer resolution — is a read (`resolve/resolved_peers.py`), never
   a write: endpoint rows keep their expressions, `resolved_config` keeps the
   values, and nothing here rewrites a row per environment.
 

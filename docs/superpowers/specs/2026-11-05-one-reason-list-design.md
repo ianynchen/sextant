@@ -52,6 +52,8 @@ A "found" answer has no reason. A success is not a reason.
 limit, not something the code does. Filling each placeholder would remove this reason
 completely ("removing the cause beats detecting it"). That change moves rows, so it is
 logged as its own item (OI-322 = SEXTANT-316) and is not part of this design.
+(Built on the same branch, 2026-11-06: every placeholder is now filled, so this reason is
+never written.)
 
 ### 3b. Which method a call reaches
 

@@ -15,6 +15,7 @@ from sextant.application.ports.scanner import ScanRequest
 from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.engines import annotation_driven, fluent, single_call
 from sextant.application.resolve.pipeline import ResolveReport, resolve
+from sextant.application.resolve.resolved_peers import resolved_peers
 from sextant.application.resolve.shapes import arguments, expansion
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import config_fact_target, write_fact_file
@@ -4069,10 +4070,10 @@ def test_the_peer_join_answers_every_client_row_per_environment(
     `path`: a literal address passes through unchanged in every environment,
     and the three `${billing.url}` rows substitute per environment — the
     same row, two answers, which is the whole reason peers resolve as a join
-    rather than a write. the `not_readable` many-placeholder answer stays unit-tested
-    (`test_config_join.py`): no live row carries two placeholders."""
+    rather than a write. Two placeholders in one address are unit-tested
+    (`test_config_join.py`): no live row carries two."""
     workspace, report = resolved_fixture
-    rows = workspace.query("resolved_peers")
+    rows = resolved_peers(workspace, YamlCatalogSource(CATALOGS).load())
     client_side = [e for e in report.endpoints if e["direction"] != "inbound"]
 
     assert {row["environment"] for row in rows} == {"default", "prod"}

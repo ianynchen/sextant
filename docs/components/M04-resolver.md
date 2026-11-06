@@ -76,9 +76,9 @@ reason from a value that is missing, or somebody goes looking for a setting that
 
 **The per-environment peer join is a query, not a write.** `resolved_peers` answers, for
 every client-side endpoint and every environment, what that row's own address expression
-substitutes to — a `${…}` placeholder read against `resolved_config` for that environment,
-never a rewrite of the endpoint row itself. An expression carrying more than one
-placeholder answers `not_readable`, the one unresolved answer this join alone gives.
+substitutes to: every placeholder filled from `resolved_config` for that environment by the
+one placeholder rule (`resolve/config.py::substitute`, so `${key:default}` takes its
+default), never a rewrite of the endpoint row itself. It is `resolve/resolved_peers.py`.
 
 ### 3. Symbol graph
 

@@ -35,12 +35,10 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.config import (
     Unresolved,
     config_model_of,
-    not_set,
+    environment_lookup,
     placeholder_rule,
     substitute,
 )
-from sextant.application.resolve.values import EXTERNAL
-from sextant.domain.config_keys import normalize_key
 from sextant.domain.redaction import REDACTED, Redactor
 
 
@@ -72,7 +70,7 @@ def record_resolved_schedules(workspace: Workspace, catalogs: list[Catalog]) -> 
         by_environment.setdefault(str(row["environment"]), []).append(row)
     rows: list[dict[str, object]] = []
     for environment in sorted(by_environment):
-        lookup = _environment_lookup(by_environment[environment], key_matching)
+        lookup = environment_lookup(by_environment[environment], key_matching)
         for job in jobs:
             asked: list[str] = []
             value, reason = substitute(
@@ -116,40 +114,3 @@ def _recording(
         return lookup(ref_key)
 
     return recorded
-
-
-def _environment_lookup(
-    config: list[dict[str, object]], key_matching: str
-) -> Callable[[str], tuple[str | None, Unresolved | None]]:
-    """`substitute`'s lookup over ONE environment's resolved rows. Where relaxed matching
-    folds two configured spellings onto one key, the first row in the `resolved_config`
-    named query's order (`ORDER BY environment, key`) wins — the alphabetically first
-    spelling. That DIVERGES from `resolve/config.py::_normalized_index`, which takes the
-    first in merged-layering order; a known divergence, logged rather than matched here,
-    because `resolved_config` keeps no layering order to match it with. A row resolved to
-    no value answers its own reason and detail; a key no row names is `external`, as
-    `resolve_config` answers a reference to a key its layering never declared."""
-
-    def keyed(key: str) -> str:
-        return normalize_key(key) if key_matching == "relaxed" else key
-
-    index: dict[str, tuple[str | None, Unresolved | None]] = {}
-    for row in config:
-        value = row["value"]
-        answer = (
-            (str(value), None)
-            if value is not None
-            else (
-                None,
-                Unresolved(
-                    str(row["unresolved_reason"] or EXTERNAL),
-                    str(row["unresolved_detail"] or not_set(str(row["key"]))),
-                ),
-            )
-        )
-        index.setdefault(keyed(str(row["key"])), answer)
-
-    def lookup(ref_key: str) -> tuple[str | None, Unresolved | None]:
-        return index.get(keyed(ref_key), (None, Unresolved(EXTERNAL, not_set(ref_key))))
-
-    return lookup

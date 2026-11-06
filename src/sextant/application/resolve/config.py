@@ -78,7 +78,7 @@ from sextant.domain.config_keys import normalize_key
 
 def not_set(key: str) -> str:
     """The detail for a key that no configuration gives. The environment is a column of the
-    row, so the text does not repeat it. `resolved_peers` (SQL) writes the same sentence."""
+    row, so the text does not repeat it."""
     return f"{key} is not set"
 
 
@@ -642,3 +642,41 @@ def _match_source(pattern: str, filename: str, allow_placeholder: bool) -> str |
                 return middle[1:]
             return None
     return "" if pattern == filename else None
+
+
+def environment_lookup(
+    config: list[dict[str, object]], key_matching: str
+) -> Callable[[str], tuple[str | None, Unresolved | None]]:
+    """`substitute`'s lookup over ONE environment's resolved rows, the one lookup both
+    per-environment readers use (`resolve/resolved_schedules.py`,
+    `resolve/resolved_peers.py`). Where relaxed matching folds two configured spellings
+    onto one key, the first row in the `resolved_config` named query's order (`ORDER BY environment, key`) wins — the alphabetically first
+    spelling. That DIVERGES from `_normalized_index`, which takes the
+    first in merged-layering order; a known divergence, logged rather than matched here,
+    because `resolved_config` keeps no layering order to match it with. A row resolved to
+    no value answers its own reason and detail; a key no row names is `external`, as
+    `resolve_config` answers a reference to a key its layering never declared."""
+
+    def keyed(key: str) -> str:
+        return normalize_key(key) if key_matching == "relaxed" else key
+
+    index: dict[str, tuple[str | None, Unresolved | None]] = {}
+    for row in config:
+        value = row["value"]
+        answer = (
+            (str(value), None)
+            if value is not None
+            else (
+                None,
+                Unresolved(
+                    str(row["unresolved_reason"] or EXTERNAL),
+                    str(row["unresolved_detail"] or not_set(str(row["key"]))),
+                ),
+            )
+        )
+        index.setdefault(keyed(str(row["key"])), answer)
+
+    def lookup(ref_key: str) -> tuple[str | None, Unresolved | None]:
+        return index.get(keyed(ref_key), (None, Unresolved(EXTERNAL, not_set(ref_key))))
+
+    return lookup
