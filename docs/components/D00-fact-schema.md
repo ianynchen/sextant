@@ -747,7 +747,11 @@ its written text, bare (`Mystery`): it names no type (`names_a_type`) and is nev
 `typing/Any#`. An unannotated parameter is `typing/Any#`, the typing specification's rule. A name that two branches bind differently
 (`try: import ujson as json` / `except ImportError: import json`) is a closed list: as a
 type it is the union of both, and as a value it is a `merge` argument with one candidate
-each. **Evidence:** every type a Python document states is written in source, so it is
+each. **A Python class's parents** are its written bases in order, the first as `superclass` and
+the rest as `interfaces`, up to the first base the file cannot name as a class (a value such as
+`Base = declarative_base()`, or a call); nothing after that base is written, so no later base
+takes its place. The document is then `partial`, and `partial_reason` names the class and the
+base, so "parents not read" is never mistaken for "no parents". **Evidence:** every type a Python document states is written in source, so it is
 `declared`, the word §5d gives a source origin. The document says so: `language` is the
 source language and `class_major` is 0. No reference carries an evidence field of its own.
 

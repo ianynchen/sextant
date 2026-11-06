@@ -253,7 +253,9 @@ differently is a closed list of both, in written order.
 **What it writes** (spec §3a, D00 §1 and §5a):
 
 - `module` symbol per file, `class` (or `protocol`, `enum`) per class, with the written
-  parents as `superclass` and then `interfaces`, in written order;
+  parents as `superclass` and then `interfaces`, in written order, up to the first base
+  the file cannot name as a class; nothing after it is written, and the document is
+  `partial` with one `partial_reason` line per such class;
 - `<clinit>` per module and class body, `<init>` for `__init__`, one `method` per `def`;
 - a static `field` per name a module or class body assigns, and a `field_write` from that
   body's `<clinit>`;

@@ -381,3 +381,63 @@ def test_a_file_that_cannot_be_opened_is_uncovered_and_the_rest_is_scanned(tmp_p
     assert len(report.uncovered) == 1
     assert report.uncovered[0].startswith("app/broken.py: ")
     assert [document.relative_path for _, document, _ in tree] == ["app/new.py"]
+
+
+def _class_and_document(tree, descriptor: str):
+    for _, document, facts in tree:
+        for fact in facts:
+            if isinstance(fact, SymbolFact) and bare_descriptor(fact.symbol) == descriptor:
+                return fact, document
+    raise AssertionError(descriptor)
+
+
+def test_a_base_the_file_cannot_name_ends_the_parents_and_the_document_is_partial(
+    tmp_path: Path,
+):
+    """A base bound to a call result is not a class name: it and every base after it are
+    not written, and no later base moves into its place."""
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/models.py": (
+                "from sqlalchemy.orm import declarative_base\n"
+                "from app.mixins import TimestampMixin\n"
+                "Base = declarative_base()\n"
+                "class User(Base, TimestampMixin): pass\n"
+            ),
+            "app/mixins.py": "class TimestampMixin: pass\n",
+        },
+    )
+
+    user, document = _class_and_document(tree, "app/models/User#")
+    assert user.superclass is None
+    assert user.interfaces == []
+    assert document.partial is True
+    assert document.partial_reason == (
+        "User: base 1 'Base' is not a class name this file can read; "
+        "parents from here on are not read"
+    )
+
+
+def test_named_bases_keep_their_written_order(tmp_path: Path):
+    _, tree = _scan(tmp_path, {"app/m.py": "class A: pass\nclass B: pass\nclass C(A, B): pass\n"})
+
+    c, document = _class_and_document(tree, "app/m/C#")
+    assert c.superclass is not None and c.superclass.endswith(" app/m/A#")
+    assert [bare_descriptor(i) for i in c.interfaces] == ["app/m/B#"]
+    assert document.partial is False
+
+
+def test_bases_after_an_unnamed_one_are_not_written(tmp_path: Path):
+    _, tree = _scan(
+        tmp_path,
+        {"app/m.py": "class A: pass\nclass B: pass\ndef f(): pass\nclass C(A, f(), B): pass\n"},
+    )
+
+    c, document = _class_and_document(tree, "app/m/C#")
+    assert c.superclass is not None and c.superclass.endswith(" app/m/A#")
+    assert c.interfaces == []
+    assert document.partial is True
+    assert document.partial_reason == (
+        "C: base 2 'f()' is not a class name this file can read; parents from here on are not read"
+    )

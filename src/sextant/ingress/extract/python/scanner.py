@@ -87,10 +87,14 @@ class PythonScanner:
                 origin=request.origin,
             )
             context = FileContext(here, is_package, index, prefix, document.document_id)
-            written = file_facts(tree, context, len(content.splitlines()) or 1)
-            write_fact_file(request.out_dir / f"{relative}.jsonl", document, written)
+            read = file_facts(tree, context, len(content.splitlines()) or 1)
+            if read.not_read:
+                document = document.model_copy(
+                    update={"partial": True, "partial_reason": "\n".join(read.not_read)}
+                )
+            write_fact_file(request.out_dir / f"{relative}.jsonl", document, read.facts)
             documents += 1
-            facts += len(written)
+            facts += len(read.facts)
         return ScanReport(
             documents=documents,
             facts=facts,

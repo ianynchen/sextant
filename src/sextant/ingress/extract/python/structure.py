@@ -76,11 +76,20 @@ class FileContext:
     document_id: str
 
 
-def file_facts(tree: ast.Module, context: FileContext, last_line: int) -> list[Fact]:
+@dataclass(frozen=True)
+class FileFacts:
+    """One file's facts, and what in it was not read: one line per class whose parents
+    stop early, for the document's `partial_reason` (D00 §2)."""
+
+    facts: list[Fact]
+    not_read: list[str]
+
+
+def file_facts(tree: ast.Module, context: FileContext, last_line: int) -> FileFacts:
     """Every structural fact of one parsed file, in source order."""
     writer = _Writer(context)
     writer.module(tree, last_line)
-    return writer.facts
+    return FileFacts(writer.facts, writer.not_read)
 
 
 @dataclass
@@ -123,6 +132,7 @@ class _Writer:
     def __init__(self, context: FileContext) -> None:
         self._context = context
         self.facts: list[Fact] = []
+        self.not_read: list[str] = []
 
     def _full(self, descriptor: str) -> str:
         return self._context.prefix + descriptor
@@ -156,8 +166,7 @@ class _Writer:
         path = f"{scope.class_path}.{node.name}" if scope.class_path else node.name
         owner = type_symbol(Target(self._context.here, path))
         generic = scope.types.with_type_parameters(node.type_params)
-        parents = [self._parent(base, generic) for base in node.bases]
-        written = [parent for parent in parents if parent is not None]
+        written = self._parents(node, generic)
         kind = ConstructKind.CLASS
         if any(
             is_typing(target, "Protocol")
@@ -196,15 +205,25 @@ class _Writer:
         clinit = self._clinit(owner, node.lineno, node.end_lineno or node.lineno)
         self._statements(node.body, _Scope(owner, types, _Body(clinit), path))
 
-    def _parent(self, base: ast.expr, types: TypeScope) -> str | None:
-        """A written parent class's symbol. `object` is the root every class has, and is
-        not written, as the JVM's root is not (D00 §5 `superclass`)."""
-        targets = types.lookup(_unsubscripted(base))
-        if len(targets) != 1 or targets[0].kind in ("variable", "function"):
-            return None
-        if targets[0] == Target(BUILTINS, "object"):
-            return None
-        return type_symbol(targets[0])
+    def _parents(self, node: ast.ClassDef, types: TypeScope) -> list[str]:
+        """The written parents' symbols, in written order, up to the first one this file
+        cannot name as a class: a value (`Base = declarative_base()`), a call, or a name
+        it does not bind. Nothing after that one is written, so no later parent moves
+        into its place, and the document says the class's parents were not all read.
+        `object` is the root every class has, and is not written, as the JVM's root is
+        not (D00 §5 `superclass`)."""
+        written: list[str] = []
+        for position, base in enumerate(node.bases, 1):
+            targets = types.lookup(_unsubscripted(base))
+            if len(targets) != 1 or targets[0].kind in ("variable", "function"):
+                self.not_read.append(
+                    f"{node.name}: base {position} '{ast.unparse(base)}' is not a class name "
+                    "this file can read; parents from here on are not read"
+                )
+                break
+            if targets[0] != Target(BUILTINS, "object"):
+                written.append(type_symbol(targets[0]))
+        return written
 
     # -- statements ----------------------------------------------------------------------
 
