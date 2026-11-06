@@ -13,7 +13,7 @@ Detector
 ```
 
 Implementations are keyed by **build system**, not by language: `MavenDetector`,
-`GradleDetector`, `GoWorkDetector`. One Gradle build may hold Java and Kotlin modules, and
+`GradleDetector`, `PythonDetector`, `GoWorkDetector`. One Gradle build may hold Java and Kotlin modules, and
 the detector reads it once.
 
 ## Inputs
@@ -141,6 +141,50 @@ root or a classes directory (a root or folder-only project with no compiling plu
 record anyway), is still a refusal with Gradle's own words: a build broken everywhere must not
 end with success.
 
+**The Python mechanism reads the build files, because there is no build tool to ask**
+(Python design §3e, built 2026-11-06, `src/sextant/ingress/detect/python.py`). Python has no
+one tool that knows the module list, so `PythonDetector` reads `pyproject.toml` and `Pipfile`
+with `tomllib`, `setup.cfg` with `configparser`, and `requirements*.txt` as lines. It never
+imports or runs scanned code, and nothing is downloaded: `--allow-resolve` does nothing for
+Python.
+
+- **Where.** `accepts` finds a Python build file at any depth, by name only (Maven and Gradle
+  look at the root only). The walk does not enter `.git`, `node_modules`, `.sextant`, or any
+  folder that holds `pyvenv.cfg` (a virtual environment, whatever its name).
+- **What is a module.** A `pyproject.toml` with `[project]`, `[tool.poetry]` or
+  `[build-system]`, or a `setup.cfg` with `[metadata]`, marks a module. A file with only tool
+  settings marks nothing (CTFd's `setup.cfg` holds only `[nosetests]`). A uv workspace root is
+  a module only when it marks one and has Python files of its own outside its members. A
+  `setup.py`, `requirements*.txt` or `Pipfile` marks a module only when no folder above it is
+  a module; a `setup.py` must also not be inside a package (no `__init__.py` beside it or
+  above it), and a requirements file needs Python files at or below its folder. The `kind` is
+  `pyproject`, `setup_cfg`, `setup_py` or `requirements`, strongest first. A repository where
+  nothing marks a module is refused: "no Python module found".
+- **Identity.** `[project]`, then `[tool.poetry]`, then `setup.cfg [metadata]`, the name
+  normalized by PEP 503 (`Shop_Orders.API` is `shop-orders-api`); the name is both the
+  `module_id` and the coordinates. A dynamic version (`dynamic = ["version"]`, `attr:`,
+  `file:`) is the version in the project's own installed `.dist-info`, else `.`. A module with
+  no name (requirements only, or `setup.py` only) is unpublished: coordinates and version
+  `.`, and its id is its folder relative to the repository root (its folder name when it is
+  the root).
+- **Import roots** (`source_roots`): the package settings of setuptools (`package-dir`,
+  `packages.find.where`, and the same keys in `setup.cfg`), hatch (`packages`) or Poetry
+  (`packages.from`); else `src/` when it holds Python files; else the module folder.
+  `output_dirs` is empty and `packaging` is `wheel`.
+- **Environment** (`ModuleModel.environment`): `.venv`, `venv` or `env` beside the build file
+  when it holds `pyvenv.cfg`; for a uv workspace member, the same names at the workspace root.
+  `.python-version` names an interpreter and is never an environment.
+- **Dependencies.** `dependency_coordinates` is every name the module folder's build files
+  declare: `[project] dependencies`, Poetry's dependency table, `setup.cfg install_requires`,
+  each `requirements*.txt`, and `Pipfile [packages]`. `dependency_versions` is the installed
+  version of each, from `<env>/lib/python*/site-packages/*.dist-info/METADATA` (`Name`,
+  `Version`), and `dependency_archives` has one `LibraryRoot` per installed one, its archive
+  the `site-packages` folder.
+- **Notes.** Every top folder of Python files in no module ("python files in a folder with no
+  project file, not analysed: <folder>"), every `sys.path.insert`/`append` found by a text
+  search of the `.py` files beside a build file (the change is not followed), and every name
+  two modules share ("more than one module has the name <name>: <folders>").
+
 ### Discovery reads the build, never a convention
 
 | Build system | Where the module list lives |
@@ -150,6 +194,7 @@ end with success.
 | Go | `go.work`, or each `go.mod` |
 | Node | `pnpm-workspace.yaml`, or `workspaces` |
 | Cargo | `members` in the workspace manifest |
+| Python | each `pyproject.toml`, `setup.cfg [metadata]`, `setup.py`, `requirements*.txt` or `Pipfile`, at any depth; `[tool.uv.workspace]` members |
 
 ### A module's identity is the one its build tool gives it
 

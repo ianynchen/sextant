@@ -183,6 +183,10 @@ class ModuleModel:
     # module (Android design M6): its results go to `<root>/.sextant/<results_name>`.
     # None when the folder holds only this module, and its results go to `<root>/.sextant`.
     results_name: str | None = None
+    # The installed environment this module's libraries were read from (Python design
+    # §3e): a folder that holds `pyvenv.cfg`. None for a build system that has no such
+    # folder, and for a module with no environment on this machine.
+    environment: Path | None = None
 
 
 @dataclass(frozen=True)

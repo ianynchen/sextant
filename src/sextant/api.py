@@ -191,6 +191,7 @@ from sextant.egress.render.system import render_system_document
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.gradle import GradleDetector
 from sextant.ingress.detect.maven import MavenDetector
+from sextant.ingress.detect.python import PythonDetector
 from sextant.ingress.detect.sextant_config import (
     EnrichDefaults,
     SextantConfigError,
@@ -424,8 +425,9 @@ class _EnrichOutcome:
 # The one real `Detector` registry (2M Task 2 review): a future detector
 # added to only one of two hand-kept lists would send the other path to
 # `select_detector`'s own uncaught `NoAdapterError`. Order is precedence
-# (`select_detector` picks the first that `accepts()`): Maven before Gradle.
-_DETECTORS: list[Detector] = [MavenDetector(), GradleDetector()]
+# (`select_detector` picks the first that `accepts()`): Maven before Gradle, and
+# Python last, because it accepts a build file at any depth.
+_DETECTORS: list[Detector] = [MavenDetector(), GradleDetector(), PythonDetector()]
 
 
 def _modules_json_path(path: Path) -> Path:
