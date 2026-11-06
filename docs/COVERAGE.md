@@ -1800,7 +1800,7 @@ workspace, one hop up.
 
 `method_resolution` states the answer for every method an EFFECTIVE call site names. A
 found body has no reason and names its declaring class (equal to the class: declared
-there; otherwise inherited). A body not found has `external` and a detail. The table
+there; otherwise inherited). A body not found has `external` or `not_readable` and a detail. The table
 below was measured under the earlier four words (`declared_here`, `inherited`,
 `ancestor_not_scanned` and `owner_not_scanned`), which are now `resolved` (the first two)
 and `external` (the last two). Effective, not raw (spec 2026-09-22 §1a):

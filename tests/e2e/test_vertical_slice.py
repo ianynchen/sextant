@@ -199,7 +199,7 @@ def test_the_document_names_every_fixture_endpoint_and_its_gaps(full_run: Path):
     # entry through neither, since the composed expression is not a column
     # any row carries.
     assert "Environments resolved: `default`, `prod`." in document
-    assert "only.in.default — external in prod (only.in.default is not set)" in document
+    assert "only.in.default — external: only.in.default is not set (in prod)" in document
     # F2, review round 1: the disclosed lead-in — the list below spans
     # every engine's own unresolved rows (the fixture's own live proof:
     # non-config_join catalogs appear in it too), not config_join alone.

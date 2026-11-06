@@ -1113,7 +1113,9 @@ registered it and where the context went unfollowed (empty where nothing names i
 entry `{reason, detail}`: `reason` one word of the general list (`values._REASONS`) —
 `escapes` where the context is handed to a method or constructor, or stored in a field, that
 the walk does not follow; `external` or `not_readable` where a handler object or method is not
-read, by whether its type is in the scanned code — and `detail` a sentence naming the method,
+read, by whether the body that would answer is in the scanned code (the same search as
+method lookup: an unread owner, or an unread ancestor the method is inherited from, is
+`external`) — and `detail` a sentence naming the method,
 field or type — on ONE row
 per `(protocol, method, path)` of the `partial` rows it explains, which is that row's reason,
 since no endpoint column carries one; a `mount_prefix` candidate holds `mount`,

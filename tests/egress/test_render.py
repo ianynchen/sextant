@@ -875,7 +875,7 @@ def test_coverage_section_names_environments_and_the_unresolved_key_with_its_rea
     ]
     text = render_module_document(MODULE, REPORT, "a3f91c", resolved_config=resolved_config)
     assert "Environments resolved: `default`, `prod`." in text
-    assert "only.in.default — external in prod (only.in.default is not set)" in text
+    assert "only.in.default — external: only.in.default is not set (in prod)" in text
     # The row that DID resolve must not also read as unresolved.
     assert "billing.url" not in text.split("## Coverage", 1)[1].split("## Structure", 1)[0]
 

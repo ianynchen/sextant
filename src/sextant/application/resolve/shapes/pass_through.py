@@ -36,7 +36,7 @@ from typing import Any, Literal
 
 from sextant.application.ports.catalogs import CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.dispatch import Dispatch
+from sextant.application.resolve.dispatch import _OBJECT, Dispatch
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.application.resolve.values import (
     ESCAPES,
@@ -81,10 +81,9 @@ def _escapes(phrase: str, name: str) -> Unread:
     return (ESCAPES, phrase.format(name))
 
 
-def _not_followed(scanned: AbstractSet[str], owner: str | None, phrase: str, name: str) -> Unread:
-    """Code the walk does not follow: `external` where the type that would answer (`owner`) is
-    not in the scanned code, `not_readable` where it is there (or is not known)."""
-    outside = owner is not None and owner not in scanned
+def _not_followed(outside: bool, phrase: str, name: str) -> Unread:
+    """Code the walk does not follow: `external` where the body that would answer is not in the
+    scanned code (`outside`), `not_readable` where it is there and not followed."""
     return (EXTERNAL if outside else NOT_READABLE, phrase.format(name))
 
 
@@ -232,8 +231,7 @@ class HandlerReader:
             descriptor = str(made["descriptor"])
             constructed = name == "<init>"
             built = owner if constructed else returned_type(descriptor)
-            maker = method_descriptor(owner, name, descriptor)
-            handlers.append(self._object(built, maker, constructed=constructed))
+            handlers.append(self._object(built, (owner, name, descriptor), constructed=constructed))
         if unmade or not handlers:
             arguments = at.get("arguments") or ()
             argument = arguments[site[2]] if site[2] < len(arguments) else None
@@ -351,18 +349,29 @@ class HandlerReader:
                 # class's body; a factory's declared return is a type, dispatched.
                 constructed = name == "<init>"
                 built = owner if constructed else returned_type(descriptor)
-                maker = method_descriptor(owner, name, descriptor)
-                handlers.append(self._object(built, maker, constructed=constructed))
+                handlers.append(
+                    self._object(built, (owner, name, descriptor), constructed=constructed)
+                )
             return handlers
         return []
 
-    def _object(self, built: str | None, maker: str | None, *, constructed: bool) -> Handler:
-        """A handler object of type `built` (made by `maker`, where a call made it; exactly
+    def _object(
+        self, built: str | None, made: tuple[str, str, str] | None, *, constructed: bool
+    ) -> Handler:
+        """A handler object of type `built` (made by the call `made`, `(owner, name,
+        descriptor)`, where a call made it; exactly
         that class where `constructed`): the framework's own passes on; a type of this
         module, or one it extends, runs its handler method; any other was produced where this
         analysis does not read."""
-        if maker is not None:
-            unread = _not_followed(self._dispatch.scanned, owner_of(maker), _PRODUCED_BY, maker)
+        if made is not None:
+            # The body of the call that built it is outside the scanned code where method
+            # lookup (`Dispatch.boundary`) leaves the workspace searching for it: an unread
+            # owner, or an unread ancestor it inherits the method from.
+            unread = _not_followed(
+                self._dispatch.boundary(*made) is not None,
+                _PRODUCED_BY,
+                method_descriptor(*made),
+            )
         else:
             unread = self._of_type(built)
         return self._typed(built, constructed=constructed) or Handler(
@@ -373,19 +382,38 @@ class HandlerReader:
         """A handler method with no body read: `external` where its type is not scanned. A
         method found through a scanned type (`_runs`) is always `not_readable`; `external` is
         reached by a method reference or lambda whose type is not scanned."""
+        owner = owner_of(bare_descriptor(symbol))
         return _not_followed(
-            self._dispatch.scanned, owner_of(bare_descriptor(symbol)), _NO_BODY, symbol
+            owner is not None and owner not in self._dispatch.scanned, _NO_BODY, symbol
         )
 
     def _of_type(self, built: str | None) -> Unread:
         """A handler object of a type nothing here reads a handler of."""
-        return _not_followed(self._dispatch.scanned, built, _OF_TYPE, built or "an unread type")
+        return _not_followed(self._inherits_unread(built), _OF_TYPE, built or "an unread type")
 
     def _from_field(self, field: str, declared: str | None) -> Unread:
         """A handler object from a field, by the field's declared type where it has one, else by
         the type that owns the field (a static field of a library class is `external`)."""
-        owner = declared if declared is not None else owner_of(bare_descriptor(field))
-        return _not_followed(self._dispatch.scanned, owner, _FROM_FIELD, field)
+        if declared is not None:
+            outside = self._inherits_unread(declared)
+        else:
+            owner = owner_of(bare_descriptor(field))
+            outside = owner is not None and owner not in self._dispatch.scanned
+        return _not_followed(outside, _FROM_FIELD, field)
+
+    def _inherits_unread(self, built: str | None) -> bool:
+        """Whether the handler method of the type `built` would be found in code that is not
+        scanned: the type is unread, or the search for a handler method of it
+        (`Dispatch.boundary`, no descriptor, so nothing declares it) leaves the workspace at an
+        unread ancestor. The platform root type is not an answer for a handler method."""
+        if built is None:
+            return False
+        if built not in self._dispatch.scanned:
+            return True
+        return any(
+            self._dispatch.boundary(built, name, "") not in (None, _OBJECT)
+            for name in sorted(self._rule.handler_methods)
+        )
 
     def _unread_argument(self, where: str) -> Unread:
         """An argument of a registering method that nothing read gives a value for. The method

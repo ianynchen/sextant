@@ -2550,7 +2550,7 @@ def test_vertx_a_context_handed_to_another_module_is_partial(vertx_inbound, vert
     # The base factory BUILT the handler: it is named as its producer, never as a hand-off.
     reason = _reason_of(plain[0], vertx_tables)
     assert "is built by com/acme/vertx/PassThroughRoutes#baseFactory(" in reason, reason
-    assert '"reason":"not_readable"' in reason, reason
+    assert '"reason":"external"' in reason, reason
     assert "hands the request's context" not in reason, reason
     assert not [r for r in rows if r["path"] == "/cors"]
 
@@ -2570,7 +2570,7 @@ def test_vertx_every_pass_through_reason_is_one_word_of_the_general_list(vertx_t
         for candidate in json.loads(q["candidates"])
         for entry in candidate["unread"]
     }
-    assert {"escapes", "not_readable"} <= reasons
+    assert {"escapes", "external"} <= reasons
 
 
 def test_vertx_an_anonymous_handler_class_runs_its_handle(vertx_inbound):

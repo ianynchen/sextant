@@ -1425,11 +1425,11 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
         # built the handler object, or the handler method with no body.
         handler = candidate["handler"] or "a handler object"
         reasons = ", and ".join(
-            f"{entry['detail']} ({entry['reason']})"
+            f"{entry['reason']}: {entry['detail']}"
             for entry in cast(list[dict[str, str]], candidate["unread"])
         )
         return (
-            f"{handler} (registered by {candidate['caller']}) {reasons}, so whether it "
+            f"{handler} (registered by {candidate['caller']}) — {reasons}, so whether it "
             f"passes the request on is not known"
         )
     if question == "mount_prefix":
@@ -1578,7 +1578,7 @@ def assemble_module_document(
     ]
     coverage_items += _type_header_items(report.coverage, module)
     coverage_items += _understanding_items(report.coverage)
-    coverage_items += _config_coverage_items(resolved_config)
+    coverage_items += _config_coverage_items(resolved_config, redactor)
     coverage_items += _unresolved_derivation_items(report.endpoints)
     # Per-environment peer AUTHORITIES — one substituted address per
     # environment for a resolved outbound row — are the system-scope
@@ -3144,6 +3144,7 @@ def _understanding_items(coverage: dict[str, object]) -> list[tuple[Run, ...]]:
 
 def _config_coverage_items(
     resolved_config: Sequence[dict[str, object]],
+    redactor: Redactor,
 ) -> list[tuple[Run, ...]]:
     """Coverage's own view of pass 2 (2F design §2): which profiles resolved,
     and which declared keys did not — named with their reason and
@@ -3165,8 +3166,8 @@ def _config_coverage_items(
         items.append(
             _runs(
                 f"Configuration key unresolved: {row['key']} — "
-                f"{row['unresolved_reason']} in {row['environment']} "
-                f"({row['unresolved_detail']})."
+                f"{row['unresolved_reason']}: {redactor.redact_text(str(row['unresolved_detail']))} "
+                f"(in {row['environment']})."
             )
         )
     return items

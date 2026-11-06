@@ -2620,9 +2620,13 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_PASS_THROUGH,
-                find="            unread = _not_followed(self._dispatch.scanned, owner_of(maker), "
-                "_PRODUCED_BY, maker)\n",
-                replace="            unread = _escapes(_HANDED_TO, maker)  # guard disabled by scripts/guard_check.py\n",
+                find="            unread = _not_followed(\n"
+                "                self._dispatch.boundary(*made) is not None,\n"
+                "                _PRODUCED_BY,\n"
+                "                method_descriptor(*made),\n"
+                "            )\n",
+                replace="            unread = _escapes(_HANDED_TO, method_descriptor(*made))  "
+                "# guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

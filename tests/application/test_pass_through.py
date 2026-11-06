@@ -258,6 +258,9 @@ def _anonymous_facts() -> list:
 _AUTH = _PKG + "Auth#"
 _AUTH_IMPL = _PKG + "AuthImpl#"
 _BARE = _PKG + "Bare#"
+# A class of this module whose superclass is in a jar this analysis does not read.
+_FROM_JAR = _PKG + "FromJar#"
+_UNSCANNED = "com/other/Lib#"
 _BASE = _PKG + "BaseHandler#"
 _SUB = _PKG + "SubHandler#"
 
@@ -345,6 +348,13 @@ def _hierarchy_facts() -> list:
         ),
         _type(_BARE),
         _declared(_BARE, "check", _TAKES),
+        _type(_FROM_JAR),
+        SymbolFact(
+            document_id="doc_values",
+            symbol=_MODULE + _FROM_JAR,
+            construct_kind=ConstructKind.CLASS,
+            superclass="com/other/BaseHandler#",
+        ),
         _type(_BASE),
         _declared(_BASE, "handle", _TAKES),
         _void(_BASE, "handle", _TAKES),
@@ -561,9 +571,6 @@ def test_a_handler_object_of_a_scanned_type_with_no_handler_is_not_readable_not_
     )
 
 
-_UNSCANNED = "com/other/Lib#"
-
-
 def test_a_handler_from_a_field_of_an_unscanned_class_is_external_else_not_readable(walked):
     """No declared type is recorded for the field: the class that owns it decides."""
     field = {"kind": "field", "symbol": _UNSCANNED + "HANDLER."}
@@ -607,30 +614,48 @@ def test_a_handler_method_of_an_unscanned_class_with_no_body_is_external(walked)
     )
 
 
-def test_a_handler_object_built_by_a_call_is_decided_by_the_class_of_the_call(walked):
-    """The factory's own class decides, whatever the type it returns."""
+def test_a_handler_built_by_a_method_is_decided_by_where_its_body_is(walked):
+    """The body of the building call decides, as method lookup does: an unread owner, or a
+    method inherited from an unread ancestor, is `external`; a body declared here is not
+    followed (`not_readable`)."""
     reader = _reader(walked)
-    outside = reader._object(
-        "com/other/Thing#", method_descriptor(_UNSCANNED, "make", "()V"), constructed=False
+    thing = "com/other/Thing#"
+    unread_owner = reader._object(thing, (_UNSCANNED, "make", "()V"), constructed=False)
+    inherited = reader._object(thing, (_FROM_JAR, "make", "()V"), constructed=False)
+    declared = reader._object(thing, (_BARE, "check", _TAKES), constructed=False)
+    assert (unread_owner.unread[0], inherited.unread[0], declared.unread[0]) == (
+        EXTERNAL,
+        EXTERNAL,
+        NOT_READABLE,
     )
-    inside = reader._object(
-        "com/other/Thing#", method_descriptor(_ROUTES, "make", "()V"), constructed=False
-    )
-    assert (outside.unread[0], inside.unread[0]) == (EXTERNAL, NOT_READABLE)
-    assert "is built by" in inside.unread[1]
+    assert declared.unread[1].startswith("is built by ")
 
 
-def test_the_reason_of_code_not_followed_follows_whether_its_type_is_scanned():
+def test_a_handler_object_whose_handler_is_inherited_from_an_unread_class_is_external(walked):
+    """`new MyHandler()`, `MyHandler` in the module, its `handle` from a base class in a jar
+    not read: the body is outside the scanned code. A scanned class with no handler anywhere
+    in its read ancestry is `not_readable`."""
+    reader = _reader(walked)
+    inherited = reader.of({"kind": "instance", "symbol": _FROM_JAR}, None)
+    assert (inherited.outcome, inherited.unread[0]) == (UNREADABLE, EXTERNAL)
+    here = reader.of({"kind": "instance", "symbol": _ROUTES}, None)
+    assert here.unread[0] == NOT_READABLE
+
+
+def test_a_handler_from_a_field_typed_as_a_class_with_an_unread_base_is_external(walked):
+    field = _ROUTES + "held."
+    reader = _reader(walked, lambda: {field: _FROM_JAR})
+    [found] = reader._declared_type(_WIRE, {"kind": "field", "symbol": field}, set())
+    assert found.unread[0] == EXTERNAL
+
+
+def test_the_reason_of_code_not_followed_follows_whether_the_body_is_outside():
     phrase = "is built by {}, whose body is not read"
-    assert _not_followed({"p/A#"}, "p/A#", phrase, "m") == (
+    assert _not_followed(False, phrase, "m") == (
         NOT_READABLE,
         "is built by m, whose body is not read",
     )
-    assert _not_followed({"p/A#"}, "q/B#", phrase, "m") == (
-        EXTERNAL,
-        "is built by m, whose body is not read",
-    )
-    assert _not_followed({"p/A#"}, None, phrase, "m")[0] == NOT_READABLE
+    assert _not_followed(True, phrase, "m") == (EXTERNAL, "is built by m, whose body is not read")
 
 
 @pytest.mark.pins("pass_through.a-next-reached-on-the-received-context-passes-on")
