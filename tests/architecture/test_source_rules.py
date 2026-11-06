@@ -266,8 +266,12 @@ def test_jvm_names_stay_in_the_jvm_extractor():
         "ingress/detect/gradle.py": {"classpath"},
         "ingress/detect/maven.py": {"java", "classpath"},
         # The platform's root type, where every method lookup ends (JVMS 5.4.3.3). Its name
-        # is a wire name, like `java.version`; it is not a language branch.
-        "application/resolve/dispatch.py": {"java"},
+        # is a wire name, like `java.version`; it is not a language branch. `jvm` is the
+        # name of one of the two lookup rules (`ModuleFact.lookup`, spec 2026-11-06 §3b):
+        # the JVM's order and the `c3` rule, Python's method resolution order, are two
+        # named rules because the languages differ (DR-6), and `Dispatch.lookup_order`
+        # branches on the rule's name, never on a language.
+        "application/resolve/dispatch.py": {"java", "jvm"},
     }
 
     found = offenders(files, JVM_NAMES)

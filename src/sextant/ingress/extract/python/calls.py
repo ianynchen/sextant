@@ -120,6 +120,9 @@ class Body:
     next_value: int = 0
     returns: int = 0
     lambdas: int = 0
+    # The class a library call's result is, by the library's written signature
+    # (`libraries.py`), keyed by the call's `result` value id.
+    returned: dict[int, str] = field(default_factory=dict)
 
     def value_id(self) -> int:
         found = self.next_value
@@ -931,6 +934,9 @@ class BodyReader:
         )
         scope.body.ordinal += 1
         if result is not None:
+            returned = self._library_returns(callee, arguments)
+            if returned is not None:
+                scope.body.returned[result] = returned
             return CallArgument(kind="unresolved", source=result)
         if callee.receiver is not None:
             return CallArgument(kind="instance", symbol=callee.target.owner, source=callee.receiver)
@@ -949,6 +955,10 @@ class BodyReader:
             owners = self._targets(func.value, scope) if _is_dotted(func.value) else None
             if owners is not None and len(owners) == 1:
                 owner = owners[0]
+                defined = self._library_member(owner, func.attr)
+                if defined is not None:
+                    method_owner, method_name = _split(defined)
+                    return Callee(_target(method_owner, method_name), "static")
                 if owner.member is None or owner.kind == "class" or _is_builtin_class(owner):
                     return Callee(_target(type_symbol(owner), func.attr), "static")
                 if owner.kind in (None, "variable"):
@@ -1011,6 +1021,29 @@ class BodyReader:
                 )
         return self._on_value(self._value(func, scope), CALL, scope)
 
+    def _library_member(self, owner: Target, name: str) -> Target | None:
+        """`module.name` for a library module, as the library defines it: a re-export is
+        its defining module's (`requests.get` is `requests.api.get`)."""
+        index = self._context.index
+        if owner.member is not None or index.libraries is None or index.owns(owner.module):
+            return None
+        found = index.libraries.member(owner, name)
+        if found is None or found.member is None or "." in found.member:
+            return None
+        return found
+
+    def _library_returns(self, callee: Callee, arguments: list[CallArgument]) -> str | None:
+        """The class a library call returns, where its written signature chooses one."""
+        libraries = self._context.index.libraries
+        owner = callee.target.owner
+        if libraries is None or owner is None or callee.target.name is None:
+            return None
+        found = libraries.call_returns(owner, str(callee.target.name), arguments)
+        if found is None or found.resolution != "resolved" or len(found.types) != 1:
+            return None
+        symbol = found.types[0].symbol
+        return symbol if names_a_type(symbol) and symbol not in (ANY, UNION) else None
+
     def _super(self, name: str, scope: Scope) -> Callee:
         """`super().m()` from a method: `special` on the class's first written parent, as
         the JVM's `super.m()` names the direct superclass. The `super()` call itself is
@@ -1037,6 +1070,8 @@ class BodyReader:
             return Callee(_target(value.symbol, name), "virtual", value.source)
         if value.kind in ("string", "concat"):
             declared = _STRING
+        if declared is None and value.kind == "unresolved" and value.source is not None:
+            declared = scope.body.returned.get(value.source)
         if value.kind == "parameter" and isinstance(value.value, int):
             return Callee(
                 _target(declared, name),

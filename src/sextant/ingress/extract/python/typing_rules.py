@@ -11,9 +11,9 @@ typing specification defines it:
 - `Self` is the enclosing class.
 
 A name the file does not bind gives no type: it is never guessed. A name bound to a closed
-list (`imports.py`) is the union of what each binding names. Library type files and
-typeshed are read later (Task 7); until then an imported name keeps the symbol its import
-line gives.
+list (`imports.py`) is the union of what each binding names. A name of a library is its
+defining symbol where the scan's libraries say (`libraries.py`); elsewhere an imported name
+keeps the symbol its import line gives.
 """
 
 import ast

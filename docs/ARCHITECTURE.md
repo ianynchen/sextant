@@ -443,7 +443,7 @@ exists usually means naming the thing it forbids.
 | **Ingress is write-only** | Nothing in `ingress/` depends on `Workspace` at all: readers emit facts and can never read the graph back | import-linter |
 | **Egress is read-only** | Nothing in `egress/` writes facts or derived tables: a renderer that writes is derivation hiding in presentation | import-linter |
 | Storage ignorance | `storage/` knows SQL and D01; it never names a framework, a language, or a protocol | source rule |
-| Language confinement | Only `ingress/extract/jvm` names JVM languages or bytecode. The composition root is excepted: naming concrete adapters is what it is for | source rule |
+| Language confinement | Only `ingress/extract/jvm` names JVM languages or bytecode. The composition root is excepted: naming concrete adapters is what it is for. Also excepted: the two named method-lookup rules in `application/resolve/dispatch.py` (`jvm`, and `c3`, Python's method resolution order with its root `builtins/object#`), which branch on the rule `module.lookup` names, never on a language (DR-6) | source rule |
 | Extension namespace | Only a language's own adapter reads its `ext.<lang>` namespace | source rule |
 | **No framework in code** | No framework is named anywhere outside the catalogs — the claim the whole design rests on | source rule |
 | **Ports hold only contracts** | Protocols, frozen dataclasses, errors, and do-nothing implementations. A port that grows behaviour stops being a seam | source rule |

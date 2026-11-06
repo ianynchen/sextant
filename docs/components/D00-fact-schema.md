@@ -138,7 +138,11 @@ machine whose local repository lives somewhere else. A document from the module'
 output carries **no `origin` key at all** rather than one spelled null: a module with no
 library extraction configured produces exactly the fact files it produced before opt-in
 library extraction existed, which is what makes "did enabling this change my module's
-facts?" answerable by comparing bytes.
+facts?" answerable by comparing bytes. A Python module's library documents (the signatures
+and types the scanner reads from the installed environment, spec 2026-11-06 §3e) carry the
+distribution's PEP 503 name (`fastapi`), or, where the file is read from Sextant's pinned
+typeshed copy, `typeshed@<commit>/<stub package>@<version>` (`typeshed@13ffe24…/requests@~=2.33.0`;
+the standard library is the stub package `stdlib`, at the environment's Python version).
 
 **`origin_tier` moves with it, to `dependency`.** A class this module did not build is
 not `module_output`, and saying so would be a claim known to be false. `dependency` is
@@ -233,8 +237,9 @@ workspace HAS scanned was reported as not found, which was false rather than imp
 **`origin_tier`** — `module_output`, `dependency`, `first_party`, `third_party`,
 `platform`. Where a document's class file was read from (§2). `dependency` is the tier
 of a declared dependency's own archive, read because the module opted into it
-([D04](D04-config-and-exclusion.md) §2a); it says the class came out of a dependency and
-nothing about whose. `first_party`/`third_party` answer that second question from
+([D04](D04-config-and-exclusion.md) §2a), and of a Python library's signatures and types,
+which the Python scanner always reads (its `symbol` facts only, never its bodies); it says
+the class came out of a dependency and nothing about whose. `first_party`/`third_party` answer that second question from
 declared group patterns, and until those are read no producer writes either — a tier is
 an observation, never a trust judgement.
 

@@ -595,6 +595,13 @@ class PythonDetector:
         own_python = PythonDetector._owns_code(folder, modules, has_python)
         dependencies = files.dependencies()
         versions = {name: installed[name] for name in dependencies if name in installed}
+        if environment is not None:
+            # A declared library missing from the environment has no symbols (§3e).
+            notes.extend(
+                f"{name} is not installed in the scanned environment"
+                for name in dependencies
+                if name not in installed
+            )
         archives = (
             tuple(
                 LibraryRoot(coordinate=name, version=installed_version, archive=site_packages)

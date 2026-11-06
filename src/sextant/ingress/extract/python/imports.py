@@ -13,8 +13,10 @@ json` binds `json` to `ujson` and to `json`, and never to the first one silently
 
 import ast
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Literal, Protocol
+
+from sextant.domain.facts import CallArgument, TypeRef
 
 # What a name of THIS file is, where the file can tell. An imported name has no kind:
 # whether `fastapi.FastAPI` is a class or a function is in a file this scanner does not
@@ -48,18 +50,55 @@ class Binding:
 
 
 @dataclass(frozen=True)
+class Returned:
+    """What a library call returns, by its written signatures: one type where the
+    argument types choose one overload (`resolved`), else the closed list of what the
+    overloads they leave return (`narrowed`)."""
+
+    types: tuple[TypeRef, ...]
+    resolution: Literal["resolved", "narrowed"]
+
+
+class LibraryNames(Protocol):
+    """What the scanned environment's libraries and typeshed say (`libraries.py`)."""
+
+    def member(self, target: Target, name: str) -> Target | None:
+        """`target.name` as the library defines it, or None where no library read says."""
+        ...
+
+    def call_returns(
+        self, owner: str, name: str, arguments: Sequence[CallArgument]
+    ) -> Returned | None:
+        """What the call `owner.name(arguments)` returns, or None where nothing says."""
+        ...
+
+
+@dataclass(frozen=True)
 class ModuleIndex:
     """The module paths that exist in the scanned module's import roots, by file path
-    alone (`app/api/items` for `app/api/items.py` or `app/api/items/__init__.py`)."""
+    alone (`app/api/items` for `app/api/items.py` or `app/api/items/__init__.py`), and
+    the libraries a name of another module is looked up in."""
 
     modules: frozenset[str]
+    libraries: LibraryNames | None = field(default=None, compare=False)
+    # Every module path and every folder above one: `owns`' answer, worked out once,
+    # because every name of another module asks it (GUIDELINES §8.7).
+    _owned: frozenset[str] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        owned = set(self.modules)
+        for module in self.modules:
+            while "/" in module:
+                module = module.rpartition("/")[0]
+                owned.add(module)
+        object.__setattr__(self, "_owned", frozenset(owned))
 
     def is_module(self, path: str) -> bool:
         return path in self.modules
 
     def owns(self, path: str) -> bool:
         """Whether `path` or a package above it is in the scanned module."""
-        return any(path == m or m.startswith(path + "/") for m in self.modules)
+        return path in self._owned
 
 
 def module_path(relative: str) -> tuple[str, bool]:
@@ -78,7 +117,13 @@ def member_of(target: Target, name: str, index: ModuleIndex, *, more_follow: boo
     """`target.name`: a submodule where one exists by path, else a member. For a library
     module, which this scanner cannot list, a name with more names after it is taken
     as a module (`fastapi.routing.APIRouter`), and so is a library member with a name
-    after it (`from fastapi import routing`, then `routing.APIRouter`)."""
+    after it (`from fastapi import routing`, then `routing.APIRouter`). Where a library
+    read says (`libraries.py`), its answer is taken: a submodule, or the member's defining
+    symbol (`fastapi.APIRouter` is `fastapi.routing.APIRouter`)."""
+    if index.libraries is not None and not index.owns(target.module):
+        found = index.libraries.member(target, name)
+        if found is not None:
+            return found
     if target.member is not None and not index.owns(target.module):
         submodule = f"{target.module}/{target.member.replace('.', '/')}"
         return member_of(Target(submodule), name, index, more_follow=more_follow)

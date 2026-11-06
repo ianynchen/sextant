@@ -47,6 +47,18 @@ here would restate those documents rather than add anything.
   `break`/`continue`, `try`/`except`/`else`/`finally`, `with`, `return`, `raise`, `assert`,
   `match`, `and`/`or`, conditional expressions and comprehensions. A name two branches set
   differently is now a `merge` of both values, where it was `unresolved`.
+- **The Python scanner reads library signatures and types, and Python lookup follows C3**
+  (OI-208 plan 1 task 7). Libraries are read from the project's installed environment, and the
+  standard library and stub-only libraries (`requests`) from a pinned typeshed copy shipped in the
+  wheel (`resources/typeshed`, commit in `COMMIT`); nothing is imported, run or downloaded. A
+  library name is its defining symbol (`fastapi.APIRouter` is `fastapi/routing/APIRouter#`), a
+  library call's result has the class its signature returns (the overload the argument types
+  choose), and each library module a name leads to is written as `symbol` facts with `origin`
+  set to the distribution or `typeshed@<commit>/<stub package>@<version>`. A declared library
+  missing from the environment is named by the detector (`fastapi is not installed in the
+  scanned environment`). Method lookup is one order per type (`Dispatch.lookup_order`): the
+  JVM's, unchanged, or C3 for a `c3` module, where `__init__` is inherited and a class whose
+  parents were not all read ends the order with `external`.
 
 - **A Retrofit client that Dagger or Hilt makes has its server address** (OI-304, spec
   `2026-11-05-di-recipe-hop-design.md`). A parameter the container fills (a `@Provides` method's,

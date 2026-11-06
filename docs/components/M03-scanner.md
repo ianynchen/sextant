@@ -335,7 +335,39 @@ comprehension is a loop; a generator expression's calls have no `post_dominator`
 reach a return, since it may run after the body returned. A call after a `return` is
 written with no place: no `dominator`, `post_dominator` or `loop_group`, both flags false.
 
-Library type files and typeshed are later parts of this scanner.
+**Libraries** (`libraries.py`, spec §3e "Libraries"). A name of another module is looked up
+in the libraries of the scan, read lazily, each module once:
+- the distributions the module declares and its installed environment holds
+  (`ScanRequest.dependency_archives`: the `site-packages` folder, and each distribution's
+  `*.dist-info/RECORD` for the import names it installs);
+- the standard library, from the pinned typeshed copy Sextant ships
+  (`resources/typeshed`, its commit in `COMMIT`; `stdlib/VERSIONS` says which modules the
+  environment's Python has);
+- for a distribution that ships no types (no `py.typed`), its typeshed stub package.
+
+A type file (`.pyi`) is read before a source file. Nothing is imported or run, and nothing
+is downloaded. A `sys.version_info` test in a type file is read against the environment's
+Python; a `sys.platform` test gives both branches.
+
+- **A library name is its defining symbol.** A re-export is followed through the library's
+  own imports, and a star import where only one module defines the name:
+  `from fastapi import APIRouter` names `fastapi/routing/APIRouter#`, and `requests.get(…)`
+  is the static call `requests/api#get`. A library that is not installed has no symbols, so
+  the name stays as the import line writes it, and the detector notes `<name> is not
+  installed in the scanned environment`.
+- **A library call's result has the class its signature returns.** The overload is the
+  first one the argument types match, as a type checker chooses. Where an argument of
+  unknown type (the receiver among them) is given different parameter types by the
+  overloads that match, the answer is the closed list of what they return (`narrowed`),
+  and a call on the result leaves its owner to the resolver, as before. A type variable or
+  a special form names no class, and also leaves the owner.
+- **Each library module a name led to is written**, after the module's own files, as one
+  document of its `symbol` facts (classes with their written parents, functions and their
+  `@overload` stubs with typed signatures, fields), under `facts/lib/pypi/<name>/` or
+  `facts/lib/typeshed/<stub package>/`, with `origin_tier: dependency` and `origin` set
+  (D00 §2). The modules that define a class's parents are written too, so a lookup can
+  continue through them. Bodies are not written: no call, value or return of a library.
+  An opted-in library's bodies (D04 §2a) are not read for Python yet.
 
 ### Artifact readers
 

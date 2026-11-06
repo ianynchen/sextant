@@ -82,5 +82,17 @@ def instructions_path(root: Path | None = None) -> Path:
     return path
 
 
+def typeshed_dir(root: Path | None = None) -> Path:
+    """The pinned copy of typeshed the Python scanner reads (spec 2026-11-06 §3e): the
+    standard library's type files and the stub packages of libraries that ship no types
+    of their own. Fetched once, at development time, from the commit `COMMIT` names;
+    Sextant downloads nothing when it runs. `root` — see `catalogs_dir`."""
+    package_root = root if root is not None else _package_root()
+    directory = package_root / "resources" / "typeshed"
+    if not (directory / "COMMIT").is_file():
+        raise MissingResourceError(f"the typeshed copy is not at {directory}")
+    return directory
+
+
 def _package_root() -> Path:
     return Path(str(resources.files("sextant")))

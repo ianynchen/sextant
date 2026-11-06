@@ -20,7 +20,9 @@ from sextant.domain.version import FACT_SCHEMA_VERSION, SEXTANT_VERSION
 from sextant.ingress.detect.python import is_skipped_folder
 from sextant.ingress.extract.python.calls import FileContext
 from sextant.ingress.extract.python.imports import ModuleIndex, module_path
+from sextant.ingress.extract.python.libraries import Libraries
 from sextant.ingress.extract.python.structure import file_facts
+from sextant.resources import typeshed_dir
 
 _LANGUAGE = "python"
 _SCANNER_ID = "sextant-python-scanner"
@@ -51,7 +53,14 @@ class PythonScanner:
         files = [
             (root, relative) for root in roots for relative in _python_files(root, request.ignore)
         ]
-        index = ModuleIndex(frozenset(_module_paths(relative for _, relative in files)))
+        # The libraries are read from the module's own scan only: an opted-in library's
+        # scan reads that library's files whole (D04 §2a).
+        libraries = (
+            Libraries(request.dependency_archives, typeshed_dir())
+            if request.origin is None
+            else None
+        )
+        index = ModuleIndex(frozenset(_module_paths(relative for _, relative in files)), libraries)
         manager = NOT_APPLICABLE if request.coordinates == NOT_APPLICABLE else _PACKAGE_MANAGER
         prefix = f"{PYTHON_SCHEME} {manager} {request.coordinates} {request.version} "
         documents = facts = 0
@@ -97,6 +106,14 @@ class PythonScanner:
             write_fact_file(request.out_dir / f"{relative}.jsonl", document, read.facts)
             documents += 1
             facts += len(read.facts)
+        if libraries is not None:
+            # After every module file: each one may lead to more library modules.
+            for target, document, library_facts in libraries.documents(
+                request.module_id, request.out_dir
+            ):
+                write_fact_file(target, document, library_facts)
+                documents += 1
+                facts += len(library_facts)
         return ScanReport(
             documents=documents,
             facts=facts,

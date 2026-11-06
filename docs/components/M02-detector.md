@@ -202,7 +202,9 @@ Python.
   each `requirements*.txt`, and `Pipfile [packages]`. `dependency_versions` is the installed
   version of each, from `<env>/lib/python*/site-packages/*.dist-info/METADATA` (`Name`,
   `Version`), and `dependency_archives` has one `LibraryRoot` per installed one, its archive
-  the `site-packages` folder.
+  the `site-packages` folder. Where an environment was found, each declared name it does not
+  hold is a note, `<name> is not installed in the scanned environment`: that library has no
+  symbols (M03 "Libraries").
 - **Notes.** Every top folder of Python files in no module ("python files in a folder with no
   project file, not analysed: <folder>"), every `sys.path.insert`/`append` found by a text
   search of the `.py` files beside a build file (the change is not followed).
