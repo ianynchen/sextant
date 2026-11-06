@@ -3,7 +3,10 @@ existing facts — modules and classes as types, a body as `<clinit>`, module-le
 static fields, decorators as the calls they are. Every tree is built in `tmp_path`; nothing
 is imported or run."""
 
+import sys
 from pathlib import Path
+
+import pytest
 
 from sextant.application.ports.scanner import ScanRequest
 from sextant.domain.factfile import read_fact_tree
@@ -494,3 +497,28 @@ def test_the_two_reason_words_are_words_of_the_general_list():
     from sextant.ingress.extract.python import structure
 
     assert {structure._NOT_READABLE, structure._EXTERNAL} <= set(values._REASONS)
+
+
+# `except A, B:` without brackets is Python 3.14 syntax (PEP 758). The scanner reads with the
+# interpreter that runs Sextant, so the same file is read on 3.14 and uncovered below it.
+_BARE_EXCEPT = "def f():\n    try:\n        pass\n    except KeyError, ValueError:\n        pass\n"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 14), reason="`except A, B:` needs Python 3.14")
+def test_python_314_syntax_is_read_on_314(tmp_path: Path):
+    report, tree = _scan(tmp_path, {"app/new.py": _BARE_EXCEPT})
+
+    assert report.uncovered == ()
+    assert _class_and_document(tree, "app/new#")[1].partial is False
+
+
+@pytest.mark.skipif(sys.version_info >= (3, 14), reason="Python 3.14 reads this file")
+def test_python_314_syntax_below_314_is_uncovered_and_the_reason_names_the_version(
+    tmp_path: Path,
+):
+    report, _ = _scan(tmp_path, {"app/new.py": _BARE_EXCEPT, "app/ok.py": "x = 1\n"})
+
+    running = f"read with Python {sys.version_info.major}.{sys.version_info.minor}"
+    assert len(report.uncovered) == 1
+    assert report.uncovered[0].startswith("app/new.py: ")
+    assert running in report.uncovered[0]
