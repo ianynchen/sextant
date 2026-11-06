@@ -1,354 +1,334 @@
-# Python: reading Python code, the command-line boundary, and FastAPI — design
+# Python: reading Python code with the JVM's pipeline — design
 
-**Status: DRAFT 2026-11-06, for the user's approval.** Plane OI-208 = SEXTANT-201 (language order 2,
-ruled 2026-10-26). Agreed in conversation on 2026-11-06. Points the user ruled are marked **(ruled)**.
-Points that are my call are marked **(my call)**, and the user can reject them.
+**Status: DRAFT v2 2026-11-06, for the user's approval.** Plane OI-208 = SEXTANT-201 (language order 2,
+ruled 2026-10-26). v1 was agreed in conversation on 2026-11-06. It was then reviewed twice: once from
+first principles, and once adversarially for reuse ("stick to the current design, reuse, extend
+existing terms before adding new ones" — user, 2026-11-06). v2 takes both reviews in. The reviews are
+kept beside this file as `2026-11-06-python-reader-review-first-principles.md` and
+`2026-11-06-python-reader-review-reuse.md`.
+
+Marks:
+- **(ruled):** the user decided it.
+- **(my call):** my decision; the user can reject it.
+- **(DECIDE):** open for the user.
 
 ## 1. Intent
 
-Java and Kotlin are complete. Python is next. The goal is the same as for the JVM (ruled): point
-Sextant at a Python service and get its architecture from the code alone:
-- the routes it serves and the commands it accepts;
-- the services it calls and the programs it starts;
+Java and Kotlin are complete. Python is next. The goal is the same as for the JVM (ruled): from the
+code alone, get:
+- what a service serves;
+- what it calls;
 - the shapes of the data on each;
 - the configuration values behind each address;
 - the path a request takes through the code.
 
-Without types, Python services cannot be stitched together. So Sextant needs its own type
-inference, not only the types written in the code (ruled).
+Python services must stitch together, so types the code does not write must be worked out (ruled).
+FastAPI comes first, then Flask, then Django (ruled 2026-10-26). Sextant's own code is the first
+project read, to test the reading of Python (ruled).
 
-Order of work (ruled 2026-10-26): FastAPI, then Flask, then Django.
+**The governing principle of v2:** Python adds a **scanner** that writes the existing facts. Every
+step after the facts is the existing one, extended where Python needs it. Nothing runs beside it.
 
 ## 2. What was measured (2026-11-06)
 
-Eleven open-source projects were cloned into `examples/py-*` (shallow clones, commit in brackets):
-- FastAPI: polar (0e5a3f1), dispatch (dd2837e), mealie (c3dc906), full-stack-fastapi-template (aabb901)
-- Flask: redash (09740ea), CTFd (a6a81dd)
-- Django: netbox (3baeb0a), zulip (82b428a), saleor (1d707dc)
-- other: httpie `cli` (5b604c3), microservices-demo (c7cb6d5, five Python gRPC services)
+**Projects:** eleven open-source projects, shallow-cloned into `examples/py-*`:
 
-Scripts, to produce the numbers again: `scripts/probes/python_shapes.sh`,
-`python_typed_share.py`, `python_call_kinds.py` (run with `python -I` over `examples/py-*`).
+| Framework | Projects (commit) |
+|---|---|
+| FastAPI | polar 0e5a3f1, dispatch dd2837e, mealie c3dc906, full-stack-fastapi-template aabb901 |
+| Flask | redash 09740ea, CTFd a6a81dd |
+| Django | netbox 3baeb0a, zulip 82b428a, saleor 1d707dc |
+| other | httpie `cli` 5b604c3, microservices-demo c7cb6d5 |
 
-**Written types (function inputs with a written type, outside tests and migrations):**
+**Scripts:** `scripts/probes/python_shapes.sh`, `python_typed_share.py`, `python_call_kinds.py`
+(run with `python -I`).
+
+**Written types** (function inputs with a written type, outside tests and migrations):
 
 | polar | zulip | mealie | dispatch | saleor | netbox | redash | CTFd | Sextant |
 |---|---|---|---|---|---|---|---|---|
 | 99% | 99% | 88% | 82% | 56% | 2% | 1% | 1% | 100% |
 
-FastAPI projects are typed, because FastAPI cannot run without types. Flask and Django projects are
-mostly untyped. zulip is the exception, because it is checked with mypy.
+**Facts the reviews measured, which decide parts below:**
 
-**What a call needs before its target is known (rough sort by code shape, not a real resolver):**
+| Measured | Where |
+|---|---|
+| 878 calls on imported module-level singletons (`order = OrderService()`, then `order.create(...)`); 86 routers, apps and clients assigned at module level | polar |
+| 80 of 83 router files get `APIRouter` from a factory whose return is written `type[_APIRouter]` | polar |
+| `Field(alias=…)`: 127 / 129 / 26 uses | polar / mealie / dispatch |
+| a base-model `alias_generator=camelize`: every shape is camelCase on the wire | mealie |
+| at least 17 outbound URLs are f-strings | polar |
+| 194 operations in the published OpenAPI against 608 route decorators (tag filters, 44 `include_in_schema=False`, version pruning) | polar |
+| calls outside any function: 12.8% / 57.8%; the §2 call table of v1 left these out | polar / netbox |
+| names defined twice in one scope (property setters, `@overload`, conditional definitions): 38 / 10 / 10 | polar / saleor / zulip |
+| 2,540 `@overload`s (`subprocess.run` is one) | typeshed's standard library |
+| 6 commands in 3 groups | Sextant |
+| commands: typer, 107 files | polar |
+| commands: `argparse`, programs declared in `setup.cfg` `console_scripts` | httpie |
 
-| Needs | redash | CTFd | netbox | polar | dispatch |
-|---|---|---|---|---|---|
-| only the name (function, imported module, built-in, `self.method`) | 54% | 56% | 57% | 66% | 69% |
-| what another function returns (variable set from a call, chained call, `self.field`) | 19% | 20% | 21% | 21% | 12% |
-| an untyped parameter's type | 4.5% | 2.3% | 5.1% | 0% | 4.0% |
-| a typed parameter's type | 0.1% | 0% | 0.1% | 4.1% | 6.1% |
-| other (loop variables, complex expressions) | 22% | 22% | 16% | 9% | 8% |
+## 3. The architecture (my call, from both reviews)
 
-**How often each shape appears (text counts, rough):** FastAPI route decorators (polar 608, dispatch 291,
-mealie 290). Flask `.route` (CTFd 167, redash 31). Django `path()` (netbox 395, zulip 234). REST
-Framework `register` (netbox 147). `requests` in every project. `httpx` (polar 497). Background tasks
-(saleor 544, polar 242). Command-line commands (polar 233, zulip 123, redash 35, dispatch 32).
+### 3a. The scanner (M03) reads one file at a time, as M03 requires
 
-**Sextant itself:** 9 `click` commands, 8 `subprocess` calls (in `api.py`, `detect/gradle.py`,
-`detect/maven.py`, `extract/jvm/scanner.py`, `read/proto_source.py`), and 100% written types.
+The Python scanner is a new `Scanner` backend (`ingress/extract/python`, `accepts({python})`). M03's
+rule holds: no reasoning across files. Per file, it writes the existing facts:
 
-## 3. Goals
+- **Symbols.**
+  - A Python module (file) is a type, `app/api/items#`. This is the Kotlin file-facade precedent
+    (`FooKt#`), which owns top-level functions.
+  - Classes are types. Functions and methods are methods.
+  - A module body is the module type's static initializer (`<clinit>`). A class body is that class's
+    `<clinit>`. D00 already maps `__init__` to `<init>`.
+  - Module-level names (`app = FastAPI()`, `order = OrderService()`, `urlpatterns = [...]`) are
+    static fields, written by `field_write` from `<clinit>`. They are not `constant`, because a
+    Python global can be rebound.
+- **Descriptors.**
+  - Python has no overloads. Every method's descriptor is one constant signature string, hashed by
+    the existing `disambiguator_of`, so a call and its callee meet by arithmetic, as on the JVM.
+  - A name defined twice in one scope is handled by its kind:
+    - a property's getter and setter are two members (`x` and `x=`);
+    - `@overload` stubs are type information, not bodies;
+    - two real definitions (conditional ones) are a closed list of bodies, one row each.
+- **Types written in the code (rule 1),** through imports bound to symbols:
+  - `Optional[X]` is `TypeRef.nullable`.
+  - A union is `TypeRef` arguments.
+  - `type[X]` returns `X` itself (polar's router factory).
+  - `@overload` signatures are chosen by argument types. Where they cannot be told apart, the
+    result is the closed list of their return types.
+  - `TypeVar`, generics, `Protocol`, `Annotated`, `Self`, ParamSpec and `dataclass_transform`
+    (needed for Pydantic and SQLModel) are read as the typing specification defines them.
+- **Flow inside one function:**
+  - value ids;
+  - `merge` arguments;
+  - the per-path fields (`dominator`, `on_every_exit`, `post_dominator`, `reaches_return`,
+    `loop_group`);
+  - f-strings and `+` as `concat` arguments;
+  - lists and tuples as `array` arguments;
+  - keyword arguments bound to parameter positions where the callee's signature is known.
 
-1. **A Python reader** (my call, after options were compared; ruled "option 1"). It is our own code
-   over Python's built-in `ast` parser. It does not use a type checker, and it does not run the project.
-2. **Our own type inference** (ruled). The rules are in §6. Rules 1–4 ship with the first release, and
-   rules 5–6 ship with Flask and Django (ruled).
-3. **The command-line boundary** (ruled): a command is an inbound endpoint. The first project read is
-   Sextant itself, which tests the reading of Python code (ruled). Only the command line counts as
-   inbound for now. Library functions (`sextant.api.*`) are not endpoints (ruled).
-4. **The program-start boundary** (my call): `subprocess.run([...])` and its relatives are outbound
-   endpoints.
-5. **FastAPI inbound, `requests` and `httpx` outbound, Pydantic shapes**, and Python configuration
-   values for addresses.
+  For control flow, every expression may raise, and a `with` block may swallow an exception.
+- **Calls whose owner is not known in this file:** the call names its receiver's value id and the
+  method name. The owner is bound later (§3b). **This is the one `call_site` format extension:**
+  `target.owner` may be absent when `receiver` is present and `invoke_kind` is `virtual`. It is
+  approved with this design.
+- **Decorators are written as the calls they are.** `@router.get("/x")` on `def f` is the call
+  `router.get("/x")` and the call of its result with `f` (a `lambda`/method-reference argument).
+  `@click.command()` and typer's `@app.command()` are the same. So the router or group a route
+  belongs to is kept. They are never written as `annotation` facts.
+- **Evidence:**
+  - a type written in the code is `evidence: declared`;
+  - a type worked out by a rule is `evidence: syntax` with `resolution: narrowed` where it is a
+    closed list (D00's existing words).
 
-Flask and Django are the next two items, each with its own design. They are decided against the real
-service projects above (ruled).
+  No new marker.
+
+### 3b. The resolver binds what one file cannot know
+
+Rules 2–4 of v1 moved here, onto the existing value walk ("follow the object", ruled 2026-10-30).
+The receiver of an unbound call is followed to what produced it:
+- a constructor call → that class;
+- a call → that callee's `return` values, by `return_flow`;
+- a parameter → the arguments at its callers, crossing per path;
+- a field → every `field_write` to it, per object;
+- a static field (module-level name) → its write in `<clinit>`.
+
+**Per path, never combined (ruling M-1):** a parameter whose callers pass a requests session on one
+path and an httpx client on another gives two rows, each with its own URL. Never four.
+
+**Which callers count:** the walk's existing rule. Callers in the scanned module and its sibling
+modules count. No caller means `external`. A function passed as a value is `escapes` unless a catalog
+says who calls it. Python has no enforced `private`, so the JVM's "private and never called" test is
+not applied to Python.
+
+**Lookup through class parents:**
+- `Dispatch.ancestors` becomes one per-type **lookup order** that every language provides.
+- The JVM's order stays as it is. Python's is C3 linearization, worked out in the resolver from the
+  written parents.
+- The rule is named by the module fact (`lookup: jvm | c3`). These are two named rules, because the
+  languages differ (DR-6).
+- `_NOT_INHERITED` and the `java/lang/Object` end are JVM rules inside the JVM order. Python's
+  `__init__` is inherited.
+- An unread parent ends the order with `external`, as an unscanned JVM ancestor does.
+
+**A body exists** when a `method_return` fact exists. The scanner writes the implicit `return None`.
+`@overload` stubs, `Protocol` members and `...` bodies of abstract methods are not bodies.
+
+### 3c. Catalogs hold all framework knowledge, in existing words
+
+| Python need | Existing word it uses (D02) |
+|---|---|
+| FastAPI routes, Flask routes | `single_call`/`fluent` with `handler_arg` (decorator as call, §3a) |
+| `include_router(prefix=)`, click/typer groups | the `mount` block (`shapes/mounts.py`) |
+| `Depends(...)` | the DI-recipe hop (`bean_model`), with one new `injection` mode: the parameter names its recipe. A dependency's own parameters join the route's `request_params` (§2k), as FastAPI does. |
+| query, path, header, cookie, body parameters | `request_params` (§2k), with `Query`/`Path`/`Header`/`Body`/`Field` normalized into `Parameter.annotations`; defaults into `declares_default` |
+| Pydantic shapes | a `shape_model` (`pydantic.yml`, §1b), naming by §2f, which must read `Field(alias=)`, `serialization_alias` and a model's `alias_generator`; `known_types` (§2g) for `datetime`, `UUID`, `Decimal` |
+| `response_model=` and the return type | `response` words, FastAPI's own rule: `response_model` first |
+| `httpx.Client(base_url=)` | `client_model`/`client_base` (§1g) |
+| `.request("GET", url)` | `verb_arg` |
+| `.model_dump()` as a body | value-model data, not a per-method rule |
+| `subprocess.run([...])` | `single_call` (if §6 keeps program starts) |
+
+### 3d. Configuration values (my call, reusing the JVM's)
+
+- **`os.environ[...]`, `.get`, `os.getenv`:** value-model data. The address keeps the expression
+  (`${KEY}`), and `resolved_peers` answers per environment, `external` where nothing in the
+  repository sets it. This is how the JVM treats a placeholder.
+- **pydantic-settings `BaseSettings`:** the field-sources ladder (§2j rung 3). The environment name
+  comes from `env_prefix` plus the field name or alias.
+- **`.env`:** a `config_model` source, **only the file the code names** (`env_file=`), resolved as a
+  value. A file chosen by an environment variable is `external`. A `.env` the code never names is
+  not read.
+
+### 3e. Finding modules (M02) and their libraries
+
+M02 is keyed by build system, and languages are observed, not taken from file names. v1 said the
+opposite and was wrong.
+
+**The detector:**
+- **Build systems:** a new Python detector beside Maven and Gradle. It reads:
+  - `pyproject.toml` (`[project]`, Poetry's table, `[build-system]`);
+  - `[tool.uv.workspace]` members;
+  - `setup.cfg [metadata]`;
+  - `console_scripts`/`[project.scripts]`.
+- **uv workspaces:** a workspace root with no code of its own is not a module. Its members are.
+- **`requirements*.txt`, `Pipfile`:** a service with only these is a module whose build system is
+  "requirements" (the five microservices-demo services).
+- **`setup.py`:** a module only when it is not inside a package (no `__init__.py` beside it or
+  above it) and no folder above it is already a module. This removes the four false modules
+  measured (CTFd ×2, redash, polar). A `setup.cfg` with no `[metadata]` (CTFd's holds only
+  `[nosetests]`) does not mark a module.
+- **The language** is observed: `.py` files under the module.
+- **A folder of `.py` files with no project file** is listed, not analysed (ruled).
+
+**Import roots** (the folders a name like `app.api` is found from):
+- the build system's package settings (setuptools, hatch, poetry `packages`, a `src/` layout);
+- otherwise the module folder.
+
+A `sys.path` change in code is not followed (zulip, 15 files). Names it would make visible are
+`external`, with the detail naming the change.
+
+**Identity** (OI-273 "what the build tool gives"):
+- `[project]`/Poetry/`setup.cfg` name and version, normalized by PEP 503.
+- A dynamic version comes from the installed project's `.dist-info` when there is one, otherwise `.`.
+- With no build file, the module is unpublished (D00 `.` fields, its folder path as id).
+- The symbol scheme is `sextant-python pypi <name> <version> <descriptors>`.
+
+**Libraries (ruled: no flag, nothing downloaded):**
+- **Read from the project's installed environment:** `.venv`, `venv`, or the environment uv or Poetry
+  settings name. `.python-version` names an interpreter, not an environment, and is not used.
+- **What is read:** library signatures and type files are read for every library. Library bodies are
+  read only under D04 §2a's existing opt-in (`extract_libraries`), as for jars.
+- **Library symbols are always the defining symbol** (`fastapi.routing.APIRouter`), never a
+  re-export. A library that is not installed has no symbols. So its routes and calls are not read,
+  and the report says `fastapi is not installed in the scanned environment`. This keeps symbols the
+  same on every machine.
+- **Catalogs** are selected by `detect.coordinates` against the module's declared dependencies, as
+  on the JVM.
+- **`typeshed`:** a pinned copy ships in the wheel, for libraries that do not ship their own types
+  (`requests`). Flask, FastAPI and Pydantic ship their own. Each fact read from typeshed carries
+  typeshed's commit and the stub package's version as provenance.
+- **`--allow-resolve`:** does nothing for Python.
+
+**Scanner capabilities** (they decide which catalogs run), stated in the plan:
+- `typed_signatures`, `annotation_args`, `type_annotations`;
+- control-flow fields;
+- value ids;
+- library signatures.
 
 ## 4. Non-goals and anti-goals
 
-**Not in this design:**
-- Flask, Django, Django REST Framework, Celery and other background tasks, messaging, gRPC.
-- `sextant.api` library functions as endpoints.
+**Not in this design:** Flask, Django, Django REST Framework, background tasks, messaging, gRPC, and
+`sextant.api` library functions as endpoints (ruled).
 
-**Anti-goals.** Any of these makes the work a failure, even if it runs:
-- importing or running the scanned project's code;
-- downloading or installing anything (ruled: no flag, no network for Python);
-- a type checker's guess, or any guess, shown as `resolved`;
-- framework names in general code instead of in catalogs;
-- a second pipeline beside the JVM one.
+**Anti-goals:**
+- importing or running scanned code (Sextant itself never does; the test setup may, §7);
+- downloading anything;
+- a guess shown as `resolved`;
+- framework names in general code;
+- a second pipeline;
+- a new word where an existing one fits.
 
-## 5. Finding Python modules (M02)
+## 5. Performance (GUIDELINES §8.7, decided here, not later; my call)
 
-**Rule (ruled):** a project file marks one module, and the kind of file gives the language. This is
-the rule Java and Kotlin already use.
+- **The scanner:** one pass per file, cached by content hash as the JVM extractor caches per class,
+  run in parallel.
+- **The resolver:** receiver binding is the existing value walk. Its pass count is bounded by the
+  depth of producer chains, and the walk already caps that.
+- **Budget, measured on polar's server** (2,382 files, 47,716 call sites, 257 locked packages, this
+  machine): a cold analysis under 5 minutes, and a warm one with no file changed under 30 seconds.
+- **The first plan task** measures reads per resolve on polar before building the passes, and stops
+  for a ruling if the budget cannot be met.
 
-| File at a folder's top | Module |
-|---|---|
-| `pyproject.toml`, `setup.cfg`, `requirements*.txt`, `Pipfile` | Python |
-| `setup.py` | Python, **only** when there is no `pyproject.toml` or `setup.cfg` beside it |
-| `pom.xml`, `build.gradle(.kts)` | JVM (unchanged) |
-| `package.json`, `go.mod` | listed as found, language not read yet |
+## 6. Command-line commands and program starts (DECIDE)
 
-- **`.py` files are required.** A Python module counts only when `.py` files are under it.
-- **Why `setup.py` is limited:** CTFd has ordinary code files called `CTFd/forms/setup.py` and
-  `CTFd/constants/setup.py`, so the name alone would make false modules.
-- **A folder of `.py` files with no project file is not analysed** (ruled). It is listed in the
-  report as "Python files with no project file". Pointing Sextant directly at that folder analyses it.
-- **Mixed repositories are normal.** microservices-demo has 10 services in three languages, with one
-  project file each. polar has one Python service, four more Python projects and six JS/TS ones. Each
-  is its own module.
+Both reviews found that v1's two new protocol words are the weakest part:
 
-**Identity (my call, following OI-273 "what the build tool gives"):**
-- **With `pyproject.toml`:** `[project] name` and `version`. Poetry's `[tool.poetry]` is read when
-  `[project]` is absent. The names are normalized as the package index does (PEP 503).
-- **A dynamic version** (`dynamic = ["version"]`): the version is `.`, because no file states it.
-- **No `pyproject.toml`:** the module is unpublished. Its id is the folder's path in the repository,
-  and the symbol fields for manager, package and version are `.` (D00 "unpublished service").
-- **Symbol scheme:** `sextant-python pypi <name> <version> <descriptors>`. Descriptors follow D00's
-  SCIP grammar, with the module path as namespaces: `app/api/routes/items/create_item().`,
-  `app/models/Item#`.
+- **Not stitched.** `cli` and `process` rows never link to anything. Linking needs the same protocol
+  on both ends, and the two paths cannot be compared.
+- **A slot exists already.** A program's starting point has a slot: D00 `root_kind: entry_point`, a
+  member with no producer (OI-22, "closes with a catalog declaring the entry point").
+- **Program starts are not JVM parity.** The JVM side does not record them either.
 
-**Libraries (ruled: no flag, nothing downloaded):**
-- **Where they are found:** the project's own installed environment: `.venv`, `venv` or `env` beside
-  the project file, or one named in `.python-version` and `uv` or Poetry settings. Its
-  `site-packages` is read like a library jar: source and `.pyi` type files.
-- **With no project file:** the `import` lines show which libraries are used. Each is looked up in an
-  installed environment.
-- **Not installed:** calls into the library are `external`. The detail names it, for example
-  `requests is not installed in the scanned environment`.
-- **`typeshed`:** the shared collection of type files ships inside the wheel as a pinned copy, so
-  `requests`, Flask and similar libraries have types even when the project's environment lacks
-  them (my call). The pinned version is recorded in the scan provenance.
-- **`--allow-resolve`:** it exists for Maven (OI-167) and does nothing for Python.
-- **Library code (my call, "follow the code we have"):** signatures, inline types and `.pyi` files are
-  read for every library the project calls. Rules 2–4 run inside a library body only for functions
-  the project actually reaches, and only when no written type answers.
-- **A library that is not installed:** its names are still known from the `import` lines
-  (`from fastapi import APIRouter`), so catalogs match on the imported name. Routes are still found,
-  but types from that library are unknown.
-- **Test fixtures and field pins:** "nothing downloaded" applies to Sextant, not to the test setup.
-  `fixtures/orders-fastapi` commits a `uv.lock` and the test setup runs `uv sync` into the fixture's
-  `.venv`, as the JVM fixtures are built with Maven and Gradle. The field-pin script does the same for
-  polar's server, dispatch and mealie at their pinned commits.
+Options:
 
-## 6. Type inference (the core)
+- **A. Commands fill the existing `entry_point` root** (no new word). Each `click`/typer/`argparse`
+  command becomes a trace root, its options become the root's `request_params`, and its handler is
+  the root.
+  - Sextant's 6 commands become 6 roots with traces, which tests the reader end to end.
+  - The same catalog rule later gives picocli and Clikt `main` roots, and closes OI-22 for the JVM
+    too.
+  - Program starts are logged for later.
+  - **Pro:** no new word, closes an open JVM issue, and tests the reading as ruled.
+  - **Con:** commands are roots, not inbound endpoint rows, so they do not appear in the endpoint
+    table.
+- **B. One new protocol word for both ends:** inbound commands, and outbound program starts, with the
+  program as `peer` and the command words as `path`. Sextant's `java -jar extractor` call and the
+  extractor's own command would then link.
+  - **Pro:** the endpoint table shows them, and the two ends can link.
+  - **Con:** a new protocol word, and new rules for the stitcher.
+- **C. Skip both.** FastAPI end to end comes first, and Sextant is read only as a reader test.
+  - **Pro:** the smallest first release.
+  - **Con:** it goes against "start with Sextant" (ruled).
 
-Every rule gives one of three answers:
-- an exact type;
-- a closed list of types (one row each, per "enumerable is exact");
-- unknown, with one general reason and a detail.
+**My recommendation: A.** It reuses an existing slot, closes OI-22, and does what "start with
+Sextant" was for, which is testing the reader on code we know. B can follow when a real pair of
+programs needs to link.
 
-Never a guess. The rules run in this order, and each is used only where the earlier ones gave no
-answer:
+## 7. Done when
 
-1. **Written types and library type files.** Annotations in the project, then `.pyi` files and inline
-   types of installed libraries, then the pinned `typeshed`. This covers `typing` forms: `Optional`,
-   unions, generics, `Annotated`, `TypeVar`, `Protocol`, and `Self`. A union in a written type is a
-   closed list.
-2. **Return types from the function body.** With no written return type, the types of its `return`
-   lines are read and combined, repeated through calls. A recursion cycle is `cycle`. Generators,
-   `async def` and `await` are read as Python defines them.
-3. **Parameter types from every caller.** If a parameter has no written type, it takes the types
-   passed at every call in the project. One type gives an exact answer. Several types give a closed
-   list. A function called from outside the project, or passed as a value, gives `external` or
-   `escapes`, as the value walk answers today.
-4. **Field types from every write.** `self.x = ...` in any method of the class, plus class-level
-   assignments and dataclass/Pydantic fields, give the field's type, with the same three answers.
+1. **Sextant reads itself.** Every call in Sextant's own code has a known target, or a reason. The
+   §2 call table is produced by the real resolver, before and after receiver binding. If §6 is A:
+   6 command roots, each with traces and `request_params` checked by hand.
+2. **A FastAPI test project** (`fixtures/orders-fastapi`, our own) covering every row of §3c and §3d:
+   - routers built by a factory with `type[...]`;
+   - module-level singletons;
+   - `alias_generator`;
+   - f-string URLs;
+   - an `env_file` setting.
 
-Shipped later, with Flask and Django:
-
-5. **Framework rules in catalogs.** Runtime behavior with no static form: Django managers
-   (`Model.objects` → QuerySet of that model), Flask's `request` and `g`. This is catalog data, never
-   code (the JVM rule).
-6. **Shapes from use.** For a payload with no declared type, the shape comes from both ends: the
-   caller's dict literal (`json={"id": ..., "items": [...]}`) and the handler's reads
-   (`request.json["id"]`). The row is `partial` and lists the fields seen.
-
-**Python's dynamic features**, decided by the same rule:
-- `getattr` with a string that is not a literal, monkey-patching, and `__getattr__` without a type
-  file are unknown (`not_readable`), with a detail naming the construct.
-- `getattr(obj, "literal")` is read as the attribute.
-- Decorators that wrap a function keep the function's identity for routing (the framework sees the
-  wrapped function). For type flow, a decorator with a written or library type gives the decorator's
-  return type. Without one, the inference passes straight through `functools.wraps`, and anything else
-  is unknown.
-- `import` inside a function, `importlib.import_module("literal")` and `if TYPE_CHECKING:` imports
-  are all read.
-
-**Where it runs (my call):** the Python scanner, because M03 is the only module that knows a language
-exists. The scanner writes `call_site` facts whose target is either the resolved function or
-unresolved with a reason. The resolver stays language-free. The value walk (addresses and
-configuration) runs on these facts.
-
-**Which callers count (my call, the JVM's rule):**
-- **The callers that count:** for rule 3, a parameter's callers are the calls in the scanned module
-  and its sibling modules, exactly as the JVM value walk crosses to callers today.
-- **No caller found:** the answer is `external` (called by something unscanned, such as a framework
-  or a test). Python has no enforced `private`, so the JVM's "private and never called means dead"
-  test is not applied.
-- **A function used as a value** (passed, stored, registered by a decorator) can be called from
-  anywhere, so it is `escapes`, unless a framework catalog says who calls it. A FastAPI route
-  handler's parameters come from the request (§8c), not from callers.
-- **Rule 4:** it counts writes from any code in those modules, `obj.x = ...` from outside the class
-  included.
-
-**Calls through a class hierarchy (my call):**
-- **Lookup order:** Python's method lookup order (C3 linearization, with multiple parents) is not
-  the JVM's lookup. The scanner works it out from the class headers it reads and writes it, in
-  order, with each class (an addition to `type_header`, §7). The resolver's dispatch uses a written
-  lookup order when one is present, and the JVM rule otherwise.
-- **Lookup order with no type known:** a class whose parents are not all read gets the order up to
-  the first unread parent, and the lookup stops there with `external`, the same answer the JVM
-  gives for an unscanned ancestor.
-- **Call kinds:** a call on an object is `virtual`. A plain function call is `static`.
-- **Overrides:** a call on `self` may reach an override in a subclass, and the existing
-  override search handles it.
-- **Disambiguator:** Python has no overloads, so a method's descriptor is `name().` with no
-  disambiguator. The plan states how the existing descriptor hashing treats an empty one.
-
-**Control flow (my call, required by the goal):** the value walk decides per path using the fields
-`dominator`, `on_every_exit`, `post_dominator`, `reaches_return`, `loop_group`, the value ids and
-`merge` arguments. Without them, addresses come out `partial`. "The same as Java and Kotlin"
-(ruled) needs them, so the scanner builds a control-flow graph from the syntax tree:
-- `if`/`elif`/`else`, `for`/`while` with `else`, `break` and `continue`;
-- `try`/`except`/`else`/`finally`, `with`, `return`, `raise`;
-- `async`/`await`, `yield`, comprehensions, `match`.
-
-This is a large part of the scanner, and the plan sizes it as its own task.
-
-**Written or inferred (my call):** an inferred type that reaches a fact (a parameter's, a
-field's, a shape) is marked as inferred, beside the written ones, the way `nullable_resolution`
-already marks nullability. Nothing inferred reads as declared. The truth guard checks the marker on
-Python rows.
-
-**Measure, do not promise:** the §2 call table is produced again from the real resolver, before and
-after rules 2–4, on Sextant, polar's server, dispatch and mealie.
-
-## 7. Facts (D00) — format additions, need approval
-
-The Python scanner writes the existing fact kinds wherever they fit:
-- `document`, `module`, `symbol`, `call_site`, `method_return`, `field_write`, `constant`,
-  `config_entry`, `type_header`;
-- decorators as `annotation` uses: the decorator's resolved symbol, plus its literal arguments.
-
-Additions the design expects. The plan names exact fields, and each one is approved before it is built:
-- **A call whose target is unknown:** `call_site` carries no target, plus `reason` and `detail` from
-  the general list.
-- **Module-level code:** a module body's assignments and calls. Python keeps routes and configuration
-  there (`app = FastAPI()`, `app.include_router(...)`, `urlpatterns = [...]`). A module-level scope
-  symbol, for example `app/main/__module__().`, owns these calls.
-- **Keyword arguments:** Python calls name their arguments (`requests.post(url, json=...)`), and a
-  `call_site` argument needs its keyword.
-- **Class lookup order:** each class's method lookup order, written by the scanner (§6).
-- **Written or inferred:** a marker on every type that reaches a fact.
-- **Default values of parameters:** literal defaults (`def f(timeout=30)`) and FastAPI's
-  `Query(...)`/`Depends(...)` defaults.
-- `GRAPH_SCHEMA_VERSION` and the facts version are raised as the changes require.
-
-## 8. Boundaries
-
-### 8a. Command-line commands — inbound (new protocol word, needs approval)
-
-- **Protocol `cli`, direction inbound.**
-- **`path`:** the command's full path as the user types it, for example `sextant module analyze`. The
-  program name comes from `[project.scripts]` (Sextant: `sextant = "sextant.cli.app:cli"`), and the
-  group and command names follow it. A program with no entry point uses `.` for the first word.
-- **`method`:** NULL.
-- **Request shape:** the arguments and options, with names, types (`click.Path`, `int`, choices as a
-  closed list), required or not, and flags.
-- **`handler`:** the decorated function.
-
-The libraries are catalog data: `click` first, because Sextant uses it. `argparse` and `typer` follow
-in the same item if the plan has room; otherwise they are logged. The word is general, so Java's
-picocli, Kotlin's Clikt and Go's cobra use it later.
-
-### 8b. Program starts — outbound (new protocol word, needs approval)
-
-- **Protocol `process`, direction outbound.**
-- **`path`:** the program name when the code gives it: the first item of the argument list, or a
-  constant or configuration value it resolves to. For example `java` or `mvn`, or the path of the
-  extractor jar resolved as a value.
-- **Shape:** the argument list as written (literal items, plus placeholders for computed ones).
-- **Calls covered:** `subprocess.run`, `Popen`, `check_output`, `check_call`, `call`, and
-  `os.system`. These are catalog data.
-
-### 8c. FastAPI — inbound
-
-- **Routes:** `@app.get(...)` and the other verbs, `api_route`, `APIRouter`.
-- **Prefixes:** `include_router(router, prefix=...)`, followed across modules, with nested routers
-  and prefixes joined in order.
-- **Path parameters:** read from the path. Query parameters come from the handler's parameters
-  (`Query`, plain types).
-- **Request body:** a Pydantic model parameter or `Body`. Headers and cookies come from `Header` and
-  `Cookie`.
-- **`Depends(...)` chains:** followed as calls. A dependency's own parameters (query, header) belong to
-  every route that uses it, which is what FastAPI does.
-- **Response shape:** `response_model=` when given, otherwise the written return type (FastAPI's own
-  rule).
-- **WebSocket routes:** the existing `websocket` protocol.
-- **Pinned version:** the latest FastAPI release as of the plan, recorded in COVERAGE §3a.
-
-### 8d. `requests` and `httpx` — outbound
-
-- **Calls:** module functions (`requests.get(url)`), `Session`/`Client`/`AsyncClient` methods, and a
-  base URL on the client (`httpx.Client(base_url=...)`) joined with each call's path.
-- **Verb:** from the method name, or from the string argument of `.request("GET", url)`.
-- **Body shape:** `json=` with a Pydantic `.model_dump()` gives the model's shape. A dict literal
-  gives rule 6 (later). Anything else is unknown.
-- **Address:** a value. The existing value walk follows it to its source.
-
-### 8e. Configuration values (Python)
-
-Reads that feed an address:
-- `os.environ[...]`, `os.environ.get(...)`, `os.getenv(...)`;
-- `.env` files beside the project file;
-- pydantic-settings `BaseSettings` classes (field name to environment name, with `env_prefix` and
-  aliases);
-- module-level constants.
-
-A value set only by the deployment is `external` with the key as its detail (ruling 2026-10-23,
-"deployment decides what it can set"). Django `settings.py` comes with Django.
-
-## 9. Done when
-
-1. **Sextant reads itself:**
-   - 9 `cli` rows, each with its options as the request shape and its handler;
-   - one `process` row per program start, with the program name where the code gives it.
-
-   Each row is checked by hand against the source and pinned in an end-to-end test.
-2. **A FastAPI test project** (`fixtures/orders-fastapi`, our own) covering every point of §8c, §8d
-   and §8e. Every row is pinned.
-3. **Field pins on real projects:** polar's server, dispatch and mealie. Route counts are checked
-   against each project's own OpenAPI output where it publishes one. A sample of outbound rows is
-   checked by hand. Added to `scripts/field_check.py`.
-4. **The type-rule table:** §2's call table produced by the real resolver, before and after rules 2–4.
+   Its `uv.lock` is committed, and the test setup runs `uv sync`, as JVM fixtures are built with
+   Maven and Gradle. Every row is pinned.
+3. **Field pins: polar's server, dispatch and mealie** at the pinned commits, installed by the
+   field-pin script with `uv sync`.
+   - **The route oracle** is FastAPI's own `app.routes`, produced by the test setup importing the
+     app (never by Sextant). Published OpenAPI is not the oracle; it filters routes (§2).
+   - A sample of outbound rows is checked by hand.
+4. **The performance budget** of §5 is met, and the numbers are recorded.
 5. **Truth:** no `resolved` row carries a guessed type or value. Every unknown has one general reason
-   and a detail, and the guard test `tests/application/test_one_reason_list.py` covers the Python
-   rows.
+   and a detail, and the guard test covers the Python rows.
 6. **Docs:**
-   - COVERAGE: the Python rows, §3 language readiness and §3a versions;
-   - D00 and D02: the new facts and words;
-   - M02 and M03: the detector and scanner.
+   - D00: the `call_site` owner extension, the `lookup` field, the scheme;
+   - D02: the new `injection` mode, `pydantic.yml`;
+   - M02 and M03: the Python detector and scanner;
+   - COVERAGE: Python rows, §3 and §3a versions;
+   - `docs/research`: the type-tool comparison (own reader vs a type checker, including mypy
+     in-process).
 7. **The full check passes.**
 
-## 10. Left to the plan and the builder
+## 8. Left to the plan
 
-- Exact fact field names (approved before building), and module layout under `ingress/extract/python`
-  and `ingress/detect`.
-- How rules 2–4 are computed (fixed point over the module, order of passes), within the "exact,
-  closed list, or unknown" rule.
-- Which `typeshed` commit is pinned.
-- Whether `argparse` and `typer` fit in this item.
+- Exact field names, approved before building, beyond the two named here (`call_site` owner
+  extension, `lookup`).
+- The scanner's internal layout.
 - The fixture's exact contents.
-- Performance: measure reads per resolve on polar's server (2,382 files) before building (GUIDELINES
-  §8.7, "optimize early").
+- The pinned typeshed commit.
