@@ -2,6 +2,7 @@
 anything reads code. Implementations are keyed by build system, never by
 language — a module records the languages present."""
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -258,23 +259,34 @@ def detect_repository(
     if not accepting:
         raise NoAdapterError(f"no detector recognises {path} as a repository it can read")
     models: list[RepositoryModel] = []
-    refusal: NoModulesFound | None = None
-    refused_notes: list[str] = []
+    failures: list[tuple[str, Exception]] = []
+    extra_notes: list[str] = []
     for detector in accepting:
         try:
             model = detector.detect(path, allow_resolve=allow_resolve)
         except NoModulesFound as none_found:
-            refusal = refusal or none_found
-            refused_notes.extend(none_found.notes)
+            failures.append((type(detector).__name__, none_found))
+            extra_notes.extend(none_found.notes)
+            continue
+        except (ValueError, SyntaxError, OSError) as failure:
+            failures.append((type(detector).__name__, failure))
             continue
         if model.modules:
             models.append(model)
     if not models:
-        if refusal is not None:
-            raise refusal
+        if failures:
+            raise failures[0][1]
         raise NoAdapterError(f"no detector found a module in {path}")
-    modules = _with_unique_ids(path, [module for model in models for module in model.modules])
-    notes = {note for model in models for note in model.notes} | set(refused_notes)
+    # A detector that failed is a note when another found modules: an unreadable
+    # `pyproject.toml` must not stop a Maven repository being analysed. One that only
+    # found no module has said so in its own notes.
+    for name, error in failures:
+        if not isinstance(error, NoModulesFound):
+            extra_notes.append(f"{name} could not read this repository: {error}")
+    modules = _with_own_results(
+        _with_unique_ids(path, [module for model in models for module in model.modules])
+    )
+    notes = {note for model in models for note in model.notes} | set(extra_notes)
     return RepositoryModel(
         root=path,
         modules=modules,
@@ -283,19 +295,60 @@ def detect_repository(
     )
 
 
+def _folder_of(root: Path, module: ModuleModel) -> str:
+    """A module's folder relative to the repository root (`.` for the root itself); the
+    absolute path for a folder outside it."""
+    if module.root.is_relative_to(root):
+        return module.root.relative_to(root).as_posix()
+    return module.root.as_posix()
+
+
 def _with_unique_ids(root: Path, modules: list[ModuleModel]) -> tuple[ModuleModel, ...]:
     """The modules, each id that more than one module has made unique by its folder."""
     counts: dict[str, int] = {}
     for module in modules:
         counts[module.module_id] = counts.get(module.module_id, 0) + 1
+    renamed = [
+        replace(module, module_id=f"{module.module_id}@{_folder_of(root, module)}")
+        if counts[module.module_id] > 1
+        else module
+        for module in modules
+    ]
+    ids = [module.module_id for module in renamed]
+    still_equal = sorted({i for i in ids if ids.count(i) > 1})
+    if still_equal:
+        raise ValueError(
+            f"modules in {root} cannot be told apart, their ids are still equal: "
+            + ", ".join(still_equal)
+        )
+    return tuple(renamed)
+
+
+# Names a results folder already uses for something else.
+_RESERVED_RESULTS_NAMES = frozenset({"facts", "render", "bundles"})
+
+
+def _with_own_results(modules: tuple[ModuleModel, ...]) -> tuple[ModuleModel, ...]:
+    """Modules that share a folder get a results folder each, `<folder>/.sextant/<name>`
+    (Android design M6): the name is the module id with every character a folder name
+    should not have changed to `-`. A module alone in its folder, and a module that
+    already has a name, keep what they have."""
+    by_folder: dict[Path, list[ModuleModel]] = {}
+    for module in modules:
+        by_folder.setdefault(module.root, []).append(module)
+    taken = {
+        (module.root, module.results_name) for module in modules if module.results_name is not None
+    }
     renamed = []
     for module in modules:
-        if counts[module.module_id] > 1:
-            # A module's folder is under the root; the root folder itself is ".".
-            folder = module.root.relative_to(root).as_posix()
-            module = replace(module, module_id=f"{module.module_id}@{folder}")
+        if module.results_name is None and len(by_folder[module.root]) > 1:
+            base = re.sub(r"[^A-Za-z0-9._-]", "-", module.module_id).strip(".") or "module"
+            if base in _RESERVED_RESULTS_NAMES:
+                base = f"{base}-module"
+            name, number = base, 2
+            while (module.root, name) in taken:
+                name, number = f"{base}-{number}", number + 1
+            taken.add((module.root, name))
+            module = replace(module, results_name=name)
         renamed.append(module)
-    ids = [module.module_id for module in renamed]
-    for module_id in sorted({i for i in ids if ids.count(i) > 1}):
-        raise ValueError(f"two modules in {root} cannot be told apart: both are {module_id}")
     return tuple(renamed)

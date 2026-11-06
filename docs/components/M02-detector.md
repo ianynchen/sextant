@@ -221,7 +221,18 @@ build file at any depth.
   (`polar-sdk@sdk/python`; `@.` for the root folder). An id that no other module has does
   not change, and `coordinates` stay what the build file says. If the ids are still equal
   after that (two detectors, one folder), the detection is refused and names the id.
-  A module's results go in its own folder, so the `@` and `/` in an id never make a folder name.
+- **One folder, several modules.** Modules from different detectors can share a folder (a
+  Maven build and a root `requirements.txt`). Each then gets a `results_name`, and its results
+  go in `<folder>/.sextant/<results_name>` (Android design M6), the module id with every
+  character that is not a letter, digit, `.`, `_` or `-` changed to `-`. A module alone in its
+  folder keeps `<folder>/.sextant`. The `@` and `/` of an id never reach a folder name.
+- **A detector that fails** (an unreadable root `pyproject.toml`) is a note, "<detector> could
+  not read this repository: <error>", when another detector found modules. It is a refusal
+  only when no detector found any module.
+- **A JVM repository with a Python project is multi-module.** A project file marks a module
+  (user ruling), so a Maven repository with a root `requirements.txt` and scripts, or a
+  `tools/pyproject.toml`, has two modules. `--workspace` is refused for it and `modules.json`
+  is written, as for any multi-module repository.
 
 `select_detector` (the first detector that accepts) stays for a module that is already known.
 

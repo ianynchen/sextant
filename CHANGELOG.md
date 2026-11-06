@@ -15,6 +15,15 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Changed
+
+- **A repository is read by every detector that recognises it, not the first** (OI-208). A Maven
+  or Gradle repository that also holds a Python project (a root `requirements.txt` with scripts,
+  or a `tools/pyproject.toml`) now detects as multi-module: `--workspace` is refused for it and
+  `modules.json` is written, as for any multi-module repository. Modules that share a folder get
+  a results folder each (`<folder>/.sextant/<name>`), and modules with one id keep both, the id
+  followed by `@<folder>`.
+
 ### Added
 
 - **A Retrofit client that Dagger or Hilt makes has its server address** (OI-304, spec
