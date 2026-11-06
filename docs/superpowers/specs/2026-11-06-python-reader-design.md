@@ -253,9 +253,17 @@ A `sys.path` change in code is not followed (zulip, 15 files). Names it would ma
 - **The resolver:** receiver binding is the existing value walk. Its pass count is bounded by the
   depth of producer chains, and the walk already caps that.
 - **Budget, measured on polar's server** (2,382 files, 47,716 call sites, 257 locked packages, this
-  machine): a cold analysis under 5 minutes, and a warm one with no file changed under 30 seconds.
-- **The first plan task** measures reads per resolve on polar before building the passes, and stops
-  for a ruling if the budget cannot be met.
+  machine). The user accepted the ceiling only as a starting point and wants much shorter
+  (2026-11-06):
+
+  | | Ceiling (fails the item) | Target (aimed for) |
+  |---|---|---|
+  | cold analysis | 5 minutes | 1 minute |
+  | warm analysis, no file changed | 30 seconds | 10 seconds |
+
+- **The first plan task** measures reads per resolve on polar before building the passes. It reports
+  the measured time against the target after every task that changes a pass, not only at the end.
+  A miss of the ceiling stops the work for a ruling.
 
 ## 6. Command-line commands and program starts (ruled A, 2026-11-06)
 
