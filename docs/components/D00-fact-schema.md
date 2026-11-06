@@ -744,7 +744,10 @@ name is bound through the file's own imports, by path: the other file is not rea
 as on the JVM, and a PEP 695 type parameter (`def f[S]`, `class C[T]`) is also written in
 the declaration's `type_parameters`. An annotation the file writes and does not bind keeps
 its written text, bare (`Mystery`): it names no type (`names_a_type`) and is never
-`typing/Any#`. An unannotated parameter is `typing/Any#`, the typing specification's rule. A name that two branches bind differently
+`typing/Any#`, in `type` and in `erased_symbol` alike. A type variable's `erased_symbol` is
+`typing/Any#`, as a JVM one erases to its bound. A module-level alias of a name the file binds
+to a module, a class or a function (`DecodeError = jwt.DecodeError`) is bound as that name is,
+so it names the same type. An unannotated parameter is `typing/Any#`, the typing specification's rule. A name that two branches bind differently
 (`try: import ujson as json` / `except ImportError: import json`) is a closed list: as a
 type it is the union of both, and as a value it is a `merge` argument with one candidate
 each. **A Python class's parents** are its written bases in order, the first as `superclass` and
@@ -1244,6 +1247,41 @@ call on `x` — and then only INEXACTLY, because the call's effect on the value 
 Strictly additive: an engine that does not consult `merge` treats it exactly as it always
 treated `unresolved`.
 
+**`keyword` is the parameter NAME a Python keyword argument gives** (`prefix="/items"`),
+on an entry of `arguments` only, and only where the scanner cannot put the argument at its
+position: the callee's parameter list is not in the file (ruling R2, 2026-11-06). The
+resolver puts it at its position when it binds the callee. `**` marks keyword arguments
+unpacked from a mapping (`f(**options)`), whose names are not written. Entries with no
+`keyword` are positional, in order, before the keyword entries. Where the file writes the
+callee's parameter list (a function or a class constructor of the same file, called by a
+`static` or `special` site), every argument is at its parameter's position, a parameter the
+call leaves out has its default (a literal default as itself, any other as `unresolved`),
+`*args` is one `array` and `**kwargs` is `unresolved`, and no entry has a `keyword`.
+Absent on every JVM argument. Strictly additive, so the fact schema version did not move.
+
+**Python (spec 2026-11-06 §3a).** The Python scanner writes these facts with the meanings
+above:
+
+- `invoke_kind` is `static` for a function, `virtual` for a call on an object, and
+  `special` for `<init>` and for `super().m()`, whose owner is the class's first written
+  parent. A call on `self` names the class with no `receiver`, as a JVM call on `this`
+  does. A call on a parameter or a local whose written type names one class names that
+  class; any other call on a value names its receiver and no owner.
+- A constructor call has no `result`; its value is `instance` with the constructor's
+  `receiver` as `source`, as `new` is on the JVM.
+- An f-string, and `+` with a string literal, is `concat`. The concatenation is a `dynamic`
+  site `builtins/str#format`, with no receiver and no `implementation`, whose arguments are
+  the values that fill the holes. With no value in it, it is the `string` itself.
+- `a if c else b` and `a or b` are `merge`; `await x` is the value of `x`; `with x as y` is
+  the call `x.__enter__()` (`__aenter__` for `async with`), and `y` is its result.
+- A nested function is a method of the same owner, named after the function that holds it
+  (`outer$inner`), as kotlinc names a local function. A `lambda` is
+  `lambda$<method>$<n>`, as javac names a lambda body (`static` for a module or class body,
+  `new` for `__init__`), numbered per method. Both are `lambda` arguments with `captures` 0.
+- A module-level name that branches bind to several imports (`try: import ujson as json` /
+  `except ImportError: import json`) is a static field with one `field_write` per import, so
+  a call on it names the field as `receiver_field`. As an argument it is a `merge`.
+
 **`method_return` is a fact of its own, one per return instruction** (capability 9.18) —
 what a method hands back:
 
@@ -1287,6 +1325,12 @@ joins a `method_return` to the caller's own `result` id; the fact ships ahead of
 that is what it will consume. Recorded plainly here rather than implied: `docs/open-issues.md`
 carries it as `OI-15`.
 
+**Python:** every `return` is a `method_return`, and so is the implicit `return None`
+where the end of the body is reachable, as `{"kind": "null"}` — a Python function hands
+`None` back, so it is a value, not a void return. A generator hands back a generator object,
+so it has one `unresolved` return. An `@overload` stub, and an abstract or `Protocol` method
+whose body is only `...`, `pass` or a docstring, has no `method_return`: it has no body.
+
 **`field_write` is a fact of its own, ANY method, direct traces only** — a method assigns a
 parameter, a constant, or a call's result directly to field F. The JVM mapping: a `PUTFIELD`
 whose receiver is `this`, or a `PUTSTATIC` (which has no receiver), whose value is a bare
@@ -1316,6 +1360,11 @@ given.example.com /s resolved`, and a base `…/api` joined as `/apiorders` wher
 holds `…/api/`). The scan is syntactic — one pass over the instructions, no flow analysis —
 and errs toward reporting less: a store on a path that never reaches the write refuses it
 too.
+
+**Python:** `self.x = v` in a method writes the class's field, `C.x = v` and `module.x = v`
+write that type's field, and a `global` name written in a function writes the module's
+field. A write to an attribute of any other object is not reported, as on the JVM. `v` is
+written as it reads in an argument slot; a parameter is `from_parameter`.
 
 Three things it deliberately does not report, each because reporting them would be a claim
 nobody can check:

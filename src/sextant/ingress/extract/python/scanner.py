@@ -18,8 +18,9 @@ from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.symbols import NOT_APPLICABLE, PYTHON_SCHEME
 from sextant.domain.version import FACT_SCHEMA_VERSION, SEXTANT_VERSION
 from sextant.ingress.detect.python import is_skipped_folder
+from sextant.ingress.extract.python.calls import FileContext
 from sextant.ingress.extract.python.imports import ModuleIndex, module_path
-from sextant.ingress.extract.python.structure import FileContext, file_facts
+from sextant.ingress.extract.python.structure import file_facts
 
 _LANGUAGE = "python"
 _SCANNER_ID = "sextant-python-scanner"

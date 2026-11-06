@@ -16,21 +16,16 @@
   `@router.get("/x")` on `def f` is the call `router.get("/x")`, then the call of its
   result with `f` as a function reference (`lambda`) argument.
 
-Calls in function bodies, keyword arguments and control flow are read by later parts of
-this scanner; this part writes the calls a module or class body makes to build its
-names and to decorate its definitions.
+The calls, values, returns and field writes of every body are read by `calls.py`; the
+control-flow fields are read by a later part of this scanner.
 """
 
 import ast
-import builtins
-from collections.abc import Iterable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 
 from sextant.domain.closed_sets import ConstructKind
 from sextant.domain.facts import (
     CallArgument,
-    CallSiteFact,
-    CallTarget,
     Fact,
     FieldWriteFact,
     Parameter,
@@ -39,41 +34,30 @@ from sextant.domain.facts import (
     TypeParameter,
 )
 from sextant.domain.symbols import PY_SIGNATURE, method_descriptor, names_a_type
-from sextant.ingress.extract.python.imports import (
-    ModuleIndex,
-    Target,
-    bind_names,
-    is_typing,
+from sextant.ingress.extract.python.calls import (
+    CLINIT,
+    INIT,
+    Body,
+    BodyReader,
+    FileContext,
+    Scope,
+    is_stub_body,
 )
+from sextant.ingress.extract.python.imports import Target, bind_names, is_typing
 from sextant.ingress.extract.python.typing_rules import (
     ANY,
     BUILTINS,
     UNANNOTATED,
     TypeScope,
     type_parameter_name,
+    type_ref,
     type_symbol,
     written_type,
 )
 
-INIT = "<init>"
-CLINIT = "<clinit>"
-# The name a call of a VALUE has: Python calls `type(value).__call__`.
-CALL = "__call__"
 _SETTER_SUFFIX = "="
 
 _ENUM_BASES = frozenset({"Enum", "IntEnum", "StrEnum", "Flag", "IntFlag"})
-
-
-@dataclass(frozen=True)
-class FileContext:
-    """What one file's facts are written against."""
-
-    here: str
-    is_package: bool
-    index: ModuleIndex
-    # `sextant-python <manager> <package> <version> `, ending in the separator.
-    prefix: str
-    document_id: str
 
 
 @dataclass(frozen=True)
@@ -92,47 +76,13 @@ def file_facts(tree: ast.Module, context: FileContext, last_line: int) -> FileFa
     return FileFacts(writer.facts, writer.not_read)
 
 
-@dataclass
-class _Body:
-    """One method's own counters: call ordinals and value ids are per method (D00 §5)."""
-
-    caller: str
-    ordinal: int = 0
-    next_value: int = 0
-
-    def value_id(self) -> int:
-        found = self.next_value
-        self.next_value += 1
-        return found
-
-
-@dataclass(frozen=True)
-class _Callee:
-    """What a call names, after its receiver was read."""
-
-    target: CallTarget
-    invoke_kind: str
-    receiver: int | None = None
-    receiver_field: str | None = None
-
-
-@dataclass
-class _Scope:
-    """The body being read: the type it belongs to, its names, its `<clinit>`."""
-
-    owner: str
-    types: TypeScope
-    body: _Body
-    # The dotted class path (`Outer.Inner`), or None for the module body.
-    class_path: str | None = None
-    fields: set[str] = field(default_factory=set)
-
-
-class _Writer:
+class _Writer(BodyReader):
     def __init__(self, context: FileContext) -> None:
         self._context = context
         self.facts: list[Fact] = []
         self.not_read: list[str] = []
+        self._signatures = {}
+        self._methods = {}
 
     def _full(self, descriptor: str) -> str:
         return self._context.prefix + descriptor
@@ -148,7 +98,8 @@ class _Writer:
         types = TypeScope(names=names, here=here, index=self._context.index)
         self._symbol(owner, ConstructKind.MODULE, None, 1, last_line)
         clinit = self._clinit(owner, 1, last_line)
-        self._statements(tree.body, _Scope(owner, types, _Body(clinit)))
+        self._collect_signatures(tree.body)
+        self._statements(tree.body, Scope(owner, types, Body(clinit)))
 
     def _clinit(self, owner: str, start: int, end: int) -> str:
         descriptor = method_descriptor(owner, CLINIT, PY_SIGNATURE)
@@ -162,25 +113,34 @@ class _Writer:
         )
         return self._full(descriptor)
 
-    def _class(self, node: ast.ClassDef, scope: _Scope) -> None:
-        path = f"{scope.class_path}.{node.name}" if scope.class_path else node.name
+    def _class(self, node: ast.ClassDef, scope: Scope) -> None:
+        """A class. One defined inside a function is named after the function that holds
+        it (`outer$Local`), as kotlinc names a local class."""
+        base = scope.class_path
+        if scope.frame is not None:
+            base = f"{base}.{scope.frame.prefix}" if base else scope.frame.prefix
+        path = f"{base}.{node.name}" if base else node.name
         owner = type_symbol(Target(self._context.here, path))
         generic = scope.types.with_type_parameters(node.type_params)
+        unread = len(self.not_read)
         written = self._parents(node, generic)
         kind = ConstructKind.CLASS
         if any(
             is_typing(target, "Protocol")
-            for base in node.bases
-            for target in scope.types.lookup(_unsubscripted(base))
+            for base_node in node.bases
+            for target in scope.types.lookup(_unsubscripted(base_node))
         ):
             kind = ConstructKind.PROTOCOL
         elif any(
             target.module == "enum" and target.member in _ENUM_BASES
-            for base in node.bases
-            for target in scope.types.lookup(_unsubscripted(base))
+            for base_node in node.bases
+            for target in scope.types.lookup(_unsubscripted(base_node))
         ):
             kind = ConstructKind.ENUM
-        self._decorate(node, CallArgument(kind="class", symbol=owner), scope)
+        callees = self._decorators(node, scope)
+        # The bases and the class keywords are read where the class is defined.
+        for written_base in [*node.bases, *(keyword.value for keyword in node.keywords)]:
+            self._value(written_base, scope)
         self.facts.append(
             SymbolFact(
                 document_id=self._context.document_id,
@@ -203,7 +163,24 @@ class _Writer:
         )
         types = replace(generic, class_names=class_names, self_type=owner)
         clinit = self._clinit(owner, node.lineno, node.end_lineno or node.lineno)
-        self._statements(node.body, _Scope(owner, types, _Body(clinit), path))
+        if scope.frame is not None:
+            self._know_class(node, owner)
+        body = Scope(
+            owner,
+            types,
+            Body(clinit),
+            path,
+            protocol=kind == ConstructKind.PROTOCOL,
+            # `super()` starts at the first written parent; with none written it is
+            # `object`, and where the parents were not read it is not known.
+            super_owner=written[0]
+            if written
+            else (None if len(self.not_read) > unread else type_symbol(Target(BUILTINS, "object"))),
+        )
+        self._statements(node.body, body)
+        self._bind_nested(
+            node.name, self._apply(callees, CallArgument(kind="class", symbol=owner), scope), scope
+        )
 
     def _parents(self, node: ast.ClassDef, types: TypeScope) -> list[str]:
         """The written parents' symbols, in written order, up to the first one this file
@@ -225,33 +202,18 @@ class _Writer:
                 written.append(type_symbol(targets[0]))
         return written
 
-    # -- statements ----------------------------------------------------------------------
+    # -- module and class names ----------------------------------------------------------
 
-    def _statements(self, body: Iterable[ast.stmt], scope: _Scope) -> None:
-        for node in body:
-            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-                self._function(node, scope)
-            elif isinstance(node, ast.ClassDef):
-                self._class(node, scope)
-            elif isinstance(node, ast.Assign | ast.AnnAssign):
-                self._assignment(node, scope)
-            elif isinstance(node, ast.If | ast.For | ast.AsyncFor | ast.While):
-                self._statements([*node.body, *node.orelse], scope)
-            elif isinstance(node, ast.Try | ast.TryStar):
-                handlers = [statement for handler in node.handlers for statement in handler.body]
-                self._statements([*node.body, *handlers, *node.orelse, *node.finalbody], scope)
-            elif isinstance(node, ast.With | ast.AsyncWith):
-                self._statements(node.body, scope)
-            elif isinstance(node, ast.Match):
-                self._statements([s for case in node.cases for s in case.body], scope)
-
-    def _assignment(self, node: ast.Assign | ast.AnnAssign, scope: _Scope) -> None:
+    def _assignment(self, node: ast.Assign | ast.AnnAssign, scope: Scope) -> None:
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         value = None if node.value is None else self._value(node.value, scope)
         written = None
         if isinstance(node, ast.AnnAssign):
             written = written_type(node.annotation, scope.types)
         for target in targets:
+            if value is not None and isinstance(target, ast.Attribute | ast.Subscript):
+                self._store(target, value, scope)
+                continue
             named = target if isinstance(target, ast.Name) else None
             for name in _names(target):
                 descriptor = f"{scope.owner}{name}."
@@ -284,8 +246,9 @@ class _Writer:
 
     # -- functions -----------------------------------------------------------------------
 
-    def _function(self, node: ast.FunctionDef | ast.AsyncFunctionDef, scope: _Scope) -> None:
-        in_class = scope.class_path is not None
+    def _function(self, node: ast.FunctionDef | ast.AsyncFunctionDef, scope: Scope) -> None:
+        nested = scope.frame is not None
+        in_class = scope.class_path is not None and not nested
         decorators = [
             target for decorator in node.decorator_list for target in scope.types.lookup(decorator)
         ]
@@ -294,12 +257,25 @@ class _Writer:
         abstract = stub or any(t == Target("abc", "abstractmethod") for t in decorators)
         name = node.name
         kind = ConstructKind.METHOD
-        if in_class and name == "__init__":
+        if nested:
+            name = self._nested_name(node, scope)
+        elif in_class and name == "__init__":
             name, kind = INIT, ConstructKind.CONSTRUCTOR
         elif in_class and _is_setter(node):
             name = name + _SETTER_SUFFIX
         descriptor = method_descriptor(scope.owner, name, PY_SIGNATURE)
-        self._decorate(node, CallArgument(kind="lambda", symbol=descriptor, captures=0), scope)
+        callees = self._decorators(node, scope)
+        # The defaults are read where the function is defined, before it is decorated.
+        for default in [*node.args.defaults, *node.args.kw_defaults]:
+            if default is not None:
+                self._value(default, scope)
+        if nested:
+            self._method_known(descriptor, scope.owner, name)
+            self._know((scope.owner, name), node, skip_first=False)
+        applied = self._apply(
+            callees, CallArgument(kind="lambda", symbol=descriptor, captures=0), scope
+        )
+        self._bind_nested(node.name, applied, scope)
         receiver_taken = in_class and not is_static
         generic = scope.types.with_type_parameters(node.type_params)
         self._symbol(
@@ -316,9 +292,23 @@ class _Writer:
                 "varargs": node.args.vararg is not None,
             },
         )
+        # A method's body reads the module's names, not its class body's.
+        self._read_function(
+            node,
+            descriptor,
+            scope,
+            name=name,
+            receiver_taken=receiver_taken,
+            has_body=not stub and not ((abstract or scope.protocol) and is_stub_body(node.body)),
+            types=replace(generic, class_names={}),
+        )
 
     def _signature(
-        self, node: ast.FunctionDef | ast.AsyncFunctionDef, types: TypeScope, *, skip_first: bool
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+        types: TypeScope,
+        *,
+        skip_first: bool,
     ) -> Signature:
         written = node.args
         ordered = [*written.posonlyargs, *written.args]
@@ -334,124 +324,23 @@ class _Writer:
                 if argument.annotation is None
                 else written_type(argument.annotation, types)
             )
+            # A type variable erases to `Any`, as a JVM one erases to its bound. A type the
+            # file does not name keeps its written text: it is not `Any`.
+            unnamed = (
+                argument.annotation is not None and type_ref(argument.annotation, types) is None
+            )
             parameters.append(
                 Parameter(
                     name=argument.arg,
                     type=found,
-                    erased_symbol=found.symbol if names_a_type(found.symbol) else ANY,
+                    erased_symbol=found.symbol if names_a_type(found.symbol) or unnamed else ANY,
                 )
             )
-        returns = written_type(node.returns, types) if node.returns is not None else None
+        returned = (
+            node.returns if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) else None
+        )
+        returns = written_type(returned, types) if returned is not None else None
         return Signature(parameters=parameters, returns=returns)
-
-    # -- decorators and calls ------------------------------------------------------------
-
-    def _decorate(
-        self,
-        node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
-        decorated: CallArgument,
-        scope: _Scope,
-    ) -> None:
-        """Python reads every decorator expression top to bottom, then applies them from
-        the bottom up, each to the result of the one below it."""
-        callees = [self._decorator(decorator, scope) for decorator in node.decorator_list]
-        current = decorated
-        for callee in reversed(callees):
-            current = CallArgument(kind="unresolved", source=self._emit(callee, [current], scope))
-
-    def _decorator(self, decorator: ast.expr, scope: _Scope) -> _Callee:
-        if isinstance(decorator, ast.Name | ast.Attribute):
-            return self._callee(decorator, scope)
-        produced = self._value(decorator, scope)
-        return self._value_call(produced, scope)
-
-    def _value_call(self, produced: CallArgument, scope: _Scope) -> _Callee:
-        receiver = produced.source if produced.source is not None else scope.body.value_id()
-        return _Callee(
-            CallTarget(owner=None, name=CALL, descriptor=PY_SIGNATURE), "virtual", receiver
-        )
-
-    def _callee(self, func: ast.expr, scope: _Scope) -> _Callee:
-        """What `func(...)` calls. A name this file binds to a class is that class's
-        `<init>`; to a function, or to a member of another module, a static call on its
-        module type — whether that member is a class is in a file this scanner does not
-        read, so the resolver decides. A call on a value names its receiver."""
-        if isinstance(func, ast.Attribute):
-            owners = scope.types.lookup(func.value) if _is_dotted(func.value) else ()
-            if len(owners) == 1 and (owners[0].member is None or owners[0].kind == "class"):
-                return _Callee(_target(type_symbol(owners[0]), func.attr), "static")
-            if len(owners) == 1 and owners[0].kind in (None, "variable"):
-                return _Callee(
-                    CallTarget(owner=None, name=func.attr, descriptor=PY_SIGNATURE),
-                    "virtual",
-                    scope.body.value_id(),
-                    _field_of(owners[0]),
-                )
-            produced = self._value(func.value, scope)
-            receiver = produced.source if produced.source is not None else scope.body.value_id()
-            return _Callee(
-                CallTarget(owner=None, name=func.attr, descriptor=PY_SIGNATURE),
-                "virtual",
-                receiver,
-            )
-        targets = scope.types.lookup(func) if isinstance(func, ast.Name) else ()
-        if len(targets) == 1:
-            target = targets[0]
-            if target.kind == "class" or _is_builtin_class(target):
-                return _Callee(_target(type_symbol(target), INIT), "special")
-            if target.kind == "variable":
-                return _Callee(
-                    CallTarget(owner=None, name=CALL, descriptor=PY_SIGNATURE),
-                    "virtual",
-                    scope.body.value_id(),
-                    _field_of(target),
-                )
-            if target.member is not None and target.kind in (None, "function"):
-                owner, name = _split(target)
-                return _Callee(_target(owner, name), "static")
-        return self._value_call(self._value(func, scope), scope)
-
-    def _emit(self, callee: _Callee, arguments: list[CallArgument], scope: _Scope) -> int:
-        result = scope.body.value_id()
-        self.facts.append(
-            CallSiteFact(
-                document_id=self._context.document_id,
-                caller=scope.body.caller,
-                target=callee.target,
-                invoke_kind=callee.invoke_kind,
-                ordinal=scope.body.ordinal,
-                receiver=callee.receiver,
-                receiver_field=callee.receiver_field,
-                result=result,
-                arguments=arguments,
-            )
-        )
-        scope.body.ordinal += 1
-        return result
-
-    def _value(self, node: ast.expr, scope: _Scope) -> CallArgument:
-        """One value as D00 §5's argument grammar. A name bound to a closed list is a
-        `merge` of what each binding names."""
-        if isinstance(node, ast.Constant):
-            return _constant(node.value)
-        if isinstance(node, ast.Call):
-            callee = self._callee(node.func, scope)
-            arguments = [
-                CallArgument(kind="unresolved")
-                if isinstance(argument, ast.Starred)
-                else self._value(argument, scope)
-                for argument in node.args
-            ]
-            return CallArgument(kind="unresolved", source=self._emit(callee, arguments, scope))
-        if _is_dotted(node):
-            targets = scope.types.lookup(node)
-            if len(targets) == 1:
-                return _reference(targets[0])
-            if targets:
-                return CallArgument(
-                    kind="merge", candidates=[_reference(target) for target in targets]
-                )
-        return CallArgument(kind="unresolved")
 
     def _symbol(
         self,
@@ -493,68 +382,6 @@ def _type_parameters(written: list[ast.type_param], scope: TypeScope) -> list[Ty
         )
         found.append(TypeParameter(name=type_parameter_name(parameter), bounds=bounds))
     return found
-
-
-def _target(owner: str, name: str) -> CallTarget:
-    return CallTarget(owner=owner, name=name, descriptor=PY_SIGNATURE)
-
-
-def _split(target: Target) -> tuple[str, str]:
-    """A member target as its owning type and its own name: `app/m#` and `x` for the
-    module-level `x`, `app/m/C#` and `x` for the class attribute `C.x`."""
-    assert target.member is not None
-    path, _, name = target.member.rpartition(".")
-    return type_symbol(Target(target.module, path or None)), name
-
-
-def _field_of(target: Target) -> str | None:
-    if target.member is None:
-        return None
-    owner, name = _split(target)
-    return f"{owner}{name}."
-
-
-def _reference(target: Target) -> CallArgument:
-    """A name used as a value: a module or class is a `class` reference, a function a
-    function reference (`lambda`), anything else a static `field`."""
-    if target.member is None or target.kind == "class" or _is_builtin_class(target):
-        return CallArgument(kind="class", symbol=type_symbol(target))
-    owner, name = _split(target)
-    if target.kind == "function" or (target.module == BUILTINS and callable(_builtin(name))):
-        return CallArgument(
-            kind="lambda", symbol=method_descriptor(owner, name, PY_SIGNATURE), captures=0
-        )
-    return CallArgument(kind="field", symbol=f"{owner}{name}.")
-
-
-def _constant(value: object) -> CallArgument:
-    if isinstance(value, bool):
-        return CallArgument(kind="boolean", value=value)
-    if isinstance(value, int):
-        return CallArgument(kind="int", value=value)
-    if isinstance(value, str):
-        return CallArgument(kind="string", value=value)
-    if value is None:
-        return CallArgument(kind="null")
-    return CallArgument(kind="unresolved")
-
-
-def _builtin(name: str) -> object:
-    return getattr(builtins, name, None)
-
-
-def _is_builtin_class(target: Target) -> bool:
-    return (
-        target.module == BUILTINS
-        and target.member is not None
-        and isinstance(_builtin(target.member), type)
-    )
-
-
-def _is_dotted(node: ast.expr) -> bool:
-    while isinstance(node, ast.Attribute):
-        node = node.value
-    return isinstance(node, ast.Name)
 
 
 def _unsubscripted(node: ast.expr) -> ast.expr:

@@ -277,8 +277,42 @@ receiver).
 of the module is scanned. The grammar is the one of the Python that runs Sextant, and the
 reason names that version: a file written for a newer Python than that is not read.
 
-Calls in function bodies, keyword arguments, returns, control-flow fields, library type
-files and typeshed are later parts of this scanner.
+**Calls, values and returns in every body** (`calls.py`, D00 §5). Every call in a module
+body, a class body, a function, a nested function and a `lambda` is a `call_site`, with
+expression statements, `+=`, the iterated value of a `for`, `with ... as` and
+comprehensions included:
+
+- `static` for a function, `virtual` for a call on an object, `special` for `<init>` and
+  for `super().m()` (on the class's first written parent);
+- a call on `self` names the class; a call on a parameter or a local with a written type
+  names that type; any other call on a value names the receiver's value id and leaves the
+  owner to the resolver;
+- `with x as y` is the call `x.__enter__()`, and `y` is its result;
+- a constructor call gives an `instance` whose `source` is the constructor's receiver;
+- an f-string, or `+` with a string literal, is `concat`, filled by a `dynamic`
+  `builtins/str#format` site; a list or a tuple is `array`; a function is `lambda`;
+  `a if c else b` and `a or b` are `merge`; `await x` is `x`;
+- a keyword argument is put at its parameter's position where this file writes the
+  callee's parameter list (a function or a constructor of this file, by a `static` or
+  `special` call), else it keeps its name in `keyword` (D00 §5).
+
+A nested function is a method of the same owner named `outer$inner`; a `lambda` is
+`lambda$<method>$<n>`, numbered per method, with `static` for a module or class body and
+`new` for `__init__`; a class inside a function is `outer$Local`.
+
+A local name holds the last value written to it on the path; where paths join with
+different values it is `unresolved`. A list held in a local is read once as written, and
+`unresolved` after that, because the code it was handed to can change it.
+
+Every `return` is a `method_return`, plus `return None` where the end of the body is
+reachable. A generator has one `unresolved` return. An `@overload` stub, and an abstract or
+`Protocol` method whose body is only `...`, `pass` or a docstring, has no body and no
+`method_return`. `self.x = …` and `C.x = …` are `field_write`s; a write to an attribute of
+another object is not written. A module-level name that branches bind to several imports is
+a static field with one `field_write` per import, and a module-level alias of an imported
+name (`DecodeError = jwt.DecodeError`) is bound as that import is.
+
+Control-flow fields, library type files and typeshed are later parts of this scanner.
 
 ### Artifact readers
 

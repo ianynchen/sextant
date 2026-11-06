@@ -12,7 +12,7 @@ json` binds `json` to `ujson` and to `json`, and never to the first one silently
 """
 
 import ast
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -164,10 +164,33 @@ class _Binder:
 
     def _assignment(self, node: ast.Assign | ast.AnnAssign, names: dict[str, Binding]) -> None:
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        aliased = self._alias(node, names, targets)
+        if aliased is not None:
+            names[aliased[0]] = aliased[1]
+            return
         kind, alias_of = self._assigned(node, names)
         for written in targets:
             for name in _names_in(written):
                 names[name] = self._own(name, kind, alias_of)
+
+    def _alias(
+        self,
+        node: ast.Assign | ast.AnnAssign,
+        names: dict[str, Binding],
+        targets: Sequence[ast.expr],
+    ) -> tuple[str, Binding] | None:
+        """A module-level name given another name of a module, a class or a function
+        (`DecodeError = jwt.DecodeError`) is bound as that name is, as an import binds
+        it. A computed value, or a name of a value, stays a value."""
+        value = node.value
+        if self._owner is not None or value is None or len(targets) != 1:
+            return None
+        if not isinstance(targets[0], ast.Name) or not isinstance(value, ast.Name | ast.Attribute):
+            return None
+        found = resolve(value, names, self._index)
+        if not found or any(target.kind not in (None, "class", "function") for target in found):
+            return None
+        return targets[0].id, Binding(found)
 
     def _assigned(
         self, node: ast.Assign | ast.AnnAssign, names: dict[str, Binding]

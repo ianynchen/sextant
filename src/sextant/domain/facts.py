@@ -430,12 +430,19 @@ class CallArgument(BaseModel):
     # call site's `arguments`, a `method_return`'s `value` and an `array`'s
     # `elements` are all entries of the same grammar, modelled by this class.
     captures: int | None = None
+    # The parameter NAME a Python keyword argument (`prefix="/items"`) gives, set only
+    # where the scanner cannot bind it to a position: the callee's parameter list is not
+    # in the file (ruling R2, 2026-11-06). The resolver binds it to a position when it
+    # binds the callee. `**` marks keyword arguments unpacked from a mapping. Absent on
+    # every positional argument and on every argument the scanner bound.
+    keyword: str | None = None
 
 
 class CallTarget(BaseModel):
     """What a call site names. `name` and `descriptor` on every site that dispatches
-    to a method — which is every one except a THROW — and `owner` on all but a rethrow
-    whose type this pass could not read.
+    to a method — which is every one except a THROW — and `owner` on all but two: a
+    rethrow whose type this pass could not read, and a `virtual` call with a receiver,
+    whose owner the resolver binds later from that receiver (a Python call on a value).
 
     The invariant is enforced on `CallSiteFact` rather than here, because it is stated
     in terms of `invoke_kind`, which lives there. A validator on this model can only see
@@ -549,7 +556,10 @@ class CallSiteFact(BaseModel):
             and self.target.owner is None
             and not leaves_owner_to_resolver
         ):
-            raise ValueError("a dispatching call site must name an owner")
+            raise ValueError(
+                "a dispatching call site must name an owner, except a `virtual` call with "
+                "a receiver, which may leave its owner to the resolver"
+            )
         return self
 
 

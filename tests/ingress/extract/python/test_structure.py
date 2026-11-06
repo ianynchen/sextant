@@ -287,7 +287,7 @@ def test_try_import_fallback_binds_a_closed_list(tmp_path: Path):
         },
     )
 
-    (write,) = _facts(tree, FieldWriteFact)
+    (write,) = [w for w in _facts(tree, FieldWriteFact) if w.field == "app/codec#codec."]
     assert write.value == CallArgument(
         kind="merge",
         candidates=[

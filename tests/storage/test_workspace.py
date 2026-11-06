@@ -1097,6 +1097,8 @@ def test_call_sites_view_round_trips_every_column_including_arguments_as_json(tm
             "captures": None,
             # Capability 9.19's key, None on every kind but `merge`.
             "candidates": None,
+            # Ruling R2's key, None on every argument but an unbound Python keyword.
+            "keyword": None,
         },
         {
             "kind": "unresolved",
@@ -1107,6 +1109,8 @@ def test_call_sites_view_round_trips_every_column_including_arguments_as_json(tm
             "captures": None,
             # Capability 9.19's key, None on every kind but `merge`.
             "candidates": None,
+            # Ruling R2's key, None on every argument but an unbound Python keyword.
+            "keyword": None,
         },
     ]
 

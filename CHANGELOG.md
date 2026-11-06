@@ -35,6 +35,12 @@ here would restate those documents rather than add anything.
   listed as uncovered with its reason, and the rest of the module is scanned. A Python module's
   import roots are what is scanned, and its module fact names the `c3` lookup rule. Calls in
   function bodies, control flow and library types are not read yet.
+- **The Python scanner reads every call, value and return** (OI-208 plan 1 task 5). Every call
+  in every body (module, class, function, nested function, `lambda`) is a `call_site` with its
+  receiver, result and arguments; f-strings are `concat`, lists `array`, functions `lambda`.
+  Every `return` and the implicit `return None` are `method_return` facts, and `self.x = …` is a
+  `field_write`. A keyword argument is bound to its position where the file writes the callee's
+  parameters; elsewhere it keeps its name in the new optional argument key `keyword` (D00 §5).
 
 - **A Retrofit client that Dagger or Hilt makes has its server address** (OI-304, spec
   `2026-11-05-di-recipe-hop-design.md`). A parameter the container fills (a `@Provides` method's,
