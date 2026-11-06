@@ -246,7 +246,7 @@ def _with_new_callers(
                 )
     callers = {key: list(value) for key, value in index.callers.items()}
     if index.by_name:
-        bind_by_name(callers, edges, index.sites, index.parameters, index.varargs)
+        bind_by_name(callers, edges, index.sites, index.call_parameters)
     else:
         for edge in edges:
             arguments = index.sites[(str(edge["caller"]), int(str(edge["ordinal"])))]["arguments"]

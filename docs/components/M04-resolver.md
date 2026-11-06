@@ -171,12 +171,15 @@ A receiver that is a parameter whose written type is a union (`Session | Client`
 member, one row each, `narrowed`; a `None` member is left out and the detail says so, and a
 union holding the unknown type or the root type is no closed list.
 
-**Arguments are bound by name** (ruling R2) where the module's lookup rule is `c3`: a keyword
-argument fills the callee's parameter of its name, positional ones fill parameters in order,
-and a parameter no argument can be said to fill — its default, a `**` mapping, a positional
-argument to a callee with a variadic parameter (whose place the facts do not give) — is
-`not_readable` on that caller's path, naming the parameter (`values.parameter_slots`). Every
-JVM argument is positional, slot for slot.
+**Arguments are bound by name** (ruling R2, user ruling A) where the module's lookup rule is
+`c3`, by Python's calling rule over each parameter's `kind` (D00 §5a): positionals fill the
+positional parameters in order and the rest go to `*args`; a keyword fills the positional or
+keyword-only parameter of its name and the rest go to `**kwargs`; after a `*` argument no
+later positional's place is known, and a `**` argument may fill any parameter left. A
+parameter none of this decides — its default, one only an unpacked argument may fill, a
+`*args`/`**kwargs` parameter — is `not_readable` on that caller's path, naming the parameter
+(`values.parameter_slots`). A constructor is bound by its `__init__`'s parameters, as any
+callee. Every JVM argument is positional, slot for slot.
 
 A bound call becomes an edge, and an edge is a caller, so binding runs in rounds until one
 binds nothing new, at most eight; a receiver still unbound when the eighth round bound

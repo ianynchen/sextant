@@ -479,3 +479,87 @@ def test_the_rounds_rewalk_only_what_a_new_edge_can_change(tmp_path: Path):
         workspace.close()
     assert len(tables[0][0]) == 8
     assert tables[0] == tables[1]
+
+
+def test_a_constructor_fills_its_init_parameters_by_name(tmp_path: Path):
+    """Fix round 2: `Svc(Session())` and `Svc(s=Client())` fill `Svc.__init__`'s `s`, so
+    `self.s.get()` binds both, one row each — a constructor is a callee like any other."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "svc.py": "class Svc:\n"
+            "    def __init__(self, s):\n        self.s = s\n"
+            "    def run(self):\n        self.s.get('/')\n",
+            "b.py": "from app.a import Session, Client\n"
+            "from app.svc import Svc\n"
+            "def f():\n    Svc(Session()).run()\n"
+            "def g():\n    Svc(s=Client()).run()\n",
+        },
+    )
+    rows = _bound(workspace, _site(workspace, "app/svc/Svc#run(sig_dd69782a).", "get"))
+    assert sorted(str(row["owner"]) for row in rows) == [_CLIENT, _SESSION]
+    workspace.close()
+
+
+def test_an_unpacked_sequence_decides_no_later_positional(tmp_path: Path):
+    """`f(*items, Client())`: how many places `items` fills is not known, so `b` is not the
+    `Client` — `not_readable` on that path."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "h.py": "def f(a, b):\n    b.get('/')\n",
+            "b.py": "from app.a import Client\nfrom app.h import f\n"
+            "def g(items):\n    f(*items, Client())\n",
+        },
+    )
+    rows = _bound(workspace, _site(workspace, "app/h#f(sig_dd69782a).", "get"))
+    assert [(row["owner"], row["reason"]) for row in rows] == [(None, "not_readable")]
+    workspace.close()
+
+
+def test_a_positional_argument_to_a_variadic_function_fills_its_first_parameter(tmp_path: Path):
+    """`def f(a, *rest): f(Client())` binds `a`: the extra positionals go to `rest`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "h.py": "def f(a, *rest):\n    a.get('/')\n",
+            "b.py": "from app.a import Client\nfrom app.h import f\ndef g():\n    f(Client(), 1, 2)\n",
+        },
+    )
+    rows = _bound(workspace, _site(workspace, "app/h#f(sig_dd69782a).", "get"))
+    assert [row["owner"] for row in rows] == [_CLIENT]
+    workspace.close()
+
+
+def test_a_keyword_only_parameter_is_filled_by_name_or_left_to_its_default(tmp_path: Path):
+    """`def f(a, *, b=None)`: `f(x, b=Client())` fills `b`; `f(x)` leaves it to its default,
+    `not_readable` naming parameter 1."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "h.py": "def f(a, *, b=None):\n    b.get('/')\n",
+            "b.py": "from app.a import Session, Client\nfrom app.h import f\n"
+            "def g():\n    f(Session(), b=Client())\n"
+            "def k():\n    f(Session())\n",
+        },
+    )
+    rows = _bound(workspace, _site(workspace, "app/h#f(sig_dd69782a).", "get"))
+    assert sorted((str(row["owner"]), str(row["reason"])) for row in rows) == [
+        ("None", "not_readable"),
+        (_CLIENT, "None"),
+    ]
+    unfilled = next(row for row in rows if row["owner"] is None)
+    assert "parameter 1" in str(unfilled["detail"])
+    kinds = {
+        str(row["symbol"]).rsplit(" ", 1)[-1]: [
+            parameter.get("kind") for parameter in row["signature"]["parameters"]
+        ]
+        for row in workspace.query("method_declarations")
+        if "app/h#f" in str(row["symbol"])
+    }
+    assert kinds == {"app/h#f(sig_dd69782a).": ["positional", "keyword_only"]}
+    workspace.close()

@@ -559,6 +559,15 @@ declarations, and every consumer that keys or looks a type up by a parameter rea
 differ, because a JSON path wildcard drops elements whose key is absent and a shorter list
 silently misaligns against the parameters it describes.
 
+**`kind` says how a call fills a parameter** (user ruling A, 2026-11-06), where a language
+has more than one way: `positional_only`, `positional` (by place or by name),
+`var_positional` (the positional arguments left over, `*args`), `keyword_only`, or
+`var_keyword` (the keyword arguments left over, `**kwargs`). The Python scanner writes it on
+every parameter, in Python's own order of the list (`self` or `cls` taken by the receiver is
+not one); the resolver binds a call's arguments by it (`values.parameter_slots`). Optional
+and absent on every JVM parameter, which a call fills by place. Strictly additive, as
+`keyword` was, so the fact schema version did not move.
+
 **The two lists are matched by the class file's own parameter flags, never by counting.**
 JVMS 4.7.9.1 permits a signature to omit parameters that are implicitly declared, and a
 compiler may also omit ones it synthesised — so the two lists can be different lengths, and
@@ -1253,8 +1262,11 @@ treated `unresolved`.
 on an entry of `arguments` only, and only where the scanner cannot put the argument at its
 position: the callee's parameter list is not in the file (ruling R2, 2026-11-06). The
 resolver puts it at its position when it binds the callee. `**` marks keyword arguments
-unpacked from a mapping (`f(**options)`), whose names are not written. Entries with no
-`keyword` are positional, in order, before the keyword entries. Where the file writes the
+unpacked from a mapping (`f(**options)`), whose names are not written, and `*` a positional
+argument unpacked from a sequence (`f(*items)`), whose entry is `unresolved` and stands in its
+place among the positional entries: after it, no later positional argument's parameter is
+known (user ruling A, 2026-11-06). Entries with no `keyword`, and `*` entries, are
+positional, in order, before the keyword entries. Where the file writes the
 callee's parameter list (a function or a class constructor of the same file, called by a
 `static` or `special` site), every argument is at its parameter's position, a parameter the
 call leaves out has its default (a literal default as itself, any other as `unresolved`),

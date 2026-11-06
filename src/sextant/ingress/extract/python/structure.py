@@ -29,6 +29,7 @@ from sextant.domain.facts import (
     Fact,
     FieldWriteFact,
     Parameter,
+    ParameterKind,
     ParentsUnread,
     Signature,
     SymbolFact,
@@ -341,14 +342,19 @@ class _Writer(BodyReader):
         skip_first: bool,
     ) -> Signature:
         written = node.args
-        ordered = [*written.posonlyargs, *written.args]
+        # Each parameter with how a call fills it (D00 §5a `kind`), in the order Python lists
+        # them: `self` (or `cls`) taken by the receiver is not one.
+        ordered: list[tuple[ast.arg, ParameterKind]] = [
+            *((a, "positional_only") for a in written.posonlyargs),
+            *((a, "positional") for a in written.args),
+        ]
         if skip_first and ordered:
             ordered = ordered[1:]
-        ordered += [a for a in (written.vararg,) if a is not None]
-        ordered += written.kwonlyargs
-        ordered += [a for a in (written.kwarg,) if a is not None]
+        ordered += [(a, "var_positional") for a in (written.vararg,) if a is not None]
+        ordered += [(a, "keyword_only") for a in written.kwonlyargs]
+        ordered += [(a, "var_keyword") for a in (written.kwarg,) if a is not None]
         parameters = []
-        for argument in ordered:
+        for argument, kind in ordered:
             found = (
                 UNANNOTATED
                 if argument.annotation is None
@@ -364,6 +370,7 @@ class _Writer(BodyReader):
                     name=argument.arg,
                     type=found,
                     erased_symbol=found.symbol if names_a_type(found.symbol) or unnamed else ANY,
+                    kind=kind,
                 )
             )
         returned = (

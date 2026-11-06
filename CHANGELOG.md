@@ -58,8 +58,12 @@ here would restate those documents rather than add anything.
   target for a call nothing bound. A class imported from another file and called is read as
   its construction, and a name of one used as a value as that class. The edges are redrawn
   after each round that bound something, at most eight rounds; rounds after the first walk only
-  the sites a new caller can change. A keyword argument fills the parameter of its name, and a
-  parameter no argument can be said to fill is `not_readable`, never a neighbour's value. A
+  the sites a new caller can change. Arguments fill parameters by Python's calling rule: a
+  keyword the parameter of its name, positionals in order, over each parameter's new `kind`
+  (`positional_only`, `positional`, `var_positional`, `keyword_only`, `var_keyword`), and an
+  argument unpacked from a sequence is marked `keyword: "*"` beside `**`; a parameter no
+  argument can be said to fill is `not_readable`, never a neighbour's value. Both fact fields
+  are optional and additive, so `FACT_SCHEMA_VERSION` stays 7. A
   parameter written as a union binds to each member. JVM facts always name an owner and pass
   arguments by position, so no JVM row changes. `GRAPH_SCHEMA_VERSION` 16 → 17: the export
   carries the new table.

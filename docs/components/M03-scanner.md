@@ -295,7 +295,10 @@ comprehensions included:
   `a if c else b` and `a or b` are `merge`; `await x` is `x`;
 - a keyword argument is put at its parameter's position where this file writes the
   callee's parameter list (a function or a constructor of this file, by a `static` or
-  `special` call), else it keeps its name in `keyword` (D00 §5).
+  `special` call), else it keeps its name in `keyword` (D00 §5); an unpacked argument is
+  `unresolved` with `keyword` `*` (`f(*items)`) or `**` (`f(**options)`);
+- every parameter of a signature carries its `kind` (`positional_only`, `positional`,
+  `var_positional`, `keyword_only`, `var_keyword`, D00 §5a).
 
 A nested function is a method of the same owner named `outer$inner`; a `lambda` is
 `lambda$<method>$<n>`, numbered per method, with `static` for a module or class body and

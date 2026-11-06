@@ -690,31 +690,32 @@ class ValueIndex:
     # module whose lookup rule is `c3`; every JVM argument is positional, slot for slot, so
     # there the slot IS the parameter and nothing below is consulted.
     by_name: bool = False
-    # The methods declaring a variadic positional parameter (`modifiers.varargs`), whose
-    # position in the list the facts do not give: a positional argument to one fills no
-    # parameter that can be decided.
-    varargs: frozenset[str] = frozenset()
+    # Every method's and constructor's parameters as a call fills them, `(name, kind)` in
+    # order (D00 §5a `Parameter.kind`), by symbol: what `argument_slots` binds by. A
+    # constructor is here as a method is — `Svc(Session())` fills `Svc.__init__`'s `s`.
+    call_parameters: Mapping[str, tuple[tuple[str | None, str | None], ...]] = dataclass_field(
+        default_factory=dict
+    )
     # `argument_slots`' answers, per (caller, ordinal, callee), for as long as this lives.
     slots_memo: dict[Any, Any] = dataclass_field(default_factory=dict, compare=False, repr=False)
 
     def argument_slots(self, caller: str, ordinal: int, callee: str) -> tuple[int, ...]:
         """For each of `callee`'s parameters, the argument slot of the call at
-        `(caller, ordinal)` that fills it, or `UNFILLED` where none can be said to (R2): a
-        parameter the call leaves to its default, one a `**` mapping may fill, one of a
-        callee whose variadic parameter's place is not known, or of a callee whose parameter
-        names are not known. Slot for slot where arguments are not bound by name."""
+        `(caller, ordinal)` that fills it, or `UNFILLED` where none can be said to (R2,
+        `parameter_slots`), and for every parameter of a callee whose parameters are not
+        known. Slot for slot where arguments are not bound by name."""
         key = (caller, ordinal, callee)
         found = self.slots_memo.get(key)
         if found is None:
             site = self.sites.get((caller, ordinal))
             arguments = (site or {}).get("arguments") or []
-            names = self.parameters.get(callee)
+            declared = self.call_parameters.get(callee)
             if not self.by_name:
                 found = tuple(range(len(arguments)))
-            elif names is None:
+            elif declared is None:
                 found = ()
             else:
-                found = parameter_slots(arguments, names, callee in self.varargs)
+                found = parameter_slots(arguments, declared)
             self.slots_memo[key] = found
         return found
 
@@ -776,45 +777,55 @@ _INDEX_BY_WORKSPACE: "WeakKeyDictionary[Workspace, ValueIndex]" = WeakKeyDiction
 
 # A parameter no argument of a call can be said to fill (`ValueIndex.argument_slots`).
 UNFILLED = -1
-# The `keyword` D00 §5 writes on a keyword argument unpacked from a mapping (`f(**options)`).
+# The `keyword` D00 §5 writes on an argument unpacked from a mapping (`f(**options)`) and
+# from a sequence (`f(*items)`).
 _UNPACKED_MAPPING = "**"
+_UNPACKED_SEQUENCE = "*"
 
 
 def parameter_slots(
-    arguments: Sequence[Mapping[str, Any]], names: Sequence[str | None], variadic: bool
+    arguments: Sequence[Mapping[str, Any]],
+    parameters: Sequence[tuple[str | None, str | None]],
 ) -> tuple[int, ...]:
-    """Which argument slot fills each parameter named `names`, in order (ruling R2): the
-    positional arguments (no `keyword`) the parameters in order, and each keyword argument
-    the parameter of its name. `UNFILLED` for a parameter neither fills, for every parameter
-    a positional argument may fill when the callee is `variadic` (where its variadic
-    parameter sits is not in the facts), and for every parameter not filled by name when a
-    `**` mapping is passed (it may hold any of them). A keyword naming no parameter fills
-    none: the callee takes it through its keyword mapping, or refuses it."""
-    filled = [UNFILLED] * len(names)
-    positional = [slot for slot, entry in enumerate(arguments) if entry.get("keyword") is None]
-    if not variadic:
-        for position, slot in enumerate(positional[: len(names)]):
-            filled[position] = slot
-    unpacked = False
+    """Which argument slot fills each parameter, `(name, kind)` in order (ruling R2 and the
+    user's ruling A of 2026-11-06), by Python's calling rule (D00 §5a `Parameter.kind`):
+
+    - the positional arguments fill the `positional_only` and `positional` parameters in
+      order, and the extra ones go to the `var_positional` parameter;
+    - a keyword fills the `positional` or `keyword_only` parameter of its name, and one naming
+      none goes to the `var_keyword` parameter;
+    - after a `*` argument (an unpacked sequence) no later positional argument's place is
+      known, and a `**` argument (an unpacked mapping) may fill any parameter not yet filled.
+
+    `UNFILLED` for every parameter none of this decides: one left to its default, one only
+    an unpacked argument may fill, and a `var_positional` or `var_keyword` parameter (it holds
+    what is left over, not one argument). A parameter with no kind fills by place, as a JVM
+    one does."""
+    filled = [UNFILLED] * len(parameters)
+    by_place = [
+        position
+        for position, (_, kind) in enumerate(parameters)
+        if kind in (None, "positional_only", "positional")
+    ]
+    by_name = {
+        name: position
+        for position, (name, kind) in enumerate(parameters)
+        if name is not None and kind in (None, "positional", "keyword_only")
+    }
+    placed = 0
+    unpacked_sequence = False
     for slot, entry in enumerate(arguments):
         keyword = entry.get("keyword")
-        if keyword is None:
-            continue
-        if keyword == _UNPACKED_MAPPING:
-            unpacked = True
-            continue
-        if keyword in names:
-            position = list(names).index(keyword)
-            if filled[position] == UNFILLED:
+        if keyword == _UNPACKED_SEQUENCE:
+            unpacked_sequence = True
+        elif keyword is None:
+            if not unpacked_sequence and placed < len(by_place):
+                filled[by_place[placed]] = slot
+            placed += 1
+        elif keyword != _UNPACKED_MAPPING:
+            position = by_name.get(str(keyword))
+            if position is not None and filled[position] == UNFILLED:
                 filled[position] = slot
-    if unpacked or (variadic and positional):
-        # Only what a keyword filled by name is decided.
-        named = {
-            list(names).index(entry["keyword"])
-            for entry in arguments
-            if entry.get("keyword") not in (None, _UNPACKED_MAPPING) and entry["keyword"] in names
-        }
-        filled = [slot if position in named else UNFILLED for position, slot in enumerate(filled)]
     return tuple(filled)
 
 
@@ -975,11 +986,23 @@ def value_index(
 
     parameters: dict[str, tuple[str | None, ...]] = {}
     parameter_types: dict[str, tuple[str | None, ...]] = {}
-    varargs: set[str] = set()
+    call_parameters: dict[str, tuple[tuple[str | None, str | None], ...]] = {}
+    for row in (
+        *workspace.query("method_declarations"),
+        *workspace.query("constructor_declarations"),
+    ):
+        declared = row.get("signature")
+        parsed = json.loads(str(declared)) if isinstance(declared, str) else declared
+        if isinstance(parsed, dict):
+            call_parameters[str(row["symbol"])] = tuple(
+                (
+                    position.get("name") if isinstance(position.get("name"), str) else None,
+                    position.get("kind") if isinstance(position.get("kind"), str) else None,
+                )
+                for position in parsed.get("parameters") or []
+                if isinstance(position, dict)
+            )
     for row in workspace.query("method_declarations"):
-        modifiers = row.get("modifiers")
-        if isinstance(modifiers, dict) and modifiers.get("varargs"):
-            varargs.add(str(row["symbol"]))
         declared = row.get("signature")
         if declared is None:
             continue
@@ -1064,7 +1087,7 @@ def value_index(
 
     edges = [row for row in workspace.query("call_edges") if row["callee"] is not None]
     if by_name:
-        bind_by_name(callers, edges, sites, parameters, frozenset(varargs))
+        bind_by_name(callers, edges, sites, call_parameters)
     reached = frozenset((str(row["caller"]), int(str(row["ordinal"]))) for row in edges)
     writing = (
         {method for entries in writers.values() for method, _ in entries}
@@ -1135,7 +1158,7 @@ def value_index(
         ),
         dispatch=dispatch,
         by_name=by_name,
-        varargs=frozenset(varargs),
+        call_parameters=call_parameters,
     )
 
 
@@ -1143,8 +1166,7 @@ def bind_by_name(
     callers: dict[tuple[str, int], list[tuple[str, int, int]]],
     edges: Sequence[Mapping[str, Any]],
     sites: Mapping[tuple[str, int], Mapping[str, Any]],
-    parameters: Mapping[str, tuple[str | None, ...]],
-    varargs: AbstractSet[str],
+    parameters: Mapping[str, tuple[tuple[str | None, str | None], ...]],
 ) -> None:
     """`bound_to_parameter` where arguments are bound by name (R2): each edge's callee's
     parameters, each with the argument slot `parameter_slots` says fills it, or `UNFILLED`
@@ -1160,11 +1182,11 @@ def bind_by_name(
         if (caller, ordinal, callee) in seen:
             continue
         seen.add((caller, ordinal, callee))
-        names = parameters.get(callee)
+        declared = parameters.get(callee)
         site = sites.get((caller, ordinal))
-        if names is None or site is None:
+        if declared is None or site is None:
             continue
-        slots = parameter_slots(site.get("arguments") or [], names, callee in varargs)
+        slots = parameter_slots(site.get("arguments") or [], declared)
         for position, slot in enumerate(slots):
             callers.setdefault((callee, position), []).append((caller, ordinal, slot))
 
@@ -1944,7 +1966,13 @@ def entered_position(
         entering = index.sites.get(outer)
         if entering is None:
             break
-        site, slot = entering, int(argument["value"])
+        # The body's parameter, as the slot of the entering call that fills it (R2).
+        filled = index.argument_slot(
+            outer[0], outer[1], str(site["caller"]), int(argument["value"])
+        )
+        if filled == UNFILLED:
+            break
+        site, slot = entering, filled
     return site, slot
 
 

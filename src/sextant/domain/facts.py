@@ -49,6 +49,12 @@ class AnnotationUse(BaseModel):
     unresolved: str | None = None
 
 
+# D00 §5a's parameter kinds (`Parameter.kind`).
+ParameterKind = Literal[
+    "positional_only", "positional", "var_positional", "keyword_only", "var_keyword"
+]
+
+
 class Parameter(BaseModel):
     model_config = {"frozen": True}
     name: str | None = None
@@ -76,6 +82,12 @@ class Parameter(BaseModel):
     # declaration owns. Unrelated to `CallSiteFact.receiver`, which is the
     # argument SLOT a call's target object came from.
     receiver: bool = False
+    # How a call fills this parameter, where the language has more than one way (spec
+    # 2026-11-06 §3a, user ruling A 2026-11-06): `positional_only`, `positional` (by place
+    # or by name), `var_positional` (the extra positional arguments), `keyword_only`, or
+    # `var_keyword` (the extra keyword arguments). Absent where a call fills every parameter
+    # by place, which is every JVM declaration.
+    kind: ParameterKind | None = None
 
 
 class TypeParameter(BaseModel):

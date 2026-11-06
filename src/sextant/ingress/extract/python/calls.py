@@ -86,6 +86,7 @@ _FORMAT = "format"
 _HOLE = "{}"
 # A keyword argument unpacked from a mapping (`f(**options)`): its names are not written.
 _UNPACKED = "**"
+_UNPACKED_POSITIONAL = "*"
 # The name prefix javac gives a lambda body in a static initializer and in a constructor.
 _PREFIXES = {CLINIT: "static", INIT: "new"}
 
@@ -882,8 +883,10 @@ class BodyReader:
         positional = []
         for argument in node.args:
             if isinstance(argument, ast.Starred):
+                # Unpacked into the positional arguments (D00 §5 `keyword: "*"`): how many it
+                # fills, and so where every later one lands, is not known.
                 self._value(argument.value, scope)
-                positional.append(_UNKNOWN)
+                positional.append(_UNKNOWN.model_copy(update={"keyword": _UNPACKED_POSITIONAL}))
             else:
                 positional.append(self._value(argument, scope))
         keywords = [(k.arg, self._value(k.value, scope)) for k in node.keywords]

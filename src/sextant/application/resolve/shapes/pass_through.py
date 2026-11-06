@@ -442,7 +442,11 @@ class HandlerReader:
                 stands_for = [
                     m
                     for m in methods
-                    if any(c in methods for c, _, _ in self._index.callers.get((m, 0), ()))
+                    if any(
+                        c in methods
+                        for c, _, slot in self._index.callers.get((m, 0), ())
+                        if slot >= 0
+                    )
                 ]
                 return self._runs(
                     (*stands_for, *(m for m in methods if m not in stands_for)),
