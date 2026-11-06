@@ -480,7 +480,7 @@ def test_a_base_from_an_import_the_file_cannot_read_says_external(tmp_path: Path
     assert c.superclass is not None and c.superclass.endswith(" app/m/A#")
     assert c.parents_unread == ParentsUnread(
         reason="external",
-        detail="base 2 'Mystery' comes from an import this file cannot read; "
+        detail="base 2 'Mystery' is a name this file does not bind; "
         "parents from here on are not read",
     )
 
@@ -522,3 +522,13 @@ def test_python_314_syntax_below_314_is_uncovered_and_the_reason_names_the_versi
     assert len(report.uncovered) == 1
     assert report.uncovered[0].startswith("app/new.py: ")
     assert running in report.uncovered[0]
+
+
+def test_a_call_as_a_base_is_named_a_call_result(tmp_path: Path):
+    _, tree = _scan(tmp_path, {"app/m.py": "def f(): pass\nclass C(f()): pass\n"})
+
+    c, _ = _class_and_document(tree, "app/m/C#")
+    assert c.parents_unread == ParentsUnread(
+        reason="not_readable",
+        detail="base 1 'f()' is a call result, not a class name; parents from here on are not read",
+    )

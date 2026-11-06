@@ -22,23 +22,11 @@ jobs:
     # tidier and were a lie: the Python end-to-end tests load the shaded jar,
     # so a Python job without a JVM either fails or skips the tests that matter
     # most — and a green run that skipped them is worse than a red one.
-    #
-    # It runs twice, once per Python: the floor and the newest. The Python scanner reads
-    # a file with the grammar of the Python that runs Sextant, so a file with 3.14
-    # syntax is read on 3.14 and uncovered on 3.12, and both results are pinned by
-    # tests. Each run is the whole script, for the reason above.
-    name: All gates (Python ${{ matrix.python }})
+    name: All gates
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # 3.12 is the floor in pyproject; a newer local version must not hide a break.
-        # 3.14 is the newest, and what a developer's `.python-version` names.
-        python: ["3.12", "3.14"]
     env:
-      # `.python-version` names 3.14. Without this, `uv sync` would build the 3.12 job's
-      # environment on 3.14 and the floor would not be tested at all.
-      UV_PYTHON: ${{ matrix.python }}
+      # `.python-version` names 3.14, which `uv` would obey. This job is the 3.12 floor.
+      UV_PYTHON: "3.12"
     steps:
       - uses: actions/checkout@v7
 
@@ -51,7 +39,7 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.12"   # the floor in pyproject; a newer local version must not hide a break
           # No pip cache: nothing installs with pip here any more. See below.
 
       - uses: astral-sh/setup-uv@v6
@@ -147,3 +135,27 @@ jobs:
         run: scripts/check.sh --extractor
       - name: Tests
         run: scripts/check.sh --tests
+
+  python-314:
+    # The newest Python, light on purpose. The Python scanner reads a file with the
+    # grammar of the Python that runs Sextant, so a file with 3.14 syntax is read here
+    # and uncovered on the floor. The full gate on 3.12 above runs everything else
+    # (JVM, Maven, Gradle, the shaded jar), so this job runs only the tests that read
+    # Python source and needs none of that.
+    name: Python 3.14 reader
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.14"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install
+        # From the lock, as in the full gate.
+        run: uv sync --frozen --extra dev
+      - name: Python reader tests
+        run: uv run pytest tests/ingress/extract/python tests/ingress/test_python_detector.py

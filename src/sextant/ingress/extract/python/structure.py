@@ -208,10 +208,13 @@ class _Writer(BodyReader):
                 text = ast.unparse(base)
                 if not targets and isinstance(_unsubscripted(base), ast.Name | ast.Attribute):
                     reason = _EXTERNAL
-                    detail = f"base {position} '{text}' comes from an import this file cannot read"
+                    detail = f"base {position} '{text}' is a name this file does not bind"
                 elif len(targets) > 1:
                     reason = _NOT_READABLE
                     detail = f"base {position} '{text}' is bound two ways, so it names no one class"
+                elif isinstance(_unsubscripted(base), ast.Call):
+                    reason = _NOT_READABLE
+                    detail = f"base {position} '{text}' is a call result, not a class name"
                 else:
                     reason = _NOT_READABLE
                     detail = f"base {position} '{text}' is a value, not a class name"
