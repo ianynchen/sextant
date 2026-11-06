@@ -665,3 +665,49 @@ def test_a_library_not_opted_into_has_no_root(tmp_path: Path):
     module, _ = _opting(tmp_path / "other", "extract_libraries:\n  - flask\n")
     assert module.library_roots == ()
     assert module.libraries_not_resolved == ("flask: the module declares no such dependency",)
+
+
+# Fix round 3.
+
+
+def test_an_opted_in_library_reads_only_its_own_record_files(tmp_path: Path):
+    """Two distributions share the namespace folder `ns/` (as `google-api-core` and
+    `protobuf` share `google/`): opting into one reads exactly the `.py` files its
+    `RECORD` lists, never the other's file in the same folder. A distribution whose
+    `RECORD` is missing is not resolved, with the reason, and nothing is guessed."""
+    project = tmp_path / "project"
+    _write(
+        project / "pyproject.toml",
+        '[project]\nname = "shop"\nversion = "1"\ndependencies = ["ns-core", "ns-proto", "bare"]\n',
+    )
+    _write(project / "shop" / "__init__.py", "")
+    _write(project / ".sextant.yml", "extract_libraries:\n  - ns-core\n  - bare\n")
+    environment = project / ".venv"
+    _write(environment / "pyvenv.cfg", "home = /usr/bin\n")
+    site = environment / "lib" / "python3.12" / "site-packages"
+    _install(site, "ns-core", "1.0", {"ns/core/__init__.py": "def a():\n    return 1\n"})
+    _install(site, "ns-proto", "2.0", {"ns/proto/__init__.py": "def b():\n    return 2\n"})
+    _install(site, "bare", "3.0", {"bare/__init__.py": ""})
+    (site / "bare-3.0.dist-info" / "RECORD").unlink()
+
+    (module,) = PythonDetector().detect(project).modules
+    (library,) = module.library_roots
+    out = tmp_path / "lib-facts"
+    PythonScanner().scan(
+        ScanRequest(
+            module_id="shop",
+            coordinates=library.coordinate,
+            version=library.version,
+            classes_dir=library.archive,
+            out_dir=out,
+            origin=library.coordinate,
+        )
+    )
+
+    assert library.coordinate == "ns-core"
+    assert [document.relative_path for _, document, _ in read_fact_tree(out)] == [
+        "ns/core/__init__.py"
+    ]
+    assert module.libraries_not_resolved == (
+        "bare: its installed RECORD is missing or unreadable, so its files are not known",
+    )

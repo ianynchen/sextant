@@ -38,6 +38,7 @@ are read.
 
 import ast
 import builtins
+import posixpath
 import re
 import sys
 import tomllib
@@ -1015,6 +1016,29 @@ def _stdlib_versions(path: Path) -> dict[str, tuple[tuple[int, int], tuple[int, 
 def _version(text: str) -> tuple[int, int]:
     major, _, minor = text.strip().partition(".")
     return int(major), int(minor)
+
+
+def record_files(library: LibraryRoot) -> list[str] | None:
+    """The `.py` files a distribution's `RECORD` lists, relative to its `site-packages`
+    folder and sorted: exactly its own files, so a namespace folder another distribution
+    shares (`google/`) gives none of the other's. None where the distribution has no
+    `RECORD`, or one that cannot be read: its files are then not known."""
+    coordinate = _normalize(library.coordinate)
+    for info in sorted(library.archive.glob("*.dist-info")):
+        if _normalize(info.name.removesuffix(".dist-info").rpartition("-")[0]) != coordinate:
+            continue
+        try:
+            lines = (info / "RECORD").read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            return None
+        files: set[str] = set()
+        for line in lines:
+            written = posixpath.normpath(line.partition(",")[0])
+            # A script installed outside `site-packages` (`../../bin/x`) is not a module.
+            if written.endswith(".py") and not written.startswith(("..", "/")):
+                files.add(written)
+        return sorted(files)
+    return None
 
 
 def top_level_names(library: LibraryRoot) -> list[str]:

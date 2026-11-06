@@ -64,6 +64,7 @@ from sextant.application.ports.detector import (
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.symbols import NOT_APPLICABLE
 from sextant.ingress.detect.sextant_config import read_python_extract_libraries
+from sextant.ingress.extract.python.libraries import record_files
 
 _PYPROJECT = "pyproject.toml"
 _SETUP_CFG = "setup.cfg"
@@ -577,6 +578,11 @@ class PythonDetector:
                 unresolved.append(f"{name}: the module declares no such dependency")
             elif name not in versions or site_packages is None:
                 unresolved.append(f"{name}: not installed in the scanned environment")
+            elif record_files(LibraryRoot(name, versions[name], site_packages)) is None:
+                unresolved.append(
+                    f"{name}: its installed RECORD is missing or unreadable, "
+                    "so its files are not known"
+                )
             else:
                 roots.append(
                     LibraryRoot(coordinate=name, version=versions[name], archive=site_packages)

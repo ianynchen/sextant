@@ -209,7 +209,8 @@ Python.
   distribution the module declares and its environment holds is a `library_roots` entry,
   its archive the `site-packages` folder; any other is in `libraries_not_resolved` with its
   reason (`<name>: the module declares no such dependency`, `<name>: not installed in the
-  scanned environment`).
+  scanned environment`, `<name>: its installed RECORD is missing or unreadable, so its files
+  are not known`).
 - **Notes.** Every top folder of Python files in no module ("python files in a folder with no
   project file, not analysed: <folder>"), every `sys.path.insert`/`append` found by a text
   search of the `.py` files beside a build file (the change is not followed).

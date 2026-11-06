@@ -392,7 +392,8 @@ Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path
 - **An opted-in library's bodies** (`extract_libraries`, D04 §2a) are read whole, as a
   jar is: the detector reports the environment's `site-packages` as the library root of
   each named distribution the module declares and has installed, and the library's own
-  scan reads only that distribution's files (its `RECORD`), into `facts/lib/pypi/<name>/`
+  scan reads exactly the `.py` files its `RECORD` lists, with no folder walk (a namespace
+  folder another distribution shares gives none of the other's), into `facts/lib/pypi/<name>/`
   with `origin: <name>` and the dependency tier.
 
 ### Artifact readers

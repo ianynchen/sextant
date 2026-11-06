@@ -23,8 +23,8 @@ from sextant.ingress.extract.python.calls import FileContext
 from sextant.ingress.extract.python.imports import ModuleIndex, module_path
 from sextant.ingress.extract.python.libraries import (
     Libraries,
+    record_files,
     referenced_types,
-    top_level_names,
 )
 from sextant.ingress.extract.python.structure import file_facts
 from sextant.resources import typeshed_dir
@@ -58,20 +58,19 @@ class PythonScanner:
 
     def scan(self, request: ScanRequest) -> ScanReport:
         roots = [request.classes_dir, *request.more_classes_dirs]
-        files = [
-            (root, relative) for root in roots for relative in _python_files(root, request.ignore)
-        ]
-        if request.origin is not None:
-            # An opted-in library (D04 §2a) is handed its environment's `site-packages`:
-            # only the files of that distribution are its own.
-            names = set(
-                top_level_names(LibraryRoot(request.origin, request.version, request.classes_dir))
-            )
+        if request.origin is None:
             files = [
                 (root, relative)
-                for root, relative in files
-                if relative.partition("/")[0].removesuffix(_SUFFIX) in names
+                for root in roots
+                for relative in _python_files(root, request.ignore)
             ]
+        else:
+            # An opted-in library (D04 §2a) is handed its environment's `site-packages`:
+            # its files are exactly the ones its `RECORD` lists, never a folder walk, so a
+            # namespace folder another distribution shares gives none of the other's. The
+            # detector does not hand over a library whose `RECORD` it could not read.
+            listed = record_files(LibraryRoot(request.origin, request.version, request.classes_dir))
+            files = [(request.classes_dir, relative) for relative in listed or ()]
         # The libraries are read from the module's own scan only: an opted-in library's
         # scan reads that library's files whole (D04 §2a).
         libraries = (
