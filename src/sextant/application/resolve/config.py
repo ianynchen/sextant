@@ -53,10 +53,7 @@ BOTH as separate rows, unconditionally.
 
 **What this pass does not do.** An environment-variable import needs a model to
 declare something pass 2 has nothing to interpret otherwise; Spring's own 2F model
-declares none, so an absent reference is `external` with no finer reading. A
-`not_readable` answer for a many-placeholder address is never given here at all; it
-belongs to the peer-resolution join (D01), which substitutes into an ENDPOINT
-expression, not a config value.
+declares none, so an absent reference is `external` with no finer reading.
 
 **Every unresolved row has two parts** (spec 2026-11-05-one-reason-list §2): `reason`,
 one word of the general list (`values._REASONS`), and `detail`, text for a person that

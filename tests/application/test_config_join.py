@@ -1216,6 +1216,40 @@ def test_an_address_placeholder_with_a_default_takes_the_default_where_the_key_i
     assert rows["prod"]["unresolved_reason"] is None
 
 
+def test_a_peer_placeholder_is_filled_and_the_paths_reason_is_reported_first(
+    tmp_path: Path,
+):
+    """`peer` is filled as `path` is. Where both fail, the one reason column names
+    `path`'s answer, and `peer`'s only where `path` had nothing to say."""
+    workspace = _workspace(tmp_path, config=[("acme.host", "default", "acme.internal")])
+    _seed(
+        workspace,
+        {"protocol": "http", "path": "/a", "peer": "${acme.host}", "caller": "c1"},
+        {"protocol": "http", "path": "${acme.p}", "peer": "${acme.q}", "caller": "c2"},
+        {"protocol": "http", "path": "/b", "peer": "${acme.q}", "caller": "c3"},
+    )
+    rows = {row["caller"]: row for row in resolved_peers(workspace, [])}
+    workspace.close()
+
+    assert rows["c1"]["resolved_peer"] == "acme.internal"
+    assert rows["c1"]["unresolved_reason"] is None
+    assert rows["c2"]["unresolved_detail"] == "acme.p is not set"
+    assert rows["c3"]["resolved_path"] == "/b"
+    assert rows["c3"]["unresolved_detail"] == "acme.q is not set"
+
+
+def test_an_address_reads_keys_by_the_config_models_own_matching(tmp_path: Path):
+    """The shipped Spring model matches keys relaxed (D02 §2i), so `${acme.base-url}`
+    finds `acme.baseUrl` as Spring's own binder would."""
+    workspace = _workspace(tmp_path, config=[("acme.baseUrl", "default", "http://acme")])
+    _seed(workspace, {"protocol": "http", "path": "${acme.base-url}/x", "caller": "c"})
+    spring = [c for c in YamlCatalogSource(CATALOGS_DIR).load() if c.id == "spring-web"]
+    [row] = resolved_peers(workspace, spring)
+    workspace.close()
+
+    assert row["resolved_path"] == "http://acme/x"
+
+
 def test_an_address_with_no_placeholder_passes_through_with_its_literal(
     tmp_path: Path,
 ):

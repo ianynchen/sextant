@@ -5577,8 +5577,8 @@ can override.
 (`resolve/resolved_peers.py`, [D01](D01-graph-schema.md)): every client-side row's `peer`
 and `path` expressions, substituted against `resolved_config` once per environment by the
 one placeholder rule (§2i's delimiters, `default_separator` and `key_matching`). A literal
-passes through as itself, and every placeholder is filled. A key with no value fails the
-whole expression with that key's own reason and detail. Endpoint rows are untouched, in
+passes through as itself, and every placeholder is filled. A key with no value and no
+default fails the whole expression with that key's own reason and detail. Endpoint rows are untouched, in
 every environment.
 
 ---

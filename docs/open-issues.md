@@ -187,7 +187,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-178 | [SEXTANT-26](https://app.plane.so/portolan/browse/SEXTANT-26/) | the URL userinfo strip can eat the next value in compact raw text |
 | OI-179 | [SEXTANT-33](https://app.plane.so/portolan/browse/SEXTANT-33/) | `resolved_peers`' SQL substitution cannot read a `:default` |
 | OI-180 | [SEXTANT-34](https://app.plane.so/portolan/browse/SEXTANT-34/) | `config_join._channel_name` is a second placeholder walk beside `substitute` |
-| OI-181 | [SEXTANT-35](https://app.plane.so/portolan/browse/SEXTANT-35/) | a relaxed-key collision reads a different spelling in `resolved_schedules` than in `resolve_config` |
+| OI-181 | [SEXTANT-35](https://app.plane.so/portolan/browse/SEXTANT-35/) | a relaxed-key collision reads a different spelling in `resolved_schedules` (and, since OI-322, `resolved_peers`) than in `resolve_config` |
 | OI-182 | [SEXTANT-36](https://app.plane.so/portolan/browse/SEXTANT-36/) | only the first declared config model is read for a scheduled expression, and `resolved_config` has no model column |
 | OI-183 | [SEXTANT-37](https://app.plane.so/portolan/browse/SEXTANT-37/) | the boundary vocabulary's `schedule` identity collides under `@Schedules` |
 | OI-184 | [SEXTANT-46](https://app.plane.so/portolan/browse/SEXTANT-46/) | `substitute` does not model two `PlaceholderParser` behaviours CP-48 read: the whole-inside lookup and the escape character |

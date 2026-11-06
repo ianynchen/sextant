@@ -770,7 +770,7 @@ never one row forced to answer for both.
 **Peer resolution is a join, never a write.** `resolve/resolved_peers.py` joins client-side
 endpoint rows' `peer`/`path` expressions against `resolved_config`, per environment, filling
 every placeholder by the one placeholder rule (`${key:default}` included). A key with no
-value fails the whole expression with that key's reason and an `unresolved_detail`.
+value and no default fails the whole expression with that key's reason and an `unresolved_detail`.
 Endpoint rows are untouched — `resolved_config` carries values, endpoints keep expressions,
 and nothing rewrites an endpoint row per environment.
 

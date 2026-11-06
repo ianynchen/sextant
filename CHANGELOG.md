@@ -199,7 +199,7 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
-- **An address with several placeholders is filled** (OI-322). The per-environment address
+- **An address with several placeholders, or a default, is filled** (OI-322, and OI-179). The per-environment address
   answer (`resolved_peers`) filled only an address with one placeholder: `${host}:${port}`
   read `not_readable`, and `${orders.url:http://fallback}` read "is not set" where its
   default answers. It now uses the one placeholder rule configuration files and schedules
