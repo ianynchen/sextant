@@ -37,7 +37,6 @@ from sextant.domain.symbols import PY_SIGNATURE, method_descriptor, names_a_type
 from sextant.ingress.extract.python.calls import (
     CLINIT,
     INIT,
-    Body,
     BodyReader,
     FileContext,
     Scope,
@@ -83,6 +82,7 @@ class _Writer(BodyReader):
         self.not_read: list[str] = []
         self._signatures = {}
         self._methods = {}
+        self._bodies = {}
 
     def _full(self, descriptor: str) -> str:
         return self._context.prefix + descriptor
@@ -99,7 +99,7 @@ class _Writer(BodyReader):
         self._symbol(owner, ConstructKind.MODULE, None, 1, last_line)
         clinit = self._clinit(owner, 1, last_line)
         self._collect_signatures(tree.body)
-        self._statements(tree.body, Scope(owner, types, Body(clinit)))
+        self._statements(tree.body, Scope(owner, types, self._body(clinit)))
 
     def _clinit(self, owner: str, start: int, end: int) -> str:
         descriptor = method_descriptor(owner, CLINIT, PY_SIGNATURE)
@@ -168,7 +168,7 @@ class _Writer(BodyReader):
         body = Scope(
             owner,
             types,
-            Body(clinit),
+            self._body(clinit),
             path,
             protocol=kind == ConstructKind.PROTOCOL,
             # `super()` starts at the first written parent; with none written it is

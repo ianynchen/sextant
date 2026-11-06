@@ -152,6 +152,8 @@ class Frame:
     self_name: str | None = None
     # The names that hold a list literal no read has handed out yet.
     mutable: set[str] = field(default_factory=set)
+    # What the body's imports bind, branches read as at module level.
+    bindings: dict[str, Binding] = field(default_factory=dict)
 
 
 @dataclass
@@ -256,6 +258,12 @@ class BodyReader:
     _signatures: dict[tuple[str, str], Params | None]
     # A nested function's or a lambda's bare descriptor, to its owner and name.
     _methods: dict[str, tuple[str, str]]
+    # One counter set per method symbol: a name defined twice is one method with two
+    # bodies, whose call ordinals, value ids and returns continue across both.
+    _bodies: dict[str, Body]
+
+    def _body(self, caller: str) -> Body:
+        return self._bodies.setdefault(caller, Body(caller))
 
     # -- declarations, written by the subclass ----------------------------------------
 
@@ -353,7 +361,7 @@ class BodyReader:
         inner = Scope(
             owner=scope.owner,
             types=types,
-            body=Body(self._full(descriptor)),
+            body=self._body(self._full(descriptor)),
             class_path=scope.class_path,
             frame=frame,
             super_owner=scope.super_owner if receiver_taken else None,
@@ -410,7 +418,14 @@ class BodyReader:
             enclosing=scope.frame,
             generator=any(isinstance(node, ast.Yield | ast.YieldFrom) for node in own),
             self_name=self_name,
+            bindings=self._import_bindings(body, own),
         )
+
+    def _import_bindings(self, body: list[ast.stmt], own: list[ast.AST]) -> dict[str, Binding]:
+        if not any(isinstance(node, ast.Import | ast.ImportFrom) for node in own):
+            return {}
+        context = self._context
+        return bind_names(body, context.here, is_package=context.is_package, index=context.index)
 
     def _nested_name(self, node: ast.FunctionDef | ast.AsyncFunctionDef, scope: Scope) -> str:
         """A function defined inside a function is a method of the same owner, named
@@ -527,7 +542,11 @@ class BodyReader:
         bound = bind_names([node], context.here, is_package=context.is_package, index=context.index)
         if scope.frame is not None:
             for name, binding in bound.items():
-                scope.frame.imported[name] = binding.targets
+                # Branches that import one name differently give the closed list, as at
+                # module level, never the import read last.
+                final = scope.frame.bindings.get(name)
+                closed = final is not None and all(t.kind is None for t in final.targets)
+                scope.frame.imported[name] = final.targets if final and closed else binding.targets
                 scope.frame.values.pop(name, None)
             return
         if scope.class_path is not None:
@@ -990,7 +1009,7 @@ class BodyReader:
         inner = Scope(
             owner=scope.owner,
             types=scope.types,
-            body=Body(self._full(descriptor)),
+            body=self._body(self._full(descriptor)),
             class_path=scope.class_path,
             frame=frame,
         )
@@ -1019,13 +1038,18 @@ class BodyReader:
     # -- names ---------------------------------------------------------------------------
 
     def _is_self(self, node: ast.expr, scope: Scope) -> bool:
-        frame = scope.frame
-        return (
-            frame is not None
-            and isinstance(node, ast.Name)
-            and node.id == frame.self_name
-            and frame.values.get(node.id) is _SELF
-        )
+        """Whether `node` is the method's receiver. A nested function or a `lambda` sees
+        the receiver of the method that holds it, as a JVM lambda body sees `this`."""
+        if not isinstance(node, ast.Name):
+            return False
+        current = scope.frame
+        while current is not None:
+            if node.id in current.global_names:
+                return False
+            if node.id in current.local_names:
+                return node.id == current.self_name and current.values.get(node.id) is _SELF
+            current = current.enclosing
+        return False
 
     def _local(self, name: str, frame: Frame | None) -> CallArgument | None:
         """The value of a function's own name, or None where `name` is not one. A name
@@ -1060,6 +1084,11 @@ class BodyReader:
             head = head.value
         if not isinstance(head, ast.Name):
             return None
+        if isinstance(node, ast.Attribute):
+            prefix = self._targets(node.value, scope)
+            if prefix is None or not prefix or not all(map(self._names_a_namespace, prefix)):
+                # An attribute of a value: no symbol names it.
+                return None
         current = scope.frame
         while current is not None:
             if head.id in current.global_names:
@@ -1071,6 +1100,17 @@ class BodyReader:
                 return None
             current = current.enclosing
         return scope.types.lookup(node)
+
+    def _names_a_namespace(self, target: Target) -> bool:
+        """Whether an attribute of `target` is a member a symbol names: `target` is a
+        module, a class, or a member of a library module, which the import rule reads as
+        a module (`imports.member_of`). A variable's attribute is a value's."""
+        return (
+            target.member is None
+            or target.kind == "class"
+            or _is_builtin_class(target)
+            or (target.kind is None and not self._context.index.owns(target.module))
+        )
 
     def _declared(self, node: ast.expr, scope: Scope) -> str | None:
         """The owner type written for a local name, where one is written."""

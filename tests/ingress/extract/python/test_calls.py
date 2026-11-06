@@ -193,7 +193,7 @@ def test_abstract_ellipsis_body_has_no_method_return(tmp_path: Path):
     ]
 
 
-def test_field_write_from_outside_the_class_names_the_receiver(tmp_path: Path):
+def test_field_write_to_another_objects_attribute_is_not_written_until_ruled(tmp_path: Path):
     """A write to another object's attribute is not written yet: `field_write` has no
     receiver key (ruling pending, see the task report). What IS written: `self.x = …`
     names the class's field, and `C.x = …` from outside the class names C's field."""
@@ -436,3 +436,137 @@ def test_a_list_in_a_local_is_read_once_as_written(tmp_path: Path):
     )
 
     assert _call(tree, "use").arguments == [CallArgument(kind="unresolved")]
+
+
+# -- fix round 1 -------------------------------------------------------------------------
+
+
+def test_a_function_defined_twice_shares_one_body_counter(tmp_path: Path):
+    """Two definitions of one name are one method symbol, so they share its ordinals and
+    value ids, and each return names its own body's call."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "import sys\n"
+                "from app.lib import g, h\n"
+                "if sys.flags.debug:\n"
+                "    def f(x):\n"
+                "        return g(x)\n"
+                "else:\n"
+                "    def f(x):\n"
+                "        return h(x)\n"
+            )
+        },
+    )
+
+    method = f"app/m#f({DIS})."
+    calls = {c.target.name: c for c in _calls(tree, method)}
+    assert sorted(c.ordinal for c in calls.values()) == [0, 1]
+    assert calls["g"].result != calls["h"].result
+    returns = _returns(tree, method)
+    assert sorted(r.ordinal for r in returns) == [0, 1]
+    assert [r.value.source for r in returns if r.value is not None] == [
+        calls["g"].result,
+        calls["h"].result,
+    ]
+
+
+def test_a_class_defined_twice_shares_one_clinit_counter(tmp_path: Path):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "import sys\n"
+                "from app.lib import g, h\n"
+                "if sys.flags.debug:\n"
+                "    class C:\n"
+                "        a = g()\n"
+                "else:\n"
+                "    class C:\n"
+                "        a = h()\n"
+            )
+        },
+    )
+
+    calls = _calls(tree, f"app/m/C#<clinit>({DIS}).")
+    assert sorted(c.ordinal for c in calls) == [0, 1]
+    assert len({c.result for c in calls}) == 2
+
+
+def test_an_attribute_chain_through_a_variable_invents_no_type(tmp_path: Path):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from fastapi import FastAPI\n"
+                "import httpx\n"
+                "from app.config import settings\n"
+                "app = FastAPI()\n"
+                "client = httpx.Client()\n"
+                "def run():\n"
+                "    app.state.client.get('/x')\n"
+                "    client.headers.update({})\n"
+                "    settings.http.client.post()\n"
+            ),
+            "app/config.py": "settings = 1\n",
+        },
+    )
+
+    for name in ("get", "update", "post"):
+        call = _call(tree, name)
+        assert call.target.owner is None
+        assert call.receiver_field is None
+        assert call.receiver is not None
+
+
+def test_self_inside_a_nested_function_is_the_methods_receiver(tmp_path: Path):
+    """A nested function sees the method's `self` as a JVM lambda body sees `this`."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "class Svc:\n"
+                "    def run(self):\n"
+                "        def go():\n"
+                "            return self.client.get('/x')\n"
+                "        return go\n"
+            )
+        },
+    )
+
+    get = _call(tree, "get")
+    assert bare_descriptor(get.caller) == f"app/m/Svc#run$go({DIS})."
+    assert get.receiver_field == "app/m/Svc#client."
+    assert get.receiver_field_kind == "instance"
+
+
+def test_a_try_import_inside_a_function_is_a_closed_list(tmp_path: Path):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.lib import use\n"
+                "def run(x):\n"
+                "    try:\n"
+                "        import ujson as json\n"
+                "    except ImportError:\n"
+                "        import json\n"
+                "    use(json)\n"
+                "    return json.dumps(x)\n"
+            )
+        },
+    )
+
+    assert _call(tree, "use").arguments == [
+        CallArgument(
+            kind="merge",
+            candidates=[
+                CallArgument(kind="class", symbol="ujson#"),
+                CallArgument(kind="class", symbol="json#"),
+            ],
+        )
+    ]
+    dumps = _call(tree, "dumps")
+    assert dumps.target.owner is None
+    assert dumps.receiver is not None

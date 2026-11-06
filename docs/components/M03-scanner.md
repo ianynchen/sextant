@@ -298,7 +298,13 @@ comprehensions included:
 
 A nested function is a method of the same owner named `outer$inner`; a `lambda` is
 `lambda$<method>$<n>`, numbered per method, with `static` for a module or class body and
-`new` for `__init__`; a class inside a function is `outer$Local`.
+`new` for `__init__`; a class inside a function is `outer$Local`. A nested function or a
+`lambda` sees the method's `self` as its receiver, as a JVM lambda body sees `this`. A name
+defined twice is one method: its bodies share one set of call ordinals, value ids and return
+ordinals. An attribute is named by a field symbol only where every name before it is a
+module or a class; an attribute of a variable (`app.state.client`) is a value, and a call on
+it names only its receiver. An import that branches of a function bind differently is the
+same closed list as at module level.
 
 A local name holds the last value written to it on the path; where paths join with
 different values it is `unresolved`. A list held in a local is read once as written, and

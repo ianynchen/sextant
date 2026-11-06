@@ -1278,6 +1278,13 @@ above:
   (`outer$inner`), as kotlinc names a local function. A `lambda` is
   `lambda$<method>$<n>`, as javac names a lambda body (`static` for a module or class body,
   `new` for `__init__`), numbered per method. Both are `lambda` arguments with `captures` 0.
+  Inside them the method's `self` is the receiver, as `this` is in a JVM lambda body.
+- A name defined twice (on two branches) is one method symbol: `ordinal`, value ids and
+  `method_return.ordinal` continue from one body to the next, so no two sites of the method
+  share an ordinal or a value id.
+- `receiver_field` and a `field` argument name a field only where every name before it is a
+  module or a class (`os.path`, `Config.client`). An attribute of a variable
+  (`app.state.client`) names no symbol: a call on it names only its receiver.
 - A module-level name that branches bind to several imports (`try: import ujson as json` /
   `except ImportError: import json`) is a static field with one `field_write` per import, so
   a call on it names the field as `receiver_field`. As an argument it is a `merge`.
