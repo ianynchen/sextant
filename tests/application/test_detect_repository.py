@@ -1,0 +1,141 @@
+"""`detect_repository`: every detector that recognises a repository is run, and the
+modules are merged. Stub detectors stand in for Maven and Gradle; no build tool runs."""
+
+from pathlib import Path
+
+import pytest
+
+from sextant.application.ports.detector import (
+    ModuleModel,
+    NoModulesFound,
+    RepositoryModel,
+    detect_repository,
+)
+from sextant.application.ports.selection import NoAdapterError
+from sextant.ingress.detect.python import PythonDetector
+
+
+def _module(root: Path, module_id: str, kind: str = "maven") -> ModuleModel:
+    return ModuleModel(
+        module_id=module_id,
+        coordinates=module_id,
+        version="1",
+        root=root,
+        kind=kind,
+        languages=frozenset({"java"}),
+        source_roots=(),
+        output_dirs=(),
+    )
+
+
+class _StubBuild:
+    """A detector that accepts a repository with `marker` in its root folder and
+    reports the modules it was given."""
+
+    def __init__(self, marker: str, modules: list[ModuleModel], notes=(), multi=False) -> None:
+        self._marker = marker
+        self._modules = modules
+        self._notes = tuple(notes)
+        self._multi = multi
+
+    def accepts(self, path: Path) -> bool:
+        return (path / self._marker).is_file()
+
+    def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
+        return RepositoryModel(
+            root=path, modules=tuple(self._modules), notes=self._notes, multi_module=self._multi
+        )
+
+
+class _StubRefusing:
+    def accepts(self, path: Path) -> bool:
+        return True
+
+    def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
+        raise NoModulesFound("no module here")
+
+
+def _write(path: Path, text: str = "") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def test_a_repository_with_a_maven_build_and_a_python_service_yields_both(tmp_path: Path):
+    _write(tmp_path / "pom.xml")
+    _write(tmp_path / "svc" / "pyproject.toml", '[project]\nname = "svc"\nversion = "1"\n')
+    _write(tmp_path / "svc" / "app.py", "x = 1\n")
+    maven = _StubBuild("pom.xml", [_module(tmp_path, "com.acme:app")], notes=["maven note"])
+
+    model = detect_repository([maven, PythonDetector()], tmp_path)
+
+    assert [m.module_id for m in model.modules] == ["com.acme:app", "svc"]
+    assert model.modules[0].kind == "maven"
+    assert model.multi_module is True
+    assert "maven note" in model.notes
+
+
+def test_a_python_only_repository_is_unchanged(tmp_path: Path):
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "solo"\nversion = "1"\n')
+    _write(tmp_path / "app.py", "x = 1\n")
+    maven = _StubBuild("pom.xml", [])
+
+    merged = detect_repository([maven, PythonDetector()], tmp_path)
+
+    assert merged == PythonDetector().detect(tmp_path)
+    assert merged.multi_module is False
+
+
+def test_two_modules_with_one_id_are_both_kept_with_their_path(tmp_path: Path):
+    _write(tmp_path / "pom.xml")
+    _write(tmp_path / "gradle.marker")
+    other = _StubBuild("gradle.marker", [_module(tmp_path / "lib", "shared", "gradle")])
+    first = _StubBuild("pom.xml", [_module(tmp_path, "shared"), _module(tmp_path, "unique")])
+    # One case from two detectors.
+    model = detect_repository([first, other], tmp_path)
+    ids = sorted(m.module_id for m in model.modules)
+    assert ids == ["shared@.", "shared@lib", "unique"]
+    assert {m.coordinates for m in model.modules} == {"shared", "unique"}
+
+    # One case from the Python detector alone.
+    for folder in ("sdk/python", "sdk/generator/python/template"):
+        _write(tmp_path / folder / "pyproject.toml", '[project]\nname = "polar-sdk"\n')
+        _write(tmp_path / folder / "m.py", "x = 1\n")
+    py = detect_repository([PythonDetector()], tmp_path)
+    assert sorted(m.module_id for m in py.modules) == [
+        "polar-sdk@sdk/generator/python/template",
+        "polar-sdk@sdk/python",
+    ]
+    assert all(m.coordinates == "polar-sdk" for m in py.modules)
+
+
+def test_a_detector_that_accepts_but_finds_no_module_adds_nothing_when_another_did(
+    tmp_path: Path,
+):
+    _write(tmp_path / "pom.xml")
+    _write(tmp_path / "docs" / "requirements.txt", "sphinx\n")
+    maven = _StubBuild("pom.xml", [_module(tmp_path, "com.acme:app")])
+
+    model = detect_repository([maven, PythonDetector()], tmp_path)
+
+    assert [m.module_id for m in model.modules] == ["com.acme:app"]
+    assert model.multi_module is False
+    assert any("docs/requirements.txt" in note for note in model.notes)
+
+
+def test_a_refusal_stays_a_refusal_when_no_detector_found_a_module(tmp_path: Path):
+    with pytest.raises(NoModulesFound, match="no module here"):
+        detect_repository([_StubRefusing()], tmp_path)
+
+
+def test_a_repository_no_detector_recognises_is_refused(tmp_path: Path):
+    with pytest.raises(NoAdapterError):
+        detect_repository([_StubBuild("pom.xml", [])], tmp_path)
+
+
+def test_a_reactor_naming_one_module_stays_multi_module(tmp_path: Path):
+    _write(tmp_path / "pom.xml")
+    _write(tmp_path / "svc" / "pyproject.toml", '[project]\nname = "svc"\n')
+    _write(tmp_path / "svc" / "app.py")
+    maven = _StubBuild("pom.xml", [_module(tmp_path / "child", "child")], multi=True)
+
+    assert detect_repository([maven], tmp_path).multi_module is True

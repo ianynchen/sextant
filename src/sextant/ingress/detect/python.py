@@ -53,7 +53,12 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from sextant.application.ports.detector import LibraryRoot, ModuleModel, RepositoryModel
+from sextant.application.ports.detector import (
+    LibraryRoot,
+    ModuleModel,
+    NoModulesFound,
+    RepositoryModel,
+)
 from sextant.domain.symbols import NOT_APPLICABLE
 
 _PYPROJECT = "pyproject.toml"
@@ -451,7 +456,9 @@ class PythonDetector:
                 continue
             modules.add(folder)
         if not modules:
-            raise ValueError(f"no Python module found in {path}: no project file marks one")
+            raise NoModulesFound(
+                f"no Python module found in {path}: no project file marks one", notes
+            )
 
         models = []
         for folder in sorted(modules):
@@ -463,7 +470,6 @@ class PythonDetector:
         notes.extend(self._loose_folder_notes(path, modules, has_python))
         for folder in sorted(modules):
             notes.extend(_sys_path_notes(path, folder, listing[folder]))
-        notes.extend(self._shared_name_notes(path, models))
         return RepositoryModel(
             root=path,
             modules=tuple(models),
@@ -616,19 +622,4 @@ class PythonDetector:
         top = [f for f in loose if not any(parent in loose for parent in f.parents)]
         return [
             f"{_LOOSE_FOLDER_NOTE}{Path(os.path.relpath(f, root)).as_posix()}" for f in sorted(top)
-        ]
-
-    @staticmethod
-    def _shared_name_notes(root: Path, models: list[ModuleModel]) -> list[str]:
-        """Two folders that publish one name (a project and a template copy of it) give
-        two modules with one id. Both are kept, and the note names the folders."""
-        by_id: dict[str, list[str]] = {}
-        for model in models:
-            by_id.setdefault(model.module_id, []).append(
-                Path(os.path.relpath(model.root, root)).as_posix()
-            )
-        return [
-            f"more than one module has the name {module_id}: {', '.join(sorted(folders))}"
-            for module_id, folders in sorted(by_id.items())
-            if len(folders) > 1
         ]

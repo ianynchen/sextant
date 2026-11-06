@@ -199,8 +199,31 @@ Python.
   the `site-packages` folder.
 - **Notes.** Every top folder of Python files in no module ("python files in a folder with no
   project file, not analysed: <folder>"), every `sys.path.insert`/`append` found by a text
-  search of the `.py` files beside a build file (the change is not followed), and every name
-  two modules share ("more than one module has the name <name>: <folders>").
+  search of the `.py` files beside a build file (the change is not followed).
+- **No module.** A repository where `accepts()` is true but every candidate is ruled out
+  (a Maven repository with `docs/requirements.txt` and no code) raises `NoModulesFound`,
+  which carries the notes made so far.
+
+### How a repository is detected
+
+`detect_repository` runs EVERY detector whose `accepts()` is true and merges their modules
+and notes. A repository with a Maven build and a Python service gives both. The Maven and
+Gradle detectors accept only a build file at the root; `PythonDetector` accepts a Python
+build file at any depth.
+
+- `multi_module` is true when the merged list has more than one module, or when a detector
+  reported it (a reactor that names one child is still a reactor).
+- A detector that raises `NoModulesFound` adds no modules when another detector found some.
+  When none did, its refusal is the answer.
+- **One id for two modules.** Two modules can have one `module_id`, from one detector or
+  from two (`examples/py-polar` has two `polar-sdk` projects). Both are kept. Each id that
+  more than one module has gets `@<its folder, relative to the repository root>` added
+  (`polar-sdk@sdk/python`; `@.` for the root folder). An id that no other module has does
+  not change, and `coordinates` stay what the build file says. If the ids are still equal
+  after that (two detectors, one folder), the detection is refused and names the id.
+  A module's results go in its own folder, so the `@` and `/` in an id never make a folder name.
+
+`select_detector` (the first detector that accepts) stays for a module that is already known.
 
 ### Discovery reads the build, never a convention
 

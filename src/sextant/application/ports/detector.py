@@ -3,7 +3,7 @@ anything reads code. Implementations are keyed by build system, never by
 language — a module records the languages present."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -228,3 +228,74 @@ def select_detector(detectors: Sequence[Detector], path: Path) -> Detector:
         if detector.accepts(path):
             return detector
     raise NoAdapterError(f"no detector recognises {path} as a repository it can read")
+
+
+class NoModulesFound(ValueError):
+    """A detector accepted a repository and found no module in it. Another detector may
+    still find some, so `detect_repository` treats this as "none from this detector".
+    The notes the detector made on the way are kept, and merged with the others."""
+
+    def __init__(self, message: str, notes: Sequence[str] = ()) -> None:
+        super().__init__(message)
+        self.notes = tuple(notes)
+
+
+def detect_repository(
+    detectors: Sequence[Detector], path: Path, allow_resolve: bool = False
+) -> RepositoryModel:
+    """Every module of this repository, from every detector that recognises it.
+
+    A repository can hold more than one build system (a Maven build and a Python
+    service), and each detector reads its own. The modules and the notes are merged.
+    A detector that accepts but finds no module (`NoModulesFound`) adds nothing when
+    another detector found modules; when none did, that refusal is the answer.
+
+    Two modules can have one `module_id`, from one detector or from two. Both are
+    kept, and each gets `@<its folder, relative to the repository root>` added to the
+    id; ids that no other module has stay as they are. `coordinates` are not changed.
+    """
+    accepting = [detector for detector in detectors if detector.accepts(path)]
+    if not accepting:
+        raise NoAdapterError(f"no detector recognises {path} as a repository it can read")
+    models: list[RepositoryModel] = []
+    refusal: NoModulesFound | None = None
+    refused_notes: list[str] = []
+    for detector in accepting:
+        try:
+            model = detector.detect(path, allow_resolve=allow_resolve)
+        except NoModulesFound as none_found:
+            refusal = refusal or none_found
+            refused_notes.extend(none_found.notes)
+            continue
+        if model.modules:
+            models.append(model)
+    if not models:
+        if refusal is not None:
+            raise refusal
+        raise NoAdapterError(f"no detector found a module in {path}")
+    modules = _with_unique_ids(path, [module for model in models for module in model.modules])
+    notes = {note for model in models for note in model.notes} | set(refused_notes)
+    return RepositoryModel(
+        root=path,
+        modules=modules,
+        notes=tuple(sorted(notes)),
+        multi_module=len(modules) > 1 or any(model.multi_module for model in models),
+    )
+
+
+def _with_unique_ids(root: Path, modules: list[ModuleModel]) -> tuple[ModuleModel, ...]:
+    """The modules, each id that more than one module has made unique by its folder."""
+    counts: dict[str, int] = {}
+    for module in modules:
+        counts[module.module_id] = counts.get(module.module_id, 0) + 1
+    renamed = []
+    for module in modules:
+        if counts[module.module_id] > 1:
+            # A module's folder is under the root; the root folder itself is ".".
+            folder = module.root.relative_to(root).as_posix()
+            module = replace(module, module_id=f"{module.module_id}@{folder}")
+        renamed.append(module)
+    ids = [module.module_id for module in renamed]
+    for module_id in sorted({i for i in ids if ids.count(i) > 1}):
+        raise ValueError(f"two modules in {root} cannot be told apart: both are {module_id}")
+    return tuple(renamed)

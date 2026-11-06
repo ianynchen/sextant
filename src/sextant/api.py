@@ -139,7 +139,7 @@ from sextant.application.ports.detector import (
     Detector,
     ModuleModel,
     RepositoryModel,
-    select_detector,
+    detect_repository,
 )
 from sextant.application.ports.enrichment import EnrichmentAgentError
 from sextant.application.ports.progress import NullProgress, Progress
@@ -424,9 +424,8 @@ class _EnrichOutcome:
 
 # The one real `Detector` registry (2M Task 2 review): a future detector
 # added to only one of two hand-kept lists would send the other path to
-# `select_detector`'s own uncaught `NoAdapterError`. Order is precedence
-# (`select_detector` picks the first that `accepts()`): Maven before Gradle, and
-# Python last, because it accepts a build file at any depth.
+# `detect_repository`'s own uncaught `NoAdapterError`. Every detector that `accepts()`
+# is run and the modules are merged, so order only sets the order of the modules.
 _DETECTORS: list[Detector] = [MavenDetector(), GradleDetector(), PythonDetector()]
 
 
@@ -1076,7 +1075,7 @@ def _analyze(
     # ahead of any workspace write, or a repository Sextant cannot analyze
     # would still leave one behind.
     try:
-        model = select_detector(_DETECTORS, path).detect(path, allow_resolve=allow_resolve)
+        model = detect_repository(_DETECTORS, path, allow_resolve=allow_resolve)
     except (SextantConfigError, ValueError, ParseError) as refused:
         raise DetectionError(str(refused)) from refused
 
