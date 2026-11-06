@@ -2,10 +2,11 @@
 its Python build files alone. Every tree is built in `tmp_path`; nothing is installed,
 imported or run."""
 
+import os
 from pathlib import Path
 
 from sextant.application.ports.detector import LibraryRoot
-from sextant.ingress.detect.python import PythonDetector
+from sextant.ingress.detect.python import PythonDetector, poetry_environment_name
 
 
 def _write(path: Path, text: str = "") -> Path:
@@ -320,3 +321,151 @@ def test_a_repository_with_no_module_is_refused_by_name(tmp_path: Path):
         assert "no Python module" in str(refused)
     else:
         raise AssertionError("expected a refusal")
+
+
+# Fix round 1.
+
+
+def test_root_requirements_without_code_does_not_swallow_the_services_under_it(tmp_path: Path):
+    """The measured tree: a root lint list and two services, each with its own list."""
+    _write(tmp_path / "requirements-dev.txt", "ruff\npytest\n")
+    _write(tmp_path / "src" / "svc_a" / "requirements.txt", "flask\n")
+    _write(tmp_path / "src" / "svc_a" / "app.py")
+    _write(tmp_path / "src" / "svc_b" / "requirements.txt", "fastapi\n")
+    _write(tmp_path / "src" / "svc_b" / "main.py")
+
+    model = PythonDetector().detect(tmp_path)
+
+    assert [m.module_id for m in model.modules] == ["src/svc_a", "src/svc_b"]
+    assert model.notes == (
+        "requirements with no python code of its own, not a module: requirements-dev.txt",
+    )
+
+
+def test_requirements_service_under_a_project_is_its_own_module(tmp_path: Path):
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "shop"\nversion = "1"\n')
+    _write(tmp_path / "shop" / "__init__.py")
+    _write(tmp_path / "services" / "mailer" / "requirements.txt", "jinja2\n")
+    _write(tmp_path / "services" / "mailer" / "server.py")
+
+    ids = sorted(m.module_id for m in PythonDetector().detect(tmp_path).modules)
+
+    assert ids == ["services/mailer", "shop"]
+
+
+def test_unreadable_nested_build_file_is_a_note_and_the_rest_is_detected(tmp_path: Path):
+    _write(tmp_path / "app" / "pyproject.toml", '[project]\nname = "app"\nversion = "1"\n')
+    _write(tmp_path / "app" / "app" / "__init__.py")
+    _write(tmp_path / "template" / "pyproject.toml", '[project]\nname = "{{ cookiecutter.name }}\n')
+    _write(tmp_path / "template" / "main.py")
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    (legacy / "setup.cfg").write_bytes(b"[metadata]\nname = caf\xe9\n")
+
+    model = PythonDetector().detect(tmp_path)
+
+    assert [m.module_id for m in model.modules] == ["app"]
+    notes = "\n".join(model.notes)
+    assert "build file not read, so its folder is not a module: template/pyproject.toml (" in notes
+    assert "build file not read, so its folder is not a module: legacy/setup.cfg (" in notes
+
+
+def test_unreadable_build_file_at_the_target_is_refused(tmp_path: Path):
+    _write(tmp_path / "pyproject.toml", "[project\n")
+    _write(tmp_path / "app.py")
+
+    try:
+        PythonDetector().detect(tmp_path)
+    except ValueError as refused:
+        assert "pyproject.toml" in str(refused)
+    else:
+        raise AssertionError("expected a refusal")
+
+
+def test_poetry_in_project_setting_names_dot_venv(tmp_path: Path):
+    _write(tmp_path / "pyproject.toml", '[tool.poetry]\nname = "billing"\nversion = "1"\n')
+    _write(tmp_path / "poetry.toml", "[virtualenvs]\nin-project = true\n")
+    _write(tmp_path / "billing" / "__init__.py")
+    _environment(tmp_path / ".venv", {})
+
+    assert _only_module(tmp_path).environment == tmp_path / ".venv"
+
+
+def test_poetry_path_setting_names_the_folder_poetry_names(tmp_path: Path):
+    project = tmp_path / "billing"
+    _write(project / "pyproject.toml", '[tool.poetry]\nname = "Billing_API"\nversion = "1"\n')
+    _write(project / "poetry.toml", '[virtualenvs]\npath = "../envs"\n')
+    _write(project / "billing" / "__init__.py")
+    name = poetry_environment_name("billing-api", project)
+    _environment(tmp_path / "envs" / f"{name}-py3.12", {"flask": "3.0.0"})
+    _environment(tmp_path / "envs" / "other-AAAAAAAA-py3.12", {})
+
+    module = _only_module(project)
+
+    assert module.environment == tmp_path / "envs" / f"{name}-py3.12"
+
+
+def test_two_poetry_environments_for_one_project_are_not_chosen_between(tmp_path: Path):
+    project = tmp_path / "billing"
+    _write(project / "pyproject.toml", '[tool.poetry]\nname = "billing"\nversion = "1"\n')
+    _write(project / "poetry.toml", '[virtualenvs]\npath = "../envs"\n')
+    _write(project / "billing" / "__init__.py")
+    name = poetry_environment_name("billing", project)
+    _environment(tmp_path / "envs" / f"{name}-py3.11", {})
+    _environment(tmp_path / "envs" / f"{name}-py3.12", {})
+
+    model = PythonDetector().detect(project)
+
+    assert model.modules[0].environment is None
+    assert any(
+        note.startswith("billing: more than one Poetry environment, none read: ")
+        for note in model.notes
+    )
+
+
+def test_poetry_module_with_no_environment_is_noted(tmp_path: Path):
+    _write(tmp_path / "pyproject.toml", '[tool.poetry]\nname = "billing"\nversion = "1"\n')
+    _write(tmp_path / "billing" / "__init__.py")
+
+    model = PythonDetector().detect(tmp_path)
+
+    assert model.modules[0].environment is None
+    assert any(note.startswith("billing: no Poetry environment found") for note in model.notes)
+
+
+def test_poetry_environment_name_is_poetrys_own():
+    """Poetry's `EnvManager.generate_env_name`: the name, then the first 8 characters of
+    the URL-safe base64 SHA-256 of the project folder's real path."""
+    import base64
+    import hashlib
+
+    folder = Path("/work/billing")
+    digest = hashlib.sha256(os.path.normcase(os.path.realpath(folder)).encode()).digest()
+    expected = f"billing-{base64.urlsafe_b64encode(digest).decode()[:8]}"
+
+    assert poetry_environment_name("billing", folder) == expected
+
+
+def test_src_layout_module_is_python(tmp_path: Path):
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "shop"\nversion = "1"\n')
+    _write(tmp_path / "src" / "shop" / "api" / "items.py")
+
+    assert _only_module(tmp_path).languages == frozenset({"python"})
+
+
+def test_uv_workspace_exclude_removes_a_member(tmp_path: Path):
+    _write(
+        tmp_path / "pyproject.toml",
+        '[project]\nname = "root"\nversion = "1"\n'
+        '[tool.uv.workspace]\nmembers = ["libs/*"]\nexclude = ["libs/old"]\n',
+    )
+    _write(tmp_path / "root" / "__init__.py")
+    _environment(tmp_path / ".venv", {})
+    for name in ("core", "old"):
+        _write(tmp_path / "libs" / name / "pyproject.toml", f'[project]\nname = "{name}"\n')
+        _write(tmp_path / "libs" / name / name / "__init__.py")
+
+    by_id = {m.module_id: m for m in PythonDetector().detect(tmp_path).modules}
+
+    assert by_id["core"].environment == tmp_path / ".venv"
+    assert by_id["old"].environment is None

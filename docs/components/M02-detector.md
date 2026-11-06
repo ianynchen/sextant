@@ -149,17 +149,25 @@ imports or runs scanned code, and nothing is downloaded: `--allow-resolve` does 
 Python.
 
 - **Where.** `accepts` finds a Python build file at any depth, by name only (Maven and Gradle
-  look at the root only). The walk does not enter `.git`, `node_modules`, `.sextant`, or any
-  folder that holds `pyvenv.cfg` (a virtual environment, whatever its name).
+  look at the root only). The walk does not enter `.git`, `node_modules`, `.sextant`,
+  `__pycache__`, `.venv`, `.tox`, `.nox`, or any folder that holds `pyvenv.cfg` (a virtual
+  environment, whatever its name).
 - **What is a module.** A `pyproject.toml` with `[project]`, `[tool.poetry]` or
   `[build-system]`, or a `setup.cfg` with `[metadata]`, marks a module. A file with only tool
   settings marks nothing (CTFd's `setup.cfg` holds only `[nosetests]`). A uv workspace root is
-  a module only when it marks one and has Python files of its own outside its members. A
-  `setup.py`, `requirements*.txt` or `Pipfile` marks a module only when no folder above it is
-  a module; a `setup.py` must also not be inside a package (no `__init__.py` beside it or
-  above it), and a requirements file needs Python files at or below its folder. The `kind` is
-  `pyproject`, `setup_cfg`, `setup_py` or `requirements`, strongest first. A repository where
-  nothing marks a module is refused: "no Python module found".
+  a module only when it marks one and has Python files of its own outside its members
+  (`[tool.uv.workspace]` `members`, less `exclude`). A `requirements*.txt` or `Pipfile` marks
+  a module only when its folder holds Python code of its own (not inside a module below it),
+  whatever is above it: each service under a project is its own module, and a root lint or
+  test list with no code of its own marks nothing ("requirements with no python code of its
+  own, not a module: <files>"). A `setup.py` marks a module only when no folder above it is a
+  module and it is not inside a package (no `__init__.py` beside it or above it). The `kind`
+  is `pyproject`, `setup_cfg`, `setup_py` or `requirements`, strongest first. A repository
+  where nothing marks a module is refused: "no Python module found".
+- **Unreadable build files.** A nested build file that is not valid TOML or `setup.cfg`, or
+  not UTF-8 (a project template with `{{ }}` in it, a tool's test data), is a note ("build
+  file not read, so its folder is not a module: <file> (<error>)"), and the rest of the
+  repository is detected. Only the build file of the folder that was asked for is a refusal.
 - **Identity.** `[project]`, then `[tool.poetry]`, then `setup.cfg [metadata]`, the name
   normalized by PEP 503 (`Shop_Orders.API` is `shop-orders-api`); the name is both the
   `module_id` and the coordinates. A dynamic version (`dynamic = ["version"]`, `attr:`,
@@ -172,8 +180,17 @@ Python.
   (`packages.from`); else `src/` when it holds Python files; else the module folder.
   `output_dirs` is empty and `packaging` is `wheel`.
 - **Environment** (`ModuleModel.environment`): `.venv`, `venv` or `env` beside the build file
-  when it holds `pyvenv.cfg`; for a uv workspace member, the same names at the workspace root.
-  `.python-version` names an interpreter and is never an environment.
+  when it holds `pyvenv.cfg` (Poetry's `in-project = true` folder is `.venv`); for a uv
+  workspace member, the same names at the workspace root (uv's documented default; the
+  process environment, `UV_PROJECT_ENVIRONMENT`, is not read). For a Poetry project
+  (`[tool.poetry]`, a `poetry.toml`, or Poetry's build backend), the folder Poetry itself
+  names: under `poetry.toml [virtualenvs] path`, else Poetry's default cache
+  (`~/Library/Caches/pypoetry/virtualenvs` on macOS, `~/.cache/pypoetry/virtualenvs` on
+  Linux), the name from Poetry's own `generate_env_name` (the PEP 503 name, `-`, the first 8
+  characters of the URL-safe base64 SHA-256 of the project folder's real path) and then
+  `-py<major>.<minor>`. Two such folders are a list this detector cannot narrow, so none is
+  read and a note names them; none found is a note too. Poetry's global `config.toml` is not
+  read. `.python-version` names an interpreter and is never an environment.
 - **Dependencies.** `dependency_coordinates` is every name the module folder's build files
   declare: `[project] dependencies`, Poetry's dependency table, `setup.cfg install_requires`,
   each `requirements*.txt`, and `Pipfile [packages]`. `dependency_versions` is the installed
