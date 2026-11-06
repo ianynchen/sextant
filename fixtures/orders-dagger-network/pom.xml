@@ -1,0 +1,33 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <!-- groupId and version are inherited, as `orders-vertx-web-base` does: the coordinate
+       `com.example:orders-dagger-network:1.0.0` is what `tests/fixture_stub.py` installs
+       into the local repository and `orders-dagger` declares. -->
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>fixtures</artifactId>
+    <version>1.0.0</version>
+    <relativePath>../pom.xml</relativePath>
+  </parent>
+  <artifactId>orders-dagger-network</artifactId>
+  <!-- A Dagger module in ANOTHER build module (spec 2026-11-05 di-recipe-hop §3): it provides
+       the `@Named("shared")` Retrofit that `orders-dagger` injects. It lives in a jar, so the
+       analysed module cannot read the recipe, and that row stays `partial`. Dagger's processor
+       runs here, so the jar holds the factory a component in `orders-dagger` calls. -->
+  <dependencies>
+    <dependency><groupId>com.google.dagger</groupId><artifactId>dagger</artifactId><version>2.57.2</version></dependency>
+    <dependency><groupId>com.squareup.retrofit2</groupId><artifactId>retrofit</artifactId><version>2.11.0</version></dependency>
+  </dependencies>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <annotationProcessorPaths>
+            <path><groupId>com.google.dagger</groupId><artifactId>dagger-compiler</artifactId><version>2.57.2</version></path>
+          </annotationProcessorPaths>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

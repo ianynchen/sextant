@@ -13,6 +13,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.beans import erased_type_of, meta_annotated_types
 from sextant.application.resolve.dependencies import unmet_dependency
 from sextant.application.resolve.effective_annotations import (
     TypeHierarchy,
@@ -166,7 +167,7 @@ def registrations(workspace: Workspace, catalog: Catalog) -> list[dict[str, Any]
         selected.append((declaration, keys))
     if by_parameter:
         marked = (
-            _meta_annotated_types(workspace, qualifier_marks) if qualifier_marks else frozenset()
+            meta_annotated_types(workspace, qualifier_marks) if qualifier_marks else frozenset()
         )
         for _, declaration in sorted(methods.items()):
             parameter = _annotated_parameter(declaration, by_parameter)
@@ -228,19 +229,6 @@ def _annotation_names(mapping: dict[str, Any], word: str, catalog: Catalog) -> f
     return frozenset(_catalog_symbol(name) for name in declared)
 
 
-def _meta_annotated_types(workspace: Workspace, markers: frozenset[str]) -> frozenset[str]:
-    """Every annotation type carrying one of `markers` as a class-level annotation: module
-    types through their own annotation facts, library types (`@Named`) through the class-level
-    annotations their type header recorded. One level, the marker on the type itself, which is
-    where a qualifier is declared. Two reads per declaring catalog (GUIDELINES §8.7)."""
-    return frozenset(
-        bare_descriptor(str(row["target"]))
-        for query in ("annotations", "type_header_annotations")
-        for row in workspace.query(query)
-        if bare_descriptor(str(row["annotation"])) in markers
-    )
-
-
 def generic_parameter(parameter: Mapping[str, Any]) -> bool:
     """Whether a parameter's declared type is generic: it carries type ARGUMENTS
     (`List<String>`), or it is a type VARIABLE (`T`, whose signature symbol is not its erasure,
@@ -283,8 +271,8 @@ def _annotated_parameter(
 def _erased_type(parameter: dict[str, Any]) -> str | None:
     """A parameter's erased type, the descriptor's answer (the class a value is dispatched
     by), or None where the fact carries none."""
-    symbol = parameter.get("erased_symbol") or (parameter.get("type") or {}).get("symbol")
-    return None if not symbol else bare_descriptor(str(symbol))
+    symbol = erased_type_of(parameter)
+    return None if symbol is None else bare_descriptor(symbol)
 
 
 def _payload_type(declaration: dict[str, Any], catalog: Catalog) -> str | None:

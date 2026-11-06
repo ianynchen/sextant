@@ -218,7 +218,13 @@ def entries(
     opener = placeholder_rule(config_model_of(catalogs if catalogs is not None else [catalog]))[0][
         "open"
     ]
-    index = cached_value_index(workspace, catalog.not_hand_offs, catalog.hand_off_effects)
+    index = cached_value_index(
+        workspace,
+        catalog.not_hand_offs,
+        catalog.hand_off_effects,
+        catalog.bean_models,
+        catalog.value_annotations,
+    )
     job_ends = list(chain_ends(workspace, job_walk, pairs_every_send=True))
     context = _Context(
         workspace=workspace,

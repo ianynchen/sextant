@@ -22,5 +22,6 @@
     <module>orders-soap-client</module>
     <module>orders-vertx-web-base</module>
     <module>orders-vertx-web</module>
+    <module>orders-dagger-network</module>
   </modules>
 </project>

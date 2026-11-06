@@ -134,6 +134,7 @@ from typing import Any
 from weakref import WeakKeyDictionary
 
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.beans import Ambiguous, Injection, ProvidedBy, injected_parameters
 from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.domain.config_keys import carries_expression
@@ -232,6 +233,9 @@ _UNSEEN = "unseen"
 # are independent, and combining them is not a fabrication but the code's own product.
 _CALLER_OF = "caller-of"
 _RETURN_OF = "return-of"
+# Which recipe's return a container-filled parameter receives (spec 2026-11-05 di-recipe-hop
+# §2): one context per parameter, because the container fills each parameter on its own.
+_FILLED_BY = "filled-by"
 # A field read through a getter on one object (ruling 1, `_Walk._object_writes`): WHICH
 # construction the read's receiver is, and WHICH write of the field the read takes. Both are
 # keyed on the receiver as the reading method holds it, never on the field's class: two
@@ -666,6 +670,10 @@ class ValueIndex:
     stated_hands: Mapping[tuple[str, str, str, int], tuple[tuple[str, int], ...] | None] = (
         dataclass_field(default_factory=dict)
     )
+    # The recipe the container gives each parameter it fills, `(method, index)` -> the
+    # `Injection` (`beans.injected_parameters`, spec 2026-11-05 di-recipe-hop §2), read from
+    # every bean model. `_parameter` reads it before `callers`.
+    injected: Mapping[tuple[str, int], Injection] = dataclass_field(default_factory=dict)
 
     def __post_init__(self) -> None:
         constructed = frozenset(
@@ -724,6 +732,8 @@ def cached_value_index(
     workspace: Workspace,
     not_hand_offs: Sequence[str] = (),
     hand_off_effects: Sequence[Mapping[str, Any]] = (),
+    bean_models: Mapping[str, Mapping[str, Any]] | None = None,
+    value_annotations: Sequence[str] = (),
 ) -> "ValueIndex":
     """`value_index`, built at most once per workspace per resolve.
 
@@ -733,7 +743,9 @@ def cached_value_index(
     """
     index = _INDEX_BY_WORKSPACE.get(workspace)
     if index is None:
-        index = value_index(workspace, not_hand_offs, hand_off_effects)
+        index = value_index(
+            workspace, not_hand_offs, hand_off_effects, bean_models, value_annotations
+        )
         _INDEX_BY_WORKSPACE[workspace] = index
     return index
 
@@ -742,13 +754,18 @@ def value_index(
     workspace: Workspace,
     not_hand_offs: Sequence[str] = (),
     hand_off_effects: Sequence[Mapping[str, Any]] = (),
+    bean_models: Mapping[str, Mapping[str, Any]] | None = None,
+    value_annotations: Sequence[str] = (),
 ) -> ValueIndex:
     """The index for one resolve. Built by `resolve_site` when it is not handed one.
 
     `not_hand_offs` is the catalogs' `not_hand_offs` (every catalog carries the same tuple):
     the owners whose calls take a value without handing it off. Empty, every call that takes
     a value is a hand-off. `hand_off_effects` is the catalogs' `hand_off_effects` (spec
-    2026-11-02 rule 7): the hand-offs whose effect a catalog states (`ValueIndex.stated`)."""
+    2026-11-02 rule 7): the hand-offs whose effect a catalog states (`ValueIndex.stated`).
+    `bean_models` and `value_annotations` are the catalogs' (`Catalog.bean_models`,
+    `Catalog.value_annotations`, the same on every catalog): what each container-filled
+    parameter receives (`ValueIndex.injected`). None, no parameter is container-filled."""
     sites: dict[tuple[str, int], Mapping[str, Any]] = {}
     receivers: dict[tuple[str, int], list[int]] = {}
     # The PROJECTION, not the raw fact stream — the rows every engine reads (spec
@@ -999,6 +1016,11 @@ def value_index(
             for e in hand_off_effects
         ),
         stated_hands=_stated_hands(workspace, hand_off_effects, shapes.lambda_types),
+        injected=(
+            {}
+            if bean_models is None
+            else injected_parameters(workspace, bean_models, value_annotations)
+        ),
     )
 
 
@@ -1447,7 +1469,9 @@ class Path:
         (review 2, C1): the frame its arguments are read in."""
         frames: list[list[tuple[str, int, int, tuple[tuple[str, int], ...]]]] = [[]]
         for step in self.trail:
-            if step.context[0] in (_CALLER_OF, _RETURN_OF):
+            # A recipe's return the container hands a parameter (`_FILLED_BY`) is a frame of
+            # its own, as a caller's or a callee's is.
+            if step.context[0] in (_CALLER_OF, _RETURN_OF, _FILLED_BY):
                 if frames[-1]:
                     frames.append([])
                 continue
@@ -4180,6 +4204,16 @@ class _Walk:
             return self._resolve((_SLOT, frame[0], frame[1], index), trail, frames)
         if method in self._stop_at_parameters_of:
             return _only(trail, Answer(kind=_PRODUCED, value=Producer(parameter=(method, index))))
+        # **A parameter the container fills receives what the container's recipe makes** (spec
+        # 2026-11-05 di-recipe-hop §2), before any caller: its callers are the container's
+        # generated code, which the hop mirrors and does not follow. Several recipes of its key
+        # in the module is `non_enumerable` (which one the container uses is not in the module).
+        # A parameter with no recipe in the module reads as before.
+        injected = self._index.injected.get((method, index))
+        if isinstance(injected, ProvidedBy):
+            return self._filled_by(method, index, injected.provider, trail, frames)
+        if isinstance(injected, Ambiguous):
+            return _only(trail, _unresolved(NON_ENUMERABLE))
         callers = self._index.callers.get((method, index), ())
         if not callers:
             return _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, parameter=(method, index)))
@@ -4193,6 +4227,24 @@ class _Walk:
                 continue
             reached.extend(self._resolve((_SLOT, caller, ordinal, argument), merged, frames))
         return tuple(reached)
+
+    def _filled_by(
+        self, method: str, index: int, recipe: str, trail: _Trail, frames: "_Frames"
+    ) -> tuple[_Reached, ...]:
+        """Parameter `index` of `method` is what `recipe` returns: each of its returns is a path,
+        resolved in the recipe's own body with no frame pushed, because no call site in the
+        module hands the value over. The recipe's own parameters are container-filled again,
+        and a recipe that returns to a position already on the path ends as `cycle`."""
+        reached: list[_Reached] = []
+        for return_ordinal, entry in self._index.returned_values.get(recipe, ()):
+            step = _Step((_FILLED_BY, method, index), f"{recipe} returns {return_ordinal}")
+            merged = _combine(trail, (step,))
+            if merged is None:
+                continue
+            reached.extend(
+                self._entry(entry, recipe, (_RETURN_OF, recipe, return_ordinal), merged, frames)
+            )
+        return tuple(reached) if reached else _only(trail, _unresolved(NOT_READABLE))
 
     def _binding(
         self,

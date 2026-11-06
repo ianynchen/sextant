@@ -484,6 +484,31 @@ _NAMED_QUERIES = {
     # Deliberately not folded into the `annotations` view: that view is what every endpoint
     # engine scans for declarations, and a dependency's class-level annotations must not
     # appear there (the `superclasses` note above says why).
+    # Every dependency type whose class-file header was read (D00 §5 `type_header`): the
+    # types whose place in the hierarchy is KNOWN although the module did not compile them.
+    # Read by the bean ladder, which must tell a type it read and found unrelated from a
+    # type it never read (spec 2026-11-05 di-recipe-hop, Task 4 review).
+    "type_headers": """
+        SELECT payload ->> 'symbol' AS symbol
+        FROM raw_facts
+        WHERE kind = 'type_header'
+        ORDER BY symbol
+    """,
+    # The types this module compiled and those of the reactor siblings it builds with
+    # (`ModuleFact.sibling_coordinates`): no dependency on the classpath extends one of them,
+    # because a dependency does not depend on the module. An opted-in library
+    # (`extract_libraries`) is scanned too but is not here: another dependency may extend it.
+    "own_types": """
+        SELECT s.symbol
+        FROM symbols s
+        JOIN documents d ON d.document_id = s.document_id
+        WHERE d.origin_tier = 'module_output'
+           OR d.origin IN (
+               SELECT unnest(from_json(payload -> 'sibling_coordinates', '["VARCHAR"]'))
+               FROM raw_facts WHERE kind = 'module'
+           )
+        ORDER BY s.symbol
+    """,
     "type_header_annotations": """
         SELECT payload ->> 'symbol'          AS target,
                use ->> 'annotation'          AS annotation,
@@ -1787,6 +1812,9 @@ _FACT_ONLY = frozenset(
         # `type_header`): a read over `raw_facts` alone, so cached per load like every
         # other fact query — the cache rule test is what said so.
         "type_header_annotations",
+        "type_headers",
+        # The module's own types and its siblings' (`symbols` and `documents`, both facts).
+        "own_types",
         # A `DefaultImpls` holder and its bodies are facts, read once per resolve like
         # every other declaration (the merge of the delivery branch added the query).
         "default_bodies",

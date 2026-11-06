@@ -2839,9 +2839,23 @@ outbound spec M8, D02 `made_by`). The row follows `create(OrdersApi.class)` to t
 object it is called on, and that object to the `baseUrl(...)` of its builder, through fields,
 parameters and helper returns; each address is joined to the path by Retrofit's own rule, one
 row per address. Where the address is not read, the row keeps its relative path, has no peer
-and is `partial` ("server address not read"), where it was `resolved` before. Stated bounds,
-each leaving a row `partial`, never wrong: a client made in a dependency-injection provider
-whose `Retrofit` parameter only the container fills (Dagger/Hilt `@Provides`); a client made
+and is `partial` ("server address not read"), where it was `resolved` before. **A client
+that Dagger or Hilt makes has its address too** (OI-304, spec 2026-11-05 di-recipe-hop): a
+parameter the container fills (a `@Provides` method's, or an `@Inject` constructor's) receives
+the value of the one recipe the container chooses for it, by Dagger's exact key (qualifier with
+its attributes, full type). Measured on `fixtures/orders-dagger`: Kotlin `object` and `class`
+modules, a Java module with static recipes, `@Named`, a custom qualifier, a qualified base
+`String` and an `@Inject` constructor each give the right address. A recipe in a reactor
+sibling the module depends on is read too: the detector scans such a sibling with the module
+(Maven W24, Gradle W55), so the Android shape `:core:network` -> `:app` resolves (measured on
+`fixtures/orders-dagger-reactor`). Whether a key has one recipe is decided over the module and
+those scanned siblings together. Stated bounds, each leaving a row `partial`, never wrong: a key
+with two recipes in the module and its siblings (two components or two editions; which one is
+used is not in the module); a recipe in a jar the analysis does not scan (not a reactor sibling, not opted in); an annotation whose type was not read beside no read
+qualifier (it may be one); a
+`Provider<T>` or `Lazy<T>` parameter, `@Binds`, `@BindsInstance`, component dependencies and
+field injection (not read) (OI-315); Koin (a lookup call, not a filled parameter) and Metro (no
+bean model yet) (OI-318); a client made
 in a generic helper (`fun <T> service(c: Class<T>) = retrofit.create(c)`), whose class
 argument is not a literal at the call; a builder handed to another method between `baseUrl`
 and `build()`; and the `baseUrl(HttpUrl)` / `baseUrl(URL)` overloads. **Not yet applied** to
@@ -4223,7 +4237,7 @@ all. These need new `protocol` values, not new columns in §2.
 | Android | Content providers | manifest `<provider android:authorities>` + subclass | artifact + `interface_implementation` | B |
 | Android | Push | `FirebaseMessagingService.onMessageReceived` | `interface_implementation` | B |
 | Android | Background work | `WorkManager` `Worker` subclasses | `interface_implementation` | B |
-| Android | **Retrofit** `@GET("users/{id}")` (outbound) | interface annotations | `annotation` | **A — highest-value Android catalog.** ✅ built 2026-11-05 (OI-274): the Android module is read from its release build, and each row has the server address of the `Retrofit` object that made its client, where the code that makes it is read (Hilt/Dagger `@Provides`: partial, OI-304) (`made_by`); OkHttp and Ktor client rows are read from the same module. Boundaries below |
+| Android | **Retrofit** `@GET("users/{id}")` (outbound) | interface annotations | `annotation` | **A — highest-value Android catalog.** ✅ built 2026-11-05 (OI-274): the Android module is read from its release build, and each row has the server address of the `Retrofit` object that made its client, where the code that makes it is read, a Hilt/Dagger `@Provides` recipe included (OI-304) (`made_by`); OkHttp and Ktor client rows are read from the same module. Boundaries below |
 | iOS | Custom URL schemes | `Info.plist` `CFBundleURLTypes` | artifact | B |
 | iOS | **Universal Links** | `apple-app-site-association` — **lives on the server, outside the app repository** | artifact | C — cross-repository join |
 | iOS | App Intents / Siri — `AppIntents` framework, iOS 16+ | structs conforming to `AppIntent` with a `perform()` method; **they live in the main binary**, not an extension | `interface_implementation` | B |
@@ -4245,10 +4259,12 @@ call, and a Kotlin Multiplatform part whose JVM and Android versions each give t
 on two real builds: kotlinconf-app (AGP 9.3.3) with its Android, JVM and shared modules, and the
 ktor-samples `client-mpp` (AGP 8.13.1) with `commonMain` sources located. **Boundaries:**
 Android inbound (manifest, deep links, exported components, `Worker`s) stays post-MVP; a
-Retrofit client made in a Dagger/Hilt `@Provides` method keeps its row `partial` (OI-304); the
-limits of the address read are OI-307; the limits of the Android detection are OI-310
+Retrofit client made through Dagger/Hilt `@Provides` has its address (OI-304, measured on
+`fixtures/orders-dagger`, and from a reactor sibling on `fixtures/orders-dagger-reactor`), and
+stays `partial` for a recipe in a jar the analysis does not scan (not a reactor sibling, not opted in), where one key has two recipes over the module and its siblings, for `Provider<T>`/`Lazy<T>`, `@Binds` and field injection (OI-315), and
+for Koin and Metro (OI-318); the limits of the address read are OI-307; the limits of the Android detection are OI-310
 (a flavored library joined by an app, Java resources, AGP 7.4 to 7.x unmeasured, no AGP 8
-fixture). Duplicate and wrong-verb Ktor client rows seen on kotlinconf-app are fixed in a separate pull request (#92), not here. Not verified: NotyKT and koog (they need a JDK 17 toolchain), and AGP 7.4 to 7.x.
+fixture). Duplicate and wrong-verb Ktor client rows seen on kotlinconf-app are fixed in a separate pull request (#92), not here. Not verified: NotyKT (its eight Retrofit rows made through Hilt included) and koog (they need a JDK 17 toolchain), and AGP 7.4 to 7.x.
 
 ---
 

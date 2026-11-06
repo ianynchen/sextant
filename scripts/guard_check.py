@@ -143,6 +143,7 @@ class Guard:
 _SINGLE_CALL = "sextant/application/resolve/engines/single_call.py"
 _SUPERTYPE_DISPATCH = "sextant/application/resolve/engines/supertype_dispatch.py"
 _FLUENT = "sextant/application/resolve/engines/fluent.py"
+_BEANS = "sextant/application/resolve/beans.py"
 # The chain walk `fluent` derives from (Quartz spec 2026-10-28 §3d), moved out of `_FLUENT`
 # whole, with the guards on the walk's own rules.
 _CHAINS = "sextant/application/resolve/shapes/chains.py"
@@ -8394,6 +8395,31 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "bean-models.an-UNKNOWN-injection-word-is-refused-at-LOAD": Guard(
+        what="a bean model declaring recipes with an `injection` outside `exact_key` and "
+        "`candidates`, or with none, is refused at load",
+        why="spec 2026-11-05 di-recipe-hop §2c: the value walk reads every model, and a typo "
+        "would match container-filled parameters to recipes by a rule nobody wrote",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find="    if injection not in _INJECTIONS:\n",
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "bean-models.CANDIDATES-needs-the-LADDER-keys-at-LOAD": Guard(
+        what="a `candidates` bean model missing one of Spring's ladder keys is refused at load",
+        why="spec 2026-11-05 di-recipe-hop §2c: without them the ladder fails at resolve time "
+        "instead, far from the file that is wrong",
+        edits=(
+            Edit(
+                path="sextant/ingress/catalogs/yaml_source.py",
+                find='    if injection == "candidates":\n',
+                replace="    if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "dispatch-hops.a-dispatch-catalog-with-NO-PROTOCOL-is-refused-at-LOAD": Guard(
         what="a catalog declaring `dispatch` and no `protocol` is refused at load",
         why="final review m-12: every hop and key row is written under the protocol; refused "
@@ -8406,6 +8432,211 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "beans.a-QUALIFIED-recipe-never-fills-an-UNQUALIFIED-parameter": Guard(
+        what="the exact key reads only annotations whose type is a qualifier, and an "
+        "unqualified parameter matches an unqualified recipe only",
+        why="spec 2026-11-05 di-recipe-hop §2a: with qualifiers unread, an unqualified "
+        "`Retrofit` parameter reads every `Retrofit` recipe and a `@Named` one reads none",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="                if bare_descriptor(annotation) in self._qualifiers\n",
+                replace="                if False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.a-QUALIFIER-s-ATTRIBUTES-are-part-of-the-key": Guard(
+        what="a qualifier is compared with all of its attributes",
+        why='spec §2a: without them `@Named("a")` and `@Named("b")` are one key, and a '
+        "parameter gets the other name's recipe or none",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="                bare_descriptor(annotation) + json.dumps(args, sort_keys=True)\n",
+                replace="                bare_descriptor(annotation)  # guard disabled\n",
+            ),
+        ),
+    ),
+    "beans.TYPE-ARGUMENTS-are-part-of-the-key": Guard(
+        what="the exact key compares the full type with its type arguments",
+        why="spec §2a: `List<String>` and `List<Integer>` are two keys in Dagger; by the "
+        "erasure, a parameter would receive a value of another type",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="    return (symbol, tuple(arguments))\n",
+                replace="    return (symbol, ())  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.a-MULTIBINDING-recipe-never-fills-T": Guard(
+        what="a recipe carrying a multibinding annotation is never a candidate for its type",
+        why="spec §2a: an `@IntoSet` recipe adds to `Set<T>`; read as a recipe for `T`, it "
+        "gives the parameter a value the container never gives it",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="            if declaring not in names or names & multibinding:\n",
+                replace="            if declaring not in names:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "beans.a-COMPANION-recipe-and-its-STATIC-FORWARDER-are-one": Guard(
+        what="a nested object's recipe and the static forwarder of the same name and "
+        "descriptor on the enclosing type are one recipe",
+        why="measured on Dagger 2.57.2 + Kotlin 2.2.21: `@JvmStatic @Provides` in a companion "
+        "gives two methods with `@Provides`, one recipe; as two, every such key is ambiguous",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="        if len(candidates) < 2:\n",
+                replace="        if True:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.an-INJECT-constructor-s-parameters-are-container-filled": Guard(
+        what="the parameters of a constructor with one of the model's injecting annotations "
+        "are container-filled",
+        why="spec §2a: `class Repo @Inject constructor(retrofit: Retrofit)` makes its client "
+        "from what the container gives; unread, its address is never read",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="                if any(annotation in injecting for annotation, _ in "
+                "index.get(symbol, [])):\n",
+                replace="                if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.a-GENERIC-Spring-slot-has-NO-entry": Guard(
+        what="under `injection: candidates`, a slot whose declared type carries type "
+        "arguments gets no recipe",
+        why="review I1: Spring fills `List<T>` with every bean of `T`; the ladder keys on the "
+        "erasure and would name one unrelated `List` bean, a false value",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="                    if configured or (ladder and "
+                '(declared.get("type") or {}).get("arguments")):\n',
+                replace="                    if configured:  # guard disabled\n",
+            ),
+        ),
+    ),
+    "beans.a-CONFIGURED-slot-has-NO-entry": Guard(
+        what="a slot carrying a configuration annotation (`@Value`) gets no recipe",
+        why="review m1: Spring fills it from configuration; a recipe of its type would be "
+        "read as its value, a false address",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="                    if configured or (ladder and "
+                '(declared.get("type") or {}).get("arguments")):\n',
+                replace="                    if ladder and "
+                '(declared.get("type") or {}).get("arguments"):  # guard disabled\n',
+            ),
+        ),
+    ),
+    "values.a-CONTAINER-FILLED-parameter-receives-its-RECIPE": Guard(
+        what="a parameter the container fills with one recipe receives that recipe's returns",
+        why="spec 2026-11-05 di-recipe-hop §2: without the hop, a Retrofit client made "
+        "through `@Provides` never gets its server address (OI-304)",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="        if isinstance(injected, ProvidedBy):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "values.TWO-RECIPES-of-one-key-are-NON-ENUMERABLE": Guard(
+        what="a parameter the container fills with one of several recipes stops at the "
+        "parameter, unread",
+        why="Task 3 review m1: without the stop, the walk falls through to a hand-written "
+        "caller and reads its value as the one the container injects",
+        edits=(
+            Edit(
+                path="sextant/application/resolve/values.py",
+                find="        if isinstance(injected, Ambiguous):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.the-NAME-rung-reads-only-the-TYPE-s-candidates": Guard(
+        what="the Spring ladder's name rung chooses only among the beans of the parameter's "
+        "type or of a subtype of it",
+        why="Task 3 review m3: Spring compares names only over the type's candidates; a bean of "
+        "an unrelated type that shares the name is never injected",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="            named = self._one_named(reference.name, sure)\n",
+                replace="            named = self._one_named(reference.name, [b for bs in "
+                "self._declared.by_type.values() for b in bs])  # guard disabled\n",
+            ),
+        ),
+    ),
+    "beans.the-TYPE-rung-counts-SUBTYPES": Guard(
+        what="the Spring ladder's type rung counts a bean of a subtype of the parameter's type",
+        why="whole-branch review m3: Spring's only bean of the type is the only bean ASSIGNABLE "
+        "to it; an exact-erasure rung misses the subtype and disagrees with the name rung",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="            verdict = self._lattice.assignable(erased, erased_type)\n",
+                replace="            verdict = ASSIGNABLE if erased == erased_type else "
+                "NOT_ASSIGNABLE  # guard disabled\n",
+            ),
+        ),
+    ),
+    "beans.a-bean-of-UNREAD-hierarchy-is-kept-by-the-QUALIFIER-only": Guard(
+        what="a type whose supertypes were not read is neither assignable nor unassignable",
+        why='whole-branch review m1: `@Qualifier("pool") ExecutorService` naming a '
+        "`ThreadPoolExecutor` bean is a true answer the JDK's unread hierarchy would turn to none",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="        return UNREAD\n",
+                replace="        return NOT_ASSIGNABLE  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.an-UNREAD-type-on-a-RESOLVED-classpath-is-the-PLATFORM-s": Guard(
+        what="on a resolved classpath, a type with no header cannot reach a type that was read",
+        why="scoped re-review I-1: without it every bean whose hierarchy touches the platform "
+        "(ObjectMapper, Clock) is a maybe, and the only RestTemplate bean is no longer chosen",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="        if self._resolved and declared in self._read:\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "beans.only-the-MODULE-and-its-SIBLINGS-are-never-extended-by-a-dependency": Guard(
+        what="only the module's own types and its siblings' are never extended by a dependency",
+        why="scoped re-review m-a: an opted-in library is scanned but is a dependency; another "
+        "dependency may extend its types, so a bean of an unread type may be one of them",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find='workspace.query("own_types")',
+                replace='workspace.query("declared_symbols")',
+            ),
+        ),
+    ),
+    "beans.an-UNREAD-annotation-may-be-a-QUALIFIER": Guard(
+        what="an annotation whose type was not read leaves an unqualified Dagger key unknown",
+        why="whole-branch review m2: dropped from the key, an unread qualifier makes a qualified "
+        "slot or recipe look unqualified, a possible false resolved",
+        edits=(
+            Edit(
+                path=_BEANS,
+                find="        if not qualifier and (self._unread_qualifier(uses) or declared_type "
+                "in self._unsure):\n",
+                replace="        if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "annotation-registrations.ONLY-a-QUALIFIER-makes-an-observer-KEYLESS": Guard(
         what="only an annotation type meta-annotated by the bean model's qualifier marker makes "
         "an observer keyless",
@@ -8413,7 +8644,7 @@ GUARDS: dict[str, Guard] = {
         "Read as a qualifier, the observer loses every hop it really has",
         edits=(
             Edit(
-                path=_ANNOTATION_DRIVEN,
+                path=_BEANS,
                 find='        if bare_descriptor(str(row["annotation"])) in markers\n',
                 replace="        if True  # guard disabled by scripts/guard_check.py\n",
             ),
@@ -9962,7 +10193,7 @@ GUARDS: dict[str, Guard] = {
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",
                 find="        # bytecode, so the base is unread, as for an unreached construction.\n"
-                "        return None, UNTRACED\n",
+                "        return None, NOT_READABLE\n",
                 replace="        # bytecode, so the base is unread, as for an unreached construction.\n"
                 '        return "http://localhost", None  # guard disabled by scripts/guard_check.py\n',
             ),
@@ -12462,6 +12693,8 @@ def copy_tree(destination: Path) -> Path:
         # The second library `fixture_stub.LIBRARIES` installs: the session fixture builds
         # every listed library, so a copy without this one fails before any test runs.
         "orders-vertx-web-base",
+        # The third library `fixture_stub.LIBRARIES` installs, for the same reason.
+        "orders-dagger-network",
         "orders-pathprefixes",
         "orders-fieldheld",
         "orders-pathvars",

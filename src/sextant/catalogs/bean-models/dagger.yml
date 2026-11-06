@@ -1,0 +1,41 @@
+id: dagger
+displayName: The Dagger and Hilt dependency-injection model (@Provides, JSR-330 qualifiers, @Inject)
+
+# WHAT THIS FILE IS: D02 §1c, the container's vocabulary declared once (see `spring.yml` for
+# why it is not a catalog). No catalog names it. The value walk reads every bean model (D02
+# §1c, spec 2026-11-05 di-recipe-hop §2): a parameter the container fills receives the value
+# of the one recipe the container chooses for it.
+#
+# Each rule below was measured on a Kotlin 2.2.21 + kapt build with Dagger and Hilt 2.57.2
+# (investigation `.superpowers/sdd/2026-11-05-android-outbound/oi-304-investigation.md` §2).
+
+# `@Provides` declares a recipe. It is a RUNTIME annotation on an ordinary method: a static
+# method in a Java module, an instance method on `INSTANCE` in a Kotlin `object` module, and an
+# instance method of the companion object in a Kotlin companion module.
+declaring_annotation: dagger.Provides
+
+# Dagger matches a parameter to a recipe by an exact key: the qualifier annotation with all
+# of its attributes, and the full type with its type arguments. An unqualified parameter
+# matches an unqualified recipe only. There is no name rung and no primary. Measured: an
+# unqualified `Retrofit` parameter got the unqualified recipe while `@Named("pay")` and
+# `@Billing` recipes of the same type were in the same module. A second unqualified recipe of
+# one key on one component fails the build (`Dagger/DuplicateBindings`).
+injection: exact_key
+
+# A qualifier is any annotation whose type carries one of these (JSR-330's definition), in
+# Jakarta's name and in javax's.
+qualifier_meta_annotations:
+  - javax.inject.Qualifier
+  - jakarta.inject.Qualifier
+
+# A recipe with one of these adds an element to a `Set<T>` or an entry to a `Map<K, V>`. It is
+# never the recipe for `T` itself.
+multibinding_annotations:
+  - dagger.multibindings.IntoSet
+  - dagger.multibindings.IntoMap
+  - dagger.multibindings.ElementsIntoSet
+
+# The container also fills each parameter of a constructor with one of these.
+injecting_annotations:
+  - javax.inject.Inject
+  - jakarta.inject.Inject

@@ -734,7 +734,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     # Shared across the whole resolve (`cached_value_index`), not built
                     # per catalog. See the note in `interface_implementation`.
                     values = cached_value_index(
-                        workspace, catalog.not_hand_offs, catalog.hand_off_effects
+                        workspace,
+                        catalog.not_hand_offs,
+                        catalog.hand_off_effects,
+                        catalog.bean_models,
+                        catalog.value_annotations,
                     )
                 destinations = list(
                     dict.fromkeys(
@@ -826,7 +830,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             ):
                 if values is None:
                     values = cached_value_index(
-                        workspace, catalog.not_hand_offs, catalog.hand_off_effects
+                        workspace,
+                        catalog.not_hand_offs,
+                        catalog.hand_off_effects,
+                        catalog.bean_models,
+                        catalog.value_annotations,
                     )
                 # One tuple per DISTINCT destination, as the `channel_via` branch above:
                 # several paths routinely agree about this slot (§1c), and 64 callers
@@ -941,7 +949,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         if client_base is not None or _ADDRESS_PARTS in method:
             if values is None and client_base is not None:
                 values = cached_value_index(
-                    workspace, catalog.not_hand_offs, catalog.hand_off_effects
+                    workspace,
+                    catalog.not_hand_offs,
+                    catalog.hand_off_effects,
+                    catalog.bean_models,
+                    catalog.value_annotations,
                 )
             minted = [
                 (row_verb, _sent_to(destination, site, method, client_base, workspace, values))

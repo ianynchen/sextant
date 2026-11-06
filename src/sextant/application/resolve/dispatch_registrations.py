@@ -682,7 +682,13 @@ class ObjectKeys:
     position asked (and one more per null check passed through), each answer kept."""
 
     def __init__(self, workspace: Workspace, catalog: Catalog) -> None:
-        self._index = cached_value_index(workspace, catalog.not_hand_offs, catalog.hand_off_effects)
+        self._index = cached_value_index(
+            workspace,
+            catalog.not_hand_offs,
+            catalog.hand_off_effects,
+            catalog.bean_models,
+            catalog.value_annotations,
+        )
         self._made = self._index.unscanned | frozenset(
             (built, _CONSTRUCTOR) for built in self._index.constructed
         )

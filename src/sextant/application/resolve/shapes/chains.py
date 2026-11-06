@@ -45,6 +45,7 @@ from typing import Any
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.beans import (
+    UNREAD,
     BeanRef,
     BeanTable,
     Unresolved,
@@ -75,6 +76,7 @@ from sextant.application.resolve.values import (
     ESCAPES,
     EXTERNAL,
     NON_ENUMERABLE,
+    NOT_READABLE,
     RECEIVER,
     Counting,
     Flow,
@@ -349,7 +351,13 @@ def chain_ends(
     # url is `base + "/path"` could never reach it (`OI-138`, ruling 1). Sharing the index
     # makes the gate unnecessary instead of merely cheaper — `mall-admin` built the same
     # index five times before.
-    walk_index = cached_value_index(workspace, catalog.not_hand_offs, catalog.hand_off_effects)
+    walk_index = cached_value_index(
+        workspace,
+        catalog.not_hand_offs,
+        catalog.hand_off_effects,
+        catalog.bean_models,
+        catalog.value_annotations,
+    )
     flow = Flow(walk_index)
     # Which splits count for the caller's rows: those whose call sets a part they show,
     # read off the same steps and capture names the walk folds (`_parts_set`).
@@ -2404,27 +2412,37 @@ def _fold_bean_captures(captures: dict[str, Any], context: _ChainContext) -> Non
             captures[field] = _POISONED
             continue
         if value.get("caller") != context.caller:
-            captures[field] = _unresolved_bean("across_bodies")
+            # A parameter index inside a lambda body is into the LAMBDA's signature.
+            captures[field] = _unresolved_bean(NOT_READABLE)
             continue
         bean = _bean_reference(value.get("argument"), context)
-        if isinstance(bean, Unresolved):
-            captures[field] = _unresolved_bean(bean.reason)
+        if bean is None:
+            captures[field] = _unresolved_bean(NOT_READABLE)
+        elif isinstance(bean, Unresolved):
+            captures[field] = _unresolved_bean(_BEAN_REASONS[bean.reason])
         elif field in _CHANNEL_NAME_FIELDS:
             captures[field] = {"kind": "string", "value": bean.name}
         else:
             captures[field] = _bean_chain_capture(bean, field, context)
 
 
+# Why the bean table did not name one bean, as the value walk's reason (ruling 2026-11-05: one
+# reason list, `values._REASONS`). `none`: no recipe of the module answers, so the container
+# makes the value — what the walk answers for a container-filled parameter with no recipe.
+# `UNREAD`: the one candidate's hierarchy goes into code that is not scanned.
+_BEAN_REASONS = {"none": EXTERNAL, "ambiguous": NON_ENUMERABLE, UNREAD: EXTERNAL}
+
+
 def _unresolved_bean(reason: str) -> dict[str, Any]:
-    """The compiler's own `unresolved` shape (`_UNRESOLVED_ARGUMENT`), with the
-    bean fold's reason — a fresh mapping, so `_fold` overwrites it as it does
+    """The compiler's own `unresolved` shape (`_UNRESOLVED_ARGUMENT`), with one of
+    the value walk's reasons — a fresh mapping, so `_fold` overwrites it as it does
     any read failure that is not a catalog poison."""
-    return {"kind": "unresolved", "reason": f"bean_{reason}"}
+    return {"kind": "unresolved", "reason": reason}
 
 
 def _bean_reference(
     argument: dict[str, Any] | None, context: _ChainContext
-) -> BeanRef | Unresolved:
+) -> BeanRef | Unresolved | None:
     """The bean one argument names (spec 2026-09-21 §3a), by the two shapes a
     reference takes in a factory method: the caller's own injected parameter —
     `{kind: parameter, value: i}`, read off the declared signature for its
@@ -2432,11 +2450,12 @@ def _bean_reference(
     same caller, to a declaring method (`bean_called`; the call's target joined
     to its symbol through `method_descriptor`, the same arithmetic every
     caller-to-callee join uses). Anything else — a field, a literal, a call to
-    a method that declares no bean — is `none`. Only ever called with a bean
-    table in hand (`_fold_bean_captures` answers the collecting context's
-    case before reaching here); a context without one resolves nothing."""
+    a method that declares no bean — is None: the code is there and this fold
+    does not follow it. Only ever called with a bean table in hand
+    (`_fold_bean_captures` answers the collecting context's case before
+    reaching here); a context without one resolves nothing."""
     if context.beans is None or argument is None:
-        return Unresolved("none")
+        return None
     if argument.get("kind") == "parameter" and isinstance(argument.get("value"), int):
         return injected_bean(
             context.beans,
@@ -2447,16 +2466,15 @@ def _bean_reference(
         )
     source = argument.get("source")
     if source is None:
-        return Unresolved("none")
+        return None
     producer = next((site for site in context.sites if _chain_key(site) == source), None)
     if producer is None or producer.get("owner") is None or producer.get("descriptor") is None:
-        return Unresolved("none")
+        return None
     bare = method_descriptor(
         str(producer["owner"]), str(producer["name"]), str(producer["descriptor"])
     )
     full = context.method_symbols.get(bare)
-    bean = context.beans.bean_called(full) if full is not None else None
-    return bean if bean is not None else Unresolved("none")
+    return context.beans.bean_called(full) if full is not None else None
 
 
 def _bean_chain_capture(bean: BeanRef, field: str, context: _ChainContext) -> Any:
@@ -2470,7 +2488,8 @@ def _bean_chain_capture(bean: BeanRef, field: str, context: _ChainContext) -> An
     `unresolved` kind with the reason: the adapter's destination is then unread
     (`path` NULL), never guessed from one of several containers' queues."""
     if bean.method is None:
-        return _unresolved_bean("no_method")
+        # A channel the container makes under its name: no code of the module builds it.
+        return _unresolved_bean(EXTERNAL)
     sites = context.by_caller.get(bare_descriptor(bean.method), [])
     by_receiver: dict[Any, list[dict[str, Any]]] = {}
     for site in sites:
@@ -2501,9 +2520,11 @@ def _bean_chain_capture(bean: BeanRef, field: str, context: _ChainContext) -> An
         _walk(site, captures, terminal=None, context=collecting)
     values = [_literal_of(field, end, collecting) for end in collected if field in end]
     if not values:
-        return _unresolved_bean("no_chain" if not collected else "field_uncaptured")
+        # No chain, or no end captured the field: the code is there, and the setters that set
+        # a field are an open set, so "nothing sets it" is not proven.
+        return _unresolved_bean(NOT_READABLE)
     if any(value != values[0] for value in values[1:]):
-        return _unresolved_bean("chains_disagree")
+        return _unresolved_bean(NON_ENUMERABLE)
     return values[0]
 
 
@@ -2529,7 +2550,11 @@ def _literal_of(field: str, end: dict[str, Any], context: _ChainContext) -> Any:
     argument = _address_read(value, context)
     if field != "channel":
         text = _string_value(argument)
-        return {"kind": "string", "value": text} if text is not None else _unresolved_bean("unread")
+        return (
+            {"kind": "string", "value": text}
+            if text is not None
+            else _unresolved_bean(NOT_READABLE)
+        )
     found: Sequence[tuple[str | None, str | None, str]] = channels_of(argument)
     forms = end.get("channel_via") or []
     if found[0][2] != "resolved" and forms:
@@ -2545,7 +2570,7 @@ def _literal_of(field: str, end: dict[str, Any], context: _ChainContext) -> Any:
     elements = [
         {"kind": "string", "value": path}
         if resolution == "resolved" and path is not None
-        else _unresolved_bean("unread")
+        else _unresolved_bean(NOT_READABLE)
         for _, path, resolution in found
     ]
     return elements[0] if len(elements) == 1 else {"kind": "array", "elements": elements}

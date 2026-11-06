@@ -469,6 +469,9 @@ jar (`by:`):
 | `conditions` | `profile: {annotation, expressions, by}`, `property: {annotation, prefix, names, having_value, match_if_missing, by}` and `other: {annotations, by}` — the conditions evaluated against configuration, and the ones the analysis names and never evaluates (`@Conditional` and the autoconfigure conditions) | CP-42, CP-43 |
 | `presence` | `@ConditionalOnMissingBean` / `@ConditionalOnBean`: `missing`, `present`, `type_attrs` (`value` and `type`, one set), `name_attrs`, `annotation_attrs` (a separate criterion), `order_reason` (what a loop holding a `missing` condition says), `present_cycle_reason` (what a loop of `present` conditions alone says) | CP-44 rows 1-3 |
 | `qualifier_meta_annotations` | the annotations that make another annotation a QUALIFIER (JSR-330's `@Qualifier`, Jakarta and javax). Read by the dispatch registration reader: an observer whose event parameter also carries a qualifier is kept with no key (§2m). Declared in `catalogs/bean-models/cdi.yml`, which the two CDI event catalogs name; a non-empty list of names, refused at load otherwise | CDI's observer resolution (stated, not probed: CP-59 bounds it) |
+| `injection` | how the container matches a parameter to a recipe (spec 2026-11-05 di-recipe-hop §2c): `exact_key` — Dagger's key, the qualifier annotation with all its attributes plus the full type with its type arguments, an unqualified parameter matching an unqualified recipe only, no name rung and no primary; or `candidates` — Spring's ladder (`qualifier_annotation`, the only bean of the type, `primary_annotation`, the name). Required on a model that declares `declaring_annotation`. The ladder keys are required for `candidates` only; `exact_key` requires `qualifier_meta_annotations`. Refused at load otherwise | Dagger: measured on a kapt probe (investigation `oi-304-investigation.md` §2); Spring: CP-27 row 15 |
+| `multibinding_annotations` | the annotations that make a recipe add to a collection (`@IntoSet`, `@IntoMap`, `@ElementsIntoSet`). Such a recipe is never a candidate for `T` itself. In `catalogs/bean-models/dagger.yml` | Dagger's multibinding rule (stated) |
+| `injecting_annotations` | the annotations marking a constructor whose parameters the container fills (`javax.inject.Inject`, `jakarta.inject.Inject`). In `catalogs/bean-models/dagger.yml` | JSR-330 (stated) |
 | `interface_registrations` | a list of `{supertypes, annotation, excluded_by, by}`: an interface assignable to a listed supertype, or carrying `annotation` (itself, a meta-annotation, or an interface it extends), and not carrying `excluded_by` itself, is a bean the framework implements at run time (Spring Data repositories) | CP-46 |
 
 The loader (`yaml_source._check_bean_model`) refuses a malformed block, naming the file
@@ -496,7 +499,17 @@ interface, so the module's single `@Bean MessageChannel` is never the container'
 candidate. Any **other** reference resolves by `@Qualifier`, else exactly one declared bean of
 its erased type, else the one of several marked `@Primary` (the `primary_annotation` — two so
 marked fail the injection and read `ambiguous`), else its name — the container's own candidate
-order, cited on the model (CP-27 row 15; `@Priority` is not read, a boundary stated there). Two
+order, cited on the model (CP-27 row 15; `@Priority` is not read, a boundary stated there). For
+such a reference every rung weighs only the candidates of its type, as the container does: a
+bean whose type is the parameter's or a subtype of it (the module's type facts and its
+dependencies' class headers, `beans.TypeLattice`). A bean whose hierarchy was not read to the end
+may be a candidate, unless no unread type can reach the parameter's type: that type is the
+module's own or a reactor sibling's (no dependency extends it), or it was read and the build tool
+resolved the classpath (a type with no header is then the platform's, which extends nothing in a
+jar or the module). A bean that may be a candidate: the `@Qualifier` rung keeps it (a qualifier
+naming a bean that is not assignable fails the container's start), the type and name rungs choose
+only a bean known to be of the type, and a lone such bean answers `unread`. A bean of a type known to be unrelated that
+shares the name is never one (OI-304 Task 4). Two
 candidates on any rung, or none, is `Unresolved`, never a guess; a
 parameter compiled without names skips the name rung. The list is the INTERFACES the
 framework's beans implement, with exact membership: a parameter declared as a concrete
@@ -504,10 +517,25 @@ channel class (`DirectChannel`) has no framework bean beside the module's own an
 by type. The fold runs once per resolve through `workspace.once`, keyed on the model's
 values, so two catalogs naming one model share it.
 
+**Bean models are also read estate-wide, like `value-models/` (§1f).** The value walk asks
+which value a parameter that the container fills receives (spec 2026-11-05 di-recipe-hop §2):
+the value of the one recipe the container chooses for it. That is a fact about the module's
+container, not about the catalog that asks, and one catalog cannot name `spring` and `dagger`
+at once. So the loader hands every catalog every model by id (`Catalog.bean_models`), and the
+walk reads all of them. A catalog's own `bean_model` keeps its uses as before: fluent's
+`bean_via`, `scheduled_chain`, `bean_conditions` and the dispatch reader's qualifiers.
+`catalogs/bean-models/dagger.yml` is named by no catalog; the walk is its reader. The walk
+reads the recipes of the module and of the reactor siblings the detector scans with it, so a
+key's uniqueness is decided over those together; a recipe in a jar the analysis does not scan is
+not read. It answers a filled parameter with the returns of its one recipe, read in the recipe's own body
+(a path step `<recipe> returns <n>`); with `unresolved`, reason `non_enumerable`, where the key
+has several recipes in the module; and as before (callers, else `external`) where the module has
+no recipe for it.
+
 **A bean model is not a catalog**, for §1b's reasons and with §1b's mechanics: it declares
 no `style`, no `matches` and no boundary; a catalog naming an id no file carries is refused
 by file; `api._catalog_hash` walks the directory so an edit changes the analysis identity.
-The `fluent` engine's `bean_via` (§2) is its one consumer today; a catalog spelling
+The `fluent` engine's `bean_via` (§2) is its one consumer by name; a catalog spelling
 `bean_via` with no `bean_model` is refused at load. The field ladder's missing bean rung —
 the field-held `Publisher`/`WebClient`/`KafkaTemplate` boundaries in COVERAGE — is the named
 follow-up (`OI-106`).
@@ -545,7 +573,8 @@ catalog naming the model declares it a terminal.
 
 The fourth, and the one no catalog NAMES. The first three are opt-in — a catalog writes
 `shape_model: json` and takes that file's blocks. This one is a single estate-wide table,
-because the question it answers has nothing to do with which catalog is asking:
+because the question it answers has nothing to do with which catalog is asking (the bean
+models are also read estate-wide by the value walk for the same reason, §1c):
 
 > **which argument of a call carries the value its result stands for.**
 
@@ -2404,7 +2433,7 @@ the block, crosses to that method's callers. The base each construction answers 
 makes. The reader answers ONE base or none:
 
 - **the construction is reached and no declared setter is**: no base, with
-  `computed_base_addresses_not_traced`, exactly as for an unreached construction. **A client with
+  `not_readable`, exactly as for an unreached construction. **A client with
   no declared base is not assumed to send to `localhost`: absence cannot be proven from the
   bytecode.** Ktor does send such a client to its builder's origin, `http://localhost` (CP-54 rows
   50, 57), and an earlier ruling published that; it was reversed (Task 10 fix round 2) because the
@@ -2436,7 +2465,8 @@ makes. The reader answers ONE base or none:
   `no_writer`, …);
 - **reached and not read** — a block the ladder does not declare, a setter handed a computed
   value or a relative address, an overload no rung declares — no base, with
-  `computed_base_addresses_not_traced`;
+  `not_readable` (the class is the gap `computed_base_addresses_not_traced`; the reason is
+  one of the value walk's, ruling 2026-11-05);
 - **several paths, several bases** (`madeClient(base)` called with two): no base, with
   `non_enumerable`. The producer records no path, so nothing says which base one client was
   built with, and pairing them across paths is ruling M-1's fabrication.
@@ -2803,10 +2833,16 @@ matches:
   cross-method `source` read is a fabrication path. Every chain end must agree or the field
   is `unresolved`; ONE hop — a `bean_via` met inside the collecting walk is a poison there.
   An unresolved bean reference is the reader's own failure, overwritable by a later literal
-  (Spring's setters are last-wins), never a catalog poison. The reason travels:
-  `bean_none`, `bean_ambiguous`, `bean_second_hop`, `bean_across_bodies` (a `bean_via` inside
-  a lambda body — a parameter index there is into the LAMBDA's signature), `bean_no_chain`,
-  `bean_field_uncaptured`, `bean_chains_disagree`. A catalog spelling `bean_via` with no
+  (Spring's setters are last-wins), never a catalog poison. The reason travels, and it is
+  one of the value walk's reasons (`values._REASONS`; ruling 2026-11-05: no reason word of
+  the bean fold's own): `external` where no recipe of the module answers (the container
+  makes the value), where the one candidate's hierarchy goes into code that is not scanned,
+  and for a channel the container makes under its name; `non_enumerable` where several
+  beans are candidates and no rung chooses, or where the bean's chain ends disagree;
+  `not_readable` for a reference shape the fold does not read (a field, a literal, a call
+  to a method that declares no bean), a `bean_via` inside a lambda body (a parameter index
+  there is into the LAMBDA's signature), a bean method with no chain, no end capturing the
+  field, and a captured value that is not a string. A catalog spelling `bean_via` with no
   `bean_model` is refused at load; the table is built once per run only then.
 - **`method_annotation: {annotation, arg, into}` on a root** — the CONSTRUCTING method's
   own annotation supplies a capture: `@ServiceActivator(inputChannel = "ch")` on the `@Bean`

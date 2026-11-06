@@ -32,6 +32,11 @@ displayName: The Spring dependency-injection model (@Bean, @Qualifier, the chann
 declaring_annotation: org.springframework.context.annotation.Bean
 name_attrs: [name, value]
 
+# How the container matches a parameter to a recipe (spec 2026-11-05 di-recipe-hop §2c): Spring
+# weighs the candidates in the ladder below (`qualifier_annotation`, the only bean of the type,
+# `primary_annotation`, the name). The ladder keys are required for `candidates` only.
+injection: candidates
+
 # `@Qualifier` declares `value()` (spring-beans 6.1.6 — F8; CP-27 row 14). On an
 # injected parameter it names the bean outright and is the
 # first rung for every reference kind. The rungs after it, for a reference that

@@ -1,0 +1,14 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.acme</groupId>
+    <artifactId>orders-dagger-reactor</artifactId>
+    <version>1.0.0</version>
+  </parent>
+  <artifactId>app</artifactId>
+  <dependencies>
+    <dependency><groupId>com.acme</groupId><artifactId>network</artifactId><version>1.0.0</version></dependency>
+    <dependency><groupId>com.google.dagger</groupId><artifactId>dagger</artifactId></dependency>
+    <dependency><groupId>com.squareup.retrofit2</groupId><artifactId>retrofit</artifactId></dependency>
+  </dependencies>
+</project>

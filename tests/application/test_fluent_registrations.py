@@ -1480,6 +1480,79 @@ def test_two_ends_of_the_containers_chain_that_disagree_leave_the_destination_un
     assert (row["path"], row["resolution"]) == (None, "unresolved")
 
 
+def _two_ends_that_disagree() -> list:
+    """The container's chain of the test above: two `withQueue` ends, `a` and `b`."""
+    container = _MODULE + CONTAINER_BEAN
+    return [
+        *_container_bean(),
+        *(
+            _call(
+                container,
+                CONTAINER,
+                "withQueue",
+                ordinal,
+                receiver=7,
+                result=7 + ordinal,
+                arguments=[CallArgument(kind="string", value=queue)],
+            )
+            for ordinal, queue in ((1, "a"), (2, "b"))
+        ),
+    ]
+
+
+def _built_in_a_third_bean() -> list:
+    """The container's method of `test_a_container_built_in_a_third_bean_is_unresolved`."""
+    return [
+        _call(
+            _MODULE + CONTAINER_BEAN,
+            "com/acme/streams/ContainerFactory#",
+            "create",
+            0,
+            receiver=None,
+            result=7,
+            arguments=[CallArgument(kind="parameter", value=0)],
+        ),
+        *_bean(CONTAINER_BEAN, CONTAINER),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("parameter", "container", "matches", "reason"),
+    [
+        # No bean of the module answers: the container makes it.
+        ("container", [], _CONTAINER_MATCHES, "external"),
+        # Two beans of the type, no rung chooses: which one the container injects is not said.
+        (
+            "listener",
+            [
+                *_container_bean(("setQueueNames", [_queue_names("q1")])),
+                *_bean(WIRING + "second(sig_5ec0nd00).", CONTAINER),
+            ],
+            _CONTAINER_MATCHES,
+            "non_enumerable",
+        ),
+        # The bean's method holds no chain this catalog roots: the code is there, not followed.
+        ("container", _built_in_a_third_bean(), _CONTAINER_MATCHES, "not_readable"),
+        # Two chain ends capture two destinations.
+        ("container", _two_ends_that_disagree(), _LINKED_CONTAINER_MATCHES, "non_enumerable"),
+    ],
+    ids=["no-bean", "two-beans", "no-chain", "ends-disagree"],
+)
+def test_an_unresolved_bean_reference_states_the_value_walks_reason(
+    tmp_path: Path, parameter: str, container: list, matches: dict, reason: str
+):
+    """Ruling 2026-11-05: why a bean reference is not resolved is one of the value walk's
+    reasons (`values._REASONS`), never a word of the bean fold's own (`bean_none`, ...)."""
+    facts = [
+        *_container_adapter(),
+        _declared(CALLER_BARE, parameters=[_parameter(CONTAINER, parameter)]),
+        *container,
+    ]
+    captured = _captures_of(tmp_path, facts, matches)["channel"]
+
+    assert dict(captured) == {"kind": "unresolved", "reason": reason}
+
+
 def test_a_beans_entry_carrying_a_root_only_word_is_refused(tmp_path: Path):
     """A `beans:` chain is walked for its captures alone: a direction, a composition or a
     method annotation on it would be read by nothing, so the file is refused."""

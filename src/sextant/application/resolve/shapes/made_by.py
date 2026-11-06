@@ -225,7 +225,13 @@ def _bases_by_interface(
     read within that path (`resolve_positions(..., within=)`), so a helper
     `retrofit(base) = Retrofit.Builder().baseUrl(base).build()` called twice gives each
     `create` its own caller's base, never both: one object, one path, one address."""
-    index = cached_value_index(workspace, catalog.not_hand_offs, catalog.hand_off_effects)
+    index = cached_value_index(
+        workspace,
+        catalog.not_hand_offs,
+        catalog.hand_off_effects,
+        catalog.bean_models,
+        catalog.value_annotations,
+    )
     owner = type_descriptor(str(made_by["owner"]))
     slot = int(made_by["class_arg"])
     # Where an object is made, as `ObjectKeys` reads it: a construction, or a call whose body
