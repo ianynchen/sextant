@@ -1,6 +1,6 @@
 # Python: reading Python code with the JVM's pipeline — design
 
-**Status: DRAFT v2 2026-11-06, for the user's approval.** Plane OI-208 = SEXTANT-201 (language order 2,
+**Status: APPROVED 2026-11-06 (v2, with ruling A and the performance target).** Plane OI-208 = SEXTANT-201 (language order 2,
 ruled 2026-10-26). v1 was agreed in conversation on 2026-11-06. It was then reviewed twice: once from
 first principles, and once adversarially for reuse ("stick to the current design, reuse, extend
 existing terms before adding new ones" — user, 2026-11-06). v2 takes both reviews in. The reviews are
