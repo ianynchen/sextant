@@ -422,6 +422,11 @@ Each plan ends in working software.
 
 ### Task 9: Commands as `entry_point` roots
 
+**Replaced (2026-11-06):** the implementer stopped NEEDS_CONTEXT on four gaps. The approved design
+`docs/superpowers/specs/2026-11-06-reading-decorators-design.md` replaces this task with Task 9a
+(decorator-factory types and entry points) and Task 9b (commands as `entry_point` roots), §11 of
+that design. The text below is the original task, kept for history.
+
 **Needs approval before building:** the catalog key `root_kind: entry_point` on a `single_call`/`fluent`
 catalog, meaning "rows go to `roots` as `entry_point`, not to `endpoints`". It is the "catalog
 declaring the entry point" OI-22 names.
