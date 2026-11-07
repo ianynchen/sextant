@@ -367,6 +367,21 @@ as the function in every case. That is a wrong value: `module.command(...)` only
 **Measured, as direct calls of a decorated name:** tenacity `retry` 59, `contextmanager` 53,
 `cache`/`lru_cache`/`memoize` about 53, `background_task` 10.
 
+### 3f. Two option details (ruled 2026-11-06, from the Task 9b review)
+
+- **`nargs=-1` (approved key `optional_when`).** A call-naming `request_params` entry may write
+  `optional_when: { arg: <reference>, equals: <literal> }`. It means "the input is optional when
+  this argument is written with this value". click: `optional_when: { arg: { keyword: nargs },
+  equals: -1 }`. Measured: 5 rows in dispatch and redash. Before this, they were reported
+  `required`, which was wrong.
+- **Several spellings (no new key).** `name_arg: all_strings` reads every string argument, using
+  the existing D02 rule. A string equal to one of the handler's own parameter names is that
+  parameter's name, not something a user types. Every other string is a spelling, and each
+  spelling is one row (an enumerable set is exact). `-m`, `--message`, `message` with
+  `def f(message)` gives the rows `-m` and `--message`. `--dry-run` with `def f(dry_run)` gives
+  one row. The rule compares facts with facts and holds no framework convention. A
+  `spelling_prefix` key was considered and rejected.
+
 ## 4. Groups, and the program's name
 
 Spec §3c says click groups use the `mount` block. Two things make that work.
