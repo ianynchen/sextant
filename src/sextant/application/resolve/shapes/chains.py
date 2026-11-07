@@ -3263,9 +3263,19 @@ def _fold_lambda_captures(captures: dict[str, Any], context: "_ChainContext") ->
     spliced. One hop only: a lambda reached from inside a lambda is not followed, because
     each hop is a place the argument could belong to something else and the discipline that
     bounds `_prefix_captures` bounds this too.
+
+    **Never a `handler`.** The fold reads a lambda that BUILDS the call's value; a handler
+    lambda is the code the registration hands control to, so it is kept as the lambda it is.
     """
     for field, value in list(captures.items()):
         if not isinstance(value, dict) or value.get("kind") != "lambda":
+            continue
+        # A `handler` lambda is the CONSUMER itself, not a builder of the registration: its
+        # body is what runs when the registration fires, and a chain inside that body is a
+        # registration of its own. Folding it named a call inside the body as the handler
+        # (task 9b fix round 1: a command whose body calls `run(helper)` was handed `helper`,
+        # and one whose body opens a `with scope(…)` lost its row).
+        if field == "handler":
             continue
         symbol = value.get("symbol")
         if symbol is None:

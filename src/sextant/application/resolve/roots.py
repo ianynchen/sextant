@@ -170,7 +170,7 @@ def record_roots(workspace: Workspace) -> None:
     """
     kept = {
         (
-            str(row["handler"]),
+            _text(row["handler"]),
             RootKind.ENTRY_POINT,
             _text(row["protocol"]),
             _text(row["method"]),
@@ -224,7 +224,12 @@ def record_roots(workspace: Workspace) -> None:
         }
         for handler, kind, protocol, method, path, method_kind, path_kind in sorted(
             found,
-            key=lambda entry: (entry[0], str(entry[1]), _address_order(entry[2:])),
+            key=lambda entry: (
+                entry[0] is not None,
+                entry[0] or "",
+                str(entry[1]),
+                _address_order(entry[2:]),
+            ),
         )
     ]
     if rows:
@@ -254,6 +259,10 @@ def roots_of(workspace: Workspace) -> list[Root]:
     """
     collapsed: dict[tuple[str, RootKind], list[RootIdentity]] = {}
     for row in workspace.query("roots"):
+        # A command whose handler was not read (an entry point behind a library decorator no
+        # value model states) is a row with no handler: there is no code to start a walk at.
+        if row["handler"] is None:
+            continue
         key = (str(row["handler"]), RootKind(str(row["root_kind"])))
         identities = collapsed.setdefault(key, [])
         identity = RootIdentity(

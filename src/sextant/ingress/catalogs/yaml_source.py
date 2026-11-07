@@ -507,6 +507,7 @@ class YamlCatalogSource:
                 raise CatalogError(f"loading catalog {path}: not a YAML mapping")
             shape = _shape_model_of(raw, shape_models, path)
             _check_made_by(raw, path)
+            _check_argument_references(raw.get("matches"), raw.get("style"), path)
             catalogs.append(
                 Catalog(
                     id=_required(raw, "id", path),
@@ -1801,6 +1802,45 @@ def _returns_argument(entry: Any, path: Path) -> dict[str, Any]:
         "arg": _arg_index(entry[forms[0]], where),
         "by": str(entry["by"]),
     }
+
+
+# The styles whose engines read an argument written in a keyword form (`{keyword: name}`,
+# `{arg: N, keyword: name}`, design 2026-11-06-reading-decorators §3a) wherever they read a
+# `*_arg` key: each reader goes through `values.argument_slot`.
+_KEYWORD_ARGUMENT_STYLES = ("fluent", "single_call")
+_REFERENCE_KEYS = frozenset({"arg", "keyword"})
+
+
+def _check_argument_references(matches: Any, style: Any, path: Path) -> None:
+    """Every mapping a `*_arg` key under `matches` holds is an argument reference: exactly
+    `{keyword: name}` or `{arg: N, keyword: name}`, a keyword that is an identifier and a
+    position that is a non-negative integer, on a style whose engine reads that form. A
+    mapping in another shape, or on another style, is refused naming the file, since its
+    reader would read it as nothing or as half of what it says."""
+    if isinstance(matches, list):
+        for item in matches:
+            _check_argument_references(item, style, path)
+        return
+    if not isinstance(matches, dict):
+        return
+    for key, value in matches.items():
+        if isinstance(key, str) and key.endswith("_arg") and isinstance(value, dict):
+            keyword, position = value.get("keyword"), value.get("arg", 0)
+            valid = (
+                set(value) <= _REFERENCE_KEYS
+                and isinstance(keyword, str)
+                and keyword.isidentifier()
+                and isinstance(position, int)
+                and not isinstance(position, bool)
+                and position >= 0
+            )
+            if not valid or style not in _KEYWORD_ARGUMENT_STYLES:
+                raise CatalogError(
+                    f"loading catalog {path}: `{key}: {value!r}` — an argument is a position, "
+                    f"or `{{keyword: name}}` / `{{arg: N, keyword: name}}` on a "
+                    f"{' or '.join(_KEYWORD_ARGUMENT_STYLES)} catalog"
+                )
+        _check_argument_references(value, style, path)
 
 
 # D00 §4's `root_kind` members a catalog may route its rows to (design

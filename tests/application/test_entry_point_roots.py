@@ -313,8 +313,9 @@ def test_the_handler_walk_goes_through_a_stated_decorator_into_module_code(tmp_p
 @pytest.mark.pins("values.an-UNSTATED-library-call-hands-back-no-argument")
 def test_a_library_decorator_no_value_model_states_names_no_handler(tmp_path: Path):
     """`click.pass_context` returns a new function (`new_func`), and no value model states it:
-    the walk ends at the library, so no function here is the command's handler and no root is
-    written for it. The command beside it is unaffected."""
+    the walk ends at the library, so no function here is the command's handler. The command is
+    still registered: its row keeps its path with `handler` NULL, and its option, which no
+    function can be linked to, gives no parameter row. The command beside it is unaffected."""
     workspace = _resolved(
         tmp_path,
         {
@@ -324,14 +325,18 @@ def test_a_library_decorator_no_value_model_states_names_no_handler(tmp_path: Pa
                 "def cli():\n    pass\n"
                 "@cli.command('ctx')\n"
                 "@click.pass_context\n"
-                "def with_context(ctx):\n    pass\n"
+                "@click.option('--n')\n"
+                "def with_context(ctx, n):\n    pass\n"
                 "@cli.command('plain')\n"
                 "def plain():\n    pass\n"
             )
         },
     )
 
-    assert _roots(workspace) == [(_handler("plain"), "shop plain")]
+    assert _roots(workspace) == [(_handler("plain"), "shop plain"), (None, "shop ctx")]
+    assert _params(workspace) == []
+    # A row with no handler starts no trace.
+    assert [t.root.identities[0].path for t in traces_of(workspace)] == ["shop plain"]
 
 
 def test_a_call_through_an_unstated_library_decorator_names_it(tmp_path: Path):
@@ -360,6 +365,51 @@ def test_a_call_through_an_unstated_library_decorator_names_it(tmp_path: Path):
             "returns, which no value model states"
         ),
     )
+
+
+@pytest.mark.parametrize(
+    ("body", "called"),
+    [
+        # dispatch's `process_signals`: a `with` over a `contextmanager` helper of its own.
+        (
+            (
+                "    from contextlib import contextmanager\n"
+                "    @contextmanager\n"
+                "    def session_scope(e):\n        yield e\n"
+                "    with session_scope(1) as s:\n        helper(s)\n"
+            ),
+            "helper",
+        ),
+        # A `partial` called in the body: a `__call__` chain of the body's own.
+        ("    f = functools.partial(print, 1)\n    f()\n    helper(1)\n", "helper"),
+        # A function handed to a call in the body is that call's, never the command's.
+        ("    run = functools.partial(print)\n    run(helper)\n", None),
+    ],
+)
+def test_the_handler_is_the_function_the_registration_receives(
+    tmp_path: Path, body: str, called: str | None
+):
+    """A command with no decorator between hands its own function to the registration, and
+    that function is the handler, whatever its body calls: a call of a value inside the body
+    is a chain of its own and never stands for the command (review of task 9b)."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "cli.py": (
+                "import click, functools\n"
+                "@click.group()\n"
+                "def cli():\n    pass\n"
+                "def helper(x=None):\n    pass\n"
+                "@cli.command('go')\n"
+                "def go():\n" + body
+            )
+        },
+    )
+
+    assert _roots(workspace) == [(_handler("go"), "shop go")]
+    if called is not None:
+        (trace,) = [t for t in traces_of(workspace) if t.root.kind is RootKind.ENTRY_POINT]
+        assert _handler(called) in {_bare(step.callee) for step in trace.steps}
 
 
 def test_with_no_entry_point_the_outermost_word_is_the_program_hole(tmp_path: Path):
@@ -422,8 +472,11 @@ def _handler(name: str) -> str:
     return f"app/cli#{name}"
 
 
-def _bare(symbol: object) -> str:
-    """A method symbol without its module prefix and its signature hash: `app/cli#name`."""
+def _bare(symbol: object) -> str | None:
+    """A method symbol without its module prefix and its signature hash: `app/cli#name`;
+    None for none."""
+    if symbol is None:
+        return None
     return re.sub(r"\(sig_[0-9a-f]+\)\.$", "", str(symbol).removeprefix(_PREFIX))
 
 
@@ -503,7 +556,7 @@ _MALFORMED = (
             "  router_type: [a.Group]\n  mount:\n    - { owner: a.Group, method: group,"
             " router_arg: { keyword: 3 }, prefix_arg: 0 }\n"
         ),
-        "must name its `router_arg`",
+        "an argument is a position",
     ),
     (
         (
@@ -524,7 +577,7 @@ _MALFORMED = (
             "  request_params:\n    - { owner: a.b, method: option, kind: option,"
             " name_arg: { key: x }, requirement: optional }\n"
         ),
-        "`name_arg` is a position",
+        "an argument is a position",
     ),
     (
         (
@@ -581,3 +634,66 @@ def test_an_endpoint_catalog_refuses_path_fallback(tmp_path: Path):
             YamlCatalogSource(tmp_path),
             PythonScanner().capabilities(),
         )
+
+
+_SINGLE_CALL = (
+    "id: x\nstyle: single_call\nprotocol: http\ndirection: outbound\nmatches:\n"
+    "  owner: app.lib\n"
+    "  methods:\n"
+    "    - { name: fetch, http_method: GET, url_arg: {arg: 0, keyword: url} }\n"
+)
+
+
+def test_a_single_call_row_reads_its_address_by_keyword(tmp_path: Path):
+    """`url_arg: {arg: 0, keyword: url}` on a `single_call` row reads the address written as
+    position 0 or as `url=`, written after another keyword; each is a module constant, so the
+    value walk reads it at the slot the reference names."""
+    (tmp_path / "x.yml").write_text(_SINGLE_CALL, encoding="utf-8")
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    resolve(
+        workspace,
+        _facts(
+            tmp_path,
+            {
+                "lib.py": "def fetch(url=None, timeout=None):\n    return url\n",
+                "cli.py": (
+                    "from app.lib import fetch\n"
+                    "STOCK = 'http://inventory/stock'\n"
+                    "ITEMS = 'http://inventory/items'\n"
+                    "def by_name():\n    fetch(timeout=3, url=STOCK)\n"
+                    "def by_place():\n    fetch(ITEMS, timeout=3)\n"
+                ),
+            },
+            {},
+        ),
+        YamlCatalogSource(tmp_path),
+        PythonScanner().capabilities(),
+    )
+
+    assert sorted((row["peer"], row["path"]) for row in workspace.query("endpoints")) == [
+        ("inventory", "/items"),
+        ("inventory", "/stock"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("catalog", "refused"),
+    [
+        # A mapping in another shape on a style that reads the keyword form.
+        (_SINGLE_CALL.replace("{arg: 0, keyword: url}", "{arg: 0, name: url}"), "_arg"),
+        # A keyword form on a style whose readers take a position only.
+        (
+            (
+                "id: x\nstyle: combinator\nprotocol: http\ndirection: inbound\nmatches:\n"
+                "  routes:\n    - { owner: a.B, method: get, path_arg: {keyword: path} }\n"
+            ),
+            "on a fluent or single_call catalog",
+        ),
+    ],
+)
+def test_the_loader_refuses_a_mapping_argument_it_cannot_read(
+    tmp_path: Path, catalog: str, refused: str
+):
+    (tmp_path / "x.yml").write_text(catalog, encoding="utf-8")
+    with pytest.raises(CatalogError, match=refused):
+        YamlCatalogSource(tmp_path).load()

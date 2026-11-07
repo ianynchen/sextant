@@ -62,7 +62,13 @@ from sextant.application.resolve.shapes.rooting import (
     catalog_symbols,
     names_a_type,
 )
-from sextant.application.resolve.values import ValueIndex, cached_value_index, resolve_site
+from sextant.application.resolve.values import (
+    UNPACKED_SLOT,
+    ValueIndex,
+    argument_slot,
+    cached_value_index,
+    resolve_site,
+)
 from sextant.domain.closed_sets import Direction, Resolution
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import Redactor
@@ -724,7 +730,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # position, so the slot is always there; narrowed rather than cast so the
             # guarantee stays checkable if that validator ever changes.
             declared_slot = method.get("url_arg", method.get("channel_arg"))
-            channel_slot: int | str = declared_slot if isinstance(declared_slot, int | str) else 0
+            # The written argument the catalog's reference names (`argument_slot`), which is
+            # what the walk's slots are keyed by: a position counts positional arguments.
+            channel_slot = _written_slot(site, declared_slot)
             if literal[2] == "resolved" or not method["channel_via"]:
                 destinations = [literal]
             elif not _producer_conforms(url_argument, method, facts.caller_call_sites, catalog):
@@ -743,7 +751,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     )
                 destinations = list(
                     dict.fromkeys(
-                        channel_of_answer(binding.slots.get(channel_slot))
+                        channel_of_answer(
+                            None if channel_slot is None else binding.slots.get(channel_slot)
+                        )
                         for binding in resolve_site(workspace, site, values, catalog.value_model)
                     )
                 ) or [(None, None, "unresolved")]
@@ -812,9 +822,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # configuration expression, `url_argument` is a `string` here and neither this
             # arm nor the concat one is reached.
             declared_url = method.get("url_arg", method.get("channel_arg"))
-            url_slot: int | str | None = (
-                declared_url if isinstance(declared_url, int | str) else None
-            )
+            url_slot = _written_slot(site, declared_url)
             assembled_kinds = (_CONCAT, _FIELD)
             if (
                 url_slot is not None
@@ -851,9 +859,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 # **Whether either slot the row reads is one of several branches** (ruling 7):
                 # a `narrowed` verb or path makes the row `narrowed`, decided per binding
                 # because `with_authority` below re-derives the resolution from the text.
-                verb_slot: int | None = (
-                    method_slot if verb is None and isinstance(method_slot, int) else None
-                )
+                verb_slot = None if verb is not None else _written_slot(site, method_slot)
                 walked = list(
                     dict.fromkeys(
                         (
@@ -1996,6 +2002,17 @@ def _conforms(got: str, want: str, conformance: list[dict[str, Any]]) -> bool:
     return False
 
 
+def _written_slot(site: Mapping[str, Any], reference: Any) -> int | None:
+    """The written argument a catalog's `*_arg` reference names at `site`, the index the walk's
+    slots are keyed by (`values.argument_slot`: a position counts positional arguments, a
+    keyword form is read by name), or None where the call writes none or an unpacked value may
+    be it."""
+    if reference is None:
+        return None
+    slot = argument_slot(site["arguments"] or [], reference)
+    return None if slot is None or slot == UNPACKED_SLOT else slot
+
+
 def _producer_conforms(
     argument: dict[str, Any] | None,
     method: dict[str, Any],
@@ -2024,6 +2041,10 @@ def _producer_conforms(
     if source is None or not descriptor or slot is None:
         return True
     declared = descriptor_parameter_types(str(descriptor))
+    # `slot` is compared with the DESCRIPTOR's parameter positions, not with a written
+    # argument: a positional reference is that position on the JVM, whose arguments are
+    # positional slot for slot. A keyword form names no position in a descriptor, so it
+    # refuses nothing here.
     if not isinstance(slot, int) or slot >= len(declared):
         return True
     producer = next(

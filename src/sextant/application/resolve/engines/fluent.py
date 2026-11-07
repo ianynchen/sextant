@@ -570,8 +570,9 @@ def _run_entry_points(
     - **The handler** is the terminal's `handler` capture, followed back with the producer
       walk as a call of it would be (`functions`): through each decorator a value model
       states hands the function back (`result_returns`), into module code, and to the
-      function. A path that ends anywhere else (a library decorator no value model states)
-      names no handler and gives no row: there is no code here to start a trace at.
+      function. Where no path names a function (a library decorator no value model states),
+      the command's row keeps its path with `handler` NULL: it is registered, and which code
+      runs is not read. It gets no parameter rows.
     - **The words**: the root's `url` capture, else the handler's name respelled by
       `path_fallback`; behind each group mount's word (`router_arg: chain_result`), joined
       by one space; the outermost router's word is the program's name (`MountReader`).
@@ -593,6 +594,14 @@ def _run_entry_points(
         programs=programs_of(workspace, index),
     )
     params = request_param_calls(catalog)
+    # The registrations: a chain end is a command only where its root is one of these. The
+    # walk also hands back ends with no declared root (a `__call__` walked back to nothing),
+    # which register nothing.
+    registrations = {
+        (owner, str(root["method"]))
+        for root in matches["roots"]
+        for owner in catalog_symbols(root.get("owner"), f"{where}: roots[].owner")
+    }
     ends = list(chain_ends(workspace, catalog, PUBLISHED_PARTS))
     mounts: MountReader | None = None
     mounted: dict[tuple[str, int], Mount] = {}
@@ -600,12 +609,14 @@ def _run_entry_points(
         mounts, mounted, _ = _mounts(
             ends, mount_rules, index, workspace, refuses_unrooted, catalog, entry_points
         )
-    roots: dict[tuple[str, str | None], None] = {}
+    roots: dict[tuple[str | None, str | None], None] = {}
     metadata: list[dict[str, Any]] = []
     for end in ends:
         terminal = end.terminal
         if terminal is None or _site_key(end.root) in mounted or _site_key(terminal) in mounted:
             # A group's chain makes the router its commands are mounted on: no row of its own.
+            continue
+        if (end.root.get("owner"), end.root.get("name")) not in registrations:
             continue
         captured = end.captures.get("handler")
         at = captured.get(_CAPTURED_AT) if isinstance(captured, dict) else None
@@ -613,6 +624,14 @@ def _run_entry_points(
         if site is None or at is None:
             continue
         handlers = _entry_handlers(index, site, int(at[2]), entry_points.method_symbols)
+        if not handlers:
+            # The walk ended at a library decorator no value model states (`pass_context`,
+            # `with_appcontext`): the command is registered, and which function runs is not
+            # read. Its row keeps its path with no handler, and no parameter row, since no
+            # decorator can be linked to a function nothing names.
+            for path in _entry_paths(end, None, mounts, entry_points, workspace, index):
+                roots.setdefault((None, path))
+            continue
         decorators = decorators_passed(index, site, int(at[2]))
         for handler in handlers:
             for path in _entry_paths(end, handler, mounts, entry_points, workspace, index):
@@ -650,7 +669,9 @@ def _run_entry_points(
             "method_kind": None,
             "path_kind": None,
         }
-        for handler, path in sorted(roots, key=lambda key: (key[0], key[1] or ""))
+        for handler, path in sorted(
+            roots, key=lambda key: (key[0] is not None, key[0] or "", key[1] or "")
+        )
     ]
     if rows:
         workspace.derive("roots_insert", rows=rows)
@@ -675,7 +696,7 @@ def _entry_handlers(
 
 def _entry_paths(
     end: ChainEnd,
-    handler: str,
+    handler: str | None,
     mounts: MountReader | None,
     entry_points: _EntryPoints,
     workspace: Workspace,
@@ -711,7 +732,7 @@ def _entry_paths(
 
 def _own_words(
     end: ChainEnd,
-    handler: str,
+    handler: str | None,
     entry_points: _EntryPoints,
     workspace: Workspace,
     index: ValueIndex,
@@ -722,7 +743,8 @@ def _own_words(
     url = end.captures.get("url")
     if url is None:
         fallback = entry_points.fallback_of(end.root)
-        if fallback is None:
+        # A word from the handler's name needs a handler: an unread one names no word.
+        if fallback is None or handler is None:
             return (None,)
         return (fallback_word(fallback, method_name(bare_descriptor(handler))),)
     at = url.get(_CAPTURED_AT) if isinstance(url, dict) else None

@@ -1280,8 +1280,9 @@ every `scheduled_work` row's handler.
 declaring `root_kind: entry_point` ([D02](D02-catalog-schema.md) §2) has its engine write one
 row per command path that reaches a handler — `protocol`, `method` and both markers NULL,
 `path` the command's words joined by one space, the outermost the program's name
-(`sextant module analyze`) — and `record_roots` keeps those rows beside the two kinds it
-derives. The table is emptied once per resolve by the pipeline, before any engine runs
+(`sextant module analyze`), and `handler` NULL where the command's function is behind a
+library decorator no value model states (such a row starts no trace) — and `record_roots`
+keeps those rows beside the two kinds it derives. The table is emptied once per resolve by the pipeline, before any engine runs
 (design 2026-11-06-reading-decorators §5; `docs/open-issues.md` OI-22, closed).
 
 **One ROOT per handler and kind; one ROW per address that reaches it.** A method serving

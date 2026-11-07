@@ -1892,8 +1892,10 @@ the call's POSITIONAL arguments only: the facts write positional arguments first
 ones after (ruling R27), so `arg1` of `option("--dry-run", is_flag=True)` is no argument, never
 `is_flag`'s value, and a `*` argument at or before the position leaves it unread. The keyword
 forms `{keyword: name}` and `{arg: N, keyword: name}` (design 2026-11-06-reading-decorators
-§3a, approved) are read by the `fluent` captures, the `mount` block and a `request_params` entry
-naming a call (§2's `fluent`, §2k); a `single_call` row's `*_arg` keys take a position.
+§3a, approved) are read by the `fluent` captures, the `mount` block, a `request_params` entry
+naming a call (§2's `fluent`, §2k), and a `single_call` row's `*_arg` keys, each through the one
+reader `values.argument_slot`. The loader refuses a mapping under any `*_arg` key in another
+shape, and on any other style, whose readers take a position only.
 
 ```yaml
 style: single_call
@@ -2379,8 +2381,10 @@ beside `style`): the catalog's chains are a PROGRAM's commands, not endpoints. I
 - one `roots` row per command path that reaches a handler, `root_kind = entry_point`,
   `protocol`, `method` and both markers NULL. The **handler** is the terminal's `handler`
   capture followed back as a call of it would be: through each decorator a `returns_argument`
-  entry states (§1f), into module code, to the function. A path that ends at a library
-  decorator no value model states names no function, and the command gets no row;
+  entry states (§1f), into module code, to the function. It is the function the terminal
+  itself receives: a chain inside that function's body is never folded into it. Where no
+  path names a function (a library decorator no value model states), the command's row
+  keeps its path with `handler` NULL, starts no trace, and gets no parameter rows;
 - the **words**, joined by one space as a command is typed (a rule, not a key; such a catalog
   declares no `path_join`): the root's `url` capture, else `path_fallback` over the handler's
   name, behind each group mount's word. **The outermost word is the program's name**: the name
