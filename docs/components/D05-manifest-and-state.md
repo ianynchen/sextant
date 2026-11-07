@@ -194,7 +194,9 @@ are gone:
   identity/attribute/evidence split ([D01](D01-graph-schema.md) §3, "The boundary
   vocabulary") the entries a reader derives are named in. `export` copies it into the
   manifest's `producer`.
-- **`catalog_hash`** — the identity of the framework knowledge this run used. Until now only
+- **`catalog_hash`** — the identity of the framework knowledge this run used: every file under
+  the catalogs folder, by its path and bytes (OI-325 fix round 1; before it, the catalogs and
+  five model folders, missing `server-models/` and `type-models/`). Until now only
   the exporter computed it, from the catalogs installed at export time, so a workspace had no
   hash of its own to compare, and hashing the catalogs installed NOW would describe the
   diff's machine and not the analysis. `analyze` writes it where the catalogs are loaded;

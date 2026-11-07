@@ -169,7 +169,9 @@ that jar never emitted.
 **`sextant_version` and `fact_schema_version` are here because a result can change when the
 tool changes, even when the code does not.** A fixed bug in extraction produces different
 facts from an identical class file. Every field in this table is part of the cache key; see
-[D01](D01-graph-schema.md) §7 for what each one invalidates.
+[D01](D01-graph-schema.md) §7 for what each one invalidates. The key also holds what a
+document's facts read that no field here names — Sextant's code, which other files exist, the
+libraries — kept by the workspace and never on the document (D01 §7 "Reuse", OI-325).
 
 ---
 

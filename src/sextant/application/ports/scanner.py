@@ -9,6 +9,24 @@ from sextant.domain.ignorefile import IgnoreRules
 
 
 @dataclass(frozen=True)
+class ReuseRecord:
+    """What a scan keeps about one document it wrote, so that a later scan into the same
+    folder can keep the document instead of reading its source again (OI-325; D00 §2: "the
+    source file is the unit of incremental reuse"). Stored by the workspace between runs and
+    handed back unread: what it means is the backend's.
+
+    `target` is the fact file, relative to the scan's `out_dir`. `key` is the backend's
+    digest of every input the document's facts were read from, the source file's bytes and
+    the document record's stamps among them: a document is kept only where a fresh read
+    would write the same bytes. `detail` is the backend's own text: what it needs to check
+    the key again, and what the document added to the scan's report."""
+
+    target: str
+    key: str
+    detail: str
+
+
+@dataclass(frozen=True)
 class ScanRequest:
     module_id: str
     coordinates: str
@@ -44,6 +62,10 @@ class ScanRequest:
     # library, and a library re-export is followed into any distribution it holds. None
     # for a JVM module and wherever no environment was found.
     environment: Path | None = None
+    # What the previous scan into `out_dir` recorded about each document it wrote or kept
+    # (`ScanReport.records`). Empty reads every file, as a scan always did; a backend that
+    # keeps nothing ignores it.
+    previous: tuple[ReuseRecord, ...] = ()
 
 
 class ScanError(RuntimeError):
@@ -78,6 +100,11 @@ class ScanReport:
     # project keeps finding.
     capabilities: tuple[str, ...] = ()
     uncovered: tuple[str, ...] = ()
+    # One record per document this scan wrote or kept, for the next scan into the same
+    # folder (`ScanRequest.previous`). Empty for a backend that keeps nothing, and then the
+    # next scan reads every file. `reused` is how many of `documents` were kept.
+    records: tuple[ReuseRecord, ...] = ()
+    reused: int = 0
 
 
 @dataclass(frozen=True)

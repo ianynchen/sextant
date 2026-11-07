@@ -1642,6 +1642,59 @@ exist yet are the same bytes, so `## Traces` on a 1.0.0 workspace would have sai
 The same stamp travels in the bundle ([D06](D06-bundle-format.md)) so that
 [M05](M05-sync.md) can refuse to assemble a system from incompatible parts.
 
+### Reuse: what a re-run keeps (OI-325, 2026-11-07)
+
+`module analyze` into a workspace it analysed before keeps what did not change. Two keys,
+each over EVERY input of the step it skips, so a kept result is byte for byte what the step
+would write (`tests/api/test_analyze_reuse.py` compares a re-run with a fresh analysis for
+an edited, an added, a deleted and an ignored file, a file another imports, a library
+version and both versions).
+
+**A document.** The document fields above are the key, as D00 §2 says, and three inputs that
+no document field names are added to it, because a fact can depend on them:
+- **Sextant's own code**: a digest of every file of the installed package
+  (`resources.code_identity`) — the `.py` files, the derivations' `.sql`, the catalogs, the
+  extractor jar — except typeshed, which the libraries' key holds by its commit, and
+  `__pycache__`. `sextant_version` moves on a release; the code of a development checkout
+  changes many times between two releases. Every file rather than a list of suffixes: the
+  first version hashed `.py` alone, and an edited `insert_endpoints.sql` kept stale endpoints
+  (fix round 1). About 20 ms, once per process.
+- **Which other files exist.** A Python import is bound by path, so `from a import b` is the
+  module `a/b` only where that file exists: adding one file changed 264 other files' facts
+  on polar. Each document records every question its file asked of the module index and is
+  kept only where every answer is the same. The other files' CONTENT is never read, and
+  editing a file 331 others import changed no fact but its own (measured).
+- **The libraries and the Python**: the typeshed commit, the environment's Python, the
+  declared distributions, every installed distribution's `*.dist-info` folder and its
+  `RECORD` bytes (which list each installed file with its hash), and the running Python.
+  A file in `site-packages` edited by hand, without its `RECORD` changing, is NOT seen: an
+  installer rewrites `RECORD` and a hand edit does not. Analyse into a new workspace after
+  editing an installed library by hand.
+
+The record of each document is a workspace table, `scan_reuse`, that the scanner fills and
+reads through the scan port (`ReuseRecord`) and no other command reads; it is emptied before
+a scan runs, so a scan that stops part-way leaves none. The Python scanner is the first to
+keep documents. The JVM extractor keeps none: it re-reads every class file on every run
+(`discard_scanned_facts` deletes the module's facts first), so its records are empty and its
+behaviour is what it was. It would need the same three inputs: the extractor jar's identity,
+and for each class the classpath types it read headers or signatures of.
+
+**The resolve.** Its key is the fact files' bytes, the catalogs (`catalog_hash`: every file
+under the catalogs folder, by path and bytes, so the model folders beside the catalogs and a
+folder added later are in it; it named five folders by hand and missed `server-models/` and
+`type-models/` until fix round 1), Sextant's
+code, the three versions, the scanner's capabilities and `--shadow`: everything a resolve
+reads, since it reads only the workspace, the catalogs and its arguments. Where the
+workspace's last finished resolve had the same key, the resolve is not run and its tables
+are the answer; the part of its report no table holds is kept beside the key in
+`resolve_stamp`. The stamp is removed before a resolve runs and written when it finishes,
+so a resolve that stops part-way leaves none. The rule is language-blind: a JVM module whose
+facts come out byte for byte the same skips its resolve too.
+
+Neither table is exported (`schema_objects` leaves them out): they say how this workspace
+was built on this machine, not what the module is. Neither changes `graph_schema_version`,
+because no table a reader reads changed.
+
 ---
 
 ## 8. Open decisions

@@ -52,6 +52,19 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A re-run keeps what did not change** (OI-325; D01 §7 "Reuse"). `module analyze` into a
+  workspace it analysed before keeps each Python file's facts whose inputs are all the same —
+  the file's bytes, which other files exist, the libraries installed, the Python, Sextant's
+  code and versions — and reads only the others; and where no fact file, catalog, flag or
+  version changed, it keeps the previous resolve's tables instead of resolving again. A kept
+  result is byte for byte what a fresh analysis writes (`tests/api/test_analyze_reuse.py`).
+  polar `server/`: a run with no file changed takes 3.0 s (was 27.6 s), one edited file 16 s.
+  The JVM extractor still reads every class; a JVM module whose facts come out the same skips
+  its resolve. Two workspace tables hold the records, `scan_reuse` and `resolve_stamp`; neither
+  is exported, and the scan line says how many files were unchanged.
+  `catalog_hash` now covers every file under the catalogs folder (it missed `server-models/`
+  and `type-models/`), so every workspace's recorded value changes once; `module diff` across
+  an older workspace then reports a producer change, as for any catalog change.
 - **Sextant reads itself, end to end** (OI-208 plan 1 task 10, spec
   `2026-11-06-python-reader-design.md` §7 item 1). `tests/e2e/test_sextant_reads_itself.py`
   analyses the repository root once and checks, against lists written by hand from

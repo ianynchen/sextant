@@ -100,6 +100,11 @@ class ModuleIndex:
 
     modules: frozenset[str]
     libraries: LibraryNames | None = field(default=None, compare=False)
+    # Every question asked of the index, as (`is_module` or `owns`, path), where the scan
+    # records them: the answers are what one file's facts read from the module's other
+    # files, so a later scan keeps the file's facts only where every answer is the same
+    # (OI-325). None records nothing.
+    asked: set[tuple[str, str]] | None = field(default=None, compare=False, repr=False)
     # Every module path and every folder above one: `owns`' answer, worked out once,
     # because every name of another module asks it (GUIDELINES §8.7).
     _owned: frozenset[str] = field(init=False, repr=False, compare=False)
@@ -113,11 +118,22 @@ class ModuleIndex:
         object.__setattr__(self, "_owned", frozenset(owned))
 
     def is_module(self, path: str) -> bool:
+        if self.asked is not None:
+            self.asked.add(("is_module", path))
         return path in self.modules
 
     def owns(self, path: str) -> bool:
         """Whether `path` or a package above it is in the scanned module."""
+        if self.asked is not None:
+            self.asked.add(("owns", path))
         return path in self._owned
+
+    def answers(self, asked: Iterable[tuple[str, str]]) -> list[bool]:
+        """What this index answers to each question, in order, recording none."""
+        return [
+            path in (self.modules if question == "is_module" else self._owned)
+            for question, path in asked
+        ]
 
 
 def module_path(relative: str) -> tuple[str, bool]:

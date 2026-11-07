@@ -43,6 +43,7 @@ are read.
 
 import ast
 import builtins
+import hashlib
 import posixpath
 import re
 import sys
@@ -215,6 +216,25 @@ class Libraries:
             {f"{library.coordinate} {library.version}" for library in self._installed.values()}
         )
         return "\n".join(lines)
+
+    @property
+    def fingerprint(self) -> str:
+        """Everything a library answer of this scan can be read from, as one digest, for a
+        later scan to compare (OI-325): `identity`'s lines, each declared distribution's
+        folder, and every distribution the environment holds, by its `*.dist-info` folder
+        and the bytes of its `RECORD`, which lists each installed file with its hash. All of
+        them, not only the declared ones: a re-export leads into any installed distribution
+        (`_other_distributions`)."""
+        digest = hashlib.sha256(self.identity.encode())
+        for library in sorted(set(self._installed.values()), key=lambda one: one.coordinate):
+            digest.update(f"\n{library.coordinate} {library.archive}".encode())
+        for info in sorted(self._site.glob("*.dist-info")) if self._site else []:
+            digest.update(f"\n{info.name}\n".encode())
+            try:
+                digest.update((info / "RECORD").read_bytes())
+            except OSError:
+                digest.update(b"no RECORD")
+        return "sha256:" + digest.hexdigest()
 
     # -- the scanner's questions (`imports.LibraryNames`) ------------------------------
 
