@@ -98,6 +98,7 @@ from sextant.ingress.extract.python.imports import (
 from sextant.ingress.extract.python.typing_rules import (
     ANY,
     BUILTINS,
+    SELF,
     TUPLE,
     UNION,
     ClassShape,
@@ -1369,7 +1370,8 @@ class BodyReader:
             return None
         instance = substitute(defining, parameter_mapping(receiver, shape)) or defining
         mapping = parameter_mapping(instance, self._local_classes[defining.symbol])
-        return _a_class(substitute(written, mapping))
+        # `Self` is the receiver's own class (the class the call was made through).
+        return _a_class(substitute(written, {**mapping, SELF: receiver}))
 
     def _declared_field_on(self, receiver: TypeRef, name: str) -> TypeRef | None:
         """The type a class of this file (or a base of this file, by C3) declares for the

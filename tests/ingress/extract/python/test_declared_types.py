@@ -397,3 +397,22 @@ def test_a_bare_qualifier_gives_no_type_and_a_wrapped_one_its_argument(tmp_path:
     assert fields["app/run/Box#limit."] != "typing/Final#"
     assert _owner_of(tree, "app/run#f", "bit_length") == [None]
     assert _owner_of(tree, "app/run#f", "send") == [CLIENT, CLIENT]
+
+
+def test_a_return_written_self_is_kept_as_written(tmp_path: Path):
+    """`def make(cls) -> Self` writes `Self` as its return (D00 §5a), not the defining class."""
+    from sextant.domain.facts import SymbolFact
+
+    tree = _scan(
+        tmp_path,
+        "from typing import Self\nclass Repo:\n"
+        "    @classmethod\n    def make(cls) -> Self:\n        return cls()\n",
+    )
+    (make,) = [
+        fact
+        for _, _, facts in tree
+        for fact in facts
+        if isinstance(fact, SymbolFact) and "#make(" in fact.symbol
+    ]
+    assert make.signature is not None and make.signature.returns is not None
+    assert make.signature.returns.symbol == "Self"

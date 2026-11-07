@@ -216,6 +216,8 @@ _INIT = "<init>"
 _UNION = "typing/Union#"
 _ANY = "typing/Any#"
 _NONE = "builtins/None#"
+# A return written `Self` (D00 §5a): the class the call was made through.
+_SELF = "Self"
 # The name the facts give a call of a value (`f(x)` on a value `f`, D00 §5).
 _CALL = "__call__"
 # `returns_argument`'s three forms (`Catalog.returns_arguments`).
@@ -4320,6 +4322,14 @@ class _Walk:
                 return self._along(stopped, trail, frames)
         reached: list[_Reached] = []
         for ordinal, callee in self._index.returns.get((method, value), ()):
+            row = self._index.sites.get((method, ordinal))
+            selfish = () if row is None else self._self_answers(row, callee, row.get("owner"))
+            if selfish:
+                step = _Step((_RETURN_OF, method, value), f"{callee} returns Self")
+                merged = _combine(trail, (step,))
+                if merged is not None:
+                    reached.extend((merged, answer) for answer in selfish)
+                continue
             for return_ordinal, entry in self._index.returned_values.get(callee, ()):
                 step = _Step((_RETURN_OF, method, value), f"{callee} returns {return_ordinal}")
                 merged = _combine(trail, (step,))
@@ -4626,6 +4636,11 @@ class _Walk:
             bound = {**row, "owner": owner}
             found = False
             for callee in dispatch.candidates(bound):
+                selfish = self._self_answers(row, callee, owner)
+                if selfish:
+                    found = True
+                    reached.extend((path, answer) for answer in selfish)
+                    continue
                 for return_ordinal, entry in self._index.returned_values.get(callee, ()):
                     found = True
                     step = _Step((_RETURN_OF, method, value), f"{callee} returns {return_ordinal}")
@@ -4654,6 +4669,37 @@ class _Walk:
                 unread = dispatch.boundary(owner, str(row["name"]), str(row["descriptor"]))
                 reached.append((path, _unresolved(NOT_READABLE if unread is None else EXTERNAL)))
         return tuple(reached)
+
+    def _self_answers(
+        self, row: Mapping[str, Any], callee: str, owner: object
+    ) -> tuple[Answer, ...]:
+        """For the type reader, what a call of a method declared `-> Self` gives on this
+        path: the class the call was made through, `owner` — exactly, where the walk bound
+        it; where the call is made on the method's own receiver (`self.m()`, `cls.m()`, no
+        receiver in the facts), that class or any subclass, one answer each (ruling R37's
+        list). The body is not read for it: what it builds (`cls()`) is that same class.
+        Empty where the method does not declare `Self`, or nothing named the class."""
+        if not self._declared_types or owner is None:
+            return ()
+        written = self._index.declared_returns.get(bare_descriptor(callee))
+        if written is None or written.get("symbol") != _SELF:
+            return ()
+        if str(row["name"]) != method_name(bare_descriptor(callee)):
+            return ()
+        if f"{owner_of(bare_descriptor(callee))}{row['name']}." in self._index.static_fields:
+            return ()
+        named = str(owner)
+        if (
+            row.get("invoke_kind") == "virtual"
+            and row.get("receiver") is None
+            and row.get("receiver_parameter") is None
+            and row.get("receiver_field") is None
+        ):
+            return tuple(
+                replace(answer, declared=True) if answer.kind == LITERAL else answer
+                for _, answer in self._constructed_through(named, ())
+            )
+        return (Answer(kind=LITERAL, value=named, literal_kind=SYMBOL, declared=True),)
 
     def _typed_returns(
         self,
@@ -5277,12 +5323,13 @@ class _Walk:
         """`written`, declared on `declaring`, as it reads on an `owner`: each type variable
         of `declaring` replaced by what `owner`'s written parents give it (`_mapping`). None
         where two parents give one variable two types: no one answer."""
+        own: dict[str, Mapping[str, Any]] = {_SELF: {"symbol": owner}}
         if declaring is None or declaring == owner:
-            return written
+            return _substituted(written, own)
         mappings = self._mapping(owner)
         if mappings is None:
             return None
-        return _substituted(written, mappings.get(declaring) or {})
+        return _substituted(written, {**(mappings.get(declaring) or {}), **own})
 
     def _mapping(self, owner: str) -> dict[str, dict[str, Mapping[str, Any]]] | None:
         """What each generic ancestor of `owner`'s type parameters are on an `owner`, by

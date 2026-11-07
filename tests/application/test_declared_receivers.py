@@ -291,3 +291,48 @@ def test_a_generic_parent_itself_leaves_its_parameter_unfilled(tmp_path: Path):
     )
     assert not [row for row in _bound(workspace, _site(workspace, _F, "save")) if row["owner"]]
     workspace.close()
+
+
+# -- `Self` (round 1, item 1) ------------------------------------------------------------
+
+_FACTORY = (
+    "from typing import Self\n"
+    "class Repo:\n"
+    "    @classmethod\n    def make(cls) -> Self:\n        return cls()\n"
+    "    def find(self):\n        return 0\n"
+    "    def again(self):\n        return self.make()\n"
+    "class Other(Repo):\n    def find(self):\n        return 1\n"
+)
+
+
+def test_self_is_the_class_the_call_was_made_through(tmp_path: Path):
+    """`UserRepo.make()`, `make` on `Repo` declared `-> Self`: the result is a `UserRepo`,
+    exactly, though `UserRepo` is another file's class the resolver binds."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _FACTORY,
+            "b.py": "from app.a import Repo\nclass UserRepo(Repo):\n"
+            "    def find(self):\n        return 2\n"
+            "def f():\n    UserRepo.make().find()\n",
+        },
+    )
+    site = _site(workspace, _F, "find")
+    assert [(r["owner"], r["evidence"], r["resolution"]) for r in _bound(workspace, site)] == [
+        ("app/b/UserRepo#", "declared", "resolved")
+    ]
+    workspace.close()
+
+
+def test_self_through_the_methods_own_receiver_is_the_class_or_a_subclass(tmp_path: Path):
+    """`self.make()` inside `Repo`: the receiver is a `Repo` or any subclass, one row each."""
+    workspace = _resolved(
+        tmp_path,
+        {"a.py": _FACTORY + "def f(r: Repo):\n    r.again().find()\n"},
+    )
+    site = _site(workspace, "app/a#f(sig_dd69782a).", "find")
+    assert sorted(str(r["owner"]) for r in _bound(workspace, site)) == [
+        "app/a/Other#",
+        "app/a/Repo#",
+    ]
+    workspace.close()

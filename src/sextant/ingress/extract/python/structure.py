@@ -57,6 +57,7 @@ from sextant.ingress.extract.python.imports import (
 from sextant.ingress.extract.python.typing_rules import (
     ANY,
     BUILTINS,
+    SELF,
     UNANNOTATED,
     ClassShape,
     Hierarchy,
@@ -312,7 +313,12 @@ class _Writer(BodyReader):
                 written = (
                     None
                     if node.returns is None or decorated
-                    else own_return_type(node.returns, scope.with_type_parameters(node.type_params))
+                    else own_return_type(
+                        node.returns,
+                        replace(
+                            scope, self_type=SELF if scope.self_type else None
+                        ).with_type_parameters(node.type_params),
+                    )
                 )
                 if descriptor in found and found[descriptor] != written:
                     written = None
@@ -653,7 +659,10 @@ class _Writer(BodyReader):
         returned = (
             node.returns if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) else None
         )
-        returns = written_type(returned, types) if returned is not None else None
+        # `Self` in a method's return is kept as written (D00 §5a): it is the class the call
+        # was made through, which the resolver reads per path, never the defining class.
+        read_as = replace(types, self_type=SELF) if types.self_type is not None else types
+        returns = written_type(returned, read_as) if returned is not None else None
         return Signature(parameters=parameters, returns=returns)
 
     def _symbol(
