@@ -356,6 +356,40 @@ comprehensions included:
 - every parameter of a signature carries its `kind` (`positional_only`, `positional`,
   `var_positional`, `keyword_only`, `var_keyword`, D00 §5a).
 
+**Types the module's own code declares** (OI-324 part 2):
+
+- **A declared return** (`def load() -> list[User]`) of a function or method of this file —
+  a module-level function, or the method a class of this file defines for the receiver by C3,
+  its type variables filled by the receiver's type arguments — types what is read OFF the
+  call's result through a library's signature: an element (`for u in load()`), a tuple part,
+  a subscript, an attribute declared on a class of this file. The call made directly on the
+  result keeps its owner to the resolver, which follows the body's returns first and takes
+  the declaration where they give no type (M04). A decorated name's declaration is not read:
+  its call is the decorators' result. `type[X]` declared is the class object (R37).
+- **A container literal is its class**, with its elements' types where every one is known:
+  `[u, u]` is `list[User]`, `{"a": c}` `dict[str, Client]`, `{u}` `set[User]`, `(u, c)`
+  `tuple[User, Client]` by position; a list, set or dict comprehension the same, from what
+  each pass adds. Several element types are their union, never one of them; an empty literal,
+  a starred element, a `**` mapping or an element of no known type gives the class alone. A
+  local holding a literal (or a comprehension) is read once as written: after that it is its
+  class alone, since the code it was handed to may have written to it. Writes into it
+  (`.append(x)`, `d[k] = v`) are not followed. The facts still read `array` or `unresolved`.
+- **An attribute declared in a class body** (`client: HttpClient`, PEP 526, any class: a
+  dataclass's, a `NamedTuple`'s, a `TypedDict`'s, a pydantic model's) is the type of
+  `obj.client` where `obj`'s class is one of this file (by C3): no fact names such a read, so
+  the type is the owner of a call on it. `self.client` keeps its owner to the resolver, which
+  reads the object's writes first (ruling R33); what is read off it is typed from the
+  declaration.
+- **`isinstance(x, C)` narrows a local** inside the body of its `if`, and `not isinstance`
+  inside the `else`; `a and b` narrows each name it tests; a tuple of classes is their union.
+  Past the `if`, the narrowing holds only where its body is the one path reaching the join
+  (the other returned, raised, broke or continued: `if not isinstance(x, C): raise`). A write
+  to the name ends it. The narrowed type wins over the name's annotation. `assert
+  isinstance(...)` narrows nothing: `python -O` drops it. The value keeps every field.
+- **A class's written parents keep their type arguments** in `supertype` and
+  `generic_interfaces`, and a `Generic[...]` class writes its `type_parameters` (D00 §5a),
+  for the resolver to map a generic class's parameters through a subclass in another file.
+
 A nested function is a method of the same owner named `outer$inner`; a `lambda` is
 `lambda$<method>$<n>`, numbered per method, with `static` for a module or class body and
 `new` for `__init__`; a class inside a function is `outer$Local`. A nested function or a
@@ -451,7 +485,8 @@ Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path
   them on to its own (`class Users(list[User])` is a list of `User`; `dict_items[K, V]`
   is `ItemsView[K, V]`, which defines `__iter__`). The method is found in the receiver's
   class or its bases by C3 order. A method a class of this file defines is a body: the
-  resolver follows it, and its signature is not read here. `Self` is the receiver's own
+  resolver follows it, and its declared return types only what is read off its result
+  (above). `Self` is the receiver's own
   type, a subclass's where the receiver is one. A function's own type variable is the
   type of the argument whose parameter writes it, directly or through a class of the
   argument's lookup order (`sorted(Iterable[T]) -> list[T]` on a `list[User]`); a

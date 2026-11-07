@@ -199,6 +199,29 @@ A receiver that is a parameter whose written type is a union (`Session | Client`
 member, one row each, `narrowed`; a `None` member is left out and the detail says so, and a
 union holding the unknown type or the root type is no closed list.
 
+**What the code declares answers where what it runs does not** (OI-324 part 2, the type
+reader `producer_paths(..., declared_types=True)`, which only receiver binding uses). A
+call's result is what its callee's body returns, path by path, first; a return path the body
+answers with no type, and a method with no body (a `Protocol`'s, an abstract one), answer
+with the method's declared return (`signature.returns`): the one the path's body declares,
+else the one the method the call names declares on the receiver's class (its lookup order's
+first). A read of an attribute takes its writes first (ruling R33's namespace); a write the
+walk reads no type of, a write by code not scanned, and no write at all (a dataclass's
+generated `__init__`) take the declarations of that attribute on every type of the namespace
+(`client: HttpClient`, PEP 526). Each class of a declared union is one row, `narrowed`; such a
+row's `evidence` is `declared`. A declared type answers only where it names a class the
+workspace knows (a class of the module or a type header): `Any`, the root type, a type
+variable left unfilled, an alias another file assigns or a re-export path is no answer. A
+type variable of the class that declares the method is filled through the receiver's class:
+its written parents' type arguments (`supertype`, `generic_interfaces`) map each generic
+ancestor's `type_parameters`, up every parent (`_Walk._mapping`); two parents giving one
+class two different arguments fill nothing. Three things a declaration does not settle are
+not read from one: a call syntax makes (`__call__`, `__getitem__`, `__iter__`, `__next__`,
+`__aiter__`, `__anext__`) on a declared value, since the facts write `type[X]` as `X` and a
+class and an instance differ there (ruling R37) — `not_readable`, with a detail; the call of a
+decorated name, which is its decorators' result; and a function reached through a `__call__`
+on a value, whose result is the wrapper's.
+
 **Arguments are bound by name** (ruling R2, user ruling A) where the module's lookup rule is
 `c3`, by Python's calling rule over each parameter's `kind` (D00 §5a): positionals fill the
 positional parameters in order and the rest go to `*args`; a keyword fills the positional or

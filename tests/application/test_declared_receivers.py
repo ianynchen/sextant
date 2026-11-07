@@ -8,7 +8,7 @@ small tree with the real scanner and runs the real pipeline (`test_receiver_bind
 
 from pathlib import Path
 
-from tests.application.test_receiver_binding import _PREFIX, _bound, _edges, _resolved, _site
+from test_receiver_binding import _PREFIX, _bound, _edges, _resolved, _site
 
 _USER = "app/a/User#"
 _MODELS = (

@@ -768,7 +768,21 @@ each. **A Python class's parents** are its written bases in order, the first as 
 the rest as `interfaces`, up to the first base the file cannot name as a class (a value such as
 `Base = declarative_base()`, or a call); nothing after that base is written, so no later base
 takes its place. The document is then `partial`, and `partial_reason` names the class and the
-base, so "parents not read" is never mistaken for "no parents". The class itself carries `parents_unread` (§5 table): method lookup treats such a class as "parents not read" — its lookup ends with `external` — and never as "no parents". **Evidence:** every type a Python document states is written in source, so it is
+base, so "parents not read" is never mistaken for "no parents". **A written parent with type
+arguments keeps them in the JVM's own fields** (OI-324 part 2, 2026-11-07): the first
+parent's `RepositoryBase[Product]` is the class's `supertype`, and each later parent that has
+type arguments is one entry of `generic_interfaces`, in written order; a parent without
+arguments has no entry, the "nothing generic, nothing captured" rule. A class that declares
+its type parameters by `Generic[...]` or `Protocol[...]`, or by the type variables of its
+written bases (the typing specification's order), writes them in `type_parameters` by name,
+as a PEP 695 class does; a variable made by `TypeVar(...)` elsewhere has a bound this file
+does not read, so its `bounds` are empty. **A method's declared return type is
+`signature.returns`, and a class-level annotation's (`client: HttpClient`, PEP 526) is its
+field's `signature.returns`** — both written since Task 4, as a JVM method's return type is
+in its descriptor and signature. No field was added for them (approved in principle,
+2026-11-07; the smallest form is the one that already exists), so the fact schema version did
+not move. `PY_SIGNATURE` (`(*)`) stays the descriptor of every Python method: it names the
+method, it never carried a type. The class itself carries `parents_unread` (§5 table): method lookup treats such a class as "parents not read" — its lookup ends with `external` — and never as "no parents". **Evidence:** every type a Python document states is written in source, so it is
 `declared`, the word §5d gives a source origin. The document says so: `language` is the
 source language and `class_major` is 0. No reference carries an evidence field of its own.
 

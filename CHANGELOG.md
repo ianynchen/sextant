@@ -52,6 +52,24 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Python: the types the module's own code declares** (OI-324, second part; M03, M04).
+  A function's declared return (`def load() -> list[User]`) answers, in the resolver, where
+  the body's returns give no type, and for a method with no body (a `Protocol`'s); in the
+  scanner it types what is read off the result (elements, parts). A container literal is its
+  class with its elements' types (`[u, u]` is `list[User]`, mixed elements a union, never one
+  of them). A class-level annotation (`client: HttpClient`, PEP 526: dataclass, `NamedTuple`,
+  `TypedDict`, attrs and pydantic fields alike, no framework named) is the attribute's type
+  where no write says more, over the R33 namespace. `isinstance(x, C)` narrows a local in its
+  branch and after an early exit on the negated test. A generic class's type parameters are
+  filled through a subclass's written parents in another file (`ProductRepository(
+  RepositoryBase[Product])`). **No fact field was added:** declared returns and annotations
+  were already `signature.returns`; a Python class now also writes the JVM's `supertype`,
+  `generic_interfaces` and (for `Generic[...]`) `type_parameters`; `bound_receivers.evidence`
+  is `declared` on a row a declaration answered. A declared type never binds a call syntax
+  makes (`__call__`, `__getitem__`, `__iter__`, ...): the facts write `type[X]` as `X`.
+  **Measured:** container-method sites typed 254 → 1,012 of 2,558 (Sextant) and 117 → 664 of
+  2,261 (polar); scanner-owned 24,598 → 27,974 and 82,541 → 85,435; bound 354 → 629 and
+  10,177 → 10,534; `not_readable` 7,264 → 4,647 and 15,232 → 12,267.
 - **Python: a type variable in a library return takes the type that fills it, and a `for`
   loop is the iteration it is** (OI-324, first part; M03 "Libraries"). `list[User].pop()` is a
   `User`, `dict[str, Client].get(k)` a `Client` (`X | None` is `X`, as `Optional[X]` is), a class

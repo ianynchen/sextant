@@ -150,7 +150,10 @@ rows, none picked.
   `resolve/receiver_binding.py`) is the owner such a call was bound to, one row per PATH the
   value walk reached its receiver by: `caller`, `ordinal`, `path_id` (the path's crossings,
   outermost first, joined by ` > `), `owner` (the type, NULL where the path names none),
-  `evidence` (`syntax`), `resolution` (the site's: `resolved`, `narrowed` for several types
+  `evidence` (`syntax`; `declared` where the path's type is the one the code DECLARES rather
+  than one the walk reached — a callee's written return type on a return path its body gives
+  no type, or for a method with no body, and a class-level annotation where no write says
+  more, OI-324 part 2), `resolution` (the site's: `resolved`, `narrowed` for several types
   from a closed list, `partial` where some path names none; `unresolved` on a row with no
   owner), `reason` (one word of the general list, NULL on a bound row) and `detail` (text for
   a person). A derived table, never a fact; empty on a JVM module. Exported as the named query.

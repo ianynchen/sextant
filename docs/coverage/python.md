@@ -103,21 +103,24 @@ from the one reason list, never a guessed value.
 **Types the reader does not work out.** Measured on Sextant at plan 1's end: 2,541 of its
 2,996 `not_readable` sites called a `dict`, `list`, `str`, `set` or `tuple` method. The
 type-variable rule and iteration (OI-324, first part) type 254 of the 2,558 such sites on
-`main` at e45b88fe, and move 250 more to `external` (their receiver is now a library call's
-result); the rest are the shapes below. Figures and commands:
+`main` at e45b88fe. Its second part (declared returns, container literals, class-body
+attribute declarations, `isinstance` narrowing, generic parents across files) types 1,012 of
+them (908 by the scanner, 104 by the resolver), and 664 of polar's 2,261 (529 and 135); the
+rest are the shapes below. Figures and commands:
 `docs/research/2026-11-06-python-performance.md`.
 
 | Shape | What happens | Why |
 |---|---|---|
 | an element of a container whose type is not written: a bare `list`, `list[Any]`, a parameter with no annotation | `not_readable`, or `external` where the container is a library call's result | nothing fills the type variable, and nothing is guessed |
-| a container literal (`found = []`, `d = {}`), then `found.append(x)` | `not_readable` | a literal's class is not read as the owner (the largest remaining group: of the container-method sites still `not_readable`, 1,176 of 2,159 on Sextant and 1,408 of 2,042 on polar have a receiver no call produced: a literal, a `merge` or an untyped local) |
-| the result of a call into the scanned code (`workspace.query(...)`, a `Protocol` method) | the value walk follows its body; where there is none, or it returns a value of no type, `not_readable` | a scanned function's written return type is not read as its result's type |
-| a union receiver whose members give different element types (`list[A] \| list[B]`) | the element has no owner; the resolver leaves it unbound | several types are never one, and a call site holds one owner: one row per member would need a fact field (not built, a question for the user) |
+| what a local container literal holds after its first read (`found = []; found.append(u); found[0].save()`) | `found.append` is a `list`'s; `found[0].save()` stays unowned | the code the list was handed to may have written to it; writes are not followed (OI-324 part 2, option b): following them is exact only where the list is never handed out, aliased or captured |
+| an element of what a function of ANOTHER file declares it returns (`for row in workspace.query(...)`, `-> Iterator[dict]`) | the call on the result binds the declared class; `__iter__` and the element stay unowned | the resolver has no library signatures (ruling A), so it cannot read `Iterator[dict]`'s element; and a declared type does not say class or instance (the facts write `type[X]` as `X`), so a call syntax makes is not bound from one |
+| a union receiver whose members give different element types (`list[A] \| list[B]`), and any union a value that is not a parameter holds (`[u, c][0]`, `isinstance(x, (A, B))`) | the call on it has no owner and no rows | no fact names the closed list of a value that is not a parameter: one row per member needs a field (measured: 4 + 15 Sextant sites, 6 + 16 polar; not built, a question for the user) |
 | a tuple of unknown arity (`tuple[A, ...]`), or a starred target | the names stay untyped | the arity is not written |
 | a subscript of a class another file defines (`make(Page[User])`, `R = Repo[User]`) | a `__getitem__` call site, answered `not_readable` ("a type form") on each path whose receiver is the class itself; no edge to the class's own `__getitem__` | ruling R37: subscripting a class object is `__class_getitem__`; this file cannot see the name is a class, the resolver can |
-| a class of another file as the receiver (`r: Repo[Order]`, `Repo` imported) | its library-inherited methods are not typed | its bases are in a file this scanner does not read (M03), and a class's written bases carry no type arguments in the facts |
-| a field declared only by a class-level annotation (dataclass, `NamedTuple`) | `not_readable` | the annotation is not read as the field's type |
-| a value typed `Any`, narrowed by `isinstance` | `external` | `isinstance` tests are not read; `is not None` is |
+| a class of another file as the receiver (`r: Repo[Order]`, `Repo` imported) | its declared returns are filled through the subclass's written parents (`ProductRepository(RepositoryBase[Product])`); its library-inherited methods are not typed, and a type argument written at the use (`Repo[Order]`) fills nothing | the resolver reads no library signatures and holds no type arguments for a value |
+| `obj.client` where `obj`'s class is in another file | `obj.client.get()` is unowned | no fact names an attribute read on a value other than `self` (R24's shape for writes); `self.client` and a class of this file are typed |
+| `Repo.from_session(s)` returning `-> Self` from a classmethod of a parent class | the result binds the parent and each of its subtypes (`narrowed`), not the class it was called through | the facts write `Self` as the declaring class (D00 §5a), and the walk does not carry the class a bound call was made through into the classmethod's `cls()`; 1,158 polar uses (a question for the user) |
+| `assert isinstance(x, C)`, or `isinstance` on an attribute (`self.x`) | not narrowed | `python -O` drops an assert; only a local name is narrowed |
 | an attribute of a library module: `pytest.mark`, `alembic.op` | `no_writer` (12,683 polar rows) | a library field has no writer in the scanned code, as the JVM answers `System.out` (ruling R26, logged) |
 | a library that is not installed | `external`, and the report says so | library symbols come only from the scanned environment; nothing is downloaded (spec §3e) |
 | a file written for a newer Python than the one running Sextant | the file is uncovered, naming the version that read it | the grammar is the running Python's (ruled 2026-11-06: run Sextant on the newest Python) |
@@ -208,7 +211,7 @@ flow fields are written, as on the JVM, which does not declare it either.
 
 | Route | Gives | Why not, or why |
 |---|---|---|
-| **`ast` (stdlib) + typeshed + the installed environment** | Syntax, decorators, literals, written types, library signatures | **Built.** Reads one file at a time and writes the existing facts, runs nothing and downloads nothing. Does not substitute generics or read `isinstance` (above). |
+| **`ast` (stdlib) + typeshed + the installed environment** | Syntax, decorators, literals, written types, library signatures | **Built.** Reads one file at a time and writes the existing facts, runs nothing and downloads nothing. Substitutes generics within a file and through a subclass's written parents, and reads `isinstance` on locals (above). |
 | `mypy` in-process | Declared and inferred types, overloads, generics | Its documented API returns report text only, and its plugin system is "experimental" (mypy's documents); a project's mypy plugins would run the scanned environment's code. Measured: 2.7 s cold on Sextant, 4.8 s on polar's package without libraries. A candidate for the four shapes above. |
 | `pyright` | Best inference available | Runs on Node.js (the PyPI wrapper downloads Node at run time when none is installed); used as a language server answering per position. That it has no programmatic API is not checked |
 | Pyrefly, ty | Fast inference (ty: "written in Rust") | Language servers as well, each one more package to ship; neither states a release status on its front page |

@@ -8,7 +8,7 @@ built in `tmp_path`; nothing is imported or run."""
 
 from pathlib import Path
 
-from tests.ingress.extract.python.test_generics import _owner_of, _scan, _sites
+from test_generics import _owner_of, _scan, _sites
 
 USER = "app/models/User#"
 CLIENT = "app/models/Client#"

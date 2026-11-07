@@ -136,6 +136,27 @@ the scan writes about 15% more facts on polar, and the resolver walks the receiv
 sites it cannot type. Under `cProfile` the type-variable rule itself
 (`calls._library_returns`, which asks the libraries) is 2.7 s of a 36 s profiled scan.
 
+### After the module's own declared types (OI-324 part 2, 2026-11-07)
+
+Branch `cov/python-types` from `cov/python-generics` cf939727 (main with per-file reuse,
+#97). One cold and one warm run each (warm: nothing changed, every file reused), same
+machine and Python 3.14. "Before" is cf939727.
+
+| Tree | Cold before → after | Warm before → after | Cold target 60 s | Warm ceiling 30 s |
+|---|---|---|---|---|
+| Sextant (repository root) | 11.4 s → 13.0 s | 3.9 s → 4.4 s | met | met |
+| polar `server/` | 37.7 s → 36.5 s | 3.1 s → 3.0 s | met | met |
+
+The work added per call is a dictionary read: the scanner reads each file's declared returns
+and class-body annotations once, in the pass that already reads its class shapes, and looks
+one up per call on a value of a class of the file; the resolver reads `signature.returns`,
+the field types, `type_parameters` and the generic parents once per resolve, and asks them
+only where a return path or an attribute read ended with no type, memoising each class's
+type-parameter mapping. Nothing a file's facts say depends on another file, so the per-file
+reuse key (#97, `scan_reuse`) is unchanged and still complete; the cross-file reading
+(declared returns of another file, generic parents) is the resolver's, which re-runs whenever
+any fact file changes. Sextant's cold rise is mostly its own new code (it analyses itself).
+
 ### What changed since the Task 0 projection
 
 Task 0 projected 13 s cold for polar from a parse-only probe and the JVM resolver's rate. The
