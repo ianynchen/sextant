@@ -6,7 +6,8 @@ typing specification defines it:
 - a union is the type arguments of `typing/Union#`;
 - `type[X]` is `X` itself, so a factory that returns a class reads as that class;
 - `Annotated[X, ...]`, `ClassVar[X]`, `Final[X]`, `Required[X]`, `NotRequired[X]` and
-  `ReadOnly[X]` are `X`;
+  `ReadOnly[X]` are `X`, and each of those qualifiers written bare (`x: Final = 3`) is no
+  type;
 - a type variable is its bare name, as a JVM type variable is (D00 §5a);
 - `Self` is the enclosing class;
 - `List`, `Dict` and typing's other aliases of a builtin or `collections` class are that
@@ -51,6 +52,9 @@ _RESOLVED = "resolved"
 _BUILTIN_NAMES = frozenset(dir(builtins))
 # Forms whose meaning is their one type argument.
 _WRAPPERS = frozenset({"ClassVar", "Final", "Required", "NotRequired", "ReadOnly", "Type"})
+# The qualifiers among them: written bare (`x: Final = 3`), each says how a name is bound,
+# never what type it holds, so a bare one gives no type.
+_QUALIFIERS = _WRAPPERS - {"Type"}
 # A bound on how deep a written type is followed, so an alias that names itself ends.
 _DEPTH = 32
 # typing's names for builtin and `collections` classes (PEP 585), and `LiteralString`,
@@ -186,6 +190,8 @@ def _named(target: Target, scope: TypeScope, depth: int) -> TypeRef | None:
         return None
     if is_typing(target, "Any"):
         return TypeRef(symbol=ANY)
+    if any(is_typing(target, qualifier) for qualifier in _QUALIFIERS):
+        return None
     if target.module in _TYPING_NAMES and target.member in _ALIASES:
         return _known(_ALIASES[target.member])
     if is_typing(target, "Self"):

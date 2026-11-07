@@ -368,3 +368,32 @@ def test_a_class_writes_its_generic_parents_and_its_parameters(tmp_path: Path):
     assert [(g.symbol, [a.symbol for a in g.arguments]) for g in repo.generic_interfaces] == [
         ("app/run/Mixin#", [USER, "builtins/int#"])
     ]
+
+
+def test_a_bare_qualifier_gives_no_type_and_a_wrapped_one_its_argument(tmp_path: Path):
+    """`limit: Final = 3` says how the name is bound, not its type: no owner and no field type
+    naming `typing/Final#`; `client: Final[Client]` and `ClassVar[Client]` are `Client`."""
+    from sextant.domain.facts import SymbolFact
+
+    tree = _scan(
+        tmp_path,
+        _MODELS + "from typing import ClassVar, Final\n"
+        "class Box:\n"
+        "    limit: Final = 3\n"
+        "    client: Final[Client]\n"
+        "    shared: ClassVar[Client]\n"
+        "def f(b: Box):\n"
+        "    b.limit.bit_length()\n"
+        "    b.client.send()\n"
+        "    b.shared.send()\n",
+    )
+    fields = {
+        fact.symbol.split(" ")[-1]: fact.signature.returns.symbol
+        for _, _, facts in tree
+        for fact in facts
+        if isinstance(fact, SymbolFact) and fact.construct_kind == "field" and fact.signature
+        if fact.signature.returns is not None
+    }
+    assert fields["app/run/Box#limit."] != "typing/Final#"
+    assert _owner_of(tree, "app/run#f", "bit_length") == [None]
+    assert _owner_of(tree, "app/run#f", "send") == [CLIENT, CLIENT]
