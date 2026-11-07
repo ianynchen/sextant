@@ -220,7 +220,18 @@ not read from one: a call syntax makes (`__call__`, `__getitem__`, `__iter__`, `
 `__aiter__`, `__anext__`) on a declared value, since the facts write `type[X]` as `X` and a
 class and an instance differ there (ruling R37) — `not_readable`, with a detail; the call of a
 decorated name, which is its decorators' result; and a function reached through a `__call__`
-on a value, whose result is the wrapper's.
+on a value, whose result is the wrapper's. A path whose body answers from code not scanned
+(`return Mock()`, `external`) keeps that answer beside the declared rows, so the site is
+`partial`: the declaration may not hold on it. **A return written `Self`** is the class the call
+was made through, on each path: the owner the walk bound for the receiver (`Order.from_session
+(s)` is an `Order`, though `Order` is another file's class bound by the resolver), or, for a
+call on the method's own receiver (`self.m()`, `cls.m()`), that class and each subclass, one
+row each (R37's list); the body (`return cls(...)`) is not read for it. **A parameter with a
+written type is that type** for this reader, as the scanner takes it for a call on the
+parameter: neither the entering call nor the callers are read for it; a written library type
+the environment does not hold is `external`. An attribute's declaration answers only where its
+class is one of the module whose lookup order is read and defines no `__get__` (a descriptor's
+read runs `__get__`, and a library class's methods are not read here).
 
 **Arguments are bound by name** (ruling R2, user ruling A) where the module's lookup rule is
 `c3`, by Python's calling rule over each parameter's `kind` (D00 §5a): positionals fill the

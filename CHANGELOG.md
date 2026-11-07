@@ -52,6 +52,20 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Python: the headers of imported module files, `Self`, and re-exports** (OI-324 part 2,
+  review round 1; M03, M04, D00). A file now reads, of each module file its names lead to,
+  the header and nothing else (names, re-exports, aliases, `NewType`s, class bases and type
+  parameters, declared returns, class-body attributes), parsed once per scan: another file's
+  declarations type elements (`for r in rows()`) and `obj.x` as this file's do, and a
+  re-export or alias of the module is named by where it is defined (polar: call sites owning a
+  non-class path 4,403 -> 10; edges reaching a body 32,287 -> 39,084). A header edit re-reads
+  the files that read it, a body edit does not (the reuse key records each header's digest).
+  `-> Self` is kept as written and filled per path with the class the call was made through
+  (all 2,722 polar calls on a `from_session(...)` result bind one class; 242 before). A bare
+  `Final`/`ClassVar` is no type; a descriptor-typed attribute (`Mapped[T]`) is what its
+  `__get__` gives; a body's `external` answer stays beside a declared one (`partial`); a
+  written parameter type is the type reader's answer for the parameter. polar cold 40.9 s,
+  warm 3.8 s.
 - **Python: the types the module's own code declares** (OI-324, second part; M03, M04).
   A function's declared return (`def load() -> list[User]`) answers, in the resolver, where
   the body's returns give no type, and for a method with no body (a `Protocol`'s); in the

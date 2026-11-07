@@ -104,8 +104,9 @@ from the one reason list, never a guessed value.
 2,996 `not_readable` sites called a `dict`, `list`, `str`, `set` or `tuple` method. The
 type-variable rule and iteration (OI-324, first part) type 254 of the 2,558 such sites on
 `main` at e45b88fe. Its second part (declared returns, container literals, class-body
-attribute declarations, `isinstance` narrowing, generic parents across files) types 1,012 of
-them (908 by the scanner, 104 by the resolver), and 664 of polar's 2,261 (529 and 135); the
+attribute declarations, `isinstance` narrowing, generic parents across files) and its first
+review round (`Self`, the headers of imported module files, re-exports followed) type 1,321 of
+them (1,229 by the scanner, 92 by the resolver), and 683 of polar's 2,261 (581 and 102); the
 rest are the shapes below. Figures and commands:
 `docs/research/2026-11-06-python-performance.md`.
 
@@ -113,13 +114,15 @@ rest are the shapes below. Figures and commands:
 |---|---|---|
 | an element of a container whose type is not written: a bare `list`, `list[Any]`, a parameter with no annotation | `not_readable`, or `external` where the container is a library call's result | nothing fills the type variable, and nothing is guessed |
 | what a local container literal holds after its first read (`found = []; found.append(u); found[0].save()`) | `found.append` is a `list`'s; `found[0].save()` stays unowned | the code the list was handed to may have written to it; writes are not followed (OI-324 part 2, option b): following them is exact only where the list is never handed out, aliased or captured |
-| an element of what a function of ANOTHER file declares it returns (`for row in workspace.query(...)`, `-> Iterator[dict]`) | the call on the result binds the declared class; `__iter__` and the element stay unowned | the resolver has no library signatures (ruling A), so it cannot read `Iterator[dict]`'s element; and a declared type does not say class or instance (the facts write `type[X]` as `X`), so a call syntax makes is not bound from one |
+| an element of what a method reached through a value the resolver binds declares it returns (`for row in self.workspace.query(...)` with `workspace` untyped) | the call on the result binds the declared class; `__iter__` and the element stay unowned | the resolver has no library signatures (ruling A); where the scanner can name the callee (a module function or a typed receiver, in this file or another), it types the element from the other file's header |
 | a union receiver whose members give different element types (`list[A] \| list[B]`), and any union a value that is not a parameter holds (`[u, c][0]`, `isinstance(x, (A, B))`) | the call on it has no owner and no rows | no fact names the closed list of a value that is not a parameter: one row per member needs a field (measured: 4 + 15 Sextant sites, 6 + 16 polar; not built, a question for the user) |
 | a tuple of unknown arity (`tuple[A, ...]`), or a starred target | the names stay untyped | the arity is not written |
 | a subscript of a class another file defines (`make(Page[User])`, `R = Repo[User]`) | a `__getitem__` call site, answered `not_readable` ("a type form") on each path whose receiver is the class itself; no edge to the class's own `__getitem__` | ruling R37: subscripting a class object is `__class_getitem__`; this file cannot see the name is a class, the resolver can |
 | a class of another file as the receiver (`r: Repo[Order]`, `Repo` imported) | its declared returns are filled through the subclass's written parents (`ProductRepository(RepositoryBase[Product])`); its library-inherited methods are not typed, and a type argument written at the use (`Repo[Order]`) fills nothing | the resolver reads no library signatures and holds no type arguments for a value |
-| `obj.client` where `obj`'s class is in another file | `obj.client.get()` is unowned | no fact names an attribute read on a value other than `self` (R24's shape for writes); `self.client` and a class of this file are typed |
-| `Repo.from_session(s)` returning `-> Self` from a classmethod of a parent class | the result binds the parent and each of its subtypes (`narrowed`), not the class it was called through | the facts write `Self` as the declaring class (D00 §5a), and the walk does not carry the class a bound call was made through into the classmethod's `cls()`; 1,158 polar uses (a question for the user) |
+| `obj.client` where `obj`'s type is not written (`def f(obj): obj.client.get()`) | unowned | no fact names an attribute read on a value other than `self` (R24's shape for writes); a typed `obj` of any module file's class is typed, through that file's header |
+| a type name another file binds by a star import (`from .x import *`) | the path is kept as written (polar: 10 sites, one owner) | a header's star imports are not followed |
+| a written attribute type that is a library class (`client: httpx.AsyncClient`) read on `self` by the resolver | not bound from the declaration (the scanner still types what is read off it) | a library class's methods are not read in the resolver, so it cannot tell a descriptor (`Mapped[T]`, whose read gives a `T`) from a plain class |
+| a body whose returns or writes give a different class than the declaration, in the scanner | the scanner types elements from the declaration | logged (round 1 item 5): the resolver reads the body first; the scanner would need a second reading of the file |
 | `assert isinstance(x, C)`, or `isinstance` on an attribute (`self.x`) | not narrowed | `python -O` drops an assert; only a local name is narrowed |
 | an attribute of a library module: `pytest.mark`, `alembic.op` | `no_writer` (12,683 polar rows) | a library field has no writer in the scanned code, as the JVM answers `System.out` (ruling R26, logged) |
 | a library that is not installed | `external`, and the report says so | library symbols come only from the scanned environment; nothing is downloaded (spec §3e) |

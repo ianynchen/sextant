@@ -782,7 +782,18 @@ field's `signature.returns`** — both written since Task 4, as a JVM method's r
 in its descriptor and signature. No field was added for them (approved in principle,
 2026-11-07; the smallest form is the one that already exists), so the fact schema version did
 not move. `PY_SIGNATURE` (`(*)`) stays the descriptor of every Python method: it names the
-method, it never carried a type. The class itself carries `parents_unread` (§5 table): method lookup treats such a class as "parents not read" — its lookup ends with `external` — and never as "no parents". **Evidence:** every type a Python document states is written in source, so it is
+method, it never carried a type. **A method's return written `Self` is kept as written** (user ruling,
+2026-11-07): `signature.returns` is the bare name `Self`, a type variable as the JVM's are
+written, never the class that declares the method. It means the class the call was made
+through — for `Order.from_session(s)`, `Order`; for a call on the method's own receiver, that
+class or any subclass — and a reader fills it per call. A qualifier written bare (`x: Final =
+3`, `ClassVar`, `Required`, `NotRequired`, `ReadOnly`) gives no type: the field keeps its
+written text, which names none. **A type named through another file of the module is named
+by where it is defined** (round 1): a re-export (`from .order import Order` in a package
+`__init__`), a module-level alias and a `NewType` of a class are followed through the
+module files' headers to the class, or to a library's defining symbol where the chain leaves
+the module, as a library re-export is (M03 "Libraries"); a name another file binds to a value
+or to an alias its own scope reads names no type here. The class itself carries `parents_unread` (§5 table): method lookup treats such a class as "parents not read" — its lookup ends with `external` — and never as "no parents". **Evidence:** every type a Python document states is written in source, so it is
 `declared`, the word §5d gives a source origin. The document says so: `language` is the
 source language and `class_major` is 0. No reference carries an evidence field of its own.
 

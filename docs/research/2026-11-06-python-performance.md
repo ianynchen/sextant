@@ -157,6 +157,25 @@ reuse key (#97, `scan_reuse`) is unchanged and still complete; the cross-file re
 (declared returns of another file, generic parents) is the resolver's, which re-runs whenever
 any fact file changes. Sextant's cold rise is mostly its own new code (it analyses itself).
 
+### After the first review round (headers, `Self`, re-exports; 2026-11-07)
+
+| Tree | Cold | Warm | Cold target 60 s | Warm ceiling 30 s |
+|---|---|---|---|---|
+| Sextant (repository root) | 13.0 s → 14.6 s | 4.4 s → 4.8 s | met | met |
+| polar `server/` | 36.5 s → 40.9 s | 3.0 s → 3.8 s | met | met |
+
+The added cold cost is one more parse of each module file the others import (its header, once
+per scan, `project.py`), and receiver binding over the real lookup orders that re-exports now
+give (round 1 binds 13,898 sites in 4 s). The warm run reads no header of a file that did not
+change: its digest is the one its reuse record kept. **Measured on the way:** following
+re-exports made polar's repository classes' orders readable, and the walk then followed
+`self.session` through every `cls(session)` call to every caller; receiver binding did not
+finish in ten minutes. Taking a parameter's written type as its type for the type reader (as
+the scanner does for a call on the parameter) ended it at 4 s, with `NewType("X", T)` read as
+`T` and a written library type the environment lacks answered `external`. There is still no
+cap on the walk (§3a); a module whose deep paths run through untyped parameters may need one,
+which is a ruling, not a constant.
+
 ### What changed since the Task 0 projection
 
 Task 0 projected 13 s cold for polar from a parse-only probe and the JVM resolver's rate. The

@@ -246,10 +246,26 @@ as `resource_files.list_files` matches). A git-ignored file IS read: generated c
 `*_pb2.py` is often git-ignored and is part of the module. A file that cannot be opened (a
 broken link) goes on the uncovered list with its reason.
 
-**One file at a time.** An import binds a name by PATH only: `from app.models import
-Order` is the class `app/models/Order#`, or the module `app/models/Order` when such a file
-is in the import roots. The other file's body is not read. A name that two branches bind
-differently is a closed list of both, in written order.
+**One file at a time, with the headers of the files it imports** (round 1, user choice A,
+2026-11-07; `project.py`). An import binds a name by path, `from app.models import Order` the
+member `Order` of the module `app/models`, or the module `app/models/Order` when such a file
+is in the import roots, and then, where another file of the module is the one named, through
+that file's HEADER: its module-level names (imports, re-exports, aliases, `NewType`s), its
+classes' written bases and type parameters, each `def`'s declared return and each class
+body's attribute declarations. Nothing else of its bodies is read. A re-export or an alias is
+followed to where the name is defined (a class of the module, or a library's defining symbol),
+as a library re-export is; a name the other file binds to a value or to a type alias its own
+scope reads (`SaveFixture = Callable[...]`) names no type here, rather than a path that is no
+class. A header is parsed once per scan however many files ask, and is bound against an index
+that reads no headers, so what a file reads never depends on which file asked first. A name
+that two branches bind differently is a closed list of both, in written order.
+
+**Reuse and headers.** Every header a file's reading consulted is one of the questions it
+asked the module index (`("header", module)`), and its answer is the header's digest: the
+syntax tree without function bodies and without statements that bind no name. Editing
+another file's header re-reads the files that read it; editing its bodies does not. A file's
+own digest is kept in its reuse record, so a warm run answers the question without parsing a
+file that did not change.
 
 **What it writes** (spec §3a, D00 §1 and §5a):
 
@@ -374,12 +390,24 @@ comprehensions included:
   local holding a literal (or a comprehension) is read once as written: after that it is its
   class alone, since the code it was handed to may have written to it. Writes into it
   (`.append(x)`, `d[k] = v`) are not followed. The facts still read `array` or `unresolved`.
+- **A return written `Self`** is the receiver's own class, the class the call was made
+  through (D00 §5a); the signature keeps `Self` as written.
+- **Another file's declarations** answer as this file's do, through its header: its declared
+  returns type what is read off a result (`for r in rows()`, `rows() -> Iterator[dict]` in
+  another file, gives `dict` rows), its class bodies type `obj.x`, and library methods its
+  classes inherit are read where the library defines them.
 - **An attribute declared in a class body** (`client: HttpClient`, PEP 526, any class: a
   dataclass's, a `NamedTuple`'s, a `TypedDict`'s, a pydantic model's) is the type of
   `obj.client` where `obj`'s class is one of this file (by C3): no fact names such a read, so
   the type is the owner of a call on it. `self.client` keeps its owner to the resolver, which
   reads the object's writes first (ruling R33); what is read off it is typed from the
-  declaration.
+  declaration. A declared class that is a descriptor (it defines `__get__`, as SQLAlchemy's
+  `Mapped[T]` does) gives what its `__get__` is written to return for an instance, never the
+  descriptor; a class whose methods are not read may be one, so it gives nothing. A bare
+  `Final` or `ClassVar` is no type. The scanner takes these types from the declaration, never
+  from the same file's body or writes (logged, round 1 item 5: a callee's returns are read
+  after its callers in file order, and a body that answers differently from its declaration
+  gives a union, which names no owner here anyway; the resolver reads the body first).
 - **`isinstance(x, C)` narrows a local** inside the body of its `if`, and `not isinstance`
   inside the `else`; `a and b` narrows each name it tests; a tuple of classes is their union.
   Past the `if`, the narrowing holds only where its body is the one path reaching the join
