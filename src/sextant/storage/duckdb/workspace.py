@@ -553,6 +553,30 @@ _NAMED_QUERIES = {
           AND document_id IN (SELECT document_id FROM selected_documents)
         ORDER BY symbol
     """,
+    # The programs the module's build declares (D00 §5 `module.entry_points`, design
+    # 2026-11-06-reading-decorators §7a), each name with its target as written, projected
+    # whole as the coordinates are below. NULL on a JVM module and on facts that predate it.
+    "entry_points": """
+        SELECT payload ->> 'module_id' AS module_id, payload -> 'entry_points' AS entry_points
+        FROM raw_facts WHERE kind = 'module'
+        ORDER BY module_id
+    """,
+    # How a method is looked up in the analysed module (D00 §5 `module.lookup`), as the
+    # module fact names the rule. Read by `resolve/dispatch.py`.
+    "lookup_rules": """
+        SELECT payload ->> 'module_id' AS module_id, payload ->> 'lookup' AS lookup
+        FROM raw_facts WHERE kind = 'module'
+        ORDER BY module_id
+    """,
+    # The Python classes whose written parents were not all read (`parents_unread`): method
+    # lookup ends where the parent not read comes in. Read by `resolve/dispatch.py`.
+    "parents_unread": """
+        SELECT payload ->> 'symbol' AS symbol
+        FROM raw_facts
+        WHERE kind = 'symbol' AND json_type(payload -> 'parents_unread') = 'OBJECT'
+          AND document_id IN (SELECT document_id FROM selected_documents)
+        ORDER BY symbol
+    """,
     # D00 §5's `module` fact, as the one question a catalog asks of it today
     # (2O design §2a, ruling R9): which `groupId:artifactId` coordinates this
     # module's build declares. The JSON array is projected whole and parsed by
@@ -569,30 +593,6 @@ _NAMED_QUERIES = {
     # analysis could not read, which is a different answer from a dependency
     # with no version — so a reader scoping a rule to a version must treat the
     # absence as unanswerable, exactly as the gate treats a missing row.
-    # How a method is looked up in the analysed module (D00 §5 `module.lookup`), as the
-    # module fact names the rule. Read by `resolve/dispatch.py`.
-    # The programs the module's build declares (D00 §5 `module.entry_points`, design
-    # 2026-11-06-reading-decorators §7a), each name with its target as written, projected
-    # whole as the coordinates are below. NULL on a JVM module and on facts that predate it.
-    "entry_points": """
-        SELECT payload ->> 'module_id' AS module_id, payload -> 'entry_points' AS entry_points
-        FROM raw_facts WHERE kind = 'module'
-        ORDER BY module_id
-    """,
-    "lookup_rules": """
-        SELECT payload ->> 'module_id' AS module_id, payload ->> 'lookup' AS lookup
-        FROM raw_facts WHERE kind = 'module'
-        ORDER BY module_id
-    """,
-    # The Python classes whose written parents were not all read (`parents_unread`): method
-    # lookup ends where the parent not read comes in. Read by `resolve/dispatch.py`.
-    "parents_unread": """
-        SELECT payload ->> 'symbol' AS symbol
-        FROM raw_facts
-        WHERE kind = 'symbol' AND json_type(payload -> 'parents_unread') = 'OBJECT'
-          AND document_id IN (SELECT document_id FROM selected_documents)
-        ORDER BY symbol
-    """,
     "module_dependencies": """
         SELECT payload ->> 'module_id'            AS module_id,
                payload -> 'dependency_coordinates' AS dependency_coordinates,
