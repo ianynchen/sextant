@@ -517,3 +517,22 @@ def test_an_attribute_whose_declared_class_is_a_descriptor_is_what_its_get_gives
     )
     assert _owner_of(tree, "app/run#f", "send") == [None]
     assert _owner_of(tree, "app/run#f", "save") == [None]
+
+
+def test_another_files_alias_of_a_type_or_a_value_names_no_class(tmp_path: Path):
+    """`SaveFixture = Callable[...]` in `a.py` is an alias its own scope reads: written as a
+    type in `b.py` it names no class (never the path `app/a/SaveFixture#`). A `NewType` of a
+    class is that class, whose methods its values have."""
+    tree = _scan_files(
+        tmp_path,
+        {
+            "a.py": _OTHER
+            + "from typing import Callable, NewType\n"
+            + "SaveFixture = Callable[[int], None]\n"
+            + "ClientId = NewType('ClientId', Client)\n",
+            "b.py": "from app.a import SaveFixture, ClientId\n"
+            "def f(save: SaveFixture, c: ClientId):\n    save(1)\n    c.send()\n",
+        },
+    )
+    assert _owner_of(tree, "app/b#f", "__call__") == [None]
+    assert _owner_of(tree, "app/b#f", "send") == ["app/a/Client#"]

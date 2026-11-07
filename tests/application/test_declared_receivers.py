@@ -226,9 +226,10 @@ def test_a_write_the_walk_reads_a_type_of_stays_the_answer(tmp_path: Path):
     workspace.close()
 
 
-def test_a_declaration_naming_another_files_alias_names_no_class(tmp_path: Path):
-    """`Alias = HttpClient` in `a.py` is a field there: `c: Alias` in `b.py` reads as the type
-    `app/a/Alias#`, which no class carries, so it is no answer (never a row naming it)."""
+def test_a_declaration_naming_another_files_alias_is_the_aliased_class(tmp_path: Path):
+    """`Alias = HttpClient` in `a.py` is a field there; `c: Alias` in `b.py` names the class
+    the alias is (round 1, item 3, read off `a.py`'s header), never the path `app/a/Alias#`,
+    which no class carries."""
     workspace = _resolved(
         tmp_path,
         {
@@ -238,7 +239,9 @@ def test_a_declaration_naming_another_files_alias_names_no_class(tmp_path: Path)
         },
     )
     site = _site(workspace, "app/b/S#run(sig_dd69782a).", "get")
-    assert [row["owner"] for row in _bound(workspace, site) if row["owner"]] == []
+    assert [row["owner"] for row in _bound(workspace, site) if row["owner"]] == [
+        "app/a/HttpClient#"
+    ]
     workspace.close()
 
 
@@ -339,4 +342,41 @@ def test_self_through_the_methods_own_receiver_is_the_class_or_a_subclass(tmp_pa
         "app/a/Other#",
         "app/a/Repo#",
     ]
+    workspace.close()
+
+
+def test_a_class_a_package_re_exports_is_named_by_where_it_is_defined(tmp_path: Path):
+    """`from app.pkg import Order`, `app/pkg/__init__.py` re-exporting it from `.order`: the
+    call names `app/pkg/order/Order#`, the class, and reaches its body (round 1, item 3)."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "pkg/__init__.py": "from .order import Order\n",
+            "pkg/order.py": "class Order:\n    def total(self):\n        return 1\n",
+            "b.py": "from app.pkg import Order\ndef f(o: Order):\n    o.total()\n",
+        },
+    )
+    site = _site(workspace, _F, "total")
+    assert [row["callee"] for row in _edges(workspace, site)] == [
+        _PREFIX + "app/pkg/order/Order#total(sig_dd69782a)."
+    ]
+    workspace.close()
+
+
+def test_a_parameter_with_a_written_type_is_that_type_for_the_type_reader(tmp_path: Path):
+    """`self.session` written from `__init__`'s `session: Session`: the written parameter type
+    answers, as the scanner takes it for a call on the parameter itself, and no caller is
+    read for it (round 1: on polar's repository graph that walk did not end in minutes)."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": "class Session:\n    def run(self):\n        return 1\n"
+            "class Repo:\n"
+            "    def __init__(self, session: Session):\n        self.session = session\n"
+            "    def go(self):\n        self.session.run()\n",
+            "b.py": "from app.a import Repo\ndef f(s):\n    Repo(s).go()\n",
+        },
+    )
+    site = _site(workspace, "app/a/Repo#go(sig_dd69782a).", "run")
+    assert _rows(workspace, site) == [("app/a/Session#", "declared", None)]
     workspace.close()

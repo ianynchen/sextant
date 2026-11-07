@@ -140,6 +140,10 @@ class ProjectNames(Protocol):
         """A class another file of the module defines, by its header."""
         ...
 
+    def names_a_value(self, module: str, name: str) -> bool:
+        """Whether `module.name` is bound, where it is defined, to a value, not a class."""
+        ...
+
     def returns(self, descriptor: str) -> TypeRef | None:
         """The return a `def` of another file of the module declares."""
         ...
@@ -223,11 +227,18 @@ def member_of(
     after it (`from fastapi import routing`, then `routing.APIRouter`). Where a library
     read says (`libraries.py`), its answer is taken: a submodule, or the member's defining
     symbol (`fastapi.APIRouter` is `fastapi.routing.APIRouter`), or the closed list of
-    them where the library's branches bind the name differently."""
+    them where the library's branches bind the name differently. A module file's header
+    answers the same way for the module's own re-exports (`project.py`)."""
     if index.libraries is not None and not index.owns(target.module):
         found = index.libraries.member(target, name)
         if found is not None:
             return found
+    if index.headers is not None and target.member is None and index.owns(target.module):
+        # A file of the module re-exports or aliases the name: it is where it is defined, as a
+        # library's is (round 1, item 3), read off that file's header.
+        defined = index.headers.member(target.module, name)
+        if defined is not None:
+            return defined
     if target.member is not None and not index.owns(target.module):
         submodule = f"{target.module}/{target.member.replace('.', '/')}"
         return member_of(Target(submodule), name, index, more_follow=more_follow)
@@ -339,10 +350,20 @@ class _Binder:
     ) -> tuple[str, Binding] | None:
         """A module-level name given another name of a module, a class or a function
         (`DecodeError = jwt.DecodeError`) is bound as that name is, as an import binds
-        it. A computed value, or a name of a value, stays a value."""
+        it, and so is a `NewType` of a class. A computed value, or a name of a value, stays a
+        value."""
         value = node.value
         if self._owner is not None or value is None or len(targets) != 1:
             return None
+        if (
+            isinstance(value, ast.Call)
+            and len(value.args) == 2
+            and self._is_typing(value.func, names, {"NewType"})
+        ):
+            # `UserId = NewType("UserId", int)`: at run time the name is the function that
+            # hands its argument back, so every value of the type is an `int`, whose methods
+            # run (the typing specification's NewType). It names the type it wraps.
+            value = value.args[1]
         if not isinstance(targets[0], ast.Name) or not isinstance(value, ast.Name | ast.Attribute):
             return None
         found = resolve(value, names, self._index)

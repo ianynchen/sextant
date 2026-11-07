@@ -145,6 +145,28 @@ class ProjectHeaders:
                 found.append(Target(target.module, target.member))
         return tuple(dict.fromkeys(found))
 
+    def names_a_value(self, module: str, name: str) -> bool:
+        """Whether `module.name`, followed to where it is defined, is bound to a value, a
+        function or a type alias rather than a class (`SaveFixture = Callable[...]`): such a
+        name, written as a type in another file, names no class there."""
+        defined = self.member(module, name)
+        if not defined:
+            return False
+        for target in defined:
+            header = self.header(target.module) if target.member is not None else None
+            if header is None:
+                return False
+            binding = header.names.get(target.member or "")
+            if binding is None or any(
+                own.kind not in ("variable", "function", "type_alias")
+                for own in binding.targets
+                if own.module == target.module
+            ):
+                return False
+            if not any(own.module == target.module for own in binding.targets):
+                return False
+        return True
+
     def canonical(self, symbol: str) -> str:
         """A type symbol written by import path, as the class it is defined as: a class a
         module file re-exports is that file's class (`polar/models/Order#` is

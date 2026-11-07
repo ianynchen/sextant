@@ -188,6 +188,17 @@ def _named(target: Target, scope: TypeScope, depth: int) -> TypeRef | None:
         return _read(target.alias_of, scope, depth - 1)
     if target.kind in ("variable", "function"):
         return None
+    headers = scope.index.headers
+    if (
+        target.kind is None
+        and target.member is not None
+        and headers is not None
+        and scope.index.owns(target.module)
+        and headers.names_a_value(target.module, target.member)
+    ):
+        # Another file of the module binds the name to a value or an alias of a type its own
+        # scope reads (`SaveFixture = Callable[...]`): as a type here it names no class.
+        return None
     if is_typing(target, "Any"):
         return TypeRef(symbol=ANY)
     if any(is_typing(target, qualifier) for qualifier in _QUALIFIERS):
