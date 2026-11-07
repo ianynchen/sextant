@@ -340,6 +340,33 @@ request_params:
 - FastAPI and typer: not used. Their parameters are the function's own (§3c `Depends`,
   `Query`, `typer.Option`), read by §2k's parameter form.
 
+### 3e. What a decorated name holds (ruled 2026-11-06, option A)
+
+Found in the Task 9a review. `@dec def f` runs `f = dec(f)`. The name `f` holds what `dec`
+returns: the function itself (`click.option`), a wrapper that calls it (`@retry`, `@cache`,
+`@contextmanager`), or another object (`@click.group()` gives a `Group`). The scanner wrote `f`
+as the function in every case. That is a wrong value: `module.command(...)` only works because
+`module` is a `Group`.
+
+**The rule:**
+- A decorated `def` is a `field_write` of the outermost decorator's result to the name, and the
+  name is read as that field afterwards. These are the existing fact shapes, with no format
+  change. The function itself stays the `lambda` value that the innermost decorator receives.
+- The language's own descriptors keep their existing method model: `staticmethod`,
+  `classmethod`, `property` and `functools.cached_property` (builtins), `typing.overload` and
+  `abc.abstractmethod`. They are the language's method kinds (like JVM modifiers), not
+  frameworks.
+- **A third form of `returns_argument` (approved): `result_calls: argN`.** It means "calling
+  this call's result runs its argument N, with the same arguments". A value model states it
+  per measured library: functools `cache`/`lru_cache`, contextlib
+  `contextmanager`/`asynccontextmanager` and tenacity `retry`, each with a probe. Then a call
+  `f()` through such a wrapper is traced into `f`'s body.
+- A decorator in the project's own code is followed into its code (§3d). A library wrapper
+  with no entry stops there: `external`, and the detail names the decorator.
+
+**Measured, as direct calls of a decorated name:** tenacity `retry` 59, `contextmanager` 53,
+`cache`/`lru_cache`/`memoize` about 53, `background_task` 10.
+
 ## 4. Groups, and the program's name
 
 Spec §3c says click groups use the `mount` block. Two things make that work.
@@ -576,8 +603,10 @@ records the measured time against the spec §5 target, as Task 1 set.
 
 1. **Keyword argument reference:** `{ keyword: <name> }` and `{ arg: N, keyword: <name> }`,
    accepted wherever a catalog names an argument; `argN` counts positional arguments only.
-2. **`returns_argument`** (value models): `{ owner, method, returns: argN | result_returns: argN,
-   by }` — a stated library call returns one of its arguments, or calling its result does.
+2. **`returns_argument`** (value models): `{ owner, method, returns: argN | result_returns: argN
+   | result_calls: argN, by }`. A stated library call returns one of its arguments, or calling
+   its result does, or calling its result runs that argument (`result_calls`, approved
+   2026-11-06, §3e).
 3. **`path_fallback` on `fluent`/`single_call`, and its mapping form** `{ name: construct_name,
    lower, replace, drop_suffixes }` — a word from the handler's name, respelled as the catalog
    states.
