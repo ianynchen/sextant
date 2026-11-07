@@ -125,6 +125,34 @@ class LibraryNames(Protocol):
         ...
 
 
+class ProjectNames(Protocol):
+    """What the headers of the module's other files say (`project.py`)."""
+
+    def member(self, module: str, name: str) -> tuple[Target, ...] | None:
+        """Where `module.name` is defined, through the module files' re-exports."""
+        ...
+
+    def digest(self, module: str) -> str | None:
+        """The digest of `module`'s header, for the reuse key."""
+        ...
+
+    def shape_of(self, symbol: str) -> "ClassShape | None":
+        """A class another file of the module defines, by its header."""
+        ...
+
+    def returns(self, descriptor: str) -> TypeRef | None:
+        """The return a `def` of another file of the module declares."""
+        ...
+
+    def field(self, field: str) -> TypeRef | None:
+        """The type a class body of another file of the module declares for an attribute."""
+        ...
+
+
+# The question a file asks for another file's header (`project.HEADER`).
+_HEADER_QUESTION = "header"
+
+
 @dataclass(frozen=True)
 class ModuleIndex:
     """The module paths that exist in the scanned module's import roots, by file path
@@ -138,6 +166,8 @@ class ModuleIndex:
     # files, so a later scan keeps the file's facts only where every answer is the same
     # (OI-325). None records nothing.
     asked: set[tuple[str, str]] | None = field(default=None, compare=False, repr=False)
+    # The headers of the module's files (`project.py`), where the scan reads them.
+    headers: ProjectNames | None = field(default=None, compare=False, repr=False)
     # Every module path and every folder above one: `owns`' answer, worked out once,
     # because every name of another module asks it (GUIDELINES §8.7).
     _owned: frozenset[str] = field(init=False, repr=False, compare=False)
@@ -161,10 +191,13 @@ class ModuleIndex:
             self.asked.add(("owns", path))
         return path in self._owned
 
-    def answers(self, asked: Iterable[tuple[str, str]]) -> list[bool]:
-        """What this index answers to each question, in order, recording none."""
+    def answers(self, asked: Iterable[tuple[str, str]]) -> list[bool | str | None]:
+        """What this index answers to each question, in order, recording none: for another
+        file's header, its digest."""
         return [
-            path in (self.modules if question == "is_module" else self._owned)
+            (None if self.headers is None else self.headers.digest(path))
+            if question == _HEADER_QUESTION
+            else path in (self.modules if question == "is_module" else self._owned)
             for question, path in asked
         ]
 

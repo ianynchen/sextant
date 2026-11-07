@@ -93,15 +93,19 @@ def test_a_declared_union_is_each_of_its_classes(tmp_path: Path):
 
 def test_a_call_syntax_makes_is_not_bound_on_a_declaration_alone(tmp_path: Path):
     """A declared type does not say whether the value is the class or an instance (the facts
-    write `type[User]` as `User`), so `kind()()` is not read as `User.__call__`."""
+    write `type[User]` as `User`), so `m.kind()()`, with `m` bound by the resolver, is not
+    read as `User.__call__`. (Where the scanner reads `kind`'s header itself, it knows the
+    class object and writes the construction.)"""
     workspace = _resolved(
         tmp_path,
         {
-            "a.py": _MODELS + "def kind() -> type[User]:\n    return unknown()\n",
-            "b.py": "from app.a import kind\ndef f():\n    kind()()\n",
+            "a.py": _MODELS
+            + "class Maker:\n    def kind(self) -> type[User]:\n        return unknown()\n",
+            "b.py": "from app.a import Maker\ndef f(m):\n    m.kind()()\n"
+            "def g():\n    f(Maker())\n",
         },
     )
-    site = _site(workspace, _F, "__call__")
+    site = _site(workspace, "app/b#f(sig_dd69782a).", "__call__")
     ((owner, _, reason),) = _rows(workspace, site)
     assert (owner, reason) == (None, "not_readable")
     assert not [row for row in _edges(workspace, site) if row["callee"]]

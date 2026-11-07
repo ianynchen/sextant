@@ -49,6 +49,8 @@ from sextant.ingress.extract.python.calls import (
 from sextant.ingress.extract.python.imports import (
     Binding,
     CallableType,
+    ModuleIndex,
+    ProjectNames,
     Target,
     bind_names,
     holds_decorated_value,
@@ -128,7 +130,7 @@ def file_facts(tree: ast.Module, context: FileContext, last_line: int) -> FileFa
     return FileFacts(writer.facts, writer.not_read, [note])
 
 
-def _class_shapes(
+def class_shapes(
     body: list[ast.stmt], here: str, names: dict[str, Binding], types: TypeScope
 ) -> dict[str, ClassShape]:
     """The type parameters, written bases and members of each class the module body and
@@ -243,90 +245,21 @@ class _Writer(BodyReader):
             tree.body, here, is_package=self._context.is_package, index=self._context.index
         )
         types = TypeScope(names=names, here=here, index=self._context.index)
-        self._local_classes = _class_shapes(tree.body, here, names, types)
-        self._own_returns, self._own_fields = self._declared_returns(tree.body, here, types)
+        self._local_classes = class_shapes(tree.body, here, names, types)
+        self._own_returns, self._own_fields = declared_types(
+            tree.body, here, types, is_package=self._context.is_package, index=self._context.index
+        )
         libraries = self._context.index.libraries
         self._hierarchy = Hierarchy(
             self._shape_or_none,
             None if libraries is None else libraries.hierarchy,
-            frozenset(self._local_classes),
+            _ModuleClasses(self._local_classes, self._context.index.headers),
         )
         self._symbol(owner, ConstructKind.MODULE, None, 1, last_line)
         clinit = self._clinit(owner, 1, last_line)
         scope = Scope(owner, types, self._body(clinit))
         self._statements(tree.body, scope)
         self._positions(scope)
-
-    def _declared_returns(
-        self, body: list[ast.stmt], here: str, types: TypeScope
-    ) -> tuple[dict[str, TypeRef], dict[str, TypeRef]]:
-        """The return type each module-level function and each method of a class of this
-        file declares, read where its annotation is read (`_function`), by bare descriptor:
-        what a call of it declares it gives (`calls.own_return_type`). A name defined twice
-        keeps one only where every definition declares the same; a decorated one has none.
-        Beside them, the type each class body declares for an attribute (`client:
-        HttpClient`, PEP 526), by field symbol, read the same way."""
-        found: dict[str, TypeRef | None] = {}
-        fields: dict[str, TypeRef | None] = {}
-        pending: list[tuple[str | None, list[ast.stmt], TypeScope]] = [(None, body, types)]
-        while pending:
-            path, statements, scope = pending.pop(0)
-            owner = type_symbol(Target(here, path))
-            for node in statements:
-                if isinstance(node, ast.ClassDef):
-                    inner = f"{path}.{node.name}" if path else node.name
-                    generic = scope.with_type_parameters(node.type_params)
-                    class_names = bind_names(
-                        node.body,
-                        here,
-                        is_package=self._context.is_package,
-                        index=self._context.index,
-                        owner=inner,
-                    )
-                    nested = replace(
-                        generic,
-                        class_names=class_names,
-                        self_type=type_symbol(Target(here, inner)),
-                    )
-                    pending.append((inner, node.body, nested))
-                    continue
-                if (
-                    path is not None
-                    and isinstance(node, ast.AnnAssign)
-                    and isinstance(node.target, ast.Name)
-                ):
-                    field = f"{owner}{node.target.id}."
-                    typed = own_return_type(node.annotation, scope)
-                    fields[field] = None if field in fields and fields[field] != typed else typed
-                    continue
-                if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-                    continue
-                # A decorated name holds what its decorators made (`f = dec(f)`), whose call
-                # the function's own declaration does not describe.
-                decorated = holds_decorated_value(node, scope.lookup)
-                name = node.name
-                if path is not None and name == "__init__":
-                    name = INIT
-                elif path is not None and _is_setter(node):
-                    name = name + _SETTER_SUFFIX
-                descriptor = method_descriptor(owner, name, PY_SIGNATURE)
-                written = (
-                    None
-                    if node.returns is None or decorated
-                    else own_return_type(
-                        node.returns,
-                        replace(
-                            scope, self_type=SELF if scope.self_type else None
-                        ).with_type_parameters(node.type_params),
-                    )
-                )
-                if descriptor in found and found[descriptor] != written:
-                    written = None
-                found[descriptor] = written
-        return (
-            {key: value for key, value in found.items() if value is not None},
-            {key: value for key, value in fields.items() if value is not None},
-        )
 
     def _generic_parameters(self, owner: str) -> list[TypeParameter]:
         """A class's type parameters where it declares them without PEP 695's list: its
@@ -338,6 +271,9 @@ class _Writer(BodyReader):
 
     def _shape_or_none(self, symbol: str) -> ClassShape | None:
         found = self._local_classes.get(symbol)
+        headers = self._context.index.headers
+        if found is None and headers is not None:
+            found = headers.shape_of(symbol)
         libraries = self._context.index.libraries
         if found is None and libraries is not None:
             found = libraries.shape_of(symbol)
@@ -689,6 +625,106 @@ class _Writer(BodyReader):
                 modifiers=modifiers or {},
                 type_parameters=type_parameters or [],
             )
+        )
+
+
+def header_types(
+    tree: ast.Module, module: str, types: TypeScope, is_package: bool
+) -> tuple[dict[str, ClassShape], dict[str, TypeRef], dict[str, TypeRef]]:
+    """What another file's header says (`project.ProjectHeaders`): its class shapes, the
+    returns its `def`s declare and the attributes its class bodies declare, read as this
+    file's own are."""
+    classes = class_shapes(tree.body, module, types.names, types)
+    returns, fields = declared_types(
+        tree.body, module, types, is_package=is_package, index=types.index
+    )
+    return classes, returns, fields
+
+
+def declared_types(
+    body: list[ast.stmt], here: str, types: TypeScope, *, is_package: bool, index: ModuleIndex
+) -> tuple[dict[str, TypeRef], dict[str, TypeRef]]:
+    """The return type each module-level function and each method of a class of this
+    file declares, read where its annotation is read (`_function`), by bare descriptor:
+    what a call of it declares it gives (`calls.own_return_type`). A name defined twice
+    keeps one only where every definition declares the same; a decorated one has none.
+    Beside them, the type each class body declares for an attribute (`client:
+    HttpClient`, PEP 526), by field symbol, read the same way."""
+    found: dict[str, TypeRef | None] = {}
+    fields: dict[str, TypeRef | None] = {}
+    pending: list[tuple[str | None, list[ast.stmt], TypeScope]] = [(None, body, types)]
+    while pending:
+        path, statements, scope = pending.pop(0)
+        owner = type_symbol(Target(here, path))
+        for node in statements:
+            if isinstance(node, ast.ClassDef):
+                inner = f"{path}.{node.name}" if path else node.name
+                generic = scope.with_type_parameters(node.type_params)
+                class_names = bind_names(
+                    node.body,
+                    here,
+                    is_package=is_package,
+                    index=index,
+                    owner=inner,
+                )
+                nested = replace(
+                    generic,
+                    class_names=class_names,
+                    self_type=type_symbol(Target(here, inner)),
+                )
+                pending.append((inner, node.body, nested))
+                continue
+            if (
+                path is not None
+                and isinstance(node, ast.AnnAssign)
+                and isinstance(node.target, ast.Name)
+            ):
+                field = f"{owner}{node.target.id}."
+                typed = own_return_type(node.annotation, scope)
+                fields[field] = None if field in fields and fields[field] != typed else typed
+                continue
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            # A decorated name holds what its decorators made (`f = dec(f)`), whose call
+            # the function's own declaration does not describe.
+            decorated = holds_decorated_value(node, scope.lookup)
+            name = node.name
+            if path is not None and name == "__init__":
+                name = INIT
+            elif path is not None and _is_setter(node):
+                name = name + _SETTER_SUFFIX
+            descriptor = method_descriptor(owner, name, PY_SIGNATURE)
+            written = (
+                None
+                if node.returns is None or decorated
+                else own_return_type(
+                    node.returns,
+                    replace(
+                        scope, self_type=SELF if scope.self_type else None
+                    ).with_type_parameters(node.type_params),
+                )
+            )
+            if descriptor in found and found[descriptor] != written:
+                written = None
+            found[descriptor] = written
+    return (
+        {key: value for key, value in found.items() if value is not None},
+        {key: value for key, value in fields.items() if value is not None},
+    )
+
+
+class _ModuleClasses:
+    """The classes of the module, which a file's lookup orders are worked out for itself:
+    this file's, and another file's by its header. Every other class is a library's."""
+
+    def __init__(self, local: dict[str, ClassShape], headers: ProjectNames | None) -> None:
+        self._local = local
+        self._headers = headers
+
+    def __contains__(self, symbol: object) -> bool:
+        return isinstance(symbol, str) and (
+            symbol in self._local
+            or (self._headers is not None and self._headers.shape_of(symbol) is not None)
         )
 
 

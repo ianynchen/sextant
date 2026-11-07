@@ -126,6 +126,8 @@ _NEXT = "__next__"
 _ASYNC_ITER = "__aiter__"
 _ASYNC_NEXT = "__anext__"
 _GETITEM = "__getitem__"
+# A descriptor's method: reading an attribute declared with its class runs it.
+_GET = "__get__"
 _SLICE = TypeRef(symbol="builtins/slice#")
 # The type of a class object: `type[X]`, as the scanner holds a value written `type[X]` or
 # `Type[X]` (a written type reads it as `X`, for a call through the class).
@@ -1297,16 +1299,17 @@ class BodyReader:
         libraries = self._context.index.libraries
         assert libraries is not None
         owner = receiver.symbol
-        if owner in self._local_classes:
+        shape = self._project_shape(owner)
+        if shape is not None:
             order = self._hierarchy.order(owner)
             entries = [] if order is None else order
             defining = next(
                 (e for e in entries if name in _members(self._hierarchy.shape_of(e.symbol))),
                 None,
             )
-            if defining is None or defining.symbol in self._local_classes:
+            if defining is None or self._project_shape(defining.symbol) is not None:
                 return None
-            given = parameter_mapping(receiver, self._local_classes[owner])
+            given = parameter_mapping(receiver, shape)
             instance = substitute(defining, given) or TypeRef(symbol=defining.symbol)
             found = libraries.call_returns(
                 defining.symbol,
@@ -1342,9 +1345,10 @@ class BodyReader:
         if owner is None:
             typed = callee.typed if callee.hinted else None
             return None if typed is None else self._declared_on(typed, name)
-        if callee.invoke_kind == "static" and owner == f"{self._context.here}#":
-            return _a_class(self._own_returns.get(method_descriptor(owner, name, PY_SIGNATURE)))
-        if owner in self._local_classes:
+        if self._project_shape(owner) is None and callee.invoke_kind == "static":
+            # A module-level function, of this file or (by its header) another of the module.
+            return _a_class(self._project_return(method_descriptor(owner, name, PY_SIGNATURE)))
+        if self._project_shape(owner) is not None:
             typed = callee.typed
             receiver = (
                 typed if typed is not None and typed.symbol == owner else TypeRef(symbol=owner)
@@ -1355,7 +1359,7 @@ class BodyReader:
     def _declared_on(self, receiver: TypeRef, name: str) -> TypeRef | None:
         """What `name` called on a `receiver` of a class of this file declares it returns."""
         owner = receiver.symbol
-        shape = self._local_classes.get(owner)
+        shape = self._project_shape(owner)
         if shape is None:
             return None
         order = self._hierarchy.order(owner)
@@ -1363,13 +1367,14 @@ class BodyReader:
         defining = next(
             (e for e in entries if name in _members(self._hierarchy.shape_of(e.symbol))), None
         )
-        if defining is None or defining.symbol not in self._local_classes:
+        defining_shape = None if defining is None else self._project_shape(defining.symbol)
+        if defining is None or defining_shape is None:
             return None
-        written = self._own_returns.get(method_descriptor(defining.symbol, name, PY_SIGNATURE))
+        written = self._project_return(method_descriptor(defining.symbol, name, PY_SIGNATURE))
         if written is None:
             return None
         instance = substitute(defining, parameter_mapping(receiver, shape)) or defining
-        mapping = parameter_mapping(instance, self._local_classes[defining.symbol])
+        mapping = parameter_mapping(instance, defining_shape)
         # `Self` is the receiver's own class (the class the call was made through).
         return _a_class(substitute(written, {**mapping, SELF: receiver}))
 
@@ -1378,7 +1383,7 @@ class BodyReader:
         attribute `name` of a `receiver`, its type variables filled by the receiver's type
         arguments; None where no class of this file declares it, or it names no class."""
         owner = receiver.symbol
-        shape = self._local_classes.get(owner)
+        shape = self._project_shape(owner)
         if shape is None:
             return None
         order = self._hierarchy.order(owner)
@@ -1386,14 +1391,69 @@ class BodyReader:
         defining = next(
             (e for e in entries if name in _members(self._hierarchy.shape_of(e.symbol))), None
         )
-        if defining is None or defining.symbol not in self._local_classes:
+        defining_shape = None if defining is None else self._project_shape(defining.symbol)
+        if defining is None or defining_shape is None:
             return None
-        written = self._own_fields.get(f"{defining.symbol}{name}.")
+        written = self._project_field(f"{defining.symbol}{name}.")
         if written is None:
             return None
         instance = substitute(defining, parameter_mapping(receiver, shape)) or defining
-        mapping = parameter_mapping(instance, self._local_classes[defining.symbol])
-        return _a_class(substitute(written, mapping))
+        mapping = parameter_mapping(instance, defining_shape)
+        return self._read_through(_a_class(substitute(written, mapping)), receiver)
+
+    def _read_through(self, declared: TypeRef | None, receiver: TypeRef) -> TypeRef | None:
+        """What reading an attribute declared `declared` on a `receiver` gives: the declared
+        type itself, unless its class is a descriptor (it has `__get__`, as SQLAlchemy's
+        `Mapped[T]` has), whose `__get__` runs and gives what it is written to return for an
+        instance (`T`); None where that is not known, or a union holds a descriptor."""
+        if declared is None:
+            return None
+        members = list(declared.arguments) if declared.symbol == UNION else [declared]
+        if not any(self._is_descriptor(member) for member in members):
+            return declared
+        if declared.symbol == UNION or self._context.index.libraries is None:
+            return None
+        got = self._returns_on(
+            declared, "__get__", [_UNKNOWN, _UNKNOWN], [receiver, None], unpacked=False
+        )
+        return got if isinstance(got, TypeRef) and _a_class(got) is not None else None
+
+    def _is_descriptor(self, typed: TypeRef) -> bool:
+        """Whether `typed`'s class defines `__get__`, by its lookup order; a class whose
+        order is not read counts as one, since it may."""
+        owner = _class_of(typed)
+        if owner is None:
+            return False
+        order = self._hierarchy.order(owner)
+        if order is None:
+            return self._hierarchy.shape_of(owner) is None or _GET in _members(
+                self._hierarchy.shape_of(owner)
+            )
+        return any(_GET in _members(self._hierarchy.shape_of(entry.symbol)) for entry in order)
+
+    def _project_shape(self, symbol: str) -> ClassShape | None:
+        """A class of the module: this file's, else another file's by its header."""
+        found = self._local_classes.get(symbol)
+        headers = self._context.index.headers
+        if found is None and headers is not None:
+            found = headers.shape_of(symbol)
+        return found
+
+    def _project_return(self, descriptor: str) -> TypeRef | None:
+        """The return a `def` of the module declares: this file's, else by its header."""
+        found = self._own_returns.get(descriptor)
+        headers = self._context.index.headers
+        if found is None and headers is not None:
+            found = headers.returns(descriptor)
+        return found
+
+    def _project_field(self, field: str) -> TypeRef | None:
+        """The type a class body of the module declares for an attribute."""
+        found = self._own_fields.get(field)
+        headers = self._context.index.headers
+        if found is None and headers is not None:
+            found = headers.field(field)
+        return found
 
     def _super(self, name: str, scope: Scope) -> Callee:
         """`super().m()` from a method: `special` on the class's first written parent, as

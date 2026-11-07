@@ -377,7 +377,8 @@ def test_a_bare_qualifier_gives_no_type_and_a_wrapped_one_its_argument(tmp_path:
 
     tree = _scan(
         tmp_path,
-        _MODELS + "from typing import ClassVar, Final\n"
+        "from typing import ClassVar, Final\n"
+        "class Client:\n    def send(self):\n        return 1\n"
         "class Box:\n"
         "    limit: Final = 3\n"
         "    client: Final[Client]\n"
@@ -396,7 +397,7 @@ def test_a_bare_qualifier_gives_no_type_and_a_wrapped_one_its_argument(tmp_path:
     }
     assert fields["app/run/Box#limit."] != "typing/Final#"
     assert _owner_of(tree, "app/run#f", "bit_length") == [None]
-    assert _owner_of(tree, "app/run#f", "send") == [CLIENT, CLIENT]
+    assert _owner_of(tree, "app/run#f", "send") == ["app/run/Client#", "app/run/Client#"]
 
 
 def test_a_return_written_self_is_kept_as_written(tmp_path: Path):
@@ -416,3 +417,103 @@ def test_a_return_written_self_is_kept_as_written(tmp_path: Path):
     ]
     assert make.signature is not None and make.signature.returns is not None
     assert make.signature.returns.symbol == "Self"
+
+
+# -- the headers of the files a file imports (round 1, item 2) ---------------------------
+
+
+def _scan_files(tmp_path: Path, files: dict[str, str]):
+    from sextant.application.ports.scanner import ScanRequest
+    from sextant.domain.factfile import read_fact_tree
+    from sextant.ingress.extract.python.scanner import PythonScanner
+
+    root = tmp_path / "src"
+    for name, text in files.items():
+        path = root / "app" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    out = tmp_path / "facts"
+    PythonScanner().scan(
+        ScanRequest(
+            module_id="shop", coordinates="shop", version="1.0.0", classes_dir=root, out_dir=out
+        )
+    )
+    return read_fact_tree(out)
+
+
+_OTHER = (
+    "from typing import Iterator\n"
+    "class Client:\n    def send(self):\n        return 1\n"
+    "class User:\n    def save(self):\n        return 1\n"
+    "def rows() -> Iterator[dict[str, int]]:\n    return fetch()\n"
+    "class Svc:\n    client: Client\n    users: list[User]\n"
+    "class Users(list[User]):\n    pass\n"
+)
+
+
+def test_another_files_declared_return_types_what_is_read_off_its_result(tmp_path: Path):
+    """`rows() -> Iterator[dict[str, int]]` in `a.py`: in `b.py`, each row is a `dict`."""
+    tree = _scan_files(
+        tmp_path,
+        {
+            "a.py": _OTHER,
+            "b.py": "from app.a import rows\ndef f():\n    for r in rows():\n        r.get('x')\n",
+        },
+    )
+    assert _owner_of(tree, "app/b#f", "get") == [DICT]
+    assert _owner_of(tree, "app/b#f", "__iter__") == [None]
+
+
+def test_another_files_class_body_types_an_attribute_read_on_a_value(tmp_path: Path):
+    """`s.client` with `s: Svc` from `a.py` is the `Client` its body declares; an element of
+    `s.users` a `User`; and a library method inherited by a class of `a.py` is read there."""
+    tree = _scan_files(
+        tmp_path,
+        {
+            "a.py": _OTHER,
+            "b.py": "from app.a import Svc, Users\n"
+            "def f(s: Svc, u: Users):\n"
+            "    s.client.send()\n"
+            "    for x in s.users:\n        x.save()\n"
+            "    u.pop().save()\n",
+        },
+    )
+    assert _owner_of(tree, "app/b#f", "send") == ["app/a/Client#"]
+    assert _owner_of(tree, "app/b#f", "save") == ["app/a/User#", "app/a/User#"]
+
+
+def test_a_class_re_exported_by_a_package_is_read_from_where_it_is_defined(tmp_path: Path):
+    """`from app.pkg import Svc`, where `app/pkg/__init__.py` re-exports it from `.svc`: the
+    header of the file that defines it answers."""
+    tree = _scan_files(
+        tmp_path,
+        {
+            "a.py": _OTHER,
+            "pkg/__init__.py": "from .svc import Svc\n",
+            "pkg/svc.py": "from app.a import Client\nclass Svc:\n    client: Client\n",
+            "b.py": "from app.pkg import Svc\ndef f(s: Svc):\n    s.client.send()\n",
+        },
+    )
+    assert _owner_of(tree, "app/b#f", "send") == ["app/a/Client#"]
+
+
+def test_an_attribute_whose_declared_class_is_a_descriptor_is_what_its_get_gives(
+    tmp_path: Path,
+):
+    """`price: Typed[Client]` where `Typed` defines `__get__`: reading `obj.price` runs it, so
+    the attribute is never a `Typed` (a library descriptor gives what its `__get__` is written
+    to return; this one's is a body of the module, not read here); a class whose methods are
+    not read may be a descriptor, so its declaration gives nothing."""
+    tree = _scan(
+        tmp_path,
+        "from typing import Generic, TypeVar, overload\n"
+        "T = TypeVar('T')\n"
+        "class Client:\n    def send(self):\n        return 1\n"
+        "class Typed(Generic[T]):\n"
+        "    def __get__(self, instance: object, owner: object) -> T: ...\n"
+        "    def send(self):\n        return 2\n"
+        "class Box:\n    price: Typed[Client]\n" + _MODELS + "class Other:\n    user: User\n"
+        "def f(b: Box, o: Other):\n    b.price.send()\n    o.user.save()\n",
+    )
+    assert _owner_of(tree, "app/run#f", "send") == [None]
+    assert _owner_of(tree, "app/run#f", "save") == [None]

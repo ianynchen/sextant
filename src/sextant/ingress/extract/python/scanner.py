@@ -28,7 +28,8 @@ from sextant.ingress.extract.python.libraries import (
     record_files,
     referenced_types,
 )
-from sextant.ingress.extract.python.structure import file_facts
+from sextant.ingress.extract.python.project import ProjectHeaders, header_digest
+from sextant.ingress.extract.python.structure import file_facts, header_types
 from sextant.resources import code_identity, typeshed_dir
 
 _LANGUAGE = "python"
@@ -80,9 +81,23 @@ class PythonScanner:
             if request.origin is None
             else None
         )
-        index = ModuleIndex(
-            frozenset(_module_paths(relative for _, relative in files)), libraries, asked=set()
+        modules = frozenset(_module_paths(relative for _, relative in files))
+        previous = {record.target: record for record in request.previous}
+        # The module's own files, read by header for the files that import them (round 1,
+        # user choice A): one parse each per scan, against an index that reads no headers.
+        project = (
+            ProjectHeaders(
+                _module_files(files),
+                _previous_headers(previous.values()),
+                ModuleIndex(modules, libraries),
+                header_types,
+            )
+            if request.origin is None
+            else None
         )
+        index = ModuleIndex(modules, libraries, asked=set(), headers=project)
+        if project is not None:
+            project.asked = index.asked
         manager = NOT_APPLICABLE if request.coordinates == NOT_APPLICABLE else _PACKAGE_MANAGER
         prefix = f"{PYTHON_SCHEME} {manager} {request.coordinates} {request.version} "
         documents = facts = reused = 0
@@ -96,7 +111,6 @@ class PythonScanner:
         referenced: set[str] = set()
         # Only the module's own scan keeps documents (OI-325): an opted-in library's is read
         # whole into a subtree the stage discards before every run (D04 §2a).
-        previous = {record.target: record for record in request.previous}
         inputs = _inputs(request, prefix, libraries) if request.origin is None else None
         records: list[ReuseRecord] = []
         for root, relative in files:
@@ -164,6 +178,9 @@ class PythonScanner:
                     update={"partial": True, "partial_reason": "\n".join(read.not_read)}
                 )
             write_fact_file(request.out_dir / target, document, read.facts)
+            # The file's own header, for the next scan's questions about it: the tree is not
+            # read again, so it is stripped in place.
+            own_header = header_digest(tree)
             documents += 1
             facts += len(read.facts)
             declared = _declared(read.facts)
@@ -185,6 +202,8 @@ class PythonScanner:
                                 "library_notes": file_library_notes,
                                 "declared": sorted(declared),
                                 "referenced": sorted(types),
+                                "content_hash": document.content_hash,
+                                "header": own_header,
                             },
                             separators=(",", ":"),
                         ),
@@ -291,6 +310,32 @@ def _kept(
     ) != document.model_copy(update={"partial": False, "partial_reason": None}):
         return None
     return kept
+
+
+def _module_files(files: list[tuple[Path, str]]) -> dict[str, tuple[Path, bool]]:
+    """Each file of the module by its module path, with whether it is a package; the first
+    root's where two import roots hold one path, as the module index has it."""
+    found: dict[str, tuple[Path, bool]] = {}
+    for root, relative in files:
+        here, is_package = module_path(relative)
+        if here and here not in found:
+            found[here] = (root / relative, is_package)
+    return found
+
+
+def _previous_headers(records: Iterable[ReuseRecord]) -> dict[str, tuple[str, str]]:
+    """Each file's content hash and header digest as the previous scan recorded them."""
+    found: dict[str, tuple[str, str]] = {}
+    for record in records:
+        try:
+            detail = json.loads(record.detail)
+            found[module_path(record.target.removesuffix(".jsonl"))[0]] = (
+                str(detail["content_hash"]),
+                str(detail["header"]),
+            )
+        except (ValueError, TypeError, KeyError):
+            continue
+    return found
 
 
 def _declared(facts: list[Fact]) -> set[str]:

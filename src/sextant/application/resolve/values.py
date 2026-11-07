@@ -218,6 +218,8 @@ _ANY = "typing/Any#"
 _NONE = "builtins/None#"
 # A return written `Self` (D00 §5a): the class the call was made through.
 _SELF = "Self"
+# A descriptor's method (`_Walk._plain_attribute`).
+_GET = "__get__"
 # The name the facts give a call of a value (`f(x)` on a value `f`, D00 §5).
 _CALL = "__call__"
 # `returns_argument`'s three forms (`Catalog.returns_arguments`).
@@ -5365,6 +5367,21 @@ class _Walk:
         memo[owner] = None if conflict else found
         return memo[owner]
 
+    def _plain_attribute(self, declared: str) -> bool:
+        """Whether reading an attribute declared `declared` gives a `declared`: its class is
+        one of the module, every type of its lookup order was read, and none defines
+        `__get__`. A descriptor's read runs `__get__` (SQLAlchemy's `Mapped[T]` gives a
+        `T`), and a library class's methods are not read here, so it may be one."""
+        dispatch = self._index.dispatch
+        if dispatch is None or declared not in dispatch.scanned:
+            return False
+        if dispatch.order_boundary(declared) is not None:
+            return False
+        return not any(
+            _GET in dispatch.declared_names.get(type_, ())
+            for type_ in dispatch.lookup_order(declared)
+        )
+
     def _declared_field(self, namespace: tuple[str, ...]) -> tuple[Answer, ...]:
         """The classes the fields of `namespace` are declared to hold, for the type reader:
         each declaration's class, or each class of its union. None where the reader is
@@ -5379,7 +5396,7 @@ class _Walk:
             if written is None:
                 continue
             members = _declared_classes(written, dispatch)
-            if not members:
+            if not members or not all(self._plain_attribute(member) for member in members):
                 return ()
             found.update(dict.fromkeys(members))
         return tuple(

@@ -197,18 +197,46 @@ def test_one_file_edited_rereads_that_file_alone(
     _assert_same_as_fresh(project, warm, tmp_path)
 
 
-def test_a_file_another_imports_edited_rereads_that_file_alone(project: Path, tmp_path: Path):
-    """`shop/api.py` imports `Order` from `shop/models.py` by path; it never reads that
-    file's body (`imports.py`), so changing the body leaves `shop/api.py`'s facts as they
-    were — which the comparison with a fresh run proves rather than assumes."""
+def test_a_file_another_imports_edited_in_a_body_rereads_that_file_alone(
+    project: Path, tmp_path: Path
+):
+    """`shop/api.py` imports `Order` from `shop/models.py` and reads that file's HEADER
+    (round 1, user choice A) and nothing of its bodies, so changing a body leaves
+    `shop/api.py`'s facts as they were — which the comparison with a fresh run proves rather
+    than assumes."""
     warm = tmp_path / "warm"
     _analyze(project, warm)
     before = _modified(warm)
 
-    _write(project / "shop" / "models.py", "class Order:\n    pass\n\n\nclass Line:\n    pass\n")
+    _write(
+        project / "shop" / "models.py",
+        "class Order:\n    def total(self) -> int:\n        return 2\n",
+    )
     _analyze(project, warm)
 
     assert _rewritten(before, _modified(warm)) - _MODULE_DOCUMENTS == {"shop/models.py.jsonl"}
+    _assert_same_as_fresh(project, warm, tmp_path)
+
+
+def test_a_file_another_imports_edited_in_its_header_rereads_its_importers(
+    project: Path, tmp_path: Path
+):
+    """A signature `shop/api.py` read changes (`total`'s declared return): every file that
+    read that header is read again, and the result is a fresh run's."""
+    warm = tmp_path / "warm"
+    _analyze(project, warm)
+    before = _modified(warm)
+
+    _write(
+        project / "shop" / "models.py",
+        "class Order:\n    def total(self) -> str:\n        return 'a'\n",
+    )
+    _analyze(project, warm)
+
+    assert _rewritten(before, _modified(warm)) - _MODULE_DOCUMENTS == {
+        "shop/models.py.jsonl",
+        "shop/api.py.jsonl",
+    }
     _assert_same_as_fresh(project, warm, tmp_path)
 
 

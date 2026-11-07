@@ -27,7 +27,7 @@ keeps the symbol its import line gives.
 
 import ast
 import builtins
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Container, Mapping
 from dataclasses import dataclass, field, replace
 
 from sextant.domain.facts import TypeRef
@@ -425,7 +425,7 @@ class Hierarchy:
         self,
         shape_of: Callable[[str], ClassShape | None],
         shared: "Hierarchy | None" = None,
-        own: frozenset[str] = frozenset(),
+        own: Container[str] = frozenset(),
     ) -> None:
         self.shape_of = shape_of
         self._orders: dict[str, list[TypeRef] | None] = {}
