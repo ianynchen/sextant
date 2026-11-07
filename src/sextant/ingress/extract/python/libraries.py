@@ -235,6 +235,9 @@ class Libraries:
         self._shapes: dict[str, ClassShape | None] = {}
         # Whether a library name another module imports is a type variable, read once.
         self._variables: dict[str, bool] = {}
+        # Each call shape's answer (`call_returns`) and each construction's (`construct`).
+        self._answers: dict[tuple[object, ...], Returned | None] = {}
+        self._made: dict[tuple[object, ...], TypeRef | None] = {}
         self.hierarchy = Hierarchy(self.shape_of)
 
     @property
@@ -272,6 +275,33 @@ class Libraries:
         receiver: TypeRef | None = None,
         argument_types: Sequence[TypeRef | None] = (),
         self_type: TypeRef | None = None,
+    ) -> Returned | None:
+        # One answer per call shape, read once however many calls ask it (GUIDELINES §8.7):
+        # what the answer depends on is exactly what the key holds.
+        key = (
+            owner,
+            name,
+            tuple(_argument_key(argument) for argument in arguments),
+            unpacked,
+            _type_key(receiver),
+            tuple(_type_key(typed) for typed in argument_types),
+            _type_key(self_type),
+        )
+        if key not in self._answers:
+            self._answers[key] = self._call_returns(
+                owner, name, arguments, unpacked, receiver, argument_types, self_type
+            )
+        return self._answers[key]
+
+    def _call_returns(
+        self,
+        owner: str,
+        name: str,
+        arguments: Sequence[CallArgument],
+        unpacked: bool,
+        receiver: TypeRef | None,
+        argument_types: Sequence[TypeRef | None],
+        self_type: TypeRef | None,
     ) -> Returned | None:
         defining = self._defining_class(owner, name, receiver, self_type)
         if defining is None:
@@ -315,6 +345,21 @@ class Libraries:
         """The type a library class's constructor call makes, its type parameters filled
         by the arguments its own `__new__` or `__init__` takes (`enumerate(users)` is an
         `enumerate[User]`); None where the class has none or one is not filled."""
+        key = (
+            owner,
+            tuple(_argument_key(argument) for argument in arguments),
+            tuple(_type_key(typed) for typed in argument_types),
+        )
+        if key not in self._made:
+            self._made[key] = self._construct(owner, arguments, argument_types)
+        return self._made[key]
+
+    def _construct(
+        self,
+        owner: str,
+        arguments: Sequence[CallArgument],
+        argument_types: Sequence[TypeRef | None],
+    ) -> TypeRef | None:
         shape = self.shape_of(owner)
         if shape is None or not shape.parameters:
             return None
@@ -1588,6 +1633,20 @@ def _makes_type_variable(value: ast.expr) -> bool:
 def _member_name(symbol: str) -> str:
     """The bare name of a library member's type symbol: `T` for `_typeshed/T#`."""
     return without_type_marker(symbol).rpartition("/")[2]
+
+
+def _argument_key(argument: CallArgument) -> tuple[object, ...]:
+    """What the overload choice reads of an argument: its keyword and its Python value, with
+    the value's class (`True` and `1` are equal, and are not one argument)."""
+    value = _value(argument)
+    return (argument.keyword, type(value).__name__, value)
+
+
+def _type_key(typed: TypeRef | None) -> object:
+    """A type as a hashable key: its symbol, whether it may be None, and its arguments'."""
+    if typed is None:
+        return None
+    return (typed.symbol, typed.nullable, tuple(_type_key(a) for a in typed.arguments))
 
 
 def _type_at(types: Sequence[TypeRef | None], position: int) -> TypeRef | None:

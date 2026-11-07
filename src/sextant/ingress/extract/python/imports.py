@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 from sextant.domain.facts import CallArgument, TypeRef
 
 if TYPE_CHECKING:
-    from sextant.ingress.extract.python.typing_rules import ClassShape
+    from sextant.ingress.extract.python.typing_rules import ClassShape, Hierarchy
 
 # What a name of THIS file is, where the file can tell. An imported name has no kind:
 # whether `fastapi.FastAPI` is a class or a function is in a file this scanner does not
@@ -113,6 +113,11 @@ class LibraryNames(Protocol):
     ) -> TypeRef | None:
         """The type the constructor call `owner(arguments)` makes, with its type arguments
         filled by the arguments, or None."""
+        ...
+
+    @property
+    def hierarchy(self) -> "Hierarchy":
+        """The lookup orders of the libraries' classes, worked out once per scan."""
         ...
 
     def shape_of(self, symbol: str) -> "ClassShape | None":

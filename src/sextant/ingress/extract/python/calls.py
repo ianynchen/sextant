@@ -128,6 +128,14 @@ _SLICE = TypeRef(symbol="builtins/slice#")
 # what `__anext__` returns.
 _AWAITABLES = frozenset({"typing/Awaitable#", "typing/Coroutine#"})
 _TYPING_MODULES = frozenset({"typing", "typing_extensions"})
+# The arguments the language reads as a type expression (ruling R37): `cast`'s type and
+# `isinstance`'s or `issubclass`'s class, by position.
+_TYPE_ARGUMENTS = {
+    ("typing#", "cast"): 0,
+    ("typing_extensions#", "cast"): 0,
+    ("builtins#", "isinstance"): 1,
+    ("builtins#", "issubclass"): 1,
+}
 # The `dynamic` site an f-string or a string `+` is: its template is a `str.format` text.
 _STRING = "builtins/str#"
 _FORMAT = "format"
@@ -897,8 +905,12 @@ class BodyReader:
         callee = self._callee(node.func, scope)
         positional = []
         types: list[TypeRef | None] = []
-        for argument in node.args:
-            if isinstance(argument, ast.Starred):
+        type_at = _TYPE_ARGUMENTS.get((str(callee.target.owner), str(callee.target.name)))
+        for position, argument in enumerate(node.args):
+            if position == type_at:
+                positional.append(self._type_form(argument, scope))
+                types.append(None)
+            elif isinstance(argument, ast.Starred):
                 # Unpacked into the positional arguments (D00 §5 `keyword: "*"`): how many it
                 # fills, and so where every later one lands, is not known.
                 self._value(argument.value, scope)
@@ -1576,15 +1588,46 @@ class BodyReader:
             scope.body.returned[result.source] = held.arguments[index.value]
         return result
 
+    def _type_form(self, node: ast.expr, scope: Scope) -> CallArgument:
+        """A type expression (ruling R37): a class base, `cast`'s type, `isinstance`'s
+        class. A subscript in it makes a type (`__class_getitem__`), whatever its name
+        binds to, so it is no `__getitem__` call; any other part is read as a value."""
+        if isinstance(node, ast.Subscript):
+            self._type_form(node.value, scope)
+            self._type_form(node.slice, scope)
+            return _UNKNOWN
+        if isinstance(node, ast.Tuple) or (
+            isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr)
+        ):
+            for part in node.elts if isinstance(node, ast.Tuple) else [node.left, node.right]:
+                self._type_form(part, scope)
+            return _UNKNOWN
+        return self._value(node, scope)
+
     def _names_a_type_form(self, node: ast.expr, scope: Scope) -> bool:
         """Whether `node` names a class or one of typing's forms, whose subscript is a
-        type."""
+        type: a class of this file, a builtin, a typing form, or a class a library
+        defines. A name imported from another file of the module may be a class too; the
+        resolver tells (ruling R37)."""
         if not isinstance(node, ast.Name | ast.Attribute):
             return False
         targets = self._targets(node, scope)
         return bool(targets) and all(
-            t.kind == "class" or _is_builtin_class(t) or t.module in _TYPING_MODULES
+            t.kind == "class"
+            or _is_builtin_class(t)
+            or t.module in _TYPING_MODULES
+            or self._library_class(t)
             for t in targets or ()
+        )
+
+    def _library_class(self, target: Target) -> bool:
+        index = self._context.index
+        return (
+            target.kind is None
+            and target.member is not None
+            and index.libraries is not None
+            and not index.owns(target.module)
+            and index.libraries.shape_of(type_symbol(target)) is not None
         )
 
     def _module_class(self, target: Target) -> str | None:

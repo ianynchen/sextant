@@ -971,3 +971,82 @@ def test_a_library_wrapper_stops_at_the_library(tmp_path: Path):
     ]
     assert [(e["target"], e["callee"]) for e in _edges(workspace, retried)] == [(None, None)]
     workspace.close()
+
+
+# OI-324 fix round 1, ruling R37: a subscript of a CLASS OBJECT is a type form
+# (`__class_getitem__`, or the metaclass's `__getitem__`), never the instance's `__getitem__`.
+
+_MODELS = (
+    "from typing import Generic, TypeVar\n"
+    "T = TypeVar('T')\n"
+    "class User:\n"
+    "    def save(self): ...\n"
+    "class Repo(Generic[T]):\n"
+    "    def __getitem__(self, k):\n"
+    "        return k\n"
+)
+_GETITEM = _PREFIX + "app/models/Repo#__getitem__(sig_dd69782a)."
+
+
+def test_a_subscripted_class_from_another_file_draws_no_edge_to_its_getitem(tmp_path: Path):
+    """The reviewer's two-file repository: `class Users(Repo[User])`, `cast(Repo[User], y)`,
+    an alias `R = Repo[User]`, `make(Repo[User])` and `models.Repo[User]`. The class body's
+    `__getitem__` never runs for any of them; an instance's subscript still reaches it."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "models.py": _MODELS,
+            "run.py": (
+                "from typing import cast\n"
+                "from app import models\n"
+                "from app.models import Repo, User\n"
+                "class Users(Repo[User]):\n"
+                "    pass\n"
+                "R = Repo[User]\n"
+                "def make(t): ...\n"
+                "def f(y):\n"
+                "    make(Repo[User])\n"
+                "    make(models.Repo[User])\n"
+                "    return cast(Repo[User], y)\n"
+                "def g():\n"
+                "    return Repo()[0]\n"
+            ),
+        },
+    )
+    callers = {
+        str(row["caller"]).removeprefix(_PREFIX)
+        for row in workspace.query("call_edges")
+        if row["callee"] == _GETITEM
+    }
+    assert callers == {"app/run#g(sig_dd69782a)."}
+    subscripts = [
+        row
+        for row in workspace.query("call_sites")
+        if row["name"] == "__getitem__" and str(row["caller"]).startswith(_PREFIX + "app/run#f")
+    ]
+    for row in subscripts:
+        rows = _bound(workspace, (str(row["caller"]), int(str(row["ordinal"]))))
+        assert [(b["owner"], b["reason"]) for b in rows] == [(None, "not_readable")]
+        assert "a type form" in str(rows[0]["detail"])
+    workspace.close()
+
+
+def test_a_class_on_one_path_and_an_instance_on_another_is_decided_per_path(tmp_path: Path):
+    workspace = _resolved(
+        tmp_path,
+        {
+            "models.py": _MODELS,
+            "run.py": (
+                "from app.models import Repo\n"
+                "def use(r):\n"
+                "    return r[0]\n"
+                "def f():\n"
+                "    use(Repo)\n"
+                "    use(Repo())\n"
+            ),
+        },
+    )
+    site = _site(workspace, "app/run#use(sig_dd69782a).", "__getitem__")
+    rows = sorted(((row["owner"], row["reason"]) for row in _bound(workspace, site)), key=str)
+    assert rows == [("app/models/Repo#", None), (None, "not_readable")]
+    workspace.close()

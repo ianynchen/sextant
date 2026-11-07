@@ -81,6 +81,10 @@ _log = logging.getLogger(__name__)
 ROUNDS = 8
 _VIRTUAL = "virtual"
 _CALL = "__call__"
+# The calls the scanner writes for syntax (`xs[i]`, `for x in xs`), which Python looks up on
+# the value's type: on a class object that is the metaclass, or `__class_getitem__` for a
+# subscript, never the class body's own method (ruling R37).
+_PROTOCOL = frozenset({"__getitem__", "__iter__", "__next__", "__aiter__", "__anext__"})
 # What a path's crossings are joined by in `path_id`, outermost first.
 _JOIN = " > "
 
@@ -439,7 +443,20 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
         ended = producer.ended_at
         owner = None if ended is None else bound_owner(ended)
         body = None if ended is None or name != _CALL else called_function(ended)
-        if owner is not None:
+        if owner is not None and name in _PROTOCOL and ended is not None and ended.class_object:
+            found.append(
+                (
+                    path_id,
+                    None,
+                    NOT_READABLE,
+                    (
+                        f"receiver of {name} is the class {bare_descriptor(owner)} itself: a "
+                        "subscript of a class is a type form (`__class_getitem__`), and the "
+                        "class's own method runs only on an instance"
+                    ),
+                )
+            )
+        elif owner is not None:
             found.append((path_id, owner, None, None))
         elif body is not None:
             if body not in functions:

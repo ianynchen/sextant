@@ -239,6 +239,12 @@ class _Writer(BodyReader):
         )
         types = TypeScope(names=names, here=here, index=self._context.index)
         self._local_classes = _class_shapes(tree.body, here, names, types)
+        libraries = self._context.index.libraries
+        self._hierarchy = Hierarchy(
+            self._shape_or_none,
+            None if libraries is None else libraries.hierarchy,
+            frozenset(self._local_classes),
+        )
         self._symbol(owner, ConstructKind.MODULE, None, 1, last_line)
         clinit = self._clinit(owner, 1, last_line)
         scope = Scope(owner, types, self._body(clinit))
@@ -290,8 +296,10 @@ class _Writer(BodyReader):
             kind = ConstructKind.ENUM
         callees = self._decorators(node, scope)
         # The bases and the class keywords are read where the class is defined.
-        for written_base in [*node.bases, *(keyword.value for keyword in node.keywords)]:
-            self._value(written_base, scope)
+        for written_base in node.bases:
+            self._type_form(written_base, scope)
+        for keyword in node.keywords:
+            self._value(keyword.value, scope)
         self.facts.append(
             SymbolFact(
                 document_id=self._context.document_id,

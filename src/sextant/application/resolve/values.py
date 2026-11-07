@@ -449,6 +449,13 @@ class Answer:
     # producer reader to hand on (`Producer.made_by`), so a reader can name the decorator a
     # walk stopped at. Outside equality, as `parameter` is.
     made_by: tuple[str, int] | None = dataclass_field(default=None, compare=False, repr=False)
+    # **The value IS the class (or module) the symbol names, not an object built from it**
+    # (ruling R37): set on a `class` reference and on a name read as the type it is
+    # (`_named_type`). A `symbol` answer is both "the class" and "the type a value was built
+    # from"; a protocol call Python looks up on the value's type (`xs[i]`, `for x in xs`)
+    # differs between the two, so the reader of a receiver tells them apart. Part of what
+    # the answer is: a class and an object of it are two values.
+    class_object: bool = False
 
 
 @dataclass(frozen=True)
@@ -3053,7 +3060,15 @@ class _Walk:
             symbol = argument.get("symbol")
             if symbol is None:
                 return _only(trail, _unresolved(NOT_READABLE))
-            return _only(trail, Answer(kind=LITERAL, value=str(symbol), literal_kind=SYMBOL))
+            return _only(
+                trail,
+                Answer(
+                    kind=LITERAL,
+                    value=str(symbol),
+                    literal_kind=SYMBOL,
+                    class_object=kind == "class",
+                ),
+            )
         if kind == "field":
             symbol = argument.get("symbol")
             if symbol is None:
@@ -4972,7 +4987,10 @@ class _Walk:
                 return _only(trail, _unresolved(EXTERNAL))
             named = self._named_type(symbol)
             if named is not None:
-                return _only(trail, Answer(kind=LITERAL, value=named, literal_kind=SYMBOL))
+                return _only(
+                    trail,
+                    Answer(kind=LITERAL, value=named, literal_kind=SYMBOL, class_object=True),
+                )
             return _only(trail, _unresolved(NO_WRITER))
         reached: list[_Reached] = []
         for one in written_ones:

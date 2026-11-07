@@ -68,6 +68,7 @@ _ALIASES = {
     "Deque": "collections/deque#",
     "LiteralString": "builtins/str#",
 }
+_TYPING_NAMES = frozenset({"typing", "typing_extensions"})
 OBJECT = "builtins/object#"
 TUPLE = "builtins/tuple#"
 # The type variable `Self` is read as in a library's signature: the receiver's type fills it.
@@ -185,9 +186,8 @@ def _named(target: Target, scope: TypeScope, depth: int) -> TypeRef | None:
         return None
     if is_typing(target, "Any"):
         return TypeRef(symbol=ANY)
-    for alias, symbol in _ALIASES.items():
-        if is_typing(target, alias):
-            return _known(symbol)
+    if target.module in _TYPING_NAMES and target.member in _ALIASES:
+        return _known(_ALIASES[target.member])
     if is_typing(target, "Self"):
         return _known(scope.self_type) if scope.self_type is not None else None
     if target.module == BUILTINS and target.member == "None":
@@ -353,9 +353,13 @@ def substitute(written: TypeRef, mapping: Mapping[str, TypeRef]) -> TypeRef | No
         if written.nullable:
             members.append(_known(NONE, nullable=True))
         return _union(members)
+    if not written.arguments:
+        return written
     arguments = [substitute(argument, mapping) for argument in written.arguments]
     if any(argument is None for argument in arguments):
         return written.model_copy(update={"arguments": []})
+    if all(new is old for new, old in zip(arguments, written.arguments, strict=True)):
+        return written
     return written.model_copy(update={"arguments": arguments})
 
 
@@ -379,11 +383,22 @@ class Hierarchy:
     `list` is `list[_T]`, `MutableSequence[_T]`, ..., `Iterable[_T]`, `object`. Worked out
     once per class (GUIDELINES §8.7); None where a class or a base is not read."""
 
-    def __init__(self, shape_of: Callable[[str], ClassShape | None]) -> None:
+    def __init__(
+        self,
+        shape_of: Callable[[str], ClassShape | None],
+        shared: "Hierarchy | None" = None,
+        own: frozenset[str] = frozenset(),
+    ) -> None:
         self.shape_of = shape_of
         self._orders: dict[str, list[TypeRef] | None] = {}
+        # Where a class not in `own` is ordered: the libraries' orders, worked out once for
+        # the whole scan, not once per file.
+        self._shared = shared
+        self._own = own
 
     def order(self, symbol: str) -> list[TypeRef] | None:
+        if self._shared is not None and symbol not in self._own:
+            return self._shared.order(symbol)
         if symbol in self._orders:
             return self._orders[symbol]
         # A class being worked out names itself through its bases: no order.

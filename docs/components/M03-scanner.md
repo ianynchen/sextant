@@ -328,9 +328,15 @@ comprehensions included:
   consumed. A tuple target (`for k, v in d.items()`) takes a `tuple[A, B]` of as many parts
   apart by position; any other value, or a starred name, leaves its names untyped;
 - `xs[i]` is the call `xs.__getitem__(i)`. A slice is an `unresolved` argument (the
-  grammar holds no slice object) that chooses a `slice` overload. Subscripting a class or a
-  typing form (`list[int]`, `Generic[T]`, `Optional[X]`) makes a type and is not written as
-  a call. A store (`xs[i] = v`) and other operators are not calls here;
+  grammar holds no slice object) that chooses a `slice` overload. Subscripting a class
+  object makes a type (`__class_getitem__`), never the instance's `__getitem__` (ruling
+  R37): no call is written for a subscript in a type expression (a class base, `cast`'s
+  type, `isinstance`'s or `issubclass`'s class), nor for one of a class of this file, a
+  builtin, a typing form or a library class. A name imported from another file of the
+  module may be a class too, which this file cannot see: the call is written, and the
+  resolver answers a path whose receiver is the class itself `not_readable` ("a type
+  form"), so no edge reaches the class's own `__getitem__`; the same holds for `__iter__`
+  and `__next__`. A store (`xs[i] = v`) and other operators are not calls here;
 - a constructor call gives an `instance` whose `source` is the constructor's receiver;
 - an f-string, or `+` with a string literal, is `concat`, filled by a `dynamic`
   `builtins/str#format` site; a list or a tuple is `array`; a function is `lambda`;

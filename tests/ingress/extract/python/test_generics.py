@@ -362,3 +362,41 @@ def test_subscripting_a_class_is_a_type_not_an_item_read(tmp_path: Path):
     )
 
     assert "__getitem__" not in [name for _, name in _owners(tree, "app/run#")]
+
+
+def test_a_type_expression_writes_no_subscript_call(tmp_path: Path):
+    """Ruling R37: a class base, `cast`'s type and `isinstance`'s class are type
+    expressions, so a subscript in them is a type, whatever its name binds to; so is a
+    subscript of a class a library defines. A subscript of a value still is `__getitem__`."""
+    site = tmp_path / "site"
+    info = site / "pages-1.0.dist-info"
+    _write(info / "METADATA", "Metadata-Version: 2.1\nName: pages\nVersion: 1.0\n\n")
+    _write(
+        site / "pages" / "__init__.py",
+        "from typing import Generic, TypeVar\nT = TypeVar('T')\nclass Page(Generic[T]): ...\n",
+    )
+    _write(site / "pages" / "py.typed", "")
+    _write(
+        info / "RECORD",
+        "pages/__init__.py,,\npages/py.typed,,\n"
+        "pages-1.0.dist-info/METADATA,,\npages-1.0.dist-info/RECORD,,\n",
+    )
+    library = LibraryRoot(coordinate="pages", version="1.0", archive=site)
+    tree = _scan(
+        tmp_path,
+        _MODELS + "from typing import cast\n"
+        "from app.repos import Repo\n"
+        "from pages import Page\n"
+        "class Users(Repo[User]):\n"
+        "    pass\n"
+        "def f(y, rows):\n"
+        "    cast(Repo[User], y)\n"
+        "    isinstance(y, Repo[User])\n"
+        "    wrap(Page[User])\n"
+        "    return rows[0]\n",
+        (library,),
+    )
+
+    getitems = [site for site in _sites(tree, "app/run#") if site.target.name == "__getitem__"]
+    assert [bare_descriptor(site.caller) for site in getitems] == ["app/run#f(sig_dd69782a)."]
+    assert getitems[0].receiver_parameter == 1
