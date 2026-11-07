@@ -653,33 +653,106 @@ _IDENT = (
 )
 
 
-def test_a_call_through_a_module_decorator_follows_its_code_and_names_no_wrong_owner(
-    tmp_path: Path,
-):
-    """`@ident def f` makes `f` the field written from `ident(f)`: the walk follows
-    `ident`'s own return into its parameter, and ends at the function value. A function
-    value is a body, not a value of a type (ruled 2026-09-22), so no owner is bound and no
-    edge is drawn to anything else."""
+def test_a_module_decorator_that_returns_its_argument_gives_the_function_back(tmp_path: Path):
+    """`@ident def f` makes `f` the field written from `ident(f)`; `ident` returns its
+    argument, so the walk follows `ident`'s own code to the function value, and calling a
+    function runs it (ruling R29, as a lambda on the JVM): `f()` is an edge to `f`'s body,
+    with no owner bound for it."""
     workspace = _resolved(tmp_path, {"a.py": _IDENT})
     site = _site(workspace, "app/a#run(sig_dd69782a).", "__call__")
-    rows = _bound(workspace, site)
-    assert [(row["owner"], row["reason"]) for row in rows] == [(None, "not_readable")]
-    assert "app/a#ident(sig_dd69782a). returns 0" in str(rows[0]["path_id"])
-    assert [(edge["target"], edge["callee"]) for edge in _edges(workspace, site)] == [(None, None)]
+    assert [(row["callee"], row["resolution"]) for row in _edges(workspace, site)] == [
+        (_PREFIX + "app/a#f(sig_dd69782a).", "resolved")
+    ]
+    assert _bound(workspace, site) == []
+    workspace.close()
+
+
+_WRAPPING = (
+    "def deco(fn):\n"
+    "    def w(*a):\n"
+    "        return fn(*a)\n"
+    "    return w\n"
+    "@deco\ndef f():\n    return 1\n"
+    "def run():\n    return f()\n"
+)
+
+
+def test_a_decorator_that_returns_its_own_wrapper_runs_the_wrapper(tmp_path: Path):
+    """`deco` returns its nested `w`: the name `f` holds `w`, so `f()` runs `w`'s body."""
+    workspace = _resolved(tmp_path, {"a.py": _WRAPPING})
+    site = _site(workspace, "app/a#run(sig_dd69782a).", "__call__")
+    assert [row["callee"] for row in _edges(workspace, site)] == [
+        _PREFIX + "app/a#deco$w(sig_dd69782a)."
+    ]
     workspace.close()
 
 
 @pytest.mark.xfail(
     strict=True,
-    reason="a call of a function value is not yet an edge into that function's body "
-    "(task 9a fix round 1 report: needs a ruling on binding __call__ to a lambda answer)",
+    reason="a nested function's read of an enclosing name (`fn` in `w`) is `unresolved`: the "
+    "scanner writes no captures (calls.py `_local`), so the wrapper's `fn(*a)` is not followed "
+    "to `f` (task 9a fix round 2 report)",
 )
-def test_a_module_decorator_that_returns_its_argument_gives_the_function_back(tmp_path: Path):
-    workspace = _resolved(tmp_path, {"a.py": _IDENT})
-    site = _site(workspace, "app/a#run(sig_dd69782a).", "__call__")
-    assert [row["callee"] for row in _edges(workspace, site)] == [
+def test_the_wrappers_call_of_its_argument_reaches_the_decorated_function(tmp_path: Path):
+    workspace = _resolved(tmp_path, {"a.py": _WRAPPING})
+    inner = _site(workspace, "app/a#deco$w(sig_dd69782a).", "__call__")
+    assert [row["callee"] for row in _edges(workspace, inner)] == [
         _PREFIX + "app/a#f(sig_dd69782a)."
     ]
+    workspace.close()
+
+
+def test_a_functools_wraps_wrapper_stops_at_the_library_until_it_is_stated(tmp_path: Path):
+    """`@functools.wraps(fn) def w` makes `w` what `wraps(fn)(w)` returns, which no value
+    model states yet (9b's `returns_argument`): `f()` is `external`, with no wrong owner and
+    no edge to a body it may not run."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": "import functools\n"
+            + _WRAPPING.replace("    def w(*a):", "    @functools.wraps(fn)\n    def w(*a):")
+        },
+    )
+    site = _site(workspace, "app/a#run(sig_dd69782a).", "__call__")
+    assert {row["reason"] for row in _bound(workspace, site)} == {"external"}
+    assert [(e["target"], e["callee"]) for e in _edges(workspace, site)] == [(None, None)]
+    workspace.close()
+
+
+def test_a_function_on_one_path_and_an_object_on_another_are_each_their_own(tmp_path: Path):
+    """`call(h)` is given a function on one path and a `Runner` on another: `h()` runs the
+    function's body on the first and `Runner.__call__` on the second, two edges, `narrowed`;
+    the `Runner` path is a bound row, the function path binds no owner."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": (
+                "class Runner:\n    def __call__(self):\n        return 2\n"
+                "def job():\n    return 1\n"
+                "def call(h):\n    return h()\n"
+                "def one():\n    call(job)\n"
+                "def two():\n    call(Runner())\n"
+            )
+        },
+    )
+    site = _site(workspace, "app/a#call(sig_dd69782a).", "__call__")
+    assert sorted((e["callee"], e["resolution"]) for e in _edges(workspace, site)) == [
+        (_PREFIX + "app/a#job(sig_dd69782a).", "narrowed"),
+        (_PREFIX + "app/a/Runner#__call__(sig_dd69782a).", "narrowed"),
+    ]
+    assert [row["owner"] for row in _bound(workspace, site)] == ["app/a/Runner#"]
+    workspace.close()
+
+
+def test_a_formatted_string_is_never_read_as_a_function(tmp_path: Path):
+    """R19b: an f-string is a `concat` made by a `dynamic` `str.format` site, never a
+    function value, so calling it binds no body."""
+    workspace = _resolved(
+        tmp_path,
+        {"a.py": "def call(h):\n    return h()\ndef one(y):\n    call(f'{y}!')\n"},
+    )
+    site = _site(workspace, "app/a#call(sig_dd69782a).", "__call__")
+    assert all(e["callee"] is None for e in _edges(workspace, site))
     workspace.close()
 
 

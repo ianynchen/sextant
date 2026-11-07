@@ -96,6 +96,11 @@ here would restate those documents rather than add anything.
   into a body (31,452 → 31,345), Sextant 27, each `external` or a library method, none to a
   wrong owner. A function or class argument fits a `Callable` parameter when an overload is
   chosen.
+- **Calling a Python function value runs that function** (OI-208 plan 1 task 9a fix round 2,
+  ruling R29). A `__call__` whose receiver is, on some path, a function (a decorator in the
+  project's code that returns its argument or its own wrapper, a function passed as an
+  argument) is an edge to that function's body, as a call on a JVM lambda reaches the lambda's
+  body; no owner is bound for it, and each path is its own answer.
 - **The Python scanner reads library signatures and types, and Python lookup follows C3**
   (OI-208 plan 1 task 7). Libraries are read from the project's installed environment, and the
   standard library and stub-only libraries (`requests`) from a pinned typeshed copy shipped in the

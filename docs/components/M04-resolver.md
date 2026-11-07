@@ -156,6 +156,17 @@ rows are then `partial`. It never writes a fact: `call_edges` reads the fact's o
 names one and these rows' where it does not, one edge per owner, evidence `syntax`; a site
 nothing bound is one row with no target, `unresolved`.
 
+**Calling a function value runs that function** (ruling R29, task 9a fix round 2). The walk
+binding a `__call__` asks what a call of the value runs (`producer_paths(..., functions=True)`):
+a path that ends at a function value (a `lambda` argument: a `def` passed or returned, a
+decorator that hands its function back) ends naming its body, and the call is an edge to
+exactly that body, the rule a JVM call on a lambda's functional interface reaches the lambda's
+body by (`call_edges._edge`'s `dynamic` lookup; the row keeps the site's `virtual`). No owner
+is written to `bound_receivers` for such a path: it has no row there, and counts in the site's
+tier as one more thing the call may run (a function on one path and a `Runner` on another are
+two edges, `narrowed`). Every other reader keeps a function value as a body and not a value
+(ruled 2026-09-22), and an f-string (`concat`) is never one (R19b).
+
 Two readings the walk applies for a call one file cannot know, both inert on the JVM:
 - **a static call naming a type is its construction** (`effective_calls`): the file that
   writes `Session()` for a class imported from another cannot see it is a class, so the call

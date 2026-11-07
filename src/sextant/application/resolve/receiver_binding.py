@@ -16,6 +16,13 @@ of the general list and a detail for a person, and the site's bound rows are the
 A receiver that is a parameter whose written type is a union is each member of the union, one
 row each, `narrowed` (carried item (c)): the written type is the closed list.
 
+**A `__call__` on a function value runs that function** (ruling R29): the walk asks what a
+call of the value runs (`producer_paths(..., functions=True)`), and a path that ends at a
+function value (`lambda`) names its body, as a JVM functional interface's method on a lambda
+reaches the lambda's body. No owner is written for it: the path is an edge to that body
+(`call_edges`), per path, beside the owners other paths bound, and it counts toward the
+site's tier as one more thing the call may run.
+
 **Which callers count** is the walk's rule: a call in the scanned code whose edge `call_edges`
 holds. No caller is `external`. A function the module hands on as a value (a `lambda`
 argument, or a name of it read as a module field) is called by whoever received it, so a
@@ -40,7 +47,7 @@ from typing import Any
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.call_edges import record_call_edges
+from sextant.application.resolve.call_edges import FunctionCalls, record_call_edges
 from sextant.application.resolve.values import (
     ESCAPES,
     EXTERNAL,
@@ -50,6 +57,7 @@ from sextant.application.resolve.values import (
     ValueIndex,
     bind_by_name,
     bound_owner,
+    called_function,
     producer_paths,
     reset_value_index,
     value_index,
@@ -72,6 +80,7 @@ _log = logging.getLogger(__name__)
 # chains"); the brief's eight.
 ROUNDS = 8
 _VIRTUAL = "virtual"
+_CALL = "__call__"
 # What a path's crossings are joined by in `path_id`, outermost first.
 _JOIN = " > "
 
@@ -85,14 +94,25 @@ _Union = tuple[tuple[str, ...], bool]
 class _Walked:
     """One site's walk: its ends, and the methods whose callers it read — a path crossed out
     of one, or ended at one of its parameters. None where that is not known (a path the walk
-    could not hold), and the site is walked again every round."""
+    could not hold), and the site is walked again every round. `functions` are the bodies,
+    bare, of the function values a `__call__`'s paths ended at (ruling R29), in path order."""
 
     found: tuple[_Found, ...]
     depends_on: frozenset[str] | None
+    functions: tuple[str, ...] = ()
 
     @property
     def owners(self) -> frozenset[str]:
         return frozenset(owner for _, owner, _, _ in self.found if owner is not None)
+
+    @property
+    def reached(self) -> frozenset[str]:
+        """What a round counts as newly bound: each owner, and each function body."""
+        return self.owners | frozenset(_FUNCTION_MARK + body for body in self.functions)
+
+
+# What marks a function body among a site's owners when rounds compare what they bound.
+_FUNCTION_MARK = "function:"
 
 
 def bind_receivers(workspace: Workspace) -> int:
@@ -129,9 +149,9 @@ def bind_until_settled(
     counts: list[int] = []
     capped = False
     for round_number in range(1, ROUNDS + 1):
-        before = {key: one.owners for key, one in walked.items()}
+        before = {key: one.reached for key, one in walked.items()}
         walked.update(_walk(index, context, gained, walked))
-        newly = [key for key, one in walked.items() if one.owners - before.get(key, frozenset())]
+        newly = [key for key, one in walked.items() if one.reached - before.get(key, frozenset())]
         counts.append(len(newly))
         _log.info(
             "bind_receivers round %d  %d newly bound  %.2fs",
@@ -149,7 +169,7 @@ def bind_until_settled(
     _write(workspace, index, walked, capped)
     if any(counts):
         started = time.perf_counter()
-        record_call_edges(workspace, catalogs)
+        record_call_edges(workspace, catalogs, _functions(walked))
         _log.info("record_call_edges after binding  %.1fs", time.perf_counter() - started)
     # Every index a later pass asks for is built from the edges as they now stand.
     reset_value_index()
@@ -161,10 +181,10 @@ def _every_round_whole(workspace: Workspace, catalogs: Sequence[Catalog]) -> tup
     walked: dict[tuple[str, int], _Walked] = {}
     for round_number in range(1, ROUNDS + 1):
         started = time.perf_counter()
-        before = {key: one.owners for key, one in walked.items()}
+        before = {key: one.reached for key, one in walked.items()}
         index = value_index(workspace)
         walked = _walk(index, _context(workspace, index), None, {})
-        newly = sum(1 for key, one in walked.items() if one.owners - before.get(key, frozenset()))
+        newly = sum(1 for key, one in walked.items() if one.reached - before.get(key, frozenset()))
         counts.append(newly)
         _write(workspace, index, walked, capped=round_number == ROUNDS and newly > 0)
         _log.info(
@@ -175,9 +195,18 @@ def _every_round_whole(workspace: Workspace, catalogs: Sequence[Catalog]) -> tup
         )
         if newly == 0:
             break
-        record_call_edges(workspace, catalogs)
+        record_call_edges(workspace, catalogs, _functions(walked))
     reset_value_index()
     return tuple(counts)
+
+
+def _functions(walked: Mapping[tuple[str, int], _Walked]) -> dict[tuple[str, int], FunctionCalls]:
+    """Each site a path of which ended at a function value: its bodies, and its tier."""
+    return {
+        key: FunctionCalls(one.functions, _tier(one))
+        for key, one in walked.items()
+        if one.functions
+    }
 
 
 @dataclass(frozen=True)
@@ -244,6 +273,24 @@ def _with_new_callers(
     callees = {key: list(value) for key, value in index.callees.items()}
     for key in newly:
         site = index.sites[key]
+        gained_here = walked[key].reached - before.get(key, frozenset())
+        bodies = [
+            callee
+            for mark in sorted(gained_here)
+            if mark.startswith(_FUNCTION_MARK)
+            for callee in dispatch.bodies.get(mark[len(_FUNCTION_MARK) :], ())
+        ]
+        for callee in bodies:
+            if callee not in callees.get(key, ()):
+                callees.setdefault(key, []).append(callee)
+                edges.append(
+                    {
+                        "caller": key[0],
+                        "ordinal": key[1],
+                        "callee": callee,
+                        "invoke_kind": site["invoke_kind"],
+                    }
+                )
         for owner in sorted(walked[key].owners - before.get(key, frozenset())):
             for callee in dispatch.candidates({**site, "owner": owner}):
                 if callee in callees.get(key, ()):
@@ -321,7 +368,7 @@ def _write(
                 )
                 for end in found
             ]
-        rows.extend(_rows(caller, ordinal, list(dict.fromkeys(found))))
+        rows.extend(_rows(caller, ordinal, list(dict.fromkeys(found)), one.functions))
     workspace.derive("bound_receivers_reset")
     if rows:
         workspace.derive("bound_receivers_insert", rows=rows)
@@ -341,8 +388,9 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
     depends_on: set[str] = set()
     dropped: list[Producer] = []
     handed_on = context.handed_on
+    functions: list[str] = []
     for producer, path in producer_paths(
-        index, site, RECEIVER, frozenset(), which_object=True, dropped=dropped
+        index, site, RECEIVER, frozenset(), which_object=True, dropped=dropped, functions=True
     ):
         path_id = _JOIN.join(path.labels())
         crossed = path.crossed_out_of()
@@ -351,8 +399,12 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
             depends_on.add(producer.parameter[0])
         ended = producer.ended_at
         owner = None if ended is None else bound_owner(ended)
+        body = None if ended is None or name != _CALL else called_function(ended)
         if owner is not None:
             found.append((path_id, owner, None, None))
+        elif body is not None:
+            if body not in functions:
+                functions.append(body)
         else:
             found.append(
                 (
@@ -391,7 +443,9 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
                 ),
             )
         )
-    return _Walked(tuple(dict.fromkeys(found)), None if dropped else frozenset(depends_on))
+    return _Walked(
+        tuple(dict.fromkeys(found)), None if dropped else frozenset(depends_on), tuple(functions)
+    )
 
 
 def _members(name: str, union: _Union) -> tuple[_Found, ...]:
@@ -504,18 +558,14 @@ def _escapes(name: str, method: str) -> _Found:
     )
 
 
-def _rows(caller: str, ordinal: int, found: list[_Found]) -> list[dict[str, object]]:
+def _rows(
+    caller: str, ordinal: int, found: list[_Found], functions: tuple[str, ...] = ()
+) -> list[dict[str, object]]:
     """A site's rows, with the site's own resolution on each (D01's rule: the tier
     describes the site): `resolved` for one type on every path, `narrowed` for several, and
-    `partial` where some path reached none."""
-    owners = {owner for _, owner, _, _ in found if owner is not None}
-    open_path = any(owner is None for _, owner, _, _ in found)
-    if open_path:
-        bound_tier = Resolution.PARTIAL
-    elif len(owners) > 1:
-        bound_tier = Resolution.NARROWED
-    else:
-        bound_tier = Resolution.RESOLVED
+    `partial` where some path reached none. A path that ended at a function value has no
+    row (it binds no owner) and counts as one more thing the call may run."""
+    bound_tier = _tier(_Walked(tuple(found), None, functions))
     return [
         {
             "caller": caller,
@@ -529,6 +579,15 @@ def _rows(caller: str, ordinal: int, found: list[_Found]) -> list[dict[str, obje
         }
         for path_id, owner, reason, detail in found
     ]
+
+
+def _tier(walked: _Walked) -> Resolution:
+    """The site's tier over every path: owners and function bodies alike."""
+    if any(owner is None for _, owner, _, _ in walked.found):
+        return Resolution.PARTIAL
+    if len(walked.owners) + len(walked.functions) > 1:
+        return Resolution.NARROWED
+    return Resolution.RESOLVED
 
 
 def _function(method: str) -> tuple[str, str]:

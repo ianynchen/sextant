@@ -1895,6 +1895,7 @@ def producer_paths(
     counting: Counting = None,
     read_sites: AbstractSet[tuple[str, int]] = frozenset(),
     dropped: list[Producer] | None = None,
+    functions: bool = False,
 ) -> tuple[tuple[Producer, Path], ...]:
     """`producers_of`, with the PATH each producer was reached by, one pair per distinct
     path — for a reader that goes on to read other positions on that same path.
@@ -1920,7 +1921,13 @@ def producer_paths(
 
     `dropped`, where handed a list, receives the end of every path left out because it
     entered one helper through two of its calls — so a reader can tell a complete answer
-    from one missing a path."""
+    from one missing a path.
+
+    `functions` is for the reader asking what a CALL of the value runs (ruling R29, task 9a
+    fix round 2): a function value (`lambda`) ends its path as a `symbol` literal naming the
+    function's body, the way a JVM functional interface's method on a lambda reaches the
+    lambda's body. Off, the default, a function value is a body and not a value (ruled
+    2026-09-22), as every other reader has it."""
     walk = _Walk(
         index,
         declared=declared,
@@ -1932,6 +1939,7 @@ def producer_paths(
         parameters_apart=True,
         counting=counting,
         read_sites=read_sites,
+        functions=functions,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[tuple[Producer, Path]] = []
@@ -2280,6 +2288,17 @@ def bound_owner(answer: Answer) -> str | None:
     return named if is_type_descriptor(named) else None
 
 
+def called_function(answer: Answer) -> str | None:
+    """The body a call of a function value runs (ruling R29): a `symbol` literal naming a
+    METHOD, which only the call reader (`producer_paths(..., functions=True)`) answers a
+    function value with. None for anything else, a type among them."""
+    if answer.kind != LITERAL or answer.literal_kind != SYMBOL:
+        return None
+    named = str(answer.value)
+    # A method descriptor ends with its parameter list: `app/a#f(sig_…).`.
+    return named if named.endswith(").") else None
+
+
 def _used_at(origin: _Position) -> int | None:
     """WHERE a value is used, which is what bounds the `escapes` window.
 
@@ -2596,8 +2615,12 @@ class _Walk:
         parameters_apart: bool = False,
         counting: Counting = None,
         read_sites: AbstractSet[tuple[str, int]] = frozenset(),
+        functions: bool = False,
     ) -> None:
         self._index = index
+        # The call reader (`producer_paths(..., functions=True)`): a function value ends its
+        # path naming the function's body. False for every other reader.
+        self._functions = functions
         # The calls the reader itself reads, by `(method, ordinal)` (the forward chain walk's
         # declared steps, for the execute-join `chains._joined_through_values` reads): one made
         # on the value, or handed the value, does not open `escapes`, since what it does is
@@ -2892,6 +2915,12 @@ class _Walk:
             # It carries a `source` and a body `symbol`, so it would fit both shapes
             # above, and it is left out of both on MEANING (`value_edges.sql`'s
             # `names_declaration` arm, ruled 2026-09-22): it names a body, not a value.
+            # The one reader asking what a CALL of the value runs is answered that body
+            # (ruling R29): calling a function runs it, as a lambda on the JVM.
+            if self._functions and argument.get("symbol") is not None:
+                return _only(
+                    trail, Answer(kind=LITERAL, literal_kind=SYMBOL, value=str(argument["symbol"]))
+                )
             return _only(trail, _unresolved(NOT_READABLE))
         if kind == "null":
             # The code STATES there is no value (D00 §5's `null` kind). That is an answer
