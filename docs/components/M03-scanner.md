@@ -338,7 +338,11 @@ comprehensions included:
   form"), so no edge reaches the class's own `__getitem__`; the same holds for `__iter__`
   and `__next__` ("iterating a class runs its metaclass"). A value written `type[X]` or
   `Type[X]`, or a library result written so, is the class object too: an explicit call
-  through it (`c.create()`) keeps the owner `X`, but a call syntax makes on it gets none. A store (`xs[i] = v`) and other operators are not calls here;
+  through it (`c.create()`) keeps the owner `X`, but a call syntax makes on it gets none.
+  Calling a class object constructs it (R37): `cls()` in a `@classmethod` and `c()` with
+  `c: type[X]` are a `virtual` `<init>` on `X`, whose dispatch is `X`'s constructor and each
+  subtype's own (the class it was called through is `X` or a subclass), and whose result is
+  an instance of `X`; never the instance's `__call__`. A store (`xs[i] = v`) and other operators are not calls here;
 - a constructor call gives an `instance` whose `source` is the constructor's receiver;
 - an f-string, or `+` with a string literal, is `concat`, filled by a `dynamic`
   `builtins/str#format` site; a list or a tuple is `array`; a function is `lambda`;

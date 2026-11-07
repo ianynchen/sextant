@@ -443,7 +443,25 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
         ended = producer.ended_at
         owner = None if ended is None else bound_owner(ended)
         body = None if ended is None or name != _CALL else called_function(ended)
-        if owner is not None and name in _PROTOCOL and ended is not None and ended.class_object:
+        if owner is not None and name == _CALL and ended is not None and ended.class_object:
+            # Calling a class constructs it (ruling R37): the call runs the class's
+            # constructor, found by its lookup order, never the instance's `__call__`.
+            built = _constructors(index, site, owner)
+            if built:
+                functions.extend(body for body in built if body not in functions)
+            else:
+                found.append(
+                    (
+                        path_id,
+                        None,
+                        NOT_READABLE,
+                        (
+                            f"receiver of {name} is the class {bare_descriptor(owner)} itself: "
+                            "calling it constructs it, and no constructor of it was read"
+                        ),
+                    )
+                )
+        elif owner is not None and name in _PROTOCOL and ended is not None and ended.class_object:
             found.append(
                 (
                     path_id,
@@ -533,6 +551,16 @@ def _declared_unions(
             ):
                 found[(str(row["symbol"]), position)] = (members, bool(written.get("nullable")))
     return found
+
+
+def _constructors(index: ValueIndex, site: Mapping[str, Any], owner: str) -> list[str]:
+    """The constructor bodies a call of the class `owner` runs: its `<init>` by lookup
+    order, as a construction of it is dispatched."""
+    dispatch = index.dispatch
+    if dispatch is None:
+        return []
+    construction = {**site, "owner": owner, "name": "<init>", "invoke_kind": "special"}
+    return [bare_descriptor(callee) for callee in dispatch.candidates(construction)]
 
 
 def _class_object_detail(name: str, owner: str) -> str:

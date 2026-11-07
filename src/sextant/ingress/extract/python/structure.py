@@ -490,6 +490,7 @@ class _Writer(BodyReader):
             scope,
             name=name,
             receiver_taken=receiver_taken,
+            class_receiver=is_class_method,
             has_body=not stub and not ((abstract or scope.protocol) and is_stub_body(node.body)),
             types=replace(generic, class_names={}),
         )

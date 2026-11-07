@@ -249,6 +249,8 @@ class Frame:
     writes: list[dict[str, list[CallArgument]]] = field(default_factory=list)
     # The names a nested function declares `nonlocal` and writes (`_rebound_nonlocal`).
     rebound: frozenset[str] = frozenset()
+    # The receiver is the class the method was called through (`cls`), not an instance.
+    class_receiver: bool = False
 
 
 @dataclass
@@ -359,11 +361,14 @@ class BodyReader:
         receiver_taken: bool,
         has_body: bool,
         types: TypeScope,
+        class_receiver: bool = False,
     ) -> None:
-        """A function's calls, returns and field writes, in its own method."""
+        """A function's calls, returns and field writes, in its own method. `class_receiver`:
+        the receiver is the class (a `@classmethod`'s `cls`), not an instance."""
         if not has_body:
             return
         frame = self._frame(node.args, node.body, scope, types, name, receiver_taken)
+        frame.class_receiver = class_receiver
         inner = Scope(
             owner=scope.owner,
             types=types,
@@ -1041,6 +1046,10 @@ class BodyReader:
             )
         if isinstance(func, ast.Name):
             if self._is_self(func, scope):
+                if self._class_receiver(func, scope):
+                    # `cls()` constructs the class the method was called through: this
+                    # class or a subclass, the closed list a virtual `<init>` reads (R37).
+                    return Callee(_target(scope.owner, INIT), "virtual")
                 return Callee(_target(scope.owner, CALL), "virtual")
             targets = self._targets(func, scope)
             if targets is None:
@@ -1115,6 +1124,9 @@ class BodyReader:
         one."""
         libraries = self._context.index.libraries
         owner = callee.target.owner
+        if callee.target.name == INIT and callee.invoke_kind == "virtual" and owner is not None:
+            # A class object called: an instance of its class (a subclass's, maybe).
+            return TypeRef(symbol=owner)
         if owner is None and callee.target.name == CALL and callee.receiver is not None:
             called = scope.body.callables.get(callee.receiver)
             given = None if called is None else _call_gives(called, arguments, scope)
@@ -1224,6 +1236,10 @@ class BodyReader:
             declared = _known_type(value, scope)
         if protocol and declared is not None and declared.symbol == _TYPE_OF:
             declared = None
+        if name == CALL and declared is not None and declared.symbol == _TYPE_OF:
+            # Calling a class object constructs it (R37): `X` or a subclass, as `cls()` is.
+            name = INIT
+            declared = declared.arguments[0] if len(declared.arguments) == 1 else None
         owner = _class_of(declared)
         if value.kind == "parameter" and isinstance(value.value, int):
             return Callee(
@@ -1437,6 +1453,15 @@ class BodyReader:
                 return False
             if node.id in current.local_names:
                 return node.id == current.self_name and current.values.get(node.id) is _SELF
+            current = current.enclosing
+        return False
+
+    def _class_receiver(self, node: ast.Name, scope: Scope) -> bool:
+        """Whether the receiver `node` names is a class (`cls` of a `@classmethod`)."""
+        current = scope.frame
+        while current is not None:
+            if node.id in current.local_names:
+                return current.class_receiver
             current = current.enclosing
         return False
 

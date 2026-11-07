@@ -433,3 +433,35 @@ def test_a_type_of_x_value_is_the_class_object(tmp_path: Path):
         (None, "__next__"),
         ("app/run/Repo#", "__getitem__"),
     ]
+
+
+def test_calling_a_class_object_is_a_construction(tmp_path: Path):
+    """Ruling R37: `cls()` in a classmethod and `c()` with `c: type[Repo]` construct the
+    class or a subclass, a `virtual` `<init>` (never the instance's `__call__`), and the
+    result is an instance of it; `self()` on an instance and `Repo()` are unchanged."""
+    tree = _scan(
+        tmp_path,
+        "class Repo:\n"
+        "    def __call__(self): ...\n"
+        "    def go(self): ...\n"
+        "    @classmethod\n"
+        "    def make(cls):\n"
+        "        cls().go()\n"
+        "    def again(self):\n"
+        "        self()\n"
+        "def f(c: type[Repo]):\n"
+        "    c().go()\n"
+        "    Repo()\n",
+    )
+
+    def kinds(caller: str) -> list[tuple[str | None, str | None, str]]:
+        return [(s.target.owner, s.target.name, s.invoke_kind) for s in _sites(tree, caller)]
+
+    repo = "app/run/Repo#"
+    assert kinds("app/run/Repo#make") == [(repo, "<init>", "virtual"), (repo, "go", "virtual")]
+    assert kinds("app/run/Repo#again") == [(repo, "__call__", "virtual")]
+    assert kinds("app/run#f") == [
+        (repo, "<init>", "virtual"),
+        (repo, "go", "virtual"),
+        (repo, "<init>", "special"),
+    ]

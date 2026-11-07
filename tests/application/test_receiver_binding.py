@@ -1132,3 +1132,99 @@ def test_a_module_alias_of_a_class_is_the_class_too(tmp_path: Path):
     ]
     assert _GETITEM not in {str(row["callee"]) for row in workspace.query("call_edges")}
     workspace.close()
+
+
+# OI-324 fix round 3 (ruling R37): calling a class object constructs it.
+
+_SHAPES = (
+    "class Repo:\n"
+    "    def __init__(self):\n"
+    "        self.n = 0\n"
+    "    def __call__(self):\n"
+    "        return 1\n"
+    "    def go(self):\n"
+    "        return 2\n"
+    "    @classmethod\n"
+    "    def make(cls):\n"
+    "        return cls()\n"
+    "class Special(Repo):\n"
+    "    def __init__(self):\n"
+    "        self.n = 1\n"
+    "    def go(self):\n"
+    "        return 3\n"
+)
+_REPO_INIT = _PREFIX + "app/shapes/Repo#<init>(sig_dd69782a)."
+_SPECIAL_INIT = _PREFIX + "app/shapes/Special#<init>(sig_dd69782a)."
+_REPO_CALL = _PREFIX + "app/shapes/Repo#__call__(sig_dd69782a)."
+
+
+def _callees(workspace: DuckDbWorkspace, method: str) -> set[str]:
+    return {
+        str(row["callee"])
+        for row in workspace.query("call_edges")
+        if row["caller"] == _PREFIX + method
+    }
+
+
+def test_calling_a_class_object_constructs_it(tmp_path: Path):
+    """`c()` with `c: type[Repo]`, `cls()` in a classmethod and `build(Repo)` calling its
+    parameter all construct: an edge to the constructors, never to the instance's
+    `__call__`. `cls()` may be called through a subclass: both constructors, `narrowed`.
+    A plain `Repo()` is unchanged."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "shapes.py": _SHAPES,
+            "run.py": (
+                "from app.shapes import Repo\n"
+                "def typed(c: type[Repo]):\n"
+                "    return c()\n"
+                "def build(c):\n"
+                "    return c()\n"
+                "def plain():\n"
+                "    return Repo()\n"
+                "def go():\n"
+                "    build(Repo)\n"
+                "    typed(Repo)\n"
+            ),
+        },
+    )
+    assert _callees(workspace, "app/run#typed(sig_dd69782a).") == {_REPO_INIT, _SPECIAL_INIT}
+    assert _callees(workspace, "app/run#build(sig_dd69782a).") == {_REPO_INIT}
+    assert _callees(workspace, "app/run#plain(sig_dd69782a).") == {_REPO_INIT}
+    assert _callees(workspace, "app/shapes/Repo#make(sig_dd69782a).") == {
+        _REPO_INIT,
+        _SPECIAL_INIT,
+    }
+    assert _REPO_CALL not in {str(row["callee"]) for row in workspace.query("call_edges")}
+    workspace.close()
+
+
+def test_what_a_class_object_call_made_is_an_instance(tmp_path: Path):
+    """`cls().go()` and `Repo.make().go()` are calls on an instance of the class (or of a
+    subclass it was called through): `go` runs on `Repo` or `Special`, one row each."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "shapes.py": _SHAPES,
+            "run.py": (
+                "from app.shapes import Repo\n"
+                "def f():\n"
+                "    return Repo.make().go()\n"
+                "def build(c):\n"
+                "    return c().go()\n"
+                "def g():\n"
+                "    build(Repo)\n"
+            ),
+        },
+    )
+    made = _site(workspace, "app/run#f(sig_dd69782a).", "go")
+    assert sorted(str(row["owner"]) for row in _bound(workspace, made)) == [
+        "app/shapes/Repo#",
+        "app/shapes/Special#",
+    ]
+    built = _site(workspace, "app/run#build(sig_dd69782a).", "go")
+    assert [(row["owner"], row["resolution"]) for row in _bound(workspace, built)] == [
+        ("app/shapes/Repo#", "resolved")
+    ]
+    workspace.close()
