@@ -10,6 +10,7 @@ each file. The build-and-install logic itself lives in `fixture_stub.py`,
 because CI's priming step needs it before the suite exists.
 """
 
+import os
 import shutil
 from pathlib import Path
 
@@ -25,7 +26,13 @@ from sextant.cli.app import cli
 def stub_library_in_the_local_repository() -> Path:
     """Built and installed once per session, and skipped entirely when it is
     already current — every test in this suite depends on it, including the ones
-    that never touch Maven, so the up-to-date path must cost nothing."""
+    that never touch Maven, so the up-to-date path must cost nothing.
+
+    A job with no JVM toolchain, CI's light "Python 3.14 reader" job, sets
+    `SEXTANT_TESTS_NO_JVM=1`. That job runs only tests that read Python source, and none of
+    those builds a JVM fixture, so the install is skipped there. The full gate never sets it."""
+    if os.environ.get("SEXTANT_TESTS_NO_JVM") == "1":
+        return fixture_stub.local_repository_jar()
     fixture_stub.install_all(offline=True)
     return fixture_stub.local_repository_jar()
 

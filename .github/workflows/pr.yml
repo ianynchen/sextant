@@ -146,6 +146,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       UV_PYTHON: "3.14"
+      # No JVM here, so the suite's session fixture skips installing the Maven stub
+      # library (tests/conftest.py). None of these tests builds a JVM fixture.
+      SEXTANT_TESTS_NO_JVM: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
