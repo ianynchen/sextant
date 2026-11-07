@@ -92,3 +92,31 @@ def test_the_wheel_carries_the_catalogs_and_the_extractor():
     assert "sextant/catalogs/spring-web.yml" in names
     assert "sextant/extractor-jvm/sextant-extractor.jar" in names
     assert "sextant/enrich/INSTRUCTIONS.md" in names
+
+
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def test_the_code_identity_moves_with_every_file_but_typeshed_and_bytecode(tmp_path: Path):
+    """OI-325 fix round 1: the code digest keys every reuse, so a file the code runs or reads
+    that is not Python — a derivation's `.sql`, a shipped table — must move it. typeshed is
+    keyed by its own commit, and `__pycache__` is the interpreter's copy of the `.py` files."""
+
+    # One package root per tree: the digest is worked out once per root and process.
+    def package(name: str, sql: str) -> Path:
+        root = tmp_path / name
+        _write(root / "a.py", "x = 1\n")
+        _write(root / "storage" / "insert.sql", sql)
+        _write(root / "resources" / "typeshed" / "COMMIT", "abc\n")
+        return root
+
+    baseline = resources.code_identity(package("first", "INSERT INTO t VALUES (1);\n"))
+
+    same = package("same", "INSERT INTO t VALUES (1);\n")
+    _write(same / "resources" / "typeshed" / "stdlib" / "os.pyi", "def f() -> int: ...\n")
+    _write(same / "__pycache__" / "a.cpython-314.pyc", "bytes")
+    assert resources.code_identity(same) == baseline
+
+    assert resources.code_identity(package("sql", "INSERT INTO t VALUES (2);\n")) != baseline

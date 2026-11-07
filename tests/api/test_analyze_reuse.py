@@ -15,12 +15,13 @@ without touching its bytes.
 """
 
 import json
+import shutil
 from pathlib import Path
 
 import duckdb
 import pytest
 
-from sextant import api
+from sextant import api, resources
 from sextant.application.stages import analyze as stage
 
 _FILES = {
@@ -284,4 +285,66 @@ def test_a_file_newly_ignored_is_dropped_as_a_fresh_run_drops_it(project: Path, 
     _analyze(project, warm)
 
     assert "shop/service.py.jsonl" not in _fact_files(warm)
+    _assert_same_as_fresh(project, warm, tmp_path)
+
+
+def test_a_catalog_model_edited_resolves_again(
+    project: Path, tmp_path: Path, resolves: list[int], monkeypatch: pytest.MonkeyPatch
+):
+    """Every file under the catalogs is knowledge the resolve reads: a model folder beside
+    the catalogs (`server-models/`) edited must re-run it (OI-325 fix round 1)."""
+    catalogs = tmp_path / "catalogs"
+    shutil.copytree(resources.catalogs_dir(), catalogs)
+    monkeypatch.setattr(api, "catalogs_dir", lambda root=None: catalogs)
+    warm = tmp_path / "warm"
+    _analyze(project, warm)
+
+    model = catalogs / "server-models" / "spring-boot.yml"
+    model.write_text(model.read_text() + "# edited\n")
+    _analyze(project, warm)
+
+    assert len(resolves) == 2
+    _assert_same_as_fresh(project, warm, tmp_path)
+
+
+def test_a_code_file_changed_rereads_every_file_and_resolves_again(
+    project: Path, tmp_path: Path, resolves: list[int], monkeypatch: pytest.MonkeyPatch
+):
+    """The code digest is in both keys (`resources.code_identity`, which every file of the
+    package moves: `tests/test_sextant_resources.py`), so a changed code file — a
+    derivation's `.sql` as much as a `.py` — re-reads every file and resolves again."""
+    from sextant.ingress.extract.python import scanner
+
+    warm = tmp_path / "warm"
+    _analyze(project, warm)
+    before = _modified(warm)
+
+    for module in (api, scanner):
+        monkeypatch.setattr(module, "code_identity", lambda: "sha256:another build")
+    _analyze(project, warm)
+
+    assert set(_rewritten(before, _modified(warm))) >= {f"{name}.jsonl" for name in _FILES}
+    assert len(resolves) == 2
+    _assert_same_as_fresh(project, warm, tmp_path)
+
+
+def test_a_record_that_cannot_be_read_rereads_its_file(project: Path, tmp_path: Path):
+    """A record whose detail is not what this build writes — a damaged row, or an older
+    format — is not a reason to stop: its file is read again (OI-325 fix round 1)."""
+    warm = tmp_path / "warm"
+    _analyze(project, warm)
+    before = _modified(warm)
+    connection = duckdb.connect(str(warm / "workspace.duckdb"))
+    try:
+        connection.execute("UPDATE scan_reuse SET detail = 'not json' WHERE target LIKE '%api%'")
+        connection.execute("UPDATE scan_reuse SET detail = '{}' WHERE target LIKE '%models%'")
+    finally:
+        connection.close()
+
+    _analyze(project, warm)
+
+    assert _rewritten(before, _modified(warm)) - _MODULE_DOCUMENTS == {
+        "shop/api.py.jsonl",
+        "shop/models.py.jsonl",
+    }
     _assert_same_as_fresh(project, warm, tmp_path)

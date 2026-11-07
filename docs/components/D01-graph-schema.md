@@ -1652,9 +1652,13 @@ version and both versions).
 
 **A document.** The document fields above are the key, as D00 §2 says, and three inputs that
 no document field names are added to it, because a fact can depend on them:
-- **Sextant's own code**: a digest of the package's `.py` files (`resources.code_identity`).
-  `sextant_version` moves on a release; the code of a development checkout changes many
-  times between two releases.
+- **Sextant's own code**: a digest of every file of the installed package
+  (`resources.code_identity`) — the `.py` files, the derivations' `.sql`, the catalogs, the
+  extractor jar — except typeshed, which the libraries' key holds by its commit, and
+  `__pycache__`. `sextant_version` moves on a release; the code of a development checkout
+  changes many times between two releases. Every file rather than a list of suffixes: the
+  first version hashed `.py` alone, and an edited `insert_endpoints.sql` kept stale endpoints
+  (fix round 1). About 20 ms, once per process.
 - **Which other files exist.** A Python import is bound by path, so `from a import b` is the
   module `a/b` only where that file exists: adding one file changed 264 other files' facts
   on polar. Each document records every question its file asked of the module index and is
@@ -1663,6 +1667,9 @@ no document field names are added to it, because a fact can depend on them:
 - **The libraries and the Python**: the typeshed commit, the environment's Python, the
   declared distributions, every installed distribution's `*.dist-info` folder and its
   `RECORD` bytes (which list each installed file with its hash), and the running Python.
+  A file in `site-packages` edited by hand, without its `RECORD` changing, is NOT seen: an
+  installer rewrites `RECORD` and a hand edit does not. Analyse into a new workspace after
+  editing an installed library by hand.
 
 The record of each document is a workspace table, `scan_reuse`, that the scanner fills and
 reads through the scan port (`ReuseRecord`) and no other command reads; it is emptied before
@@ -1672,7 +1679,10 @@ keep documents. The JVM extractor keeps none: it re-reads every class file on ev
 behaviour is what it was. It would need the same three inputs: the extractor jar's identity,
 and for each class the classpath types it read headers or signatures of.
 
-**The resolve.** Its key is the fact files' bytes, the catalogs (`catalog_hash`), Sextant's
+**The resolve.** Its key is the fact files' bytes, the catalogs (`catalog_hash`: every file
+under the catalogs folder, by path and bytes, so the model folders beside the catalogs and a
+folder added later are in it; it named five folders by hand and missed `server-models/` and
+`type-models/` until fix round 1), Sextant's
 code, the three versions, the scanner's capabilities and `--shadow`: everything a resolve
 reads, since it reads only the workspace, the catalogs and its arguments. Where the
 workspace's last finished resolve had the same key, the resolve is not run and its tables

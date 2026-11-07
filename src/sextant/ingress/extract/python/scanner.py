@@ -268,8 +268,21 @@ def _kept(
     the document that scan wrote (D00 §2's stamps, the content hash among them)."""
     if record is None:
         return None
-    detail = json.loads(record.detail)
-    asked = [(str(question), str(path)) for question, path in detail["asked"]]
+    try:
+        detail = json.loads(record.detail)
+        asked = [(str(question), str(path)) for question, path in detail["asked"]]
+        kept = _Kept(
+            record,
+            int(detail["facts"]),
+            [str(note) for note in detail["notes"]],
+            [str(note) for note in detail["library_notes"]],
+            [str(symbol) for symbol in detail["declared"]],
+            [str(symbol) for symbol in detail["referenced"]],
+        )
+    except (ValueError, TypeError, KeyError):
+        # A record this build cannot read — a damaged row, or one an older build wrote in
+        # another shape — keeps nothing: the file is read again (OI-325 fix round 1).
+        return None
     if record.key != _key(inputs, document, asked, index):
         return None
     written = read_document(path)
@@ -277,14 +290,7 @@ def _kept(
         update={"partial": False, "partial_reason": None}
     ) != document.model_copy(update={"partial": False, "partial_reason": None}):
         return None
-    return _Kept(
-        record,
-        int(detail["facts"]),
-        list(detail["notes"]),
-        list(detail["library_notes"]),
-        list(detail["declared"]),
-        list(detail["referenced"]),
-    )
+    return kept
 
 
 def _declared(facts: list[Fact]) -> set[str]:

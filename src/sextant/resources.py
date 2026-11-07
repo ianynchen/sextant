@@ -24,6 +24,7 @@ it, without touching the installed package.
 """
 
 import hashlib
+import os
 from functools import cache
 from importlib import resources
 from pathlib import Path
@@ -96,19 +97,40 @@ def typeshed_dir(root: Path | None = None) -> Path:
     return directory
 
 
+def code_identity(root: Path | None = None) -> str:
+    """A digest of Sextant's own code: every file of the installed package, by path and
+    bytes. A re-run reuses facts and derived tables only where this is the same (OI-325,
+    D01 §7): `sextant_version` moves on a release, and the code of a development checkout
+    changes many times between two releases, so the version alone would keep a result the
+    changed code no longer gives.
+
+    Every file, not only the `.py` ones (OI-325 fix round 1): the derivations' `.sql`, the
+    catalogs, the extractor jar and every other file the code runs or reads are code as
+    much as the Python is, and a list of suffixes misses the next one. Two folders are left
+    out: typeshed, whose 28 MB a scan keys by its own `COMMIT` (`Libraries.identity`), and
+    `__pycache__`, the interpreter's copy of the `.py` files, which it rewrites on its own.
+    Worked out once per process and package root; the code does not change while it runs.
+    `root` — see `catalogs_dir`."""
+    return _code_identity(root if root is not None else _package_root())
+
+
 @cache
-def code_identity() -> str:
-    """A digest of Sextant's own Python code: every `.py` file of the installed package, by
-    path and bytes. A re-run reuses facts and derived tables only where this is the same
-    (OI-325, D01 §7): `sextant_version` moves on a release, and the code of a development
-    checkout changes many times between two releases, so the version alone would keep a
-    result the changed code no longer gives. Worked out once per process; the code does
-    not change while it runs."""
-    root = _package_root()
+def _code_identity(root: Path) -> str:
+    typeshed = root / "resources" / "typeshed"
+    files: list[Path] = []
+    for current, folders, names in os.walk(root):
+        here = Path(current)
+        # Not entered at all: the walk of typeshed's files cost more than hashing the rest.
+        folders[:] = [
+            folder for folder in folders if folder != "__pycache__" and here / folder != typeshed
+        ]
+        files.extend(here / name for name in names)
     digest = hashlib.sha256()
-    for path in sorted(root.rglob("*.py")):
-        digest.update(path.relative_to(root).as_posix().encode())
-        digest.update(path.read_bytes())
+    for path in sorted(files):
+        relative = path.relative_to(root).as_posix().encode()
+        data = path.read_bytes()
+        digest.update(len(relative).to_bytes(8, "big") + relative)
+        digest.update(len(data).to_bytes(8, "big") + data)
     return "sha256:" + digest.hexdigest()
 
 
