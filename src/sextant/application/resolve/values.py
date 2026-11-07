@@ -211,6 +211,11 @@ RECEIVER = "receiver"
 
 # A construction's name at a call site (D00 §5).
 _INIT = "<init>"
+# The written types that name no one class (D00 §5a): a union's members are each a type,
+# `Any` is every type, and `None` has no method.
+_UNION = "typing/Union#"
+_ANY = "typing/Any#"
+_NONE = "builtins/None#"
 # The name the facts give a call of a value (`f(x)` on a value `f`, D00 §5).
 _CALL = "__call__"
 # `returns_argument`'s three forms (`Catalog.returns_arguments`).
@@ -456,6 +461,13 @@ class Answer:
     # differs between the two, so the reader of a receiver tells them apart. Part of what
     # the answer is: a class and an object of it are two values.
     class_object: bool = False
+    # **The type a method DECLARES it returns, not one its body was read to give** (OI-324
+    # part 2): set only by the type reader (`producer_paths(..., declared_types=True)`), on a
+    # return path the body answers with no type, or for a method with no body. Its evidence
+    # is `declared`, beside the `syntax` of a type the walk reached. A declared type does not
+    # say whether the value is the class or an instance of it (the facts write `type[X]` as
+    # `X`), so a reader of syntax calls cannot take it (`receiver_binding`).
+    declared: bool = False
 
 
 @dataclass(frozen=True)
@@ -731,6 +743,11 @@ class ValueIndex:
     stated_returns: Mapping[tuple[str, str], tuple[str, int]] = dataclass_field(
         default_factory=dict
     )
+    # The return type each method of a `c3` module declares (`signature.returns`), by bare
+    # descriptor, as the fact writes it; a method two facts declare differently has none.
+    # Read only by the type reader (`_Walk._declared_answers`). Empty for a JVM module, whose
+    # calls the facts own.
+    declared_returns: Mapping[str, Mapping[str, Any]] = dataclass_field(default_factory=dict)
     # `argument_slots`' answers, per (caller, ordinal, callee), for as long as this lives.
     slots_memo: dict[Any, Any] = dataclass_field(default_factory=dict, compare=False, repr=False)
     # `_Walk._namespace`'s answers, per field symbol, for as long as this lives.
@@ -1142,6 +1159,7 @@ def value_index(
                 for position in parsed.get("parameters") or []
                 if isinstance(position, dict)
             )
+    declared_returns: dict[str, Mapping[str, Any] | None] = {}
     for row in workspace.query("method_declarations"):
         declared = row.get("signature")
         if declared is None:
@@ -1149,6 +1167,13 @@ def value_index(
         parsed = json.loads(str(declared)) if isinstance(declared, str) else declared
         if not isinstance(parsed, dict):
             continue
+        if by_name:
+            bare = bare_descriptor(str(row["symbol"]))
+            written = parsed.get("returns")
+            written = written if isinstance(written, dict) else None
+            if bare in declared_returns and declared_returns[bare] != written:
+                written = None
+            declared_returns[bare] = written
         named: list[str | None] = []
         typed: list[str | None] = []
         for position in parsed.get("parameters") or []:
@@ -1308,6 +1333,7 @@ def value_index(
             (str(entry["owner"]), str(entry["method"])): (str(entry["form"]), int(entry["arg"]))
             for entry in returns_arguments
         },
+        declared_returns={key: value for key, value in declared_returns.items() if value},
     )
 
 
@@ -2025,6 +2051,7 @@ def producer_paths(
     dropped: list[Producer] | None = None,
     functions: bool = False,
     declared_sites: AbstractSet[tuple[str, int]] = frozenset(),
+    declared_types: bool = False,
 ) -> tuple[tuple[Producer, Path], ...]:
     """`producers_of`, with the PATH each producer was reached by, one pair per distinct
     path — for a reader that goes on to read other positions on that same path.
@@ -2060,7 +2087,12 @@ def producer_paths(
 
     `declared_sites` are stops by site, `(method, ordinal)`, beside `declared`'s by call: a
     call that makes an object its `(owner, name)` cannot name, as a `__call__` applying a
-    group decorator makes a router (design 2026-11-06-reading-decorators §4)."""
+    group decorator makes a router (design 2026-11-06-reading-decorators §4).
+
+    `declared_types` is for the reader asking a receiver's TYPE (OI-324 part 2): a call's
+    result is what its callee's body returns, path by path, and on a return path the body
+    answers with no type, or for a callee with no body, the type the method declares it
+    returns (`Answer.declared`). Off, the default, a declaration is never read as a value."""
     walk = _Walk(
         index,
         declared=declared,
@@ -2074,6 +2106,7 @@ def producer_paths(
         read_sites=read_sites,
         functions=functions,
         declared_sites=declared_sites,
+        declared_types=declared_types,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[tuple[Producer, Path]] = []
@@ -2788,8 +2821,13 @@ class _Walk:
         read_sites: AbstractSet[tuple[str, int]] = frozenset(),
         functions: bool = False,
         declared_sites: AbstractSet[tuple[str, int]] = frozenset(),
+        declared_types: bool = False,
     ) -> None:
         self._index = index
+        # The type reader (`producer_paths(..., declared_types=True)`): where a body gives a
+        # call's result no type, the callee's declared return does. False for every other
+        # reader, which never reads a declaration as a value.
+        self._declared_types = declared_types
         # The producer reader's stop set by site, `(method, ordinal)`: a call that makes an
         # object although its `(owner, name)` names no type (a mount's chain result, design
         # 2026-11-06-reading-decorators §4). Empty for every other reader.
@@ -4189,12 +4227,16 @@ class _Walk:
                 if merged is None:
                     continue
                 reached.extend(
-                    self._entry(
-                        entry,
+                    self._typed_returns(
+                        self._entry(
+                            entry,
+                            callee,
+                            (_RETURN_OF, callee, return_ordinal),
+                            merged,
+                            frames + ((callee, (method, ordinal)),),
+                        ),
+                        (method, ordinal),
                         callee,
-                        (_RETURN_OF, callee, return_ordinal),
-                        merged,
-                        frames + ((callee, (method, ordinal)),),
                     )
                 )
         if reached:
@@ -4358,6 +4400,13 @@ class _Walk:
         # receiver's type runs returns**, on each path the receiver is read by.
         if row is not None and row.get("owner") is None and row.get("invoke_kind") != DYNAMIC:
             return self._bound_returns(site, row, value, trail, frames)
+        # **A method with no body read here answers with the type it declares** (OI-324 part
+        # 2), for the type reader: a `Protocol` or abstract method, whose declaration is the
+        # only answer the code gives.
+        if row is not None and row.get("owner") is not None:
+            declared = self._declared_answers(row, str(row["owner"]), None)
+            if declared:
+                return tuple((trail, answer) for answer in declared)
         # Nothing identifies it. Whether its BODY was read is what separates the two
         # reasons, and `call_edges` is the table that says so — it writes a row per site
         # with a NULL callee at the third-party boundary. MEASURED on `mall-admin`: 1,411
@@ -4485,18 +4534,101 @@ class _Walk:
                     if merged is None:
                         continue
                     reached.extend(
-                        self._entry(
-                            entry,
+                        self._typed_returns(
+                            self._entry(
+                                entry,
+                                callee,
+                                (_RETURN_OF, callee, return_ordinal),
+                                merged,
+                                frames + ((callee, (method, ordinal)),),
+                            ),
+                            site,
                             callee,
-                            (_RETURN_OF, callee, return_ordinal),
-                            merged,
-                            frames + ((callee, (method, ordinal)),),
+                            owner,
                         )
                     )
             if not found:
+                declared = self._declared_answers(row, owner, None)
+                if declared:
+                    reached.extend((path, answer) for answer in declared)
+                    continue
                 unread = dispatch.boundary(owner, str(row["name"]), str(row["descriptor"]))
                 reached.append((path, _unresolved(NOT_READABLE if unread is None else EXTERNAL)))
         return tuple(reached)
+
+    def _typed_returns(
+        self,
+        reached: tuple[_Reached, ...],
+        site: tuple[str, int],
+        callee: str,
+        owner: str | None = None,
+    ) -> tuple[_Reached, ...]:
+        """For the type reader, each return path of `callee` the body answers with no type
+        answered instead with the type the method declares (`_declared_answers`): the body's
+        own answer stays wherever it names a type, a function or `None`. Every other reader
+        gets `reached` as it is. Only a call that names the method takes its declaration: a
+        `__call__` that reaches a function's body through a value (a wrapper a decorator made,
+        ruling R29) gives what the wrapper returns, which the function does not declare."""
+        if not self._declared_types:
+            return reached
+        row = self._index.sites.get(site)
+        if row is None or str(row["name"]) != method_name(bare_descriptor(callee)):
+            return reached
+        found: list[_Reached] = []
+        for path, answer in reached:
+            if answer.kind != UNRESOLVED:
+                found.append((path, answer))
+                continue
+            named = owner if owner is not None else row.get("owner")
+            declared = self._declared_answers(
+                row, None if named is None else str(named), bare_descriptor(callee)
+            )
+            if declared:
+                found.extend((path, one) for one in declared)
+            else:
+                found.append((path, answer))
+        return tuple(found)
+
+    def _declared_answers(
+        self, row: Mapping[str, Any], owner: str | None, body: str | None
+    ) -> tuple[Answer, ...]:
+        """The types a call's result is DECLARED to be, for the type reader: what `body`
+        (the method a return path came from) declares, else what the method the call names
+        on `owner` declares (its lookup order's first declaration). One answer per class of a
+        written union; none where the type names no class: `Any`, the root type, `None`, a
+        type variable left unfilled, a type the file did not name."""
+        dispatch = self._index.dispatch
+        if not self._declared_types or dispatch is None or not self._index.declared_returns:
+            return ()
+        name = str(row["name"])
+        written = None if body is None else self._index.declared_returns.get(body)
+        if written is None and owner is not None:
+            declaring, _ = dispatch.resolve(owner, name, str(row["descriptor"]))
+            if declaring is None:
+                return ()
+            body = method_descriptor(declaring, name, str(row["descriptor"]))
+            written = self._index.declared_returns.get(body)
+        if written is None or body is None:
+            return ()
+        if f"{owner_of(body)}{name}." in self._index.static_fields:
+            # A decorated name holds what its decorators made (`f = dec(f)`, design
+            # 2026-11-06-reading-decorators §3e): its call is that value's, which the
+            # function's own declaration does not describe.
+            return ()
+        symbol = str(written.get("symbol"))
+        members = (
+            [str(m.get("symbol")) for m in written.get("arguments") or []]
+            if symbol == _UNION
+            else [symbol]
+        )
+        if not members or not all(
+            is_type_descriptor(m) and m not in (_ANY, _NONE, dispatch.root) for m in members
+        ):
+            return ()
+        return tuple(
+            Answer(kind=LITERAL, value=member, literal_kind=SYMBOL, declared=True)
+            for member in dict.fromkeys(members)
+        )
 
     def _through_receiver(
         self, site: tuple[str, int], trail: _Trail, frames: "_Frames"

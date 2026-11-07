@@ -34,6 +34,7 @@ from sextant.domain.facts import (
     Signature,
     SymbolFact,
     TypeParameter,
+    TypeRef,
 )
 from sextant.domain.symbols import PY_SIGNATURE, method_descriptor, names_a_type
 from sextant.ingress.extract.python.calls import (
@@ -43,6 +44,7 @@ from sextant.ingress.extract.python.calls import (
     FileContext,
     Scope,
     is_stub_body,
+    own_return_type,
 )
 from sextant.ingress.extract.python.imports import (
     Binding,
@@ -225,6 +227,7 @@ class _Writer(BodyReader):
         self.consulted = {}
         self._local_classes = {}
         self._hierarchy = Hierarchy(self._shape_or_none)
+        self._own_returns = {}
 
     def _full(self, descriptor: str) -> str:
         return self._context.prefix + descriptor
@@ -239,6 +242,7 @@ class _Writer(BodyReader):
         )
         types = TypeScope(names=names, here=here, index=self._context.index)
         self._local_classes = _class_shapes(tree.body, here, names, types)
+        self._own_returns = self._declared_returns(tree.body, here, types)
         libraries = self._context.index.libraries
         self._hierarchy = Hierarchy(
             self._shape_or_none,
@@ -250,6 +254,57 @@ class _Writer(BodyReader):
         scope = Scope(owner, types, self._body(clinit))
         self._statements(tree.body, scope)
         self._positions(scope)
+
+    def _declared_returns(
+        self, body: list[ast.stmt], here: str, types: TypeScope
+    ) -> dict[str, TypeRef]:
+        """The return type each module-level function and each method of a class of this
+        file declares, read where its annotation is read (`_function`), by bare descriptor:
+        what a call of it declares it gives (`calls.own_return_type`). A name defined twice
+        keeps one only where every definition declares the same; a decorated one has none."""
+        found: dict[str, TypeRef | None] = {}
+        pending: list[tuple[str | None, list[ast.stmt], TypeScope]] = [(None, body, types)]
+        while pending:
+            path, statements, scope = pending.pop(0)
+            owner = type_symbol(Target(here, path))
+            for node in statements:
+                if isinstance(node, ast.ClassDef):
+                    inner = f"{path}.{node.name}" if path else node.name
+                    generic = scope.with_type_parameters(node.type_params)
+                    class_names = bind_names(
+                        node.body,
+                        here,
+                        is_package=self._context.is_package,
+                        index=self._context.index,
+                        owner=inner,
+                    )
+                    nested = replace(
+                        generic,
+                        class_names=class_names,
+                        self_type=type_symbol(Target(here, inner)),
+                    )
+                    pending.append((inner, node.body, nested))
+                    continue
+                if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue
+                # A decorated name holds what its decorators made (`f = dec(f)`), whose call
+                # the function's own declaration does not describe.
+                decorated = holds_decorated_value(node, scope.lookup)
+                name = node.name
+                if path is not None and name == "__init__":
+                    name = INIT
+                elif path is not None and _is_setter(node):
+                    name = name + _SETTER_SUFFIX
+                descriptor = method_descriptor(owner, name, PY_SIGNATURE)
+                written = (
+                    None
+                    if node.returns is None or decorated
+                    else own_return_type(node.returns, scope.with_type_parameters(node.type_params))
+                )
+                if descriptor in found and found[descriptor] != written:
+                    written = None
+                found[descriptor] = written
+        return {key: value for key, value in found.items() if value is not None}
 
     def _shape_or_none(self, symbol: str) -> ClassShape | None:
         found = self._local_classes.get(symbol)

@@ -128,6 +128,7 @@ _SLICE = TypeRef(symbol="builtins/slice#")
 # The type of a class object: `type[X]`, as the scanner holds a value written `type[X]` or
 # `Type[X]` (a written type reads it as `X`, for a call through the class).
 _TYPE_OF = "builtins/type#"
+_NONE = "builtins/None#"
 # The awaitables whose awaited value is their last type argument, as `async for` awaits
 # what `__anext__` returns.
 _AWAITABLES = frozenset({"typing/Awaitable#", "typing/Coroutine#"})
@@ -202,6 +203,12 @@ class Body:
     returned: dict[int, TypeRef] = field(default_factory=dict)
     # The callable a library call's result is (`Callable[[P, ...], R]`), keyed the same way.
     callables: dict[int, CallableType] = field(default_factory=dict)
+    # The type a call of a function or method of this file DECLARES it returns, keyed by the
+    # call's `result`: no owner is written from it for a call on the result, since the body's
+    # returns, which the resolver follows, are what runs; it types only what the scanner
+    # reads off the result through a library's signature (an element, a part, an entered
+    # value), which nothing else can answer.
+    declared: dict[int, TypeRef] = field(default_factory=dict)
 
     def value_id(self) -> int:
         found = self.next_value
@@ -221,6 +228,9 @@ class Callee:
     receiver_field_kind: Literal["instance"] | None = None
     # The whole type written for the receiver, type arguments and all, where one is.
     typed: TypeRef | None = None
+    # `typed` is what a function of this file declares it returns (`Body.declared`), not
+    # the receiver's own written type: it gives the call no owner.
+    hinted: bool = False
 
 
 @dataclass
@@ -309,6 +319,10 @@ class BodyReader:
     # the lookup orders they and the libraries' classes give (`typing_rules.Hierarchy`).
     _local_classes: dict[str, ClassShape]
     _hierarchy: Hierarchy
+    # The return type each function and method of this file declares, by bare descriptor,
+    # type variables kept (`own_return_type`); a name defined twice with two different
+    # declared returns has none.
+    _own_returns: dict[str, TypeRef]
 
     def _body(self, caller: str) -> Body:
         return self._bodies.setdefault(caller, Body(caller))
@@ -992,6 +1006,10 @@ class BodyReader:
                 scope.body.callables[result] = returned
             elif returned is not None:
                 scope.body.returned[result] = returned
+            else:
+                hinted = self._declared_result(callee)
+                if hinted is not None:
+                    scope.body.declared[result] = hinted
             return CallArgument(kind="unresolved", source=result)
         libraries = self._context.index.libraries
         if callee.receiver is not None and libraries is not None and not unpacked:
@@ -1135,6 +1153,8 @@ class BodyReader:
             return None
         name = str(callee.target.name)
         typed = callee.typed
+        if owner is None and callee.hinted and typed is not None and typed.symbol != UNION:
+            return self._returns_on(typed, name, arguments, types, unpacked=unpacked)
         if owner is None:
             if typed is None or typed.symbol != UNION:
                 return None
@@ -1196,6 +1216,48 @@ class BodyReader:
             return returned
         return None
 
+    def _declared_result(self, callee: Callee) -> TypeRef | None:
+        """The type a call of a function or method of this file declares it returns: a
+        module-level function's, or the method a class of this file defines for the
+        receiver (C3, through bases of this file), its type variables filled by the
+        receiver's type arguments. None where the callee is another file's or a library's,
+        or declares nothing that names a class."""
+        owner, name = callee.target.owner, callee.target.name
+        if name is None or name == INIT:
+            return None
+        if owner is None:
+            typed = callee.typed if callee.hinted else None
+            return None if typed is None else self._declared_on(typed, name)
+        if callee.invoke_kind == "static" and owner == f"{self._context.here}#":
+            return _a_class(self._own_returns.get(method_descriptor(owner, name, PY_SIGNATURE)))
+        if owner in self._local_classes:
+            typed = callee.typed
+            receiver = (
+                typed if typed is not None and typed.symbol == owner else TypeRef(symbol=owner)
+            )
+            return self._declared_on(receiver, name)
+        return None
+
+    def _declared_on(self, receiver: TypeRef, name: str) -> TypeRef | None:
+        """What `name` called on a `receiver` of a class of this file declares it returns."""
+        owner = receiver.symbol
+        shape = self._local_classes.get(owner)
+        if shape is None:
+            return None
+        order = self._hierarchy.order(owner)
+        entries = [TypeRef(symbol=owner)] if order is None else order
+        defining = next(
+            (e for e in entries if name in _members(self._hierarchy.shape_of(e.symbol))), None
+        )
+        if defining is None or defining.symbol not in self._local_classes:
+            return None
+        written = self._own_returns.get(method_descriptor(defining.symbol, name, PY_SIGNATURE))
+        if written is None:
+            return None
+        instance = substitute(defining, parameter_mapping(receiver, shape)) or defining
+        mapping = parameter_mapping(instance, self._local_classes[defining.symbol])
+        return _a_class(substitute(written, mapping))
+
     def _super(self, name: str, scope: Scope) -> Callee:
         """`super().m()` from a method: `special` on the class's first written parent, as
         the JVM's `super.m()` names the direct superclass. The `super()` call itself is
@@ -1234,13 +1296,20 @@ class BodyReader:
             declared = TypeRef(symbol=_STRING)
         if declared is None:
             declared = _known_type(value, scope)
+        # What a function of this file declares the value is: it names no owner (the body's
+        # returns run, and the resolver follows them), and types only what is read off it.
+        hinted = False
+        if declared is None and value.kind == "unresolved" and value.source is not None:
+            declared = scope.body.declared.get(value.source)
+            hinted = declared is not None
         if protocol and declared is not None and declared.symbol == _TYPE_OF:
             declared = None
         if name == CALL and declared is not None and declared.symbol == _TYPE_OF:
             # Calling a class object constructs it (R37): `X` or a subclass, as `cls()` is.
             name = INIT
             declared = declared.arguments[0] if len(declared.arguments) == 1 else None
-        owner = _class_of(declared)
+            hinted = False
+        owner = None if hinted else _class_of(declared)
         if value.kind == "parameter" and isinstance(value.value, int):
             return Callee(
                 _target(owner, name),
@@ -1259,7 +1328,7 @@ class BodyReader:
                 receiver_field_kind="instance" if on_self else None,
                 typed=declared,
             )
-        return Callee(_target(owner, name), "virtual", receiver, typed=declared)
+        return Callee(_target(owner, name), "virtual", receiver, typed=declared, hinted=hinted)
 
     def _closed_list_field(self, node: ast.expr, scope: Scope) -> str | None:
         """The static field a module-level name bound to a closed list is read as."""
@@ -1783,6 +1852,8 @@ def _parts(value: CallArgument, targets: list[ast.expr], scope: Scope) -> list[T
     many parts. None where the value's type says no arity (`tuple[A, ...]`, a list) or a
     name is starred."""
     typed = _known_type(value, scope)
+    if typed is None and value.kind == "unresolved" and value.source is not None:
+        typed = scope.body.declared.get(value.source)
     if (
         typed is None
         or typed.symbol != TUPLE
@@ -1894,6 +1965,29 @@ def _declared_type(annotation: ast.expr, types: TypeScope) -> TypeRef | None:
     if is_class_object(annotation, types):
         return TypeRef(symbol=_TYPE_OF, arguments=[found], nullable=found.nullable)
     return found
+
+
+def own_return_type(annotation: ast.expr, types: TypeScope) -> TypeRef | None:
+    """The type a function of this file declares it returns, as the scanner reads it off a
+    call's result: the written type, type variables kept for the receiver's type arguments to
+    fill, and `type[X]` the class object (`_declared_type`). None where the file does not
+    name it, or it is `Any`."""
+    found = type_ref(annotation, types)
+    if found is None or found.symbol == ANY:
+        return None
+    if is_class_object(annotation, types):
+        return TypeRef(symbol=_TYPE_OF, arguments=[found], nullable=found.nullable)
+    return found
+
+
+def _a_class(typed: TypeRef | None) -> TypeRef | None:
+    """`typed` where it names a class, a class object or a union of them; None for a type
+    variable left unfilled, `Any`, an unnamed type or `None` itself."""
+    if typed is None or typed.symbol in (ANY, _NONE):
+        return None
+    if typed.symbol == UNION:
+        return typed if all(_class_of(member) for member in typed.arguments) else None
+    return typed if _class_of(typed) is not None else None
 
 
 def _class_of(typed: TypeRef | None) -> str | None:
