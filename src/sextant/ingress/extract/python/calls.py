@@ -345,6 +345,9 @@ class BodyReader:
     # type variables kept (`own_return_type`); a name defined twice with two different
     # declared returns has none.
     _own_returns: dict[str, TypeRef]
+    # The type each class of this file declares for an attribute in its body (`client:
+    # HttpClient`, PEP 526), by bare field symbol (`app/m/C#client.`).
+    _own_fields: dict[str, TypeRef]
 
     def _body(self, caller: str) -> Body:
         return self._bodies.setdefault(caller, Body(caller))
@@ -1280,6 +1283,28 @@ class BodyReader:
         mapping = parameter_mapping(instance, self._local_classes[defining.symbol])
         return _a_class(substitute(written, mapping))
 
+    def _declared_field_on(self, receiver: TypeRef, name: str) -> TypeRef | None:
+        """The type a class of this file (or a base of this file, by C3) declares for the
+        attribute `name` of a `receiver`, its type variables filled by the receiver's type
+        arguments; None where no class of this file declares it, or it names no class."""
+        owner = receiver.symbol
+        shape = self._local_classes.get(owner)
+        if shape is None:
+            return None
+        order = self._hierarchy.order(owner)
+        entries = [TypeRef(symbol=owner)] if order is None else order
+        defining = next(
+            (e for e in entries if name in _members(self._hierarchy.shape_of(e.symbol))), None
+        )
+        if defining is None or defining.symbol not in self._local_classes:
+            return None
+        written = self._own_fields.get(f"{defining.symbol}{name}.")
+        if written is None:
+            return None
+        instance = substitute(defining, parameter_mapping(receiver, shape)) or defining
+        mapping = parameter_mapping(instance, self._local_classes[defining.symbol])
+        return _a_class(substitute(written, mapping))
+
     def _super(self, name: str, scope: Scope) -> Callee:
         """`super().m()` from a method: `special` on the class's first written parent, as
         the JVM's `super.m()` names the direct superclass. The `super()` call itself is
@@ -1321,8 +1346,14 @@ class BodyReader:
         # What a function of this file declares the value is: it names no owner (the body's
         # returns run, and the resolver follows them), and types only what is read off it.
         hinted = False
-        if declared is None and value.kind == "unresolved" and value.source is not None:
-            declared = scope.body.declared.get(value.source)
+        if declared is None:
+            declared = _hinted(value, scope)
+            if declared is None and value.kind == "field" and on_self and value.symbol:
+                # `self.client`: what the class declares the attribute holds. Its writes, which
+                # the resolver follows (ruling R33), are what the object holds.
+                declared = self._declared_field_on(
+                    TypeRef(symbol=scope.owner), member_name(str(value.symbol))
+                )
             hinted = declared is not None
         if protocol and declared is not None and declared.symbol == _TYPE_OF:
             declared = None
@@ -1349,6 +1380,7 @@ class BodyReader:
                 receiver_field=value.symbol,
                 receiver_field_kind="instance" if on_self else None,
                 typed=declared,
+                hinted=hinted,
             )
         return Callee(_target(owner, name), "virtual", receiver, typed=declared, hinted=hinted)
 
@@ -1396,6 +1428,14 @@ class BodyReader:
                 if len(targets) == 1:
                     return _reference(targets[0])
                 return CallArgument(kind="merge", candidates=[_reference(t) for t in targets])
+        if isinstance(node, ast.Attribute):
+            # An attribute of a value (`obj.client`): the type a class of this file declares
+            # for it (`client: HttpClient` in its body, PEP 526), where the value's class is
+            # known; else a value this scanner does not follow.
+            base = self._value(node.value, scope)
+            held = self._typed(node.value, base, scope) or _hinted(base, scope)
+            declared = None if held is None else self._declared_field_on(held, node.attr)
+            return _UNKNOWN if declared is None else _part(declared)
         if isinstance(node, ast.List | ast.Tuple):
             elements = [self._value(element, scope) for element in node.elts]
             typed = self._literal_type(node, node.elts, elements, scope)
@@ -2086,6 +2126,13 @@ def own_return_type(annotation: ast.expr, types: TypeScope) -> TypeRef | None:
     if is_class_object(annotation, types):
         return TypeRef(symbol=_TYPE_OF, arguments=[found], nullable=found.nullable)
     return found
+
+
+def _hinted(value: CallArgument, scope: Scope) -> TypeRef | None:
+    """What a function of this file declares a call result is (`Body.declared`)."""
+    if value.kind == "unresolved" and value.source is not None:
+        return scope.body.declared.get(value.source)
+    return None
 
 
 def _a_class(typed: TypeRef | None) -> TypeRef | None:

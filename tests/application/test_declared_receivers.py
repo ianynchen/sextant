@@ -154,3 +154,85 @@ def test_a_call_in_the_callees_own_file_takes_its_declaration_too(tmp_path: Path
         (_USER, "declared", None)
     ]
     workspace.close()
+
+
+# -- attributes declared in a class body (step 3) ------------------------------------------
+
+_CLIENTS = (
+    "class HttpClient:\n"
+    "    def get(self):\n"
+    "        return 1\n"
+    "class FastClient(HttpClient):\n"
+    "    def get(self):\n"
+    "        return 2\n"
+)
+
+
+def test_an_attribute_no_code_writes_is_its_declaration(tmp_path: Path):
+    """A dataclass's `client: HttpClient`: its generated `__init__` is not code we read, so
+    the declaration answers, `declared`, and the edges reach the override too."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _CLIENTS
+            + "from dataclasses import dataclass\n@dataclass\nclass Service:\n"
+            + "    client: HttpClient\n    def run(self):\n        self.client.get()\n",
+        },
+    )
+    site = _site(workspace, "app/a/Service#run(sig_dd69782a).", "get")
+    assert _rows(workspace, site) == [("app/a/HttpClient#", "declared", None)]
+    assert len(_edges(workspace, site)) == 2
+    workspace.close()
+
+
+def test_a_subclass_redeclaring_the_attribute_is_one_more_class(tmp_path: Path):
+    """Ruling R33: a read in `Service` takes `Service`'s declaration and each subtype's, here
+    `Fast`'s narrower `client: FastClient` in another file: a closed list, one row each."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _CLIENTS
+            + "class Service:\n    client: HttpClient\n"
+            + "    def run(self):\n        self.client.get()\n",
+            "b.py": "from app.a import Service, FastClient\n"
+            "class Fast(Service):\n    client: FastClient\n",
+        },
+    )
+    site = _site(workspace, "app/a/Service#run(sig_dd69782a).", "get")
+    assert sorted(_rows(workspace, site)) == [
+        ("app/a/FastClient#", "declared", None),
+        ("app/a/HttpClient#", "declared", None),
+    ]
+    workspace.close()
+
+
+def test_a_write_the_walk_reads_a_type_of_stays_the_answer(tmp_path: Path):
+    """`self.client = FastClient()` is what the object holds: `syntax`, the declaration aside."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _CLIENTS
+            + "class Service:\n    client: HttpClient\n"
+            + "    def __init__(self):\n        self.client = FastClient()\n"
+            + "    def run(self):\n        self.client.get()\n",
+        },
+    )
+    site = _site(workspace, "app/a/Service#run(sig_dd69782a).", "get")
+    assert _rows(workspace, site) == [("app/a/FastClient#", "syntax", None)]
+    workspace.close()
+
+
+def test_a_declaration_naming_another_files_alias_names_no_class(tmp_path: Path):
+    """`Alias = HttpClient` in `a.py` is a field there: `c: Alias` in `b.py` reads as the type
+    `app/a/Alias#`, which no class carries, so it is no answer (never a row naming it)."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _CLIENTS + "Alias = HttpClient\n",
+            "b.py": "from app.a import Alias\nclass S:\n    c: Alias\n"
+            "    def run(self):\n        self.c.get()\n",
+        },
+    )
+    site = _site(workspace, "app/b/S#run(sig_dd69782a).", "get")
+    assert [row["owner"] for row in _bound(workspace, site) if row["owner"]] == []
+    workspace.close()

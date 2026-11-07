@@ -224,3 +224,45 @@ def test_a_literal_writes_the_facts_it_wrote_before(tmp_path: Path):
     assert call.arguments[0].kind == "merge"
     assert [a.kind for a in call.arguments[0].candidates or []] == ["array", "array"]
     assert call.arguments[1].kind == "unresolved"
+
+
+# -- attributes declared in a class body (step 3) ------------------------------------------
+
+_SERVICE = (
+    "from dataclasses import dataclass\n"
+    "class HttpClient:\n"
+    "    def get(self):\n"
+    "        return 1\n"
+    "@dataclass\n"
+    "class Service:\n"
+    "    client: HttpClient\n"
+    "    clients: list[HttpClient]\n"
+    "    def run(self):\n"
+    "        self.client.get()\n"
+    "        for c in self.clients:\n"
+    "            c.get()\n"
+)
+_HTTP = "app/run/HttpClient#"
+
+
+def test_an_attribute_read_on_a_value_takes_its_class_body_declaration(tmp_path: Path):
+    """`s.client` with `s: Service` is the `HttpClient` the class body declares (PEP 526), for
+    any class: no framework is named. An element of `s.clients` is one too."""
+    tree = _scan(
+        tmp_path,
+        _SERVICE + "def f(s: Service):\n"
+        "    s.client.get()\n"
+        "    for c in s.clients:\n"
+        "        c.get()\n",
+    )
+    assert _owner_of(tree, "app/run#f", "get") == [_HTTP, _HTTP]
+
+
+def test_an_attribute_of_self_leaves_its_owner_to_the_writes_and_types_its_elements(
+    tmp_path: Path,
+):
+    """`self.client` is what the object's writes hold (the resolver reads them, ruling R33):
+    no owner here; an element of `self.clients` is read off the declaration."""
+    tree = _scan(tmp_path, _SERVICE)
+    assert _owner_of(tree, "app/run/Service#run", "get") == [None, _HTTP]
+    assert _owner_of(tree, "app/run/Service#run", "__iter__") == [None]

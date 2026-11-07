@@ -748,6 +748,10 @@ class ValueIndex:
     # Read only by the type reader (`_Walk._declared_answers`). Empty for a JVM module, whose
     # calls the facts own.
     declared_returns: Mapping[str, Mapping[str, Any]] = dataclass_field(default_factory=dict)
+    # The type each field of a `c3` module declares (a class-level annotation, `client:
+    # HttpClient`, or a module-level one), by bare field symbol, as the fact writes it
+    # (`signature.returns`). Read only by the type reader (`_Walk._declared_field`).
+    declared_fields: Mapping[str, Mapping[str, Any]] = dataclass_field(default_factory=dict)
     # `argument_slots`' answers, per (caller, ordinal, callee), for as long as this lives.
     slots_memo: dict[Any, Any] = dataclass_field(default_factory=dict, compare=False, repr=False)
     # `_Walk._namespace`'s answers, per field symbol, for as long as this lives.
@@ -1272,9 +1276,19 @@ def value_index(
             called_at.setdefault(str(row["callee"]), []).append(
                 (str(row["caller"]), int(str(row["ordinal"])))
             )
+    field_rows = list(workspace.query("fields"))
     static_fields = frozenset(
-        bare_descriptor(str(row["symbol"])) for row in workspace.query("fields") if row["static"]
+        bare_descriptor(str(row["symbol"])) for row in field_rows if row["static"]
     )
+    declared_fields: dict[str, Mapping[str, Any] | None] = {}
+    for row in field_rows if by_name else ():
+        written = row.get("returns")
+        written = json.loads(str(written)) if isinstance(written, str) else written
+        written = written if isinstance(written, dict) else None
+        bare = bare_descriptor(str(row["symbol"]))
+        if bare in declared_fields and declared_fields[bare] != written:
+            written = None
+        declared_fields[bare] = written
     unscanned = frozenset(
         (str(row.get("owner")), str(row["name"]))
         for key, row in sites.items()
@@ -1334,6 +1348,7 @@ def value_index(
             for entry in returns_arguments
         },
         declared_returns={key: value for key, value in declared_returns.items() if value},
+        declared_fields={key: value for key, value in declared_fields.items() if value},
     )
 
 
@@ -2480,6 +2495,31 @@ def _only(trail: _Trail, answer: Answer) -> tuple[_Reached, ...]:
 
 def _unresolved(reason: str) -> Answer:
     return Answer(kind=UNRESOLVED, reason=reason)
+
+
+def _declared_classes(written: Mapping[str, Any], dispatch: Dispatch | None) -> tuple[str, ...]:
+    """The classes a declared type reference (`TypeRef`, as a fact writes it) names: itself,
+    or each member of a union, `None` aside. Empty where one names no class the workspace
+    knows: `Any`, the root type every value is, a type variable, a type the file did not
+    name, or a name no class of the module or type header carries (an alias another file
+    assigns, `Logger = structlog.stdlib.BoundLogger`, is a field, not a class)."""
+    if dispatch is None:
+        return ()
+    symbol = str(written.get("symbol"))
+    members = (
+        [str(m.get("symbol")) for m in written.get("arguments") or [] if isinstance(m, Mapping)]
+        if symbol == _UNION
+        else [symbol]
+    )
+    members = [m for m in members if m != _NONE]
+    if not members or not all(
+        is_type_descriptor(m)
+        and m not in (_ANY, dispatch.root)
+        and (m in dispatch.scanned or m in dispatch.headers)
+        for m in members
+    ):
+        return ()
+    return tuple(dict.fromkeys(members))
 
 
 def bound_owner(answer: Answer) -> str | None:
@@ -4615,19 +4655,9 @@ class _Walk:
             # 2026-11-06-reading-decorators §3e): its call is that value's, which the
             # function's own declaration does not describe.
             return ()
-        symbol = str(written.get("symbol"))
-        members = (
-            [str(m.get("symbol")) for m in written.get("arguments") or []]
-            if symbol == _UNION
-            else [symbol]
-        )
-        if not members or not all(
-            is_type_descriptor(m) and m not in (_ANY, _NONE, dispatch.root) for m in members
-        ):
-            return ()
         return tuple(
             Answer(kind=LITERAL, value=member, literal_kind=SYMBOL, declared=True)
-            for member in dict.fromkeys(members)
+            for member in _declared_classes(written, dispatch)
         )
 
     def _through_receiver(
@@ -5143,6 +5173,14 @@ class _Walk:
             or self._index.constants.get(one)
             or self._index.produced.get(one)
         ]
+        # **A declared attribute is its declaration's type where no write says more**
+        # (OI-324 part 2), for the type reader: `client: HttpClient` in a class body (PEP 526),
+        # on every type of the read's namespace (ruling R33), one answer per class. A write
+        # whose value the walk reads no type of, a write by code nothing scanned, and no write
+        # at all (a dataclass's generated `__init__`) take it.
+        declared = self._declared_field(namespace)
+        if not written_ones and declared:
+            return tuple((trail, answer) for answer in declared)
         if not written_ones:
             if beyond:
                 return _only(trail, _unresolved(EXTERNAL))
@@ -5158,7 +5196,39 @@ class _Walk:
             reached.extend(self._attribute(one, trail, frames, unseen, read_on))
         if beyond:
             reached.append((trail, _unresolved(EXTERNAL)))
+        if declared:
+            reached = [
+                typed
+                for path, answer in reached
+                for typed in (
+                    [(path, one) for one in declared]
+                    if answer.kind == UNRESOLVED
+                    else [(path, answer)]
+                )
+            ]
         return self._distinct(reached)
+
+    def _declared_field(self, namespace: tuple[str, ...]) -> tuple[Answer, ...]:
+        """The classes the fields of `namespace` are declared to hold, for the type reader:
+        each declaration's class, or each class of its union. None where the reader is
+        another, no field of it is declared, or one declaration names no class (`Any`, a
+        type variable, a type the file did not name): the list would not be closed."""
+        if not self._declared_types or not self._index.declared_fields:
+            return ()
+        dispatch = self._index.dispatch
+        found: dict[str, None] = {}
+        for one in namespace:
+            written = self._index.declared_fields.get(one)
+            if written is None:
+                continue
+            members = _declared_classes(written, dispatch)
+            if not members:
+                return ()
+            found.update(dict.fromkeys(members))
+        return tuple(
+            Answer(kind=LITERAL, value=member, literal_kind=SYMBOL, declared=True)
+            for member in found
+        )
 
     def _attribute(
         self,

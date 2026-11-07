@@ -228,6 +228,7 @@ class _Writer(BodyReader):
         self._local_classes = {}
         self._hierarchy = Hierarchy(self._shape_or_none)
         self._own_returns = {}
+        self._own_fields = {}
 
     def _full(self, descriptor: str) -> str:
         return self._context.prefix + descriptor
@@ -242,7 +243,7 @@ class _Writer(BodyReader):
         )
         types = TypeScope(names=names, here=here, index=self._context.index)
         self._local_classes = _class_shapes(tree.body, here, names, types)
-        self._own_returns = self._declared_returns(tree.body, here, types)
+        self._own_returns, self._own_fields = self._declared_returns(tree.body, here, types)
         libraries = self._context.index.libraries
         self._hierarchy = Hierarchy(
             self._shape_or_none,
@@ -257,12 +258,15 @@ class _Writer(BodyReader):
 
     def _declared_returns(
         self, body: list[ast.stmt], here: str, types: TypeScope
-    ) -> dict[str, TypeRef]:
+    ) -> tuple[dict[str, TypeRef], dict[str, TypeRef]]:
         """The return type each module-level function and each method of a class of this
         file declares, read where its annotation is read (`_function`), by bare descriptor:
         what a call of it declares it gives (`calls.own_return_type`). A name defined twice
-        keeps one only where every definition declares the same; a decorated one has none."""
+        keeps one only where every definition declares the same; a decorated one has none.
+        Beside them, the type each class body declares for an attribute (`client:
+        HttpClient`, PEP 526), by field symbol, read the same way."""
         found: dict[str, TypeRef | None] = {}
+        fields: dict[str, TypeRef | None] = {}
         pending: list[tuple[str | None, list[ast.stmt], TypeScope]] = [(None, body, types)]
         while pending:
             path, statements, scope = pending.pop(0)
@@ -285,6 +289,15 @@ class _Writer(BodyReader):
                     )
                     pending.append((inner, node.body, nested))
                     continue
+                if (
+                    path is not None
+                    and isinstance(node, ast.AnnAssign)
+                    and isinstance(node.target, ast.Name)
+                ):
+                    field = f"{owner}{node.target.id}."
+                    typed = own_return_type(node.annotation, scope)
+                    fields[field] = None if field in fields and fields[field] != typed else typed
+                    continue
                 if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                     continue
                 # A decorated name holds what its decorators made (`f = dec(f)`), whose call
@@ -304,7 +317,10 @@ class _Writer(BodyReader):
                 if descriptor in found and found[descriptor] != written:
                     written = None
                 found[descriptor] = written
-        return {key: value for key, value in found.items() if value is not None}
+        return (
+            {key: value for key, value in found.items() if value is not None},
+            {key: value for key, value in fields.items() if value is not None},
+        )
 
     def _shape_or_none(self, symbol: str) -> ClassShape | None:
         found = self._local_classes.get(symbol)
