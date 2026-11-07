@@ -108,6 +108,7 @@ from sextant.ingress.extract.python.typing_rules import (
     substitute,
     type_ref,
     type_symbol,
+    union_of,
 )
 
 INIT = "<init>"
@@ -151,6 +152,19 @@ _UNPACKED_POSITIONAL = "*"
 # The name prefix javac gives a lambda body in a static initializer and in a constructor.
 _PREFIXES = {CLINIT: "static", INIT: "new"}
 
+# The class a literal or a comprehension builds (OI-324 part 2).
+_LITERAL_CLASSES: dict[type[ast.expr], str] = {
+    ast.List: "builtins/list#",
+    ast.Tuple: TUPLE,
+    ast.Set: "builtins/set#",
+    ast.Dict: "builtins/dict#",
+}
+_COMPREHENSION_CLASSES: dict[type[ast.expr], str] = {
+    ast.ListComp: "builtins/list#",
+    ast.SetComp: "builtins/set#",
+    ast.DictComp: "builtins/dict#",
+}
+
 _UNKNOWN = CallArgument(kind="unresolved")
 # The receiver of a method (`self`, `cls`). It is never a parameter (D00 §5 numbering) and
 # reads as `unresolved` where it is used as a value; only its identity is tested.
@@ -165,12 +179,20 @@ class _Part(CallArgument):
     _typed: TypeRef | None = PrivateAttr(default=None)
 
 
+def _is_part(value: CallArgument) -> bool:
+    """Whether `value` is an `unresolved` value only the scanner knows the type of: it folds
+    as unknown where paths give different ones. A typed `array` keeps its own fact."""
+    return isinstance(value, _Part) and value.kind == "unresolved"
+
+
 def _part(typed: TypeRef) -> CallArgument:
     found = _Part(kind="unresolved")
     found._typed = typed
     return found
 
 
+# A literal a local holds that the code it is handed to can change: read once as written.
+_MUTABLE = (ast.List, ast.Dict, ast.Set, ast.ListComp, ast.DictComp, ast.SetComp)
 _NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 _COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 
@@ -510,7 +532,7 @@ class BodyReader:
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 for target in targets:
                     self._store(target, value, scope)
-                    if isinstance(node.value, ast.List) and isinstance(target, ast.Name):
+                    if isinstance(node.value, _MUTABLE) and isinstance(target, ast.Name):
                         frame.mutable.add(target.id)
             if _only_a_call(node):
                 scope.flow.quiet()
@@ -1376,9 +1398,21 @@ class BodyReader:
                 return CallArgument(kind="merge", candidates=[_reference(t) for t in targets])
         if isinstance(node, ast.List | ast.Tuple):
             elements = [self._value(element, scope) for element in node.elts]
+            typed = self._literal_type(node, node.elts, elements, scope)
             if any(isinstance(element, ast.Starred) for element in node.elts):
-                return _UNKNOWN
-            return CallArgument(kind="array", elements=elements)
+                return _part(typed)
+            found = _Part(kind="array", elements=elements)
+            found._typed = typed
+            return found
+        if isinstance(node, ast.Dict | ast.Set):
+            children = [c for c in ast.iter_child_nodes(node) if isinstance(c, ast.expr)]
+            read = {id(child): self._value(child, scope) for child in children}
+            if isinstance(node, ast.Set):
+                return _part(
+                    self._literal_type(node, node.elts, [read[id(e)] for e in node.elts], scope)
+                )
+            keys = [None if k is None else read[id(k)] for k in node.keys]
+            return _part(self._dict_type(node, keys, [read[id(v)] for v in node.values], scope))
         if isinstance(node, ast.Lambda):
             return self._lambda(node, scope)
         if isinstance(node, ast.IfExp):
@@ -1497,8 +1531,8 @@ class BodyReader:
                 self._value(condition, scope)
                 flow.loop_test(loops[-1])
         parts = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
-        for part in parts:
-            self._value(part, scope)
+        made = [(part, self._value(part, scope)) for part in parts]
+        typed = [self._element_type(part, value, scope) for part, value in made]
         if lazy:
             flow.defer(False)
         # An exhausted inner loop takes the outer loop's next element.
@@ -1507,7 +1541,77 @@ class BodyReader:
         flow.loop_end(loops[0])
         if frame is not None and saved is not None:
             frame.values, frame.local_names = saved
-        return _UNKNOWN
+        if lazy:
+            return _UNKNOWN
+        # The object it builds is its class, with the type of what each pass adds.
+        symbol = _COMPREHENSION_CLASSES[type(node)]
+        if any(part is None for part in typed):
+            return _part(TypeRef(symbol=symbol))
+        return _part(TypeRef(symbol=symbol, arguments=[p for p in typed if p is not None]))
+
+    # -- container literals (OI-324 part 2) ----------------------------------------------
+
+    def _literal_type(
+        self,
+        node: ast.List | ast.Tuple | ast.Set,
+        written: list[ast.expr],
+        elements: list[CallArgument],
+        scope: Scope,
+    ) -> TypeRef:
+        """The type a list, tuple or set literal builds: its class, with its elements'
+        types where every one is known. Several types are their union (a closed list, never
+        one of them); a tuple keeps them by position. An empty literal, a starred element or
+        an element of no known type gives the class alone."""
+        symbol = _LITERAL_CLASSES[type(node)]
+        if not written or any(isinstance(element, ast.Starred) for element in written):
+            return TypeRef(symbol=symbol)
+        types = [self._element_type(w, e, scope) for w, e in zip(written, elements, strict=True)]
+        if any(found is None for found in types):
+            return TypeRef(symbol=symbol)
+        if isinstance(node, ast.Tuple):
+            return TypeRef(symbol=symbol, arguments=[t for t in types if t is not None])
+        joined = union_of(list(types))
+        return TypeRef(symbol=symbol, arguments=[] if joined is None else [joined])
+
+    def _dict_type(
+        self,
+        node: ast.Dict,
+        keys: list[CallArgument | None],
+        values: list[CallArgument],
+        scope: Scope,
+    ) -> TypeRef:
+        """A dict literal's type: `dict[K, V]` where every key and value has a known type,
+        each the union of what is written; an unpacked `**mapping` or an unknown one gives
+        `dict` alone."""
+        dict_type = TypeRef(symbol=_LITERAL_CLASSES[ast.Dict])
+        if not keys or any(key is None for key in keys):
+            return dict_type
+        key_types = [
+            self._element_type(w, k, scope)
+            for w, k in zip(node.keys, keys, strict=True)
+            if w is not None and k is not None
+        ]
+        value_types = [
+            self._element_type(w, v, scope) for w, v in zip(node.values, values, strict=True)
+        ]
+        joined = [union_of(list(key_types)), union_of(list(value_types))]
+        if any(t is None for t in [*key_types, *value_types]) or any(j is None for j in joined):
+            return dict_type
+        return dict_type.model_copy(update={"arguments": [j for j in joined if j is not None]})
+
+    def _element_type(self, node: ast.expr, value: CallArgument, scope: Scope) -> TypeRef | None:
+        """The type of one element the code writes: a literal's own class, else what the
+        scanner knows of the value (`_typed`). None where it is not known."""
+        if isinstance(node, ast.Constant):
+            if node.value is None:
+                return TypeRef(symbol=_NONE, nullable=True)
+            literal = type(node.value)
+            if literal in (str, int, float, bool, bytes, complex):
+                return TypeRef(symbol=f"{BUILTINS}/{literal.__name__}#")
+            return None
+        if value.kind in ("string", "concat"):
+            return TypeRef(symbol=_STRING)
+        return self._typed(node, value, scope)
 
     # -- names ---------------------------------------------------------------------------
 
@@ -1553,7 +1657,11 @@ class BodyReader:
                     # reaches another call does: the first read gets the literal, a
                     # later read gets `unresolved`.
                     current.mutable.discard(name)
-                    current.values[name] = _UNKNOWN
+                    # Its class does not change; what it holds may have (OI-324 part 2).
+                    typed = value._typed if isinstance(value, _Part) else None
+                    current.values[name] = (
+                        _UNKNOWN if typed is None else _part(TypeRef(symbol=typed.symbol))
+                    )
                 return value
             current, nested = current.enclosing, True
         return None
@@ -1928,7 +2036,7 @@ def _merge(candidates: list[CallArgument]) -> CallArgument:
     """One of several values, identical ones folded (D00 §5 `merge`). A tuple part is an
     `unresolved` value in the facts, and folds as one where the parts differ."""
     if any(candidate != candidates[0] for candidate in candidates):
-        candidates = [_UNKNOWN if isinstance(c, _Part) else c for c in candidates]
+        candidates = [_UNKNOWN if _is_part(c) else c for c in candidates]
     folded: list[CallArgument] = []
     for candidate in candidates:
         if candidate not in folded:
@@ -1951,7 +2059,7 @@ def _one_of(values: list[CallArgument]) -> CallArgument:
     value this scanner did not follow, else their `merge`."""
     if all(value == values[0] for value in values):
         return values[0]
-    if any(value == _UNKNOWN or isinstance(value, _Part) for value in values):
+    if any(value == _UNKNOWN or _is_part(value) for value in values):
         return _UNKNOWN
     return _merge([c for value in values for c in (value.candidates or [value])])
 

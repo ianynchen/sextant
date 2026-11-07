@@ -231,6 +231,11 @@ def _alternatives(node: ast.expr) -> list[ast.expr]:
     return [node]
 
 
+def union_of(members: list[TypeRef | None]) -> TypeRef | None:
+    """`_union`, for a reader outside the written types: the one type several are."""
+    return _union(members)
+
+
 def _union(members: list[TypeRef | None]) -> TypeRef | None:
     """One type for several: `None` among them is `nullable`, one other is itself, and
     several others are the arguments of `typing/Union#`. A member the file does not name

@@ -145,3 +145,82 @@ def test_a_decorated_function_declares_nothing_for_its_call(tmp_path: Path):
         "    load()[0].save()\n",
     )
     assert _owner_of(tree, "app/run#f", "save") == [None]
+
+
+# -- container literals (step 2) ------------------------------------------------------------
+
+
+def test_a_container_literal_is_its_class_with_its_elements_types(tmp_path: Path):
+    """`[u, u]` is a `list[User]`, `{'a': c}` a `dict[str, Client]`, `{u}` a `set[User]` and
+    `(u, c)` a `tuple[User, Client]`; an element read off each is typed."""
+    tree = _scan(
+        tmp_path,
+        _MODELS + "def f(u: User, c: Client):\n"
+        "    [u, u][0].save()\n"
+        "    {'a': c}['a'].send()\n"
+        "    for x in {u}:\n"
+        "        x.save()\n"
+        "    (u, c)[1].send()\n",
+    )
+    assert _owner_of(tree, "app/run#f", "__getitem__") == [LIST, DICT, "builtins/tuple#"]
+    assert _owner_of(tree, "app/run#f", "__iter__") == ["builtins/set#"]
+    assert _owner_of(tree, "app/run#f", "save") == [USER, USER]
+    assert _owner_of(tree, "app/run#f", "send") == [CLIENT, CLIENT]
+
+
+def test_mixed_elements_are_a_closed_list_never_one_of_them(tmp_path: Path):
+    """`[u, c]` holds a `User | Client`: a call on an element has no one owner."""
+    tree = _scan(
+        tmp_path,
+        _MODELS + "def f(u: User, c: Client):\n    [u, c][0].save()\n",
+    )
+    assert _owner_of(tree, "app/run#f", "save") == [None]
+
+
+def test_a_local_literal_keeps_its_class_after_it_is_handed_out(tmp_path: Path):
+    """`found = []`: every call on `found` is a `list`'s, at every read; its elements are not
+    known once it was handed out (it may have been written to), so `found[0]` is untyped."""
+    tree = _scan(
+        tmp_path,
+        _MODELS + "def f(u: User):\n"
+        "    found = []\n"
+        "    found.append(u)\n"
+        "    found.append(u)\n"
+        "    found[0].save()\n"
+        "    names = {'a': u}\n"
+        "    names['b'] = Client()\n"
+        "    names['b'].save()\n",
+    )
+    assert _owner_of(tree, "app/run#f", "append") == [LIST, LIST]
+    assert _owner_of(tree, "app/run#f", "__getitem__") == [LIST, DICT]
+    assert _owner_of(tree, "app/run#f", "save") == [None, None]
+
+
+def test_a_comprehension_is_its_class_with_its_elements_type(tmp_path: Path):
+    """`[u for _ in xs]` is a `list[User]`; `{k: c for k in ks}` a dict."""
+    tree = _scan(
+        tmp_path,
+        _MODELS + "def f(xs, ks, u: User, c: Client):\n"
+        "    users = [u for _ in xs]\n"
+        "    users[0].save()\n"
+        "    clients = {k: c for k in ks}\n"
+        "    clients.values()\n",
+    )
+    assert _owner_of(tree, "app/run#f", "save") == [USER]
+    assert _owner_of(tree, "app/run#f", "values") == [DICT]
+
+
+def test_a_literal_writes_the_facts_it_wrote_before(tmp_path: Path):
+    """The element types are the scanner's own: the facts still read `array` and `merge`."""
+    tree = _scan(
+        tmp_path,
+        _MODELS + "def g(*a):\n"
+        "    return a\n"
+        "def f(c):\n"
+        "    xs = [1] if c else [2]\n"
+        "    g(xs, {'a': 1})\n",
+    )
+    (call,) = [s for s in _sites(tree, "app/run#f") if s.target.name == "g"]
+    assert call.arguments[0].kind == "merge"
+    assert [a.kind for a in call.arguments[0].candidates or []] == ["array", "array"]
+    assert call.arguments[1].kind == "unresolved"
