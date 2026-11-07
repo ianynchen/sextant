@@ -25,7 +25,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from sextant.domain.facts import TypeRef
-from sextant.domain.symbols import names_a_type, owner_of
+from sextant.domain.symbols import (
+    is_type_descriptor,
+    names_a_type,
+    owner_of,
+    without_type_marker,
+)
 from sextant.ingress.extract.python.imports import Binding, ModuleIndex, Target, bind_names
 from sextant.ingress.extract.python.typing_rules import ClassShape, TypeScope, type_symbol
 
@@ -190,10 +195,10 @@ class ProjectHeaders:
 
     def _follow(self, symbol: str) -> str:
         found = symbol
-        path = symbol.removesuffix("#")
+        path = without_type_marker(symbol)
         module, _, member = path.rpartition("/")
         if (
-            symbol.endswith("#")
+            is_type_descriptor(symbol)
             and "$" not in member
             and path not in self._files
             and module in self._files
@@ -264,7 +269,7 @@ class ProjectHeaders:
     def _module_of(self, symbol: str) -> str:
         """The module file a type symbol is in: `a/b` for the module type `a/b#` and for the
         class `a/b/C#` (a nested class `a/b/Outer$Inner#` too)."""
-        path = symbol.removesuffix("#")
+        path = without_type_marker(symbol)
         return path if path in self._files else path.rpartition("/")[0]
 
     def _typed(self, written: TypeRef) -> TypeRef:
