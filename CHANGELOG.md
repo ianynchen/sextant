@@ -34,7 +34,7 @@ here would restate those documents rather than add anything.
   JVM too, the Vert.x web and event-bus handlers included. No pinned answer changed (the field
   pins and the suite), and `examples/vertx-examples/web-examples` analyses to the same 56
   endpoints and the same derived tables as before the change.
-- **A Python `self.x` / `cls.x` read takes every class's writes of `x`** (ruling R33). An
+- **A field read in a Python class takes every class's writes of that field** (`self.x`, `cls.x` and an explicit `B.x` alike; ruling R33). An
   object's attributes are one namespace, whichever class's code wrote them, so a read in class
   `C` takes the writes of `x` on `C`, its ancestors and its subtypes (and their other parents):
   `self.d` set to a `Session` in `B.__init__` and to a `Client` in `D(B).__init__` is both,

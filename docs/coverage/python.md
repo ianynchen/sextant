@@ -111,7 +111,8 @@ The comparison with a type checker, which solves the first four exactly, is
 
 | Shape | What happens | Ruling or record |
 |---|---|---|
-| `obj.x = v` on another object (`app.state.x = v`) | not written | R24: only `self` field writes are facts, as on the JVM |
+| `obj.x = v` on another object (`app.state.x = v`) | not written | R24: only `self` field writes are facts, as on the JVM; reads of the field keep the class's own value (OI-340) |
+| a module-level `for`, `with … as` or `except … as` target | not a write, so a function reading the name gets the earlier value, marked `resolved` | final review, logged as OI-339 (rare; the fix is cheap) |
 | a nested `def` reading a name of its enclosing function (a closure) | the trace stops at the wrapper's `fn(*a)` | R30: logged, kept as a strict xfail |
 | a class whose parent cannot be named | parents kept up to that one, then `parents_unread`; lookup ends `external` | R11, R11b; mixins after it are not found |
 | 13 standard-library classes (typing's `Protocol`, `Generic`; `IntEnum`) | no type header | R23: typeshed declares them as values |

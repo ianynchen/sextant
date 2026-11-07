@@ -327,6 +327,23 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-321 | [SEXTANT-315](https://app.plane.so/portolan/browse/SEXTANT-315/) | One reason list everywhere: configuration values, method lookup and hand-off reasons become a general reason plus a detail (ruled B, 2026-11-05) |
 | OI-322 | [SEXTANT-316](https://app.plane.so/portolan/browse/SEXTANT-316/) | Peer join fills one placeholder only: an address with two (${host}:${port}) is never resolved |
 | OI-323 | [SEXTANT-317](https://app.plane.so/portolan/browse/SEXTANT-317/) | A program that starts another program is not read as outbound |
+| OI-324 | [SEXTANT-318](https://app.plane.so/portolan/browse/SEXTANT-318/) | Python types not worked out: container elements, type-variable library returns, dataclass fields, isinstance |
+| OI-325 | [SEXTANT-319](https://app.plane.so/portolan/browse/SEXTANT-319/) | A warm Python analysis reuses nothing (polar warm 27.6 s against a 10 s target) |
+| OI-326 | [SEXTANT-320](https://app.plane.so/portolan/browse/SEXTANT-320/) | Python closures are not read: a nested def's read of an enclosing name is unresolved |
+| OI-327 | [SEXTANT-321](https://app.plane.so/portolan/browse/SEXTANT-321/) | exact_methods treats a Python classmethod as never overridden (fix before a Python catalog reads pass-through) |
+| OI-328 | [SEXTANT-322](https://app.plane.so/portolan/browse/SEXTANT-322/) | A Python parameter's default value is not a fact (FastAPI Depends / Query defaults) |
+| OI-329 | [SEXTANT-323](https://app.plane.so/portolan/browse/SEXTANT-323/) | Decorated Python methods: self.m() names the method, and the external detail does not name the decorator |
+| OI-330 | [SEXTANT-324](https://app.plane.so/portolan/browse/SEXTANT-324/) | Decorator factories and reused decorators are not stated (lru_cache(maxsize), retry(...), deco = x(...)) |
+| OI-331 | [SEXTANT-325](https://app.plane.so/portolan/browse/SEXTANT-325/) | Command-line gaps after click: typer, argparse, function entry points, group options, flag pairs, parameter types |
+| OI-332 | [SEXTANT-326](https://app.plane.so/portolan/browse/SEXTANT-326/) | roots has no reason column: a command behind an unstated decorator says nothing about why its handler is empty |
+| OI-333 | [SEXTANT-327](https://app.plane.so/portolan/browse/SEXTANT-327/) | A library module attribute answers no_writer where external may be truer (pytest.mark, System.out) |
+| OI-334 | [SEXTANT-328](https://app.plane.so/portolan/browse/SEXTANT-328/) | Python type headers: 13 standard-library classes get none, and a header cannot carry parents_unread |
+| OI-335 | [SEXTANT-329](https://app.plane.so/portolan/browse/SEXTANT-329/) | Python control flow: a missing implicit None after a swallowing with; break/continue values after a finally |
+| OI-336 | [SEXTANT-330](https://app.plane.so/portolan/browse/SEXTANT-330/) | Python scanner minors: try-import binding, two import roots, property setters, dotted closed lists, globals() |
+| OI-337 | [SEXTANT-331](https://app.plane.so/portolan/browse/SEXTANT-331/) | Python detector minors: tests/ requirements, egg-info, empty module lists, build-system-only, unreadable .gitignore |
+| OI-338 | [SEXTANT-332](https://app.plane.so/portolan/browse/SEXTANT-332/) | The call-edges-drawn-last guard misses an aliased import or a direct derive |
+| OI-339 | [SEXTANT-333](https://app.plane.so/portolan/browse/SEXTANT-333/) | A module-level for / with / except target is not a write, so a function reading that name gets the earlier value |
+| OI-340 | [SEXTANT-334](https://app.plane.so/portolan/browse/SEXTANT-334/) | A field written from outside its class (obj.x = v) is not seen, so reads of it keep the class's own value |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
