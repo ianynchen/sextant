@@ -496,10 +496,9 @@ CREATE TABLE IF NOT EXISTS roots (
     handler   TEXT,
     -- D00 §4's root_kind. `inbound_endpoint` where a row the module EXPOSES
     -- named this handler; `scheduled` where a declaration hands it to a clock.
-    -- The third member, `entry_point`, has no producer — which signature
-    -- starts a program is knowledge about a language, and ARCHITECTURE §10
-    -- keeps that out of the language-blind half, so its producer is a catalog
-    -- nobody has written (`docs/open-issues.md`, OI-22).
+    -- `entry_point` where a catalog declaring `root_kind: entry_point` read a
+    -- command (D02 §2's `fluent`, design 2026-11-06-reading-decorators §5):
+    -- that engine writes the row, with no wire address, `path` the command.
     root_kind TEXT,
     -- The wire address that reaches this root, carried from the `endpoints`
     -- row that named the handler, column for column and unformatted: the

@@ -796,7 +796,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**117 of 131 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**118 of 132 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -819,6 +819,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `cdi-events` | `io.quarkus.arc:arc` | 3.17.5 |
 |  | `jakarta.enterprise:jakarta.enterprise.cdi-api` | 4.1.0 |
 |  | `javax.enterprise:cdi-api` | 1.0.0, 2.0.0 |
+| `click` | `click` | 8.5.0 |
 | `google-pubsub-client` | `com.google.cloud:google-cloud-pubsub` | 1.129.3 |
 | `google-pubsub-subscriber` | `com.google.cloud:google-cloud-pubsub` | 1.127.3 |
 | `grpc-java` | `io.grpc:protoc-gen-grpc-java` | 1.62.2, 1.81.0 |
@@ -4302,14 +4303,14 @@ wait for a Go scanner. The bounds of each kind are in its §5.12 boundary row.
 
 2Q's `I1` produces [D00](components/D00-fact-schema.md) §4's `root_kind` into
 [D01](components/D01-graph-schema.md) §3's `roots`, so "a scheduled job is a first-class
-root" stopped being a sentence in a document. Two of the set's three members have a
-producer; the third does not, and this is where a reader meets that.
+root" stopped being a sentence in a document. All three members have a producer; the third
+is a catalog's.
 
 | Root kind | Produced from | State |
 |---|---|---|
 | `inbound_endpoint` | every `endpoints` row the module exposes and names a handler for — `direction <> outbound`, so a `both` row from the linking tier would keep its trace; no pass here writes one since W27 | ✅ shipped. 77 handler-bearing rows are 77 root rows and 66 roots on the orders-service fixture: a root is a place a walk starts, not an address, and the row carries the address so a reader can find the walk by the URL they know |
 | `scheduled` | every `scheduled_work` handler | ✅ shipped. The user's own ruling — a scheduled job still contains business logic — and the reason `I1` was promoted out of paperwork |
-| `entry_point` | nothing | **Boundary — the member exists and no producer writes it.** Which signature starts a program is a rule of a LANGUAGE, and ARCHITECTURE §10 keeps language knowledge out of the language-blind half: the descriptor a runtime looks for belongs in a catalog exactly as a framework's annotation does, and no catalog declares one. Matching on a method's NAME alone would derive a root for any method that happens to be called that. **Falsified by** a module whose only starting point is a `main` producing no trace at all. **Closes with** a catalog declaring the entry-point signature — `docs/open-issues.md` OI-22 |
+| `entry_point` | every command a catalog declaring `root_kind: entry_point` reads (`catalogs/click.yml`: a click program's commands, design 2026-11-06-reading-decorators §5) | ✅ shipped for click. Sextant's own six commands are its rows (`sextant module analyze`, …), each with a trace, and their options are `request_params`. Not read: typer, argparse, and an entry point that names a function rather than a group — `docs/open-issues.md` OI-22, closed |
 
 **An error handler is deliberately not a root.** It runs INSIDE work something else already
 started, so a trace beginning at one would report an exception path as though a request or

@@ -258,12 +258,13 @@ broker listener's root kind naming nothing in `protocol` at all. `cli_entry` bec
 `entry_point` because a `main` is a program entry point whether or not anything about it
 is a command-line interface, and `cli` claimed a surface no producer measured.
 
-**`entry_point` has no producer, and that is stated rather than left to a reader.** Which
-signature starts a program is a fact about a LANGUAGE, and [ARCHITECTURE](../ARCHITECTURE.md)
-§10 keeps language knowledge out of the language-blind half — so its producer is a catalog,
-and none declares one (`docs/open-issues.md`, OI-22). The member stays in the set because
-the traversal that reads `roots` branches on no kind at all: a root of this kind traces
-exactly as the other two do the day something writes one.
+**`entry_point`'s producer is a catalog.** Which signature starts a program is a fact about a
+LANGUAGE or a framework, and [ARCHITECTURE](../ARCHITECTURE.md) §10 keeps that knowledge out
+of the language-blind half — so a catalog declares it: `root_kind: entry_point` on a `fluent`
+catalog sends its rows to `roots` ([D02](D02-catalog-schema.md) §2's `fluent`;
+`catalogs/click.yml`, design 2026-11-06-reading-decorators §5; `docs/open-issues.md` OI-22,
+closed). The traversal that reads `roots` branches on no kind at all, so a root of this kind
+traces exactly as the other two do.
 
 **`terminal_kind`** — `outbound_call`, `returns`, `ends_silently`, `persistence`,
 `throws`, `unresolved`, `async_handoff`, `cycle`

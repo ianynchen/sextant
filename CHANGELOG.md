@@ -28,6 +28,22 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A click program's commands are `entry_point` roots** (OI-208 plan 1 task 9b, design
+  `2026-11-06-reading-decorators-design.md` §5; closes OI-22). `catalogs/click.yml` declares
+  `root_kind: entry_point`: each command is a `roots` row with no wire address, its path the
+  command's words joined by one space, the outermost the entry point's name (`sextant module
+  analyze`), or `<program>` where no entry point names the group; each `click.argument` and
+  `click.option` between the registration and the function is a `request_params` row
+  (`argument`, `option` or `flag`). Sextant's own six commands are six roots with 24 parameters.
+  The approved forms that read it: an argument reference by keyword (`{keyword: name}`,
+  `{arg: N, keyword: name}`) on `fluent` captures, `mount` and `request_params`; `path_fallback`
+  on an entry-point catalog, with a mapping form for the framework's respelling of a function
+  name; `mount[].router_arg: chain_result`; `request_params` entries that name a call; and the
+  value-model key `returns_argument` (`returns`, `result_returns`, `result_calls`), shipped for
+  click's parameter decorators, `functools.wraps`, `cache` and `lru_cache`,
+  `contextlib.contextmanager` and `asynccontextmanager`, and `tenacity.retry`
+  (`scripts/probes/click_commands.md`, `scripts/probes/python_wrappers.md`).
+
 - **A Python scanner reads the structure of `.py` source** (OI-208 plan 1 task 4, spec
   `2026-11-06-python-reader-design.md` §3a). Modules, classes, `<clinit>` bodies, `__init__` as
   `<init>`, module-level names as static fields with their `field_write`, typed signatures from
@@ -305,6 +321,16 @@ here would restate those documents rather than add anything.
   `OAuth2WebClient` inherits `get` from `WebClient`. The other 19 are unchanged.
 
 ### Fixed
+
+- **A catalog's argument position counts positional arguments only** (OI-208 plan 1 task 9b,
+  design `2026-11-06-reading-decorators-design.md` §3a). The facts write a Python call's keyword
+  arguments after its positional ones, and a position counted all of them, so `arg1` of
+  `option("--dry-run", is_flag=True)` read `is_flag`'s `True`. A `*` value at or before the
+  position now leaves it unread. JVM arguments carry no keyword, so nothing there changes.
+- **A call of a function a library decorator wraps reaches its body again** (task 9b, design
+  §3e). Since 9a a decorated name holds the decorator's result, so `f()` through
+  `@functools.cache` or `@contextlib.contextmanager` ended at the library; a `result_calls`
+  statement now carries the call into `f`.
 
 - **An address with several placeholders, or a default, is filled** (OI-322, and OI-179). The per-environment address
   answer (`resolved_peers`) filled only an address with one placeholder: `${host}:${port}`

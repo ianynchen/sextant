@@ -571,6 +571,14 @@ _NAMED_QUERIES = {
     # absence as unanswerable, exactly as the gate treats a missing row.
     # How a method is looked up in the analysed module (D00 §5 `module.lookup`), as the
     # module fact names the rule. Read by `resolve/dispatch.py`.
+    # The programs the module's build declares (D00 §5 `module.entry_points`, design
+    # 2026-11-06-reading-decorators §7a), each name with its target as written, projected
+    # whole as the coordinates are below. NULL on a JVM module and on facts that predate it.
+    "entry_points": """
+        SELECT payload ->> 'module_id' AS module_id, payload -> 'entry_points' AS entry_points
+        FROM raw_facts WHERE kind = 'module'
+        ORDER BY module_id
+    """,
     "lookup_rules": """
         SELECT payload ->> 'module_id' AS module_id, payload ->> 'lookup' AS lookup
         FROM raw_facts WHERE kind = 'module'
@@ -1794,6 +1802,7 @@ _FACT_ONLY = frozenset(
         "constructor_declarations",
         "declared_symbols",
         "lookup_rules",
+        "entry_points",
         "parents_unread",
         "nest_hosts",
         "interface_declarations",

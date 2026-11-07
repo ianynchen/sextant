@@ -24,6 +24,10 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.open_questions import record_open_questions
+from sextant.application.resolve.request_requirements import (
+    request_param_calls,
+    request_param_row,
+)
 from sextant.application.resolve.shapes.arguments import (
     _CAPTURED_AT,
     _HOLE,
@@ -82,11 +86,15 @@ from sextant.application.resolve.shapes.client_base import (
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.inbound_routes import (
     UNROOTED_PATH,
+    WORDS,
+    fallback_word,
     file_refusal,
     is_unrooted,
+    join_prefix,
     media_columns,
     refusal_rows,
     validated_verbless_serves,
+    validated_word_fallback,
 )
 from sextant.application.resolve.shapes.member_values import (
     member_table,
@@ -95,7 +103,9 @@ from sextant.application.resolve.shapes.member_values import (
 )
 from sextant.application.resolve.shapes.mounts import (
     ANY_ROUTER,
+    CHAIN_RESULT,
     ROOT,
+    UNREAD_PROGRAM,
     Mount,
     MountPath,
     MountReader,
@@ -105,6 +115,7 @@ from sextant.application.resolve.shapes.mounts import (
     Prefix,
     file_unread_prefix,
     mount_rules_of,
+    programs_of,
     router_producers,
     same_router,
     unread_prefix_rows,
@@ -123,22 +134,34 @@ from sextant.application.resolve.shapes.pass_through import (
     pass_through_of,
     unread_rows,
 )
-from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.application.resolve.values import (
     EXPRESSION,
     INT,
     LITERAL,
     RECEIVER,
     STRING,
+    UNPACKED_SLOT,
     Answer,
     Path,
     ValueIndex,
+    argument_slot,
     cached_value_index,
+    called_function,
+    decorators_passed,
+    producer_paths,
+    resolve_positions,
 )
-from sextant.domain.closed_sets import PATH_KIND_PATTERN, Direction, Resolution
+from sextant.domain.closed_sets import (
+    PATH_KIND_PATTERN,
+    Direction,
+    Evidence,
+    Resolution,
+    RootKind,
+)
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import REDACTED, Redactor
-from sextant.domain.symbols import bare_descriptor
+from sextant.domain.symbols import bare_descriptor, method_name
 
 # D00 §5's kind for an address the code ASSEMBLES. Spelled here because `_url_arguments`
 # treats it as the catalog's own declared position rather than as a hop - see there.
@@ -293,7 +316,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     pathless_serves = _pathless_serves(matches, catalog)
     _validate_route_captures([*roots, *bean_roots, *steps], catalog)
     pass_through = pass_through_of(matches, catalog.source)
-    mount_rules = mount_rules_of(matches, catalog.source)
+    mount_rules = mount_rules_of(matches, catalog.source, words=catalog.root_kind is not None)
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
         enums=_enum_symbols(workspace),
@@ -326,9 +349,20 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         catalog.hand_off_effects,
         catalog.bean_models,
         catalog.value_annotations,
+        returns_arguments=catalog.returns_arguments,
     )
     client_base = client_base_of(matches, catalog.source)
     _validate_options_capture([*roots, *bean_roots, *steps], client_base, catalog)
+    if catalog.root_kind is not None:
+        _run_entry_points(
+            workspace, catalog, matches, mount_rules, walk_index, refuses_unrooted, method_symbols
+        )
+        return
+    if "path_fallback" in matches or any("path_fallback" in root for root in matches["roots"]):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `path_fallback` names a chain's word from its "
+            f"handler, which only a `root_kind: entry_point` catalog reads"
+        )
     rows: list[dict[str, Any]] = []
     # Spec 2026-09-21 §3b: the `fed_by` edges the chains wrote, one per chain
     # that captured a readable `channel_link` — accumulated across every
@@ -493,6 +527,231 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             *unread_prefix_rows(unread_prefixes, rows),
         ],
     )
+
+
+@dataclass(frozen=True)
+class _EntryPoints:
+    """What a `root_kind: entry_point` catalog's chains read beside the walk (design
+    2026-11-06-reading-decorators §3c, §4): the catalog's `path_fallback` and each root's
+    own, the method symbols a handler's bare name joins to, and the programs the module's
+    build names (`programs_of`)."""
+
+    fallback: dict[str, Any] | None
+    # `(owners, method, fallback)` of each root entry declaring a `path_fallback` of its own.
+    root_fallbacks: tuple[tuple[tuple[str, ...], str, dict[str, Any]], ...]
+    method_symbols: Mapping[str, str]
+    programs: Mapping[tuple[str, int], str]
+
+    def fallback_of(self, root: Mapping[str, Any]) -> dict[str, Any] | None:
+        """The `path_fallback` of the first root entry the call `root` matches, where that
+        entry declares one, else the catalog's."""
+        for owners, method, fallback in self.root_fallbacks:
+            if root.get("owner") in owners and root.get("name") == method:
+                return fallback
+        return self.fallback
+
+
+def _run_entry_points(
+    workspace: Workspace,
+    catalog: Catalog,
+    matches: Mapping[str, Any],
+    mount_rules: MountRules | None,
+    index: ValueIndex,
+    refuses_unrooted: bool,
+    method_symbols: Mapping[str, str],
+) -> None:
+    """A `root_kind: entry_point` catalog (design 2026-11-06-reading-decorators §5): each
+    chain that reaches its terminal is a program entry point, one `roots` row per command
+    path that reaches its handler, `protocol`, `method` and the two markers NULL; and each
+    decorator its handler passed that a `request_params` entry names is one
+    `endpoint_metadata` row against it (`caller` the handler, `row_id` NULL: there is no
+    `endpoints` row).
+
+    - **The handler** is the terminal's `handler` capture, followed back with the producer
+      walk as a call of it would be (`functions`): through each decorator a value model
+      states hands the function back (`result_returns`), into module code, and to the
+      function. A path that ends anywhere else (a library decorator no value model states)
+      names no handler and gives no row: there is no code here to start a trace at.
+    - **The words**: the root's `url` capture, else the handler's name respelled by
+      `path_fallback`; behind each group mount's word (`router_arg: chain_result`), joined
+      by one space; the outermost router's word is the program's name (`MountReader`).
+    - **The rows are this engine's own**, written to `roots` beside the two kinds
+      `record_roots` derives, which keeps them (`roots.record_roots`)."""
+    where = f"loading catalog {catalog.source}"
+    entry_points = _EntryPoints(
+        fallback=validated_word_fallback(matches.get("path_fallback"), where),
+        root_fallbacks=tuple(
+            (
+                catalog_symbols(root.get("owner"), f"{where}: roots[].owner"),
+                str(root["method"]),
+                fallback,
+            )
+            for root in matches["roots"]
+            if (fallback := validated_word_fallback(root.get("path_fallback"), where)) is not None
+        ),
+        method_symbols=method_symbols,
+        programs=programs_of(workspace, index),
+    )
+    params = request_param_calls(catalog)
+    ends = list(chain_ends(workspace, catalog, PUBLISHED_PARTS))
+    mounts: MountReader | None = None
+    mounted: dict[tuple[str, int], Mount] = {}
+    if mount_rules is not None:
+        mounts, mounted, _ = _mounts(
+            ends, mount_rules, index, workspace, refuses_unrooted, catalog, entry_points
+        )
+    roots: dict[tuple[str, str | None], None] = {}
+    metadata: list[dict[str, Any]] = []
+    for end in ends:
+        terminal = end.terminal
+        if terminal is None or _site_key(end.root) in mounted or _site_key(terminal) in mounted:
+            # A group's chain makes the router its commands are mounted on: no row of its own.
+            continue
+        captured = end.captures.get("handler")
+        at = captured.get(_CAPTURED_AT) if isinstance(captured, dict) else None
+        site = index.sites.get((str(at[0]), int(str(at[1])))) if at is not None else None
+        if site is None or at is None:
+            continue
+        handlers = _entry_handlers(index, site, int(at[2]), entry_points.method_symbols)
+        decorators = decorators_passed(index, site, int(at[2]))
+        for handler in handlers:
+            for path in _entry_paths(end, handler, mounts, entry_points, workspace, index):
+                roots.setdefault((handler, path))
+                for maker in decorators:
+                    row = index.sites[maker]
+                    entry = params.get((str(row.get("owner")), str(row["name"])))
+                    if entry is None:
+                        continue
+                    kind, name, requirement, resolution = request_param_row(
+                        entry, list(row["arguments"] or [])
+                    )
+                    metadata.append(
+                        {
+                            "protocol": None,
+                            "direction": "inbound",
+                            "method": None,
+                            "path": path,
+                            "caller": handler,
+                            "kind": kind,
+                            "name": name,
+                            "value": None,
+                            "resolution": resolution,
+                            "evidence": str(Evidence.DECLARED),
+                            "requirement": requirement,
+                        }
+                    )
+    rows = [
+        {
+            "handler": handler,
+            "root_kind": str(RootKind.ENTRY_POINT),
+            "protocol": None,
+            "method": None,
+            "path": path,
+            "method_kind": None,
+            "path_kind": None,
+        }
+        for handler, path in sorted(roots, key=lambda key: (key[0], key[1] or ""))
+    ]
+    if rows:
+        workspace.derive("roots_insert", rows=rows)
+    if metadata:
+        workspace.derive("endpoint_metadata_insert", rows=metadata)
+
+
+def _entry_handlers(
+    index: ValueIndex, site: Mapping[str, Any], slot: int, method_symbols: Mapping[str, str]
+) -> tuple[str, ...]:
+    """The function each path of the handler argument at `site`'s `slot` reaches, as a call of
+    it would (`producer_paths(..., functions=True)`), joined to its full method symbol; in
+    path order, each once."""
+    found: list[str] = []
+    for producer, _ in producer_paths(index, site, slot, frozenset(), functions=True):
+        body = None if producer.ended_at is None else called_function(producer.ended_at)
+        symbol = None if body is None else method_symbols.get(body)
+        if symbol is not None and symbol not in found:
+            found.append(symbol)
+    return tuple(found)
+
+
+def _entry_paths(
+    end: ChainEnd,
+    handler: str,
+    mounts: MountReader | None,
+    entry_points: _EntryPoints,
+    workspace: Workspace,
+    index: ValueIndex,
+) -> tuple[str | None, ...]:
+    """Every command path `end` registers `handler` at: its own word (the `url` capture, else
+    `path_fallback` over the handler's name) behind each prefix its router is served under,
+    words joined by one space, the outermost word the program's name. NULL where the
+    command's own word was not read."""
+    words = _own_words(end, handler, entry_points, workspace, index)
+    prefixes = mounts.of_route(end.root, end.path) if mounts is not None else (ROOT,)
+    terminal = end.terminal
+    program = (
+        None if terminal is None else entry_points.programs.get(_site_key(terminal), UNREAD_PROGRAM)
+    )
+    found: list[str | None] = []
+    for prefix in prefixes:
+        for word in words:
+            path: str | None
+            if word is None:
+                path = None
+            elif prefix.text is not None:
+                path = join_prefix(prefix.text, word, WORDS)
+            elif mounts is not None and any(place[-1][0] for place in prefix.places):
+                path = mounts.outermost(prefix, word)
+            else:
+                # No router: the command is the program, started by its installed name.
+                path = program
+            if path not in found:
+                found.append(path)
+    return tuple(found)
+
+
+def _own_words(
+    end: ChainEnd,
+    handler: str,
+    entry_points: _EntryPoints,
+    workspace: Workspace,
+    index: ValueIndex,
+) -> tuple[str | None, ...]:
+    """A command's own word(s): each string the root's `url` capture reads on the chain's
+    path, or, where the root writes no argument for it, the handler's name as the
+    `path_fallback` respells it; None where neither gives a word."""
+    url = end.captures.get("url")
+    if url is None:
+        fallback = entry_points.fallback_of(end.root)
+        if fallback is None:
+            return (None,)
+        return (fallback_word(fallback, method_name(bare_descriptor(handler))),)
+    at = url.get(_CAPTURED_AT) if isinstance(url, dict) else None
+    site = index.sites.get((str(at[0]), int(str(at[1])))) if at is not None else None
+    if site is None or at is None:
+        return (None,)
+    words: list[str | None] = []
+    for answers in resolve_positions(
+        workspace, {"url": (site, int(at[2]))}, index, within=end.path
+    ):
+        answer = answers["url"]
+        word = (
+            str(answer.value)
+            if answer.kind == LITERAL and answer.literal_kind == STRING and not answer.inexact
+            else None
+        )
+        if word not in words:
+            words.append(word)
+    return tuple(words) or (None,)
+
+
+def _fallback_word(end: ChainEnd, entry_points: _EntryPoints) -> str | None:
+    """A mount chain's own word from its handler's name (`path_fallback`), or None where its
+    handler is not a function this module names or no fallback is declared."""
+    fallback = entry_points.fallback_of(end.root)
+    handler = _handler_symbol(end.captures.get("handler"), dict(entry_points.method_symbols))
+    if fallback is None or handler is None:
+        return None
+    return fallback_word(fallback, method_name(bare_descriptor(handler)))
 
 
 @dataclass(frozen=True)
@@ -1306,6 +1565,7 @@ def _mounts(
     workspace: Workspace,
     refuses_unrooted: bool,
     catalog: Catalog,
+    entry_points: "_EntryPoints | None" = None,
 ) -> tuple[MountReader | None, dict[tuple[str, int], Mount], dict[int, int]]:
     """The module's mounts (Vert.x spec §3c), by the mount call's site, the reader of the
     prefixes they give, and which way to its mount each mount chain end is (by `id`, for
@@ -1322,42 +1582,65 @@ def _mounts(
     ways: dict[int, int] = {}
     for end in ends:
         terminal = end.terminal
+        # A `chain_result` mount is matched on the chain's ROOT, and the router it mounts is
+        # what the chain's terminal returns (design 2026-11-06-reading-decorators §4).
         rule = next(
             (
                 rule
                 for rule in rules.mounts
-                if rule.prefix_arg is None and terminal is not None and rule.matches(terminal)
+                if rule.prefix_arg is None
+                and terminal is not None
+                and rule.matches(end.root if rule.router_arg == CHAIN_RESULT else terminal)
             ),
             None,
         )
         if rule is None or terminal is None:
             continue
+        mounted_by = end.root if rule.router_arg == CHAIN_RESULT else terminal
         url = end.captures.get("url")
         at = url.get(_CAPTURED_AT) if isinstance(url, dict) else None
         read = index.sites.get((str(at[0]), int(str(at[1])))) if at is not None else None
+        # The mount's own word from its handler, where its route writes none
+        # (`path_fallback`, design §3c): the argument is absent, not unread.
+        named = (
+            _fallback_word(end, entry_points)
+            if entry_points is not None and "url" in end.captures and url is None
+            else None
+        )
         way = MountPath(
             end.root or None,
             None if read is None or at is None else (read, int(at[2])),
             pattern=_URL_IS.get(str(end.captures.get("url_is"))) == PATH_KIND_PATTERN,
             within=end.path,
-            unread="url" in end.captures and read is None,
+            unread="url" in end.captures and read is None and named is None,
             order=_order_of(end.captures.get(_ORDER)),
+            made=terminal if rule.router_arg == CHAIN_RESULT else None,
+            named=named,
         )
-        paths = found.setdefault(_site_key(terminal), (rule, terminal, []))[2]
+        paths = found.setdefault(_site_key(mounted_by), (rule, mounted_by, []))[2]
         if way not in paths:
             paths.append(way)
         ways[id(end)] = paths.index(way)
     for site in index.sites.values():
         for rule in rules.mounts:
             if rule.prefix_arg is not None and rule.matches(site):
+                slot = argument_slot(site["arguments"] or [], rule.prefix_arg)
+                read_at = None if slot is None or slot == UNPACKED_SLOT else (site, slot)
                 found.setdefault(
-                    _site_key(site), (rule, site, [MountPath(site, (site, rule.prefix_arg))])
+                    _site_key(site),
+                    (rule, site, [MountPath(site, read_at, unread=read_at is None)]),
                 )
     if not found:
         return None, {}, {}
     mounts = {key: Mount(rule, site, tuple(paths)) for key, (rule, site, paths) in found.items()}
     reader = _router_reader(
-        index, workspace, rules, list(mounts.values()), refuses_unrooted, catalog
+        index,
+        workspace,
+        rules,
+        list(mounts.values()),
+        refuses_unrooted,
+        catalog,
+        None if entry_points is None else entry_points.programs,
     )
     return reader, mounts, ways
 
@@ -1369,13 +1652,16 @@ def _router_reader(
     mounts: Sequence[Mount],
     refuses_unrooted: bool,
     catalog: Catalog,
+    programs: Mapping[tuple[str, int], str] | None = None,
 ) -> MountReader:
     """The reader of which router a route is made on and what serves it, over `mounts`."""
     configuring = configuring_calls(catalog, index.sites.values())
     declared = router_producers(
         index, rules.router_types, workspace.once(dispatch_of).ancestors, configuring
     )
-    return MountReader(workspace, index, rules, declared, mounts, refuses_unrooted, configuring)
+    return MountReader(
+        workspace, index, rules, declared, mounts, refuses_unrooted, configuring, programs
+    )
 
 
 def _judged_of(

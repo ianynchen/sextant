@@ -739,6 +739,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                         catalog.hand_off_effects,
                         catalog.bean_models,
                         catalog.value_annotations,
+                        returns_arguments=catalog.returns_arguments,
                     )
                 destinations = list(
                     dict.fromkeys(
@@ -835,6 +836,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                         catalog.hand_off_effects,
                         catalog.bean_models,
                         catalog.value_annotations,
+                        returns_arguments=catalog.returns_arguments,
                     )
                 # One tuple per DISTINCT destination, as the `channel_via` branch above:
                 # several paths routinely agree about this slot (§1c), and 64 callers
@@ -954,6 +956,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     catalog.hand_off_effects,
                     catalog.bean_models,
                     catalog.value_annotations,
+                    returns_arguments=catalog.returns_arguments,
                 )
             minted = [
                 (row_verb, _sent_to(destination, site, method, client_base, workspace, values))

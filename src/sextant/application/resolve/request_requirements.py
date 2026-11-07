@@ -26,6 +26,7 @@ declares `request_requirement_attrs` and owns an inbound row (two shipped), the 
 
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,7 +35,9 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.engines.annotation_driven import effective_annotation_uses
 from sextant.application.resolve.routing_conflicts import _discriminators
+from sextant.application.resolve.shapes.arguments import _arg_at
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
+from sextant.application.resolve.values import argument_reference
 from sextant.domain.redaction import REDACTED, Redactor
 from sextant.domain.symbols import bare_descriptor
 
@@ -437,7 +440,9 @@ def _request_params(catalog: Catalog) -> dict[str, dict[str, Any]]:
     into a different one silently — `requried_attr` would make every
     `required = false` parameter `required`."""
     declared = catalog.matches.get("request_params")
-    if declared is None:
+    # A chain catalog's entries name a CALL, not an annotation (`request_param_calls`), and
+    # its engine reads them off the decorators a handler passed: nothing here applies.
+    if declared is None or catalog.style in _CALL_STYLES:
         return {}
     where = f"loading catalog {catalog.source}: `request_params`"
     if not isinstance(declared, list):
@@ -527,6 +532,112 @@ _KINDS = frozenset({"header", "query", "cookie", "param"})
 # `absent` is a route-tree word (§5c), never an annotation's: an annotation binds a value
 # and cannot demand its absence.
 _REQUIREMENTS = frozenset({"binder", "optional"})
+
+
+# The styles whose `request_params` entries name a call (design 2026-11-06-reading-decorators
+# §3d, approved): a decorator's own arguments say what the parameter is.
+_CALL_STYLES = frozenset({"fluent"})
+# The keys such an entry carries.
+_REQUEST_PARAM_CALL_KEYS = frozenset(
+    {
+        "owner",
+        "method",
+        "kind",
+        "name_arg",
+        "requirement",
+        "required_arg",
+        "default_arg",
+        "flag_arg",
+    }
+)
+# What a command-line parameter is (D01 §3's inbound `kind` set, design §3d, approved): a
+# positional word, a named value, or a named switch that takes no value.
+_CALL_KINDS = frozenset({"argument", "option", "flag"})
+FLAG = "flag"
+# The framework's default for an entry naming a call: it rejects a command line without the
+# parameter, or it does not. `binder` is an annotation word, and `absent` a route-tree one.
+_CALL_REQUIREMENTS = frozenset({"required", "optional"})
+
+
+def request_param_calls(catalog: Catalog) -> dict[tuple[str, str], dict[str, Any]]:
+    """A chain catalog's `request_params` entries, by the `(owner, method)` of the call each
+    names (design 2026-11-06-reading-decorators §3d, approved): `{owner, method, kind,
+    name_arg, requirement, required_arg?, default_arg?, flag_arg?}`, each `*_arg` an argument
+    reference (a position, `{keyword: name}` or `{arg: N, keyword: name}`). Validated here,
+    for the reason `_request_params` gives: a misspelt key read as absent turns the rule into
+    another one silently. Empty where the catalog declares none."""
+    declared = catalog.matches.get("request_params")
+    if declared is None:
+        return {}
+    where = f"loading catalog {catalog.source}: `request_params`"
+    if not isinstance(declared, list):
+        raise CatalogError(f"{where} must be a list of entries, got {declared!r}")
+    entries: dict[tuple[str, str], dict[str, Any]] = {}
+    for entry in declared:
+        if not isinstance(entry, dict) or not set(entry) <= _REQUEST_PARAM_CALL_KEYS:
+            raise CatalogError(
+                f"{where} entries that name a call carry only "
+                f"{'/'.join(sorted(_REQUEST_PARAM_CALL_KEYS))}, got {entry!r}"
+            )
+        for key in ("owner", "method", "kind", "name_arg", "requirement"):
+            if key not in entry:
+                raise CatalogError(f"{where} entry lacks `{key}`: {entry!r}")
+        if entry["kind"] not in _CALL_KINDS:
+            raise CatalogError(
+                f"{where} `kind` must be one of {sorted(_CALL_KINDS)}, got {entry['kind']!r}"
+            )
+        if entry["requirement"] not in _CALL_REQUIREMENTS:
+            raise CatalogError(
+                f"{where} `requirement` must be one of {sorted(_CALL_REQUIREMENTS)}, "
+                f"got {entry['requirement']!r}"
+            )
+        for key in ("name_arg", "required_arg", "default_arg", "flag_arg"):
+            if key in entry and argument_reference(entry[key], spelled=False) is None:
+                raise CatalogError(
+                    f"{where} `{key}` is a position, `{{keyword: name}}` or "
+                    f"`{{arg: N, keyword: name}}`, got {entry[key]!r}"
+                )
+        call = (_catalog_symbol(str(entry["owner"])), str(entry["method"]))
+        if call in entries:
+            raise CatalogError(f"{where} names `{entry['owner']}.{entry['method']}` twice")
+        entries[call] = dict(entry)
+    return entries
+
+
+def request_param_row(
+    entry: Mapping[str, Any], arguments: list[dict[str, Any]]
+) -> tuple[str, str | None, str | None, str]:
+    """`(kind, name, requirement, resolution)` of one decorator call an entry names, read off
+    its own arguments (design 2026-11-06-reading-decorators §3d):
+
+    - `name` is the string literal at `name_arg`, else NULL at `unresolved` (§5b's rule);
+    - `requirement` is the entry's default; a `default_arg` that is written makes it
+      `optional`; a `required_arg` written as a literal boolean replaces both (click's
+      `Argument`: an explicit `required` wins, else a written `default` makes it optional);
+      one written as anything else is not read, NULL;
+    - `kind` is `flag` where `flag_arg` is written as the literal `True`: the option takes no
+      value."""
+    name_argument = _arg_at(arguments, entry["name_arg"])
+    name = _literal(name_argument, "string")
+    requirement: str | None = str(entry["requirement"])
+    if "default_arg" in entry and _arg_at(arguments, entry["default_arg"]) is not None:
+        requirement = "optional"
+    if "required_arg" in entry:
+        required = _arg_at(arguments, entry["required_arg"])
+        if required is not None:
+            stated = _literal(required, "boolean")
+            requirement = None if stated is None else ("required" if stated else "optional")
+    kind = str(entry["kind"])
+    if "flag_arg" in entry and _literal(_arg_at(arguments, entry["flag_arg"]), "boolean") is True:
+        kind = FLAG
+    return kind, name, requirement, "resolved" if name is not None else "unresolved"
+
+
+def _literal(argument: Mapping[str, Any] | None, kind: str) -> Any:
+    """The value of an argument written as a literal of `kind` (D00 §5), else None."""
+    if argument is None or argument.get("kind") != kind:
+        return None
+    return argument.get("value")
 
 
 def _from_mapping_attributes(

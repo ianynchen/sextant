@@ -64,9 +64,12 @@ def declared_identities() -> dict[str, list[dict[str, object]]]:
         # `hand_off_effects` (spec 2026-11-02 rule 7) states what a call DOES, measured the
         # same way and read by every catalog at once the same way, so it is held to the
         # same two rules.
+        # `returns_argument` (design 2026-11-06-reading-decorators §3d) states what a call hands
+        # back, read by every catalog at once: held to the same two rules too.
         found[path.stem] = [
             *(document.get("identified_by") or []),
             *(document.get("hand_off_effects") or []),
+            *(document.get("returns_argument") or []),
         ]
     return found
 

@@ -1,0 +1,23 @@
+id: python-wrappers
+displayName: Library decorators that hand back the function, or a wrapper that runs it
+
+# WHAT THIS FILE IS (D02 §1f, `returns_argument`; design 2026-11-06-reading-decorators §3e,
+# approved). `@dec def f` runs `f = dec(f)`, so the name `f` holds what `dec` returns. A
+# decorator in the module's own code is followed into its code; one in a library is followed
+# only where a statement here says what it returns, each measured in
+# `scripts/probes/python_wrappers.md`:
+#
+# - `result_returns: arg0` — calling the decorator's result returns the function it is called
+#   with (`@wraps(fn) def w` holds `w`);
+# - `result_calls: arg0` — the decorator's result is a wrapper, and calling it runs the
+#   decorator's own argument 0 with the same arguments (`@cache def f`: `f()` runs `f`'s body).
+#   Read only where argument 0 is a function: `lru_cache(maxsize=128)` and `retry(stop=…)`
+#   return a decorator instead, and state nothing here.
+
+returns_argument:
+  - { owner: functools, method: wraps, result_returns: arg0, by: scripts/probes/python_wrappers.md }
+  - { owner: functools, method: cache, result_calls: arg0, by: scripts/probes/python_wrappers.md }
+  - { owner: functools, method: lru_cache, result_calls: arg0, by: scripts/probes/python_wrappers.md }
+  - { owner: contextlib, method: contextmanager, result_calls: arg0, by: scripts/probes/python_wrappers.md }
+  - { owner: contextlib, method: asynccontextmanager, result_calls: arg0, by: scripts/probes/python_wrappers.md }
+  - { owner: tenacity, method: retry, result_calls: arg0, by: scripts/probes/python_wrappers.md }

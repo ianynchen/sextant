@@ -191,6 +191,10 @@ def resolve(
     # leaves empty tables rather than the previous run's rows.
     workspace.derive("scheduled_work_reset")
     workspace.derive("error_handlers_reset")
+    # `roots` likewise: a `root_kind: entry_point` catalog's engine writes its rows there,
+    # and `record_roots` far below keeps them beside the two kinds it derives (design
+    # 2026-11-06-reading-decorators §5), so the table is emptied here, once, before either.
+    workspace.derive("roots_reset")
     # 2Q `G3`, and its position says what it depends on: NOTHING any engine
     # writes. It reads `call_sites`, `method_returns` and the type hierarchy —
     # compiler facts, all loaded — and writes a table of its own, so it could

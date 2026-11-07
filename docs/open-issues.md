@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-323 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-324 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -53,7 +53,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-18 | [SEXTANT-161](https://app.plane.so/portolan/browse/SEXTANT-161/) | the several-implementations rule still has no real-code exercise |
 | OI-19 | [SEXTANT-163](https://app.plane.so/portolan/browse/SEXTANT-163/) | `sig_` is computed in two languages and only an uncatchable test guards the drift |
 | OI-20 | [SEXTANT-19](https://app.plane.so/portolan/browse/SEXTANT-19/) | `return_flows` had no reader until G4 |
-| OI-22 | [SEXTANT-164](https://app.plane.so/portolan/browse/SEXTANT-164/) | `root_kind`'s third member has no producer |
+| OI-22 | [SEXTANT-164](https://app.plane.so/portolan/browse/SEXTANT-164/) | `root_kind`'s third member has no producer — **closed 2026-11-06** (plan 1 task 9b: `catalogs/click.yml` declares `root_kind: entry_point`, and Sextant's six commands are its rows) |
 | OI-23 | [SEXTANT-13](https://app.plane.so/portolan/browse/SEXTANT-13/) | a functional route is an endpoint with no handler, so it has no root |
 | OI-24 | [SEXTANT-11](https://app.plane.so/portolan/browse/SEXTANT-11/) | D01 §7's conservative re-derivation rule was not enforced anywhere |
 | OI-25 | [SEXTANT-10](https://app.plane.so/portolan/browse/SEXTANT-10/) | the traversal had no reader outside its own tests |
@@ -326,6 +326,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-320 | [SEXTANT-314](https://app.plane.so/portolan/browse/SEXTANT-314/) | Dagger recipe hop: a platform annotation (@Deprecated, Android @SuppressLint) on a @Provides method leaves its type's unqualified slots unread_type (safe direction) |
 | OI-321 | [SEXTANT-315](https://app.plane.so/portolan/browse/SEXTANT-315/) | One reason list everywhere: configuration values, method lookup and hand-off reasons become a general reason plus a detail (ruled B, 2026-11-05) |
 | OI-322 | [SEXTANT-316](https://app.plane.so/portolan/browse/SEXTANT-316/) | Peer join fills one placeholder only: an address with two (${host}:${port}) is never resolved |
+| OI-323 | [SEXTANT-317](https://app.plane.so/portolan/browse/SEXTANT-317/) | A program that starts another program is not read as outbound |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

@@ -355,6 +355,44 @@ class YamlCatalogSource:
             sorted(effects, key=lambda e: (e["owner"], e["method"], e["descriptor"], e["arg"]))
         )
 
+    def returns_arguments(self) -> tuple[dict[str, Any], ...]:
+        """Every entry `value-models/*.yml` declares under `returns_argument` (design
+        2026-11-06-reading-decorators §3d and §3e, approved; D02 §1f): a library call that
+        hands back one of its arguments. Each entry is `{owner, method, <form>: argN, by}`
+        with exactly one form:
+
+        - `returns` — the call returns its argument N;
+        - `result_returns` — calling the call's result returns THAT call's argument N (a
+          decorator factory whose decorator hands the function back: click's `option`);
+        - `result_calls` — calling the call's result runs the call's own argument N with the
+          same arguments (a wrapper: `functools.cache`);
+        - `by` — the probe that measured it, required as `identified_by`'s is.
+
+        A call stated twice is refused naming the file, as `identified_by`'s is: two entries
+        citing two probes would leave whichever file sorts first. Sorted, so two runs build
+        one tuple (NFR-1)."""
+        stated: dict[tuple[str, str], tuple[dict[str, Any], Path]] = {}
+        for path in sorted((self._directory / "value-models").glob("*.yml")):
+            raw = _load(path.read_text(encoding="utf-8"))
+            declared = raw.get("returns_argument") if isinstance(raw, dict) else None
+            if declared is None:
+                continue
+            if not isinstance(declared, list) or not declared:
+                raise CatalogError(
+                    f"loading value model {path}: `returns_argument` must be a non-empty list"
+                )
+            for entry in declared:
+                read = _returns_argument(entry, path)
+                key = (read["owner"], read["method"])
+                if key in stated:
+                    raise CatalogError(
+                        f"loading value model {path}: `returns_argument` states "
+                        f"`{entry['owner']}.{entry['method']}`, which "
+                        f"{stated[key][1].name} already states — one call is stated once"
+                    )
+                stated[key] = (read, path)
+        return tuple(read for _, (read, _) in sorted(stated.items()))
+
     def value_model(self) -> list[dict[str, Any]]:
         """The identity of every PRODUCING call this source knows (spec 2026-09-22 §2,
         D02 §1f): which argument of a call carries the value its result stands for.
@@ -447,6 +485,9 @@ class YamlCatalogSource:
         # What a declared call does to a value handed to it (`value-models/`'s
         # `hand_off_effects`, spec 2026-11-02 rule 7), read once like the table above.
         hand_off_effects = self.hand_off_effects()
+        # What a stated library call does with one of its arguments (`value-models/`'s
+        # `returns_argument`, design 2026-11-06-reading-decorators §3d), read once likewise.
+        returns_arguments = self.returns_arguments()
         # The conformance table, read once per source for the same reason: it is
         # knowledge about TYPES rather than about any one catalog, and the engines need
         # it to refuse a producer whose return type cannot be the declared parameter
@@ -555,6 +596,8 @@ class YamlCatalogSource:
                     value_model=identities,
                     not_hand_offs=not_hand_offs,
                     hand_off_effects=hand_off_effects,
+                    returns_arguments=returns_arguments,
+                    root_kind=_root_kind(raw, path),
                     # The source's own type-conformance table, built above.
                     type_model=conformance,
                     # The server's own prefix keys, built above.
@@ -1723,6 +1766,74 @@ def _hand_off_effect(entry: Any, path: Path) -> dict[str, Any]:
         "refuses": refuses,
         "by": str(entry["by"]),
     }
+
+
+# The three things a `returns_argument` entry may say a call does with its argument N
+# (design 2026-11-06-reading-decorators §3d, §3e).
+_RETURNS_FORMS = ("returns", "result_returns", "result_calls")
+
+
+def _returns_argument(entry: Any, path: Path) -> dict[str, Any]:
+    """One `returns_argument` entry, checked and converted: the owner as a type symbol (the
+    facts' spelling, a module's included: `click.decorators` is `click/decorators#`), the one
+    form it states, and its `argN` as the position N."""
+    where = f"loading value model {path}: a `returns_argument` entry"
+    if not isinstance(entry, dict):
+        raise CatalogError(f"{where} is a mapping, got {entry!r}")
+    forms = [form for form in _RETURNS_FORMS if form in entry]
+    unknown = sorted(set(entry) - {"owner", "method", "by", *_RETURNS_FORMS})
+    if (
+        unknown
+        or len(forms) != 1
+        or not isinstance(entry.get("owner"), str)
+        or not isinstance(entry.get("method"), str)
+        or not str(entry["method"]).isidentifier()
+        or not entry.get("by")
+    ):
+        raise CatalogError(
+            f"{where} is `{{owner, method, <one of {', '.join(_RETURNS_FORMS)}>: argN, by}}`, "
+            f"got {entry!r}"
+        )
+    return {
+        "owner": type_descriptor(str(entry["owner"])),
+        "method": str(entry["method"]),
+        "form": forms[0],
+        "arg": _arg_index(entry[forms[0]], where),
+        "by": str(entry["by"]),
+    }
+
+
+# D00 §4's `root_kind` members a catalog may route its rows to (design
+# 2026-11-06-reading-decorators §5, approved): only `entry_point`. An endpoint row reaches
+# `roots` as `inbound_endpoint` and a scheduled one as `scheduled` without any catalog saying so.
+_CATALOG_ROOT_KINDS = ("entry_point",)
+# The one style whose engine routes rows by `root_kind`: a Python decorator registration is
+# always a chain (the call that makes the decorator, then its `__call__`).
+_ROOT_KIND_STYLES = ("fluent",)
+
+
+def _root_kind(raw: dict[str, Any], path: Path) -> str | None:
+    """`root_kind`, checked: absent, or `entry_point` on a `fluent` catalog that declares no
+    `protocol` and no `direction` (a program has no wire identity)."""
+    if "root_kind" not in raw:
+        return None
+    declared = raw["root_kind"]
+    if declared not in _CATALOG_ROOT_KINDS:
+        raise CatalogError(
+            f"loading catalog {path}: `root_kind: {declared!r}` — a catalog routes its rows to "
+            f"{', '.join(_CATALOG_ROOT_KINDS)} only"
+        )
+    if raw.get("style") not in _ROOT_KIND_STYLES:
+        raise CatalogError(
+            f"loading catalog {path}: `root_kind` is read on a "
+            f"{', '.join(_ROOT_KIND_STYLES)} catalog only, not `{raw.get('style')}`"
+        )
+    if "protocol" in raw or "direction" in raw:
+        raise CatalogError(
+            f"loading catalog {path}: a `root_kind: {declared}` catalog derives no endpoint, so "
+            f"it declares no `protocol` or `direction`"
+        )
+    return str(declared)
 
 
 _HANDLER_POSITIONS = ("class_arg", "value_arg", "predicate_arg", "handler_arg")

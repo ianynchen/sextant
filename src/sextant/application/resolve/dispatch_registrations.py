@@ -688,6 +688,7 @@ class ObjectKeys:
             catalog.hand_off_effects,
             catalog.bean_models,
             catalog.value_annotations,
+            returns_arguments=catalog.returns_arguments,
         )
         self._made = self._index.unscanned | frozenset(
             (built, _CONSTRUCTOR) for built in self._index.constructed

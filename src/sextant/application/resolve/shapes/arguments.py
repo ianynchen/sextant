@@ -32,9 +32,12 @@ from sextant.application.resolve.values import (
     EXPRESSION,
     LITERAL,
     STRING,
+    UNPACKED_DETAIL,
+    UNPACKED_SLOT,
     Answer,
     Path,
     ValueIndex,
+    argument_slot,
     resolve_positions,
     resolve_site,
 )
@@ -488,7 +491,7 @@ def parameter_index(argument: dict[str, Any] | None) -> int | None:
 _PARAMETER_KIND = "parameter"
 
 
-def _arg_at(arguments: list[dict[str, Any]], index: int | None) -> dict[str, Any] | None:
+def _arg_at(arguments: list[dict[str, Any]], index: Any) -> dict[str, Any] | None:
     """The argument at a call site's declared position, or None where the
     caller names no position at all (`body_arg`/`response_arg` are optional)
     or the real call site carries fewer arguments than the catalog expects —
@@ -497,10 +500,19 @@ def _arg_at(arguments: list[dict[str, Any]], index: int | None) -> dict[str, Any
     trailing argument is simply never addressed. Shared verbatim between
     `single_call` (a `methods` row's positional slot) and `fluent` (a step's
     own `argN` capture) — both read the same D00 §5 argument list the same
-    way."""
-    if index is None or index >= len(arguments):
+    way.
+
+    `index` is a catalog's argument reference (design 2026-11-06-reading-decorators §3a):
+    a position, which counts the positional arguments only, or a keyword form
+    (`values.argument_slot`). Where an unpacked `*`/`**` value may be the argument, the
+    answer is an `unresolved` argument with no `source`, which every reader reads as
+    `not_readable`, its `detail` saying why."""
+    if index is None:
         return None
-    return arguments[index]
+    slot = argument_slot(arguments, index)
+    if slot == UNPACKED_SLOT:
+        return {"kind": "unresolved", "detail": UNPACKED_DETAIL}
+    return None if slot is None else arguments[slot]
 
 
 def _capture_resolved(

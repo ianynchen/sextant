@@ -433,7 +433,11 @@ minted stayed at the address the prefix had just moved the row away from.
 2026-09-19 §5a). An inbound row's entries are the headers, query parameters and cookies the
 framework's binder or routing tree enforces — `direction = inbound`, `caller` the handler
 symbol, `kind ∈ {header, query, cookie, param}` (`param` only for the two APIs that cannot
-tell query from form) — and **`requirement`** states what is enforced: `required` (the
+tell query from form), and for a program's command `kind ∈ {argument, option, flag}` (a
+positional word, a named value, a named switch: design 2026-11-06-reading-decorators §3d,
+approved), whose entries name no `endpoints` row (`protocol`, `method` and `row_id` NULL,
+`path` the command, [D02](D02-catalog-schema.md) §2k mechanism 4) — and **`requirement`**
+states what is enforced: `required` (the
 framework rejects a request without it), `optional` (it serves one without it), `absent`
 (it requires it to be missing). The column states what the FRAMEWORK enforces, never what
 the handler body does with the value. An inbound row's `value` is the framework's OWN
@@ -1272,10 +1276,13 @@ already finished with: every `endpoints` row the module EXPOSES and names a hand
 (`direction <> outbound`, the `resolved_peers` test rather than `= inbound`, so a `both`
 row from the linking tier would keep its trace — no pass here writes one since W27), and
 every `scheduled_work` row's handler.
-[D00](D00-fact-schema.md) §4's third member, `entry_point`, has no producer — which
-signature starts a program is a LANGUAGE rule and [ARCHITECTURE](../ARCHITECTURE.md) §10
-keeps those out of the resolver, so its producer is a catalog nobody has written
-(`docs/open-issues.md`, OI-22).
+[D00](D00-fact-schema.md) §4's third member, `entry_point`, is a catalog's: a `fluent` catalog
+declaring `root_kind: entry_point` ([D02](D02-catalog-schema.md) §2) has its engine write one
+row per command path that reaches a handler — `protocol`, `method` and both markers NULL,
+`path` the command's words joined by one space, the outermost the program's name
+(`sextant module analyze`) — and `record_roots` keeps those rows beside the two kinds it
+derives. The table is emptied once per resolve by the pipeline, before any engine runs
+(design 2026-11-06-reading-decorators §5; `docs/open-issues.md` OI-22, closed).
 
 **One ROOT per handler and kind; one ROW per address that reaches it.** A method serving
 three paths is ONE root: the walk that runs from it is the same walk whichever address

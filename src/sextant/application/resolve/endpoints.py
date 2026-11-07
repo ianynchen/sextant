@@ -331,8 +331,9 @@ def _derives_rows(catalog: Catalog) -> int:
     about `endpoints` would move it for a reason that does not apply to it.
     Everything else reads the same predicate `_wire_identity_checked` does —
     one answer to "does this catalog mint endpoint rows", so the ordering and
-    the wire-identity rule can never disagree about a catalog."""
-    if catalog.style in _NON_WIRE:
+    the wire-identity rule can never disagree about a catalog. A catalog of program entry
+    points (`root_kind`) writes `roots`, likewise not `endpoints`, and keeps rank 0 too."""
+    if catalog.style in _NON_WIRE or catalog.root_kind is not None:
         return 0
     return 0 if _derives_endpoint_rows(catalog) else 1
 
@@ -372,8 +373,10 @@ def _derives_endpoint_rows(catalog: Catalog) -> bool:
 
     A style absent from `_DERIVES_ROWS` has no such split and every one of its
     catalogs mints rows; a NON-WIRE style mints none, by definition of the
-    split 2O design §4 drew."""
-    if catalog.style in _NON_WIRE:
+    split 2O design §4 drew. Nor does a catalog whose rows are program entry points
+    (`root_kind: entry_point`, design 2026-11-06-reading-decorators §5): a program is
+    started, not addressed, so its rows go to `roots` and it has no wire style."""
+    if catalog.style in _NON_WIRE or catalog.root_kind is not None:
         return False
     declared = _DERIVES_ROWS.get(catalog.style)
     return declared is None or declared(catalog)

@@ -262,12 +262,12 @@ def test_a_both_row_is_still_a_root_because_the_module_serves_it(tmp_path: Path)
 
 
 def test_no_root_is_recorded_for_a_kind_nothing_produces(roots: list[dict[str, object]]):
-    """`entry_point` is a member of the closed set with no producer, and this
-    is the assertion that says so out loud rather than leaving it to a reader
-    of the enum. Which signature starts a program is a LANGUAGE rule, and
-    ARCHITECTURE §10 keeps those out of the resolver — so its producer is a
-    catalog nobody has written (OI-22). This test is what fails, loudly, on the
-    day somebody adds one without also deciding what it means here."""
+    """`entry_point`'s one producer is a catalog declaring `root_kind:
+    entry_point` (OI-22, closed by `catalogs/click.yml`), and on this JVM
+    fixture no such catalog applies: the pass itself derives the kind from no
+    endpoint and no schedule. Which signature starts a program is a LANGUAGE or
+    framework rule, and ARCHITECTURE §10 keeps those out of the resolver. This
+    test is what fails, loudly, the day the resolver mints one on its own."""
     assert _handlers(roots, RootKind.ENTRY_POINT) == set()
 
 

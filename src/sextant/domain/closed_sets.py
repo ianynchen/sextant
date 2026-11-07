@@ -209,14 +209,13 @@ class RootKind(StrEnum):
     it is a command-line interface, and `cli` claimed a surface nobody
     measured.
 
-    **`ENTRY_POINT` has no producer, and that is stated rather than glossed**
-    (§5.3, GUIDELINES §2). Which signature starts a program is knowledge about
-    a LANGUAGE, and ARCHITECTURE §10 keeps language knowledge out of the
-    language-blind half — so its producer is a catalog, and no catalog declares
-    one yet (`docs/open-issues.md`, OI-22). The member is here anyway because
-    the traversal that reads this table branches on no kind at all: it takes a
-    root, and a root of this kind traces exactly as the other two do the day
-    something writes one.
+    **`ENTRY_POINT`'s producer is a catalog** (§5.3, GUIDELINES §2). Which
+    signature starts a program is knowledge about a LANGUAGE or a framework,
+    and ARCHITECTURE §10 keeps that knowledge out of the language-blind half —
+    so a catalog declares it with `root_kind: entry_point` (`catalogs/click.yml`,
+    design 2026-11-06-reading-decorators §5; `docs/open-issues.md`, OI-22,
+    closed). The traversal that reads this table branches on no kind at all: a
+    root of this kind traces exactly as the other two do.
     """
 
     INBOUND_ENDPOINT = "inbound_endpoint"

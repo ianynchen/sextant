@@ -394,6 +394,23 @@ class Catalog:
     # symbol. Checked by the loader; read by `resolve/dispatch_registrations.py`.
     dispatch_implementations: tuple[dict[str, Any], ...] = ()
 
+    # What this catalog's rows ARE where they are not endpoints (design
+    # 2026-11-06-reading-decorators §5, approved): `entry_point` sends each chain's row to
+    # `roots` as a program entry point, with no wire identity, so the catalog declares no
+    # `protocol` or `direction`. None for every catalog whose rows are endpoints. Checked by
+    # the loader (D00 §4's `root_kind`, the one member a catalog produces); read by
+    # `resolve/engines/fluent.py` and `resolve/endpoints.py`.
+    root_kind: str | None = None
+
+    # What a stated library call does with one of its arguments (`value-models/`'s
+    # `returns_argument`, design 2026-11-06-reading-decorators §3d/§3e, approved):
+    # `{owner, method, form, arg, by}`, the owner a type symbol, `form` one of `returns` (the
+    # call returns argument `arg`), `result_returns` (calling its result returns that call's
+    # argument `arg`) or `result_calls` (calling its result runs the call's argument `arg`),
+    # `arg` a position. The value walk reads them (`ValueIndex.stated_returns`). The source
+    # reads them once and hands every catalog the same tuple, as `hand_off_effects`.
+    returns_arguments: tuple[dict[str, Any], ...] = ()
+
 
 class CatalogError(ValueError):
     """A catalog that cannot be trusted. An unchecked value does not stay in

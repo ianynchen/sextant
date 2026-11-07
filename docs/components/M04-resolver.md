@@ -170,6 +170,19 @@ two edges, `narrowed`). Every other reader keeps a function value as a body and 
 redraws `call_edges` after binding, which `tests/architecture/test_call_edges_drawn_last.py`
 holds (two callers, the pipeline's first draw and the binder's, the binder's last).
 
+**A library call a value model states hands back an argument** (`returns_argument`, D02 §1f,
+design 2026-11-06-reading-decorators §3d/§3e, task 9b). The walk reads it where a value's
+producer is that call (`values._Walk._stated_value`): `returns: N` is the call's argument N;
+the result of a `__call__` whose receiver a `result_returns: N` call made, in the same method,
+is that `__call__`'s argument N (a decorator stack: `@click.option(...)` applied to a function
+is the function); and, for the call reader only, a value a `result_calls: N` call made stands
+for its argument N where that is a function (`@functools.cache def f`: `f()` runs `f`). The
+binder also walks a `__call__` whose owner the facts name and whose body no edge reaches — a
+library type's: `_lru_cache_wrapper`, or a parameter written `Callable[...]` — for function
+bodies alone, by ruling R29: its owner stays the facts', it gets no `bound_receivers` row, and
+each function is an edge beside the library edge (`call_edges._with_wrapped`). `values.decorators_passed` names the stated decorators a
+registration's argument passed, by the same rule, for the engines that read them.
+
 Two readings the walk applies for a call one file cannot know, both inert on the JVM:
 - **a static call naming a type is its construction** (`effective_calls`): the file that
   writes `Session()` for a class imported from another cannot see it is a class, so the call

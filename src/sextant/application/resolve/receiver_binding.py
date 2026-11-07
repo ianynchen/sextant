@@ -142,7 +142,7 @@ def bind_until_settled(
     if not incremental:
         return _every_round_whole(workspace, catalogs)
     started = time.perf_counter()
-    index = value_index(workspace)
+    index = value_index(workspace, returns_arguments=_returns_arguments(catalogs))
     context = _context(workspace, index)
     walked: dict[tuple[str, int], _Walked] = {}
     gained: frozenset[str] | None = None
@@ -182,7 +182,7 @@ def _every_round_whole(workspace: Workspace, catalogs: Sequence[Catalog]) -> tup
     for round_number in range(1, ROUNDS + 1):
         started = time.perf_counter()
         before = {key: one.reached for key, one in walked.items()}
-        index = value_index(workspace)
+        index = value_index(workspace, returns_arguments=_returns_arguments(catalogs))
         walked = _walk(index, _context(workspace, index), None, {})
         newly = sum(1 for key, one in walked.items() if one.reached - before.get(key, frozenset()))
         counts.append(newly)
@@ -198,6 +198,13 @@ def _every_round_whole(workspace: Workspace, catalogs: Sequence[Catalog]) -> tup
         record_call_edges(workspace, catalogs, _functions(walked))
     reset_value_index()
     return tuple(counts)
+
+
+def _returns_arguments(catalogs: Sequence[Catalog]) -> tuple[dict[str, Any], ...]:
+    """The library calls the value models state hand back an argument (`Catalog
+    .returns_arguments`, the same on every catalog): a call of a wrapper one of them made runs
+    the function it wraps (design 2026-11-06-reading-decorators §3e)."""
+    return catalogs[0].returns_arguments if catalogs else ()
 
 
 def _functions(walked: Mapping[tuple[str, int], _Walked]) -> dict[tuple[str, int], FunctionCalls]:
@@ -247,14 +254,46 @@ def _walk(
     those whose previous walk read the callers of a method in it, or is not known not to."""
     walked: dict[tuple[str, int], _Walked] = {}
     for key, site in index.sites.items():
-        if site.get("owner") is not None or site.get("invoke_kind") != _VIRTUAL:
+        wrapper = _calls_a_library_wrapper(index, key, site)
+        if not wrapper and (site.get("owner") is not None or site.get("invoke_kind") != _VIRTUAL):
             continue
         if gained is not None:
             depends_on = previous[key].depends_on
             if depends_on is not None and not depends_on & gained:
                 continue
-        walked[key] = _paths(index, site, context)
+        walked[key] = _wrapped(index, site) if wrapper else _paths(index, site, context)
     return walked
+
+
+def _calls_a_library_wrapper(
+    index: ValueIndex, key: tuple[str, int], site: Mapping[str, Any]
+) -> bool:
+    """Whether `site` calls a value whose type the facts name and whose `__call__` no body
+    here has: a library type's, such as `functools.cache`'s `_lru_cache_wrapper` or a
+    parameter written `Callable[...]`. Calling a function value runs it (ruling R29), and a
+    value model may state that calling a wrapper runs the function it wraps (`result_calls`,
+    design 2026-11-06-reading-decorators §3e), so the call is walked for the functions its
+    receiver is, and only for them: its owner is already known."""
+    return (
+        site.get("name") == _CALL and site.get("owner") is not None and not index.callees.get(key)
+    )
+
+
+def _wrapped(index: ValueIndex, site: Mapping[str, Any]) -> _Walked:
+    """The function bodies a call of a library-typed value runs (`_calls_a_library_wrapper`):
+    the ends of its receiver's paths that name a function — a function passed in, or the one a
+    `result_calls` wrapper runs. No path names an owner here, so the site keeps the one its
+    facts name and gets no `bound_receivers` row."""
+    functions: list[str] = []
+    depends_on: set[str] = set()
+    for producer, path in producer_paths(
+        index, site, RECEIVER, frozenset(), which_object=True, functions=True
+    ):
+        depends_on.update(path.crossed_out_of())
+        body = None if producer.ended_at is None else called_function(producer.ended_at)
+        if body is not None and body not in functions:
+            functions.append(body)
+    return _Walked((), frozenset(depends_on), tuple(functions))
 
 
 def _with_new_callers(
@@ -416,6 +455,7 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
                         producer.reason,
                         producer.parameter,
                         context,
+                        _library_call(index, name, producer.made_by),
                     ),
                 )
             )
@@ -488,6 +528,7 @@ def _reason(
     reason: str | None,
     parameter: tuple[str, int] | None,
     context: _Context,
+    made_by: str | None = None,
 ) -> tuple[str, str]:
     """The reason and the detail of a path that reached no type. `field` is the field the
     receiver is read from, where it is one, for the detail. A parameter no edge binds is
@@ -528,6 +569,14 @@ def _reason(
                 "which nothing in the scanned code calls"
             ),
         )
+    if reason == EXTERNAL and made_by is not None:
+        return (
+            EXTERNAL,
+            (
+                f"receiver of {name} is what the library call {made_by} returns, which no "
+                "value model states"
+            ),
+        )
     if reason == EXTERNAL:
         return EXTERNAL, f"receiver of {name} comes from code outside the scanned module"
     if reason == NOT_READABLE and parameter is not None:
@@ -544,6 +593,16 @@ def _reason(
         read = "" if field is None else f" reading {field}"
         return reason, f"receiver of {name} not followed{read}: the walk ended at {reason}"
     return NOT_READABLE, f"receiver of {name} is a value of no type the scanned code declares"
+
+
+def _library_call(index: ValueIndex, name: str, made_by: tuple[str, int] | None) -> str | None:
+    """The library call a `__call__`'s receiver path ended at, as `owner#name` (a decorator
+    such as `click/decorators#pass_context`), for the detail; None for any other call, whose
+    detail is as before."""
+    row = None if made_by is None or name != _CALL else index.sites.get(made_by)
+    if row is None or row.get("owner") is None:
+        return None
+    return f"{row['owner']}{row['name']}"
 
 
 def _escapes(name: str, method: str) -> _Found:

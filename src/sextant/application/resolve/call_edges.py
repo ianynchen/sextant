@@ -208,9 +208,9 @@ def _site_rows(
     binding was, and its evidence is the binding's (`syntax`, a type worked out by a rule).
     A site nothing bound is one row naming no target and reaching no body, `unresolved`:
     the call is in the code, and what it calls is not known."""
-    if not _unowned(site):
-        return _rows_for(site, dispatch, rules)
     key = (str(site["caller"]), int(str(site["ordinal"])))
+    if not _unowned(site):
+        return _with_wrapped(site, key, _rows_for(site, dispatch, rules), dispatch, rules, called)
     owners, tier = bound.get(key, ((), str(Resolution.UNRESOLVED)))
     function = (called or {}).get(key)
     if function is not None:
@@ -246,6 +246,40 @@ def _site_rows(
     return [
         {**row, "resolution": str(resolution), "evidence": str(Evidence.SYNTAX)} for row in rows
     ]
+
+
+def _with_wrapped(
+    site: dict[str, object],
+    key: tuple[str, int],
+    rows: list[dict[str, object]],
+    dispatch: Dispatch,
+    rules: TerminalRules,
+    called: Mapping[tuple[str, int], FunctionCalls] | None,
+) -> list[dict[str, object]]:
+    """`rows`, the edges of a call whose owner the facts name, and, where it is a `__call__` on
+    a library type whose receiver the binder found to be a function (`receiver_binding
+    ._wrapped`: a function passed as a `Callable`, or the one a `result_calls` wrapper runs,
+    design 2026-11-06-reading-decorators §3e), an edge to each such function, looked up as a
+    lambda body is (ruling R29). The library edge stays: the call runs the library's
+    `__call__`, and that runs the function."""
+    function = (called or {}).get(key)
+    if function is None:
+        return rows
+    for body in function.bodies:
+        lambda_site = {**site, "invoke_kind": DYNAMIC, "implementation": body}
+        rows = [
+            *rows,
+            *(
+                {
+                    **row,
+                    "invoke_kind": str(site["invoke_kind"]),
+                    "resolution": str(function.tier),
+                    "evidence": str(Evidence.SYNTAX),
+                }
+                for row in _rows_for(lambda_site, dispatch, rules)
+            ),
+        ]
+    return rows
 
 
 def _record_hierarchy(workspace: Workspace, dispatch: Dispatch) -> None:

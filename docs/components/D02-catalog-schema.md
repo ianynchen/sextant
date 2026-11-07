@@ -737,6 +737,34 @@ site it matches. **A new entry naming a void sender or setter would reopen it.**
 must therefore check that the producer it names really hands something back — and if it does
 not, that it is genuinely a constructor rather than an ordinary void call.
 
+**`returns_argument` — a library call that hands back one of its arguments** (design
+2026-11-06-reading-decorators §3d, §3e, approved). A `value-models/` file may declare
+`returns_argument: [{owner, method, <form>: argN, by}]`, exactly one form per entry:
+
+- **`returns: argN`** — the call returns its argument N (`Objects.requireNonNull`; none ships);
+- **`result_returns: argN`** — calling the call's RESULT returns that call's argument N: a
+  decorator factory whose decorator hands the function back. `value-models/click.yml` states
+  click's `option`, `argument`, `password_option` and `version_option`, and
+  `value-models/python-wrappers.yml` `functools.wraps`;
+- **`result_calls: argN`** — calling the call's result runs the call's OWN argument N with the
+  same arguments: a wrapper. `python-wrappers.yml` states `functools.cache` and `lru_cache`,
+  `contextlib.contextmanager` and `asynccontextmanager`, and `tenacity.retry`.
+
+`owner` is dotted as every catalog spells a type, a module included (`click.decorators` is the
+facts' `click/decorators#`). `by` is required, as `identified_by`'s is; a call stated in two
+files, a missing or second form, an unknown key or a form not spelled `argN` is refused naming
+the file (`YamlCatalogSource.returns_arguments`, into `Catalog.returns_arguments`, the same on
+every catalog). **What reads it is the value walk** (`values._Walk._stated_value`): a value a
+stated `returns` call made is that argument; the result of a `__call__` whose receiver a
+`result_returns` call made in the same method is that `__call__`'s argument N — a decorator
+stack is written beside its `def`, so the receiver is matched there; and for the reader asking
+what a CALL of a value runs (`functions`), a wrapper a `result_calls` call made stands for its
+argument N where that is a function — the bare spelling `lru_cache(f)`, never the factory
+`lru_cache(128)`, whose argument 0 is no function. Receiver binding also walks a `__call__` on a
+value whose type the facts name and whose `__call__` no body here has (typeshed types
+`@functools.cache`'s name as `_lru_cache_wrapper`), for the functions its receiver is, and the
+edge to each is drawn beside the library edge. A position counts positional arguments only.
+
 An edit here moves `_catalog_hash` (`api._MODEL_DIRECTORIES`), like an edit to any of the
 other four directories: it is knowledge a run was produced with.
 
@@ -1859,7 +1887,13 @@ mapping:
 
 ### `single_call`
 
-One call carries the whole declaration. Arguments are addressed by position or name.
+One call carries the whole declaration. Arguments are addressed by position, which counts
+the call's POSITIONAL arguments only: the facts write positional arguments first and keyword
+ones after (ruling R27), so `arg1` of `option("--dry-run", is_flag=True)` is no argument, never
+`is_flag`'s value, and a `*` argument at or before the position leaves it unread. The keyword
+forms `{keyword: name}` and `{arg: N, keyword: name}` (design 2026-11-06-reading-decorators
+§3a, approved) are read by the `fluent` captures, the `mount` block and a `request_params` entry
+naming a call (§2's `fluent`, §2k); a `single_call` row's `*_arg` keys take a position.
 
 ```yaml
 style: single_call
@@ -2326,6 +2360,54 @@ reached on one path through a mount and on another through none serves under bot
 mount adds no prefix and is filed as a `refused_registration` open question (D01). A malformed
 entry, either key without the other, or a `prefix_from` mount that is not a terminal, is
 refused at load.
+
+**An argument capture may name a keyword** (design 2026-11-06-reading-decorators §3a,
+approved). Wherever a capture reads `argN` — `url`, `body`, `response`, `channel`, `host`,
+`port`, `options`, `handler`, a two-spelling field — it may read `{keyword: name}`, the argument
+written with that name, or `{arg: N, keyword: name}`, Python's rule for a parameter that is
+positional or named: position N where the call writes more than N positional arguments, else
+the keyword. `argN` counts positional arguments only. Where a `*` value is written at or before
+the position, or the keyword is absent and a `**` value is written, the argument may come from
+the unpacked value: it is `not_readable` and the capture names no position. A mapping with any
+other key, a keyword that is not an identifier, or a position that is not a non-negative
+integer is refused at load. `mount[].router_arg` and `prefix_arg` take the same forms.
+
+**`root_kind: entry_point`** (design 2026-11-06-reading-decorators §5, approved; top-level,
+beside `style`): the catalog's chains are a PROGRAM's commands, not endpoints. It declares no
+`protocol` and no `direction` (refused otherwise, and on any style but `fluent`), derives no
+`endpoints` row (`resolve/endpoints.py` gives it no wire style), and writes instead:
+- one `roots` row per command path that reaches a handler, `root_kind = entry_point`,
+  `protocol`, `method` and both markers NULL. The **handler** is the terminal's `handler`
+  capture followed back as a call of it would be: through each decorator a `returns_argument`
+  entry states (§1f), into module code, to the function. A path that ends at a library
+  decorator no value model states names no function, and the command gets no row;
+- the **words**, joined by one space as a command is typed (a rule, not a key; such a catalog
+  declares no `path_join`): the root's `url` capture, else `path_fallback` over the handler's
+  name, behind each group mount's word. **The outermost word is the program's name**: the name
+  of the module's `entry_points` entry ([D00](D00-fact-schema.md) §5) whose target names the
+  outermost router — `"sextant.cli.app:cli"` is the module-level name `cli`, the field
+  `sextant/cli/app#cli.`, extras (`[extra]`) dropped — or, where none names it, the named hole
+  `<program>`. A command on no router is itself the program and its path is that name alone.
+  A command whose own word is not read (a name from an unpacked `**` value) has `path` NULL;
+- one `endpoint_metadata` row per `request_params` entry naming a decorator the handler walk
+  passed (§2k), `caller` the handler, `direction = inbound`, `protocol` and `method` NULL,
+  `path` the command's, and no `endpoints` row to bind (`row_id` NULL).
+
+**`path_fallback`** on an entry-point catalog (`matches`, or one root; design §3c, approved) is
+what a chain's word is where its root's `url` capture reads no argument at all: `construct_name`,
+the handler's own name, or `{name: construct_name, lower: bool, replace: {from: to},
+drop_suffixes: [word]}`, each part applied in that order — `drop_suffixes` removes a last part
+in the list and the `-` before it where the name has a `-` (click 8.5.0's rule:
+`init_data_command` is `init-data`; typer's is the mapping without `drop_suffixes`). A root's
+own wins over the catalog's. Anything else is refused, and so is the key on a catalog that is
+not an entry-point catalog, which reads it nowhere.
+
+**`mount[].router_arg: chain_result`** (design §4, approved): the router is what the chain the
+mount entry's ROOT starts returns — `@cli.group() def module` makes the `Group` that applying
+`cli.group()`'s result to `module` returns, and mounts it on `cli`. The entry names a declared
+root (refused otherwise) and `prefix_from: receiver_path`: its prefix is that chain's own word.
+The chain's terminal is the router's producer (the producer reader stops there), and like every
+mount chain it derives no row of its own.
 
 **A step may declare `receiver_arg: N`** (spec 2026-10-26 §3c): the step joins the chain
 through argument N's value id instead of through its own `receiver`. A Kotlin extension
@@ -6139,6 +6221,30 @@ refused naming the file. **Boundaries, stated:** the handler body only, never a 
 delegates to; and a `single_call` row's handler is the REGISTERING method, not the `Handler`
 lambda it passes, so a Javalin flat `app.get("/x", ctx -> ctx.queryParam("q"))` writes
 nothing — the `ApiBuilder` rows carry the lambda body as `handler` and read fully.
+
+**Mechanism 4 — `request_params` naming a call**, on a `root_kind: entry_point` `fluent`
+catalog (design 2026-11-06-reading-decorators §3d, approved), read off the decorators a
+command's handler walk passed (§2's `fluent`), by the engine that derives the command:
+
+```yaml
+request_params:
+  - { owner: click.decorators, method: argument, kind: argument, name_arg: 0,
+      requirement: required, required_arg: { keyword: required }, default_arg: { keyword: default } }
+  - { owner: click.decorators, method: option, kind: option, name_arg: 0,
+      requirement: optional, required_arg: { keyword: required }, flag_arg: { keyword: is_flag } }
+```
+
+An entry carries `owner`, `method`, `kind`, `name_arg` and `requirement`, and may carry
+`required_arg`, `default_arg` and `flag_arg`, each `*_arg` an argument reference (a position,
+`{keyword: name}` or `{arg: N, keyword: name}`, §2's `fluent`). `kind` is one of
+**`argument`** (a positional word), **`option`** (a named value) and **`flag`** (a named switch
+that takes no value); `requirement` is the framework's default, `required` or `optional`.
+The `name` is the string literal at `name_arg`, else NULL at `unresolved`; a `default_arg` that
+is written makes the row `optional` (click's `Argument`); a `required_arg` written as a literal
+boolean replaces both, and one written as anything else leaves `requirement` NULL; a `flag_arg`
+written as the literal `True` makes the row's kind `flag`. `value` is NULL and `evidence` is
+`declared`. A parameter's type has no column. Any other key, a `kind` or `requirement` outside
+its set, a reference in another shape, or one call named twice, is refused naming the file.
 
 ## 2l. What an annotation says ABOUT an inbound endpoint — `metadata_from`
 

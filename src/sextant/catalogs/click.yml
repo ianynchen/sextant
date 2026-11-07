@@ -1,0 +1,71 @@
+id: click
+displayName: Click (command-line programs)
+style: fluent
+
+# A click program is a tree of commands, each a function the program runs (design
+# 2026-11-06-reading-decorators §5, approved). Its rows are ENTRY POINTS, not endpoints: a
+# command is started by the name it is typed under, so it has no protocol, no method and no
+# address on a wire, and this catalog declares no `protocol` or `direction`. Its rows go to
+# `roots` as `entry_point`, its parameters to `endpoint_metadata` (`request_params` below).
+root_kind: entry_point
+
+# Every decorator is the call it is (design §3a, ruled): `@module.command("analyze")` over
+# `def module_analyze` is a call of `Group.command` whose result is called with the function
+# (`__call__`), and each `@click.option(...)` between them is a call whose result is called
+# with what the decorator below it returned. The rules quoted below are click 8.5.0's own,
+# read from its source (`scripts/probes/click_commands.md`).
+
+detect:
+  coordinates: []
+
+measured:
+  - { artifact: click, versions: ["8.5.0"], identity: reported, by: scripts/probes/click_commands.md }
+
+# NO `requires`, and that is a claim: the engine reads call sites, which every scanner writes,
+# and a module whose build holds no click has no call it matches, so it derives nothing. A
+# capability only the Python scanner declares would have this catalog SKIPPED on every JVM
+# module, and a skipped catalog degrades that module's observability for a framework it does
+# not use.
+
+matches:
+  # A COMMAND WITH NO NAME WRITTEN is named from its function (probe §2): click 8.5.0's
+  # `command` lower-cases `f.__name__`, turns `_` into `-`, then removes a last part
+  # `command`, `cmd`, `group` or `grp` after a `-` (`init_data_command` is `init-data`).
+  # `Group.command` and `Group.group` pass their arguments to it unchanged.
+  path_fallback: { name: construct_name, lower: true, replace: { "_": "-" },
+                   drop_suffixes: [command, cmd, group, grp] }
+  # THE REGISTRATIONS (probe §1). The name is `command`'s first parameter, positional or
+  # named (`name`); `Group.command(*args, **kwargs)` hands its arguments to `command` as
+  # written. A group is a command too, and is also the router its commands hang on (`mount`).
+  roots:
+    - { owner: click.core.Group, method: command, captures: { url: { arg: 0, keyword: name } } }
+    - { owner: click.decorators, method: command, captures: { url: { arg: 0, keyword: name } } }
+    - { owner: click.core.Group, method: group,   captures: { url: { arg: 0, keyword: name } } }
+    - { owner: click.decorators, method: group,   captures: { url: { arg: 0, keyword: name } } }
+  # The decorator the registration returns, called with the function it registers: the
+  # handler is that argument, followed back through every decorator below the registration
+  # (probe §3: each of `option`, `argument`, `password_option` and `version_option` hands the
+  # function back, `value-models/click.yml`).
+  steps:
+    - { method: __call__, captures: { handler: arg0 } }
+  terminal: [__call__]
+  # GROUPS (probe §4). `@cli.group() def module` makes a `Group` — what `cli.group()`'s
+  # result returns when applied to `module` — and adds it to `cli`, so every command on
+  # `module` is typed after `module`'s own word. The router is that chain's result, and its
+  # word is that chain's own path. The outermost group's word is the program's name: click
+  # ignores the top group's own name and uses the name the program was started by
+  # (`_detect_program_name`), which is the entry point's name where the build declares one.
+  router_type: [click.core.Group]
+  mount:
+    - { owner: click.core.Group, method: group, router_arg: chain_result, prefix_from: receiver_path }
+    - { owner: click.decorators, method: group, router_arg: chain_result, prefix_from: receiver_path }
+  # A COMMAND'S PARAMETERS (probe §5) are the `argument` and `option` decorators between the
+  # registration and the function. An argument is required unless a `default` is written or
+  # `required` says otherwise (`Argument.__init__`); an option is optional unless `required`
+  # is written true (`Option.__init__`'s `required: bool = False`), and one with `is_flag`
+  # written true takes no value. The name is the first parameter declaration as written.
+  request_params:
+    - { owner: click.decorators, method: argument, kind: argument, name_arg: 0,
+        requirement: required, required_arg: { keyword: required }, default_arg: { keyword: default } }
+    - { owner: click.decorators, method: option, kind: option, name_arg: 0,
+        requirement: optional, required_arg: { keyword: required }, flag_arg: { keyword: is_flag } }

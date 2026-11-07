@@ -440,6 +440,7 @@ def _matches(workspace: Workspace, catalog: Catalog) -> list[_ClassMatch]:
             catalog.hand_off_effects,
             catalog.bean_models,
             catalog.value_annotations,
+            catalog.returns_arguments,
         ):
             # The serving annotation, where the catalog names one, is a conjunct of every
             # form (CP-52 row 7), this one included.
@@ -507,6 +508,7 @@ def _bound(
     hand_off_effects: Sequence[Mapping[str, Any]] = (),
     bean_models: Mapping[str, Mapping[str, Any]] | None = None,
     value_annotations: Sequence[str] = (),
+    returns_arguments: Sequence[Mapping[str, Any]] = (),
 ) -> list[tuple[str, str, str]]:
     """`(implementer, the bind method's parameter type, marked outer)` for every class an
     instance of which reaches a static `method` call owned by a marked class, one entry per
@@ -535,7 +537,12 @@ def _bound(
         supertype = _catalog_symbol(parameters[0])
         if index is None:
             index = cached_value_index(
-                workspace, not_hand_offs, hand_off_effects, bean_models, value_annotations
+                workspace,
+                not_hand_offs,
+                hand_off_effects,
+                bean_models,
+                value_annotations,
+                returns_arguments=returns_arguments,
             )
         for binding in resolve_site(workspace, site, index):
             answer = binding.slots.get(0)

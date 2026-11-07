@@ -125,6 +125,7 @@ work that takes under a millisecond.
 """
 
 import json
+import re
 from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
@@ -210,6 +211,12 @@ RECEIVER = "receiver"
 
 # A construction's name at a call site (D00 §5).
 _INIT = "<init>"
+# The name the facts give a call of a value (`f(x)` on a value `f`, D00 §5).
+_CALL = "__call__"
+# `returns_argument`'s three forms (`Catalog.returns_arguments`).
+_RETURNS = "returns"
+_RESULT_RETURNS = "result_returns"
+_RESULT_CALLS = "result_calls"
 
 # D00 §5's argument grammar, read as answers. `long` answers `int` because the
 # distinction is a storage width and not a kind of value a consumer branches on; a catalog
@@ -437,6 +444,11 @@ class Answer:
     # equality: two `external` answers at two parameters are still one answer to every
     # reader that deduplicates them, exactly as before it existed.
     parameter: tuple[str, int] | None = dataclass_field(default=None, compare=False, repr=False)
+    # **Which library call an `external` answer ended at**, `(method, ordinal)` — set only by
+    # `_Walk._value` where a value's producer is a call whose body was not read, for the
+    # producer reader to hand on (`Producer.made_by`), so a reader can name the decorator a
+    # walk stopped at. Outside equality, as `parameter` is.
+    made_by: tuple[str, int] | None = dataclass_field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -498,6 +510,10 @@ class Producer:
     # a lambda's capture crossing, the method named is the CAPTURING method, never the body.
     # None everywhere else.
     parameter: tuple[str, int] | None = None
+    # The library call an `external` path ended at, `(method, ordinal)` (`Answer.made_by`).
+    # Outside equality: two paths ending `external` at two library calls are still one end
+    # to every reader that deduplicates them, as before it existed.
+    made_by: tuple[str, int] | None = dataclass_field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -701,6 +717,13 @@ class ValueIndex:
     # such a call to such a method hands `self` as its first argument (`call_slots`).
     instance_methods: frozenset[str] = frozenset()
     class_receivers: frozenset[tuple[str, int]] = frozenset()
+    # What a stated library call does with one of its arguments (`Catalog.returns_arguments`,
+    # design 2026-11-06-reading-decorators §3d/§3e), `(owner, name)` -> `(form, position)`:
+    # `returns`, `result_returns` or `result_calls` of its argument at that position. Read by
+    # `_Walk._stated_value`; empty, nothing is stated and the walk reads as before.
+    stated_returns: Mapping[tuple[str, str], tuple[str, int]] = dataclass_field(
+        default_factory=dict
+    )
     # `argument_slots`' answers, per (caller, ordinal, callee), for as long as this lives.
     slots_memo: dict[Any, Any] = dataclass_field(default_factory=dict, compare=False, repr=False)
 
@@ -838,6 +861,86 @@ def parameter_slots(
     return tuple(filled)
 
 
+# The slot an argument reference names where an unpacked `*`/`**` value may be the argument
+# (`argument_slot`): no argument the code writes can be said to be it.
+UNPACKED_SLOT = -1
+# What a read at `UNPACKED_SLOT` says, for the reader that reports it (design
+# 2026-11-06-reading-decorators §3a).
+UNPACKED_DETAIL = "the argument may come from an unpacked `*`/`**` value"
+
+
+def argument_slot(arguments: Sequence[Mapping[str, Any]], reference: Any) -> int | None:
+    """Which written argument a catalog's argument reference names (design
+    2026-11-06-reading-decorators §3a, approved): its index in `arguments`, None where the
+    call writes no such argument, or `UNPACKED_SLOT` where an unpacked value may be it.
+
+    A reference is a position `N` (an integer, or the capture spelling `argN`), `{keyword:
+    name}`, or `{arg: N, keyword: name}` — Python's rule for a parameter that is positional or
+    named: position N where the call writes more than N positional arguments, else the keyword.
+
+    - A position counts the POSITIONAL arguments only. The facts write a call's positional
+      arguments first, then its keyword ones (ruling R27), so counting every argument read
+      `True` for `arg1` of `option("--dry-run", is_flag=True)`. A JVM argument has no
+      `keyword`, so there a position is the index, as before.
+    - A `*` argument at or before the position may hold it, and a missing keyword may be in a
+      `**` argument: `UNPACKED_SLOT` for both."""
+    position, keyword = _reference_parts(reference)
+    if position is not None:
+        placed = 0
+        for slot, entry in enumerate(arguments):
+            written = entry.get("keyword")
+            if written == _UNPACKED_SEQUENCE:
+                return UNPACKED_SLOT
+            if written is None:
+                if placed == position:
+                    return slot
+                placed += 1
+        if keyword is None:
+            return None
+    if keyword is None:
+        return None
+    mapping = False
+    for slot, entry in enumerate(arguments):
+        written = entry.get("keyword")
+        if written == keyword:
+            return slot
+        mapping = mapping or written == _UNPACKED_MAPPING
+    return UNPACKED_SLOT if mapping else None
+
+
+def _reference_parts(reference: Any) -> tuple[int | None, str | None]:
+    """`(position, keyword)` of a reference already checked at load (`argument_reference`)."""
+    if isinstance(reference, Mapping):
+        position = reference.get("arg")
+        return (None if position is None else int(position)), str(reference["keyword"])
+    if isinstance(reference, str):
+        return int(reference.removeprefix("arg")), None
+    return int(reference), None
+
+
+def argument_reference(value: Any, *, spelled: bool) -> Any:
+    """`value` if it is an argument reference a catalog may write, else None: `argN` where
+    `spelled` (a capture's spelling) or an integer where not (a `*_arg` key's), or either
+    mapping form `{keyword: name}` / `{arg: N, keyword: name}` (design
+    2026-11-06-reading-decorators §3a). A mapping with any other key, a keyword that is not an
+    identifier, or a position that is not a non-negative integer is no reference."""
+    if isinstance(value, Mapping):
+        keyword, position = value.get("keyword"), value.get("arg", 0)
+        if (
+            set(value) <= {"arg", "keyword"}
+            and isinstance(keyword, str)
+            and keyword.isidentifier()
+            and isinstance(position, int)
+            and not isinstance(position, bool)
+            and position >= 0
+        ):
+            return value
+        return None
+    if spelled:
+        return value if isinstance(value, str) and re.fullmatch(r"arg\d+", value) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
 def reset_value_index() -> None:
     """Drops every cached index, so a resolve never answers from facts a previous one
     loaded.
@@ -856,6 +959,7 @@ def cached_value_index(
     hand_off_effects: Sequence[Mapping[str, Any]] = (),
     bean_models: Mapping[str, Mapping[str, Any]] | None = None,
     value_annotations: Sequence[str] = (),
+    returns_arguments: Sequence[Mapping[str, Any]] = (),
 ) -> "ValueIndex":
     """`value_index`, built at most once per workspace per resolve.
 
@@ -866,7 +970,12 @@ def cached_value_index(
     index = _INDEX_BY_WORKSPACE.get(workspace)
     if index is None:
         index = value_index(
-            workspace, not_hand_offs, hand_off_effects, bean_models, value_annotations
+            workspace,
+            not_hand_offs,
+            hand_off_effects,
+            bean_models,
+            value_annotations,
+            returns_arguments=returns_arguments,
         )
         _INDEX_BY_WORKSPACE[workspace] = index
     return index
@@ -878,6 +987,7 @@ def value_index(
     hand_off_effects: Sequence[Mapping[str, Any]] = (),
     bean_models: Mapping[str, Mapping[str, Any]] | None = None,
     value_annotations: Sequence[str] = (),
+    returns_arguments: Sequence[Mapping[str, Any]] = (),
 ) -> ValueIndex:
     """The index for one resolve. Built by `resolve_site` when it is not handed one.
 
@@ -887,7 +997,9 @@ def value_index(
     2026-11-02 rule 7): the hand-offs whose effect a catalog states (`ValueIndex.stated`).
     `bean_models` and `value_annotations` are the catalogs' (`Catalog.bean_models`,
     `Catalog.value_annotations`, the same on every catalog): what each container-filled
-    parameter receives (`ValueIndex.injected`). None, no parameter is container-filled."""
+    parameter receives (`ValueIndex.injected`). None, no parameter is container-filled.
+    `returns_arguments` is the catalogs' (`Catalog.returns_arguments`): the library calls
+    that hand back one of their arguments (`ValueIndex.stated_returns`)."""
     sites: dict[tuple[str, int], Mapping[str, Any]] = {}
     receivers: dict[tuple[str, int], list[int]] = {}
     # The PROJECTION, not the raw fact stream — the rows every engine reads (spec
@@ -1180,6 +1292,10 @@ def value_index(
         call_parameters=call_parameters,
         instance_methods=frozenset(instance_methods),
         class_receivers=class_receivers,
+        stated_returns={
+            (str(entry["owner"]), str(entry["method"])): (str(entry["form"]), int(entry["arg"]))
+            for entry in returns_arguments
+        },
     )
 
 
@@ -1896,6 +2012,7 @@ def producer_paths(
     read_sites: AbstractSet[tuple[str, int]] = frozenset(),
     dropped: list[Producer] | None = None,
     functions: bool = False,
+    declared_sites: AbstractSet[tuple[str, int]] = frozenset(),
 ) -> tuple[tuple[Producer, Path], ...]:
     """`producers_of`, with the PATH each producer was reached by, one pair per distinct
     path — for a reader that goes on to read other positions on that same path.
@@ -1927,7 +2044,11 @@ def producer_paths(
     fix round 2): a function value (`lambda`) ends its path as a `symbol` literal naming the
     function's body, the way a JVM functional interface's method on a lambda reaches the
     lambda's body. Off, the default, a function value is a body and not a value (ruled
-    2026-09-22), as every other reader has it."""
+    2026-09-22), as every other reader has it.
+
+    `declared_sites` are stops by site, `(method, ordinal)`, beside `declared`'s by call: a
+    call that makes an object its `(owner, name)` cannot name, as a `__call__` applying a
+    group decorator makes a router (design 2026-11-06-reading-decorators §4)."""
     walk = _Walk(
         index,
         declared=declared,
@@ -1940,6 +2061,7 @@ def producer_paths(
         counting=counting,
         read_sites=read_sites,
         functions=functions,
+        declared_sites=declared_sites,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[tuple[Producer, Path]] = []
@@ -1947,7 +2069,9 @@ def producer_paths(
         if answer.kind == _PRODUCED:
             producer = replace(answer.value, inexact=True) if answer.inexact else answer.value
         elif answer.kind == UNRESOLVED:
-            producer = Producer(reason=answer.reason, parameter=answer.parameter)
+            producer = Producer(
+                reason=answer.reason, parameter=answer.parameter, made_by=answer.made_by
+            )
         else:
             producer = Producer(ended_at=answer)
         entered = _entered(trail, index)
@@ -1958,6 +2082,41 @@ def producer_paths(
             # the answer; a caller that must know the answer is incomplete asks for these.
             dropped.append(producer)
     return tuple(dict.fromkeys(found))
+
+
+def decorators_passed(
+    index: ValueIndex, site: Mapping[str, Any], slot: int
+) -> tuple[tuple[str, int], ...]:
+    """The stated decorators a value at `site`'s argument `slot` passed through, nearest
+    first, as `(method, ordinal)` of the call that made each (design
+    2026-11-06-reading-decorators §3d): the calls `_Walk._stated_value` goes through by
+    `result_returns`, read by the same rule — an argument made by a `__call__` in this method
+    whose receiver a `result_returns` call made, then that `__call__`'s own argument. Ends at
+    the first value made any other way (the function itself, module code, a library call no
+    value model states), which the value walk reads on its own."""
+    method = str(site["caller"])
+    found: list[tuple[str, int]] = []
+    arguments = site["arguments"] or []
+    held = arguments[slot] if 0 <= slot < len(arguments) else None
+    while held is not None and held.get("source") is not None and held.get("kind") != "lambda":
+        made = index.producers.get((method, int(str(held["source"]))))
+        row = index.sites.get((method, min(made))) if made else None
+        if row is None or row["name"] != _CALL or row.get("owner") is not None:
+            break
+        receiver = row.get("receiver")
+        makers = index.producers.get((method, int(str(receiver)))) if receiver is not None else None
+        maker = index.sites.get((method, min(makers))) if makers else None
+        applied = (
+            None
+            if maker is None
+            else index.stated_returns.get((str(maker.get("owner")), str(maker["name"])))
+        )
+        if maker is None or applied is None or applied[0] != _RESULT_RETURNS:
+            break
+        found.append((method, int(str(maker["ordinal"]))))
+        at = argument_slot(row["arguments"] or [], applied[1])
+        held = None if at is None or at == UNPACKED_SLOT else (row["arguments"] or [])[at]
+    return tuple(found)
 
 
 def _entered(trail: "_Trail", index: ValueIndex) -> "_Trail | None":
@@ -2616,8 +2775,13 @@ class _Walk:
         counting: Counting = None,
         read_sites: AbstractSet[tuple[str, int]] = frozenset(),
         functions: bool = False,
+        declared_sites: AbstractSet[tuple[str, int]] = frozenset(),
     ) -> None:
         self._index = index
+        # The producer reader's stop set by site, `(method, ordinal)`: a call that makes an
+        # object although its `(owner, name)` names no type (a mount's chain result, design
+        # 2026-11-06-reading-decorators §4). Empty for every other reader.
+        self._declared_sites = frozenset(declared_sites)
         # The call reader (`producer_paths(..., functions=True)`): a function value ends its
         # path naming the function's body. False for every other reader.
         self._functions = functions
@@ -4056,6 +4220,11 @@ class _Walk:
         row = self._index.sites.get(site)
         if self._which_object and row is not None and _call_of(row) in self._configuring:
             return self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames)
+        # **A stated library call hands back one of its arguments** (design
+        # 2026-11-06-reading-decorators §3d, §3e): the value is that argument, read on.
+        stated = None if row is None else self._stated_value(site, row, trail, frames)
+        if stated is not None:
+            return stated
         # **The producer is a call, and this is where the walk used to be stuck** (§0b,
         # and it is the correction that design says it made three times before it stuck).
         # A backward walk reaching `session.createQueue("raw-audit")` has a `Queue` object
@@ -4162,7 +4331,73 @@ class _Walk:
         # with a NULL callee at the third-party boundary. MEASURED on `mall-admin`: 1,411
         # of 2,065 value-producing sites are that boundary, so `external` is the common
         # answer and not the corner case.
-        return _only(trail, _unresolved(NOT_READABLE if site in self._index.reached else EXTERNAL))
+        if site in self._index.reached:
+            return _only(trail, _unresolved(NOT_READABLE))
+        return _only(trail, replace(_unresolved(EXTERNAL), made_by=site))
+
+    def _stated_value(
+        self,
+        site: tuple[str, int],
+        row: Mapping[str, Any],
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...] | None:
+        """The value a call a value model states makes (`ValueIndex.stated_returns`, design
+        2026-11-06-reading-decorators §3d and §3e), or None where no statement applies:
+
+        - `returns: N` on the call: the value is its argument N (`Objects.requireNonNull`);
+        - `result_returns: N` on the call that made this call's RECEIVER, in this method: this
+          call applies a decorator that hands its argument back, so the value is this call's
+          argument N (click's `option(...)` applied to a function is the function);
+        - `result_calls: N` on the call, for the reader asking what a CALL of the value runs
+          (`functions`): calling the wrapper runs the call's argument N, so the value stands
+          for that function (`functools.cache(f)` runs `f`). Only an answer naming a function
+          is kept: a factory spelling whose argument N is no function (`lru_cache(128)`)
+          states nothing here, and the call ends as any library call does.
+
+        Positions count positional arguments only (`argument_slot`); an argument the call does
+        not write, or one an unpacked value may be, is `not_readable`. The decorator's receiver
+        is matched in the same method because that is where a decorator stack is written: the
+        decorator expression is evaluated beside the `def`."""
+        stated = self._index.stated_returns
+        if not stated:
+            return None
+        method = site[0]
+        own = stated.get((str(row.get("owner")), str(row["name"])))
+        if own is not None and own[0] == _RETURNS:
+            return self._stated_slot(site, row, own[1], trail, frames)
+        if own is not None and own[0] == _RESULT_CALLS and self._functions:
+            runs = tuple(
+                reached
+                for reached in self._stated_slot(site, row, own[1], trail, frames)
+                if called_function(reached[1]) is not None
+            )
+            return runs or None
+        receiver = row.get("receiver")
+        if row["name"] != _CALL or row.get("owner") is not None or receiver is None:
+            return None
+        made = self._index.producers.get((method, int(str(receiver))))
+        maker = self._index.sites.get((method, min(made))) if made else None
+        applied = (
+            None if maker is None else stated.get((str(maker.get("owner")), str(maker["name"])))
+        )
+        if applied is None or applied[0] != _RESULT_RETURNS:
+            return None
+        return self._stated_slot(site, row, applied[1], trail, frames)
+
+    def _stated_slot(
+        self,
+        site: tuple[str, int],
+        row: Mapping[str, Any],
+        position: int,
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...]:
+        """The value of `row`'s positional argument `position`, read on this path."""
+        slot = argument_slot(row["arguments"] or [], position)
+        if slot is None or slot == UNPACKED_SLOT:
+            return _only(trail, _unresolved(NOT_READABLE))
+        return self._resolve((_SLOT, site[0], site[1], slot), trail, frames)
 
     def _bound_returns(
         self,
@@ -4388,13 +4623,13 @@ class _Walk:
         declared, with no arity or descriptor, because the question is which call built the
         value and not which overload. The value walk declares nothing, so this answers None
         there before reading anything."""
-        if not self._declared:
+        if not self._declared and not self._declared_sites:
             return None
         row = self._index.sites.get(site)
         if row is None:
             return None
         identity = (row.get("owner"), row["name"])
-        if identity not in self._declared:
+        if identity not in self._declared and site not in self._declared_sites:
             return None
         return Answer(
             kind=_PRODUCED,

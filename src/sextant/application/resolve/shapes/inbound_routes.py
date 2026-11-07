@@ -20,6 +20,9 @@ from sextant.domain.paths import EXPRESSION_OPENS
 # The one `path_join` a catalog may declare, beside "absent" (verbatim). Named once so the
 # engine that validates the catalog and the engine that applies it read the same word.
 LEADING_SLASH = "leading_slash"
+# How a `root_kind: entry_point` catalog joins its words: one space, as a command is typed
+# (design 2026-11-06-reading-decorators §4, ruled: a rule, not a catalog value).
+WORDS = "words"
 
 MEDIA_FIELDS = ("consumes", "produces")
 
@@ -100,10 +103,64 @@ def join_prefix(prefix: str | None, path: str, rule: str | None) -> str:
     and the join is what makes `path("api", …)` and `path("/api", …)` the same address here
     as they are in the framework. The prefix is already an address and is written as it
     is."""
+    if rule == WORDS:
+        return " ".join(word for word in (prefix, path) if word)
     segment = path
     if rule == LEADING_SLASH and path not in ("", "*") and not path.startswith("/"):
         segment = "/" + path
     return (prefix or "") + segment
+
+
+# The one name a `path_fallback` names on a chain (design 2026-11-06-reading-decorators §3c):
+# the construct the registration receives, its handler.
+CONSTRUCT_NAME = "construct_name"
+_WORD_FALLBACK_KEYS = frozenset({"name", "lower", "replace", "drop_suffixes"})
+
+
+def validated_word_fallback(declared: Any, where: str) -> dict[str, Any] | None:
+    """A `fluent` catalog's `path_fallback` (design 2026-11-06-reading-decorators §3c,
+    approved): what a chain's own word is where its root's `url` capture reads no argument —
+    `construct_name`, the handler's own name, or the mapping `{name: construct_name, lower,
+    replace, drop_suffixes}` stating the framework's respelling of it. None where nothing is
+    declared. Anything else is refused, `where` naming the catalog."""
+    if declared is None:
+        return None
+    if declared == CONSTRUCT_NAME:
+        return {"lower": False, "replace": {}, "drop_suffixes": ()}
+    replace = declared.get("replace", {}) if isinstance(declared, dict) else None
+    suffixes = declared.get("drop_suffixes", []) if isinstance(declared, dict) else None
+    if (
+        not isinstance(declared, dict)
+        or not set(declared) <= _WORD_FALLBACK_KEYS
+        or declared.get("name") != CONSTRUCT_NAME
+        or not isinstance(declared.get("lower", False), bool)
+        or not isinstance(replace, dict)
+        or not all(isinstance(k, str) and k and isinstance(v, str) for k, v in replace.items())
+        or not isinstance(suffixes, list)
+        or not all(isinstance(suffix, str) and suffix for suffix in suffixes)
+    ):
+        raise CatalogError(
+            f"{where}: `path_fallback` is `{CONSTRUCT_NAME}` or `{{name: {CONSTRUCT_NAME}, "
+            f"lower: bool, replace: {{from: to}}, drop_suffixes: [word]}}`, got {declared!r}"
+        )
+    return {
+        "lower": bool(declared.get("lower", False)),
+        "replace": dict(replace),
+        "drop_suffixes": tuple(suffixes),
+    }
+
+
+def fallback_word(rule: Mapping[str, Any], name: str) -> str:
+    """`name` respelled as a `path_fallback` states, each part in order: lower case, each
+    `replace` pair, then a last part in `drop_suffixes` removed with the `-` before it, where
+    the name has a `-` (click 8.5.0's `command`: `init_data_command` is `init-data`)."""
+    word = name.lower() if rule["lower"] else name
+    for old, new in rule["replace"].items():
+        word = word.replace(old, new)
+    left, separator, last = word.rpartition("-")
+    if separator and last in rule["drop_suffixes"]:
+        word = left
+    return word
 
 
 # The `open_questions` kind a refused declaration is filed under (`resolve/open_questions.py`
