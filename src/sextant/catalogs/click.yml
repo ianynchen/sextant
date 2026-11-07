@@ -60,12 +60,21 @@ matches:
     - { owner: click.core.Group, method: group, router_arg: chain_result, prefix_from: receiver_path }
     - { owner: click.decorators, method: group, router_arg: chain_result, prefix_from: receiver_path }
   # A COMMAND'S PARAMETERS (probe §5) are the `argument` and `option` decorators between the
-  # registration and the function. An argument is required unless a `default` is written or
-  # `required` says otherwise (`Argument.__init__`); an option is optional unless `required`
-  # is written true (`Option.__init__`'s `required: bool = False`), and one with `is_flag`
-  # written true takes no value. The name is the first parameter declaration as written.
+  # registration and the function.
+  # - An ARGUMENT is required unless `required` says otherwise, `nargs=-1` is written (it then
+  #   takes any number of values, none included), or a `default` is written
+  #   (`Argument.__init__`: `required = attrs.get("nargs", 1) > 0` where no default is
+  #   written). Its one declaration is its name: click refuses an argument with more than one
+  #   (`Argument._parse_decls`), and it is typed by place, never by that name, so the name is
+  #   read at position 0 and is the parameter's own.
+  # - An OPTION is optional unless `required` is written true (`Parameter.__init__`'s
+  #   `required: bool = False`), and one with `is_flag` written true takes no value. Its
+  #   declarations are every string written positionally (`all_strings`): each one a user
+  #   types (`-v`, `--verbose`) is a row, and one that is the function's own parameter name
+  #   (`workspace_dir`) names where the value lands, not something typed.
   request_params:
     - { owner: click.decorators, method: argument, kind: argument, name_arg: 0,
-        requirement: required, required_arg: { keyword: required }, default_arg: { keyword: default } }
-    - { owner: click.decorators, method: option, kind: option, name_arg: 0,
+        requirement: required, required_arg: { keyword: required },
+        optional_when: { arg: { keyword: nargs }, equals: -1 }, default_arg: { keyword: default } }
+    - { owner: click.decorators, method: option, kind: option, name_arg: all_strings,
         requirement: optional, required_arg: { keyword: required }, flag_arg: { keyword: is_flag } }

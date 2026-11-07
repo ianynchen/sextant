@@ -1424,8 +1424,14 @@ def _all_string_channels(
     and this reader answered one trailing unresolved tuple for the whole
     call. `List.of` with <=10 elements binds a FIXED-ARITY overload and has
     always arrived as positional literals, so it is untouched by the
-    expansion: the two spellings of one topic list now answer alike."""
-    entries = _expanded_arguments(arguments)
+    expansion: the two spellings of one topic list now answer alike.
+
+    Positional means written without a keyword (design 2026-11-06-reading-decorators §3a): a
+    keyword argument (`help="…"`) is no element of the list, and a `*` value is one that
+    cannot be read. A JVM argument has no keyword, so every one is positional, as before."""
+    entries = _expanded_arguments(
+        [argument for argument in arguments if argument.get("keyword") in (None, "*")]
+    )
     resolved: list[tuple[None, str | None, str]] = [
         (None, str(entry["value"]), "resolved")
         for entry in entries

@@ -12,9 +12,9 @@ whole function name.
 state how a click program's commands are named, which decorators hand the function back, how
 groups nest, and what each parameter decorator says. Each statement cites a rule below.
 
-**What this probe does not settle.** It runs no program. `nargs` on an argument (§5: `nargs=-1`
-makes an argument optional) is read by click and NOT by the catalog, which reads only `default`
-and `required`: such an argument is reported `required`. `version_option`'s first positional
+**What this probe does not settle.** It runs no program. `nargs` on an argument (§5) is read by
+the catalog only as `nargs=-1` (`optional_when`, design §3f): the `nargs=0` that click's
+`nargs > 0` also makes optional is not stated. `version_option`'s first positional
 parameter is the version, not an option name, and `password_option` and `version_option`
 default their names (`--password`, `--version`): the catalog states both hand the function back
 (§3) and gives neither a `request_params` entry. Boolean pairs (`--shout/--no-shout`) are flags
@@ -51,6 +51,9 @@ click 8.5.0 from /Users/yining/programming/ai/sextant/.venv/lib/python3.14/site-
 | 5 an argument with a `default`: not required | `click.core.Argument.__init__` | read |
 | 5 an option: not required unless `required` (`Parameter`'s default) | `click.core.Parameter.__init__` | read |
 | 5 an option hands `required` to `Parameter` | `click.core.Option.__init__` | read |
+| 5 an argument takes exactly one declaration | `click.core.Argument._parse_decls` | read |
+| 5 an option's declaration that is an identifier is the parameter's name | `click.core.Option._parse_decls` | read |
+| 5 an option's every other declaration is a spelling | `click.core.Option._parse_decls` | read |
 | 5 `is_flag`: an option that takes no value | `click.core.Option.__init__` | read |
 
 ## What each rule means for the catalog
@@ -74,7 +77,10 @@ click 8.5.0 from /Users/yining/programming/ai/sextant/.venv/lib/python3.14/site-
    outermost word is the entry point's name (`[project.scripts]`), and with none the named hole
    `<program>`.
 5. **Parameters.** `Argument.__init__`: with `required` not given, the argument is required where
-   no `default` is written (and `nargs` is not 0 or negative, which the catalog does not read),
-   else not. `Parameter.__init__`'s `required: bool = False`, which `Option` reaches through
+   no `default` is written and `nargs` is above 0; the catalog reads `nargs=-1`, the spelling for
+   "any number", as `optional_when` (design §3f). An argument takes exactly one declaration
+   (`_parse_decls`), its name. An option's declaration that is an identifier is its parameter's
+   name; each other one is a spelling a user types (`opts.append(decl)`), which the catalog
+   reads with `name_arg: all_strings` and the handler's parameter names (design §3f). `Parameter.__init__`'s `required: bool = False`, which `Option` reaches through
    `**attrs`: an option is optional unless `required` is written. `Option`'s `is_flag` makes an
    option that takes no value.

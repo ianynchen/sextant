@@ -26,7 +26,7 @@ from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.open_questions import record_open_questions
 from sextant.application.resolve.request_requirements import (
     request_param_calls,
-    request_param_row,
+    request_param_rows,
 )
 from sextant.application.resolve.shapes.arguments import (
     _CAPTURED_AT,
@@ -594,6 +594,17 @@ def _run_entry_points(
         programs=programs_of(workspace, index),
     )
     params = request_param_calls(catalog)
+    # Each handler's own parameter names (`request_param_rows`): a string a parameter
+    # decorator writes that is one of them names the parameter, not an input anyone types.
+    declared = workspace.once(declared_parameters_of)
+
+    def parameter_names(handler: str) -> frozenset[str]:
+        return frozenset(
+            str(parameter["name"])
+            for parameter in declared.get(handler, ())
+            if parameter.get("name") is not None
+        )
+
     # The registrations: a chain end is a command only where its root is one of these. The
     # walk also hands back ends with no declared root (a `__call__` walked back to nothing),
     # which register nothing.
@@ -641,24 +652,24 @@ def _run_entry_points(
                     entry = params.get((str(row.get("owner")), str(row["name"])))
                     if entry is None:
                         continue
-                    kind, name, requirement, resolution = request_param_row(
-                        entry, list(row["arguments"] or [])
-                    )
-                    metadata.append(
-                        {
-                            "protocol": None,
-                            "direction": "inbound",
-                            "method": None,
-                            "path": path,
-                            "caller": handler,
-                            "kind": kind,
-                            "name": name,
-                            "value": None,
-                            "resolution": resolution,
-                            "evidence": str(Evidence.DECLARED),
-                            "requirement": requirement,
-                        }
-                    )
+                    for kind, name, requirement, resolution in request_param_rows(
+                        entry, list(row["arguments"] or []), parameter_names(handler)
+                    ):
+                        metadata.append(
+                            {
+                                "protocol": None,
+                                "direction": "inbound",
+                                "method": None,
+                                "path": path,
+                                "caller": handler,
+                                "kind": kind,
+                                "name": name,
+                                "value": None,
+                                "resolution": resolution,
+                                "evidence": str(Evidence.DECLARED),
+                                "requirement": requirement,
+                            }
+                        )
     rows = [
         {
             "handler": handler,

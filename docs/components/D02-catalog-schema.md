@@ -6233,22 +6233,38 @@ command's handler walk passed (§2's `fluent`), by the engine that derives the c
 ```yaml
 request_params:
   - { owner: click.decorators, method: argument, kind: argument, name_arg: 0,
-      requirement: required, required_arg: { keyword: required }, default_arg: { keyword: default } }
-  - { owner: click.decorators, method: option, kind: option, name_arg: 0,
+      requirement: required, required_arg: { keyword: required },
+      optional_when: { arg: { keyword: nargs }, equals: -1 }, default_arg: { keyword: default } }
+  - { owner: click.decorators, method: option, kind: option, name_arg: all_strings,
       requirement: optional, required_arg: { keyword: required }, flag_arg: { keyword: is_flag } }
 ```
 
 An entry carries `owner`, `method`, `kind`, `name_arg` and `requirement`, and may carry
-`required_arg`, `default_arg` and `flag_arg`, each `*_arg` an argument reference (a position,
-`{keyword: name}` or `{arg: N, keyword: name}`, §2's `fluent`). `kind` is one of
-**`argument`** (a positional word), **`option`** (a named value) and **`flag`** (a named switch
-that takes no value); `requirement` is the framework's default, `required` or `optional`.
-The `name` is the string literal at `name_arg`, else NULL at `unresolved`; a `default_arg` that
-is written makes the row `optional` (click's `Argument`); a `required_arg` written as a literal
-boolean replaces both, and one written as anything else leaves `requirement` NULL; a `flag_arg`
-written as the literal `True` makes the row's kind `flag`. `value` is NULL and `evidence` is
+`required_arg`, `optional_when`, `default_arg` and `flag_arg`, each `*_arg` an argument
+reference (a position, `{keyword: name}` or `{arg: N, keyword: name}`, §2's `fluent`). `kind` is
+one of **`argument`** (a positional word), **`option`** (a named value) and **`flag`** (a named
+switch that takes no value); `requirement` is the framework's default, `required` or `optional`.
+
+- **The name.** With `name_arg` a reference, the string literal there, else NULL at
+  `unresolved`. With **`name_arg: all_strings`** (§1f's rule, design 2026-11-06-reading-decorators
+  §3f, approved), every string the call writes positionally, never a keyword's (`help=`): a
+  string equal to one of the handler's own parameter names names the parameter the value lands
+  in, which nobody types, and each other string is a SPELLING, one row each (an enumerable set is
+  exact). `option("-m", "--message", "message")` over `def f(message)` is the rows `-m` and
+  `--message`; `option("--dry-run")` over `def f(dry_run)` is one. A positional argument not read
+  as a string adds one row with no name, `unresolved`. The rule compares facts with facts and
+  holds no framework's convention; a command whose handler is not read has no parameter names
+  to compare with and gets no rows.
+- **The requirement**, the first answer that applies: a `required_arg` written as a literal
+  boolean (one written as anything else leaves `requirement` NULL); **`optional_when: { arg:
+  <reference>, equals: <literal> }`** (approved, §3f) — the input is optional when that argument
+  is written with that value, of the same type (`nargs=-1`: any number of values, none
+  included); written with no literal value, `requirement` is NULL, not read; a `default_arg`
+  that is written, `optional` (click's `Argument`); else the entry's default.
+- A `flag_arg` written as the literal `True` makes the row's kind `flag`. `value` is NULL and `evidence` is
 `declared`. A parameter's type has no column. Any other key, a `kind` or `requirement` outside
-its set, a reference in another shape, or one call named twice, is refused naming the file.
+its set, a reference in another shape, an `optional_when` that is not exactly `{arg, equals}`
+with a literal, or one call named twice, is refused naming the file.
 
 ## 2l. What an annotation says ABOUT an inbound endpoint — `metadata_from`
 

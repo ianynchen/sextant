@@ -104,6 +104,21 @@ RULES = (
     ),
     ("5 an option hands `required` to `Parameter`", core.Option.__init__, "**attrs: t.Any,"),
     (
+        "5 an argument takes exactly one declaration",
+        core.Argument._parse_decls,
+        "Arguments take exactly one parameter declaration, got",
+    ),
+    (
+        "5 an option's declaration that is an identifier is the parameter's name",
+        core.Option._parse_decls,
+        "if decl.isidentifier():",
+    ),
+    (
+        "5 an option's every other declaration is a spelling",
+        core.Option._parse_decls,
+        "opts.append(decl)",
+    ),
+    (
         "5 `is_flag`: an option that takes no value",
         core.Option.__init__,
         "is_flag: bool | None = None",

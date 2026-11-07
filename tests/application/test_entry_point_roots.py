@@ -697,3 +697,121 @@ def test_the_loader_refuses_a_mapping_argument_it_cannot_read(
     (tmp_path / "x.yml").write_text(catalog, encoding="utf-8")
     with pytest.raises(CatalogError, match=refused):
         YamlCatalogSource(tmp_path).load()
+
+
+def _one_command(tmp_path: Path, decorators: str, signature: str) -> list[tuple[object, ...]]:
+    """The parameter rows of one command `go` under `decorators`, its `def` `signature`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "cli.py": (
+                "import click\n"
+                "N = int('2')\n"
+                "@click.group()\n"
+                "def cli():\n    pass\n"
+                "@cli.command('go')\n" + decorators + f"def go({signature}):\n    pass\n"
+            )
+        },
+    )
+    return [row[1:4] for row in _params(workspace)]
+
+
+@pytest.mark.parametrize(
+    ("decorator", "requirement"),
+    [
+        # Any number of values, none included (design §3f, `optional_when`).
+        ("@click.argument('files', nargs=-1)\n", "optional"),
+        # An explicit `required` still wins.
+        ("@click.argument('files', nargs=-1, required=True)\n", "required"),
+        ("@click.argument('files', nargs=2)\n", "required"),
+        # `nargs` written, not as a literal: not read.
+        ("@click.argument('files', nargs=N)\n", None),
+    ],
+)
+def test_nargs_minus_one_makes_an_argument_optional(
+    tmp_path: Path, decorator: str, requirement: str | None
+):
+    assert _one_command(tmp_path, decorator, "files") == [("argument", "files", requirement)]
+
+
+def test_the_measured_nargs_arguments_read_optional(tmp_path: Path):
+    """The five `nargs=-1` arguments the review measured, as dispatch's `cli.py` and redash's
+    `cli/rq.py` write them (click 8.5.0), one command each."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "cli.py": (
+                "import click\n"
+                "from click import argument\n"
+                "@click.group()\n"
+                "def cli():\n    pass\n"
+                "@cli.command('install')\n@click.argument('plugins', nargs=-1)\n"
+                "def install_plugins(plugins):\n    pass\n"
+                "@cli.command('merge')\n@click.argument('revisions', nargs=-1)\n"
+                "def merge_revisions(revisions):\n    pass\n"
+                "@cli.command('list')\n@click.argument('tasks', nargs=-1)\n"
+                "def list_tasks(tasks):\n    pass\n"
+                "@cli.command('shell')\n"
+                "@click.argument('ipython_args', nargs=-1, type=click.UNPROCESSED)\n"
+                "def shell(ipython_args):\n    pass\n"
+                "@cli.command('worker')\n@argument('queues', nargs=-1)\n"
+                "def worker(queues):\n    pass\n"
+            )
+        },
+    )
+
+    assert {(row[2], row[3]) for row in _params(workspace)} == {
+        ("plugins", "optional"),
+        ("revisions", "optional"),
+        ("tasks", "optional"),
+        ("ipython_args", "optional"),
+        ("queues", "optional"),
+    }
+
+
+@pytest.mark.parametrize(
+    ("decorator", "signature", "rows"),
+    [
+        (
+            "@click.option('-m', '--message', 'message', default=None)\n",
+            "message",
+            [("option", "--message", "optional"), ("option", "-m", "optional")],
+        ),
+        (
+            "@click.option('--dry-run', is_flag=True)\n",
+            "dry_run",
+            [("flag", "--dry-run", "optional")],
+        ),
+        (
+            "@click.option('-v', '--verbose', is_flag=True, help='Say more.')\n",
+            "verbose",
+            [("flag", "--verbose", "optional"), ("flag", "-v", "optional")],
+        ),
+        # An argument's one declaration is its name, though it is the parameter's too.
+        ("@click.argument('path')\n", "path", [("argument", "path", "required")]),
+    ],
+)
+def test_each_spelling_of_an_option_is_a_row(
+    tmp_path: Path, decorator: str, signature: str, rows: list[tuple[object, ...]]
+):
+    """`name_arg: all_strings` reads every string an option writes positionally (never its
+    `help=`); one equal to a parameter of the handler names that parameter, and each other is a
+    spelling a user types, one row each (design §3f)."""
+    assert _one_command(tmp_path, decorator, signature) == rows
+
+
+def test_the_loader_refuses_a_malformed_optional_when(tmp_path: Path):
+    (tmp_path / "x.yml").write_text(
+        _CLICK_LIKE
+        + "  request_params:\n    - { owner: a.b, method: argument, kind: argument, name_arg: 0,"
+        " requirement: required, optional_when: { arg: { keyword: nargs } } }\n",
+        encoding="utf-8",
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    with pytest.raises(CatalogError, match="optional_when"):
+        resolve(
+            workspace,
+            _facts(tmp_path, {"cli.py": "pass\n"}, {}),
+            YamlCatalogSource(tmp_path),
+            PythonScanner().capabilities(),
+        )

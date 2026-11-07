@@ -35,7 +35,7 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.engines.annotation_driven import effective_annotation_uses
 from sextant.application.resolve.routing_conflicts import _discriminators
-from sextant.application.resolve.shapes.arguments import _arg_at
+from sextant.application.resolve.shapes.arguments import _all_string_channels, _arg_at
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.application.resolve.values import argument_reference
 from sextant.domain.redaction import REDACTED, Redactor
@@ -548,8 +548,11 @@ _REQUEST_PARAM_CALL_KEYS = frozenset(
         "required_arg",
         "default_arg",
         "flag_arg",
+        "optional_when",
     }
 )
+# `name_arg`'s rule form (D02 §1f, §2): every string the call writes positionally.
+ALL_STRINGS = "all_strings"
 # What a command-line parameter is (D01 §3's inbound `kind` set, design §3d, approved): a
 # positional word, a named value, or a named switch that takes no value.
 _CALL_KINDS = frozenset({"argument", "option", "flag"})
@@ -592,11 +595,24 @@ def request_param_calls(catalog: Catalog) -> dict[tuple[str, str], dict[str, Any
                 f"got {entry['requirement']!r}"
             )
         for key in ("name_arg", "required_arg", "default_arg", "flag_arg"):
+            if key == "name_arg" and entry[key] == ALL_STRINGS:
+                continue
             if key in entry and argument_reference(entry[key], spelled=False) is None:
                 raise CatalogError(
                     f"{where} `{key}` is a position, `{{keyword: name}}` or "
                     f"`{{arg: N, keyword: name}}`, got {entry[key]!r}"
                 )
+        when = entry.get("optional_when")
+        if when is not None and not (
+            isinstance(when, dict)
+            and set(when) == {"arg", "equals"}
+            and argument_reference(when["arg"], spelled=False) is not None
+            and isinstance(when["equals"], str | int | float | bool)
+        ):
+            raise CatalogError(
+                f"{where} `optional_when` is `{{arg: <reference>, equals: <literal>}}`, "
+                f"got {when!r}"
+            )
         call = (_catalog_symbol(str(entry["owner"])), str(entry["method"]))
         if call in entries:
             raise CatalogError(f"{where} names `{entry['owner']}.{entry['method']}` twice")
@@ -604,33 +620,66 @@ def request_param_calls(catalog: Catalog) -> dict[tuple[str, str], dict[str, Any
     return entries
 
 
-def request_param_row(
-    entry: Mapping[str, Any], arguments: list[dict[str, Any]]
-) -> tuple[str, str | None, str | None, str]:
-    """`(kind, name, requirement, resolution)` of one decorator call an entry names, read off
-    its own arguments (design 2026-11-06-reading-decorators §3d):
+def request_param_rows(
+    entry: Mapping[str, Any], arguments: list[dict[str, Any]], parameters: frozenset[str]
+) -> list[tuple[str, str | None, str | None, str]]:
+    """`(kind, name, requirement, resolution)` of each input one decorator call an entry names
+    declares, read off its own arguments (design 2026-11-06-reading-decorators §3d, §3f):
 
-    - `name` is the string literal at `name_arg`, else NULL at `unresolved` (§5b's rule);
-    - `requirement` is the entry's default; a `default_arg` that is written makes it
-      `optional`; a `required_arg` written as a literal boolean replaces both (click's
-      `Argument`: an explicit `required` wins, else a written `default` makes it optional);
-      one written as anything else is not read, NULL;
-    - `kind` is `flag` where `flag_arg` is written as the literal `True`: the option takes no
+    - **the names.** With `name_arg` a reference, the string literal there, else NULL at
+      `unresolved` (§5b's rule). With `name_arg: all_strings`, every string the call writes
+      positionally (`shapes.arguments._all_string_channels`, the one reader of the rule),
+      less each that is one of the handler's own `parameters`: such a string names the
+      parameter the value lands in, which nobody types. Every other string is a spelling, one
+      row each (an enumerable set is exact), and a positional argument not read as a string
+      adds one row with no name, `unresolved`;
+    - **the requirement**, first answer wins: a `required_arg` written as a literal boolean
+      (one written as anything else is not read, NULL); `optional_when`'s argument written
+      with its value, `optional` (written with no literal value, not read, NULL); a
+      `default_arg` that is written, `optional`; else the entry's default;
+    - `kind` is `flag` where `flag_arg` is written as the literal `True`: the input takes no
       value."""
-    name_argument = _arg_at(arguments, entry["name_arg"])
-    name = _literal(name_argument, "string")
-    requirement: str | None = str(entry["requirement"])
-    if "default_arg" in entry and _arg_at(arguments, entry["default_arg"]) is not None:
-        requirement = "optional"
+    if entry["name_arg"] == ALL_STRINGS:
+        names = [
+            name
+            for _, name, _ in _all_string_channels(arguments)
+            if name is None or name not in parameters
+        ]
+    else:
+        names = [_literal(_arg_at(arguments, entry["name_arg"]), "string")]
+    requirement = _requirement_of_call(entry, arguments)
+    kind = str(entry["kind"])
+    if "flag_arg" in entry and _literal(_arg_at(arguments, entry["flag_arg"]), "boolean") is True:
+        kind = FLAG
+    return [
+        (kind, name, requirement, "resolved" if name is not None else "unresolved")
+        for name in dict.fromkeys(names)
+    ]
+
+
+def _requirement_of_call(entry: Mapping[str, Any], arguments: list[dict[str, Any]]) -> str | None:
+    """`request_param_rows`' requirement, in its order of precedence."""
     if "required_arg" in entry:
         required = _arg_at(arguments, entry["required_arg"])
         if required is not None:
             stated = _literal(required, "boolean")
-            requirement = None if stated is None else ("required" if stated else "optional")
-    kind = str(entry["kind"])
-    if "flag_arg" in entry and _literal(_arg_at(arguments, entry["flag_arg"]), "boolean") is True:
-        kind = FLAG
-    return kind, name, requirement, "resolved" if name is not None else "unresolved"
+            return None if stated is None else ("required" if stated else "optional")
+    when = entry.get("optional_when")
+    if when is not None:
+        written = _arg_at(arguments, when["arg"])
+        if written is not None:
+            value = written.get("value") if written.get("kind") in _LITERAL_KINDS else None
+            if value is None:
+                return None
+            if type(value) is type(when["equals"]) and value == when["equals"]:
+                return "optional"
+    if "default_arg" in entry and _arg_at(arguments, entry["default_arg"]) is not None:
+        return "optional"
+    return str(entry["requirement"])
+
+
+# The literal kinds (D00 §5) an `optional_when` value is read from.
+_LITERAL_KINDS = frozenset({"string", "int", "long", "float", "double", "boolean"})
 
 
 def _literal(argument: Mapping[str, Any] | None, kind: str) -> Any:
