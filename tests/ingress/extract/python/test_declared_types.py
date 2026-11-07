@@ -332,3 +332,39 @@ def test_and_narrows_each_name_it_tests(tmp_path: Path):
     )
     assert _owner_of(tree, "app/run#f", "save") == [USER]
     assert _owner_of(tree, "app/run#f", "send") == [CLIENT]
+
+
+# -- a generic class's written parents (step 6) --------------------------------------------
+
+
+def test_a_class_writes_its_generic_parents_and_its_parameters(tmp_path: Path):
+    """`class Repo(Base[User], Mixin[User, int])` keeps each parent's type arguments (D00 §5a
+    `supertype`, `generic_interfaces`); `class Base(Generic[T])` its parameter `T`."""
+    from sextant.domain.facts import SymbolFact
+
+    tree = _scan(
+        tmp_path,
+        _MODELS + "from typing import Generic, TypeVar\n"
+        "T = TypeVar('T')\n"
+        "K = TypeVar('K')\n"
+        "class Base(Generic[T]):\n    pass\n"
+        "class Mixin(Generic[T, K]):\n    pass\n"
+        "class Plain:\n    pass\n"
+        "class Repo(Base[User], Plain, Mixin[User, int]):\n    pass\n",
+    )
+    classes = {
+        fact.symbol.split(" ")[-1]: fact
+        for _, _, facts in tree
+        for fact in facts
+        if isinstance(fact, SymbolFact) and fact.construct_kind == "class"
+    }
+    base, repo = classes["app/run/Base#"], classes["app/run/Repo#"]
+    assert [p.name for p in base.type_parameters] == ["T"]
+    assert repo.supertype is not None
+    assert (repo.supertype.symbol, [a.symbol for a in repo.supertype.arguments]) == (
+        "app/run/Base#",
+        [USER],
+    )
+    assert [(g.symbol, [a.symbol for a in g.arguments]) for g in repo.generic_interfaces] == [
+        ("app/run/Mixin#", [USER, "builtins/int#"])
+    ]

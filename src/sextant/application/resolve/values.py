@@ -752,6 +752,18 @@ class ValueIndex:
     # HttpClient`, or a module-level one), by bare field symbol, as the fact writes it
     # (`signature.returns`). Read only by the type reader (`_Walk._declared_field`).
     declared_fields: Mapping[str, Mapping[str, Any]] = dataclass_field(default_factory=dict)
+    # Each class's type parameters by name, in order (D00 §5a `type_parameters`), and its
+    # written parents with their type arguments (`supertype`, `generic_interfaces`), by bare
+    # class symbol, for a `c3` module: what a generic class's parameters are on a subclass
+    # (`class ProductRepository(RepositoryBase[Product])`), across files (`_Walk._mapping`).
+    class_parameters: Mapping[str, tuple[str, ...]] = dataclass_field(default_factory=dict)
+    generic_bases: Mapping[str, tuple[Mapping[str, Any], ...]] = dataclass_field(
+        default_factory=dict
+    )
+    # `_Walk._mapping`'s answers, per class, for as long as this lives.
+    mappings: dict[str, dict[str, dict[str, Mapping[str, Any]]] | None] = dataclass_field(
+        default_factory=dict, compare=False, repr=False
+    )
     # `argument_slots`' answers, per (caller, ordinal, callee), for as long as this lives.
     slots_memo: dict[Any, Any] = dataclass_field(default_factory=dict, compare=False, repr=False)
     # `_Walk._namespace`'s answers, per field symbol, for as long as this lives.
@@ -1349,6 +1361,8 @@ def value_index(
         },
         declared_returns={key: value for key, value in declared_returns.items() if value},
         declared_fields={key: value for key, value in declared_fields.items() if value},
+        class_parameters=_class_parameters(workspace) if by_name else {},
+        generic_bases=_generic_bases(workspace) if by_name else {},
     )
 
 
@@ -2495,6 +2509,51 @@ def _only(trail: _Trail, answer: Answer) -> tuple[_Reached, ...]:
 
 def _unresolved(reason: str) -> Answer:
     return Answer(kind=UNRESOLVED, reason=reason)
+
+
+def _class_parameters(workspace: Workspace) -> dict[str, tuple[str, ...]]:
+    """Each class's type parameters by name, in order, by bare class symbol."""
+    found: dict[str, tuple[str, ...]] = {}
+    for row in workspace.query("type_parameters"):
+        bare = bare_descriptor(str(row["symbol"]))
+        written = row["type_parameters"]
+        listed = json.loads(str(written)) if isinstance(written, str) else written
+        if is_type_descriptor(bare) and isinstance(listed, list):
+            found[bare] = tuple(str(one.get("name")) for one in listed if isinstance(one, Mapping))
+    return found
+
+
+def _generic_bases(workspace: Workspace) -> dict[str, tuple[Mapping[str, Any], ...]]:
+    """Each class's written parents that carry type arguments, by bare class symbol."""
+    found: dict[str, tuple[Mapping[str, Any], ...]] = {}
+    for row in workspace.query("generic_bases"):
+        bases: list[Mapping[str, Any]] = []
+        for column in ("supertype", "generic_interfaces"):
+            written = row[column]
+            parsed = json.loads(str(written)) if isinstance(written, str) else written
+            for one in parsed if isinstance(parsed, list) else [parsed]:
+                if isinstance(one, Mapping) and one.get("symbol"):
+                    bases.append(one)
+        found[bare_descriptor(str(row["symbol"]))] = tuple(bases)
+    return found
+
+
+def _substituted(
+    written: Mapping[str, Any], mapping: Mapping[str, Mapping[str, Any]]
+) -> Mapping[str, Any]:
+    """`written` with a type variable at its top, or as a member of its union, replaced by
+    what `mapping` gives it; one `mapping` does not fill is left as it is."""
+    symbol = str(written.get("symbol"))
+    if symbol == _UNION:
+        members = [
+            _substituted(m, mapping)
+            for m in written.get("arguments") or []
+            if isinstance(m, Mapping)
+        ]
+        return {**written, "arguments": members}
+    if not is_type_descriptor(symbol) and symbol in mapping:
+        return mapping[symbol]
+    return written
 
 
 def _declared_classes(written: Mapping[str, Any], dispatch: Dispatch | None) -> tuple[str, ...]:
@@ -4642,12 +4701,16 @@ class _Walk:
             return ()
         name = str(row["name"])
         written = None if body is None else self._index.declared_returns.get(body)
+        if written is not None and body is not None and owner is not None:
+            written = self._mapped(written, owner, owner_of(body))
         if written is None and owner is not None:
             declaring, _ = dispatch.resolve(owner, name, str(row["descriptor"]))
             if declaring is None:
                 return ()
             body = method_descriptor(declaring, name, str(row["descriptor"]))
             written = self._index.declared_returns.get(body)
+            if written is not None:
+                written = self._mapped(written, owner, declaring)
         if written is None or body is None:
             return ()
         if f"{owner_of(body)}{name}." in self._index.static_fields:
@@ -5207,6 +5270,53 @@ class _Walk:
                 )
             ]
         return self._distinct(reached)
+
+    def _mapped(
+        self, written: Mapping[str, Any], owner: str, declaring: str | None
+    ) -> Mapping[str, Any] | None:
+        """`written`, declared on `declaring`, as it reads on an `owner`: each type variable
+        of `declaring` replaced by what `owner`'s written parents give it (`_mapping`). None
+        where two parents give one variable two types: no one answer."""
+        if declaring is None or declaring == owner:
+            return written
+        mappings = self._mapping(owner)
+        if mappings is None:
+            return None
+        return _substituted(written, mappings.get(declaring) or {})
+
+    def _mapping(self, owner: str) -> dict[str, dict[str, Mapping[str, Any]]] | None:
+        """What each generic ancestor of `owner`'s type parameters are on an `owner`, by
+        the typing specification: a written parent `RepositoryBase[Product]` gives
+        `RepositoryBase`'s parameters its arguments by position, read through the mapping of
+        the class that writes it, up every parent with type arguments. None where two paths
+        give one class different arguments."""
+        memo = self._index.mappings
+        if owner in memo:
+            return memo[owner]
+        found: dict[str, dict[str, Mapping[str, Any]]] = {owner: {}}
+        pending = [owner]
+        conflict = False
+        while pending and not conflict:
+            current = pending.pop(0)
+            for base in self._index.generic_bases.get(current, ()):
+                parent = bare_descriptor(str(base.get("symbol")))
+                parameters = self._index.class_parameters.get(parent, ())
+                arguments = [
+                    _substituted(a, found[current])
+                    for a in base.get("arguments") or []
+                    if isinstance(a, Mapping)
+                ]
+                if not parameters or len(parameters) != len(arguments):
+                    continue
+                given = dict(zip(parameters, arguments, strict=True))
+                if parent in found and found[parent] != given:
+                    conflict = True
+                    break
+                if parent not in found:
+                    found[parent] = given
+                    pending.append(parent)
+        memo[owner] = None if conflict else found
+        return memo[owner]
 
     def _declared_field(self, namespace: tuple[str, ...]) -> tuple[Answer, ...]:
         """The classes the fields of `namespace` are declared to hold, for the type reader:

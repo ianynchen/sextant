@@ -236,3 +236,58 @@ def test_a_declaration_naming_another_files_alias_names_no_class(tmp_path: Path)
     site = _site(workspace, "app/b/S#run(sig_dd69782a).", "get")
     assert [row["owner"] for row in _bound(workspace, site) if row["owner"]] == []
     workspace.close()
+
+
+# -- a generic class from another file (step 6) --------------------------------------------
+
+_REPO = (
+    _MODELS
+    + "from typing import Generic, TypeVar\n"
+    + "T = TypeVar('T')\n"
+    + "class Repo[M]:\n"
+    + "    def get(self) -> M:\n"
+    + "        return unknown()\n"
+    + "class Old(Generic[T]):\n"
+    + "    def first(self) -> T | None:\n        return unknown()\n"
+    + "class Mid[X](Repo[X]):\n"
+    + "    pass\n"
+)
+
+
+def test_a_subclass_in_another_file_fills_its_generic_parents_parameters(tmp_path: Path):
+    """`UserRepo(Repo[User])`: `get`'s declared `M` is `User` on a `UserRepo`, through the
+    parent's written type arguments, PEP 695 or `Generic[T]`, one hop or two."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _REPO,
+            "b.py": "from app.a import Repo, Old, Mid, User\n"
+            "class UserRepo(Repo[User]):\n    pass\n"
+            "class OldRepo(Old[User]):\n    pass\n"
+            "class Leaf(Mid[User]):\n    pass\n"
+            "def f(r: UserRepo, o: OldRepo, l: Leaf):\n"
+            "    r.get().save()\n"
+            "    o.first().save()\n"
+            "    l.get().save()\n",
+        },
+    )
+    saves = sorted(
+        (int(str(row["ordinal"])), row["owner"], row["evidence"])
+        for row in workspace.query("bound_receivers")
+        if str(row["caller"]).endswith(_F) and row["owner"]
+    )
+    assert [(owner, evidence) for _, owner, evidence in saves] == [(_USER, "declared")] * 3
+    workspace.close()
+
+
+def test_a_generic_parent_itself_leaves_its_parameter_unfilled(tmp_path: Path):
+    """On a bare `Repo` nothing fills `M`: no answer, never a guessed one."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _REPO,
+            "b.py": "from app.a import Repo\ndef f(r: Repo):\n    r.get().save()\n",
+        },
+    )
+    assert not [row for row in _bound(workspace, _site(workspace, _F, "save")) if row["owner"]]
+    workspace.close()

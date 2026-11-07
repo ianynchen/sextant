@@ -322,6 +322,14 @@ class _Writer(BodyReader):
             {key: value for key, value in fields.items() if value is not None},
         )
 
+    def _generic_parameters(self, owner: str) -> list[TypeParameter]:
+        """A class's type parameters where it declares them without PEP 695's list: its
+        `Generic[...]` or `Protocol[...]` list, else the type variables of its written bases
+        in order, by the typing specification (`class_shape`). Each by name: a variable
+        declared by `TypeVar(...)` elsewhere has a bound this file does not read."""
+        shape = self._local_classes.get(owner)
+        return [] if shape is None else [TypeParameter(name=name) for name in shape.parameters]
+
     def _shape_or_none(self, symbol: str) -> ClassShape | None:
         found = self._local_classes.get(symbol)
         libraries = self._context.index.libraries
@@ -365,6 +373,17 @@ class _Writer(BodyReader):
             for target in scope.types.lookup(_unsubscripted(base_node))
         ):
             kind = ConstructKind.ENUM
+        # Each written parent with its type arguments, where it has any (`RepositoryBase
+        # [Product]`), as the JVM's generic supertype and interfaces (D00 §5a): what a class
+        # of another file's type parameters are, read through this one.
+        generic_bases: list[TypeRef | None] = []
+        for written_base, parent in zip(node.bases, written, strict=False):
+            typed = (
+                type_ref(written_base, generic) if isinstance(written_base, ast.Subscript) else None
+            )
+            generic_bases.append(
+                typed if typed is not None and typed.arguments and typed.symbol == parent else None
+            )
         callees = self._decorators(node, scope)
         # The bases and the class keywords are read where the class is defined.
         for written_base in node.bases:
@@ -382,7 +401,10 @@ class _Writer(BodyReader):
                 superclass=self._full(written[0]) if written else None,
                 interfaces=[self._full(parent) for parent in written[1:]],
                 parents_unread=parents_unread,
-                type_parameters=_type_parameters(node.type_params, generic),
+                type_parameters=_type_parameters(node.type_params, generic)
+                or self._generic_parameters(owner),
+                supertype=generic_bases[0] if generic_bases else None,
+                generic_interfaces=[base for base in generic_bases[1:] if base is not None],
             )
         )
         class_names = bind_names(
