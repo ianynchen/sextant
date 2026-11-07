@@ -27,9 +27,11 @@ def _rows(workspace, site):
     return [(row["owner"], row["evidence"], row["reason"]) for row in _bound(workspace, site)]
 
 
-def test_a_declared_return_answers_where_the_body_gives_no_type(tmp_path: Path):
-    """`load() -> User` returns what an unread library call gives: the declared `User`
-    answers, `declared`, and the edges go to `User.save` and its override."""
+def test_a_declared_return_answers_beside_a_library_value_the_body_returns(tmp_path: Path):
+    """`load() -> User` returns what an unread library call gives (`json.loads`, or a
+    `Mock()`): the declared `User` answers, `declared`, with edges to `User.save` and its
+    override, and the body's own answer, `external`, stays beside it as its own path: the
+    declaration may not hold for it (round 1, item 6)."""
     workspace = _resolved(
         tmp_path,
         {
@@ -38,8 +40,12 @@ def test_a_declared_return_answers_where_the_body_gives_no_type(tmp_path: Path):
         },
     )
     site = _site(workspace, _F, "save")
-    assert _rows(workspace, site) == [(_USER, "declared", None)]
-    assert sorted(str(row["callee"]) for row in _edges(workspace, site)) == [
+    assert sorted(_rows(workspace, site), key=str) == [
+        (_USER, "declared", None),
+        (None, "syntax", "external"),
+    ]
+    assert {row["resolution"] for row in _bound(workspace, site)} == {"partial", "unresolved"}
+    assert sorted(str(row["callee"]) for row in _edges(workspace, site) if row["callee"]) == [
         _PREFIX + "app/a/Admin#save(sig_dd69782a).",
         _PREFIX + "app/a/User#save(sig_dd69782a).",
     ]
@@ -154,8 +160,11 @@ def test_a_call_in_the_callees_own_file_takes_its_declaration_too(tmp_path: Path
             + "def f():\n    load().save()\n",
         },
     )
-    assert _rows(workspace, _site(workspace, "app/a#f(sig_dd69782a).", "save")) == [
-        (_USER, "declared", None)
+    assert sorted(
+        _rows(workspace, _site(workspace, "app/a#f(sig_dd69782a).", "save")), key=str
+    ) == [
+        (_USER, "declared", None),
+        (None, "syntax", "external"),
     ]
     workspace.close()
 

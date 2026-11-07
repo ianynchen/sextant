@@ -4751,7 +4751,9 @@ class _Walk:
             )
             if declared:
                 found.extend((path, one) for one in declared)
-            else:
+            if not declared or answer.reason == EXTERNAL:
+                # A path the body answers from code not scanned (`return Mock()`) is an answer
+                # of its own: it stays beside the declaration, which may not hold for it.
                 found.append((path, answer))
         return tuple(found)
 
@@ -5339,6 +5341,7 @@ class _Walk:
                 for path, answer in reached
                 for typed in (
                     [(path, one) for one in declared]
+                    + ([(path, answer)] if answer.reason == EXTERNAL else [])
                     if answer.kind == UNRESOLVED
                     else [(path, answer)]
                 )
