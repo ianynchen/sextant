@@ -19,9 +19,12 @@ import ast
 import builtins
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from sextant.domain.facts import CallArgument, TypeRef
+
+if TYPE_CHECKING:
+    from sextant.ingress.extract.python.typing_rules import ClassShape
 
 # What a name of THIS file is, where the file can tell. An imported name has no kind:
 # whether `fastapi.FastAPI` is a class or a function is in a file this scanner does not
@@ -85,10 +88,35 @@ class LibraryNames(Protocol):
         ...
 
     def call_returns(
-        self, owner: str, name: str, arguments: Sequence[CallArgument], *, unpacked: bool = False
+        self,
+        owner: str,
+        name: str,
+        arguments: Sequence[CallArgument],
+        *,
+        unpacked: bool = False,
+        receiver: TypeRef | None = None,
+        argument_types: Sequence[TypeRef | None] = (),
+        self_type: TypeRef | None = None,
     ) -> Returned | None:
         """What the call `owner.name(arguments)` returns, or None where nothing says.
-        `unpacked`: the call unpacks `*args`, so how many arguments it has is not known."""
+        `unpacked`: the call unpacks `*args`, so how many arguments it has is not known.
+        `receiver`: the type written for the receiver, whose type arguments fill the
+        class's type variables; `argument_types`: each argument's type where it is known;
+        `self_type`: what `Self` is, where the receiver is a subclass's."""
+        ...
+
+    def construct(
+        self,
+        owner: str,
+        arguments: Sequence[CallArgument],
+        argument_types: Sequence[TypeRef | None],
+    ) -> TypeRef | None:
+        """The type the constructor call `owner(arguments)` makes, with its type arguments
+        filled by the arguments, or None."""
+        ...
+
+    def shape_of(self, symbol: str) -> "ClassShape | None":
+        """A library class's type parameters, written bases and members, or None."""
         ...
 
 

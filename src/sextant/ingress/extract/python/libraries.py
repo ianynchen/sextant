@@ -31,6 +31,14 @@ or downloaded: a library file is parsed with `ast`, as a module file is.
   where the overloads that match give it different parameter types, leaves the closed
   list of what those overloads return (`narrowed`). A literal is not callable, so it
   never fits a `Callable` parameter.
+- **Type variables (OI-324):** a return written with a type variable takes the type the
+  receiver's type arguments give it (`list[User].pop()` is a `User`), through the class's
+  written bases to the one that defines the method (`dict_items[K, V].__iter__` is
+  `ItemsView`'s), with `Self` the receiver's own type; and a function's own type variable
+  takes the type of the argument that fills it (`sorted(users)` is a `list[User]`). The
+  overload is chosen first; a type variable nothing fills leaves the call untyped. An
+  argument whose type the scanner knows (a parameter written `int`, a slice) is checked
+  against the overloads' parameters by class, as a literal is by value.
 - **Callables (design 2026-11-06-reading-decorators §3b):** a return written
   `Callable[[P, ...], R]` is a callable whose call gives `R` (a decorator factory's
   result: `click.group()` returns `Callable[[F], Group]`). `R` is a class, or a type
@@ -48,7 +56,7 @@ import re
 import sys
 import tomllib
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from sextant.application.ports.detector import LibraryRoot
@@ -82,8 +90,18 @@ from sextant.ingress.extract.python.imports import (
 )
 from sextant.ingress.extract.python.structure import file_facts
 from sextant.ingress.extract.python.typing_rules import (
+    ANY,
     BUILTINS,
+    NONE,
+    SELF,
+    UNION,
+    ClassShape,
+    Hierarchy,
     TypeScope,
+    class_shape,
+    parameter_mapping,
+    substitute,
+    type_ref,
     written_type,
 )
 
@@ -105,6 +123,13 @@ _TYPE_KINDS = frozenset(
 _LITERAL_KINDS = frozenset({"string", "int", "long", "boolean", "null", "concat"})
 # The builtin classes a literal argument is checked against, and the literal types each
 # accepts (`bool` is a subtype of `int`, and `int` is accepted where `float` is written).
+# The classes a value of a builtin class is accepted as beyond its own lookup order (the
+# typing specification's promotions: `int` where `float` is written).
+_PROMOTIONS = {
+    "builtins/int#": ("builtins/float#", "builtins/complex#"),
+    "builtins/bool#": ("builtins/float#", "builtins/complex#"),
+    "builtins/float#": ("builtins/complex#",),
+}
 _ACCEPTS: dict[str, tuple[type, ...]] = {
     "bool": (bool,),
     "int": (int,),
@@ -205,6 +230,12 @@ class Libraries:
         # A call's callee, read once however many calls name it (GUIDELINES §8.7).
         self._functions: dict[tuple[str, str], _Function | None] = {}
         self._recording = True
+        # Each library class's type parameters, bases and members, read once, and the
+        # lookup orders they give.
+        self._shapes: dict[str, ClassShape | None] = {}
+        # Whether a library name another module imports is a type variable, read once.
+        self._variables: dict[str, bool] = {}
+        self.hierarchy = Hierarchy(self.shape_of)
 
     @property
     def identity(self) -> str:
@@ -232,11 +263,23 @@ class Libraries:
         return None
 
     def call_returns(
-        self, owner: str, name: str, arguments: Sequence[CallArgument], *, unpacked: bool = False
+        self,
+        owner: str,
+        name: str,
+        arguments: Sequence[CallArgument],
+        *,
+        unpacked: bool = False,
+        receiver: TypeRef | None = None,
+        argument_types: Sequence[TypeRef | None] = (),
+        self_type: TypeRef | None = None,
     ) -> Returned | None:
-        key = (owner, name)
+        defining = self._defining_class(owner, name, receiver, self_type)
+        if defining is None:
+            return None
+        found_in, mapping = defining
+        key = (found_in, name)
         if key not in self._functions:
-            self._functions[key] = self._function(owner, name)
+            self._functions[key] = self._function(found_in, name)
         known = self._functions[key]
         if known is None:
             return None
@@ -244,27 +287,132 @@ class Libraries:
         recording, self._recording = self._recording, False
         inside, self._inside = self._inside, True
         try:
-            found = self._choose(
+            scope = replace(self._scope(table), self_type=SELF)
+            chosen = self._choose(
                 defined,
                 list(arguments),
-                self._scope(table),
+                list(argument_types),
+                scope,
                 method=target.member is not None,
                 unpacked=unpacked or any(a.keyword == _UNPACKED for a in arguments),
             )
+            found = None if chosen is None else self._filled(chosen, argument_types, mapping, scope)
         finally:
             self._recording = recording
             self._inside = inside
-        if found is None or not all(self._gives_a_class(t) for t in found.types):
-            # A type variable (`-> _T`), a special form or a name no library read defines:
-            # what the call returns depends on more than the signature says.
+        if found is None:
+            # A type variable (`-> _T`) nothing fills, a special form or a name no library
+            # read defines: what the call returns depends on more than the signature says.
             return None
         return found
 
-    def _gives_a_class(self, returned: TypeRef | CallableType) -> bool:
+    def construct(
+        self,
+        owner: str,
+        arguments: Sequence[CallArgument],
+        argument_types: Sequence[TypeRef | None],
+    ) -> TypeRef | None:
+        """The type a library class's constructor call makes, its type parameters filled
+        by the arguments its own `__new__` or `__init__` takes (`enumerate(users)` is an
+        `enumerate[User]`); None where the class has none or one is not filled."""
+        shape = self.shape_of(owner)
+        if shape is None or not shape.parameters:
+            return None
+        own = TypeRef(symbol=owner, arguments=[TypeRef(symbol=p) for p in shape.parameters])
+        for method in ("__new__", "__init__"):
+            if method not in shape.members:
+                continue
+            known = self._function(owner, method)
+            if known is None:
+                return None
+            table, _, defined = known
+            recording, self._recording = self._recording, False
+            inside, self._inside = self._inside, True
+            try:
+                scope = replace(self._scope(table), self_type=SELF)
+                chosen = self._choose(
+                    defined,
+                    list(arguments),
+                    list(argument_types),
+                    scope,
+                    method=True,
+                    unpacked=any(a.keyword in (_UNPACKED, "*") for a in arguments),
+                )
+                if chosen is None or len(chosen) != 1:
+                    return None
+                ((node, bound),) = chosen
+                solved = self._solve(bound, argument_types, scope)
+                written = node.returns
+                made = (
+                    written_type(written, scope)
+                    if method == "__new__" and written is not None
+                    else TypeRef(symbol=SELF)
+                )
+            finally:
+                self._recording = recording
+                self._inside = inside
+            if made.symbol == SELF:
+                made = own
+            if made.symbol != owner:
+                return None
+            filled = substitute(made, solved)
+            if filled is None or len(filled.arguments) != len(shape.parameters):
+                return None
+            return filled
+        return None
+
+    def shape_of(self, symbol: str) -> ClassShape | None:
+        """A library class's type parameters, written bases and members; None for a name
+        that is not a library class."""
+        if symbol in self._shapes:
+            return self._shapes[symbol]
+        self._shapes[symbol] = None
+        target = self._target_of(symbol)
+        table = None if target is None or target.member is None else self._table(target.module)
+        node = None if table is None or target is None else self._class_node(table, target)
+        if table is not None and node is not None:
+            inside, self._inside = self._inside, True
+            try:
+                body = list(_statements(node.body, self._python))
+                self._shapes[symbol] = class_shape(node, self._scope(table), body)
+            finally:
+                self._inside = inside
+        return self._shapes[symbol]
+
+    def _defining_class(
+        self, owner: str, name: str, receiver: TypeRef | None, self_type: TypeRef | None
+    ) -> tuple[str, dict[str, TypeRef]] | None:
+        """The class whose definition of `name` a call on `owner` runs, by its lookup order,
+        with what the receiver's type gives that class's type parameters (and `Self`). A
+        module, or a class whose order is not read, is looked in only itself."""
+        shape = self.shape_of(owner)
+        if shape is None:
+            return owner, {}
+        instance = receiver if receiver is not None and receiver.symbol == owner else None
+        instance = instance or TypeRef(symbol=owner)
+        itself = (self_type or instance).model_copy(
+            update={"nullable": None, "nullable_resolution": None}
+        )
+        given = parameter_mapping(instance, shape)
+        if name in shape.members:
+            return owner, {**given, SELF: itself}
+        order = self.hierarchy.order(owner)
+        for entry in order or []:
+            entry_shape = self.shape_of(entry.symbol)
+            if entry_shape is None or name not in entry_shape.members:
+                continue
+            filled = substitute(entry, given) or TypeRef(symbol=entry.symbol)
+            return entry.symbol, {**parameter_mapping(filled, entry_shape), SELF: itself}
+        return None if order is not None else (owner, {})
+
+    def _gives_a_class(self, returned: TypeRef | CallableType, given: frozenset[str]) -> bool:
         """A class; or a callable whose call gives a class, or a type variable that one of
-        its own parameters fills, so the call's argument decides it."""
+        its own parameters fills, so the call's argument decides it. A type the scanned
+        code wrote and a type variable took (`given`) is one too; so is a union of them."""
         if isinstance(returned, TypeRef):
-            return self._names_a_class(returned.symbol)
+            if returned.symbol == UNION:
+                return all(self._gives_a_class(member, given) for member in returned.arguments)
+            return returned.symbol in given or self._names_a_class(returned.symbol)
         result = returned.returns.symbol
         if names_a_type(result):
             return self._names_a_class(result)
@@ -295,20 +443,22 @@ class Libraries:
         self,
         defined: list[ast.FunctionDef | ast.AsyncFunctionDef],
         arguments: list[CallArgument],
+        argument_types: list[TypeRef | None],
         scope: TypeScope,
         *,
         method: bool,
         unpacked: bool,
-    ) -> Returned | None:
-        """The return of the one overload the arguments choose, else the closed list of
-        the returns of those they leave. A function with no `@overload` that branches
-        define differently is several definitions: each is one of the closed list."""
+    ) -> list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, dict[int, ast.expr | None]]] | None:
+        """The one overload the arguments choose, else the closed list of those they leave,
+        each with its parameters' annotations by argument position. A function with no
+        `@overload` that branches define differently is several definitions: each is one
+        of the closed list."""
         overloads = [node for node in defined if _is_overload(node)]
         alternatives = not overloads
         candidates = overloads or defined
         if unpacked:
             # `*args` or `**options`: how many arguments, and which names, is not known.
-            return self._returned(candidates, scope)
+            return [(node, {}) for node in candidates]
         matches: list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, dict[int, ast.expr | None]]]
         matches = []
         # Per match, the positions whose fit this rule cannot decide.
@@ -322,6 +472,13 @@ class Libraries:
                 for position, annotation in bound.items()
                 if position != _RECEIVER and _value(arguments[position]) is not _UNKNOWN_VALUE
             }
+            fits |= {
+                position: self._fits_type(typed, annotation, scope, _DEPTH)
+                for position, annotation in bound.items()
+                if position != _RECEIVER
+                and _value(arguments[position]) is _UNKNOWN_VALUE
+                and (typed := _type_at(argument_types, position)) is not None
+            }
             if any(fit is False for fit in fits.values()):
                 continue
             undecided |= {position for position, fit in fits.items() if fit is None}
@@ -329,30 +486,214 @@ class Libraries:
         if not matches:
             return None
         if alternatives:
-            return self._returned([node for node, _ in matches], scope)
+            return matches
         # An argument of unknown type, or one whose fit is not decided here (an alias or a
         # protocol this rule does not read), decides nothing where every match gives its
         # parameter the same written type; then the first match is the one a type checker
         # takes. The receiver is one such argument: an overload that writes a type for
         # `self` (`def lower(self: LiteralString)`) is chosen by it.
-        unknown = [p for p, argument in enumerate(arguments) if _value(argument) is _UNKNOWN_VALUE]
+        unknown = [
+            p
+            for p, argument in enumerate(arguments)
+            if _value(argument) is _UNKNOWN_VALUE and _type_at(argument_types, p) is None
+        ]
         deciding = any(
             len({_text(bound.get(position)) for _, bound in matches}) > 1
             for position in [_RECEIVER, *unknown, *sorted(undecided)]
         )
-        return self._returned([node for node, _ in (matches if deciding else matches[:1])], scope)
+        return matches if deciding else matches[:1]
 
-    def _returned(
-        self, chosen: list[ast.FunctionDef | ast.AsyncFunctionDef], scope: TypeScope
+    def _filled(
+        self,
+        chosen: list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, dict[int, ast.expr | None]]],
+        argument_types: Sequence[TypeRef | None],
+        mapping: dict[str, TypeRef],
+        scope: TypeScope,
     ) -> Returned | None:
+        """What the chosen definitions return, each type variable filled by the receiver's
+        type (`mapping`) or by the argument that fills a function's own one; None where one
+        is left, or a return is not a class."""
         types: list[TypeRef | CallableType] = []
-        for node in chosen:
+        for node, bound in chosen:
             if node.returns is None:
                 return None
             returned = _callable(node.returns, scope) or written_type(node.returns, scope)
+            if isinstance(returned, TypeRef):
+                returned = self._unimported(returned)
+                given = {**self._solve(bound, argument_types, scope), **mapping}
+                filled = substitute(returned, given)
+                if filled is None or not self._gives_a_class(filled, _symbols_of(given)):
+                    return None
+                returned = filled
+            elif not self._gives_a_class(returned, frozenset()):
+                return None
             if returned not in types:
                 types.append(returned)
         return Returned(tuple(types), "narrowed" if len(types) > 1 else "resolved")
+
+    def _solve(
+        self,
+        bound: dict[int, ast.expr | None],
+        argument_types: Sequence[TypeRef | None],
+        scope: TypeScope,
+    ) -> dict[str, TypeRef]:
+        """A function's own type variables, each the type of the argument whose parameter
+        writes it: the parameter itself (`x: _T`), or a class of the argument's lookup
+        order (`Iterable[_T]` for a `list[User]`). A variable two arguments fill
+        differently is left unfilled."""
+        found: dict[str, TypeRef] = {}
+        clashes: set[str] = set()
+        for position, annotation in bound.items():
+            typed = _type_at(argument_types, position)
+            if typed is None or annotation is None:
+                continue
+            written = type_ref(annotation, scope)
+            if written is not None:
+                self._match(self._unimported(written), typed, found, clashes, _DEPTH)
+        return {name: typed for name, typed in found.items() if name not in clashes}
+
+    def _match(
+        self,
+        written: TypeRef,
+        actual: TypeRef,
+        found: dict[str, TypeRef],
+        clashes: set[str],
+        depth: int,
+    ) -> None:
+        if depth == 0 or actual.symbol in (ANY, UNION):
+            return
+        if not names_a_type(written.symbol):
+            bare = actual.model_copy(update={"nullable": None, "nullable_resolution": None})
+            if found.setdefault(written.symbol, bare) != bare:
+                clashes.add(written.symbol)
+            return
+        if not written.arguments:
+            return
+        order = self.hierarchy.order(actual.symbol)
+        shape = self.shape_of(actual.symbol)
+        if order is None or shape is None:
+            return
+        given = parameter_mapping(actual, shape)
+        for entry in order:
+            if entry.symbol != written.symbol:
+                continue
+            filled = substitute(entry, given)
+            if filled is not None and len(filled.arguments) == len(written.arguments):
+                for part, held in zip(written.arguments, filled.arguments, strict=True):
+                    self._match(part, held, found, clashes, depth - 1)
+            return
+
+    def _unimported(self, written: TypeRef) -> TypeRef:
+        """`written` with each type variable another library module defines, which the
+        import reads as a name of that module (`from _typeshed import
+        SupportsRichComparisonT`), as the bare type variable it is."""
+        arguments = [self._unimported(argument) for argument in written.arguments]
+        if self._is_imported_variable(written.symbol):
+            return TypeRef(symbol=_member_name(written.symbol), nullable=written.nullable)
+        if arguments == list(written.arguments):
+            return written
+        return written.model_copy(update={"arguments": arguments})
+
+    def _is_imported_variable(self, symbol: str) -> bool:
+        if symbol in self._variables:
+            return self._variables[symbol]
+        self._variables[symbol] = False
+        target = self._target_of(symbol) if names_a_type(symbol) else None
+        if target is not None and target.member is not None and "." not in target.member:
+            for defined in self._defining(target.module, target.member, set()):
+                table = None if defined.member is None else self._table(defined.module)
+                values = [] if table is None else table.values.get(str(defined.member), [])
+                if len(values) == 1 and _makes_type_variable(values[0]):
+                    self._variables[symbol] = True
+        return self._variables[symbol]
+
+    def _fits_type(
+        self, typed: TypeRef, annotation: ast.expr | None, scope: TypeScope, depth: int
+    ) -> bool | None:
+        """Whether a value of the class `typed` fits the written type, by class: True where
+        the class is it or has it in its lookup order, False where its lookup order is read
+        and lacks it and it is not a protocol the class may satisfy (one of its members is
+        missing), else None."""
+        if annotation is None:
+            return True
+        if depth == 0:
+            return None
+        if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+            return _any_fits(
+                [
+                    self._fits_type(typed, part, scope, depth - 1)
+                    for part in _alternatives(annotation)
+                ]
+            )
+        if isinstance(annotation, ast.Constant):
+            if annotation.value is None:
+                return typed.symbol == NONE
+            if isinstance(annotation.value, str):
+                try:
+                    written = ast.parse(annotation.value.strip(), mode="eval").body
+                except SyntaxError:
+                    return None
+                return self._fits_type(typed, written, scope, depth - 1)
+            return None
+        if isinstance(annotation, ast.Subscript):
+            targets = scope.lookup(annotation.value) if _is_name(annotation.value) else ()
+            if len(targets) != 1:
+                return None
+            target = targets[0]
+            parts = (
+                list(annotation.slice.elts)
+                if isinstance(annotation.slice, ast.Tuple)
+                else [annotation.slice]
+            )
+            if target.module in _TYPING and target.member in ("Optional", "Union"):
+                held = [*parts, ast.Constant(None)] if target.member == "Optional" else parts
+                return _any_fits([self._fits_type(typed, p, scope, depth - 1) for p in held])
+            if target.module in _TYPING and target.member == "Annotated":
+                return self._fits_type(typed, parts[0], scope, depth - 1)
+            if (
+                target.module in _TYPING
+                or _is_callable_form(target)
+                or target == Target(BUILTINS, "type")
+            ):
+                return None
+            # A generic class (`slice[int]`): the value fits its class or does not.
+            return self._fits_type(typed, annotation.value, scope, depth - 1)
+        if not _is_name(annotation):
+            return None
+        targets = scope.lookup(annotation)
+        if len(targets) != 1:
+            return None
+        target = targets[0]
+        if target.kind == "type_variable" or _is_callable_form(target):
+            return None
+        if target.module in _TYPING and target.member in ("Any", "LiteralString"):
+            # A `str` may or may not be a literal one.
+            return True if target.member == "Any" else None
+        named = type_ref(annotation, scope)
+        if named is None or not names_a_type(named.symbol) or named.symbol == ANY:
+            alias = self._alias(target)
+            if alias is None:
+                return None
+            return self._fits_type(typed, alias[0], alias[1], depth - 1)
+        wanted = named.symbol
+        if wanted == typed.symbol or wanted == "builtins/object#":
+            return True
+        if wanted in _PROMOTIONS.get(typed.symbol, ()):
+            return True
+        order = self.hierarchy.order(typed.symbol)
+        if order is None:
+            return None
+        if any(entry.symbol == wanted for entry in order):
+            return True
+        shape = self.shape_of(wanted)
+        if shape is None:
+            return None
+        defined: set[str] = set().union(*(self._members(entry.symbol) for entry in order))
+        return None if shape.methods <= defined else False
+
+    def _members(self, symbol: str) -> frozenset[str]:
+        shape = self.shape_of(symbol)
+        return frozenset() if shape is None else shape.members
 
     def _fits(
         self, value: object, annotation: ast.expr | None, scope: TypeScope, depth: int
@@ -641,6 +982,23 @@ class Libraries:
                 return None
             body = found.body
         return body
+
+    def _class_node(self, table: _Table, target: Target) -> ast.ClassDef | None:
+        body: list[ast.stmt] = table.tree.body
+        found: ast.ClassDef | None = None
+        for part in (target.member or "").split("."):
+            found = next(
+                (
+                    node
+                    for node in _statements(body, self._python)
+                    if isinstance(node, ast.ClassDef) and node.name == part
+                ),
+                None,
+            )
+            if found is None:
+                return None
+            body = found.body
+        return found
 
     def _target_of(self, symbol: str) -> Target | None:
         """The module or class a type symbol of a library names."""
@@ -1215,6 +1573,35 @@ _UNPACKED = "**"
 # Where `_bind_arguments` puts the receiver's written type (`self`), beside the arguments'
 # positions.
 _RECEIVER = -1
+
+
+def _makes_type_variable(value: ast.expr) -> bool:
+    """`TypeVar("T", ...)`, `ParamSpec(...)` or `TypeVarTuple(...)`, the typing
+    specification's three."""
+    if not isinstance(value, ast.Call):
+        return False
+    called = value.func
+    name = called.id if isinstance(called, ast.Name) else getattr(called, "attr", None)
+    return name in ("TypeVar", "ParamSpec", "TypeVarTuple")
+
+
+def _member_name(symbol: str) -> str:
+    """The bare name of a library member's type symbol: `T` for `_typeshed/T#`."""
+    return without_type_marker(symbol).rpartition("/")[2]
+
+
+def _type_at(types: Sequence[TypeRef | None], position: int) -> TypeRef | None:
+    return types[position] if 0 <= position < len(types) else None
+
+
+def _symbols_of(mapping: dict[str, TypeRef]) -> frozenset[str]:
+    """The classes the types in `mapping` name, a union's members among them."""
+    found: set[str] = set()
+    for typed in mapping.values():
+        found.add(typed.symbol)
+        if typed.symbol == UNION:
+            found.update(member.symbol for member in typed.arguments)
+    return frozenset(found)
 
 
 def _value(argument: CallArgument) -> object:

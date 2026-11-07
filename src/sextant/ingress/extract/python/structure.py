@@ -45,6 +45,7 @@ from sextant.ingress.extract.python.calls import (
     is_stub_body,
 )
 from sextant.ingress.extract.python.imports import (
+    Binding,
     CallableType,
     Target,
     bind_names,
@@ -55,7 +56,10 @@ from sextant.ingress.extract.python.typing_rules import (
     ANY,
     BUILTINS,
     UNANNOTATED,
+    ClassShape,
+    Hierarchy,
     TypeScope,
+    class_shape,
     type_parameter_name,
     type_ref,
     type_symbol,
@@ -119,6 +123,32 @@ def file_facts(tree: ast.Module, context: FileContext, last_line: int) -> FileFa
         "so none is written"
     )
     return FileFacts(writer.facts, writer.not_read, [note])
+
+
+def _class_shapes(
+    body: list[ast.stmt], here: str, names: dict[str, Binding], types: TypeScope
+) -> dict[str, ClassShape]:
+    """The type parameters, written bases and members of each class the module body and
+    its class bodies define, read before any body so a use above the class sees it. A name
+    bound more than once (a class defined on two branches) is not one class: none."""
+    found: dict[str, ClassShape] = {}
+    seen: set[str] = set()
+    pending: list[tuple[str | None, ast.ClassDef]] = [
+        (None, node) for node in body if isinstance(node, ast.ClassDef)
+    ]
+    while pending:
+        outer, node = pending.pop(0)
+        path = f"{outer}.{node.name}" if outer else node.name
+        symbol = type_symbol(Target(here, path))
+        single = outer is not None or len(names.get(node.name, Binding(())).targets) == 1
+        if symbol in seen or not single:
+            found.pop(symbol, None)
+            seen.add(symbol)
+            continue
+        seen.add(symbol)
+        found[symbol] = class_shape(node, types, node.body)
+        pending += [(path, inner) for inner in node.body if isinstance(inner, ast.ClassDef)]
+    return found
 
 
 def _rebound_names(tree: ast.Module) -> set[str]:
@@ -193,6 +223,8 @@ class _Writer(BodyReader):
         self._module_types = module_types
         self._module_writes = {}
         self.consulted = {}
+        self._local_classes = {}
+        self._hierarchy = Hierarchy(self._shape_or_none)
 
     def _full(self, descriptor: str) -> str:
         return self._context.prefix + descriptor
@@ -206,11 +238,19 @@ class _Writer(BodyReader):
             tree.body, here, is_package=self._context.is_package, index=self._context.index
         )
         types = TypeScope(names=names, here=here, index=self._context.index)
+        self._local_classes = _class_shapes(tree.body, here, names, types)
         self._symbol(owner, ConstructKind.MODULE, None, 1, last_line)
         clinit = self._clinit(owner, 1, last_line)
         scope = Scope(owner, types, self._body(clinit))
         self._statements(tree.body, scope)
         self._positions(scope)
+
+    def _shape_or_none(self, symbol: str) -> ClassShape | None:
+        found = self._local_classes.get(symbol)
+        libraries = self._context.index.libraries
+        if found is None and libraries is not None:
+            found = libraries.shape_of(symbol)
+        return found
 
     def _clinit(self, owner: str, start: int, end: int) -> str:
         descriptor = method_descriptor(owner, CLINIT, PY_SIGNATURE)
