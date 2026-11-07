@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from sextant import api
+from sextant.api import FirstAccepting
 from sextant.application.ports.detector import (
     ModuleModel,
     NoModulesFound,
@@ -17,6 +18,8 @@ from sextant.application.ports.detector import (
     detect_repository,
 )
 from sextant.application.ports.selection import NoAdapterError
+from sextant.ingress.detect.gradle import GradleDetector
+from sextant.ingress.detect.maven import MavenDetector
 from sextant.ingress.detect.python import PythonDetector
 
 
@@ -144,6 +147,59 @@ def test_a_reactor_naming_one_module_stays_multi_module(tmp_path: Path):
     maven = _StubBuild("pom.xml", [_module(tmp_path / "child", "child")], multi=True)
 
     assert detect_repository([maven], tmp_path).multi_module is True
+
+
+def test_two_builds_of_one_language_on_one_root_are_one_choice_the_first(tmp_path: Path):
+    """Ruling R32: detectors of one language keep main's precedence. A `pom.xml` and a
+    `build.gradle` in one folder were read by Maven alone on main (`select_detector`), and
+    still are: the second is never run, so neither its failure nor a clashing id refuses the
+    analysis."""
+    _write(tmp_path / "pom.xml")
+    _write(tmp_path / "gradle.marker")
+    maven = _StubBuild("pom.xml", [_module(tmp_path, "shop")])
+    gradle = _StubFailing()
+
+    model = detect_repository([FirstAccepting(maven, gradle)], tmp_path)
+
+    assert [(m.module_id, m.kind) for m in model.modules] == [("shop", "maven")]
+
+
+def test_the_second_build_of_one_language_reads_a_root_the_first_does_not_accept(
+    tmp_path: Path,
+):
+    _write(tmp_path / "gradle.marker")
+    maven = _StubBuild("pom.xml", [_module(tmp_path, "shop")])
+    gradle = _StubBuild("gradle.marker", [_module(tmp_path, "shop", "gradle")])
+
+    model = detect_repository([FirstAccepting(maven, gradle)], tmp_path)
+
+    assert [(m.module_id, m.kind) for m in model.modules] == [("shop", "gradle")]
+
+
+def test_a_jvm_build_and_a_python_project_of_two_languages_are_both_read(tmp_path: Path):
+    """R7 kept: detectors of different languages all run."""
+    _write(tmp_path / "pom.xml")
+    _write(tmp_path / "gradle.marker")
+    _write(tmp_path / "svc" / "pyproject.toml", '[project]\nname = "svc"\nversion = "1"\n')
+    _write(tmp_path / "svc" / "app.py", "x = 1\n")
+    maven = _StubBuild("pom.xml", [_module(tmp_path, "com.acme:app")])
+    gradle = _StubBuild("gradle.marker", [_module(tmp_path, "com.acme:app", "gradle")])
+
+    model = detect_repository([FirstAccepting(maven, gradle), PythonDetector()], tmp_path)
+
+    assert [(m.module_id, m.kind) for m in model.modules] == [
+        ("com.acme:app", "maven"),
+        ("svc", "pyproject"),
+    ]
+
+
+def test_the_registry_reads_the_jvm_builds_as_one_choice_maven_first():
+    """The registry main's `select_detector` chose among (Maven before Gradle) is one
+    choice; the Python detector is beside it."""
+    jvm, python = api._DETECTORS
+    assert isinstance(jvm, FirstAccepting)
+    assert [type(detector) for detector in jvm.detectors] == [MavenDetector, GradleDetector]
+    assert isinstance(python, PythonDetector)
 
 
 class _StubFailing:

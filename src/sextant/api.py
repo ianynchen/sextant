@@ -140,6 +140,7 @@ from sextant.application.ports.detector import (
     ModuleModel,
     RepositoryModel,
     detect_repository,
+    select_detector,
 )
 from sextant.application.ports.enrichment import EnrichmentAgentError
 from sextant.application.ports.progress import NullProgress, Progress
@@ -423,11 +424,35 @@ class _EnrichOutcome:
 # never `click.ClickException` directly).
 # --------------------------------------------------------------------------
 
+
+class FirstAccepting:
+    """Detectors of one language, of which one reads a repository: the first that accepts
+    it (`select_detector`). Ruling R32: `detect_repository` runs every detector, so two
+    builds of one language in one folder (a `pom.xml` beside a `build.gradle`) would both
+    run, and the second's failure or a clashing id would refuse what one build read before.
+    Grouped, they keep the registry's order as the statement of which is authoritative,
+    exactly as before detectors of other languages were added."""
+
+    def __init__(self, *detectors: Detector) -> None:
+        self.detectors = detectors
+
+    def accepts(self, path: Path) -> bool:
+        return any(detector.accepts(path) for detector in self.detectors)
+
+    def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
+        return select_detector(self.detectors, path).detect(path, allow_resolve=allow_resolve)
+
+
 # The one real `Detector` registry (2M Task 2 review): a future detector
 # added to only one of two hand-kept lists would send the other path to
 # `detect_repository`'s own uncaught `NoAdapterError`. Every detector that `accepts()`
-# is run and the modules are merged, so order only sets the order of the modules.
-_DETECTORS: list[Detector] = [MavenDetector(), GradleDetector(), PythonDetector()]
+# is run and the modules are merged, so order only sets the order of the modules. The JVM
+# builds are one choice (ruling R32): order is precedence among them (`select_detector`
+# picks the first that `accepts()`): Maven before Gradle, as before Python was added.
+_DETECTORS: list[Detector] = [
+    FirstAccepting(MavenDetector(), GradleDetector()),
+    PythonDetector(),
+]
 
 
 def _modules_json_path(path: Path) -> Path:

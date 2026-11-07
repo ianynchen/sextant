@@ -24,7 +24,9 @@ here would restate those documents rather than add anything.
   a results folder each (`<folder>/.sextant/<name>`), and modules with one id keep both, the id
   followed by `@<folder>`. A detector that fails (a malformed `pom.xml`, a Gradle run that
   fails) still stops detection with its own message; only a detector with no module to report
-  is passed over when another found some.
+  is passed over when another found some. The JVM builds stay one choice (ruling R32): where a
+  root carries both a `pom.xml` and a `build.gradle` (`examples/spring-petclinic`), Maven reads
+  it and Gradle is not run, as before; detectors of different languages all run.
 
 ### Added
 
