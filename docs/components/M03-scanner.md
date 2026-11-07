@@ -320,6 +320,29 @@ comprehensions included:
   names that type; any other call on a value names the receiver's value id and leaves the
   owner to the resolver;
 - `with x as y` is the call `x.__enter__()`, and `y` is its result;
+- `for x in xs` is the call `xs.__iter__()`, then `__next__()` on its result at the head
+  of every pass, and `x` is that result (OI-324): javac writes `iterator()` and `next()`
+  for a for-each loop, and the facts keep the same shape. `async for` calls `__aiter__` and
+  `__anext__`, and `x` has the type the awaited step gives; a comprehension's `for` is the
+  same, a generator expression's `__iter__` running at once and its `__next__` when it is
+  consumed. A tuple target (`for k, v in d.items()`) takes a `tuple[A, B]` of as many parts
+  apart by position; any other value, or a starred name, leaves its names untyped;
+- `xs[i]` is the call `xs.__getitem__(i)`. A slice is an `unresolved` argument (the
+  grammar holds no slice object) that chooses a `slice` overload. Subscripting a class
+  object makes a type (`__class_getitem__`), never the instance's `__getitem__` (ruling
+  R37): no call is written for a subscript in a type expression (a class base, `cast`'s
+  type, `isinstance`'s or `issubclass`'s class), nor for one of a class of this file, a
+  builtin, a typing form or a library class. A name imported from another file of the
+  module may be a class too, which this file cannot see: the call is written, and the
+  resolver answers a path whose receiver is the class itself `not_readable` ("a type
+  form"), so no edge reaches the class's own `__getitem__`; the same holds for `__iter__`
+  and `__next__` ("iterating a class runs its metaclass"). A value written `type[X]` or
+  `Type[X]`, or a library result written so, is the class object too: an explicit call
+  through it (`c.create()`) keeps the owner `X`, but a call syntax makes on it gets none.
+  Calling a class object constructs it (R37): `cls()` in a `@classmethod` and `c()` with
+  `c: type[X]` are a `virtual` `<init>` on `X`, whose dispatch is `X`'s constructor and each
+  subtype's own (the class it was called through is `X` or a subclass), and whose result is
+  an instance of `X`; never the instance's `__call__`. A store (`xs[i] = v`) and other operators are not calls here;
 - a constructor call gives an `instance` whose `source` is the constructor's receiver;
 - an f-string, or `+` with a string literal, is `concat`, filled by a `dynamic`
   `builtins/str#format` site; a list or a tuple is `array`; a function is `lambda`;
@@ -410,13 +433,37 @@ Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path
   (`narrowed`); so is a call that unpacks `*args` or `**options`, and a function the
   library's branches define differently. A call on a `narrowed` result leaves its owner to
   the resolver. A type variable or a special form names no class, and also leaves the
-  owner. A literal is never callable, so it does not fit a `Callable` parameter
+  owner. An argument the scanner knows the type of (a parameter written `int`, the result
+  of a typed call, a slice) is checked by class: it fits a class it is or has in its lookup
+  order, and does not fit one its read order lacks unless that one is a protocol whose
+  methods it all has (then the fit is not decided). A literal is never callable, so it does not fit a `Callable` parameter
   (`Group.command("analyze")` takes the overload with `*args`, not `__func: Callable`). A
   function or a class argument fits a bare `Callable`, `Callable[..., Any]`, `object` and
   `Any` (`@cli.command` with no parentheses is `Command`), and no literal type; a class also
   fits `type` and `type[Any]`. Whether it fits a listed signature (`Callable[[int], str]`),
   a written return (`Callable[..., Awaitable[int]]`) or `type[X]` is not read here, so such
   overloads stay a closed list.
+- **A type variable in a library return takes the type that fills it** (OI-324; the
+  typing specification's generic classes). A class's type parameters are its PEP 695 list,
+  else its `Generic[...]` or `Protocol[...]` list, else the type variables of its written
+  bases in order. The type written for the receiver (`list[User]`, `dict[str, Client]`,
+  a class of this file `Bag[User]`) gives them by position, and each written base maps
+  them on to its own (`class Users(list[User])` is a list of `User`; `dict_items[K, V]`
+  is `ItemsView[K, V]`, which defines `__iter__`). The method is found in the receiver's
+  class or its bases by C3 order. A method a class of this file defines is a body: the
+  resolver follows it, and its signature is not read here. `Self` is the receiver's own
+  type, a subclass's where the receiver is one. A function's own type variable is the
+  type of the argument whose parameter writes it, directly or through a class of the
+  argument's lookup order (`sorted(Iterable[T]) -> list[T]` on a `list[User]`); a
+  constructor's own `__new__` or `__init__` fills the class's parameters the same way
+  (`enumerate(users)` is an `enumerate[User]`). `X | None` is `X`, as `Optional[X]` is
+  (None has no method). A tuple's parameter is the union of its parts (`tuple[A, B]`), and
+  `pair[1]` with a literal index is that part. The overload is chosen first; the type
+  variables are filled after it. Where one is not filled (a bare `list`, `Any`, an unknown
+  receiver), or two arguments fill one differently, the result has no type. On a union
+  receiver the result has a type only where every member gives the same one: several
+  types are never one. `List`, `Dict` and typing's other aliases of builtin and
+  `collections` classes are those classes (PEP 585), and `LiteralString` is `str`.
 - **A result written `Callable[[P, ...], R]` is a callable** (design
   `2026-11-06-reading-decorators-design.md` §3b, a decorator factory's result:
   `click.group()` returns `Callable[[F], Group]`). Calling it gives `R` where `R` is a
