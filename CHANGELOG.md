@@ -70,6 +70,22 @@ here would restate those documents rather than add anything.
   parameter written as a union binds to each member. JVM facts always name an owner and pass
   arguments by position, so no JVM row changes. `GRAPH_SCHEMA_VERSION` 16 → 17: the export
   carries the new table.
+- **A decorator factory's result has a type, and a module-level name the type its file writes**
+  (OI-208 plan 1 task 9a, design `2026-11-06-reading-decorators-design.md` §3b). A library
+  call written to return `Callable[[P, ...], R]` gives a callable whose call is an `R` (a type
+  variable in `R` takes the type of the argument that fills it), so `@click.group() def cli`
+  makes `cli` a `click/core/Group#`, and `cli.group()` and `module.command("analyze")` carry
+  that owner. A module-level name read anywhere in its file has the one type every write to it
+  in that file gives; two types, or a write not read, leave the owner to the resolver. A
+  literal never fits a `Callable` parameter when an overload is chosen. On Sextant 52 call
+  sites gain an owner, on polar 37; no fact field changes.
+- **A Python module records its entry points, and another checkout is not entered** (OI-208
+  plan 1 task 9a, design §7). The module fact gains the optional `entry_points`, program name
+  to target as written, from `[project.scripts]`, `[tool.poetry.scripts]` and `setup.cfg`
+  `console_scripts`; `FACT_SCHEMA_VERSION` stays 7 (unshipped). A folder below the analysed one
+  that holds `.git` (a clone, a submodule, a git worktree such as `.claude/worktrees/…`) is
+  neither detected nor scanned, and is noted "another repository, not analysed". Analysing
+  Sextant's own repository with an agent worktree present now finds one module.
 - **The Python scanner reads library signatures and types, and Python lookup follows C3**
   (OI-208 plan 1 task 7). Libraries are read from the project's installed environment, and the
   standard library and stub-only libraries (`requests`) from a pinned typeshed copy shipped in the

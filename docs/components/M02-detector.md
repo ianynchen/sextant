@@ -150,8 +150,12 @@ Python.
 
 - **Where.** `accepts` finds a Python build file at any depth, by name only (Maven and Gradle
   look at the root only). The walk does not enter `.git`, `node_modules`, `.sextant`,
-  `__pycache__`, `.venv`, `.tox`, `.nox`, or any folder that holds `pyvenv.cfg` (a virtual
-  environment, whatever its name).
+  `__pycache__`, `.venv`, `.tox`, `.nox`, any folder that holds `pyvenv.cfg` (a virtual
+  environment, whatever its name), or another checkout: a folder below the analysed folder
+  that holds `.git`, a folder (a clone, a submodule) or a file (a git worktree, such as
+  `.claude/worktrees/agent-…`). Each one is a note ("another repository, not analysed:
+  <folder>"). The analysed folder is always read, whatever it holds. The scanner shares the
+  rule (`is_skipped_folder`); the Maven and Gradle detectors do not use it.
 - **What is a module.** A `pyproject.toml` with `[project]`, `[tool.poetry]` or
   `[build-system]`, or a `setup.cfg` with `[metadata]`, marks a module. A file with only tool
   settings marks nothing (CTFd's `setup.cfg` holds only `[nosetests]`). A uv workspace root is
@@ -180,6 +184,13 @@ Python.
   (`packages.from`); else `src/` when it holds Python files; else the module folder.
   `output_dirs` are the same folders, because Python runs from source and they are what the
   scanner reads; `packaging` is `wheel`. `lookup` is `c3` (D00 §5 `module`).
+- **Entry points** (`entry_points`, D00 §5 `module`; design
+  `2026-11-06-reading-decorators-design.md` §7a): each program the module folder's build
+  files declare, its name to its target as written (`sextant = "sextant.cli.app:cli"`), from
+  `[project.scripts]`, `[tool.poetry.scripts]` (the string form) and `setup.cfg`
+  `[options.entry_points] console_scripts`; a name in two tables keeps the first. The target
+  is not turned into a symbol here. GUI scripts and `setup.py` `entry_points=` are not read.
+  A module that declares none has `{}`.
 - **Which folders are searched for modules.** The detector's skip list (version control, tool
   caches, `node_modules`, every folder that holds `pyvenv.cfg`), every path `.sextantignore`
   excludes, and every path a `.gitignore` file at or below the analysed folder names are not

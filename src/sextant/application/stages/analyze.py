@@ -549,6 +549,8 @@ def _write_module_fact(fact_root: Path, module: ModuleModel) -> None:
     # stands for every other module.
     if module.lookup is not None:
         fact = fact.model_copy(update={"lookup": module.lookup})
+    if module.entry_points is not None:
+        fact = fact.model_copy(update={"entry_points": dict(module.entry_points)})
     write_fact_file(fact_root / f"{_MODULE_DOCUMENT}.jsonl", document, [fact])
 
 

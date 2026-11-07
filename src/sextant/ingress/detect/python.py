@@ -12,7 +12,9 @@ build file, and the result is a note.
 **Where it looks.** Python build files can be at any depth, so the whole tree is
 walked once. Dependency folders (`node_modules`), version control (`.git`), Sextant's
 own results (`.sextant`) and every virtual environment (any folder that holds
-`pyvenv.cfg`) are not entered.
+`pyvenv.cfg`) are not entered. Nor is another checkout: a folder below the given root
+that holds `.git`, a folder (a clone, a submodule) or a file (a git worktree). It is
+noted, not analysed. The given root is always read.
 
 **What is a module (§3e).**
 - A `pyproject.toml` with `[project]`, `[tool.poetry]` or `[build-system]`, or a
@@ -35,6 +37,11 @@ own results (`.sextant`) and every virtual environment (any folder that holds
 the name normalized by PEP 503. A dynamic version is the installed project's own
 version, else `.`. A module with no name is unpublished: its coordinates and version
 are `.`, and its id is its folder relative to the repository root (D00 §1).
+
+**Entry points (design 2026-11-06-reading-decorators §7a).** `[project.scripts]`,
+`[tool.poetry.scripts]` and `setup.cfg`'s `[options.entry_points] console_scripts`, each
+program name with its target as written (`sextant.cli.app:cli`). GUI scripts and
+`setup.py` are not read.
 
 **Environment (§3e).** `.venv`, `venv` or `env` beside the build file; for a uv workspace
 member, the same names at the workspace root; for a Poetry project, the folder Poetry
@@ -72,6 +79,9 @@ _SETUP_PY = "setup.py"
 _PIPFILE = "Pipfile"
 _PACKAGE_MARKER = "__init__.py"
 _ENVIRONMENT_MARKER = "pyvenv.cfg"
+# What makes a folder a checkout of its own: a `.git` folder (a clone, a submodule) or a
+# `.git` file (a git worktree).
+_CHECKOUT_MARKER = ".git"
 _GITIGNORE = ".gitignore"
 
 # The folder names `python -m venv`, uv and Poetry give an environment beside the
@@ -99,6 +109,7 @@ _POETRY_SETTINGS = "poetry.toml"
 _LOOSE_FOLDER_NOTE = "python files in a folder with no project file, not analysed: "
 _LIST_ONLY_NOTE = "requirements with no python code of its own, not a module: "
 _UNREADABLE_NOTE = "build file not read, so its folder is not a module: "
+_OTHER_REPOSITORY_NOTE = "another repository, not analysed: "
 
 
 class _Identity(NamedTuple):
@@ -133,19 +144,30 @@ def _is_build_file(name: str) -> bool:
 
 def is_skipped_folder(parent: str, name: str) -> bool:
     """Whether the folder `name` under `parent` holds no code of a module: a tool cache,
-    version control, installed packages, or an environment (it holds `pyvenv.cfg`). The
-    detector and the scanner share this rule."""
-    return name in _SKIPPED_FOLDERS or os.path.isfile(
-        os.path.join(parent, name, _ENVIRONMENT_MARKER)
+    version control, installed packages, an environment (it holds `pyvenv.cfg`), or
+    another checkout (`is_other_repository`). The detector and the scanner share this
+    rule; the folder they are given is never one asked about."""
+    folder = os.path.join(parent, name)
+    return (
+        name in _SKIPPED_FOLDERS
+        or os.path.isfile(os.path.join(folder, _ENVIRONMENT_MARKER))
+        or is_other_repository(folder)
     )
 
 
-def _walk(root: Path) -> Iterator[tuple[Path, list[str]]]:
+def is_other_repository(folder: str) -> bool:
+    """Whether `folder` is a checkout of its own: it holds `.git`, a folder (a clone, a
+    submodule) or a file (a git worktree). Git's own boundary, so no folder name is
+    listed."""
+    return os.path.lexists(os.path.join(folder, _CHECKOUT_MARKER))
+
+
+def _walk(root: Path, notes: list[str] | None = None) -> Iterator[tuple[Path, list[str]]]:
     """Every folder under `root` that the detector may read, with its file names, in
     sorted order. Skipped folders and environments are not entered, and neither is a
     path `.sextantignore` excludes (D04 §3) or a `.gitignore` file at or below `root`
     names: a git-ignored clone or worktree is not part of the project. `root` itself is
-    always read."""
+    always read. Each other checkout found is added to `notes`."""
     ignore = IgnoreRules.load(root)
     git: list[tuple[Path, pathspec.GitIgnoreSpec]] = []
     for current, folders, files in os.walk(root):
@@ -153,6 +175,14 @@ def _walk(root: Path) -> Iterator[tuple[Path, list[str]]]:
         if _GITIGNORE in files:
             lines = (here / _GITIGNORE).read_text(encoding="utf-8", errors="replace")
             git.append((here, pathspec.GitIgnoreSpec.from_lines(lines.splitlines())))
+        if notes is not None:
+            notes.extend(
+                f"{_OTHER_REPOSITORY_NOTE}{(here / folder).relative_to(root).as_posix()}"
+                for folder in sorted(folders)
+                if folder not in _SKIPPED_FOLDERS
+                and is_other_repository(os.path.join(current, folder))
+                and not _excluded(here / folder, root, ignore, git, folder=True)
+            )
         folders[:] = sorted(
             folder
             for folder in folders
@@ -319,6 +349,24 @@ class _BuildFiles:
         names.update(normalize_name(key) for key in _table(self.pipfile, "packages"))
         return tuple(sorted(name for name in names if name))
 
+    def entry_points(self) -> dict[str, str]:
+        """Each program this folder's build files declare, with its target as written
+        (design 2026-11-06-reading-decorators §7a): `[project.scripts]`,
+        `[tool.poetry.scripts]`, then `setup.cfg [options.entry_points] console_scripts`.
+        A name declared twice keeps the first table's target."""
+        found: dict[str, str] = {}
+        for table in (_table(self.project, "scripts"), _table(self.poetry, "scripts")):
+            for name, target in table.items():
+                if isinstance(target, str):
+                    found.setdefault(str(name), target.strip())
+        if self.setup_cfg is not None:
+            scripts = self.setup_cfg.get("options.entry_points", "console_scripts", fallback="")
+            for line in _cfg_lines(scripts):
+                name, separator, target = line.partition("=")
+                if separator and name.strip() and target.strip():
+                    found.setdefault(name.strip(), target.strip())
+        return dict(sorted(found.items()))
+
     def import_roots(self, has_python: set[Path]) -> tuple[Path, ...]:
         """The folders a name like `app.api` is found from (§3e): the package settings
         of setuptools, hatch or Poetry, else a `src/` layout, else the module folder.
@@ -450,11 +498,11 @@ class PythonDetector:
         return any(any(_is_build_file(name) for name in files) for _, files in _walk(path))
 
     def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
-        listing = dict(_walk(path))
+        notes: list[str] = []
+        listing = dict(_walk(path, notes))
         has_python = {
             folder for folder, files in listing.items() if any(f.endswith(".py") for f in files)
         }
-        notes: list[str] = []
         build_files: dict[Path, _BuildFiles] = {}
         for folder, files in listing.items():
             if not any(_is_build_file(name) for name in files):
@@ -665,6 +713,7 @@ class PythonDetector:
             environment=environment_folder,
             # Python finds a method by its method resolution order (spec §3b).
             lookup="c3",
+            entry_points=files.entry_points(),
         )
         return model, notes
 

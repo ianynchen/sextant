@@ -491,3 +491,79 @@ def test_a_sextantignored_folder_holding_a_project_is_not_a_module(tmp_path: Pat
     _write(tmp_path / "vendor" / "lib" / "lib.py")
 
     assert [m.module_id for m in PythonDetector().detect(tmp_path).modules] == ["shop"]
+
+
+# Task 9a: entry points and other repositories (design 2026-11-06-reading-decorators §7).
+
+
+def test_project_scripts_become_entry_points_as_written(tmp_path: Path):
+    """`[project.scripts]` names each program and its target as written; the target is
+    not turned into a symbol here. `gui-scripts` are not read."""
+    _write(
+        tmp_path / "pyproject.toml",
+        '[project]\nname = "sextant"\nversion = "1.0"\n'
+        '[project.scripts]\nsextant = "sextant.cli.app:cli"\n'
+        '[project.gui-scripts]\nviewer = "sextant.gui:main"\n',
+    )
+    _write(tmp_path / "sextant" / "__init__.py")
+
+    assert _only_module(tmp_path).entry_points == {"sextant": "sextant.cli.app:cli"}
+
+
+def test_setup_cfg_console_scripts_become_entry_points(tmp_path: Path):
+    """httpie's form: `[options.entry_points] console_scripts`, one `name = target` per
+    line. `gui_scripts` are not read."""
+    _write(
+        tmp_path / "setup.cfg",
+        "[metadata]\nname = httpie\nversion = 3.2\n"
+        "[options.entry_points]\nconsole_scripts =\n"
+        "    http = httpie.__main__:main\n    https = httpie.__main__:main_https\n"
+        "gui_scripts =\n    viewer = httpie.gui:main\n",
+    )
+    _write(tmp_path / "httpie" / "__init__.py")
+
+    assert _only_module(tmp_path).entry_points == {
+        "http": "httpie.__main__:main",
+        "https": "httpie.__main__:main_https",
+    }
+
+
+def test_poetry_scripts_become_entry_points(tmp_path: Path):
+    _write(
+        tmp_path / "pyproject.toml",
+        '[tool.poetry]\nname = "shop"\nversion = "1.0"\n'
+        '[tool.poetry.scripts]\nshop = "shop.cli:main"\n',
+    )
+    _write(tmp_path / "shop" / "__init__.py")
+
+    assert _only_module(tmp_path).entry_points == {"shop": "shop.cli:main"}
+
+
+def test_a_module_with_no_scripts_has_no_entry_points(tmp_path: Path):
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "shop"\nversion = "1.0"\n')
+    _write(tmp_path / "shop" / "__init__.py")
+
+    assert _only_module(tmp_path).entry_points == {}
+
+
+def test_a_folder_holding_git_is_another_repository_and_is_not_entered(tmp_path: Path):
+    """A git worktree (`.git` is a file) and a nested clone (`.git` is a folder) are other
+    checkouts: not entered, and noted. The given root holds `.git` too, and is read."""
+    _write(tmp_path / ".git" / "HEAD", "ref: refs/heads/main\n")
+    _write(tmp_path / "pyproject.toml", '[project]\nname = "sextant"\nversion = "1.0"\n')
+    _write(tmp_path / "sextant" / "__init__.py")
+    worktree = tmp_path / ".claude" / "worktrees" / "agent-1"
+    _write(worktree / ".git", "gitdir: ../../../.git/worktrees/agent-1\n")
+    _write(worktree / "pyproject.toml", '[project]\nname = "sextant"\nversion = "1.0"\n')
+    _write(worktree / "sextant" / "__init__.py")
+    clone = tmp_path / "vendor" / "other"
+    _write(clone / ".git" / "HEAD", "ref: refs/heads/main\n")
+    _write(clone / "pyproject.toml", '[project]\nname = "other"\nversion = "1.0"\n')
+    _write(clone / "other.py")
+
+    found = PythonDetector().detect(tmp_path)
+
+    assert [(m.module_id, m.root) for m in found.modules] == [("sextant", tmp_path)]
+    assert "another repository, not analysed: .claude/worktrees/agent-1" in found.notes
+    assert "another repository, not analysed: vendor/other" in found.notes
+    assert not found.multi_module

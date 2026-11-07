@@ -44,7 +44,7 @@ from sextant.ingress.extract.python.calls import (
     Scope,
     is_stub_body,
 )
-from sextant.ingress.extract.python.imports import Target, bind_names, is_typing
+from sextant.ingress.extract.python.imports import CallableType, Target, bind_names, is_typing
 from sextant.ingress.extract.python.typing_rules import (
     ANY,
     BUILTINS,
@@ -77,19 +77,103 @@ class FileFacts:
 
 
 def file_facts(tree: ast.Module, context: FileContext, last_line: int) -> FileFacts:
-    """Every structural fact of one parsed file, in source order."""
-    writer = _Writer(context)
+    """Every structural fact of one parsed file, in source order.
+
+    A module-level name's type is that of every value written to it in the file (design
+    2026-11-06-reading-decorators §3b), and a value's type can rest on another name's
+    (`module` is made by `cli.group()`). The first reading answers from the writes read
+    so far, and is kept where every answer is the one all the writes give: a name
+    written before it is read, the usual order. Else the file is read again from no
+    types, each time with the types the reading before found, until a reading finds no
+    new type for a name it asked about. A type is only ever added there (a write whose
+    type is known stays known), so those readings end, at most one per name."""
+    rebound = _rebound_names(tree)
+    writer = _Writer(context, rebound, None)
     writer.module(tree, last_line)
-    return FileFacts(writer.facts, writer.not_read)
+    if writer.agrees(writer.module_types()):
+        return FileFacts(writer.facts, writer.not_read)
+    known: dict[str, str | CallableType] = {}
+    while True:
+        writer = _Writer(context, rebound, known)
+        writer.module(tree, last_line)
+        found = writer.module_types()
+        if writer.agrees(found):
+            return FileFacts(writer.facts, writer.not_read)
+        known = found
+
+
+def _rebound_names(tree: ast.Module) -> set[str]:
+    """The module-level names some statement binds to a value this scanner does not read
+    as a write: a loop or `with` target, an import, `del`, `:=`, an `except ... as`, a
+    `match` capture, `+=`, a `type` alias, or a `global` in a function. Such a name's
+    writes are not all known, so it has no class."""
+    rebound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            rebound.update(node.names)
+    for node in _module_level(tree.body):
+        if isinstance(node, ast.Import | ast.ImportFrom):
+            rebound.update(
+                (alias.asname or alias.name).partition(".")[0]
+                for alias in node.names
+                if alias.name != "*"
+            )
+        elif isinstance(node, ast.For | ast.AsyncFor):
+            rebound.update(_names(node.target))
+        elif isinstance(node, ast.With | ast.AsyncWith):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    rebound.update(_names(item.optional_vars))
+        elif isinstance(node, ast.Delete):
+            for target in node.targets:
+                rebound.update(_names(target))
+        elif isinstance(node, ast.AugAssign | ast.NamedExpr):
+            rebound.update(_names(node.target))
+        elif isinstance(node, ast.ExceptHandler | ast.MatchAs | ast.MatchStar) and node.name:
+            rebound.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest is not None:
+            rebound.add(node.rest)
+        elif isinstance(node, ast.TypeAlias):
+            rebound.update(_names(node.name))
+    return rebound
+
+
+def _module_level(body: list[ast.stmt]) -> list[ast.AST]:
+    """Every node of the module's own scope: its statements and expressions, not the
+    bodies of the functions and classes it defines (a comprehension's `:=` binds here)."""
+    found: list[ast.AST] = []
+    pending: list[ast.AST] = list(body)
+    while pending:
+        node = pending.pop()
+        found.append(node)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+            # Its decorators and defaults run here; its body does not.
+            pending.extend(getattr(node, "decorator_list", []))
+            pending.extend(d for d in [*node.args.defaults, *node.args.kw_defaults] if d)
+            continue
+        if isinstance(node, ast.ClassDef):
+            pending.extend([*node.decorator_list, *node.bases, *node.keywords])
+            continue
+        pending.extend(ast.iter_child_nodes(node))
+    return found
 
 
 class _Writer(BodyReader):
-    def __init__(self, context: FileContext) -> None:
+    def __init__(
+        self,
+        context: FileContext,
+        rebound: set[str],
+        module_types: dict[str, str | CallableType] | None,
+    ) -> None:
         self._context = context
         self.facts: list[Fact] = []
         self.not_read: list[str] = []
         self._methods = {}
         self._bodies = {}
+        self._rebound = rebound
+        self._module_types = module_types
+        self._module_writes = {}
+        self.consulted = {}
 
     def _full(self, descriptor: str) -> str:
         return self._context.prefix + descriptor
@@ -186,9 +270,10 @@ class _Writer(BodyReader):
         )
         self._statements(node.body, body)
         self._positions(body)
-        self._bind_nested(
-            node.name, self._apply(callees, CallArgument(kind="class", symbol=owner), scope), scope
-        )
+        applied = self._apply(callees, CallArgument(kind="class", symbol=owner), scope)
+        self._bind_nested(node.name, applied, scope)
+        if scope.frame is None and scope.class_path is None:
+            self._module_write(node.name, applied, scope)
 
     def _parents(
         self, node: ast.ClassDef, types: TypeScope
@@ -260,6 +345,10 @@ class _Writer(BodyReader):
                     )
                 if value is None:
                     continue
+                if scope.class_path is None:
+                    self._module_write(
+                        name, value if named is not None else CallArgument(kind="unresolved"), scope
+                    )
                 self.facts.append(
                     FieldWriteFact(
                         document_id=self._context.document_id,
@@ -305,6 +394,8 @@ class _Writer(BodyReader):
             callees, CallArgument(kind="lambda", symbol=descriptor, captures=0), scope
         )
         self._bind_nested(node.name, applied, scope)
+        if not nested and not in_class:
+            self._module_write(node.name, applied, scope)
         receiver_taken = in_class and not is_static
         generic = scope.types.with_type_parameters(node.type_params)
         self._symbol(

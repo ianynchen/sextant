@@ -93,7 +93,9 @@ SEXTANT_VERSION = version("sextant")
 #             `module` gains `lookup` (`jvm` or `c3`; spec 2026-11-06-python-reader §3a,
 #             §3b, approved by the user 2026-11-06). A fact set of the older vintage has
 #             no `lookup`, so a reader could not tell which lookup rule a module uses; it
-#             is refused and re-extracted.
+#             is refused and re-extracted. While 7 was unshipped, `module` also gained
+#             `entry_points` (the programs a Python build declares; design
+#             2026-11-06-reading-decorators §7a, approved by the user 2026-11-06).
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and

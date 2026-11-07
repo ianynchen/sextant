@@ -29,7 +29,12 @@ or downloaded: a library file is parsed with `ast`, as a module file is.
 - **Overloads:** a call's return type is the one overload the argument types choose, as
   a type checker chooses: the first that matches. An argument whose type is not known,
   where the overloads that match give it different parameter types, leaves the closed
-  list of what those overloads return (`narrowed`).
+  list of what those overloads return (`narrowed`). A literal is not callable, so it
+  never fits a `Callable` parameter.
+- **Callables (design 2026-11-06-reading-decorators §3b):** a return written
+  `Callable[[P, ...], R]` is a callable whose call gives `R` (a decorator factory's
+  result: `click.group()` returns `Callable[[F], Group]`). `R` is a class, or a type
+  variable the call's arguments fill; the scanner reads the call (`calls.py`).
 
 A `sys.version_info` test in a type file is read against the environment's Python (its
 `site-packages` path names it); a `sys.platform` test is not decided, so both branches
@@ -63,11 +68,13 @@ from sextant.domain.symbols import (
     PYTHON_SCHEME,
     bare_descriptor,
     is_type_descriptor,
+    names_a_type,
     without_type_marker,
 )
 from sextant.ingress.extract.python.calls import FileContext
 from sextant.ingress.extract.python.imports import (
     Binding,
+    CallableType,
     ModuleIndex,
     Returned,
     Target,
@@ -247,11 +254,21 @@ class Libraries:
         finally:
             self._recording = recording
             self._inside = inside
-        if found is None or not all(self._names_a_class(t.symbol) for t in found.types):
+        if found is None or not all(self._gives_a_class(t) for t in found.types):
             # A type variable (`-> _T`), a special form or a name no library read defines:
             # what the call returns depends on more than the signature says.
             return None
         return found
+
+    def _gives_a_class(self, returned: TypeRef | CallableType) -> bool:
+        """A class; or a callable whose call gives a class, or a type variable that one of
+        its own parameters fills, so the call's argument decides it."""
+        if isinstance(returned, TypeRef):
+            return self._names_a_class(returned.symbol)
+        result = returned.returns.symbol
+        if names_a_type(result):
+            return self._names_a_class(result)
+        return any(parameter.symbol == result for parameter in returned.parameters or ())
 
     def _function(self, owner: str, name: str) -> _Function | None:
         """Each written definition of the function `owner.name` (its `@overload` stubs
@@ -328,11 +345,11 @@ class Libraries:
     def _returned(
         self, chosen: list[ast.FunctionDef | ast.AsyncFunctionDef], scope: TypeScope
     ) -> Returned | None:
-        types: list[TypeRef] = []
+        types: list[TypeRef | CallableType] = []
         for node in chosen:
-            returned = written_type(node.returns, scope) if node.returns is not None else None
-            if returned is None:
+            if node.returns is None:
                 return None
+            returned = _callable(node.returns, scope) or written_type(node.returns, scope)
             if returned not in types:
                 types.append(returned)
         return Returned(tuple(types), "narrowed" if len(types) > 1 else "resolved")
@@ -369,6 +386,9 @@ class Libraries:
         if len(targets) != 1:
             return None
         target = targets[0]
+        if _is_callable_form(target):
+            # Every value this rule reads is a literal, and no literal is callable.
+            return False
         if target.module == BUILTINS:
             return _fits_builtin(value, target.member or "")
         if target.module in _TYPING and target.member in ("Any", "LiteralString"):
@@ -391,6 +411,8 @@ class Libraries:
         if len(targets) != 1:
             return None
         target = targets[0]
+        if _is_callable_form(target):
+            return False
         if target.module in _TYPING:
             if target.member == "Literal":
                 if value is _SOME_TEXT:
@@ -1154,6 +1176,7 @@ _UNKNOWN_VALUE = object()
 # A text argument whose value is not known (an f-string): it is a `str`, of no one literal.
 _SOME_TEXT = object()
 _TYPING = frozenset({"typing", "typing_extensions"})
+_CALLABLE_MODULES = frozenset({*_TYPING, "collections/abc", "_collections_abc"})
 # A bound on how far a written type and its aliases are followed.
 _DEPTH = 16
 # A keyword argument unpacked from a mapping (`f(**options)`), as `calls.py` writes it.
@@ -1195,6 +1218,54 @@ def _fits_builtin(value: object, name: str) -> bool | None:
     if isinstance(written, type):
         return isinstance(value, written)
     return None
+
+
+def _callable(annotation: ast.expr, scope: TypeScope) -> CallableType | None:
+    """A return written `Callable[[P, ...], R]` (or `Callable[..., R]`), as the callable
+    it is; None for any other return. `R` is kept only where it is a class name or a type
+    variable: anything else (an alias, a special form) says nothing of what the call
+    gives."""
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            annotation = ast.parse(annotation.value.strip(), mode="eval").body
+        except SyntaxError:
+            return None
+    if not isinstance(annotation, ast.Subscript) or not _is_name(annotation.value):
+        return None
+    targets = scope.lookup(annotation.value)
+    if len(targets) != 1 or not _is_callable_form(targets[0]):
+        return None
+    written = annotation.slice
+    if not isinstance(written, ast.Tuple) or len(written.elts) != 2:
+        return None
+    parameters, result = written.elts
+    returns = written_type(result, scope)
+    if not names_a_type(returns.symbol) and not _is_type_variable(result, scope):
+        return None
+    # `...`, a `ParamSpec` or `Concatenate[...]`: the parameters are not listed.
+    listed = (
+        tuple(written_type(parameter, scope) for parameter in parameters.elts)
+        if isinstance(parameters, ast.List)
+        else None
+    )
+    return CallableType(listed, returns)
+
+
+def _is_callable_form(target: Target) -> bool:
+    """`typing.Callable` or `collections.abc.Callable`."""
+    return target.member == "Callable" and target.module in _CALLABLE_MODULES
+
+
+def _is_type_variable(node: ast.expr, scope: TypeScope) -> bool:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        try:
+            node = ast.parse(node.value.strip(), mode="eval").body
+        except SyntaxError:
+            return False
+    if not _is_name(node):
+        return False
+    targets = scope.lookup(node)
+    return len(targets) == 1 and targets[0].kind == "type_variable"
 
 
 def _alternatives(node: ast.expr) -> list[ast.expr]:

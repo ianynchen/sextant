@@ -37,6 +37,17 @@ body is reachable. A generator returns a generator object, so its one `method_re
 
 `self.x = …` and `C.x = …` are `field_write`s. A write to an attribute of another object is
 not written: `field_write` has no key for its receiver.
+
+A call's owner is the type the code writes for its receiver (design
+2026-11-06-reading-decorators §3b), with `declared` evidence as every written type:
+- a library call's result has the class its written signature returns (`libraries.py`), and
+  calling a result written `Callable[[P, ...], R]` gives `R`, where a type variable in `R`
+  takes the type of the argument that fills it (`click.group()` applied to `cli` is a
+  `Group`). Where `R` is still not a class, the result has no type;
+- a module-level name has the type of the values written to it in its file: one class (or
+  one callable) where every write gives it, read anywhere in the file. Two classes are a closed
+  list, and a write whose type is not known (a loop, an import, `global`) gives none: the
+  owner is then left to the resolver. A write from another file is not seen.
 """
 
 import ast
@@ -59,6 +70,7 @@ from sextant.domain.symbols import PY_SIGNATURE, method_descriptor, names_a_type
 from sextant.ingress.extract.python.flow import Flow
 from sextant.ingress.extract.python.imports import (
     Binding,
+    CallableType,
     ModuleIndex,
     Target,
     bind_names,
@@ -124,6 +136,8 @@ class Body:
     # The class a library call's result is, by the library's written signature
     # (`libraries.py`), keyed by the call's `result` value id.
     returned: dict[int, str] = field(default_factory=dict)
+    # The callable a library call's result is (`Callable[[P, ...], R]`), keyed the same way.
+    callables: dict[int, CallableType] = field(default_factory=dict)
 
     def value_id(self) -> int:
         found = self.next_value
@@ -208,6 +222,19 @@ class BodyReader:
     # One counter set per method symbol: a name defined twice is one method with two
     # bodies, whose call ordinals, value ids and returns continue across both.
     _bodies: dict[str, Body]
+    # The type of each module-level name, a class or a callable, by every write to it in
+    # this file, as the previous reading of the file found them (`structure.file_facts`).
+    # None on a first reading, which answers from the writes read so far and is kept only
+    # where every answer it gave is the one all the file's writes give.
+    _module_types: dict[str, str | CallableType] | None
+    # The module-level names some statement binds to a value that is not read as a write
+    # (a loop, an import, `global`): their writes are not all known, so they have no type.
+    _rebound: set[str]
+    # Each module-level name's writes in this reading: the type of each value, None where
+    # it is not known.
+    _module_writes: dict[str, list[str | CallableType | None]]
+    # Each module-level name this reading asked about, with every answer it gave.
+    consulted: dict[str, list[str | CallableType | None]]
 
     def _body(self, caller: str) -> Body:
         return self._bodies.setdefault(caller, Body(caller))
@@ -824,8 +851,10 @@ class BodyReader:
         )
         scope.body.ordinal += 1
         if result is not None:
-            returned = self._library_returns(callee, arguments, unpacked=unpacked)
-            if returned is not None:
+            returned = self._library_returns(callee, arguments, scope, unpacked=unpacked)
+            if isinstance(returned, CallableType):
+                scope.body.callables[result] = returned
+            elif returned is not None:
                 scope.body.returned[result] = returned
             return CallArgument(kind="unresolved", source=result)
         if callee.receiver is not None:
@@ -855,7 +884,7 @@ class BodyReader:
                     return Callee(_target(type_symbol(owner), attr), "static")
                 if owner.kind in (None, "variable"):
                     return Callee(
-                        _target(None, attr),
+                        _target(self._module_class(owner), attr),
                         "virtual",
                         scope.body.value_id(),
                         receiver_field=_field_of(owner),
@@ -895,10 +924,16 @@ class BodyReader:
                         _target(type_symbol(target), INIT), "special", scope.body.value_id()
                     )
                 if target.kind == "variable":
+                    typed = self._module_type(target)
+                    receiver = scope.body.value_id()
+                    if isinstance(typed, CallableType):
+                        # The name holds a callable: what calling it gives is read with
+                        # its arguments, as for a call's own result.
+                        scope.body.callables[receiver] = typed
                     return Callee(
-                        _target(None, CALL),
+                        _target(typed if isinstance(typed, str) else None, CALL),
                         "virtual",
-                        scope.body.value_id(),
+                        receiver,
                         receiver_field=_field_of(target),
                     )
                 if target.member is not None and target.kind in (None, "function"):
@@ -930,17 +965,24 @@ class BodyReader:
         return defined
 
     def _library_returns(
-        self, callee: Callee, arguments: list[CallArgument], *, unpacked: bool
-    ) -> str | None:
-        """The class a library call returns, where its written signature chooses one."""
+        self, callee: Callee, arguments: list[CallArgument], scope: Scope, *, unpacked: bool
+    ) -> str | CallableType | None:
+        """The class a library call returns, where its written signature chooses one, or
+        the callable it returns; and the class a call of such a callable gives."""
         libraries = self._context.index.libraries
         owner = callee.target.owner
+        if owner is None and callee.target.name == CALL and callee.receiver is not None:
+            called = scope.body.callables.get(callee.receiver)
+            return None if called is None else _call_gives(called, arguments, scope)
         if libraries is None or owner is None or callee.target.name is None:
             return None
         found = libraries.call_returns(owner, str(callee.target.name), arguments, unpacked=unpacked)
         if found is None or found.resolution != "resolved" or len(found.types) != 1:
             return None
-        symbol = found.types[0].symbol
+        (returned,) = found.types
+        if isinstance(returned, CallableType):
+            return returned
+        symbol = returned.symbol
         return symbol if names_a_type(symbol) and symbol not in (ANY, UNION) else None
 
     def _super(self, name: str, scope: Scope) -> Callee:
@@ -1237,14 +1279,73 @@ class BodyReader:
         )
 
     def _declared(self, node: ast.expr, scope: Scope) -> str | None:
-        """The owner type written for a local name, where one is written."""
+        """The owner type written for a local name, where one is written; for a
+        module-level name, the class its file writes to it."""
         if (
             isinstance(node, ast.Name)
             and scope.frame is not None
             and node.id in scope.frame.local_names
         ):
             return scope.frame.declared.get(node.id)
+        if isinstance(node, ast.Name):
+            targets = self._targets(node, scope)
+            if targets is not None and len(targets) == 1:
+                return self._module_class(targets[0])
         return None
+
+    def _module_class(self, target: Target) -> str | None:
+        typed = self._module_type(target)
+        return typed if isinstance(typed, str) else None
+
+    def _module_type(self, target: Target) -> str | CallableType | None:
+        """The type every write in this file gives the module-level name `target`, where
+        it is one of this file's own names; None for any other target."""
+        if (
+            target.module != self._context.here
+            or target.member is None
+            or "." in target.member
+            or target.kind not in ("variable", "function")
+        ):
+            return None
+        name = target.member
+        if self._module_types is not None:
+            answer = self._module_types.get(name)
+        else:
+            answer = self._one_type(name, self._module_writes.get(name, []))
+        answers = self.consulted.setdefault(name, [])
+        if answer not in answers:
+            answers.append(answer)
+        return answer
+
+    def _module_write(self, name: str, value: CallArgument, scope: Scope) -> None:
+        """A module-level name written in this file, with the type of the value."""
+        self._module_writes.setdefault(name, []).append(_type_of(value, scope))
+
+    def _one_type(
+        self, name: str, written: list[str | CallableType | None]
+    ) -> str | CallableType | None:
+        """The one type every write gives; None where there is none, where a write's type
+        is not known, or where writes give two (a closed list is never narrowed)."""
+        if name in self._rebound or not written or written[0] is None:
+            return None
+        return written[0] if all(t == written[0] for t in written) else None
+
+    def module_types(self) -> dict[str, str | CallableType]:
+        """Each module-level name whose every write in this reading gives one type."""
+        found: dict[str, str | CallableType] = {}
+        for name, written in self._module_writes.items():
+            typed = self._one_type(name, written)
+            if typed is not None:
+                found[name] = typed
+        return found
+
+    def agrees(self, found: dict[str, str | CallableType]) -> bool:
+        """Whether every answer this reading gave is the type all the file's writes give."""
+        return all(
+            answer == found.get(name)
+            for name, answers in self.consulted.items()
+            for answer in answers
+        )
 
 
 # -- helpers -------------------------------------------------------------------------------
@@ -1252,6 +1353,35 @@ class BodyReader:
 
 def _target(owner: str | None, name: str) -> CallTarget:
     return CallTarget(owner=owner, name=name, descriptor=PY_SIGNATURE)
+
+
+def _type_of(value: CallArgument, scope: Scope) -> str | CallableType | None:
+    """The type of a value this body made: a constructed object's class, or the class or
+    callable a call's written signature gives. None for any other value."""
+    if value.kind == "instance":
+        return value.symbol
+    if value.kind == "unresolved" and value.source is not None:
+        return scope.body.returned.get(value.source) or scope.body.callables.get(value.source)
+    return None
+
+
+def _call_gives(
+    called: CallableType, arguments: list[CallArgument], scope: Scope
+) -> str | CallableType | None:
+    """What a call of `Callable[[P, ...], R]` gives: `R` where it is a class; where `R` is
+    a type variable, the type of the positional argument whose parameter is that
+    variable. None where neither is known (`Callable[[FC], FC]` applied to a function)."""
+    result = called.returns.symbol
+    if names_a_type(result):
+        return result if result not in (ANY, UNION) else None
+    if any(argument.keyword == _UNPACKED_POSITIONAL for argument in arguments):
+        # Where each later argument lands is not known.
+        return None
+    positional = [argument for argument in arguments if argument.keyword is None]
+    for parameter, argument in zip(called.parameters or (), positional, strict=False):
+        if parameter.symbol == result:
+            return _type_of(argument, scope)
+    return None
 
 
 def _split(target: Target) -> tuple[str, str]:

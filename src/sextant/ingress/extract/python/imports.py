@@ -50,12 +50,24 @@ class Binding:
 
 
 @dataclass(frozen=True)
+class CallableType:
+    """`Callable[[P, ...], R]`, as the typing specification defines it: calling the value
+    gives `returns`. `parameters` are the written parameter types, None for `...`. A type
+    variable in `returns` takes the type of the argument that fills it (design
+    2026-11-06-reading-decorators §3b)."""
+
+    parameters: tuple[TypeRef, ...] | None
+    returns: TypeRef
+
+
+@dataclass(frozen=True)
 class Returned:
     """What a library call returns, by its written signatures: one type where the
     argument types choose one overload (`resolved`), else the closed list of what the
-    overloads they leave return (`narrowed`)."""
+    overloads they leave return (`narrowed`). A type is a class, or a callable that
+    gives one (a decorator factory's result)."""
 
-    types: tuple[TypeRef, ...]
+    types: tuple[TypeRef | CallableType, ...]
     resolution: Literal["resolved", "narrowed"]
 
 

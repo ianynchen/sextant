@@ -192,6 +192,11 @@ class ModuleModel:
     # How a method is looked up on this module's types (D00 §5 `module.lookup`): set by a
     # detector whose language has its own rule. None keeps the module fact's default.
     lookup: Lookup | None = None
+    # The programs this module's build declares (D00 §5 `module.entry_points`): each
+    # program name with its target as written (`{"sextant": "sextant.cli.app:cli"}`). Set
+    # by a detector whose build files declare them (Python); None where the build system
+    # has no such table.
+    entry_points: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)

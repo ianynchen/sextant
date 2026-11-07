@@ -711,3 +711,202 @@ def test_an_opted_in_library_reads_only_its_own_record_files(tmp_path: Path):
     assert module.libraries_not_resolved == (
         "bare: its installed RECORD is missing or unreadable, so its files are not known",
     )
+
+
+# Task 9a: decorator-factory types (design 2026-11-06-reading-decorators §3b, gap 2).
+
+# click 8.5.0's own written signatures (`decorators.py`, `core.py`), cut to what is read.
+_CLICK = {
+    "click/__init__.py": (
+        "from .core import Command as Command\n"
+        "from .core import Group as Group\n"
+        "from .decorators import argument as argument\n"
+        "from .decorators import command as command\n"
+        "from .decorators import group as group\n"
+        "from .decorators import option as option\n"
+    ),
+    "click/core.py": (
+        "import typing as t\n"
+        "class Command:\n"
+        "    def main(self) -> None: ...\n"
+        "class Group(Command):\n"
+        "    @t.overload\n"
+        "    def command(self, __func: t.Callable[..., t.Any]) -> Command: ...\n"
+        "    @t.overload\n"
+        "    def command(\n"
+        "        self, *args: t.Any, **kwargs: t.Any\n"
+        "    ) -> t.Callable[[t.Callable[..., t.Any]], Command]: ...\n"
+        "    def command(\n"
+        "        self, *args: t.Any, **kwargs: t.Any\n"
+        "    ) -> t.Callable[[t.Callable[..., t.Any]], Command] | Command:\n"
+        "        return Command()\n"
+        "    @t.overload\n"
+        "    def group(self, __func: t.Callable[..., t.Any]) -> 'Group': ...\n"
+        "    @t.overload\n"
+        "    def group(\n"
+        "        self, *args: t.Any, **kwargs: t.Any\n"
+        "    ) -> t.Callable[[t.Callable[..., t.Any]], 'Group']: ...\n"
+        "    def group(\n"
+        "        self, *args: t.Any, **kwargs: t.Any\n"
+        "    ) -> 't.Callable[[t.Callable[..., t.Any]], Group] | Group':\n"
+        "        return Group()\n"
+    ),
+    "click/decorators.py": (
+        "import typing as t\n"
+        "from .core import Command, Group\n"
+        "_AnyCallable = t.Callable[..., t.Any]\n"
+        "FC = t.TypeVar('FC', bound='_AnyCallable | Command')\n"
+        "GrpType = t.TypeVar('GrpType', bound=Group)\n"
+        "@t.overload\n"
+        "def group(name: _AnyCallable) -> Group: ...\n"
+        "@t.overload\n"
+        "def group(\n"
+        "    name: str | None, cls: type[GrpType], **attrs: t.Any\n"
+        ") -> t.Callable[[_AnyCallable], GrpType]: ...\n"
+        "@t.overload\n"
+        "def group(\n"
+        "    name: None = None, *, cls: type[GrpType], **attrs: t.Any\n"
+        ") -> t.Callable[[_AnyCallable], GrpType]: ...\n"
+        "@t.overload\n"
+        "def group(\n"
+        "    name: str | None = ..., cls: None = None, **attrs: t.Any\n"
+        ") -> t.Callable[[_AnyCallable], Group]: ...\n"
+        "def group(name=None, cls=None, **attrs):\n"
+        "    return Group()\n"
+        "def option(\n"
+        "    *param_decls: str, cls: type | None = None, **attrs: t.Any\n"
+        ") -> t.Callable[[FC], FC]:\n"
+        "    return lambda f: f\n"
+        "def argument(\n"
+        "    *param_decls: str, cls: type | None = None, **attrs: t.Any\n"
+        ") -> t.Callable[[FC], FC]:\n"
+        "    return lambda f: f\n"
+    ),
+    "click/py.typed": "",
+}
+
+
+def _click(tmp_path: Path, text: str):
+    click = _install(tmp_path / "site", "click", "8.5.0", _CLICK)
+    _, tree = _scan(tmp_path, {"app/cli.py": text}, (click,))
+    return tree
+
+
+def _owners(tree, caller: str) -> list[tuple[str | None, str | None]]:
+    return [(site.target.owner, site.target.name) for site in _sites(tree, caller)]
+
+
+def test_calling_a_callable_result_gives_its_return_type(tmp_path: Path):
+    """`click.group()` returns `Callable[[F], Group]`: calling it with `cli` gives a
+    `Group`, so `cli.group()` has owner `click/core/Group#`; its result is called with
+    `module`, so `module.command("analyze")` has that owner too. A string is not callable,
+    so `command("analyze")` takes the overload that returns a callable, and the name it
+    decorates is a `Command`."""
+    tree = _click(
+        tmp_path,
+        "import click\n"
+        "@click.group()\n"
+        "def cli():\n    pass\n"
+        "@cli.group()\n"
+        "def module():\n    pass\n"
+        "@module.command('analyze')\n"
+        "def analyze():\n    pass\n"
+        "analyze.main()\n",
+    )
+
+    owners = _owners(tree, "app/cli#<clinit>")
+    group = "click/core/Group#"
+    assert owners == [
+        ("click/decorators#", "group"),
+        (None, "__call__"),
+        (group, "group"),
+        (None, "__call__"),
+        (group, "command"),
+        (None, "__call__"),
+        ("click/core/Command#", "main"),
+    ]
+
+
+def test_an_applied_option_stays_untyped(tmp_path: Path):
+    """`option(...)` returns `Callable[[FC], FC]`: applied to a function, `FC` is that
+    function, which is not a class, so the result has no type, and neither does the name
+    it decorates. Applied to a `Group`, `FC` takes the `Group`."""
+    tree = _click(
+        tmp_path,
+        "import click\n"
+        "@click.option('--x')\n"
+        "def plain():\n    pass\n"
+        "plain.main()\n"
+        "@click.option('--y')\n"
+        "@click.group()\n"
+        "def grouped():\n    pass\n"
+        "grouped.main()\n",
+    )
+
+    owners = _owners(tree, "app/cli#<clinit>")
+    assert owners[2] == (None, "main")
+    assert owners[-1] == ("click/core/Group#", "main")
+
+
+def test_a_module_level_name_has_the_types_written_to_it_in_its_file(tmp_path: Path):
+    """One type over every write in the file is the name's type, also where it is read
+    before the write (in a function) and in a function body. Two types, or a write whose
+    type is not known (a loop, an import), leave the owner to the resolver: a closed list
+    is never narrowed to one."""
+    tree = _click(
+        tmp_path,
+        "import click\n"
+        "class Shop:\n"
+        "    def open(self):\n        pass\n"
+        "class Other:\n"
+        "    def open(self):\n        pass\n"
+        "def early():\n"
+        "    shop.open()\n"
+        "shop = Shop()\n"
+        "shop.open()\n"
+        "either = Shop()\n"
+        "if shop:\n"
+        "    either = Other()\n"
+        "either.open()\n"
+        "looped = Shop()\n"
+        "for looped in []:\n"
+        "    pass\n"
+        "looped.open()\n"
+        "grp = click.group()\n"
+        "@grp\n"
+        "def named():\n    pass\n"
+        "named.main()\n",
+    )
+
+    clinit = [s for s in _owners(tree, "app/cli#<clinit>") if s[1] in ("open", "main")]
+    assert _owners(tree, "app/cli#early") == [("app/cli/Shop#", "open")]
+    assert clinit == [
+        ("app/cli/Shop#", "open"),
+        (None, "open"),
+        (None, "open"),
+        ("click/core/Group#", "main"),
+    ]
+
+
+def test_group_command_with_a_name_chooses_the_overload_that_returns_a_callable(
+    tmp_path: Path,
+):
+    """A string literal is not callable, so it does not fit `__func: Callable[..., Any]`:
+    the overload with `*args` is the one chosen, and its return is a callable."""
+    click = Libraries((_install(tmp_path, "click", "8.5.0", _CLICK),), typeshed_dir())
+
+    found = click.call_returns("click/core/Group#", "command", [_argument("string", "analyze")])
+
+    assert found is not None and found.resolution == "resolved"
+    (returned,) = found.types
+    assert returned.returns.symbol == "click/core/Command#"
+
+
+def test_a_nested_checkout_under_an_import_root_is_not_scanned(tmp_path: Path):
+    _, tree = _scan(
+        tmp_path,
+        {"app/a.py": "x = 1\n", "vendored/.git": "gitdir: elsewhere\n", "vendored/b.py": ""},
+        (),
+    )
+
+    assert [d.relative_path for _, d, _ in tree if not d.header_only] == ["app/a.py"]

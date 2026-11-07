@@ -217,6 +217,12 @@ class ModuleFact(BaseModel):
     # `c3` for Python's method resolution order. It is the module's, not the document's,
     # because the resolver reads it per module and every JVM module keeps `jvm`.
     lookup: Lookup = "jvm"
+    # The programs the module's build declares, program name to target as written
+    # (`{"sextant": "sextant.cli.app:cli"}`, design 2026-11-06-reading-decorators §7a):
+    # Python's `[project.scripts]`, `[tool.poetry.scripts]` and `console_scripts`. The
+    # target is not a symbol here; the resolver reads it. None where the build system has
+    # no such table (every JVM module).
+    entry_points: dict[str, str] | None = None
     # The reactor siblings this analysis scanned for their TYPES (F4 §5.2, W24), as
     # their coordinates, sorted. Carried on the module fact because its consumer runs at
     # RESOLVE and there is nothing else there that can tell them apart.

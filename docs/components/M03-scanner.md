@@ -271,8 +271,21 @@ A call's owner is named where the file can tell: a class of the file is its `<in
 function of the file, or a member of another module, is a static call on that module's
 type. Whether an imported member is a class is in a file this scanner does not read, so
 the resolver decides. A call on a name the file assigns names the static field
-(`receiver_field`) and leaves the owner to the resolver (D00 §5's virtual call with a
-receiver).
+(`receiver_field`); its owner is the name's type where the file gives it one (below), and
+is otherwise left to the resolver (D00 §5's virtual call with a receiver).
+
+**A module-level name has the type of the values written to it in its file** (design
+`2026-11-06-reading-decorators-design.md` §3b): an assignment, or a `def` or `class` with
+its decorators applied. Where every write gives one class (or one callable, below), a call
+on the name, anywhere in the file, has that owner (`cli.group()` is `click/core/Group#`,
+`_PATTERN.match(…)` is `re/Pattern#`). Two types are a closed list and give no owner,
+never one of them; so does a write whose type is not known, and any binding not read as a
+write (a loop or `with` target, an import, `del`, `:=`, `except … as`, a `match` capture,
+`+=`, `global` in a function). A write from another file is not seen; the resolver's
+field walk answers those. A call of a function the file defines stays the static call to
+it. The file is read once with the writes read so far, and kept where every answer it
+gave is the one all the writes give; otherwise it is read again until no reading finds a
+new type for a name it asked about.
 
 **A file Python cannot parse** goes on the uncovered list with the reason, and the rest
 of the module is scanned. The grammar is the one of the Python that runs Sextant, and the
@@ -379,7 +392,15 @@ Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path
   (`narrowed`); so is a call that unpacks `*args` or `**options`, and a function the
   library's branches define differently. A call on a `narrowed` result leaves its owner to
   the resolver. A type variable or a special form names no class, and also leaves the
-  owner.
+  owner. A literal is never callable, so it does not fit a `Callable` parameter
+  (`Group.command("analyze")` takes the overload with `*args`, not `__func: Callable`).
+- **A result written `Callable[[P, ...], R]` is a callable** (design
+  `2026-11-06-reading-decorators-design.md` §3b, a decorator factory's result:
+  `click.group()` returns `Callable[[F], Group]`). Calling it gives `R` where `R` is a
+  class; where `R` is a type variable, the type of the positional argument whose parameter
+  is that variable. Where that is not a class either (`option(…)`'s `Callable[[FC], FC]`
+  applied to a function), the result has no type. `evidence` stays `declared`, as for
+  every written type.
 - **What is written of a library is its type headers, as on the JVM** (ruled A,
   2026-11-06; D00 §5 `type_header`). After the module's own files, one synthetic
   `header_only` document, `__type_headers__.jsonl` labelled `<environment>`, holds a
