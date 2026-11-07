@@ -204,7 +204,7 @@ from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.ingress.extract.python.scanner import PythonScanner
 from sextant.ingress.interpret.descriptors import interpret_descriptors
 from sextant.ingress.read.registry import READERS
-from sextant.resources import catalogs_dir, extractor_jar, instructions_path
+from sextant.resources import catalogs_dir, code_identity, extractor_jar, instructions_path
 from sextant.storage.duckdb.workspace import (
     DuckDbWorkspace,
     StaleParticipantError,
@@ -978,6 +978,9 @@ def _analyzed(
             allow_resolve=allow_resolve,
             ignore_root=ignore_root,
             shadow=shadow,
+            # What the resolve reads that the stage cannot see (OI-325): the catalogs, as
+            # `metadata.json` records them, and Sextant's own code.
+            resolve_inputs=f"{_catalog_hash(catalogs_dir())} {code_identity()}",
         )
     except SextantConfigError as refused:
         raise ConfigurationError(str(refused)) from refused

@@ -23,6 +23,8 @@ remains as the seam that test uses to point at a directory with nothing in
 it, without touching the installed package.
 """
 
+import hashlib
+from functools import cache
 from importlib import resources
 from pathlib import Path
 
@@ -92,6 +94,22 @@ def typeshed_dir(root: Path | None = None) -> Path:
     if not (directory / "COMMIT").is_file():
         raise MissingResourceError(f"the typeshed copy is not at {directory}")
     return directory
+
+
+@cache
+def code_identity() -> str:
+    """A digest of Sextant's own Python code: every `.py` file of the installed package, by
+    path and bytes. A re-run reuses facts and derived tables only where this is the same
+    (OI-325, D01 §7): `sextant_version` moves on a release, and the code of a development
+    checkout changes many times between two releases, so the version alone would keep a
+    result the changed code no longer gives. Worked out once per process; the code does
+    not change while it runs."""
+    root = _package_root()
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*.py")):
+        digest.update(path.relative_to(root).as_posix().encode())
+        digest.update(path.read_bytes())
+    return "sha256:" + digest.hexdigest()
 
 
 def _package_root() -> Path:

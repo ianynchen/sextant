@@ -1,6 +1,7 @@
 """Fact files are JSONL, one file per source file (D00 §7). The document
 record is the first line, so a fact file is self-describing."""
 
+import hashlib
 import json
 import re
 import shutil
@@ -168,7 +169,9 @@ def discard_library_facts(
     shutil.rmtree(target, ignore_errors=True)
 
 
-def discard_scanned_facts(fact_root: Path, *classes_dirs: Path) -> None:
+def discard_scanned_facts(
+    fact_root: Path, *classes_dirs: Path, keep: frozenset[Path] = frozenset()
+) -> None:
     """Remove every fact file a PREVIOUS scan of any of `classes_dirs` left behind — one
     walk of the tree for all of them, because a module may report several (OI-273).
 
@@ -202,12 +205,17 @@ def discard_scanned_facts(fact_root: Path, *classes_dirs: Path) -> None:
     Only the document record is read — the first line, which is what makes a fact file
     self-describing (D00 §7) — so this costs one line per file rather than a parse of
     every fact in the tree.
+
+    `keep` names fact files to leave whatever they hold: the documents a scan that reuses
+    may keep (OI-325). Empty retracts everything, as before.
     """
     if not fact_root.exists():
         return
     spelled = {str(classes_dir) for classes_dir in classes_dirs}
     targets = {classes_dir.resolve() for classes_dir in classes_dirs}
     for path in sorted(fact_root.rglob("*.jsonl")):
+        if path in keep:
+            continue
         try:
             with path.open(encoding="utf-8") as handle:
                 first = handle.readline()
@@ -221,6 +229,31 @@ def discard_scanned_facts(fact_root: Path, *classes_dirs: Path) -> None:
             continue
         if entry in spelled or Path(entry).resolve() in targets:
             path.unlink(missing_ok=True)
+
+
+def read_document(path: Path) -> Document | None:
+    """The document record of the fact file at `path`, its first line (D00 §7), or None
+    where there is no such file or its first line is not a document. Only the line is read,
+    as `discard_scanned_facts` reads it."""
+    try:
+        with path.open(encoding="utf-8") as handle:
+            first = handle.readline()
+        return Document.model_validate_json(first)
+    except (OSError, ValueError):
+        return None
+
+
+def fact_tree_digest(fact_root: Path) -> str:
+    """A digest of every fact file under `fact_root`, by path and bytes: the files the
+    workspace loads (`load_facts` reads `**/*.jsonl`). Two equal digests are two equal
+    fact sets, which is what lets a re-run keep the previous resolve (OI-325)."""
+    digest = hashlib.sha256()
+    for path in sorted(fact_root.rglob("*.jsonl")):
+        relative = path.relative_to(fact_root).as_posix().encode()
+        digest.update(len(relative).to_bytes(8, "big") + relative)
+        data = path.read_bytes()
+        digest.update(len(data).to_bytes(8, "big") + data)
+    return "sha256:" + digest.hexdigest()
 
 
 def write_fact_file(path: Path, document: Document, facts: Iterable[Fact]) -> None:

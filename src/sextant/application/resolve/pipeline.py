@@ -420,11 +420,39 @@ def resolve(
     # with `--shadow` keeps that run's review list for ever (the pass says why).
     with _timed("record_value_resolutions"):
         recorded = record_value_resolutions(workspace, declared, shadow=shadow)
-    return ResolveReport(
+    return report_of(
+        workspace,
         facts_loaded=loaded,
-        value_resolutions=recorded,
-        endpoints=workspace.query("endpoints"),
         skipped_catalogs=skipped,
+        catalogs_run=catalogs_run,
+        # Both passes root payload types and both expand what they root, so
+        # both can meet a type nothing opens. Reported as one list, deduped:
+        # the gap is in the type, not in how many passes walked into it —
+        # the same rule `derive_endpoint_shapes` applies across catalogs.
+        unexpanded_types=tuple(
+            dict.fromkeys([*expanded.unexpanded_types, *bound.unexpanded_types])
+        ),
+        value_resolutions=recorded,
+    )
+
+
+def report_of(
+    workspace: Workspace,
+    *,
+    facts_loaded: int,
+    skipped_catalogs: list[SkippedCatalog],
+    catalogs_run: dict[str, int],
+    unexpanded_types: tuple[str, ...],
+    value_resolutions: int,
+) -> ResolveReport:
+    """A resolve's report: its rows read off the workspace's tables, and the rest as the
+    resolve that wrote those tables counted it. One function, so a re-run that keeps the
+    previous resolve (OI-325, `stages/analyze.py`) reports what that resolve reported."""
+    return ResolveReport(
+        facts_loaded=facts_loaded,
+        value_resolutions=value_resolutions,
+        endpoints=workspace.query("endpoints"),
+        skipped_catalogs=skipped_catalogs,
         catalogs_run=catalogs_run,
         coverage=coverage_of(workspace),
         shapes=workspace.query("shapes"),
@@ -435,11 +463,5 @@ def resolve(
         bean_presence=workspace.query("bean_presence"),
         symbol_beans=workspace.query("symbol_beans"),
         candidate_presence=workspace.query("candidate_presence"),
-        # Both passes root payload types and both expand what they root, so
-        # both can meet a type nothing opens. Reported as one list, deduped:
-        # the gap is in the type, not in how many passes walked into it —
-        # the same rule `derive_endpoint_shapes` applies across catalogs.
-        unexpanded_types=tuple(
-            dict.fromkeys([*expanded.unexpanded_types, *bound.unexpanded_types])
-        ),
+        unexpanded_types=unexpanded_types,
     )

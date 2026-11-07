@@ -26,6 +26,7 @@ from sextant.application.ports.descriptors import DescriptorInterpreter
 from sextant.application.ports.detector import Detector, ModuleModel, select_detector
 from sextant.application.ports.progress import Progress
 from sextant.application.ports.scanner import (
+    ReuseRecord,
     ScanError,
     Scanner,
     ScannerProvenance,
@@ -33,12 +34,14 @@ from sextant.application.ports.scanner import (
     select_scanner,
 )
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.pipeline import ResolveReport, resolve
+from sextant.application.resolve.endpoints import SkippedCatalog
+from sextant.application.resolve.pipeline import ResolveReport, report_of, resolve
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import (
     config_fact_target,
     discard_library_facts,
     discard_scanned_facts,
+    fact_tree_digest,
     library_fact_root,
     read_fact_tree,
     schema_fact_target,
@@ -53,7 +56,7 @@ from sextant.domain.facts import (
 )
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.resource_files import list_files
-from sextant.domain.version import FACT_SCHEMA_VERSION, SEXTANT_VERSION
+from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SEXTANT_VERSION
 
 # The module fact's own document (`_write_module_fact`). Its `relative_path`,
 # its `language` and its fact file's name are one literal: the document IS the
@@ -186,6 +189,12 @@ def analyze(
     # single row of `endpoints`, `endpoint_metadata` or `shapes` moving.
     # Defaulted off, so every existing caller analyses exactly as before.
     shadow: bool = False,
+    # OI-325: a digest of everything outside the fact files that the resolve reads and this
+    # stage cannot see — the catalogs and Sextant's own code — from the composition root.
+    # Given, a resolve over the same fact files, capabilities, flag and versions as the
+    # workspace's last finished one is not run again: its tables are the answer. None, the
+    # default every caller that builds this pipeline by hand keeps, resolves every time.
+    resolve_inputs: str | None = None,
 ) -> AnalyzeResult:
     progress.define("detect", "detect")
     progress.define("scan", "scan")
@@ -231,6 +240,15 @@ def analyze(
     # rewrite. Stated because it is load-bearing and free to satisfy, not
     # because it is enforced.
     discard_library_facts(fact_root)
+    # What the previous scan into this fact root recorded about each document it wrote
+    # (OI-325, `ReuseRecord`): the scanner keeps a document whose inputs are all the same.
+    # Emptied before the scan, so a scan that stops part-way leaves no record for a fact
+    # file it may not have finished, and written again after it.
+    previous = tuple(
+        ReuseRecord(str(row["target"]), str(row["key"]), str(row["detail"]))
+        for row in workspace.query("scan_reuse")
+    )
+    workspace.derive("scan_reuse_reset")
     # And the module's OWN classes, for the same reason one line up: a class that was
     # deleted, renamed, or moved to another package overwrites nothing, so its facts
     # would stay in the workspace and keep deriving rows for source that is not there.
@@ -238,7 +256,15 @@ def analyze(
     # two inbound Pub/Sub endpoints, 143 against a fresh workspace's 141 on identical
     # source. BEFORE the scan, for the reason above and for one more: after it, this
     # would delete what the scan had just written.
-    discard_scanned_facts(fact_root, *module.output_dirs)
+    #
+    # Except the fact files a previous scan recorded, which this scan may keep (OI-325):
+    # each is either kept or rewritten by the scan, and one it neither keeps nor writes —
+    # its source deleted, ignored or no longer readable — goes after the scan, below.
+    discard_scanned_facts(
+        fact_root,
+        *module.output_dirs,
+        keep=frozenset(fact_root / record.target for record in previous),
+    )
     # EVERY output directory the build reports, read in ONE scan (OI-273): Gradle's
     # `classesDirs` is a set, one directory per compiling plugin. The first may not exist
     # at all (a plugin with nothing to compile never creates it), and on a module with
@@ -301,7 +327,23 @@ def analyze(
             dependency_archives=module.dependency_archives,
             ignore=ignore,
             environment=module.environment,
+            previous=previous,
         )
+    )
+    if previous:
+        # The rest of the retraction above: every recorded fact file this scan neither
+        # kept nor wrote, so the tree holds exactly what a scan from nothing writes.
+        discard_scanned_facts(
+            fact_root,
+            *module.output_dirs,
+            keep=frozenset(fact_root / record.target for record in scan_report.records),
+        )
+    workspace.derive(
+        "scan_reuse_insert",
+        rows=[
+            {"target": record.target, "key": record.key, "detail": record.detail}
+            for record in scan_report.records
+        ],
     )
     # Each opted-into library (D04 §2a) is scanned by the SAME scanner, through
     # the same port, into its own subtree — nothing here knows it is reading an
@@ -371,7 +413,11 @@ def analyze(
             note.replace(str(library.archive), library.coordinate)
             for note in library_report.uncovered
         )
-    progress.finish("scan", f"{scanned_facts} facts")
+    progress.finish(
+        "scan",
+        f"{scanned_facts} facts"
+        + (f", {scan_report.reused} files unchanged" if scan_report.reused else ""),
+    )
 
     # Ingress stays model-blind (design §1): every parseable config file
     # under every resource root is read, sorted by relative path (NFR-1),
@@ -442,8 +488,20 @@ def analyze(
     progress.finish("interpret", f"{len(descriptors_not_interpreted)} not interpreted")
 
     progress.start("resolve")
-    report = resolve(workspace, fact_root, catalogs, scanner.capabilities(), shadow=shadow)
-    progress.finish("resolve", f"{len(report.endpoints)} endpoints")
+    capabilities = scanner.capabilities()
+    report = _kept_resolve(workspace, fact_root, capabilities, shadow, resolve_inputs)
+    if report is None:
+        workspace.derive("resolve_stamp_reset")
+        report = resolve(workspace, fact_root, catalogs, capabilities, shadow=shadow)
+        if resolve_inputs is not None:
+            workspace.derive(
+                "resolve_stamp_insert",
+                key=_resolve_key(fact_root, capabilities, shadow, resolve_inputs),
+                report=_stamped_report(report),
+            )
+        progress.finish("resolve", f"{len(report.endpoints)} endpoints")
+    else:
+        progress.finish("resolve", f"{len(report.endpoints)} endpoints, nothing changed")
 
     # The detector always writes the module document, so it is always a
     # producer; the class scanner reports its own third-party libraries; the
@@ -467,6 +525,84 @@ def analyze(
         descriptors_not_interpreted,
         tuple(libraries_not_scanned),
         model.notes,
+    )
+
+
+def _resolve_key(fact_root: Path, capabilities: set[str], shadow: bool, resolve_inputs: str) -> str:
+    """Everything a resolve reads, as one digest (OI-325, D01 §7): the fact files' bytes,
+    the scanner's capabilities, `--shadow`, the three versions, and `resolve_inputs`, the
+    composition root's digest of the catalogs and Sextant's code. Nothing else reaches a
+    resolve: it reads the workspace, the catalogs and these arguments, and no file or
+    environment variable of its own (ARCHITECTURE §10)."""
+    text = json.dumps(
+        [
+            fact_tree_digest(fact_root),
+            sorted(capabilities),
+            shadow,
+            SEXTANT_VERSION,
+            FACT_SCHEMA_VERSION,
+            GRAPH_SCHEMA_VERSION,
+            resolve_inputs,
+        ]
+    )
+    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+
+
+def _kept_resolve(
+    workspace: Workspace,
+    fact_root: Path,
+    capabilities: set[str],
+    shadow: bool,
+    resolve_inputs: str | None,
+) -> ResolveReport | None:
+    """The workspace's last resolve, where it read exactly what this one would: its tables
+    are then what this resolve writes, and its report is read back as `report_of` reads any
+    report. None where anything it read differs, or no resolve finished."""
+    if resolve_inputs is None:
+        return None
+    stamp = workspace.query("resolve_stamp")
+    if not stamp or stamp[0]["key"] != _resolve_key(
+        fact_root, capabilities, shadow, resolve_inputs
+    ):
+        return None
+    kept = json.loads(str(stamp[0]["report"]))
+    return report_of(
+        workspace,
+        facts_loaded=int(kept["facts_loaded"]),
+        skipped_catalogs=[
+            SkippedCatalog(
+                one["catalog_id"],
+                tuple(one["missing_capabilities"]),
+                tuple(one["feeds"]),
+                one["cause"],
+            )
+            for one in kept["skipped_catalogs"]
+        ],
+        catalogs_run=dict(kept["catalogs_run"]),
+        unexpanded_types=tuple(kept["unexpanded_types"]),
+        value_resolutions=int(kept["value_resolutions"]),
+    )
+
+
+def _stamped_report(report: ResolveReport) -> str:
+    """The part of a resolve's report no table holds, for `_kept_resolve`."""
+    return json.dumps(
+        {
+            "facts_loaded": report.facts_loaded,
+            "skipped_catalogs": [
+                {
+                    "catalog_id": one.catalog_id,
+                    "missing_capabilities": list(one.missing_capabilities),
+                    "feeds": list(one.feeds),
+                    "cause": one.cause,
+                }
+                for one in report.skipped_catalogs
+            ],
+            "catalogs_run": report.catalogs_run,
+            "unexpanded_types": list(report.unexpanded_types),
+            "value_resolutions": report.value_resolutions,
+        },
+        sort_keys=True,
     )
 
 

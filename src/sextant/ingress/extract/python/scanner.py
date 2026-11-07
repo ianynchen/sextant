@@ -5,15 +5,17 @@ source file. It never imports or runs the code it reads, and it downloads nothin
 
 import ast
 import hashlib
+import json
 import os
 import sys
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 
 from sextant.application.ports.detector import LibraryRoot
-from sextant.application.ports.scanner import ScanReport, ScanRequest
+from sextant.application.ports.scanner import ReuseRecord, ScanReport, ScanRequest
 from sextant.domain.closed_sets import OriginTier
-from sextant.domain.factfile import write_fact_file
+from sextant.domain.factfile import read_document, write_fact_file
 from sextant.domain.facts import Document, Fact, SymbolFact
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.symbols import NOT_APPLICABLE, PYTHON_SCHEME, bare_descriptor
@@ -27,7 +29,7 @@ from sextant.ingress.extract.python.libraries import (
     referenced_types,
 )
 from sextant.ingress.extract.python.structure import file_facts
-from sextant.resources import typeshed_dir
+from sextant.resources import code_identity, typeshed_dir
 
 _LANGUAGE = "python"
 _SCANNER_ID = "sextant-python-scanner"
@@ -78,15 +80,25 @@ class PythonScanner:
             if request.origin is None
             else None
         )
-        index = ModuleIndex(frozenset(_module_paths(relative for _, relative in files)), libraries)
+        index = ModuleIndex(
+            frozenset(_module_paths(relative for _, relative in files)), libraries, asked=set()
+        )
         manager = NOT_APPLICABLE if request.coordinates == NOT_APPLICABLE else _PACKAGE_MANAGER
         prefix = f"{PYTHON_SCHEME} {manager} {request.coordinates} {request.version} "
-        documents = facts = 0
+        documents = facts = reused = 0
         uncovered: list[str] = []
+        # The library notes, each file's in file order: one line per note however many
+        # files lead to it, in the order a scan of every file first meets it.
+        library_notes: list[str] = []
         # The module's types, and every type its facts name: what the header read starts
         # from (D00 §5 `type_header`).
         own: set[str] = set()
         referenced: set[str] = set()
+        # Only the module's own scan keeps documents (OI-325): an opted-in library's is read
+        # whole into a subtree the stage discards before every run (D04 §2a).
+        previous = {record.target: record for record in request.previous}
+        inputs = _inputs(request, prefix, libraries) if request.origin is None else None
+        records: list[ReuseRecord] = []
         for root, relative in files:
             here, is_package = module_path(relative)
             if not here:
@@ -97,11 +109,6 @@ class PythonScanner:
             except OSError as failure:
                 # A broken link, or a file this process may not read.
                 uncovered.append(f"{relative}: not readable: {failure.strerror or failure}")
-                continue
-            try:
-                tree = ast.parse(content, filename=relative)
-            except (SyntaxError, ValueError, RecursionError) as failure:
-                uncovered.append(f"{relative}: not readable as Python: {_reason(failure)}")
                 continue
             document = Document(
                 document_id=hashlib.sha256(relative.encode()).hexdigest(),
@@ -119,23 +126,75 @@ class PythonScanner:
                 redaction_set_hash=_NO_REDACTION_HASH,
                 origin=request.origin,
             )
+            target = f"{relative}.jsonl"
+            kept = (
+                _kept(previous.get(target), document, inputs, index, request.out_dir / target)
+                if inputs is not None
+                else None
+            )
+            if kept is not None:
+                # The previous scan's document is what this one would write: its fact file
+                # stays, and what it added to the report is added again.
+                documents += 1
+                reused += 1
+                facts += kept.facts
+                uncovered.extend(kept.notes)
+                library_notes.extend(kept.library_notes)
+                own.update(kept.declared)
+                referenced.update(kept.referenced)
+                records.append(kept.record)
+                continue
+            try:
+                tree = ast.parse(content, filename=relative)
+            except (SyntaxError, ValueError, RecursionError) as failure:
+                uncovered.append(f"{relative}: not readable as Python: {_reason(failure)}")
+                continue
+            assert index.asked is not None
+            index.asked.clear()
+            if libraries is not None:
+                libraries.notes = []
             context = FileContext(here, is_package, index, prefix, document.document_id)
             read = file_facts(tree, context, len(content.splitlines()) or 1)
-            uncovered.extend(f"{relative}: {note}" for note in read.notes)
+            notes = [f"{relative}: {note}" for note in read.notes]
+            uncovered.extend(notes)
+            file_library_notes = list(libraries.notes) if libraries is not None else []
+            library_notes.extend(file_library_notes)
             if read.not_read:
                 document = document.model_copy(
                     update={"partial": True, "partial_reason": "\n".join(read.not_read)}
                 )
-            write_fact_file(request.out_dir / f"{relative}.jsonl", document, read.facts)
+            write_fact_file(request.out_dir / target, document, read.facts)
             documents += 1
             facts += len(read.facts)
+            declared = _declared(read.facts)
+            types = referenced_types(read.facts)
             if libraries is not None:
-                own.update(_declared(read.facts))
-                referenced |= referenced_types(read.facts)
+                own.update(declared)
+                referenced |= types
+            if inputs is not None:
+                asked = sorted(index.asked)
+                records.append(
+                    ReuseRecord(
+                        target=target,
+                        key=_key(inputs, document, asked, index),
+                        detail=json.dumps(
+                            {
+                                "asked": asked,
+                                "facts": len(read.facts),
+                                "notes": notes,
+                                "library_notes": file_library_notes,
+                                "declared": sorted(declared),
+                                "referenced": sorted(types),
+                            },
+                            separators=(",", ":"),
+                        ),
+                    )
+                )
         if libraries is not None:
             # After every module file, as the JVM scanner reads its classpath: the one
             # synthetic document of every library type's header. It is not a file this
             # module holds, so `documents` does not count it.
+            libraries.notes = []
             document_id = hashlib.sha256(f"type-headers:{request.module_id}".encode()).hexdigest()
             headers, unlocated, not_read = libraries.headers(referenced, own, document_id)
             write_fact_file(
@@ -144,7 +203,7 @@ class PythonScanner:
                 list(headers),
             )
             facts += len(headers)
-            uncovered.extend(libraries.notes)
+            uncovered.extend(dict.fromkeys([*library_notes, *libraries.notes]))
             uncovered.extend(not_read)
         return ScanReport(
             documents=documents,
@@ -152,7 +211,80 @@ class PythonScanner:
             scanner_id=_SCANNER_ID,
             capabilities=tuple(sorted(_CAPABILITIES)),
             uncovered=tuple(uncovered),
+            records=tuple(records),
+            reused=reused,
         )
+
+
+@dataclass(frozen=True)
+class _Kept:
+    """A previous scan's document this scan keeps, and what it added to that scan's report."""
+
+    record: ReuseRecord
+    facts: int
+    notes: list[str]
+    library_notes: list[str]
+    declared: list[str]
+    referenced: list[str]
+
+
+def _inputs(request: ScanRequest, prefix: str, libraries: Libraries | None) -> str:
+    """What every document of the module's own scan is read from beyond its own file: this
+    reader's code and stamps, the Python that parses, the module's identity, and the
+    libraries (OI-325). `.sextantignore` and the other files reach a document only through
+    the module index, whose answers each document's key holds."""
+    return json.dumps(
+        [
+            _SCANNER_ID,
+            SEXTANT_VERSION,
+            FACT_SCHEMA_VERSION,
+            code_identity(),
+            sys.version,
+            request.module_id,
+            prefix,
+            libraries.fingerprint if libraries is not None else None,
+        ]
+    )
+
+
+def _key(inputs: str, document: Document, asked: list[tuple[str, str]], index: ModuleIndex) -> str:
+    """One document's key: the scan's inputs, its document record before it is read (the
+    file's content hash, its import root and path), and the module index's answer to every
+    question the file asked of it."""
+    stamped = document.model_copy(update={"partial": False, "partial_reason": None})
+    text = json.dumps([inputs, stamped.model_dump(mode="json"), asked, index.answers(asked)])
+    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+
+
+def _kept(
+    record: ReuseRecord | None,
+    document: Document,
+    inputs: str,
+    index: ModuleIndex,
+    path: Path,
+) -> _Kept | None:
+    """The previous scan's document for this file, where a fresh read would write the same:
+    the key is the same under this scan's inputs and index, and the fact file still holds
+    the document that scan wrote (D00 §2's stamps, the content hash among them)."""
+    if record is None:
+        return None
+    detail = json.loads(record.detail)
+    asked = [(str(question), str(path)) for question, path in detail["asked"]]
+    if record.key != _key(inputs, document, asked, index):
+        return None
+    written = read_document(path)
+    if written is None or written.model_copy(
+        update={"partial": False, "partial_reason": None}
+    ) != document.model_copy(update={"partial": False, "partial_reason": None}):
+        return None
+    return _Kept(
+        record,
+        int(detail["facts"]),
+        list(detail["notes"]),
+        list(detail["library_notes"]),
+        list(detail["declared"]),
+        list(detail["referenced"]),
+    )
 
 
 def _declared(facts: list[Fact]) -> set[str]:
