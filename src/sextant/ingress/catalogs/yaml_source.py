@@ -507,7 +507,7 @@ class YamlCatalogSource:
                 raise CatalogError(f"loading catalog {path}: not a YAML mapping")
             shape = _shape_model_of(raw, shape_models, path)
             _check_made_by(raw, path)
-            _check_argument_references(raw.get("matches"), raw.get("style"), path)
+            _check_argument_references(raw, raw.get("style"), path)
             catalogs.append(
                 Catalog(
                     id=_required(raw, "id", path),
@@ -613,6 +613,11 @@ class YamlCatalogSource:
                     dispatch_views=_dispatch_views(raw["matches"], path),
                     dispatch_implementations=_dispatch_implementations(raw["matches"], path),
                 )
+            )
+            # The merged `matches` too: a client model's `client_base` rungs reach the engine
+            # through it, read as positions.
+            _check_argument_references(
+                catalogs[-1].matches, raw.get("style"), path, "dispatch" in raw
             )
         _check_mechanisms(catalogs)
         # The annotations that make the container fill a slot from configuration (Spring's
@@ -1805,26 +1810,60 @@ def _returns_argument(entry: Any, path: Path) -> dict[str, Any]:
 
 
 # The styles whose engines read an argument written in a keyword form (`{keyword: name}`,
-# `{arg: N, keyword: name}`, design 2026-11-06-reading-decorators §3a) wherever they read a
-# `*_arg` key: each reader goes through `values.argument_slot`.
+# `{arg: N, keyword: name}`, design 2026-11-06-reading-decorators §3a), and the keys whose
+# every reader there takes such a reference (`values.argument_slot`, `_arg_at`): `single_call`'s
+# own `methods` positions, a `mount`'s two, and a call-naming `request_params` entry's. Every
+# other `*_arg` key is read as an integer somewhere (`client_arg`, `class_arg`, `value_arg`,
+# `block_arg`, `options_arg`, `handler_arg`, `payload_arg`, `receiver_arg`, …), and so is
+# `channel_arg` on a catalog that declares `dispatch` (`dispatch_hops`), so a mapping there
+# would fail at run time: it is refused at load.
 _KEYWORD_ARGUMENT_STYLES = ("fluent", "single_call")
+_REFERENCE_ARGUMENT_KEYS = frozenset(
+    {
+        "url_arg",
+        "channel_arg",
+        "body_arg",
+        "response_arg",
+        "record_arg",
+        "method_arg",
+        "lambda_arg",
+        "address_arg_2",
+        "router_arg",
+        "prefix_arg",
+        "name_arg",
+        "required_arg",
+        "default_arg",
+        "flag_arg",
+    }
+)
+# `annotation_arg` names an annotation attribute's condition (`protocol_hint`, `wrappers`), a
+# mapping by design and no argument of a call.
+_NOT_AN_ARGUMENT = frozenset({"annotation_arg"})
 _REFERENCE_KEYS = frozenset({"arg", "keyword"})
 
 
-def _check_argument_references(matches: Any, style: Any, path: Path) -> None:
-    """Every mapping a `*_arg` key under `matches` holds is an argument reference: exactly
+def _check_argument_references(node: Any, style: Any, path: Path, dispatch: bool = False) -> None:
+    """Every mapping a `*_arg` key in the catalog holds is an argument reference: exactly
     `{keyword: name}` or `{arg: N, keyword: name}`, a keyword that is an identifier and a
-    position that is a non-negative integer, on a style whose engine reads that form. A
-    mapping in another shape, or on another style, is refused naming the file, since its
-    reader would read it as nothing or as half of what it says."""
-    if isinstance(matches, list):
-        for item in matches:
-            _check_argument_references(item, style, path)
+    position that is a non-negative integer, on a key whose every reader takes one in a style
+    that reads it (`_REFERENCE_ARGUMENT_KEYS`). A mapping in another shape, on another key or
+    on another style is refused naming the file, since its reader would read it as nothing,
+    as half of what it says, or fail at run time."""
+    if isinstance(node, dict) and dispatch is False and "dispatch" in node and "style" in node:
+        dispatch = True
+    if isinstance(node, list):
+        for item in node:
+            _check_argument_references(item, style, path, dispatch)
         return
-    if not isinstance(matches, dict):
+    if not isinstance(node, dict):
         return
-    for key, value in matches.items():
-        if isinstance(key, str) and key.endswith("_arg") and isinstance(value, dict):
+    for key, value in node.items():
+        if (
+            isinstance(key, str)
+            and key.endswith("_arg")
+            and key not in _NOT_AN_ARGUMENT
+            and isinstance(value, dict)
+        ):
             keyword, position = value.get("keyword"), value.get("arg", 0)
             valid = (
                 set(value) <= _REFERENCE_KEYS
@@ -1840,7 +1879,13 @@ def _check_argument_references(matches: Any, style: Any, path: Path) -> None:
                     f"or `{{keyword: name}}` / `{{arg: N, keyword: name}}` on a "
                     f"{' or '.join(_KEYWORD_ARGUMENT_STYLES)} catalog"
                 )
-        _check_argument_references(value, style, path)
+            if key not in _REFERENCE_ARGUMENT_KEYS or (dispatch and key == "channel_arg"):
+                raise CatalogError(
+                    f"loading catalog {path}: `{key}: {value!r}` — `{key}` is read as an "
+                    f"argument position only; the keyword forms are read on "
+                    f"{', '.join(sorted(_REFERENCE_ARGUMENT_KEYS))}"
+                )
+        _check_argument_references(value, style, path, dispatch)
 
 
 # D00 §4's `root_kind` members a catalog may route its rows to (design

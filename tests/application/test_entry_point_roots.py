@@ -815,3 +815,64 @@ def test_the_loader_refuses_a_malformed_optional_when(tmp_path: Path):
             YamlCatalogSource(tmp_path),
             PythonScanner().capabilities(),
         )
+
+
+def test_a_command_on_a_subclassed_group_is_registered(tmp_path: Path):
+    """`class MyGroup(click.Group)`: its `command` is `Group.command`, matched as the walk
+    matches a root on a subtype (redash's `AppGroup` is such a class)."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "cli.py": (
+                "import click\n"
+                "class MyGroup(click.Group):\n    pass\n"
+                "cli = MyGroup()\n"
+                "@cli.command('x')\n"
+                "@click.option('--n')\n"
+                "def x(n):\n    pass\n"
+            )
+        },
+        entry_points={},
+    )
+
+    assert _roots(workspace) == [(_handler("x"), "<program> x")]
+    assert _params(workspace) == [("<program> x", "option", "--n", "optional", "resolved")]
+
+
+def test_an_option_of_a_handler_taking_any_keyword_has_no_name(tmp_path: Path):
+    """`def b(**kwargs)` may receive any name, so no string `option("--y", "y_val")` writes can
+    be told to be the parameter's rather than a spelling: one row, name NULL, `unresolved`,
+    its requirement as read."""
+    rows = _one_command(tmp_path, "@click.option('--y', 'y_val', required=True)\n", "**kwargs")
+
+    assert rows == [("option", None, "required")]
+
+
+@pytest.mark.parametrize(
+    "catalog",
+    [
+        # A key read as an integer: `single_call`'s `client_base.client_arg`.
+        (
+            "id: x\nstyle: single_call\nprotocol: http\ndirection: outbound\nmatches:\n"
+            "  owner: app.lib\n  client_base: { client_arg: {keyword: client} }\n"
+            "  methods:\n    - { name: fetch, http_method: GET, url_arg: 0 }\n"
+        ),
+        # A fluent step's `receiver_arg`, read as an integer.
+        _CLICK_LIKE.replace(
+            "{ method: __call__, captures: { handler: arg0 } }",
+            "{ method: __call__, receiver_arg: {keyword: self}, captures: { handler: arg0 } }",
+        ),
+        # `channel_arg` on a catalog that declares `dispatch`: `dispatch_hops` reads it as one.
+        (
+            "id: x\nstyle: single_call\ndispatch: { mechanism: actor }\nmatches:\n"
+            "  owner: app.lib\n"
+            "  methods:\n    - { name: fetch, channel_arg: {keyword: key} }\n"
+        ),
+    ],
+)
+def test_the_loader_refuses_a_keyword_form_on_a_key_read_as_an_integer(
+    tmp_path: Path, catalog: str
+):
+    (tmp_path / "x.yml").write_text(catalog, encoding="utf-8")
+    with pytest.raises(CatalogError, match="read as an argument position only"):
+        YamlCatalogSource(tmp_path).load()

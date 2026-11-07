@@ -621,7 +621,9 @@ def request_param_calls(catalog: Catalog) -> dict[tuple[str, str], dict[str, Any
 
 
 def request_param_rows(
-    entry: Mapping[str, Any], arguments: list[dict[str, Any]], parameters: frozenset[str]
+    entry: Mapping[str, Any],
+    arguments: list[dict[str, Any]],
+    parameters: frozenset[str] | None,
 ) -> list[tuple[str, str | None, str | None, str]]:
     """`(kind, name, requirement, resolution)` of each input one decorator call an entry names
     declares, read off its own arguments (design 2026-11-06-reading-decorators §3d, §3f):
@@ -632,19 +634,26 @@ def request_param_rows(
       less each that is one of the handler's own `parameters`: such a string names the
       parameter the value lands in, which nobody types. Every other string is a spelling, one
       row each (an enumerable set is exact), and a positional argument not read as a string
-      adds one row with no name, `unresolved`;
+      adds one row with no name, `unresolved`. `parameters` None is a handler that takes
+      `**kwargs`: any string may name where a value lands, so none can be told to be a
+      spelling, and the input is one row with no name, `unresolved`, its requirement as read;
     - **the requirement**, first answer wins: a `required_arg` written as a literal boolean
       (one written as anything else is not read, NULL); `optional_when`'s argument written
       with its value, `optional` (written with no literal value, not read, NULL); a
       `default_arg` that is written, `optional`; else the entry's default;
     - `kind` is `flag` where `flag_arg` is written as the literal `True`: the input takes no
       value."""
+    names: list[str | None]
     if entry["name_arg"] == ALL_STRINGS:
-        names = [
-            name
-            for _, name, _ in _all_string_channels(arguments)
-            if name is None or name not in parameters
-        ]
+        names = (
+            [None]
+            if parameters is None
+            else [
+                name
+                for _, name, _ in _all_string_channels(arguments)
+                if name is None or name not in parameters
+            ]
+        )
     else:
         names = [_literal(_arg_at(arguments, entry["name_arg"]), "string")]
     requirement = _requirement_of_call(entry, arguments)

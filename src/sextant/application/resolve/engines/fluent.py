@@ -355,7 +355,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     _validate_options_capture([*roots, *bean_roots, *steps], client_base, catalog)
     if catalog.root_kind is not None:
         _run_entry_points(
-            workspace, catalog, matches, mount_rules, walk_index, refuses_unrooted, method_symbols
+            workspace,
+            catalog,
+            matches,
+            mount_rules,
+            walk_index,
+            refuses_unrooted,
+            method_symbols,
+            roots,
         )
         return
     if "path_fallback" in matches or any("path_fallback" in root for root in matches["roots"]):
@@ -559,6 +566,7 @@ def _run_entry_points(
     index: ValueIndex,
     refuses_unrooted: bool,
     method_symbols: Mapping[str, str],
+    registrations: Sequence[dict[str, Any]],
 ) -> None:
     """A `root_kind: entry_point` catalog (design 2026-11-06-reading-decorators §5): each
     chain that reaches its terminal is a program entry point, one `roots` row per command
@@ -598,21 +606,16 @@ def _run_entry_points(
     # decorator writes that is one of them names the parameter, not an input anyone types.
     declared = workspace.once(declared_parameters_of)
 
-    def parameter_names(handler: str) -> frozenset[str]:
+    def parameter_names(handler: str) -> frozenset[str] | None:
+        """The handler's parameter names; None where it takes `**kwargs`, which may receive
+        any name, so no string can be told to be a parameter's rather than a spelling."""
+        parameters = declared.get(handler, ())
+        if any(parameter.get("kind") == "var_keyword" for parameter in parameters):
+            return None
         return frozenset(
-            str(parameter["name"])
-            for parameter in declared.get(handler, ())
-            if parameter.get("name") is not None
+            str(parameter["name"]) for parameter in parameters if parameter.get("name") is not None
         )
 
-    # The registrations: a chain end is a command only where its root is one of these. The
-    # walk also hands back ends with no declared root (a `__call__` walked back to nothing),
-    # which register nothing.
-    registrations = {
-        (owner, str(root["method"]))
-        for root in matches["roots"]
-        for owner in catalog_symbols(root.get("owner"), f"{where}: roots[].owner")
-    }
     ends = list(chain_ends(workspace, catalog, PUBLISHED_PARTS))
     mounts: MountReader | None = None
     mounted: dict[tuple[str, int], Mount] = {}
@@ -627,7 +630,11 @@ def _run_entry_points(
         if terminal is None or _site_key(end.root) in mounted or _site_key(terminal) in mounted:
             # A group's chain makes the router its commands are mounted on: no row of its own.
             continue
-        if (end.root.get("owner"), end.root.get("name")) not in registrations:
+        # A chain end is a command only where its root is a declared registration, matched as
+        # the walk matches one (`_matching_root`: a subclass's call is its base's, as a
+        # `class MyGroup(click.Group)`'s `command` is). The walk also hands back ends with no
+        # declared root (a `__call__` walked back to nothing), which register nothing.
+        if _matching_root(dict(end.root), list(registrations)) is None:
             continue
         captured = end.captures.get("handler")
         at = captured.get(_CAPTURED_AT) if isinstance(captured, dict) else None
@@ -733,12 +740,25 @@ def _entry_paths(
                 path = join_prefix(prefix.text, word, WORDS)
             elif mounts is not None and any(place[-1][0] for place in prefix.places):
                 path = mounts.outermost(prefix, word)
+            elif _made_on_something(end.root):
+                # Registered ON an object the router walk could not pin to a call (a group a
+                # subclass's constructor made): there is a router, and which program it is
+                # cannot be read, so the command's word stays behind the hole.
+                path = join_prefix(UNREAD_PROGRAM, word, WORDS)
             else:
                 # No router: the command is the program, started by its installed name.
                 path = program
             if path not in found:
                 found.append(path)
     return tuple(found)
+
+
+def _made_on_something(site: Mapping[str, Any]) -> bool:
+    """Whether a call is made on a receiver at all (D00 §5: a value id, a field or a
+    parameter), rather than on nothing, as a module function is called."""
+    return any(
+        site.get(key) is not None for key in ("receiver", "receiver_field", "receiver_parameter")
+    )
 
 
 def _own_words(
