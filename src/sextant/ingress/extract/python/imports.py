@@ -6,13 +6,18 @@ PATH only: `from app.models import Order` is the member `Order` of the module `a
 or the module `app/models/Order` when such a file exists in the module's import roots. The
 other file's body is never read (M03: one file at a time).
 
+A decorated `def` binds its name to what its outermost decorator returns (`f = dec(f)`,
+design 2026-11-06-reading-decorators §3e): a value, so the name is a `variable`. The
+language's own descriptors (`DESCRIPTORS`) keep the name a `function`.
+
 Two branches that bind one name differently give a CLOSED LIST of both bindings, in the
 order the branches are written: `try: import ujson as json` / `except ImportError: import
 json` binds `json` to `ujson` and to `json`, and never to the first one silently.
 """
 
 import ast
-from collections.abc import Iterable, Sequence
+import builtins
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
@@ -205,7 +210,9 @@ class _Binder:
         elif isinstance(node, ast.ClassDef):
             names[node.name] = self._own(node.name, "class")
         elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            names[node.name] = self._own(node.name, "function")
+            decorated = holds_decorated_value(node, lambda written: self._lookup(written, names))
+            kind: Kind = "variable" if decorated else "function"
+            names[node.name] = self._own(node.name, kind)
         elif isinstance(node, ast.TypeAlias) and isinstance(node.name, ast.Name):
             names[node.name.id] = self._own(node.name.id, "type_alias", node.value)
         elif isinstance(node, ast.Assign | ast.AnnAssign):
@@ -223,6 +230,13 @@ class _Binder:
         elif isinstance(node, ast.Match):
             names = _either(names, [self.run(case.body, names) for case in node.cases])
         return names
+
+    def _lookup(self, node: ast.expr, names: dict[str, Binding]) -> tuple[Target, ...]:
+        """What a written name refers to, then the builtins, as `TypeScope.lookup` reads."""
+        found = resolve(node, names, self._index)
+        if found or not isinstance(node, ast.Name) or node.id not in _BUILTIN_NAMES:
+            return found
+        return (Target(_BUILTINS, node.id),)
 
     def _assignment(self, node: ast.Assign | ast.AnnAssign, names: dict[str, Binding]) -> None:
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -348,6 +362,54 @@ def resolve(node: ast.expr, names: dict[str, Binding], index: ModuleIndex) -> tu
             if target not in found:
                 found.append(target)
     return tuple(found)
+
+
+# The language's own method kinds (design 2026-11-06-reading-decorators §3e): a `def` they
+# decorate keeps the method model, as a JVM modifier does. Matched by the symbol a
+# decorator names, never by its text.
+DESCRIPTORS = frozenset(
+    {
+        ("builtins", "staticmethod"),
+        ("builtins", "classmethod"),
+        ("builtins", "property"),
+        ("functools", "cached_property"),
+        ("typing", "overload"),
+        ("typing_extensions", "overload"),
+        ("abc", "abstractmethod"),
+    }
+)
+_BUILTINS = "builtins"
+_BUILTIN_NAMES = frozenset(dir(builtins))
+# A property's own decorators (`@x.setter` on `def x`): the property's methods.
+_PROPERTY_PARTS = frozenset({"setter", "getter", "deleter"})
+
+
+def is_descriptor(
+    decorator: ast.expr, name: str, lookup: Callable[[ast.expr], tuple[Target, ...]]
+) -> bool:
+    """Whether `decorator`, on the `def` named `name`, is one of the language's own method
+    kinds: a name bound to one of `DESCRIPTORS`, or `@name.setter` (`getter`, `deleter`) of
+    the property of that name."""
+    if (
+        isinstance(decorator, ast.Attribute)
+        and decorator.attr in _PROPERTY_PARTS
+        and isinstance(decorator.value, ast.Name)
+        and decorator.value.id == name
+    ):
+        return True
+    if not isinstance(decorator, ast.Name | ast.Attribute):
+        return False
+    targets = lookup(decorator)
+    return len(targets) == 1 and (targets[0].module, targets[0].member) in DESCRIPTORS
+
+
+def holds_decorated_value(
+    node: ast.FunctionDef | ast.AsyncFunctionDef, lookup: Callable[[ast.expr], tuple[Target, ...]]
+) -> bool:
+    """Whether the name of `node` holds its decorators' result rather than the function:
+    it carries a decorator that is not one of the language's own method kinds. With both
+    kinds, the name holds the outermost decorator's result (design §3e)."""
+    return any(not is_descriptor(d, node.name, lookup) for d in node.decorator_list)
 
 
 def is_typing(target: Target, name: str) -> bool:

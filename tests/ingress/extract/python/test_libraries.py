@@ -910,3 +910,24 @@ def test_a_nested_checkout_under_an_import_root_is_not_scanned(tmp_path: Path):
     )
 
     assert [d.relative_path for _, d, _ in tree if not d.header_only] == ["app/a.py"]
+
+
+def test_a_bare_group_command_decorator_takes_the_callable_overload(tmp_path: Path):
+    """`@cli.command` with no parentheses: a function is callable, so it fits
+    `__func: Callable[..., Any]` and not `*args` alone deciding nothing: the name is a
+    `Command`."""
+    tree = _click(
+        tmp_path,
+        "import click\n"
+        "@click.group()\n"
+        "def cli():\n    pass\n"
+        "@cli.command\n"
+        "def bare():\n    pass\n"
+        "bare.main()\n"
+        "@click.group\n"
+        "def top():\n    pass\n"
+        "top.main()\n",
+    )
+
+    mains = [s for s in _owners(tree, "app/cli#<clinit>") if s[1] == "main"]
+    assert mains == [("click/core/Command#", "main"), ("click/core/Group#", "main")]

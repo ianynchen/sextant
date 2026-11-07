@@ -110,6 +110,10 @@ _LOOSE_FOLDER_NOTE = "python files in a folder with no project file, not analyse
 _LIST_ONLY_NOTE = "requirements with no python code of its own, not a module: "
 _UNREADABLE_NOTE = "build file not read, so its folder is not a module: "
 _OTHER_REPOSITORY_NOTE = "another repository, not analysed: "
+_ENTRY_POINT_NOT_STRING = "entry point not read, the target is not a string: "
+_ENTRY_POINT_NOT_A_LINE = (
+    "entry point not read, not a name = target line: setup.cfg console_scripts "
+)
 
 
 class _Identity(NamedTuple):
@@ -349,23 +353,34 @@ class _BuildFiles:
         names.update(normalize_name(key) for key in _table(self.pipfile, "packages"))
         return tuple(sorted(name for name in names if name))
 
-    def entry_points(self) -> dict[str, str]:
+    def entry_points(self) -> tuple[dict[str, str], list[str]]:
         """Each program this folder's build files declare, with its target as written
-        (design 2026-11-06-reading-decorators §7a): `[project.scripts]`,
+        (design 2026-11-06-reading-decorators §7a), extras included: `[project.scripts]`,
         `[tool.poetry.scripts]`, then `setup.cfg [options.entry_points] console_scripts`.
-        A name declared twice keeps the first table's target."""
+        A name declared twice keeps the first table's target. Each entry that is not a
+        name with a target string (a number, Poetry's table form, a line with no `=` or
+        no name) is a reason, so it is noted rather than dropped."""
         found: dict[str, str] = {}
-        for table in (_table(self.project, "scripts"), _table(self.poetry, "scripts")):
+        unread: list[str] = []
+        tables = (
+            ("[project.scripts]", _table(self.project, "scripts")),
+            ("[tool.poetry.scripts]", _table(self.poetry, "scripts")),
+        )
+        for label, table in tables:
             for name, target in table.items():
                 if isinstance(target, str):
                     found.setdefault(str(name), target.strip())
+                else:
+                    unread.append(f"{_ENTRY_POINT_NOT_STRING}{label} {name}")
         if self.setup_cfg is not None:
             scripts = self.setup_cfg.get("options.entry_points", "console_scripts", fallback="")
             for line in _cfg_lines(scripts):
                 name, separator, target = line.partition("=")
                 if separator and name.strip() and target.strip():
                     found.setdefault(name.strip(), target.strip())
-        return dict(sorted(found.items()))
+                else:
+                    unread.append(f"{_ENTRY_POINT_NOT_A_LINE}'{line.strip()}'")
+        return dict(sorted(found.items())), unread
 
     def import_roots(self, has_python: set[Path]) -> tuple[Path, ...]:
         """The folders a name like `app.api` is found from (§3e): the package settings
@@ -694,6 +709,8 @@ class PythonDetector:
             folder, dependencies, versions, site_packages
         )
         import_roots = files.import_roots(has_python)
+        entry_points, unread = files.entry_points()
+        notes.extend(f"{module_id}: {reason}" for reason in unread)
         model = ModuleModel(
             module_id=module_id,
             coordinates=coordinates,
@@ -713,7 +730,7 @@ class PythonDetector:
             environment=environment_folder,
             # Python finds a method by its method resolution order (spec §3b).
             lookup="c3",
-            entry_points=files.entry_points(),
+            entry_points=entry_points,
         )
         return model, notes
 

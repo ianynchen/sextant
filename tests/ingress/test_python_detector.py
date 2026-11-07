@@ -567,3 +567,31 @@ def test_a_folder_holding_git_is_another_repository_and_is_not_entered(tmp_path:
     assert "another repository, not analysed: .claude/worktrees/agent-1" in found.notes
     assert "another repository, not analysed: vendor/other" in found.notes
     assert not found.multi_module
+
+
+def test_an_entry_point_that_cannot_be_read_is_noted(tmp_path: Path):
+    """A script that is not a `name = "target"` string (a number, Poetry's table form) and
+    a `console_scripts` line with no `=` or no name are noted, not dropped silently. Extras
+    stay in the target as written."""
+    _write(
+        tmp_path / "pyproject.toml",
+        '[project]\nname = "a"\nversion = "1"\n'
+        '[project.scripts]\nok = "a.m:f"\nbad = 3\n'
+        '[tool.poetry.scripts]\ntbl = { callable = "a:b" }\n',
+    )
+    _write(
+        tmp_path / "setup.cfg",
+        "[options.entry_points]\nconsole_scripts =\n"
+        "    c1 = a.c:main [extra]\n    noeq\n    = a:b\n",
+    )
+    _write(tmp_path / "a" / "__init__.py")
+
+    found = PythonDetector().detect(tmp_path)
+
+    assert found.modules[0].entry_points == {"c1": "a.c:main [extra]", "ok": "a.m:f"}
+    assert [n for n in found.notes if "entry point" in n] == [
+        "a: entry point not read, not a name = target line: setup.cfg console_scripts '= a:b'",
+        "a: entry point not read, not a name = target line: setup.cfg console_scripts 'noeq'",
+        "a: entry point not read, the target is not a string: [project.scripts] bad",
+        "a: entry point not read, the target is not a string: [tool.poetry.scripts] tbl",
+    ]

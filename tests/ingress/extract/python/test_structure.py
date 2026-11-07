@@ -535,3 +535,107 @@ def test_a_call_as_a_base_is_named_a_call_result(tmp_path: Path):
         reason="not_readable",
         detail="base 1 'f()' is a call result, not a class name; parents from here on are not read",
     )
+
+
+# Task 9a fix round 1: a decorated name holds its decorator's result (design §3e, option A).
+
+
+def _clinit_sites(tree, here: str) -> list[CallSiteFact]:
+    return [
+        c
+        for c in _facts(tree, CallSiteFact)
+        if bare_descriptor(c.caller) == f"{here}#<clinit>({DIS})."
+    ]
+
+
+def test_a_decorated_def_writes_its_decorators_result_to_its_name(tmp_path: Path):
+    """`@dec def f` runs `f = dec(f)`: the name is a field written from the outermost
+    decorator's result, and every later read of the name reads that field. The function
+    itself is the `lambda` the innermost decorator receives."""
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/cli.py": (
+                "import click\n"
+                "@click.group()\n"
+                "def cli():\n    pass\n"
+                "@cli.group()\n"
+                "def module():\n    pass\n"
+                "cli.add_command(module)\n"
+                "alias = module\n"
+                "def run():\n    return cli()\n"
+            )
+        },
+    )
+
+    writes = {w.field: w.value for w in _facts(tree, FieldWriteFact)}
+    sites = _clinit_sites(tree, "app/cli")
+    _group, apply_cli, sub, apply_module, add = sites
+    assert apply_cli.arguments == [
+        CallArgument(kind="lambda", symbol=f"app/cli#cli({DIS}).", captures=0)
+    ]
+    assert writes["app/cli#cli."] == CallArgument(kind="unresolved", source=apply_cli.result)
+    assert writes["app/cli#module."] == CallArgument(kind="unresolved", source=apply_module.result)
+    assert sub.receiver_field == "app/cli#cli."
+    assert add.arguments == [CallArgument(kind="field", symbol="app/cli#module.")]
+    assert writes["app/cli#alias."] == CallArgument(kind="field", symbol="app/cli#module.")
+    (call,) = [c for c in _facts(tree, CallSiteFact) if "run" in c.caller]
+    assert (call.target.owner, call.target.name, call.invoke_kind) == (None, "__call__", "virtual")
+    assert call.receiver_field == "app/cli#cli."
+    symbols = _symbols(tree)
+    assert "app/cli#cli." in symbols and f"app/cli#cli({DIS})." in symbols
+
+
+def test_a_decorated_method_writes_a_class_field(tmp_path: Path):
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/svc.py": (
+                "import tenacity\nclass S:\n    @tenacity.retry\n    def go(self):\n        pass\n"
+            )
+        },
+    )
+
+    (write,) = [w for w in _facts(tree, FieldWriteFact) if w.field == "app/svc/S#go."]
+    assert write.value.kind == "unresolved" and write.value.source is not None
+    assert bare_descriptor(write.written_by) == f"app/svc/S#<clinit>({DIS})."
+
+
+def test_the_languages_own_descriptors_keep_the_method_model(tmp_path: Path):
+    """`staticmethod`, `classmethod`, `property` (and its setter), `cached_property`,
+    `overload` and `abstractmethod`, matched by what they name, not by their text: a name
+    bound to them some other way is the descriptor still, and a local function called
+    `property` is not one. A def that also carries another decorator holds that one's
+    result."""
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/k.py": (
+                "import abc\n"
+                "import builtins\n"
+                "import functools\n"
+                "import typing\n"
+                "from functools import cached_property as cp\n"
+                "def property(f):\n    return f\n"
+                "class K:\n"
+                "    @staticmethod\n    def a(): pass\n"
+                "    @classmethod\n    def b(cls): pass\n"
+                "    @builtins.property\n    def c(self): pass\n"
+                "    @cp\n    def d(self): pass\n"
+                "    @functools.cached_property\n    def e(self): pass\n"
+                "    @abc.abstractmethod\n    def f(self): pass\n"
+                "    @typing.overload\n    def g(self, x: int) -> int: ...\n"
+                "    def g(self, x): return x\n"
+                "    @property\n    def h(self): pass\n"
+                "    @staticmethod\n    @functools.lru_cache\n    def i(): pass\n"
+            ),
+            "app/p.py": (
+                "class P:\n"
+                "    @property\n    def x(self): pass\n"
+                "    @x.setter\n    def x(self, v): pass\n"
+            ),
+        },
+    )
+
+    fields = {w.field for w in _facts(tree, FieldWriteFact)}
+    assert fields == {"app/k/K#h.", "app/k/K#i."}

@@ -8,6 +8,8 @@ path the walk reached the receiver by) and `call_edges` (one edge per bound owne
 
 from pathlib import Path
 
+import pytest
+
 from sextant.application.ports.catalogs import Catalog, CatalogSource
 from sextant.application.ports.scanner import ScanRequest
 from sextant.application.resolve.call_edges import record_call_edges
@@ -641,4 +643,69 @@ def test_a_function_that_always_raises_is_called_not_external(tmp_path: Path):
     rows = _bound(workspace, _site(workspace, "app/b#fail(sig_dd69782a).", "get"))
     assert [row["reason"] for row in rows] == ["not_readable"]
     assert "never returns normally" in str(rows[0]["detail"])
+    workspace.close()
+
+
+# Task 9a fix round 1: a decorated name holds its decorator's result (design §3e).
+
+_IDENT = (
+    "def ident(fn):\n    return fn\n@ident\ndef f():\n    return 1\ndef run():\n    return f()\n"
+)
+
+
+def test_a_call_through_a_module_decorator_follows_its_code_and_names_no_wrong_owner(
+    tmp_path: Path,
+):
+    """`@ident def f` makes `f` the field written from `ident(f)`: the walk follows
+    `ident`'s own return into its parameter, and ends at the function value. A function
+    value is a body, not a value of a type (ruled 2026-09-22), so no owner is bound and no
+    edge is drawn to anything else."""
+    workspace = _resolved(tmp_path, {"a.py": _IDENT})
+    site = _site(workspace, "app/a#run(sig_dd69782a).", "__call__")
+    rows = _bound(workspace, site)
+    assert [(row["owner"], row["reason"]) for row in rows] == [(None, "not_readable")]
+    assert "app/a#ident(sig_dd69782a). returns 0" in str(rows[0]["path_id"])
+    assert [(edge["target"], edge["callee"]) for edge in _edges(workspace, site)] == [(None, None)]
+    workspace.close()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="a call of a function value is not yet an edge into that function's body "
+    "(task 9a fix round 1 report: needs a ruling on binding __call__ to a lambda answer)",
+)
+def test_a_module_decorator_that_returns_its_argument_gives_the_function_back(tmp_path: Path):
+    workspace = _resolved(tmp_path, {"a.py": _IDENT})
+    site = _site(workspace, "app/a#run(sig_dd69782a).", "__call__")
+    assert [row["callee"] for row in _edges(workspace, site)] == [
+        _PREFIX + "app/a#f(sig_dd69782a)."
+    ]
+    workspace.close()
+
+
+def test_a_library_wrapper_stops_at_the_library(tmp_path: Path):
+    """`@tenacity.retry def r` (not installed): `r` holds what the library returns, which
+    the module does not show, so `r()` is `external` with no edge. `@functools.cache def f`:
+    typeshed writes the wrapper's class, so `f()` is that class's `__call__`, a library
+    method. Neither reaches a wrong owner."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": (
+                "import functools\nimport tenacity\n"
+                "@functools.cache\ndef f():\n    return 1\n"
+                "@tenacity.retry\ndef r():\n    return 1\n"
+                "def run():\n    f()\n    r()\n"
+            )
+        },
+    )
+    cached = (_PREFIX + "app/a#run(sig_dd69782a).", 0)
+    retried = (_PREFIX + "app/a#run(sig_dd69782a).", 1)
+    assert [(e["target"], e["callee"]) for e in _edges(workspace, cached)] == [
+        ("functools/_lru_cache_wrapper#__call__(sig_dd69782a).", None)
+    ]
+    assert [(row["owner"], row["reason"]) for row in _bound(workspace, retried)] == [
+        (None, "external")
+    ]
+    assert [(e["target"], e["callee"]) for e in _edges(workspace, retried)] == [(None, None)]
     workspace.close()

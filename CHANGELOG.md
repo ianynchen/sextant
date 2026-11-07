@@ -85,7 +85,17 @@ here would restate those documents rather than add anything.
   `console_scripts`; `FACT_SCHEMA_VERSION` stays 7 (unshipped). A folder below the analysed one
   that holds `.git` (a clone, a submodule, a git worktree such as `.claude/worktrees/…`) is
   neither detected nor scanned, and is noted "another repository, not analysed". Analysing
-  Sextant's own repository with an agent worktree present now finds one module.
+  Sextant's own repository with an agent worktree present now finds one module. An entry
+  point that cannot be read is noted.
+- **A decorated Python `def` holds its decorators' result** (OI-208 plan 1 task 9a fix round 1,
+  design §3e, ruled option A). Its name is a field written from the outermost decorator's
+  result, and is read as that field: `cli()` is a call of the `Group`, `cli.add_command(module)`
+  passes the field. `staticmethod`, `classmethod`, `property`, `cached_property`, `overload`
+  and `abstractmethod` keep the method model. A call through a library wrapper (`@retry`,
+  `@contextmanager`, a pytest fixture) now stops at the library: polar has 107 fewer edges
+  into a body (31,452 → 31,345), Sextant 27, each `external` or a library method, none to a
+  wrong owner. A function or class argument fits a `Callable` parameter when an overload is
+  chosen.
 - **The Python scanner reads library signatures and types, and Python lookup follows C3**
   (OI-208 plan 1 task 7). Libraries are read from the project's installed environment, and the
   standard library and stub-only libraries (`requests`) from a pinned typeshed copy shipped in the

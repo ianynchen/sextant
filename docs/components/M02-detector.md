@@ -189,8 +189,12 @@ Python.
   files declare, its name to its target as written (`sextant = "sextant.cli.app:cli"`), from
   `[project.scripts]`, `[tool.poetry.scripts]` (the string form) and `setup.cfg`
   `[options.entry_points] console_scripts`; a name in two tables keeps the first. The target
-  is not turned into a symbol here. GUI scripts and `setup.py` `entry_points=` are not read.
-  A module that declares none has `{}`.
+  is not turned into a symbol here; extras (`a.c:main [extra]`) stay in it. GUI scripts and
+  `setup.py` `entry_points=` are not read. A module that declares none has `{}`. An entry
+  that is not a name with a target string (a number, Poetry's table form, a
+  `console_scripts` line with no `=` or no name) is a note: "<module>: entry point not
+  read, the target is not a string: <table> <name>", or "… not a name = target line:
+  setup.cfg console_scripts '<line>'".
 - **Which folders are searched for modules.** The detector's skip list (version control, tool
   caches, `node_modules`, every folder that holds `pyvenv.cfg`), every path `.sextantignore`
   excludes, and every path a `.gitignore` file at or below the analysed folder names are not

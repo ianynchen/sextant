@@ -1339,6 +1339,10 @@ class BodyReader:
                 found[name] = typed
         return found
 
+    def written_names(self) -> list[str]:
+        """The module-level names this reading saw written."""
+        return list(self._module_writes)
+
     def agrees(self, found: dict[str, str | CallableType]) -> bool:
         """Whether every answer this reading gave is the type all the file's writes give."""
         return all(

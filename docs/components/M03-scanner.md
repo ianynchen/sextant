@@ -265,7 +265,20 @@ differently is a closed list of both, in written order.
 - decorators as `call_site` facts in the enclosing body's `<clinit>`: each decorator
   expression in written order, then each application from the bottom up, with the
   function as a `lambda` argument or the class as a `class` argument. A call on a value
-  is `__call__` with that value's id as `receiver`.
+  is `__call__` with that value's id as `receiver`;
+- **a decorated `def` holds its decorators' result** (`f = dec(f)`, design
+  `2026-11-06-reading-decorators-design.md` §3e, ruled option A): a module-level one is a
+  static field of the module and a class-level one a field of the class, with a
+  `field_write` of the outermost decorator's result, and the name is read as that field
+  afterwards (a value `field`, a call `cli()` a `virtual` `__call__` with
+  `receiver_field`, a call on it `cli.group()` with `receiver_field`). The function itself
+  is the `lambda` the innermost decorator receives, and keeps its method symbol and body.
+  The language's own method kinds keep the method model: `staticmethod`, `classmethod`,
+  `property` (and `@x.setter`, `getter`, `deleter` of that property),
+  `functools.cached_property`, `typing.overload` and `abc.abstractmethod`, matched by the
+  symbol the decorator names, never its text. A `def` with one of them and another
+  decorator holds the outermost decorator's result. A nested `def`'s local name already
+  held it. An attribute read (`self.m()`, `C.m()`) still names the method;
 
 A call's owner is named where the file can tell: a class of the file is its `<init>`; a
 function of the file, or a member of another module, is a static call on that module's
@@ -285,7 +298,8 @@ write (a loop or `with` target, an import, `del`, `:=`, `except … as`, a `matc
 field walk answers those. A call of a function the file defines stays the static call to
 it. The file is read once with the writes read so far, and kept where every answer it
 gave is the one all the writes give; otherwise it is read again until no reading finds a
-new type for a name it asked about.
+new type for a name it asked about, at most one reading per module-level name plus one;
+reaching that limit is an error, since the rule only ever adds a type.
 
 **A file Python cannot parse** goes on the uncovered list with the reason, and the rest
 of the module is scanned. The grammar is the one of the Python that runs Sextant, and the
@@ -393,7 +407,9 @@ Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path
   library's branches define differently. A call on a `narrowed` result leaves its owner to
   the resolver. A type variable or a special form names no class, and also leaves the
   owner. A literal is never callable, so it does not fit a `Callable` parameter
-  (`Group.command("analyze")` takes the overload with `*args`, not `__func: Callable`).
+  (`Group.command("analyze")` takes the overload with `*args`, not `__func: Callable`); a
+  function or a class argument is callable and fits one (`@cli.command` with no parentheses
+  is `Command`), fits `object` and `Any`, and no literal type; a class also fits `type`.
 - **A result written `Callable[[P, ...], R]` is a callable** (design
   `2026-11-06-reading-decorators-design.md` §3b, a decorator factory's result:
   `click.group()` returns `Callable[[F], Group]`). Calling it gives `R` where `R` is a

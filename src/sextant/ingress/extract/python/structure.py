@@ -44,7 +44,13 @@ from sextant.ingress.extract.python.calls import (
     Scope,
     is_stub_body,
 )
-from sextant.ingress.extract.python.imports import CallableType, Target, bind_names, is_typing
+from sextant.ingress.extract.python.imports import (
+    CallableType,
+    Target,
+    bind_names,
+    holds_decorated_value,
+    is_typing,
+)
 from sextant.ingress.extract.python.typing_rules import (
     ANY,
     BUILTINS,
@@ -93,13 +99,19 @@ def file_facts(tree: ast.Module, context: FileContext, last_line: int) -> FileFa
     if writer.agrees(writer.module_types()):
         return FileFacts(writer.facts, writer.not_read)
     known: dict[str, str | CallableType] = {}
-    while True:
+    # Each reading that does not end adds a type to at least one name.
+    limit = len(writer.written_names()) + 1
+    for _ in range(limit):
         writer = _Writer(context, rebound, known)
         writer.module(tree, last_line)
         found = writer.module_types()
         if writer.agrees(found):
             return FileFacts(writer.facts, writer.not_read)
         known = found
+    raise RuntimeError(
+        f"{context.here}: the types of its module-level names did not settle in {limit} "
+        "readings; a type was taken back, which the reading rule does not allow"
+    )
 
 
 def _rebound_names(tree: ast.Module) -> set[str]:
@@ -394,6 +406,10 @@ class _Writer(BodyReader):
             callees, CallArgument(kind="lambda", symbol=descriptor, captures=0), scope
         )
         self._bind_nested(node.name, applied, scope)
+        if not nested and holds_decorated_value(node, scope.types.lookup):
+            # `f = dec(f)` (design 2026-11-06-reading-decorators §3e): the name is a field of
+            # the module or the class, written from the outermost decorator's result.
+            self._decorated_name(node, applied, scope)
         if not nested and not in_class:
             self._module_write(node.name, applied, scope)
         receiver_taken = in_class and not is_static
@@ -421,6 +437,29 @@ class _Writer(BodyReader):
             receiver_taken=receiver_taken,
             has_body=not stub and not ((abstract or scope.protocol) and is_stub_body(node.body)),
             types=replace(generic, class_names={}),
+        )
+
+    def _decorated_name(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef, applied: CallArgument, scope: Scope
+    ) -> None:
+        descriptor = f"{scope.owner}{node.name}."
+        if descriptor not in scope.fields:
+            scope.fields.add(descriptor)
+            self._symbol(
+                descriptor,
+                ConstructKind.FIELD,
+                scope.owner,
+                node.lineno,
+                node.end_lineno or node.lineno,
+                modifiers={"static": True},
+            )
+        self.facts.append(
+            FieldWriteFact(
+                document_id=self._context.document_id,
+                field=descriptor,
+                value=applied,
+                written_by=scope.body.caller,
+            )
         )
 
     def _signature(

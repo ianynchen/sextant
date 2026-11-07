@@ -387,8 +387,8 @@ class Libraries:
             return None
         target = targets[0]
         if _is_callable_form(target):
-            # Every value this rule reads is a literal, and no literal is callable.
-            return False
+            # A function and a class are callable; no literal is.
+            return value is _FUNCTION_VALUE or value is _CLASS_VALUE
         if target.module == BUILTINS:
             return _fits_builtin(value, target.member or "")
         if target.module in _TYPING and target.member in ("Any", "LiteralString"):
@@ -412,7 +412,7 @@ class Libraries:
             return None
         target = targets[0]
         if _is_callable_form(target):
-            return False
+            return value is _FUNCTION_VALUE or value is _CLASS_VALUE
         if target.module in _TYPING:
             if target.member == "Literal":
                 if value is _SOME_TEXT:
@@ -1175,6 +1175,10 @@ def _bind_arguments(
 _UNKNOWN_VALUE = object()
 # A text argument whose value is not known (an f-string): it is a `str`, of no one literal.
 _SOME_TEXT = object()
+# A function (a `lambda` argument) and a class (a `class` argument): callable values whose
+# own type is not read, so they fit a `Callable`, `object` and `Any`, and no literal type.
+_FUNCTION_VALUE = object()
+_CLASS_VALUE = object()
 _TYPING = frozenset({"typing", "typing_extensions"})
 _CALLABLE_MODULES = frozenset({*_TYPING, "collections/abc", "_collections_abc"})
 # A bound on how far a written type and its aliases are followed.
@@ -1188,6 +1192,10 @@ _RECEIVER = -1
 
 def _value(argument: CallArgument) -> object:
     """The Python value of an argument whose type the call site states."""
+    if argument.kind == "lambda":
+        return _FUNCTION_VALUE
+    if argument.kind == "class":
+        return _CLASS_VALUE
     if argument.kind not in _LITERAL_KINDS:
         return _UNKNOWN_VALUE
     if argument.kind == "null":
@@ -1209,6 +1217,11 @@ def _fits_builtin(value: object, name: str) -> bool | None:
     typing specification's promotions (`int` where `float` is written)."""
     if name == "object":
         return True
+    if value is _FUNCTION_VALUE:
+        return False
+    if value is _CLASS_VALUE:
+        # A class is an instance of its metaclass, a `type`.
+        return name == "type"
     if value is _SOME_TEXT:
         value = ""
     accepted = _ACCEPTS.get(name)
