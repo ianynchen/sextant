@@ -266,3 +266,69 @@ def test_an_attribute_of_self_leaves_its_owner_to_the_writes_and_types_its_eleme
     tree = _scan(tmp_path, _SERVICE)
     assert _owner_of(tree, "app/run/Service#run", "get") == [None, _HTTP]
     assert _owner_of(tree, "app/run/Service#run", "__iter__") == [None]
+
+
+# -- isinstance narrowing (step 4) -----------------------------------------------------------
+
+
+def test_isinstance_narrows_inside_its_branch_only(tmp_path: Path):
+    """`isinstance(x, User)` makes `x` a `User` in the body; after the `if`, where the other
+    path joins, `x` is what it was."""
+    tree = _scan(
+        tmp_path,
+        _MODELS + "def f(x):\n    if isinstance(x, User):\n        x.save()\n    x.save()\n",
+    )
+    saves = [s for s in _sites(tree, "app/run#f") if s.target.name == "save"]
+    assert [(s.target.owner, s.receiver_parameter) for s in saves] == [(USER, 0), (None, 0)]
+
+
+def test_an_early_exit_on_the_negated_test_narrows_the_rest(tmp_path: Path):
+    """`if not isinstance(x, User): return` leaves only the path where `x` is a `User`."""
+    tree = _scan(
+        tmp_path,
+        _MODELS + "def f(x: object):\n"
+        "    if not isinstance(x, User):\n"
+        "        raise TypeError(x)\n"
+        "    x.save()\n",
+    )
+    assert _owner_of(tree, "app/run#f", "save") == [USER]
+
+
+def test_a_tuple_of_classes_is_a_closed_list(tmp_path: Path):
+    """`isinstance(x, (User, Client))` makes `x` one of them: no one owner."""
+    tree = _scan(
+        tmp_path,
+        _MODELS + "def f(x):\n    if isinstance(x, (User, Client)):\n        x.save()\n",
+    )
+    assert _owner_of(tree, "app/run#f", "save") == [None]
+
+
+def test_no_narrowing_survives_a_reassignment(tmp_path: Path):
+    """`x = make()` inside the branch: `x` is the new value, not the tested one."""
+    tree = _scan(
+        tmp_path,
+        _MODELS + "def f(x):\n"
+        "    if not isinstance(x, User):\n"
+        "        return\n"
+        "    x = make()\n"
+        "    x.save()\n"
+        "    y = x\n"
+        "    if isinstance(y, Client):\n"
+        "        y = make()\n"
+        "        y.send()\n",
+    )
+    assert _owner_of(tree, "app/run#f", "save") == [None]
+    assert _owner_of(tree, "app/run#f", "send") == [None]
+
+
+def test_and_narrows_each_name_it_tests(tmp_path: Path):
+    """`isinstance(a, User) and isinstance(b, Client)` narrows both in the body."""
+    tree = _scan(
+        tmp_path,
+        _MODELS + "def f(a, b):\n"
+        "    if isinstance(a, User) and isinstance(b, Client):\n"
+        "        a.save()\n"
+        "        b.send()\n",
+    )
+    assert _owner_of(tree, "app/run#f", "save") == [USER]
+    assert _owner_of(tree, "app/run#f", "send") == [CLIENT]

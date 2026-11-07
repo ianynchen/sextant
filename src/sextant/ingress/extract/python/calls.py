@@ -179,6 +179,17 @@ class _Part(CallArgument):
     _typed: TypeRef | None = PrivateAttr(default=None)
 
 
+class _Narrowed(_Part):
+    """A local's value inside a branch an `isinstance` test chose: the same value, every
+    field as it was (so every fact reads as before), with the type the test gives it."""
+
+
+def _narrowed(value: CallArgument, typed: TypeRef) -> CallArgument:
+    found = _Narrowed(**dict(value))
+    found._typed = typed
+    return found
+
+
 def _is_part(value: CallArgument) -> bool:
     """Whether `value` is an `unresolved` value only the scanner knows the type of: it folds
     as unknown where paths give different ones. A typed `array` keeps its own fact."""
@@ -562,7 +573,9 @@ class BodyReader:
             scope.flow.jump("break" if isinstance(node, ast.Break) else "continue")
         elif isinstance(node, ast.If):
             self._value(node.test, scope)
-            self._branches([node.body, node.orelse], scope)
+            self._branches(
+                [node.body, node.orelse], scope, narrows=self._narrowing(node.test, scope)
+            )
         elif isinstance(node, ast.For | ast.AsyncFor):
             asynchronous = isinstance(node, ast.AsyncFor)
             iterator = self._iterate(node.iter, scope, asynchronous=asynchronous)
@@ -699,12 +712,16 @@ class BodyReader:
         scope: Scope,
         starts: list[int | None] | None = None,
         captures: list[list[tuple[str, CallArgument]]] | None = None,
+        narrows: list[dict[str, TypeRef]] | None = None,
     ) -> None:
         """Each body runs from the same names, and from `starts` in the control flow (by
         default, from where the branch is); after them, a name keeps a value only where
         every body that reaches the end gives it the same one, and is a `merge` where they
         give different ones. `captures` are the names each body starts by writing (a
-        `match` case's pattern)."""
+        `match` case's pattern). `narrows` are the types an `isinstance` test gives a name
+        in each body (`_narrowing`): the name holds its value with that type there, and past
+        the branch only where that body is the one that reaches its end (the other returned
+        or raised) and did not write the name."""
         frame = scope.frame
         flow = scope.flow
         if starts is None:
@@ -722,16 +739,87 @@ class BodyReader:
             return
         before = frame.values
         ends = []
-        for body, start, captured in zip(bodies, starts, captures, strict=True):
+        narrowed: list[tuple[str, CallArgument, CallArgument]] = []
+        for position, (body, start, captured) in enumerate(
+            zip(bodies, starts, captures, strict=True)
+        ):
             flow.at(start)
             frame.values = dict(before)
+            for name, typed in (narrows[position] if narrows else {}).items():
+                held = frame.values.get(name)
+                if held is not None and held is not _SELF:
+                    frame.values[name] = _narrowed(held, typed)
+                    narrowed.append((name, frame.values[name], held))
             self._capture(captured, scope)
             self._statements(body, scope)
             points.append(flow.here())
             if flow.here() is not None:
                 ends.append(frame.values)
         flow.join(points)
+        if len(ends) > 1:
+            # A narrowed type holds only on its own body's paths: where another body reaches
+            # the join too, the name holds the value it had, untyped by the test.
+            for end in ends:
+                for name, made, held in narrowed:
+                    if end.get(name) is made:
+                        end[name] = held
         frame.values = _join(ends) if ends else dict(before)
+
+    def _narrowing(self, test: ast.expr, scope: Scope) -> list[dict[str, TypeRef]] | None:
+        """The types an `if` test gives local names in its two bodies (the typing
+        specification's `isinstance` narrowing): `isinstance(x, C)` makes `x` a `C` in the
+        body, `not isinstance(x, C)` in the `else`, and `a and b` gives the body both. A tuple
+        of classes is their union, a closed list. A class the file does not name, a name that
+        is not a local, or anything else narrows nothing."""
+        frame = scope.frame
+        if frame is None:
+            return None
+        positive = not (isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not))
+        tested = test if positive else test.operand  # type: ignore[attr-defined]
+        conjuncts = (
+            list(tested.values)
+            if positive and isinstance(tested, ast.BoolOp) and isinstance(tested.op, ast.And)
+            else [tested]
+        )
+        found: dict[str, TypeRef] = {}
+        for part in conjuncts:
+            narrowed = self._isinstance_test(part, scope)
+            if narrowed is not None:
+                found[narrowed[0]] = narrowed[1]
+        if not found:
+            return None
+        return [found, {}] if positive else [{}, found]
+
+    def _isinstance_test(self, test: ast.expr, scope: Scope) -> tuple[str, TypeRef] | None:
+        """`isinstance(x, C)` on a local `x`, as `(x, C)`; a tuple of classes `(A, B)` as
+        their union. None for any other expression."""
+        if not (
+            isinstance(test, ast.Call)
+            and len(test.args) == 2
+            and not test.keywords
+            and isinstance(test.args[0], ast.Name)
+            and isinstance(test.func, ast.Name)
+        ):
+            return None
+        targets = self._targets(test.func, scope)
+        if targets != (Target(BUILTINS, "isinstance"),):
+            return None
+        name = test.args[0].id
+        frame = scope.frame
+        if frame is None or name not in frame.local_names or name not in frame.values:
+            return None
+        written = test.args[1]
+        classes = list(written.elts) if isinstance(written, ast.Tuple) else [written]
+        found: list[TypeRef | None] = []
+        for one in classes:
+            named = (
+                type_ref(one, scope.types) if isinstance(one, ast.Name | ast.Attribute) else None
+            )
+            if named is None or _class_of(named) is None or named.arguments:
+                return None
+            found.append(TypeRef(symbol=named.symbol))
+        joined = union_of(found)
+        return None if joined is None else (name, joined)
 
     def _capture(self, captured: list[tuple[str, CallArgument]], scope: Scope) -> None:
         """Write each name a `match` pattern captured."""
@@ -1341,6 +1429,10 @@ class BodyReader:
             )
         if value.kind in ("string", "concat"):
             declared = TypeRef(symbol=_STRING)
+        if isinstance(value, _Narrowed):
+            # The `isinstance` test chose this branch: the value is that class here, whatever
+            # its annotation says it may be.
+            declared = value._typed
         if declared is None:
             declared = _known_type(value, scope)
         # What a function of this file declares the value is: it names no owner (the body's
