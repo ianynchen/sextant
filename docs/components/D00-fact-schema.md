@@ -1281,6 +1281,14 @@ above:
   class; any other call on a value names its receiver and no owner.
 - A constructor call has no `result`; its value is `instance` with the constructor's
   `receiver` as `source`, as `new` is on the JVM.
+- **A `virtual` `<init>` is Python-only** (user approval, 2026-11-07). It means "construct
+  whichever class this value holds". `cls()` inside a `@classmethod`, and `c()` where `c` is
+  written `type[X]`, are written as `virtual` `<init>` on `X`. The class is chosen at run
+  time, from the class the method was called through, as any `virtual` call is. Dispatch
+  gives `X`'s constructor and each known subclass's own constructor, one answer each
+  (`narrowed`). Where a lookup order leaves the scanned code, `external` is added. A
+  `special` `<init>` still names exactly one class. The JVM never writes a `virtual`
+  `<init>`.
 - `X.__init__(…)` names `<init>`, the method the definition is. A `@classmethod`, like a
   `@staticmethod`, is `modifiers.static` — bound to the class rather than an instance (§5a) —
   and its `cls` is not a parameter.

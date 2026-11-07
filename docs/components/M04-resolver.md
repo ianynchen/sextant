@@ -97,6 +97,7 @@ For each call site, the set of method bodies that could run.
 |---|---|
 | Static, constructor, private, super | Exactly one target |
 | Virtual or interface | Every non-abstract subtype of the owner declaring a matching method |
+| Virtual constructor (Python only: `cls()`, `c()` with `c: type[X]`) | `X`'s constructor and each known subclass's own constructor, one each (`narrowed`), plus `external` where a lookup order leaves the scanned code; the result is an instance of each class. A call or subscript that syntax makes on a class object (`X[...]`, `for _ in X`) never binds to the instance's method: it is a type form or the metaclass's method, answered `not_readable` (ruling R37) |
 
 Then narrowed by **rapid type analysis**: a candidate survives only if the program creates
 an instance of that type somewhere. This removes a large part of the noise for about a
