@@ -215,3 +215,36 @@ AST-only table of Task 0 with the resolver's own answer (spec §7 item 1).
   Sextant's.
 - **Several reasons:** one row per path, each with its own reason (ruling M-1: per path,
   never combined).
+
+## Reuse (OI-325, 2026-11-07)
+
+Machine and command as in "Final measurements" above, on branch `cov/python-reuse`. A re-run
+keeps each unchanged file's facts and, with no fact changed, the previous resolve (D01 §7
+"Reuse"). "Edited" appends one line to one file and analyses again into the same workspace.
+polar's "edited", "added" and "deleted" runs used a copy of `server/` (the checkout is read
+only); its cold and warm runs match the original's within 0.5 s. Sextant's "edited" run used a
+copy of `src/` and `pyproject.toml`: editing Sextant's own source changes the code that
+analyses it, and then every file is read again, as it must be.
+
+| Run | Sextant scan | resolve | total | polar scan | resolve | total |
+|---|---|---|---|---|---|---|
+| cold | 5.4 s | 2.9 s | 9.9 s | 14.7 s | 13.3 s | 29.2 s |
+| warm, no file changed | 2.0 s (171 of 171 kept) | 0.0 s (kept) | 3.9 s | 1.5 s (2,053 of 2,053 kept) | 0.1 s (kept) | **3.0 s** |
+| warm, one file edited | 2.0 s (170 kept) | 2.9 s | 5.8 s | 1.4 s (2,052 kept) | 13.3 s | 16.1 s |
+| warm, one file added that 264 files import by path | | | | 6.0 s (1,789 kept) | 13.5 s | 20.8 s |
+| warm, that file deleted again | | | | 6.0 s (1,789 kept) | 13.6 s | 20.9 s |
+| render (`sextant module render`, whole command; about 1.0 s of it is start-up) | | | 1.6 s | | | 1.6 s |
+
+- **The 10 s warm target is met**: polar 3.0 s, Sextant 3.9 s (was 27.6 s and 8.8 s).
+- **What a warm run still pays:** start-up and detection (about 1 s), hashing every file and
+  checking each fact file's document line, and the library type headers, which are read again
+  on every run from the types the kept documents name (about 1 s on polar, 1.6 s on Sextant,
+  whose environment holds pydantic, duckdb and click). The resolve key hashes every fact file
+  (171 MB on polar) in about 0.1 s.
+- **One edited file pays the whole resolve.** Making that run fast needs an incremental
+  resolve, which is a design question, not a cache.
+- **An added or deleted file re-reads every file whose imports it changes**: on polar,
+  `polar/kit/utils/utc_now.py` turns `from polar.kit.utils import utc_now` into a module import
+  in 264 files, and those 264 are read again. Every kept file was compared with a fresh
+  analysis of the changed tree: the fact files are byte for byte the same, and so are the
+  tables and `metadata.json`.

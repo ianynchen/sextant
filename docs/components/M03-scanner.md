@@ -492,6 +492,19 @@ Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path
   folder another distribution shares gives none of the other's), into `facts/lib/pypi/<name>/`
   with `origin: <name>` and the dependency tier.
 
+**A re-run reads only what changed** (OI-325; [D01](D01-graph-schema.md) §7 "Reuse"). The
+scan stage hands the scanner what the previous scan into the same workspace recorded about
+each document (`ScanRequest.previous`, one `ReuseRecord` per document), and the scanner keeps
+a document's fact file where a fresh read would write the same bytes: the file's content
+hash, the document's stamps, Sextant's code, the module's identity, the libraries and the
+Python are the same, and so is every answer the module index gave the file (which other
+files exist). A kept document adds to the report what it added the first time: its fact
+count, its uncovered lines and its library notes. The library type headers are read again
+on every run, from the types every document names. An opted-in library's scan keeps nothing:
+its subtree is discarded before every run. A file the scan neither keeps nor writes — deleted,
+newly ignored, or no longer readable — loses its fact file, as on a first run. On polar
+`server/`, a run with no file changed scans in 1.5 s instead of 14 s.
+
 ### Artifact readers
 
 Configuration, build files, Kubernetes manifests, Helm charts, OpenAPI documents, protobuf

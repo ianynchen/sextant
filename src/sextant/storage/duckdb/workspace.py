@@ -1066,6 +1066,10 @@ _NAMED_QUERIES = {
         FROM hops
         ORDER BY caller, ordinal, handler
     """,
+    # OI-325: what the previous run recorded, for the next analyze alone. Total by `target`,
+    # one row per fact file.
+    "scan_reuse": "SELECT target, key, detail FROM scan_reuse ORDER BY target, key",
+    "resolve_stamp": "SELECT key, report FROM resolve_stamp ORDER BY key",
     # Spec 2026-11-05 §3: each group's registrations, in the order the group tries them.
     # Every column orders it (NFR-1): two ends of one root share a group id and may each put
     # a different registration at one position, so (group, position) alone is not total.
@@ -1892,6 +1896,12 @@ _NAMED_DERIVATIONS = {
     # once, before both.
     "hops_reset": "reset_hops.sql",
     "hops_insert": "insert_hops.sql",
+    # OI-325: how the workspace was built, read by the next run's analyze and by nothing
+    # else. Each is a reset/insert pair the analyze stage runs around the step it vouches for.
+    "scan_reuse_reset": "reset_scan_reuse.sql",
+    "scan_reuse_insert": "insert_scan_reuse.sql",
+    "resolve_stamp_reset": "reset_resolve_stamp.sql",
+    "resolve_stamp_insert": "insert_resolve_stamp.sql",
     # Spec 2026-11-05 §3. A reset/insert pair owned by its one writing pass, as above:
     # nothing but `resolve/dispatch_registrations.py` writes here.
     "dispatch_registrations_reset": "reset_dispatch_registrations.sql",
@@ -2585,7 +2595,7 @@ class DuckDbWorkspace:
         rows = self._connection.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_schema = 'main' AND table_name NOT IN "
-            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ORDER BY table_name",
             [
                 _REDACTED_CONFIG_VALUES,
@@ -2609,6 +2619,11 @@ class DuckDbWorkspace:
                 # not create, which is why it is spelled out rather than listed.
                 "participants",
                 "links",
+                # How the workspace was built (OI-325), never what the module is: a bundle
+                # carrying them would ship one machine's file records and a stamp nothing
+                # off it can use.
+                "scan_reuse",
+                "resolve_stamp",
             ],
         ).fetchall()
         # The `fact_*` tables are excluded for the same reason the staged tables are:

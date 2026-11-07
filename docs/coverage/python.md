@@ -74,8 +74,9 @@ On the development Mac, Python 3.14.10. Full figures and commands:
 | A call of a function value, whose edge enters that function's body (ruling R29) | 34 (0.1%) | 304 (0.2%) |
 | Unresolved, with a reason from the one reason list (several reasons, one per path, on 104 / 172 of them) | 3,893 (16.6%) | 39,774 (30.8%) |
 | **No owner and no reason** | **0** | **0** |
-| Cold analysis (target 60 s, ceiling 300 s) | 8.7 s | 27.2 s |
-| Warm analysis, no file changed (target 10 s, ceiling 30 s) | 8.8 s | 27.6 s: **target missed** |
+| Cold analysis (target 60 s, ceiling 300 s) | 9.9 s | 29.2 s |
+| Warm analysis, no file changed (target 10 s, ceiling 30 s) | 3.9 s | 3.0 s |
+| Warm analysis, one file edited | 5.8 s | 16.1 s |
 
 - **The table is plan 1's.** Since OI-324's first part writes `for` loops and subscripts as
   the `__iter__`, `__next__` and `__getitem__` calls they are, both trees have more call sites
@@ -87,10 +88,11 @@ On the development Mac, Python 3.14.10. Full figures and commands:
   from `src/sextant/cli/app.py` and are pinned by the test.
 - **dispatch** (`examples/py-dispatch`, a reviewer probe in task 9b): 27 roots, 56 parameters.
 - **polar:** 31,770 call edges enter a function body.
-- **Warm is as slow as cold** because nothing is reused: the scan is not cached by content
-  hash and not run in parallel, although spec §5 planned both. Reaching 10 s needs the scan
-  reused for unchanged files and the resolve skipped for an unchanged fact set; the
-  performance file has the arithmetic.
+- **A re-run reads only what changed** (OI-325, D01 §7 "Reuse"): each unchanged file's facts
+  are kept, and with no fact changed the resolve is kept too. One edited file still pays the
+  whole resolve (13 s on polar), which only an incremental resolve would shorten. The scan is
+  not run in parallel, which spec §5 also planned; it would shorten the cold run. The
+  performance file has the measurements.
 
 ## What is not read, and why
 

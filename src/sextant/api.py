@@ -204,7 +204,7 @@ from sextant.ingress.extract.jvm.scanner import AsmScanner
 from sextant.ingress.extract.python.scanner import PythonScanner
 from sextant.ingress.interpret.descriptors import interpret_descriptors
 from sextant.ingress.read.registry import READERS
-from sextant.resources import catalogs_dir, extractor_jar, instructions_path
+from sextant.resources import catalogs_dir, code_identity, extractor_jar, instructions_path
 from sextant.storage.duckdb.workspace import (
     DuckDbWorkspace,
     StaleParticipantError,
@@ -598,44 +598,31 @@ def _module_commit_of(path: Path) -> str:
     return result.stdout.strip() or "unknown"
 
 
-# The model subdirectories beside the catalogs, each part of the knowledge a run
-# was produced with (`yaml_source.YamlCatalogSource` reads the same five: `_models`
-# the first three and the fifth, `value_model` the fourth).
-_MODEL_DIRECTORIES = (
-    "shape-models",
-    "bean-models",
-    "step-models",
-    "value-models",
-    "client-models",
-)
-
-
 def _catalog_hash(catalogs: Path) -> str:
-    """The identity of the framework knowledge a run was produced with.
+    """The identity of the framework knowledge a run was produced with: every file
+    under the catalogs folder, by its path from that folder and its bytes, in sorted
+    order.
 
-    `shape-models/` is walked as well as the catalogs themselves (D02 §1b).
-    Since F2, `serialization`, `nullability` and `known_types` live there and
-    in no catalog at all — so a hash over `catalogs/*.yml` alone would say two
-    runs used the same knowledge while one of them read a different wire-type
-    table, which is precisely the drift the hash exists to make visible.
-    `bean-models/` (D02 §1c) and `step-models/` (spec 2026-09-21 §5) are
-    walked for the same reason: the bean vocabulary and the flow definition's
-    step table live there and nowhere else. `value-models/` (D02 §1f, spec
-    2026-09-22 §2) joins them: a producing call's identity is declared there once
-    rather than once per consuming catalog, so an edit to it is an edit to what
-    every catalog resolves through. `client-models/` (spec 2026-10-26 §3g) likewise: a
-    client's base-address ladder lives there and in no catalog. The path is included, not just the
-    filename, so a model and a catalog of the same name cannot collide.
+    The model folders beside the catalogs (`shape-models/`, D02 §1b; `bean-models/`,
+    §1c; `step-models/`, spec 2026-09-21 §5; `value-models/`, §1f; `client-models/`,
+    spec 2026-10-26 §3g; `server-models/` and `type-models/`) hold knowledge no catalog
+    repeats, so an edit to any of them is an edit to what the run read. The whole tree
+    is walked rather than a list of folders: the list named five and missed
+    `server-models/` and `type-models/`, which `yaml_source` reads, so a re-run kept a
+    resolve its changed `server.servlet.context-path` rule would not give (OI-325 fix
+    round 1). A folder added later is walked without this function changing. The path
+    is included, not just the file name, so a model and a catalog of the same name
+    cannot collide; each part is prefixed by its length, so two trees cannot spell one
+    stream of bytes.
     """
     digest = hashlib.sha256()
-    files = sorted(catalogs.glob("*.yml")) + [
-        path
-        for subdirectory in _MODEL_DIRECTORIES
-        for path in sorted((catalogs / subdirectory).glob("*.yml"))
-    ]
-    for catalog in files:
-        digest.update(str(catalog.relative_to(catalogs)).encode("utf-8"))
-        digest.update(catalog.read_bytes())
+    for path in sorted(catalogs.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(catalogs).as_posix().encode("utf-8")
+        data = path.read_bytes()
+        digest.update(len(relative).to_bytes(8, "big") + relative)
+        digest.update(len(data).to_bytes(8, "big") + data)
     return "sha256:" + digest.hexdigest()
 
 
@@ -978,6 +965,9 @@ def _analyzed(
             allow_resolve=allow_resolve,
             ignore_root=ignore_root,
             shadow=shadow,
+            # What the resolve reads that the stage cannot see (OI-325): the catalogs, as
+            # `metadata.json` records them, and Sextant's own code.
+            resolve_inputs=f"{_catalog_hash(catalogs_dir())} {code_identity()}",
         )
     except SextantConfigError as refused:
         raise ConfigurationError(str(refused)) from refused

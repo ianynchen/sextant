@@ -734,6 +734,32 @@ CREATE TABLE IF NOT EXISTS endpoint_metadata (
 );
 
 -- ==========================================================================
+-- How this workspace was built (OI-325, D01 §7 "Reuse"). Not facts and not the
+-- module's graph: what a re-run reads to keep what did not change. Neither is
+-- exported (`DuckDbWorkspace.schema_objects`) or read by any other command.
+-- ==========================================================================
+
+-- One row per document the module's own scan wrote or kept, as the scanner
+-- recorded it (`ports/scanner.py` `ReuseRecord`): the fact file relative to the
+-- fact root, the scanner's key, and its own detail. Replaced whole by every
+-- scan: emptied before it runs, so a scan that stops part-way leaves none, and
+-- the next run reads every file.
+CREATE TABLE IF NOT EXISTS scan_reuse (
+    target TEXT,
+    key    TEXT,
+    detail TEXT
+);
+
+-- At most one row: the key of the last resolve that finished, over everything
+-- it read (the fact files' bytes, the catalogs, Sextant's code and versions,
+-- the scanner's capabilities, `--shadow`), and the part of its report no table
+-- holds, as JSON. Emptied before a resolve runs, written after it finishes.
+CREATE TABLE IF NOT EXISTS resolve_stamp (
+    key    TEXT,
+    report TEXT
+);
+
+-- ==========================================================================
 -- System scope (D01 "System scope — two native tables, everything else
 -- federated"). These two are the ONLY tables the system workspace owns; every
 -- participant's own graph is read through a view over its workspace, never

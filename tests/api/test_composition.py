@@ -180,8 +180,13 @@ def test_the_catalog_hash_changes_when_any_model_beside_the_catalogs_changes(tmp
         "step-models",
         "value-models",
         "client-models",
+        # OI-325 fix round 1: the two the hand-kept list had missed, and a folder no list
+        # names yet. The whole tree is walked, so a folder added later cannot be missed.
+        "server-models",
+        "type-models",
+        "a-folder-added-later/nested",
     ):
-        (tmp_path / subdirectory).mkdir()
+        (tmp_path / subdirectory).mkdir(parents=True)
         (tmp_path / subdirectory / "model.yml").write_text(
             f"id: {subdirectory}\n", encoding="utf-8"
         )
