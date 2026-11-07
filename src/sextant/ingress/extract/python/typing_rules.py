@@ -304,6 +304,33 @@ def class_shape(node: ast.ClassDef, scope: TypeScope, body: list[ast.stmt]) -> C
     return ClassShape(tuple(listed), held, class_members(body), methods)
 
 
+def is_class_object(annotation: ast.expr, types: TypeScope, depth: int = 8) -> bool:
+    """Whether a written type is `type[X]` or `Type[X]` (or one of them or `None`): the
+    value is a class object."""
+    if depth == 0:
+        return False
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            annotation = ast.parse(annotation.value.strip(), mode="eval").body
+        except SyntaxError:
+            return False
+    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+        parts = [annotation.left, annotation.right]
+        held = [p for p in parts if not (isinstance(p, ast.Constant) and p.value is None)]
+        return bool(held) and all(is_class_object(p, types, depth - 1) for p in held)
+    if not isinstance(annotation, ast.Subscript) or not isinstance(
+        annotation.value, ast.Name | ast.Attribute
+    ):
+        return False
+    targets = types.lookup(annotation.value)
+    if len(targets) != 1:
+        return False
+    (target,) = targets
+    if target == Target(BUILTINS, "type") or is_typing(target, "Type"):
+        return True
+    return is_typing(target, "Optional") and is_class_object(annotation.slice, types, depth - 1)
+
+
 def class_members(body: list[ast.stmt]) -> frozenset[str]:
     """The names a class body defines: its methods and its assigned attributes."""
     names: set[str] = set()

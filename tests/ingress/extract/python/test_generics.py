@@ -400,3 +400,36 @@ def test_a_type_expression_writes_no_subscript_call(tmp_path: Path):
     getitems = [site for site in _sites(tree, "app/run#") if site.target.name == "__getitem__"]
     assert [bare_descriptor(site.caller) for site in getitems] == ["app/run#f(sig_dd69782a)."]
     assert getitems[0].receiver_parameter == 1
+
+
+def test_a_type_of_x_value_is_the_class_object(tmp_path: Path):
+    """`c: type[Repo]` holds the class: an explicit `c.create()` is a call through the class
+    (owner `Repo`, as before), but `c[0]` and `for m in c` are protocol calls Python looks
+    up on the class's own type, so they get no `Repo` owner. `Type[...]` and
+    `Optional[type[...]]` read the same."""
+    tree = _scan(
+        tmp_path,
+        "from typing import Optional, Type\n"
+        "class Repo:\n"
+        "    def __getitem__(self, k): ...\n"
+        "    @classmethod\n"
+        "    def create(cls): ...\n"
+        "def f(c: type[Repo], d: Type[Repo], e: Optional[type[Repo]], r: Repo):\n"
+        "    c.create()\n"
+        "    c[0]\n"
+        "    d[0]\n"
+        "    e[0]\n"
+        "    for m in c:\n"
+        "        pass\n"
+        "    r[0]\n",
+    )
+
+    assert _owners(tree, "app/run#f") == [
+        ("app/run/Repo#", "create"),
+        (None, "__getitem__"),
+        (None, "__getitem__"),
+        (None, "__getitem__"),
+        (None, "__iter__"),
+        (None, "__next__"),
+        ("app/run/Repo#", "__getitem__"),
+    ]

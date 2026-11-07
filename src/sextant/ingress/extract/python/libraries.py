@@ -99,6 +99,7 @@ from sextant.ingress.extract.python.typing_rules import (
     Hierarchy,
     TypeScope,
     class_shape,
+    is_class_object,
     parameter_mapping,
     substitute,
     type_ref,
@@ -125,6 +126,8 @@ _LITERAL_KINDS = frozenset({"string", "int", "long", "boolean", "null", "concat"
 # accepts (`bool` is a subtype of `int`, and `int` is accepted where `float` is written).
 # The classes a value of a builtin class is accepted as beyond its own lookup order (the
 # typing specification's promotions: `int` where `float` is written).
+# The type of a class object, `type[X]`.
+_TYPE_OF = "builtins/type#"
 _PROMOTIONS = {
     "builtins/int#": ("builtins/float#", "builtins/complex#"),
     "builtins/bool#": ("builtins/float#", "builtins/complex#"),
@@ -563,6 +566,9 @@ class Libraries:
             if node.returns is None:
                 return None
             returned = _callable(node.returns, scope) or written_type(node.returns, scope)
+            if isinstance(returned, TypeRef) and is_class_object(node.returns, scope):
+                # `-> type[X]`: the class object, not an `X` (ruling R37).
+                returned = TypeRef(symbol=_TYPE_OF, arguments=[returned])
             if isinstance(returned, TypeRef):
                 returned = self._unimported(returned)
                 given = {**self._solve(bound, argument_types, scope), **mapping}

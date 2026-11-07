@@ -449,11 +449,7 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
                     path_id,
                     None,
                     NOT_READABLE,
-                    (
-                        f"receiver of {name} is the class {bare_descriptor(owner)} itself: a "
-                        "subscript of a class is a type form (`__class_getitem__`), and the "
-                        "class's own method runs only on an instance"
-                    ),
+                    _class_object_detail(name, bare_descriptor(owner)),
                 )
             )
         elif owner is not None:
@@ -537,6 +533,21 @@ def _declared_unions(
             ):
                 found[(str(row["symbol"]), position)] = (members, bool(written.get("nullable")))
     return found
+
+
+def _class_object_detail(name: str, owner: str) -> str:
+    """Why a call syntax makes on a class object binds no method of the class (ruling R37):
+    a subscript of a class makes a type; iterating a class runs its metaclass's method."""
+    if name == "__getitem__":
+        return (
+            f"receiver of {name} is the class {owner} itself: a subscript of a class is a "
+            "type form (`__class_getitem__`), and the class's own method runs only on an "
+            "instance"
+        )
+    return (
+        f"receiver of {name} is the class {owner} itself: iterating a class runs its "
+        "metaclass's method, which is not read, not the class's own"
+    )
 
 
 def _reason(

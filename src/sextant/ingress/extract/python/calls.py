@@ -103,6 +103,7 @@ from sextant.ingress.extract.python.typing_rules import (
     ClassShape,
     Hierarchy,
     TypeScope,
+    is_class_object,
     parameter_mapping,
     substitute,
     type_ref,
@@ -124,6 +125,9 @@ _ASYNC_ITER = "__aiter__"
 _ASYNC_NEXT = "__anext__"
 _GETITEM = "__getitem__"
 _SLICE = TypeRef(symbol="builtins/slice#")
+# The type of a class object: `type[X]`, as the scanner holds a value written `type[X]` or
+# `Type[X]` (a written type reads it as `X`, for a call through the class).
+_TYPE_OF = "builtins/type#"
 # The awaitables whose awaited value is their last type argument, as `async for` awaits
 # what `__anext__` returns.
 _AWAITABLES = frozenset({"typing/Awaitable#", "typing/Coroutine#"})
@@ -1197,9 +1201,13 @@ class BodyReader:
         *,
         declared: TypeRef | None = None,
         on_self: bool = False,
+        protocol: bool = False,
     ) -> Callee:
         """A call named `name` on `value`. The owner is the type written for it where
-        there is one; else it is left to the resolver, and the receiver is named."""
+        there is one; else it is left to the resolver, and the receiver is named. A
+        `protocol` call (one syntax makes, `xs[i]`, `for x in xs`) on a value of type
+        `type[X]` runs on the class object, never on an `X`: no owner, and the resolver
+        reads the class (ruling R37)."""
         if value.kind == "class" and value.symbol is not None:
             return Callee(_target(value.symbol, name), "static")
         if value.kind == "instance" and value.symbol is not None:
@@ -1214,6 +1222,8 @@ class BodyReader:
             declared = TypeRef(symbol=_STRING)
         if declared is None:
             declared = _known_type(value, scope)
+        if protocol and declared is not None and declared.symbol == _TYPE_OF:
+            declared = None
         owner = _class_of(declared)
         if value.kind == "parameter" and isinstance(value.value, int):
             return Callee(
@@ -1547,7 +1557,12 @@ class BodyReader:
             return Callee(_target(None, name), "virtual", scope.body.value_id())
         on_self = isinstance(node, ast.Attribute) and self._is_self(node.value, scope)
         return self._on_value(
-            value, name, scope, declared=self._declared(node, scope), on_self=on_self
+            value,
+            name,
+            scope,
+            declared=self._declared(node, scope),
+            on_self=on_self,
+            protocol=True,
         )
 
     def _subscript(self, node: ast.Subscript, scope: Scope) -> CallArgument:
@@ -1851,12 +1866,17 @@ def _declared_type(annotation: ast.expr, types: TypeScope) -> TypeRef | None:
     found = type_ref(annotation, types)
     if found is None or not names_a_type(found.symbol) or found.symbol == ANY:
         return None
+    if is_class_object(annotation, types):
+        return TypeRef(symbol=_TYPE_OF, arguments=[found], nullable=found.nullable)
     return found
 
 
 def _class_of(typed: TypeRef | None) -> str | None:
     """The one class a type names, as the owner of a call on a value of it. A union,
-    `Any` or a type variable gives none."""
+    `Any` or a type variable gives none. A class object's (`type[X]`) is `X`: a call
+    through the class, as the scanner has always read it."""
+    if typed is not None and typed.symbol == _TYPE_OF and len(typed.arguments) == 1:
+        return _class_of(typed.arguments[0])
     if typed is None or not names_a_type(typed.symbol) or typed.symbol in (UNION, ANY):
         return None
     return typed.symbol

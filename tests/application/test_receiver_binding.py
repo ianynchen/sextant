@@ -1050,3 +1050,85 @@ def test_a_class_on_one_path_and_an_instance_on_another_is_decided_per_path(tmp_
     rows = sorted(((row["owner"], row["reason"]) for row in _bound(workspace, site)), key=str)
     assert rows == [("app/models/Repo#", None), (None, "not_readable")]
     workspace.close()
+
+
+# OI-324 fix round 2: a value whose type is written `type[X]` is the class, not an instance.
+
+_COLOURS = (
+    "import enum\n"
+    "class Colour(enum.Enum):\n"
+    "    RED = 1\n"
+    "    def __iter__(self):\n"
+    "        return iter(())\n"
+)
+
+
+def test_a_type_of_x_value_is_the_class_so_syntax_calls_reach_no_instance_method(
+    tmp_path: Path,
+):
+    """`c: type[Repo]` (or `Type[Repo]`) holds the class: `c[0]` is a type form and
+    `for m in enum_cls` runs the metaclass, so no edge reaches the class body's own
+    `__getitem__` or `__iter__`. An explicit call through the class keeps its owner."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "models.py": _MODELS,
+            "colours.py": _COLOURS,
+            "run.py": (
+                "from typing import Type\n"
+                "from app.models import Repo\n"
+                "from app.colours import Colour\n"
+                "def typed(c: type[Repo], d: Type[Repo]):\n"
+                "    c[0]\n"
+                "    d[0]\n"
+                "def each(enum_cls: type[Colour]):\n"
+                "    for m in enum_cls:\n"
+                "        pass\n"
+                "def go():\n"
+                "    typed(Repo, Repo)\n"
+                "    each(Colour)\n"
+            ),
+        },
+    )
+    callees = {str(row["callee"]) for row in workspace.query("call_edges")}
+    assert _GETITEM not in callees
+    assert _PREFIX + "app/colours/Colour#__iter__(sig_dd69782a)." not in callees
+    getitems = [
+        row
+        for row in workspace.query("call_sites")
+        if row["name"] == "__getitem__" and str(row["caller"]).endswith("#typed(sig_dd69782a).")
+    ]
+    assert [row["owner"] for row in getitems] == [None, None]
+    iterate = _site(workspace, "app/run#each(sig_dd69782a).", "__iter__")
+    rows = _bound(workspace, iterate)
+    assert [(row["owner"], row["reason"]) for row in rows] == [(None, "not_readable")]
+    assert "metaclass" in str(rows[0]["detail"])
+    for row in getitems:
+        detail = _bound(workspace, (str(row["caller"]), int(str(row["ordinal"]))))[0]["detail"]
+        assert "a type form" in str(detail)
+    workspace.close()
+
+
+def test_a_module_alias_of_a_class_is_the_class_too(tmp_path: Path):
+    """`Alias = Repo` in a third file: a read of `Alias` takes that write, which names the
+    class, so `Alias[User]` is a type form on that arm too."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "models.py": _MODELS,
+            "aliases.py": "from app import models\nAlias = models.Repo\n",
+            "run.py": (
+                "from app.aliases import Alias\n"
+                "from app.models import User\n"
+                "def make(t): ...\n"
+                "def f():\n"
+                "    make(Alias[User])\n"
+            ),
+        },
+    )
+    site = _site(workspace, "app/run#f(sig_dd69782a).", "__getitem__")
+    assert [(row["owner"], row["reason"]) for row in _bound(workspace, site)] == [
+        (None, "not_readable")
+    ]
+    assert _GETITEM not in {str(row["callee"]) for row in workspace.query("call_edges")}
+    workspace.close()

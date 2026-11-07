@@ -5148,7 +5148,12 @@ class _Walk:
                     (trail, Answer(kind=LITERAL, value=entry["value"], literal_kind=literal_kind))
                 )
             elif named is not None:
-                reached.append((trail, Answer(kind=LITERAL, value=named, literal_kind=SYMBOL)))
+                reached.append(
+                    (
+                        trail,
+                        Answer(kind=LITERAL, value=named, literal_kind=SYMBOL, class_object=True),
+                    )
+                )
             else:
                 reached.append((trail, _unresolved(NOT_READABLE)))
         for method, index in written:

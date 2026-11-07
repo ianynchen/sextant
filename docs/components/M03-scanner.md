@@ -336,7 +336,9 @@ comprehensions included:
   module may be a class too, which this file cannot see: the call is written, and the
   resolver answers a path whose receiver is the class itself `not_readable` ("a type
   form"), so no edge reaches the class's own `__getitem__`; the same holds for `__iter__`
-  and `__next__`. A store (`xs[i] = v`) and other operators are not calls here;
+  and `__next__` ("iterating a class runs its metaclass"). A value written `type[X]` or
+  `Type[X]`, or a library result written so, is the class object too: an explicit call
+  through it (`c.create()`) keeps the owner `X`, but a call syntax makes on it gets none. A store (`xs[i] = v`) and other operators are not calls here;
 - a constructor call gives an `instance` whose `source` is the constructor's receiver;
 - an f-string, or `+` with a string literal, is `concat`, filled by a `dynamic`
   `builtins/str#format` site; a list or a tuple is `array`; a function is `lambda`;
