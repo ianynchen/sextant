@@ -725,7 +725,7 @@ the JAX-RS line. Apache Camel was ruled out of scope earlier that day, and the d
 | **Go** | **`go/packages`** + `go/ssa` | Full | No (deps only) | **`callgraph/{cha,rta,vta}` ships with the Go toolchain** | `registration_call` |
 | **TypeScript** | **`ts.TypeChecker`** compiler API | Full where annotated | No | `Jelly` | `registration_call` + `annotation` + `filesystem` |
 | **Swift** | **IndexStoreDB** (index-while-building) | Full | Yes (macOS) | Index carries call relations | `registration_call` |
-| **Python** | None — pyright has **no programmatic API**, only LSP | Sparse (§7) | No | `PyCG` | `annotation` + `registration_call` |
+| **Python** | None exists, so **our own scanner** over the standard library's `ast`, with typeshed and the installed environment's type files (pyright answers only over LSP; mypy's type objects are internal: [comparison](research/2026-11-06-python-type-tools.md)) | What the code and libraries write: annotations, unions, `type[X]`, overloads. **Not** a generic's elements, `isinstance` narrowing, or annotation-only fields ([essay](coverage/python.md)) | No: the installed environment is read, never built or run | We write it, as for the JVM: receiver binding per path, C3 lookup | `fluent` with `entry_point` roots (click) ✅ built; FastAPI, Flask, Django not yet |
 | **Rust** | ⛔ **None stable.** `syn` has no types; rustdoc JSON needs `cargo +nightly … -Z unstable-options` and its `FORMAT_VERSION` breaks between releases | Syntax only | — | None | `annotation` (syntax-only) |
 | **JavaScript** | `ts.TypeChecker` via `allowJs` + `checkJs` | Inferred, plus JSDoc | No | `Jelly` | as TypeScript |
 | **C# / .NET** | Compiled assemblies — IL plus metadata — via `System.Reflection.Metadata` or Mono.Cecil; Roslyn's semantic model where source is needed | Full | Yes (or the published assemblies) | We would write it, as for the JVM | `annotation` + `registration_call` |
@@ -750,6 +750,15 @@ is richer than source. In TypeScript it is strictly poorer — types erased, dec
 lowered to `__decorate` calls, bundlers renaming and inlining. **Scan TypeScript source**,
 with `tsconfig.json` as the build input carrying authority under DR-4.
 
+**Python's reader foundation was built 2026-11-06 to 2026-11-07** (OI-208 plan 1). Sextant reads
+itself end to end (`tests/e2e/test_sextant_reads_itself.py`): six commands are six
+`entry_point` roots with traces, their 24 parameters are `request_params` rows, and every one of
+its 23,482 call sites has an owner (82.7% written by the scanner, 0.7% bound by the resolver) or
+one reason from the general list (16.6%). No Python protocol row ships, so the §2 cells are
+unchanged. The essay has what is read, what is not and why, and the measured numbers;
+`docs/research/2026-11-06-python-performance.md` has the times against the budget (cold met,
+warm 10 s target missed on polar: 27.6 s).
+
 Per-language essays — toolchain detail, payload handling, structural oddities:
 [Go](coverage/go.md) · [Rust](coverage/rust.md) · [Python](coverage/python.md) ·
 [TypeScript and JavaScript](coverage/typescript.md) · [Android and iOS](coverage/mobile.md).
@@ -769,6 +778,7 @@ each catalog's rules were measured against.
 |---|---|---|---|
 | **Java** | class-file majors **45–71** — Java 1.1 through **JDK 27** | the pinned ASM (`org.ow2.asm:asm:9.10.1`) | **JDK 28** (major 72) and later: the class is skipped, its document marked `partial` with ASM's own refusal, and the scan continues |
 | **Kotlin** | the same bytecode range for structure; **Kotlin 1.0–2.5** for metadata (`mv` 1.1 through 2.5) | `kotlin-metadata-jvm:2.4.20`, which reads one minor past its own release; pinned on a real class by `extractor-jvm/.../KotlinMetadataVersionTest.java` | **Kotlin 2.6** and later: the class is still scanned and still yields facts, but its `@Metadata` is not decoded, and the document is marked `partial` with the library's refusal, which names the version. What is lost is everything metadata supplies: nullability (Java's rule applies instead), suspend return types, parameter types and defaults, and the extension-receiver mark, so a module extension's `$default` call is mis-projected. Measured on the library this replaced (2.2.0, through Kotlin 2.3) with kotlinc 2.4.20: every class of `ktor-samples/client-tools` and `kotlin-ktor-exposed-starter` was `partial`, and none is now (OI-219) |
+| **Python** | the grammar of the Python that runs Sextant: **3.12** (the floor, `requires-python`, CI's "All gates" job) to **3.14** (development, and CI's "Python 3.14 reader" job). Library and standard-library types from **typeshed commit `13ffe24f8b9d0069a7a45c42eed3f5513e1472a1`** (`src/sextant/resources/typeshed/COMMIT`), its `VERSIONS` read against the scanned environment's Python | the running interpreter's `ast` (ruled 2026-11-06: run Sextant on the newest Python) | a file using newer syntax is listed as uncovered, its reason naming the Python that read it (`read with Python 3.14`), and the rest of the module is scanned. Measured on polar: 33 files uncovered under 3.13 (`except A, B:`), 0 under 3.14 |
 
 `verify: java -jar src/sextant/extractor-jvm/sextant-extractor.jar --capabilities` ·
 the range itself is asserted against real bytes by

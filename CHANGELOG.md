@@ -28,6 +28,19 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Sextant reads itself, end to end** (OI-208 plan 1 task 10, spec
+  `2026-11-06-python-reader-design.md` §7 item 1). `tests/e2e/test_sextant_reads_itself.py`
+  analyses the repository root once and checks, against lists written by hand from
+  `src/sextant/cli/app.py`: one `sextant` module; the six commands as six `entry_point` roots,
+  each with a trace; their 24 parameters as `request_params` rows; and every one of the 23,482
+  call sites with an owner or one reason from the general list (none has neither). The probe
+  `scripts/probes/python_call_kinds.py --workspace <folder>` prints a workspace's call table
+  before and after receiver binding. Measured on the development Mac: Sextant 8.7 s cold,
+  8.8 s warm; polar's `server/` 27.2 s cold (target 60 s) and 27.6 s warm (target 10 s
+  missed, ceiling 30 s met), because the scan is not reused on a re-run
+  (`docs/research/2026-11-06-python-performance.md`). The Python essay
+  (`docs/coverage/python.md`) states what is read, what is not and why; the comparison with
+  pyright, Pyrefly, ty and mypy is `docs/research/2026-11-06-python-type-tools.md`.
 - **A click program's commands are `entry_point` roots** (OI-208 plan 1 task 9b, design
   `2026-11-06-reading-decorators-design.md` §5; closes OI-22). `catalogs/click.yml` declares
   `root_kind: entry_point`: each command is a `roots` row with no wire address, its path the

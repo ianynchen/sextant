@@ -1,10 +1,73 @@
-"""Rough split of call sites by what is needed to know the target."""
+"""Rough split of call sites by what is needed to know the target.
+
+`--workspace <dir>...` prints the same question answered by the real resolver instead: every
+`call_site` of an analysed workspace (`sextant module analyze <path> --workspace <dir>`), split
+by what the scanner wrote (before receiver binding) and by what the resolver bound (after it).
+"""
 
 import ast
 import builtins
 import collections
 import pathlib
 import sys
+
+# A site whose receiver the scanner left to the resolver and that is still unbound after it.
+_NO_TARGET_NO_REASON = "no owner and no reason"
+
+
+def _workspace_table(directory: pathlib.Path) -> None:
+    """The call table of one workspace, before and after `bind_receivers`, one line per
+    kind, counted per call SITE (`caller`, `ordinal`), never per binding row."""
+    import duckdb  # only this mode needs it; the AST mode runs on any Python
+
+    path = directory if directory.suffix == ".duckdb" else directory / "workspace.duckdb"
+    db = duckdb.connect(str(path), read_only=True)
+    before = db.execute(
+        "SELECT CASE WHEN owner IS NULL THEN 'owner left to the resolver'"
+        " ELSE 'owner written: ' || invoke_kind END, count(*)"
+        " FROM call_sites GROUP BY ALL ORDER BY 2 DESC"
+    ).fetchall()
+    # A site's binding rows share one site-level `resolution` (schema.sql `bound_receivers`),
+    # except a `partial` site, whose unbound paths are `unresolved` rows beside it.
+    after = db.execute(
+        f"""
+        WITH sites AS (
+            SELECT s.caller, s.ordinal, s.owner,
+                   bool_or(b.owner IS NOT NULL) AS bound,
+                   any_value(b.resolution) FILTER (WHERE b.owner IS NOT NULL) AS resolution,
+                   count(DISTINCT b.reason) AS reasons, any_value(b.reason) AS reason,
+                   count(b.caller) AS rows
+            FROM call_sites s
+            LEFT JOIN bound_receivers b ON b.caller = s.caller AND b.ordinal = s.ordinal
+            GROUP BY s.caller, s.ordinal, s.owner
+        )
+        SELECT CASE
+            WHEN owner IS NOT NULL THEN 'owner written by the scanner'
+            WHEN bound THEN 'bound: ' || resolution
+            WHEN rows = 0 AND EXISTS (
+                SELECT 1 FROM call_edges e
+                WHERE e.caller = sites.caller AND e.ordinal = sites.ordinal
+                  AND e.callee IS NOT NULL
+            ) THEN 'a function value called (edge into its body)'
+            WHEN reasons > 1 THEN 'unresolved: several reasons, one per path'
+            WHEN reasons = 1 THEN 'unresolved: ' || reason
+            ELSE '{_NO_TARGET_NO_REASON}' END, count(*)
+        FROM sites GROUP BY ALL ORDER BY 2 DESC
+        """
+    ).fetchall()
+    db.close()
+    total = sum(count for _, count in before)
+    print(f"== {directory}  ({total} call sites)")
+    for title, rows in (("before receiver binding", before), ("after receiver binding", after)):
+        print(f"   {title}")
+        for name, count in rows:
+            print(f"   {count:7d}  {100 * count / total:5.1f}%  {name}")
+
+
+if sys.argv[1:2] == ["--workspace"]:
+    for directory in sys.argv[2:]:
+        _workspace_table(pathlib.Path(directory))
+    raise SystemExit(0)
 
 B = set(dir(builtins))
 for root in sys.argv[1:]:
