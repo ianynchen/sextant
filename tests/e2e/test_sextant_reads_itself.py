@@ -3,8 +3,9 @@
 The repository root is analysed once, as a user would run it, into a workspace outside the
 tree. What is checked was read by hand from `src/sextant/cli/app.py` and `pyproject.toml`
 `[project.scripts]`, never from a previous run:
-- the root is one `sextant` module (a nested checkout such as `.claude/worktrees/*` is not
-  a second one);
+- the root is one `sextant` module. A nested checkout such as `.claude/worktrees/*` holds
+  `.git` and is not entered (`is_other_repository`; the rule itself is pinned with a real
+  `.git` folder and file by `tests/ingress/test_python_detector.py`);
 - the six commands are the six `entry_point` roots, each with a trace;
 - the 24 parameters of those commands are their `request_params` rows;
 - every call site has a target, or a reason from the one reason list.

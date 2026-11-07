@@ -725,7 +725,7 @@ the JAX-RS line. Apache Camel was ruled out of scope earlier that day, and the d
 | **Go** | **`go/packages`** + `go/ssa` | Full | No (deps only) | **`callgraph/{cha,rta,vta}` ships with the Go toolchain** | `registration_call` |
 | **TypeScript** | **`ts.TypeChecker`** compiler API | Full where annotated | No | `Jelly` | `registration_call` + `annotation` + `filesystem` |
 | **Swift** | **IndexStoreDB** (index-while-building) | Full | Yes (macOS) | Index carries call relations | `registration_call` |
-| **Python** | None exists, so **our own scanner** over the standard library's `ast`, with typeshed and the installed environment's type files (pyright answers only over LSP; mypy's type objects are internal: [comparison](research/2026-11-06-python-type-tools.md)) | What the code and libraries write: annotations, unions, `type[X]`, overloads. **Not** a generic's elements, `isinstance` narrowing, or annotation-only fields ([essay](coverage/python.md)) | No: the installed environment is read, never built or run | We write it, as for the JVM: receiver binding per path, C3 lookup | `fluent` with `entry_point` roots (click) ✅ built; FastAPI, Flask, Django not yet |
+| **Python** | None exists, so **our own scanner** over the standard library's `ast`, with typeshed and the installed environment's type files (pyright, Pyrefly and ty answer over a language server; mypy's documented API returns report text only: [comparison](research/2026-11-06-python-type-tools.md)) | What the code and libraries write: annotations, unions, `type[X]`, overloads. **Not** a generic's elements, `isinstance` narrowing, or annotation-only fields ([essay](coverage/python.md)) | No: the installed environment is read, never built or run | We write it, as for the JVM: receiver binding per path, C3 lookup | `fluent` with `entry_point` roots (click) ✅ built; FastAPI, Flask, Django not yet |
 | **Rust** | ⛔ **None stable.** `syn` has no types; rustdoc JSON needs `cargo +nightly … -Z unstable-options` and its `FORMAT_VERSION` breaks between releases | Syntax only | — | None | `annotation` (syntax-only) |
 | **JavaScript** | `ts.TypeChecker` via `allowJs` + `checkJs` | Inferred, plus JSDoc | No | `Jelly` | as TypeScript |
 | **C# / .NET** | Compiled assemblies — IL plus metadata — via `System.Reflection.Metadata` or Mono.Cecil; Roslyn's semantic model where source is needed | Full | Yes (or the published assemblies) | We would write it, as for the JVM | `annotation` + `registration_call` |
@@ -752,9 +752,11 @@ with `tsconfig.json` as the build input carrying authority under DR-4.
 
 **Python's reader foundation was built 2026-11-06 to 2026-11-07** (OI-208 plan 1). Sextant reads
 itself end to end (`tests/e2e/test_sextant_reads_itself.py`): six commands are six
-`entry_point` roots with traces, their 24 parameters are `request_params` rows, and every one of
-its 23,482 call sites has an owner (82.7% written by the scanner, 0.7% bound by the resolver) or
-one reason from the general list (16.6%). No Python protocol row ships, so the §2 cells are
+`entry_point` roots with traces, their 24 parameters are `request_params` rows, and each of its
+23,482 call sites is in one of four groups: owner written by the scanner (19,429, 82.7%), owner
+bound by the resolver (126, 0.5%), a call of a function value whose edge enters that function's
+body (34, 0.1%), or unresolved with a reason from the one reason list (3,893, 16.6%; 104 of them
+carry several reasons, one per path). No Python protocol row ships, so the §2 cells are
 unchanged. The essay has what is read, what is not and why, and the measured numbers;
 `docs/research/2026-11-06-python-performance.md` has the times against the budget (cold met,
 warm 10 s target missed on polar: 27.6 s).

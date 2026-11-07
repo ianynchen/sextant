@@ -24,9 +24,12 @@ after the facts is the existing one, extended where Python needs it.
   `[build-system]`, `[tool.uv.workspace]` members, `[project.scripts]`), `setup.cfg`
   `[metadata]` and `console_scripts`, and `requirements*.txt` or `Pipfile` for a service with
   nothing else. A uv workspace root with no code of its own is not a module. A `setup.py`
-  inside a package is not a module. When it looks for modules it skips folders that git
-  ignores or that `.sextantignore` names, so a nested checkout such as `.claude/worktrees/*` is
-  not a second module. A repository read by several detectors (a Maven project with a Python
+  inside a package is not a module. When it looks for modules it skips folders that a
+  `.gitignore` in the repository or `.sextantignore` names, and it does not enter a folder that
+  holds `.git` (a folder for a clone or submodule, a file for a git worktree:
+  `is_other_repository`), noting it as another repository. So a nested checkout such as
+  `.claude/worktrees/*` is not a second module (pinned by
+  `tests/ingress/test_python_detector.py::test_a_folder_holding_git_is_another_repository_and_is_not_entered`). A repository read by several detectors (a Maven project with a Python
   tool beside it) keeps every module found.
 - **Each file** (M03), one at a time, with the standard library's `ast`. A module is a type
   (`app/api/items#`), its body is that type's `<clinit>`, classes are types and functions are
@@ -60,8 +63,9 @@ On the development Mac, Python 3.14.10. Full figures and commands:
 | Files read | 171 | 2,053 (no installed environment: typeshed only) |
 | Call sites | 23,482 | 129,009 |
 | Owner written by the scanner | 82.7% | 61.4% |
-| Owner bound by the resolver, or a function value whose body the call enters | 0.7% | 7.8% |
-| Unresolved, with one reason from the general list | 16.6% | 30.8% |
+| Owner bound by the resolver (`resolved`, `narrowed`, `partial`) | 126 (0.5%) | 9,712 (7.5%) |
+| A call of a function value, whose edge enters that function's body (ruling R29) | 34 (0.1%) | 304 (0.2%) |
+| Unresolved, with a reason from the one reason list (several reasons, one per path, on 104 / 172 of them) | 3,893 (16.6%) | 39,774 (30.8%) |
 | **No owner and no reason** | **0** | **0** |
 | Cold analysis (target 60 s, ceiling 300 s) | 8.7 s | 27.2 s |
 | Warm analysis, no file changed (target 10 s, ceiling 30 s) | 8.8 s | 27.6 s: **target missed** |
@@ -80,7 +84,7 @@ On the development Mac, Python 3.14.10. Full figures and commands:
 
 Every item is recorded in the plan's ledger (`.superpowers/sdd/2026-11-06-python-reader-foundation/progress.md`)
 or a task report, with its ruling where one was made. "Unknown" below always means a reason
-from the general list, never a guessed value.
+from the one reason list, never a guessed value.
 
 **Types the reader does not work out** (measured on Sextant: 2,541 of its 2,996 `not_readable`
 sites call a `dict`, `list`, `str`, `set` or `tuple` method):
@@ -95,6 +99,10 @@ sites call a `dict`, `list`, `str`, `set` or `tuple` method):
 | a library that is not installed | `external`, and the report says so | library symbols come only from the scanned environment; nothing is downloaded (spec §3e) |
 | a file written for a newer Python than the one running Sextant | the file is uncovered, naming the version that read it | the grammar is the running Python's (ruled 2026-11-06: run Sextant on the newest Python) |
 | names a `sys.path` change makes visible | `external` | `sys.path` changes are not followed (spec §3e) |
+| a name whose defining distribution is not installed, though another installed one re-exports it | keeps the import path, with an uncovered note | Task 7 fix round 1, accepted: no fact field names the missing definer |
+| a re-export cycle between library modules | keeps the written name | Task 7 fix round 1, accepted |
+| a type written in the code | `evidence: declared` on the document only, not per symbol | Task 4, deferred |
+| a class base that is a name the file does not bind | `parents_unread` with `external`, the detail "a name this file does not bind"; a base imported from a library is written as a class, so `external` fires only for unbound names | Task 5b fix round 1, parked |
 
 The comparison with a type checker, which solves the first four exactly, is
 `docs/research/2026-11-06-python-type-tools.md`.
@@ -118,6 +126,12 @@ The comparison with a type checker, which solves the first four exactly, is
 | the value of `f()` through a `result_calls` wrapper (`lru_cache`) | the library's, not `f`'s return (15 polar edges) | Task 9b, logged |
 | a decorator built once and reused (`deco = click.option(...)`, then `@deco`) | not followed | Task 9b: `result_returns` reads the same method only |
 | a decorator factory no value model states (`lru_cache(maxsize)`, `retry(...)`) | unstated | Task 9b, logged |
+| `self.m()` or `C.m()` on a decorated method | still names the method, not the decorator's result; the `external` detail does not name the decorator there | Task 9a, parked for 9b; 9b named the decorator on `__call__` sites only |
+| a classmethod (written `static: true`, R28) | `exact_methods` (`shapes/pass_through.py:478`) treats it as never overridden, though `cls` can reach an override | Task 8 re-review round 3, parked: **must be fixed before a Python catalog reads pass-through** |
+| a closed list (a name bound on several branches) reached through a dotted head (`a.b.c`) | loses its field | Task 5, deferred |
+| a name rebound through `globals()` or `setattr` | not followed | Task 9a, parked (contrived) |
+| calling a wrapper a library types (`_lru_cache_wrapper`) | two edges: the library's `__call__` and the wrapped function | Task 9b concern 4, accepted: both run |
+| a wrapped handler's own parameters (`__wrapped__`; CTFd has 56 such routes) | not read | Task 9b §9, plan 2 |
 
 **Commands:**
 
@@ -128,7 +142,12 @@ The comparison with a type checker, which solves the first four exactly, is
 | `--shout/--no-shout`; a parameter's type; `password_option`, `version_option` | not flags; no column; no row | Task 9b, logged |
 | `@click.group` or `@cli.command` with no parentheses | not read | Task 9b, logged (none in the corpus) |
 | a command behind a library decorator no value model states (`pass_context`) | a root row with no handler, and no reason column to say why | Task 9b: `roots` has no reason column |
-| a command no entry point names | its path is `<program>` | the outermost word is the program's name |
+| a command no entry point names | its path is `<program>`: the outermost word is the program's name, and no entry point gives it | design `2026-11-06-reading-decorators-design.md` §5 (`path_fallback`, program name); Task 9b concern 6 |
+| a command named from its function (`path_fallback`) whose handler is unread | the row's path is NULL: the name would be the wrapper's | Task 9b fix round 1, logged |
+| a group whose class comes from a library that is not installed (redash's flask `AppGroup`) | 0 roots: nothing has an owner | Task 9b fix round 1 (reviewer probe); follows the not-installed rule |
+| an `optional_when` whose value is not a literal | `requirement` NULL | Task 9b fix round 2, accepted: the column's words are `required` and `optional` only |
+| a keyword argument reference (`{keyword: name}`) in a catalog | read on `fluent` captures, `mount`, `request_params` and `single_call`; every other style's `*_arg` takes a position | Task 9b deviation 1 and fix round 1 |
+| a keyword-form capture under `--shadow` | not seen by the shadow ask reader | Task 9b §9 item 11, logged |
 | a group made by a class constructor | not tied to its entry-point name | Task 9b re-review, logged |
 | a program started by the code (`subprocess`, `java -jar`) | not recorded | OI-323 |
 
@@ -140,6 +159,24 @@ The comparison with a type checker, which solves the first four exactly, is
 | a `tests/` folder with its own `requirements.txt` inside a `pyproject` module | its own module | Task 2, deferred |
 | `.egg-info`, a Windows `Lib/site-packages` | not read | Task 2, deferred |
 | a Poetry checkout with no installed environment | a note on every run | Task 2, deferred |
+| two modules with one id in one repository (polar's two `polar-sdk`) | both kept, each id followed by `@<folder>` | R6 |
+| an unreadable root `pyproject.toml` in a JVM repository | the whole analysis is refused, loudly | R8b: only "no module found" is passed over |
+| a detector that reports an empty module list | dropped without a note | Task 3, deferred |
+| a `pyproject.toml` with only `[build-system]` | no module, and no note saying why | Task 2, deferred |
+| the own-code check, in one order of nested files | an edge case can take the wrong order (`detect/python.py`) | Task 2, deferred |
+| a `.gitignore` that cannot be read | detection stops with `OSError` | Task 4, deferred |
+| a module's own git-ignored files (generated code) | read by the scanner; git-ignored folders are skipped only when looking for modules | R9 |
+| a folder named `site-packages` or `.mypy_cache` that is not an environment | read: only a folder holding `pyvenv.cfg` is an environment | Task 4, deferred |
+| an opted-in library sharing a `pypi` folder name with a Maven group | its fact folder can collide | Task 7, logged (real input cannot trigger it) |
+| a `RECORD` path written with a backslash | not refused | Task 7, parked (harmless off Windows) |
+
+**Out of this essay's scope**, though in the ledger: items that change no answer a user reads.
+These are stale docstrings and error texts (Task 1), test hygiene (Task 2's Poetry cache
+tests, Task 3's failure-test order), Task 0's measurement notes, a redundant assignment
+(Task 2), a guard test's blind spots (Tasks 9a and R31), the walk's `_copy` cost (Task 6, not
+measurable), the order of two honest reasons in receiver binding (Task 8), and the JVM-only
+`requireNonNull` entry (Task 9b). `control_flow` is not declared as a capability (R14): the
+flow fields are written, as on the JVM, which does not declare it either.
 
 ---
 
@@ -148,9 +185,9 @@ The comparison with a type checker, which solves the first four exactly, is
 | Route | Gives | Why not, or why |
 |---|---|---|
 | **`ast` (stdlib) + typeshed + the installed environment** | Syntax, decorators, literals, written types, library signatures | **Built.** Reads one file at a time and writes the existing facts, runs nothing and downloads nothing. Does not substitute generics or read `isinstance` (above). |
-| `mypy` in-process | Declared and inferred types, overloads, generics | Its build and type objects are internal (from its documents); a project's mypy plugins would run the scanned environment's code. Measured: 2.7 s cold on Sextant, 4.8 s on polar's package without libraries. A candidate for the four shapes above. |
-| `pyright` | Best inference available | No programmatic API; it runs as a language server answering per position, and needs Node.js |
-| Pyrefly, ty | Fast inference, in Rust | Language servers as well, each a native binary to ship; ty is a preview release |
+| `mypy` in-process | Declared and inferred types, overloads, generics | Its documented API returns report text only, and its plugin system is "experimental" (mypy's documents); a project's mypy plugins would run the scanned environment's code. Measured: 2.7 s cold on Sextant, 4.8 s on polar's package without libraries. A candidate for the four shapes above. |
+| `pyright` | Best inference available | Runs on Node.js (the PyPI wrapper downloads Node at run time when none is installed); used as a language server answering per position. That it has no programmatic API is not checked |
+| Pyrefly, ty | Fast inference (ty: "written in Rust") | Language servers as well, each one more package to ship; neither states a release status on its front page |
 | `PyCG` | Call graph | Named in the literature as the reference Python call-graph tool (see §10) |
 
 There is no artifact equivalent to a `.class` file. `.pyc` bytecode exists but is *less*

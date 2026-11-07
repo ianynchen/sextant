@@ -33,7 +33,10 @@ here would restate those documents rather than add anything.
   analyses the repository root once and checks, against lists written by hand from
   `src/sextant/cli/app.py`: one `sextant` module; the six commands as six `entry_point` roots,
   each with a trace; their 24 parameters as `request_params` rows; and every one of the 23,482
-  call sites with an owner or one reason from the general list (none has neither). The probe
+  call sites in one of four groups, none outside them: the owner written by the scanner
+  (19,429), bound by the resolver (126), a call of a function value whose edge enters that
+  function's body (34), or unresolved with a reason from the one reason list (3,893, of which
+  104 carry several reasons, one per path). The probe
   `scripts/probes/python_call_kinds.py --workspace <folder>` prints a workspace's call table
   before and after receiver binding. Measured on the development Mac: Sextant 8.7 s cold,
   8.8 s warm; polar's `server/` 27.2 s cold (target 60 s) and 27.6 s warm (target 10 s
