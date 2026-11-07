@@ -178,8 +178,14 @@ keyword-only parameter of its name and the rest go to `**kwargs`; after a `*` ar
 later positional's place is known, and a `**` argument may fill any parameter left. A
 parameter none of this decides — its default, one only an unpacked argument may fill, a
 `*args`/`**kwargs` parameter — is `not_readable` on that caller's path, naming the parameter
-(`values.parameter_slots`). A constructor is bound by its `__init__`'s parameters, as any
-callee. Every JVM argument is positional, slot for slot.
+(`values.parameter_slots`), the one calling rule: the scanner writes arguments as written
+(R27). A constructor is bound by its `__init__`'s parameters, as any callee. A method called
+through its class — a `static` call on a class, or a call whose receiver is a name that is a
+class (`Base.__init__(self, x)`, `H.use(h, x)`) — to a method that takes `self` is handed
+`self` as its first positional argument (`values.call_slots`); a classmethod or staticmethod
+takes none. A parameter no edge binds is `external` only where no call in the module names its
+method; a method that never returns normally has no body the edges reach, and its parameter is
+`not_readable`, saying so. Every JVM argument is positional, slot for slot.
 
 A bound call becomes an edge, and an edge is a caller, so binding runs in rounds until one
 binds nothing new, at most eight; a receiver still unbound when the eighth round bound

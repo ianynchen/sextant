@@ -88,7 +88,6 @@ class _Writer(BodyReader):
         self._context = context
         self.facts: list[Fact] = []
         self.not_read: list[str] = []
-        self._signatures = {}
         self._methods = {}
         self._bodies = {}
 
@@ -106,7 +105,6 @@ class _Writer(BodyReader):
         types = TypeScope(names=names, here=here, index=self._context.index)
         self._symbol(owner, ConstructKind.MODULE, None, 1, last_line)
         clinit = self._clinit(owner, 1, last_line)
-        self._collect_signatures(tree.body)
         scope = Scope(owner, types, self._body(clinit))
         self._statements(tree.body, scope)
         self._positions(scope)
@@ -174,8 +172,6 @@ class _Writer(BodyReader):
         )
         types = replace(generic, class_names=class_names, self_type=owner)
         clinit = self._clinit(owner, node.lineno, node.end_lineno or node.lineno)
-        if scope.frame is not None:
-            self._know_class(node, owner)
         body = Scope(
             owner,
             types,
@@ -284,6 +280,9 @@ class _Writer(BodyReader):
             target for decorator in node.decorator_list for target in scope.types.lookup(decorator)
         ]
         is_static = any(t == Target(BUILTINS, "staticmethod") for t in decorators)
+        # A classmethod is bound to the class, not to an instance (D00 §5a `static`): `cls`
+        # is taken by the receiver as `self` is, and a call through the class fills no `cls`.
+        is_class_method = any(t == Target(BUILTINS, "classmethod") for t in decorators)
         stub = any(is_typing(t, "overload") for t in decorators)
         abstract = stub or any(t == Target("abc", "abstractmethod") for t in decorators)
         name = node.name
@@ -302,7 +301,6 @@ class _Writer(BodyReader):
                 self._value(default, scope)
         if nested:
             self._method_known(descriptor, scope.owner, name)
-            self._know((scope.owner, name), node, skip_first=False)
         applied = self._apply(
             callees, CallArgument(kind="lambda", symbol=descriptor, captures=0), scope
         )
@@ -319,7 +317,7 @@ class _Writer(BodyReader):
             type_parameters=_type_parameters(node.type_params, generic),
             modifiers={
                 "abstract": abstract,
-                "static": not receiver_taken,
+                "static": not receiver_taken or is_class_method,
                 "varargs": node.args.vararg is not None,
             },
         )

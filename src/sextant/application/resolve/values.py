@@ -696,6 +696,11 @@ class ValueIndex:
     call_parameters: Mapping[str, tuple[tuple[str | None, str | None], ...]] = dataclass_field(
         default_factory=dict
     )
+    # The methods and constructors that take a `self` the receiver fills (`modifiers.static`
+    # false), and the calls made through a class rather than an instance (`_class_receivers`):
+    # such a call to such a method hands `self` as its first argument (`call_slots`).
+    instance_methods: frozenset[str] = frozenset()
+    class_receivers: frozenset[tuple[str, int]] = frozenset()
     # `argument_slots`' answers, per (caller, ordinal, callee), for as long as this lives.
     slots_memo: dict[Any, Any] = dataclass_field(default_factory=dict, compare=False, repr=False)
 
@@ -715,7 +720,11 @@ class ValueIndex:
             elif declared is None:
                 found = ()
             else:
-                found = parameter_slots(arguments, declared)
+                found = call_slots(
+                    arguments,
+                    declared,
+                    (caller, ordinal) in self.class_receivers and callee in self.instance_methods,
+                )
             self.slots_memo[key] = found
         return found
 
@@ -987,6 +996,13 @@ def value_index(
     parameters: dict[str, tuple[str | None, ...]] = {}
     parameter_types: dict[str, tuple[str | None, ...]] = {}
     call_parameters: dict[str, tuple[tuple[str | None, str | None], ...]] = {}
+    instance_methods: set[str] = {
+        str(row["symbol"]) for row in workspace.query("constructor_declarations")
+    }
+    for row in workspace.query("method_declarations"):
+        modifiers = row.get("modifiers")
+        if isinstance(modifiers, dict) and modifiers.get("static") is False:
+            instance_methods.add(str(row["symbol"]))
     for row in (
         *workspace.query("method_declarations"),
         *workspace.query("constructor_declarations"),
@@ -1086,8 +1102,11 @@ def value_index(
         )
 
     edges = [row for row in workspace.query("call_edges") if row["callee"] is not None]
+    class_receivers = (
+        _class_receivers(sites, dispatch, writers, constants, produced) if by_name else frozenset()
+    )
     if by_name:
-        bind_by_name(callers, edges, sites, call_parameters)
+        bind_by_name(callers, edges, sites, call_parameters, instance_methods, class_receivers)
     reached = frozenset((str(row["caller"]), int(str(row["ordinal"]))) for row in edges)
     writing = (
         {method for entries in writers.values() for method, _ in entries}
@@ -1159,6 +1178,71 @@ def value_index(
         dispatch=dispatch,
         by_name=by_name,
         call_parameters=call_parameters,
+        instance_methods=frozenset(instance_methods),
+        class_receivers=class_receivers,
+    )
+
+
+def named_type(symbol: str, dispatch: Dispatch | None) -> str | None:
+    """`_Walk._named_type`'s rule, for a reader with no walk: the type a binding declared as
+    no field names, where it names one the workspace declares or holds a header for."""
+    bare = bare_descriptor(symbol)
+    if dispatch is None or bare in dispatch.scanned:
+        return None
+    named = field_type(bare)
+    if named is None or (named not in dispatch.scanned and named not in dispatch.headers):
+        return None
+    return named
+
+
+def call_slots(
+    arguments: Sequence[Mapping[str, Any]],
+    parameters: Sequence[tuple[str | None, str | None]],
+    through_class: bool,
+) -> tuple[int, ...]:
+    """`parameter_slots` for one call. A method called THROUGH ITS CLASS — `Base.__init__(self,
+    x)`, `H.use(h, x)` — is handed its `self` as the first positional argument, which the
+    declaration does not list (the receiver takes it on an instance call): so the call fills
+    a leading `self` first, and the rest of the rule is unchanged."""
+    if through_class:
+        return parameter_slots(arguments, ((None, "positional_only"), *parameters))[1:]
+    return parameter_slots(arguments, parameters)
+
+
+def _class_receivers(
+    sites: Mapping[tuple[str, int], Mapping[str, Any]],
+    dispatch: Dispatch,
+    writers: Mapping[str, Any],
+    constants: Mapping[str, Sequence[tuple[str | None, Mapping[str, Any]]]],
+    produced: Mapping[str, Any],
+) -> frozenset[tuple[str, int]]:
+    """The calls made through a CLASS rather than an instance: a `static` call naming an
+    owner (to an instance method only where the class is the owner — a module function is
+    `static` itself), and a `virtual` one whose receiver is a name that is a class on every
+    write (`named_type`): an import used as a value, or one bound to classes on branches."""
+
+    def names_classes(field: str) -> bool:
+        if writers.get(field) or produced.get(field):
+            return False
+        written = constants.get(field, ())
+        if not written:
+            return named_type(field, dispatch) is not None
+        return all(
+            entry.get("kind") == "field"
+            and entry.get("symbol") is not None
+            and named_type(str(entry["symbol"]), dispatch) is not None
+            for _, entry in written
+        )
+
+    return frozenset(
+        key
+        for key, site in sites.items()
+        if (site.get("invoke_kind") == "static" and site.get("owner") is not None)
+        or (
+            site.get("invoke_kind") == "virtual"
+            and site.get("receiver_field") is not None
+            and names_classes(str(site["receiver_field"]))
+        )
     )
 
 
@@ -1167,6 +1251,8 @@ def bind_by_name(
     edges: Sequence[Mapping[str, Any]],
     sites: Mapping[tuple[str, int], Mapping[str, Any]],
     parameters: Mapping[str, tuple[tuple[str | None, str | None], ...]],
+    instance_methods: AbstractSet[str],
+    class_receivers: AbstractSet[tuple[str, int]],
 ) -> None:
     """`bound_to_parameter` where arguments are bound by name (R2): each edge's callee's
     parameters, each with the argument slot `parameter_slots` says fills it, or `UNFILLED`
@@ -1186,7 +1272,11 @@ def bind_by_name(
         site = sites.get((caller, ordinal))
         if declared is None or site is None:
             continue
-        slots = parameter_slots(site.get("arguments") or [], declared)
+        slots = call_slots(
+            site.get("arguments") or [],
+            declared,
+            (caller, ordinal) in class_receivers and callee in instance_methods,
+        )
         for position, slot in enumerate(slots):
             callers.setdefault((callee, position), []).append((caller, ordinal, slot))
 
@@ -4027,7 +4117,12 @@ class _Walk:
         # the `result` a JVM construction never has, holds an instance of the class it names —
         # what an `instance` entry answers for a `new`. After every identity arm, as a `new`'s
         # symbol answer is after its identified construction (`_entry`).
-        if row is not None and row["name"] == _INIT and row.get("owner") is not None:
+        if (
+            row is not None
+            and row["name"] == _INIT
+            and row.get("invoke_kind") == "special"
+            and row.get("owner") is not None
+        ):
             return _only(trail, Answer(kind=LITERAL, value=str(row["owner"]), literal_kind=SYMBOL))
         # **A call whose owner the facts left to the resolver returns what the method its
         # receiver's type runs returns**, on each path the receiver is read by.
@@ -4621,14 +4716,7 @@ class _Walk:
         `no_writer` keeps its meaning: a declared field, or a name that is no type. On the JVM
         a read field is declared wherever its class was read, and no type is named after a
         member of a class (`member_type`), so nothing there reaches this."""
-        dispatch = self._index.dispatch
-        bare = bare_descriptor(symbol)
-        if dispatch is None or bare in dispatch.scanned:
-            return None
-        named = field_type(bare)
-        if named is None or (named not in dispatch.scanned and named not in dispatch.headers):
-            return None
-        return named
+        return named_type(symbol, self._index.dispatch)
 
     def _from_outside(self, symbol: str, trail: _Trail, frames: "_Frames") -> tuple[_Reached, ...]:
         """**A field read on an object from outside what was scanned borrows no other

@@ -1259,19 +1259,16 @@ Strictly additive: an engine that does not consult `merge` treats it exactly as 
 treated `unresolved`.
 
 **`keyword` is the parameter NAME a Python keyword argument gives** (`prefix="/items"`),
-on an entry of `arguments` only, and only where the scanner cannot put the argument at its
-position: the callee's parameter list is not in the file (ruling R2, 2026-11-06). The
-resolver puts it at its position when it binds the callee. `**` marks keyword arguments
-unpacked from a mapping (`f(**options)`), whose names are not written, and `*` a positional
-argument unpacked from a sequence (`f(*items)`), whose entry is `unresolved` and stands in its
-place among the positional entries: after it, no later positional argument's parameter is
-known (user ruling A, 2026-11-06). Entries with no `keyword`, and `*` entries, are
-positional, in order, before the keyword entries. Where the file writes the
-callee's parameter list (a function or a class constructor of the same file, called by a
-`static` or `special` site), every argument is at its parameter's position, a parameter the
-call leaves out has its default (a literal default as itself, any other as `unresolved`),
-`*args` is one `array` and `**kwargs` is `unresolved`, and no entry has a `keyword`.
-Absent on every JVM argument. Strictly additive, so the fact schema version did not move.
+on an entry of `arguments` only, written exactly as the call writes it, whatever the scanner
+knows of the callee (ruling R27, 2026-11-06, which amends R2): argument positions are the
+order the call is written in, and the resolver binds every call's arguments to parameters by
+one calling rule (`values.parameter_slots`, over each parameter's `kind`). `**` marks keyword
+arguments unpacked from a mapping (`f(**options)`), whose names are not written, and `*` a
+positional argument unpacked from a sequence (`f(*items)`), whose entry is `unresolved` and
+stands in its place among the positional entries: after it, no later positional argument's
+parameter is known (user ruling A, 2026-11-06). Entries with no `keyword`, and `*` entries,
+are positional, in order, before the keyword entries; a parameter the call leaves out has no
+entry. Absent on every JVM argument. Strictly additive, so the fact schema version did not move.
 
 **Python (spec 2026-11-06 §3a).** The Python scanner writes these facts with the meanings
 above:
@@ -1283,6 +1280,9 @@ above:
   class; any other call on a value names its receiver and no owner.
 - A constructor call has no `result`; its value is `instance` with the constructor's
   `receiver` as `source`, as `new` is on the JVM.
+- `X.__init__(…)` names `<init>`, the method the definition is. A `@classmethod`, like a
+  `@staticmethod`, is `modifiers.static` — bound to the class rather than an instance (§5a) —
+  and its `cls` is not a parameter.
 - An f-string, and `+` with a string literal, is `concat`. The concatenation is a `dynamic`
   site `builtins/str#format`, with no receiver and no `implementation`, whose arguments are
   the values that fill the holes. With no value in it, it is the `string` itself.

@@ -293,10 +293,12 @@ comprehensions included:
 - an f-string, or `+` with a string literal, is `concat`, filled by a `dynamic`
   `builtins/str#format` site; a list or a tuple is `array`; a function is `lambda`;
   `a if c else b` and `a or b` are `merge`; `await x` is `x`;
-- a keyword argument is put at its parameter's position where this file writes the
-  callee's parameter list (a function or a constructor of this file, by a `static` or
-  `special` call), else it keeps its name in `keyword` (D00 §5); an unpacked argument is
-  `unresolved` with `keyword` `*` (`f(*items)`) or `**` (`f(**options)`);
+- arguments are written as the call writes them (ruling R27): positional ones in order, then
+  each keyword one with its name in `keyword` (D00 §5); an unpacked argument is `unresolved`
+  with `keyword` `*` (`f(*items)`) or `**` (`f(**options)`). The resolver binds them;
+- `X.__init__(…)` names the method `<init>`, as the definition does; a `@classmethod` is
+  `modifiers.static` (bound to the class, as D00 §5a defines the word), and `cls` is not a
+  parameter;
 - every parameter of a signature carries its `kind` (`positional_only`, `positional`,
   `var_positional`, `keyword_only`, `var_keyword`, D00 §5a).
 

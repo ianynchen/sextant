@@ -136,7 +136,7 @@ def _rows_for(
     # (spec 2026-11-06 §3b): a class called as a function is read as its `<init>`
     # (`effective_calls`), and that body's `return None` is not the value the caller holds.
     # A JVM `<init>` has no `result`, so it never reaches this.
-    if site["name"] == _INIT:
+    if site["name"] == _INIT and site["invoke_kind"] == "special":
         return []
     # Only candidates that hand a value back: `dispatch` keeps every body it
     # read, `void` ones included, because its question is "did we read a body".

@@ -19,9 +19,9 @@ Values are D00 §5's argument grammar:
 - `await x` is the value of `x`;
 - a constructed object is `instance`, whose `source` is the constructor's receiver.
 
-A keyword argument is put at its parameter's position where this file writes the callee's
-parameter list (a function or a class constructor of this file, by a `static` or `special`
-call). Elsewhere it keeps its name in `keyword` (ruling R2), and the resolver binds it.
+Arguments are written as the call writes them (ruling R27): the positional ones in order, an
+unpacked sequence among them marked `keyword: "*"`, then each keyword one with its name in
+`keyword` (`**` for an unpacked mapping). The resolver binds them to parameters.
 
 A local name holds the last value written to it on this path. Where two paths join with
 different values, the name is a `merge` of them, as a JVM frame slot two branches wrote; it
@@ -197,88 +197,12 @@ class Scope:
     flow: Flow = field(default_factory=Flow)
 
 
-@dataclass(frozen=True)
-class Params:
-    """A callee's parameter list as this file writes it, receiver left out."""
-
-    positional: tuple[str, ...]
-    positional_only: int
-    vararg: str | None
-    keyword_only: tuple[str, ...]
-    kwarg: str | None
-    defaults: tuple[tuple[str, CallArgument], ...]
-
-    @classmethod
-    def of(cls, written: ast.arguments, *, skip_first: bool) -> "Params":
-        ordered = [*written.posonlyargs, *written.args]
-        defaults = dict(
-            zip(
-                [a.arg for a in ordered][len(ordered) - len(written.defaults) :],
-                [_default(d) for d in written.defaults],
-                strict=True,
-            )
-        )
-        for argument, default in zip(written.kwonlyargs, written.kw_defaults, strict=True):
-            if default is not None:
-                defaults[argument.arg] = _default(default)
-        skipped = 1 if skip_first and ordered else 0
-        return cls(
-            positional=tuple(a.arg for a in ordered[skipped:]),
-            positional_only=max(len(written.posonlyargs) - skipped, 0),
-            vararg=written.vararg.arg if written.vararg else None,
-            keyword_only=tuple(a.arg for a in written.kwonlyargs),
-            kwarg=written.kwarg.arg if written.kwarg else None,
-            defaults=tuple(defaults.items()),
-        )
-
-    def bind(
-        self, positional: list[CallArgument], keywords: list[tuple[str, CallArgument]]
-    ) -> list[CallArgument] | None:
-        """One argument per parameter, in parameter order, or None where Python would
-        refuse the call or where a keyword goes into `**kwargs`. A parameter the call
-        leaves out has its default; `*args` is one `array`, as a JVM varargs slot is."""
-        slots: dict[str, CallArgument] = {}
-        extra: list[CallArgument] = []
-        for position, value in enumerate(positional):
-            if position < len(self.positional):
-                slots[self.positional[position]] = value
-            elif self.vararg is not None:
-                extra.append(value)
-            else:
-                return None
-        if self.vararg is not None:
-            slots[self.vararg] = CallArgument(kind="array", elements=extra)
-        named = (*self.positional[self.positional_only :], *self.keyword_only)
-        for name, value in keywords:
-            if name not in named or name in slots:
-                return None
-            slots[name] = value
-        if self.kwarg is not None:
-            # A mapping, empty here: the grammar has no kind for a mapping.
-            slots[self.kwarg] = _UNKNOWN
-        defaults = dict(self.defaults)
-        order = [
-            *self.positional,
-            *(name for name in (self.vararg,) if name is not None),
-            *self.keyword_only,
-            *(name for name in (self.kwarg,) if name is not None),
-        ]
-        bound = []
-        for name in order:
-            found = slots.get(name, defaults.get(name))
-            if found is None:
-                return None
-            bound.append(found)
-        return bound
-
-
 class BodyReader:
     """Reads the statements and expressions of every body of one file. The declarations
     (symbols, signatures, class parents) are written by the subclass."""
 
     _context: FileContext
     facts: list[Fact]
-    _signatures: dict[tuple[str, str], Params | None]
     # A nested function's or a lambda's bare descriptor, to its owner and name.
     _methods: dict[str, tuple[str, str]]
     # One counter set per method symbol: a name defined twice is one method with two
@@ -323,46 +247,6 @@ class BodyReader:
         modifiers: dict[str, bool] | None = None,
     ) -> None:
         raise NotImplementedError
-
-    # -- known parameter lists ---------------------------------------------------------
-
-    def _collect_signatures(self, body: list[ast.stmt], class_path: str | None = None) -> None:
-        """The parameter lists this file writes for its module-level functions and its
-        class constructors, read before any body, because a call runs after the whole
-        module was read. A decorated definition, or a name defined twice, is not known:
-        what the name holds is then not the written definition."""
-        here = self._context.here
-        for node in _top_statements(body):
-            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and class_path is None:
-                self._know((f"{here}#", node.name), node, skip_first=False)
-            elif isinstance(node, ast.ClassDef):
-                path = f"{class_path}.{node.name}" if class_path else node.name
-                self._know_class(node, type_symbol(Target(here, path)))
-                self._collect_signatures(node.body, path)
-
-    def _know_class(self, node: ast.ClassDef, owner: str) -> None:
-        inits = [
-            s
-            for s in _top_statements(node.body)
-            if isinstance(s, ast.FunctionDef | ast.AsyncFunctionDef) and s.name == "__init__"
-        ]
-        if len(inits) == 1:
-            self._know(
-                (owner, INIT), inits[0], skip_first=True, decorated=bool(node.decorator_list)
-            )
-
-    def _know(
-        self,
-        key: tuple[str, str],
-        node: ast.FunctionDef | ast.AsyncFunctionDef,
-        *,
-        skip_first: bool,
-        decorated: bool = False,
-    ) -> None:
-        if key in self._signatures or decorated or node.decorator_list:
-            self._signatures[key] = None
-        else:
-            self._signatures[key] = Params.of(node.args, skip_first=skip_first)
 
     # -- function bodies ---------------------------------------------------------------
 
@@ -892,29 +776,20 @@ class BodyReader:
         keywords = [(k.arg, self._value(k.value, scope)) for k in node.keywords]
         return self._invoke(
             callee,
-            self._arguments(callee, node, positional, keywords),
+            self._arguments(positional, keywords),
             scope,
             unpacked=any(isinstance(a, ast.Starred) for a in node.args),
         )
 
     def _arguments(
         self,
-        callee: Callee,
-        node: ast.Call,
         positional: list[CallArgument],
         keywords: list[tuple[str | None, CallArgument]],
     ) -> list[CallArgument]:
-        """Arguments by position where this file writes the callee's parameters, else
-        positional ones in order and then each keyword one with its name."""
-        unpacked = any(isinstance(a, ast.Starred) for a in node.args)
-        known = None
-        if callee.invoke_kind in ("static", "special") and callee.target.owner is not None:
-            known = self._signatures.get((callee.target.owner, str(callee.target.name)))
-        named = [(name, value) for name, value in keywords if name is not None]
-        if known is not None and not unpacked and len(named) == len(keywords):
-            bound = known.bind(positional, named)
-            if bound is not None:
-                return bound
+        """The arguments as written (ruling R27): the positional ones in order, then each
+        keyword one with its name in `keyword` (`**` for a mapping unpacked into them). The
+        resolver binds them to the callee's parameters, by one calling rule for every call
+        (`values.parameter_slots`)."""
         return positional + [
             value.model_copy(update={"keyword": name or _UNPACKED}) for name, value in keywords
         ]
@@ -965,27 +840,29 @@ class BodyReader:
         if isinstance(func, ast.Attribute):
             if _is_super(func.value, scope):
                 return self._super(func.attr, scope)
+            # `Base.__init__(self, …)` calls the method this scanner names `<init>`.
+            attr = INIT if func.attr == "__init__" else func.attr
             if self._is_self(func.value, scope):
-                return Callee(_target(scope.owner, func.attr), "virtual")
+                return Callee(_target(scope.owner, attr), "virtual")
             owners = self._targets(func.value, scope) if _is_dotted(func.value) else None
             if owners is not None and len(owners) == 1:
                 owner = owners[0]
-                defined = self._library_member(owner, func.attr)
+                defined = self._library_member(owner, attr)
                 if defined is not None:
                     method_owner, method_name = _split(defined)
                     return Callee(_target(method_owner, method_name), "static")
                 if owner.member is None or owner.kind == "class" or _is_builtin_class(owner):
-                    return Callee(_target(type_symbol(owner), func.attr), "static")
+                    return Callee(_target(type_symbol(owner), attr), "static")
                 if owner.kind in (None, "variable"):
                     return Callee(
-                        _target(None, func.attr),
+                        _target(None, attr),
                         "virtual",
                         scope.body.value_id(),
                         receiver_field=_field_of(owner),
                     )
             if owners is not None and len(owners) > 1:
                 return Callee(
-                    _target(None, func.attr),
+                    _target(None, attr),
                     "virtual",
                     scope.body.value_id(),
                     receiver_field=self._closed_list_field(func.value, scope),
@@ -995,7 +872,7 @@ class BodyReader:
                 func.value.value, scope
             )
             return self._on_value(
-                value, func.attr, scope, declared=self._declared(func.value, scope), on_self=on_self
+                value, attr, scope, declared=self._declared(func.value, scope), on_self=on_self
             )
         if isinstance(func, ast.Name):
             if self._is_self(func, scope):
@@ -1417,12 +1294,6 @@ def _constant(value: object) -> CallArgument:
     return _UNKNOWN
 
 
-def _default(node: ast.expr) -> CallArgument:
-    """A parameter's default as a caller's argument. It is evaluated where the function
-    is defined, so only a literal is the same value in the caller."""
-    return _constant(node.value) if isinstance(node, ast.Constant) else _UNKNOWN
-
-
 def _merge(candidates: list[CallArgument]) -> CallArgument:
     """One of several values, identical ones folded (D00 §5 `merge`)."""
     folded: list[CallArgument] = []
@@ -1509,21 +1380,6 @@ def _as_load(node: ast.expr) -> ast.expr:
     if isinstance(node, ast.Subscript):
         return ast.Subscript(value=node.value, slice=node.slice, ctx=ast.Load())
     return node
-
-
-def _top_statements(body: Iterable[ast.stmt]) -> Iterator[ast.stmt]:
-    """The statements of one scope, through `if`, `try`, `with`, loops and `match`."""
-    for node in body:
-        yield node
-        if isinstance(node, ast.If | ast.For | ast.AsyncFor | ast.While):
-            yield from _top_statements([*node.body, *node.orelse])
-        elif isinstance(node, ast.Try | ast.TryStar):
-            handlers = [s for handler in node.handlers for s in handler.body]
-            yield from _top_statements([*node.body, *handlers, *node.orelse, *node.finalbody])
-        elif isinstance(node, ast.With | ast.AsyncWith):
-            yield from _top_statements(node.body)
-        elif isinstance(node, ast.Match):
-            yield from _top_statements([s for case in node.cases for s in case.body])
 
 
 def _own_nodes(body: Iterable[ast.AST]) -> Iterator[ast.AST]:

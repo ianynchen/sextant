@@ -563,3 +563,82 @@ def test_a_keyword_only_parameter_is_filled_by_name_or_left_to_its_default(tmp_p
     }
     assert kinds == {"app/h#f(sig_dd69782a).": ["positional", "keyword_only"]}
     workspace.close()
+
+
+def test_a_call_in_the_callees_own_file_binds_as_one_from_another_file(tmp_path: Path):
+    """Ruling R27: the scanner writes `k=Session()` as written in either file, and the
+    resolver's one calling rule binds both calls of `f3(a, *, k)` to `Session`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "b.py": "from app.a import Session, Client\n"
+            "def f3(a, *, k):\n    k.get('/')\n"
+            "def g():\n    f3(Client(), k=Session())\n",
+            "c.py": "from app.a import Session, Client\nfrom app.b import f3\n"
+            "def h():\n    f3(Client(), k=Session())\n",
+        },
+    )
+    rows = _bound(workspace, _site(workspace, "app/b#f3(sig_dd69782a).", "get"))
+    assert sorted((str(row["owner"]), str(row["path_id"]).rsplit(" ", 1)[-1]) for row in rows) == [
+        (_SESSION, "app/b#g(sig_dd69782a).@2"),
+        (_SESSION, "app/c#h(sig_dd69782a).@2"),
+    ]
+    workspace.close()
+
+
+def test_a_parent_init_called_through_its_class_fills_self_first(tmp_path: Path):
+    """`Base.__init__(self, Session())` calls `Base`'s `__init__` through the class: `self`
+    is its first argument, so `c` is the `Session` — beside `super().__init__(Client())`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A + "class Base:\n"
+            "    def __init__(self, c):\n        self.c = c\n"
+            "    def run(self):\n        self.c.get('/')\n"
+            "class Kid(Base):\n    def __init__(self):\n        Base.__init__(self, Session())\n"
+            "class Kid2(Base):\n    def __init__(self):\n        super().__init__(Client())\n",
+            "b.py": "from app.a import Kid, Kid2\ndef f():\n    Kid().run()\n    Kid2().run()\n",
+        },
+    )
+    rows = _bound(workspace, _site(workspace, "app/a/Base#run(sig_dd69782a).", "get"))
+    assert sorted(str(row["owner"]) for row in rows) == [_CLIENT, _SESSION]
+    workspace.close()
+
+
+def test_a_method_called_through_its_class_fills_self_with_its_first_argument(tmp_path: Path):
+    """`H.use(h, Session())` from another file: `h` fills `self`, so `x` is the `Session`,
+    never `H`. A classmethod called through its class fills no `cls`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A + "class H:\n    def use(self, x):\n        x.get('/')\n"
+            "class U:\n    @classmethod\n    def c(cls, x, y):\n        y.get('/')\n",
+            "b.py": "from app.a import H, U, Session, Client\n"
+            "def f():\n    h = H()\n    H.use(h, Session())\n    U.c(Session(), Client())\n",
+        },
+    )
+    used = _bound(workspace, _site(workspace, "app/a/H#use(sig_dd69782a).", "get"))
+    assert [row["owner"] for row in used] == [_SESSION]
+    classed = _bound(workspace, _site(workspace, "app/a/U#c(sig_dd69782a).", "get"))
+    # The decorator hands `c` on as a value, which adds its `escapes` row beside the binding.
+    assert {row["owner"] for row in classed if row["owner"]} == {_CLIENT}
+    workspace.close()
+
+
+def test_a_function_that_always_raises_is_called_not_external(tmp_path: Path):
+    """A function with no normal return has no body the edges reach, but its callers are in
+    the module: its parameter is `not_readable`, saying so, never "nothing calls"."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "b.py": "from app.a import Session\n"
+            "def fail(c):\n    c.get('/')\n    raise ValueError('x')\n"
+            "def f():\n    fail(Session())\n",
+        },
+    )
+    rows = _bound(workspace, _site(workspace, "app/b#fail(sig_dd69782a).", "get"))
+    assert [row["reason"] for row in rows] == ["not_readable"]
+    assert "never returns normally" in str(rows[0]["detail"])
+    workspace.close()

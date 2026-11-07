@@ -126,7 +126,10 @@ def test_fstring_url_is_concat(tmp_path: Path):
     assert plus.arguments == [CallArgument(kind="parameter", value=0)]
 
 
-def test_keyword_binds_to_position_when_signature_known(tmp_path: Path):
+def test_a_keyword_is_written_as_written_even_where_the_signature_is_known(tmp_path: Path):
+    """Ruling R27 (amends R2): the scanner never turns a keyword into a position, so a call
+    in the callee's own file is written as one from another file is, and the resolver binds
+    both by one rule."""
     tree = _scan(
         tmp_path,
         {
@@ -141,12 +144,9 @@ def test_keyword_binds_to_position_when_signature_known(tmp_path: Path):
 
     send = _call(tree, "send")
     assert send.invoke_kind == "static"
-    # Each argument is at its parameter's position, the default in the gap, and no
-    # argument keeps a keyword.
     assert send.arguments == [
         CallArgument(kind="string", value="/a"),
-        CallArgument(kind="null"),
-        CallArgument(kind="int", value=9),
+        CallArgument(kind="int", value=9, keyword="timeout"),
     ]
 
 
@@ -382,7 +382,7 @@ def test_super_call_is_special_on_the_first_parent(tmp_path: Path):
 
     init = next(c for c in _facts(tree, CallSiteFact) if c.target.name == "<init>")
     assert (init.target.owner, init.invoke_kind) == ("app/m/Base#", "special")
-    assert init.arguments == [CallArgument(kind="int", value=1)]
+    assert init.arguments == [CallArgument(kind="int", value=1, keyword="x")]
 
 
 def test_lists_are_arrays_and_a_local_function_reference_is_a_lambda(tmp_path: Path):

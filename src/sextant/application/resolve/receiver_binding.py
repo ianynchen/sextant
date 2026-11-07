@@ -61,6 +61,7 @@ from sextant.domain.symbols import (
     bare_descriptor,
     is_type_descriptor,
     member_name,
+    method_descriptor,
     method_name,
     owner_of,
 )
@@ -186,12 +187,24 @@ class _Context:
 
     handed_on: frozenset[tuple[str, str]]
     unions: Mapping[tuple[str, int], _Union]
+    # The methods, bare, that some call site in the module names, and those with no normal
+    # return (`ValueIndex.never_return`): a parameter of one is called, though no edge may
+    # reach it.
+    named: frozenset[str] = frozenset()
+    never_return: frozenset[str] = frozenset()
 
 
 def _context(workspace: Workspace, index: ValueIndex) -> _Context:
     open_types = {ANY_TYPE} | ({index.dispatch.root} if index.dispatch is not None else set())
     return _Context(
-        frozenset(_handed_on_as_values(index)), _declared_unions(workspace, frozenset(open_types))
+        frozenset(_handed_on_as_values(index)),
+        _declared_unions(workspace, frozenset(open_types)),
+        frozenset(
+            method_descriptor(str(site["owner"]), str(site["name"]), str(site["descriptor"]))
+            for site in index.sites.values()
+            if site.get("owner") is not None and site.get("name") is not None
+        ),
+        index.never_return,
     )
 
 
@@ -246,7 +259,14 @@ def _with_new_callers(
                 )
     callers = {key: list(value) for key, value in index.callers.items()}
     if index.by_name:
-        bind_by_name(callers, edges, index.sites, index.call_parameters)
+        bind_by_name(
+            callers,
+            edges,
+            index.sites,
+            index.call_parameters,
+            index.instance_methods,
+            index.class_receivers,
+        )
     else:
         for edge in edges:
             arguments = index.sites[(str(edge["caller"]), int(str(edge["ordinal"])))]["arguments"]
@@ -343,7 +363,7 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
                         site.get("receiver_field"),
                         producer.reason,
                         producer.parameter,
-                        handed_on,
+                        context,
                     ),
                 )
             )
@@ -413,14 +433,33 @@ def _reason(
     field: object,
     reason: str | None,
     parameter: tuple[str, int] | None,
-    handed_on: frozenset[tuple[str, str]],
+    context: _Context,
 ) -> tuple[str, str]:
     """The reason and the detail of a path that reached no type. `field` is the field the
-    receiver is read from, where it is one, for the detail."""
+    receiver is read from, where it is one, for the detail. A parameter no edge binds is
+    `external` only where no call in the module names its method: a method that never
+    returns normally has no body the edges reach, so a call of it binds nothing, and that is
+    the code we have, not followed (`not_readable`)."""
     if reason == EXTERNAL and parameter is not None:
         method, position = parameter
         shown = bare_descriptor(method)
-        if _function(method) in handed_on:
+        if shown in context.never_return:
+            return (
+                NOT_READABLE,
+                (
+                    f"receiver of {name} is parameter {position} of {shown}, which never "
+                    "returns normally, so no call of it reaches its body"
+                ),
+            )
+        if shown in context.named:
+            return (
+                NOT_READABLE,
+                (
+                    f"receiver of {name} is parameter {position} of {shown}, which a call in "
+                    "the module names, but no edge reaches its body"
+                ),
+            )
+        if _function(method) in context.handed_on:
             return (
                 ESCAPES,
                 (

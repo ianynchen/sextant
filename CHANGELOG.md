@@ -63,7 +63,10 @@ here would restate those documents rather than add anything.
   (`positional_only`, `positional`, `var_positional`, `keyword_only`, `var_keyword`), and an
   argument unpacked from a sequence is marked `keyword: "*"` beside `**`; a parameter no
   argument can be said to fill is `not_readable`, never a neighbour's value. Both fact fields
-  are optional and additive, so `FACT_SCHEMA_VERSION` stays 7. A
+  are optional and additive, so `FACT_SCHEMA_VERSION` stays 7. The scanner writes every
+  call's arguments as written, keywords by name, in every file (ruling R27); `X.__init__(…)`
+  names `<init>`, and a `@classmethod` is `static`. A method called through its class with an
+  explicit `self` (`Base.__init__(self, x)`) binds its arguments past `self`. A
   parameter written as a union binds to each member. JVM facts always name an owner and pass
   arguments by position, so no JVM row changes. `GRAPH_SCHEMA_VERSION` 16 → 17: the export
   carries the new table.
