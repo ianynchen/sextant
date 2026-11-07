@@ -328,7 +328,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-322 | [SEXTANT-316](https://app.plane.so/portolan/browse/SEXTANT-316/) | Peer join fills one placeholder only: an address with two (${host}:${port}) is never resolved |
 | OI-323 | [SEXTANT-317](https://app.plane.so/portolan/browse/SEXTANT-317/) | A program that starts another program is not read as outbound |
 | OI-324 | [SEXTANT-318](https://app.plane.so/portolan/browse/SEXTANT-318/) | Python types not worked out: container elements, type-variable library returns, dataclass fields, isinstance |
-| OI-325 | [SEXTANT-319](https://app.plane.so/portolan/browse/SEXTANT-319/) | A warm Python analysis reuses nothing (polar warm 27.6 s against a 10 s target) |
+| OI-325 | [SEXTANT-319](https://app.plane.so/portolan/browse/SEXTANT-319/) | A warm Python analysis reuses nothing (polar warm 27.6 s against a 10 s target) — **closed 2026-11-07** (branch `cov/python-reuse`: a re-run keeps each unchanged file's facts and an unchanged resolve, D01 §7 "Reuse"; polar warm 3.0 s) |
 | OI-326 | [SEXTANT-320](https://app.plane.so/portolan/browse/SEXTANT-320/) | Python closures are not read: a nested def's read of an enclosing name is unresolved |
 | OI-327 | [SEXTANT-321](https://app.plane.so/portolan/browse/SEXTANT-321/) | exact_methods treats a Python classmethod as never overridden (fix before a Python catalog reads pass-through) |
 | OI-328 | [SEXTANT-322](https://app.plane.so/portolan/browse/SEXTANT-322/) | A Python parameter's default value is not a fact (FastAPI Depends / Query defaults) |
