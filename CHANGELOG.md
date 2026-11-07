@@ -27,6 +27,28 @@ here would restate those documents rather than add anything.
   is passed over when another found some. The JVM builds stay one choice (ruling R32): where a
   root carries both a `pom.xml` and a `build.gradle` (`examples/spring-petclinic`), Maven reads
   it and Gradle is not run, as before; detectors of different languages all run.
+- **A `handler` lambda is no longer folded into its registration's captures, for every
+  catalog** (OI-208 plan 1 task 9b; `shapes/chains.py` `_fold_lambda_captures`). The fold reads a
+  lambda that builds a call's value; a handler lambda is the code the registration runs, so its
+  body's chain no longer replaces the handler or adds what it collected. This is visible on the
+  JVM too, the Vert.x web and event-bus handlers included. No pinned answer changed (the field
+  pins and the suite), and `examples/vertx-examples/web-examples` analyses to the same 56
+  endpoints and the same derived tables as before the change.
+- **A Python `self.x` / `cls.x` read takes every class's writes of `x`** (ruling R33). An
+  object's attributes are one namespace, whichever class's code wrote them, so a read in class
+  `C` takes the writes of `x` on `C`, its ancestors and its subtypes (and their other parents):
+  `self.d` set to a `Session` in `B.__init__` and to a `Client` in `D(B).__init__` is both,
+  `narrowed`, where it was the base's `Session`, `resolved`; a class attribute a subclass
+  overrides (`model = …`, `serializer_class = …`) likewise; and a subclass reading what its
+  ancestor wrote reads that write, where it was `no_writer`. A parent nothing scanned (a
+  library class) may write it too: `external` beside the module's writes, and the site is
+  `partial`. JVM field reads are unchanged: javac names the declaring field.
+- **A Python name a nested function rebinds `nonlocal` is no one value, and a `match` capture
+  is a write** (OI-208 final review). `h = Session(); def cb(): nonlocal h; h = Client()` then
+  `run(cb); h.get()` was `Session`, `resolved`; when `cb` runs is not known there, so `h` is
+  now `not_readable`. `case Client() as s:` binds `s` to the subject, and every other capture
+  (`case [s, *rest]`, `**rest`) to a part of it this scanner does not split, in the case's guard
+  and body, so `s` after the `match` is no longer the value written before it.
 
 ### Added
 
@@ -73,8 +95,9 @@ here would restate those documents rather than add anything.
   in every body (module, class, function, nested function, `lambda`) is a `call_site` with its
   receiver, result and arguments; f-strings are `concat`, lists `array`, functions `lambda`.
   Every `return` and the implicit `return None` are `method_return` facts, and `self.x = …` is a
-  `field_write`. A keyword argument is bound to its position where the file writes the callee's
-  parameters; elsewhere it keeps its name in the new optional argument key `keyword` (D00 §5).
+  `field_write`. Arguments are written as written: positional ones in order, and a keyword one
+  by its name in the new optional argument key `keyword` (D00 §5), never converted to a
+  position; the resolver fills parameters by Python's calling rule (ruling R27, task 8).
 - **The Python scanner states each call's place in its body's control flow** (OI-208 plan 1
   task 6). Every Python `call_site` carries `dominator`, `on_every_exit`, `post_dominator`,
   `reaches_return` and `loop_group` with the JVM meanings (D00 §5 rule 9), for `if`, loops,

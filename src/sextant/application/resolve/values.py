@@ -726,6 +726,10 @@ class ValueIndex:
     )
     # `argument_slots`' answers, per (caller, ordinal, callee), for as long as this lives.
     slots_memo: dict[Any, Any] = dataclass_field(default_factory=dict, compare=False, repr=False)
+    # `_Walk._namespace`'s answers, per field symbol, for as long as this lives.
+    namespaces: dict[str, tuple[tuple[str, ...], bool]] = dataclass_field(
+        default_factory=dict, compare=False, repr=False
+    )
 
     def argument_slots(self, caller: str, ordinal: int, callee: str) -> tuple[int, ...]:
         """For each of `callee`'s parameters, the argument slot of the call at
@@ -862,8 +866,9 @@ def parameter_slots(
 
 
 # The slot an argument reference names where an unpacked `*`/`**` value may be the argument
-# (`argument_slot`): no argument the code writes can be said to be it.
-UNPACKED_SLOT = -1
+# (`argument_slot`): no argument the code writes can be said to be it. Not `UNFILLED`'s
+# value, so a slot read from one is never taken for the other (`parameter_of`).
+UNPACKED_SLOT = -2
 # What a read at `UNPACKED_SLOT` says, for the reader that reports it (design
 # 2026-11-06-reading-decorators §3a).
 UNPACKED_DETAIL = "the argument may come from an unpacked `*`/`**` value"
@@ -4954,21 +4959,88 @@ class _Walk:
         inside the declaration that introduced it, so handing `frames` on unchanged is what
         lets a nested descent stay correct.
         """
-        written = self._index.writers.get(symbol, ())
-        constants = self._index.constants.get(symbol, ())
-        produced = self._index.produced.get(symbol, ())
-        if not written and not constants and not produced:
+        namespace, beyond = self._namespace(symbol)
+        written_ones = [
+            one
+            for one in namespace
+            if self._index.writers.get(one)
+            or self._index.constants.get(one)
+            or self._index.produced.get(one)
+        ]
+        if not written_ones:
+            if beyond:
+                return _only(trail, _unresolved(EXTERNAL))
             named = self._named_type(symbol)
             if named is not None:
                 return _only(trail, Answer(kind=LITERAL, value=named, literal_kind=SYMBOL))
             return _only(trail, _unresolved(NO_WRITER))
+        reached: list[_Reached] = []
+        for one in written_ones:
+            reached.extend(self._attribute(one, trail, frames, unseen, read_on))
+        if beyond:
+            reached.append((trail, _unresolved(EXTERNAL)))
+        return self._distinct(reached)
+
+    def _attribute(
+        self,
+        symbol: str,
+        trail: _Trail,
+        frames: "_Frames",
+        unseen: bool,
+        read_on: tuple[str, int] | None,
+    ) -> tuple[_Reached, ...]:
+        """The answers one written binding of `_binding`'s read gives."""
         if unseen:
             return self._from_outside(symbol, trail, frames)
         if read_on is not None:
             scoped = self._object_writes(symbol, read_on, trail, frames)
             if scoped is not None:
                 return scoped
-        return self._binding_writes(written, constants, produced, symbol, trail, frames)
+        return self._binding_writes(
+            self._index.writers.get(symbol, ()),
+            self._index.constants.get(symbol, ()),
+            self._index.produced.get(symbol, ()),
+            symbol,
+            trail,
+            frames,
+        )
+
+    def _namespace(self, symbol: str) -> tuple[tuple[str, ...], bool]:
+        """The bindings a read of `symbol` takes the writes of, and whether code nothing
+        scanned may write it too (ruling R33).
+
+        **In Python an object's attributes are one namespace**, whichever class's code wrote
+        them: `self.d` read in `B` is what `B.__init__` wrote on a `B`, and what `D.__init__`
+        wrote over it on a `D(B)`; a class attribute `D` overrides is `D`'s on a `D`. The
+        scanner names each write after the class whose body makes it, so a read in `C` takes
+        the writes of the same name on every type in the lookup order of `C` and of each of
+        its subtypes: `C`, its ancestors, its subtypes, and their other parents. Several are a
+        closed list, one answer each. A type in one of those orders that was not read (a
+        library parent, `parents_unread`) may write it as well: `external` beside them.
+
+        Only for a `c3` module, and only for a field of a class: javac names the field a JVM
+        read resolves to, and a module-level name has no other class. Everywhere else, the
+        symbol alone."""
+        dispatch = self._index.dispatch
+        if dispatch is None or dispatch.lookup != "c3":
+            return (symbol,), False
+        cached = self._index.namespaces.get(symbol)
+        if cached is not None:
+            return cached
+        owner = owner_of(symbol)
+        found: tuple[tuple[str, ...], bool] = ((symbol,), False)
+        if owner is not None and (owner in dispatch.ancestors or owner in dispatch.subtypes):
+            name = symbol[len(owner) :]
+            types: dict[str, None] = {}
+            beyond = False
+            for type_ in (owner, *dispatch.subtypes.get(owner, ())):
+                for each in dispatch.lookup_order(type_):
+                    if each != dispatch.root:
+                        types[each] = None
+                beyond = beyond or dispatch.order_boundary(type_) is not None
+            found = (tuple(type_ + name for type_ in types), beyond)
+        self._index.namespaces[symbol] = found
+        return found
 
     def _named_type(self, symbol: str) -> str | None:
         """The type a binding nothing writes IS, where it is one (spec 2026-11-06 §3b): a

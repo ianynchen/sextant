@@ -187,6 +187,8 @@ class Frame:
     # Per protected block being read (a `try`, a `with`), innermost last: every value each
     # name was given in it, which an exception may leave the block with.
     writes: list[dict[str, list[CallArgument]]] = field(default_factory=list)
+    # The names a nested function declares `nonlocal` and writes (`_rebound_nonlocal`).
+    rebound: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -351,6 +353,9 @@ class BodyReader:
         global_names = {n for node in own if isinstance(node, ast.Global) for n in node.names}
         outer = {n for node in own if isinstance(node, ast.Nonlocal) for n in node.names}
         local_names = (_assigned(own) | set(values)) - global_names - outer
+        rebound = _rebound_nonlocal(body) & local_names
+        for shared in rebound & set(values):
+            values[shared] = _UNKNOWN
         if self_name is not None:
             values[self_name] = _SELF
             local_names.add(self_name)
@@ -365,6 +370,7 @@ class BodyReader:
             generator=any(isinstance(node, ast.Yield | ast.YieldFrom) for node in own),
             self_name=self_name,
             bindings=self._import_bindings(body, own),
+            rebound=frozenset(rebound),
         )
 
     def _import_bindings(self, body: list[ast.stmt], own: list[ast.AST]) -> dict[str, Binding]:
@@ -476,16 +482,22 @@ class BodyReader:
         elif isinstance(node, ast.Try | ast.TryStar):
             self._try(node, scope)
         elif isinstance(node, ast.Match):
-            self._value(node.subject, scope)
+            subject = self._value(node.subject, scope)
             # A case's guard runs where its pattern matched; where the pattern or the guard
-            # fails, the next case is tried.
+            # fails, the next case is tried. The names a pattern captures are written where
+            # it matched, so its guard and its body read them.
             flow = scope.flow
             starts: list[int | None] = []
+            captures = [_captures(case.pattern, subject) for case in node.cases]
             untried = flow.here()
-            for case in node.cases:
+            for case, captured in zip(node.cases, captures, strict=True):
                 flow.at(untried)
                 if case.guard is not None:
+                    held = None if frame is None else dict(frame.values)
+                    self._capture(captured, scope)
                     self._value(case.guard, scope)
+                    if frame is not None and held is not None:
+                        frame.values = held
                 starts.append(flow.here())
                 irrefutable = isinstance(case.pattern, ast.MatchAs) and case.pattern.pattern is None
                 untried = flow.join(
@@ -494,7 +506,12 @@ class BodyReader:
                         flow.here() if case.guard is not None else None,
                     ]
                 )
-            self._branches([case.body for case in node.cases] + [[]], scope, [*starts, untried])
+            self._branches(
+                [case.body for case in node.cases] + [[]],
+                scope,
+                [*starts, untried],
+                [*captures, []],
+            )
         elif isinstance(node, ast.Raise):
             for part in (node.exc, node.cause):
                 if part is not None:
@@ -565,34 +582,45 @@ class BodyReader:
         bodies: list[list[ast.stmt]],
         scope: Scope,
         starts: list[int | None] | None = None,
+        captures: list[list[tuple[str, CallArgument]]] | None = None,
     ) -> None:
         """Each body runs from the same names, and from `starts` in the control flow (by
         default, from where the branch is); after them, a name keeps a value only where
         every body that reaches the end gives it the same one, and is a `merge` where they
-        give different ones."""
+        give different ones. `captures` are the names each body starts by writing (a
+        `match` case's pattern)."""
         frame = scope.frame
         flow = scope.flow
         if starts is None:
             starts = [flow.here()] * len(bodies)
+        if captures is None:
+            captures = [[] for _ in bodies]
         points: list[int | None] = []
         if frame is None:
-            for body, start in zip(bodies, starts, strict=True):
+            for body, start, captured in zip(bodies, starts, captures, strict=True):
                 flow.at(start)
+                self._capture(captured, scope)
                 self._statements(body, scope)
                 points.append(flow.here())
             flow.join(points)
             return
         before = frame.values
         ends = []
-        for body, start in zip(bodies, starts, strict=True):
+        for body, start, captured in zip(bodies, starts, captures, strict=True):
             flow.at(start)
             frame.values = dict(before)
+            self._capture(captured, scope)
             self._statements(body, scope)
             points.append(flow.here())
             if flow.here() is not None:
                 ends.append(frame.values)
         flow.join(points)
         frame.values = _join(ends) if ends else dict(before)
+
+    def _capture(self, captured: list[tuple[str, CallArgument]], scope: Scope) -> None:
+        """Write each name a `match` pattern captured."""
+        for name, value in captured:
+            self._store(ast.Name(id=name, ctx=ast.Store()), value, scope)
 
     def _loop(
         self,
@@ -728,6 +756,10 @@ class BodyReader:
                 return
             frame.local_names.add(target.id)
             frame.imported.pop(target.id, None)
+            if target.id in frame.rebound:
+                # A nested function rebinds it (`nonlocal`) at a time this body does not
+                # order: no one value at any read.
+                value = _UNKNOWN
             frame.values[target.id] = value
             frame.mutable.discard(target.id)
             if frame.writes:
@@ -1549,6 +1581,33 @@ def _own_nodes(body: Iterable[ast.AST]) -> Iterator[ast.AST]:
             stack.append(node.generators[0].iter)
             continue
         stack.extend(ast.iter_child_nodes(node))
+
+
+def _rebound_nonlocal(body: list[ast.stmt]) -> set[str]:
+    """The names a function nested at any depth in `body` declares `nonlocal` and writes:
+    it may run at any time the enclosing body hands it on to, so that body cannot order
+    those writes against its own reads. A name of a deeper function bound again between
+    is counted too, which can only leave a value unknown."""
+    found: set[str] = set()
+    for node in (each for statement in body for each in ast.walk(statement)):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            own = list(_own_nodes(node.body))
+            declared = {n for each in own if isinstance(each, ast.Nonlocal) for n in each.names}
+            found |= declared & _assigned(own)
+    return found
+
+
+def _captures(pattern: ast.pattern, subject: CallArgument) -> list[tuple[str, CallArgument]]:
+    """The names a `match` case's pattern binds, each with its value: the subject itself for
+    a capture of the whole (`case Client() as s`, `case s`), and a part of it, which this
+    scanner does not split, for every other (`case [s, *rest]`, `case {"k": s, **rest}`)."""
+    found: list[tuple[str, CallArgument]] = []
+    for node in ast.walk(pattern):
+        if isinstance(node, ast.MatchAs | ast.MatchStar) and node.name:
+            found.append((node.name, subject if node is pattern else _UNKNOWN))
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            found.append((node.rest, _UNKNOWN))
+    return found
 
 
 def _assigned(nodes: Iterable[ast.AST]) -> set[str]:

@@ -128,7 +128,11 @@ The receiver of an unbound call is followed to what produced it:
 - a constructor call → that class;
 - a call → that callee's `return` values, by `return_flow`;
 - a parameter → the arguments at its callers, crossing per path;
-- a field → every `field_write` to it, per object;
+- a field → every `field_write` to it, per object. An object's attributes are one namespace,
+  whichever class's code wrote them (ruling R33): a read of `self.x` / `cls.x` in class C takes the
+  writes of `x` on C, on its ancestors (lookup order) and on its subtypes, as a closed list, never
+  the base write alone; a type in those orders that was not read adds `external` (the site is
+  `partial`). `c3` modules only: javac names the declaring field;
 - a static field (module-level name) → its write in `<clinit>`.
 
 **Per path, never combined (ruling M-1):** a parameter whose callers pass a requests session on one
@@ -183,7 +187,9 @@ M02 is keyed by build system, and languages are observed, not taken from file na
 opposite and was wrong.
 
 **The detector:**
-- **Build systems:** a new Python detector beside Maven and Gradle. It reads:
+- **Build systems:** a new Python detector beside Maven and Gradle. Detectors of different
+  languages all run; detectors of one language keep the old precedence (ruling R32): Maven before
+  Gradle, one of them per repository, as `select_detector` chose. It reads:
   - `pyproject.toml` (`[project]`, Poetry's table, `[build-system]`);
   - `[tool.uv.workspace]` members;
   - `setup.cfg [metadata]`;

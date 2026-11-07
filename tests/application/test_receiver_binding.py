@@ -203,6 +203,195 @@ def test_field_written_in_init_binds_self_field_calls(tmp_path: Path):
     workspace.close()
 
 
+def _owners(workspace: DuckDbWorkspace, site: tuple[str, int]) -> list[tuple[object, ...]]:
+    return sorted(
+        (str(row["owner"]), str(row["resolution"]), str(row["reason"]))
+        for row in _bound(workspace, site)
+    )
+
+
+def test_a_field_a_subclass_also_sets_is_both_writes(tmp_path: Path):
+    """Ruling R33: an object's attributes are one namespace, whichever class's code wrote
+    them. `self.d` read in `B` is `Session` on a `B` and `Client` on a `D`: a closed list,
+    never the base's write alone."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "b.py": "from app.a import Session, Client\n"
+            "class B:\n"
+            "    def __init__(self):\n"
+            "        self.d = Session()\n"
+            "    def use(self):\n"
+            "        self.d.get(1)\n"
+            "class D(B):\n"
+            "    def __init__(self):\n"
+            "        super().__init__()\n"
+            "        self.d = Client()\n",
+        },
+    )
+    site = _site(workspace, "app/b/B#use(sig_dd69782a).", "get")
+    assert _owners(workspace, site) == [
+        (_CLIENT, "narrowed", "None"),
+        (_SESSION, "narrowed", "None"),
+    ]
+    assert sorted(str(row["callee"]) for row in _edges(workspace, site)) == [
+        _PREFIX + "app/a/Client#get(sig_dd69782a).",
+        _PREFIX + "app/a/Session#get(sig_dd69782a).",
+    ]
+    workspace.close()
+
+
+def test_a_class_attribute_a_subclass_overrides_is_both_values(tmp_path: Path):
+    """`model = …` / `serializer_class = …` overridden in a subclass: `self.c` in the base
+    is either class's attribute."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "b.py": "from app.a import Session, Client\n"
+            "class B:\n"
+            "    c = Session()\n"
+            "    def use(self):\n"
+            "        self.c.get(1)\n"
+            "class D(B):\n"
+            "    c = Client()\n",
+        },
+    )
+    site = _site(workspace, "app/b/B#use(sig_dd69782a).", "get")
+    assert _owners(workspace, site) == [
+        (_CLIENT, "narrowed", "None"),
+        (_SESSION, "narrowed", "None"),
+    ]
+    workspace.close()
+
+
+def test_a_field_an_ancestor_writes_is_read_in_the_subclass(tmp_path: Path):
+    """`self.d` read in `D`, written only in `B.__init__`: the ancestor's write, one value."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "b.py": "from app.a import Session\n"
+            "class B:\n"
+            "    def __init__(self):\n"
+            "        self.d = Session()\n"
+            "class D(B):\n"
+            "    def use(self):\n"
+            "        self.d.get(1)\n",
+        },
+    )
+    site = _site(workspace, "app/b/D#use(sig_dd69782a).", "get")
+    assert _owners(workspace, site) == [(_SESSION, "resolved", "None")]
+    workspace.close()
+
+
+def test_a_field_of_a_class_with_an_unread_parent_is_partial(tmp_path: Path):
+    """A parent nothing scanned may write the attribute too: the module's write is kept
+    beside `external`, and the site is `partial`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "b.py": "from app.a import Session\n"
+            "from elsewhere import Base\n"
+            "class D(Base):\n"
+            "    def __init__(self):\n"
+            "        self.d = Session()\n"
+            "    def use(self):\n"
+            "        self.d.get(1)\n",
+        },
+    )
+    site = _site(workspace, "app/b/D#use(sig_dd69782a).", "get")
+    assert _owners(workspace, site) == [
+        ("None", "unresolved", "external"),
+        (_SESSION, "partial", "None"),
+    ]
+    workspace.close()
+
+
+def test_a_field_of_a_subclass_with_an_unread_parent_is_partial(tmp_path: Path):
+    """A subtype whose other parent was not read: that parent's code may write the
+    attribute on the object `B.use` is called on."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "b.py": "from app.a import Session\n"
+            "from elsewhere import Mixin\n"
+            "class B:\n"
+            "    def __init__(self):\n"
+            "        self.d = Session()\n"
+            "    def use(self):\n"
+            "        self.d.get(1)\n"
+            "class D(B, Mixin):\n"
+            "    pass\n",
+        },
+    )
+    site = _site(workspace, "app/b/B#use(sig_dd69782a).", "get")
+    assert _owners(workspace, site) == [
+        ("None", "unresolved", "external"),
+        (_SESSION, "partial", "None"),
+    ]
+    workspace.close()
+
+
+def test_a_name_a_nested_function_rebinds_nonlocal_is_not_one_value(tmp_path: Path):
+    """`nonlocal h; h = Client()` in a callback: when the callback runs is not known here,
+    so `h.get()` after `run(cb)` is no one value, never the `Session` written before."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "b.py": "from app.a import Session, Client\n"
+            "def f(run):\n"
+            "    h = Session()\n"
+            "    def cb():\n"
+            "        nonlocal h\n"
+            "        h = Client()\n"
+            "    run(cb)\n"
+            "    h.get(1)\n",
+        },
+    )
+    site = _site(workspace, "app/b#f(sig_dd69782a).", "get")
+    assert _owners(workspace, site) == [("None", "unresolved", "not_readable")]
+    assert [row["callee"] for row in _edges(workspace, site)] == [None]
+    workspace.close()
+
+
+def test_a_match_capture_is_a_write_of_its_name(tmp_path: Path):
+    """`case Client() as s:` binds `s` to the subject `v`, which nothing here passes;
+    `case [s, *rest]:` to a part of it, not read. After the `match`, `s` is no one value
+    (a path the scanner does not follow joined with the others), never the `Session`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "b.py": "from app.a import Session, Client\n"
+            "def f(v):\n"
+            "    s = Session()\n"
+            "    match v:\n"
+            "        case Client() as s if s.get(0):\n"
+            "            pass\n"
+            "        case [s, *rest]:\n"
+            "            s.get(1)\n"
+            "    s.get(2)\n",
+        },
+    )
+    guard, inside, after = sorted(
+        (
+            (str(row["caller"]), int(str(row["ordinal"])))
+            for row in workspace.query("call_sites")
+            if row["name"] == "get"
+        ),
+        key=lambda site: site[1],
+    )
+    assert _owners(workspace, guard) == [("None", "unresolved", "external")]
+    assert _owners(workspace, inside) == [("None", "unresolved", "not_readable")]
+    assert _owners(workspace, after) == [("None", "unresolved", "not_readable")]
+    workspace.close()
+
+
 def test_module_singleton_imported_from_another_file_binds(tmp_path: Path):
     """Review Focus 3: a module-level `shared = Session()` read in another file is the
     static field `app/a#shared.`, written once in `<clinit>`."""

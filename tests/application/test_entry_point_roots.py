@@ -23,7 +23,7 @@ from sextant.application.resolve.shapes.inbound_routes import (
     fallback_word,
     validated_word_fallback,
 )
-from sextant.application.resolve.values import UNPACKED_SLOT, argument_slot
+from sextant.application.resolve.values import UNFILLED, UNPACKED_SLOT, argument_slot
 from sextant.domain.closed_sets import RootKind
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import Document, ModuleFact
@@ -263,6 +263,8 @@ def test_an_unpacked_argument_makes_the_reference_not_readable():
     assert argument_slot(stars, {"keyword": "name"}) == UNPACKED_SLOT
     assert argument_slot(stars, {"arg": 0, "keyword": "name"}) == UNPACKED_SLOT
     assert argument_slot([], {"keyword": "name"}) is None
+    # A parameter no argument fills is another answer than an unpacked argument.
+    assert UNPACKED_SLOT != UNFILLED
 
 
 def test_a_command_named_from_an_unpacked_mapping_has_no_path(tmp_path: Path):

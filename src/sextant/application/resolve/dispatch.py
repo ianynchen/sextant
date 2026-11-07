@@ -262,6 +262,13 @@ class Dispatch:
         it was not read, and `boundary` names that type."""
         return self._order(owner)[0]
 
+    def order_boundary(self, owner: str) -> str | None:
+        """Where `owner`'s lookup order left the workspace, the root type aside: the first
+        type in it that was not read, or None where every type it reached was read. What such
+        a type declares or writes is not known."""
+        end = self._order(owner)[1]
+        return None if end == self.root else end
+
     def _order(self, owner: str) -> tuple[list[str], str | None]:
         """`lookup_order`, and the type the order left the workspace at (None where it
         read every type it reached)."""
