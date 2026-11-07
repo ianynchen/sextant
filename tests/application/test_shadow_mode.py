@@ -355,6 +355,8 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # **`jdk-blocking-queue` joined with Java blocking queues** (spec 2026-11-05 §4 item 7): forty
 # `dispatch_sends` entries (four calls on ten owners), each a `value_arg`; its receives read no
 # argument.
+# **`click` joined with Sextant's own commands** (design 2026-11-06-reading-decorators §5): its
+# three positions as `asks_of` counts them, one slot each.
 _ASKS_PER_CATALOG = {
     "akka-actor-handlers": (69, 94),
     "akka-cluster-sharding": (6, 8),
@@ -367,6 +369,7 @@ _ASKS_PER_CATALOG = {
     "aws-sqs-sdk": (2, 2),
     "cdi-async-events": (4, 4),
     "cdi-events": (2, 2),
+    "click": (3, 3),
     "google-pubsub-client": (1, 1),
     "google-pubsub-publisher": (2, 2),
     "google-pubsub-subscriber": (2, 3),
@@ -490,7 +493,8 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # 5 collectors' function arguments) catalogs, same comment.
     # **+1 on 2026-11-05** (Task 5 fix round): `collectLatest`'s `handler_arg`, same comment.
     # **+2 on 2026-11-05** (Android M8): `retrofit`'s `made_by` call and its `baseUrl` step.
-    assert sum(asks for asks, _ in counted.values()) == 1487
+    # **+3 on 2026-11-06**: the new `click` catalog, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 1490
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

@@ -2061,8 +2061,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_MOUNTS,
-                find="                for way, at in enumerate(mount.paths):\n",
-                replace="                for way, at in enumerate(mount.paths[:1]):  # guard "
+                find="        ways = tuple(enumerate(mount.paths))\n",
+                replace="        ways = tuple(enumerate(mount.paths[:1]))  # guard "
                 "disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -4759,7 +4759,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        if identity not in self._declared:",
+                find="        if identity not in self._declared and site not in self._declared_sites:",
                 replace="        if True:  # guard disabled by scripts/guard_check.py",
             ),
         ),
@@ -4851,9 +4851,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        if identity not in self._declared:",
-                replace='        if row["name"] not in {name for _, name in self._declared}:  '
-                "# guard disabled by scripts/guard_check.py",
+                find="        if identity not in self._declared and site not in self._declared_sites:",
+                replace='        if row["name"] not in {name for _, name in self._declared} and site '
+                "not in self._declared_sites:  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -4902,15 +4902,11 @@ GUARDS: dict[str, Guard] = {
                 path=_VALUES,
                 find="        frame = self._frame_in(frames, method)\n"
                 "        if frame is not None:\n"
-                "            return self._resolve((_SLOT, frame[0], frame[1], index), trail, "
-                "frames)\n"
-                "        if method in self._stop_at_parameters_of:\n",
+                "            slot = self._index.argument_slot(frame[0], frame[1], method, index)\n",
                 replace="        frame = None if method in self._stop_at_parameters_of else "
                 "self._frame_in(frames, method)  # guard disabled by scripts/guard_check.py\n"
                 "        if frame is not None:\n"
-                "            return self._resolve((_SLOT, frame[0], frame[1], index), trail, "
-                "frames)\n"
-                "        if method in self._stop_at_parameters_of:\n",
+                "            slot = self._index.argument_slot(frame[0], frame[1], method, index)\n",
             ),
         ),
     ),
@@ -4941,6 +4937,24 @@ GUARDS: dict[str, Guard] = {
                 "compare=False, repr=False)",
                 replace="    parameter: tuple[str, int] | None = None  "
                 "# guard disabled by scripts/guard_check.py",
+            ),
+        ),
+    ),
+    "values.an-UNSTATED-library-call-hands-back-no-argument": Guard(
+        what="a library call hands back one of its arguments only where a value model's "
+        "`returns_argument` states it (design 2026-11-06-reading-decorators §3d)",
+        why="read as handing back its first argument, every library decorator would be the "
+        "function it decorates: `@click.pass_context`, which returns a new function, would name "
+        "the decorated function as a command's handler, a root no value model justifies",
+        edits=(
+            Edit(
+                path=_VALUES,
+                find="        if own is not None and own[0] == _RETURNS:\n"
+                "            return self._stated_slot(site, row, own[1], trail, frames)\n",
+                replace="        if own is None or own[0] == _RETURNS:  # guard disabled by "
+                "scripts/guard_check.py\n"
+                "            return self._stated_slot(site, row, 0 if own is None else own[1], "
+                "trail, frames)\n",
             ),
         ),
     ),

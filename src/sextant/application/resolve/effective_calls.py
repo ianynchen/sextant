@@ -1,11 +1,12 @@
 """Effective call sites (spec 2026-09-19 §3): the `call_sites` facts as every ENGINE reads
-them, with three projections applied once per load — a compiler-emitted `$default` bridge call
+them, with four projections applied once per load — a compiler-emitted `$default` bridge call
 re-targeted to the function it stands for (§3a, T4), a class-compiled lambda argument
-read as the `lambda` it is (§3b, T5), and a boxed constant read as the constant the source
-wrote. The first two join on shared fields the extractor publishes on the declaration it
+read as the `lambda` it is (§3b, T5), a boxed constant read as the constant the source
+wrote, and a static call naming a type read as that type's construction (spec 2026-11-06
+§3b). The first two join on shared fields the extractor publishes on the declaration it
 scanned (`bridge_of`, `lambda_body`); the third on the boxing call's own site, whose
-vocabulary is the compiler's (JLS 5.1.7), not a library's. Nothing here names a language
-or a framework.
+vocabulary is the compiler's (JLS 5.1.7), not a library's; the fourth on the types the
+workspace holds. Nothing here names a language or a framework.
 
 `call_sites` itself is untouched: the exported bundle, `format` and every raw-fact test
 keep the bytecode's own statement. The graph/trace readers do NOT — `call_edges` and
@@ -22,6 +23,9 @@ from sextant.application.ports.workspace import Workspace
 from sextant.domain.symbols import (
     bare_descriptor,
     descriptor_slots,
+    is_type_descriptor,
+    member_field,
+    member_type,
     method_descriptor,
     owner_of,
     returned_type,
@@ -43,6 +47,11 @@ _MASK_BITS = 32
 # push an int), and `float`/`double` have no constant kind in D00 §5 yet, so theirs is
 # empty and those calls are left as they are.
 _BOXING_NAME = "valueOf"
+# A construction's name at a call site (D00 §5), which a static call naming a type is read
+# as, and the invoke kinds before and after.
+_INIT = "<init>"
+_STATIC = "static"
+_SPECIAL = "special"
 _BOXING: dict[str, tuple[str, ...]] = {
     "(Z)Ljava/lang/Boolean;": ("boolean",),
     "(B)Ljava/lang/Byte;": ("int",),
@@ -107,7 +116,8 @@ def _effective(workspace: Workspace) -> list[dict[str, Any]]:
     bodies = _lambda_bodies(workspace)
     sites = workspace.query("call_sites")
     boxed = _boxed_constants(sites)
-    if not bridges and not bodies and not boxed:
+    classes = _class_calls(workspace, sites)
+    if not bridges and not bodies and not boxed and not classes:
         return list(sites)
     declared = (
         {
@@ -125,7 +135,12 @@ def _effective(workspace: Workspace) -> list[dict[str, Any]]:
     for site in sites:
         name = site["name"]
         row = site
-        if bridges and isinstance(name, str) and name.endswith(_DEFAULT_SUFFIX):
+        if (
+            bridges
+            and isinstance(name, str)
+            and name.endswith(_DEFAULT_SUFFIX)
+            and site["owner"] is not None
+        ):
             owner, descriptor = str(site["owner"]), str(site["descriptor"])
             symbol = method_descriptor(owner, name, descriptor)
             function = bridges.get(symbol)
@@ -139,8 +154,62 @@ def _effective(workspace: Workspace) -> list[dict[str, Any]]:
             row = _with_lambdas(row, bodies)
         if boxed:
             row = _with_unboxed(row, boxed)
+        if classes:
+            row = _as_construction(row, classes)
         rows.append(row)
     return rows
+
+
+def _class_calls(workspace: Workspace, sites: list[dict[str, Any]]) -> dict[tuple[str, str], str]:
+    """Each static call `(owner, name)` whose name is a TYPE of the owner's module, to that
+    type (spec 2026-11-06 §3b): `from app.a import Session; Session()` is written as the
+    static call `app/a#Session`, because the file that makes it cannot see that `Session` is
+    a class, and calling a class constructs it. A type is one the workspace declares or holds
+    a header for. Empty where no static call names one, which is every JVM module: a JVM
+    static call's owner is a class, and no type is named after a member of a class's own
+    package path (`member_type`)."""
+    named: dict[tuple[str, str], str] = {}
+    for site in sites:
+        owner, name = site["owner"], site["name"]
+        if site["invoke_kind"] != _STATIC or owner is None or name is None:
+            continue
+        candidate = member_type(str(owner), str(name))
+        if candidate is not None:
+            named[(str(owner), str(name))] = candidate
+    if not named:
+        return {}
+    declared = {bare_descriptor(str(row["symbol"])) for row in workspace.query("declared_symbols")}
+    types = {symbol for symbol in declared if is_type_descriptor(symbol)} | {
+        bare_descriptor(str(row["symbol"])) for row in workspace.query("type_headers")
+    }
+    # A name the module writes, or declares as a field, is a variable, whatever it held
+    # first: `Session = Client` after `class Session` makes `Session()` a call of its value.
+    variables = declared | {
+        bare_descriptor(str(row["field"]))
+        for row in workspace.query("field_writes")
+        if row["field"] is not None
+    }
+    return {
+        key: type_
+        for key, type_ in named.items()
+        if type_ in types and member_field(*key) not in variables
+    }
+
+
+def _as_construction(row: dict[str, Any], classes: dict[tuple[str, str], str]) -> dict[str, Any]:
+    """`row` read as the construction it is where it is a static call naming a type
+    (`_class_calls`): `special` `<init>` on that type, its `result` the constructed object,
+    as `resolve/values.py` reads a construction with a result. `row` itself otherwise."""
+    if row["invoke_kind"] != _STATIC or row["owner"] is None:
+        return row
+    constructed = classes.get((str(row["owner"]), str(row["name"])))
+    if constructed is None:
+        return row
+    projected = dict(row)
+    projected["owner"] = constructed
+    projected["name"] = _INIT
+    projected["invoke_kind"] = _SPECIAL
+    return projected
 
 
 def _boxed_constants(sites: list[dict[str, Any]]) -> dict[tuple[str, int], dict[str, Any]]:

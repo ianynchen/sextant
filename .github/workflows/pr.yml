@@ -24,6 +24,9 @@ jobs:
     # most — and a green run that skipped them is worse than a red one.
     name: All gates
     runs-on: ubuntu-latest
+    env:
+      # `.python-version` names 3.14, which `uv` would obey. This job is the 3.12 floor.
+      UV_PYTHON: "3.12"
     steps:
       - uses: actions/checkout@v7
 
@@ -132,3 +135,30 @@ jobs:
         run: scripts/check.sh --extractor
       - name: Tests
         run: scripts/check.sh --tests
+
+  python-314:
+    # The newest Python, light on purpose. The Python scanner reads a file with the
+    # grammar of the Python that runs Sextant, so a file with 3.14 syntax is read here
+    # and uncovered on the floor. The full gate on 3.12 above runs everything else
+    # (JVM, Maven, Gradle, the shaded jar), so this job runs only the tests that read
+    # Python source and needs none of that.
+    name: Python 3.14 reader
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.14"
+      # No JVM here, so the suite's session fixture skips installing the Maven stub
+      # library (tests/conftest.py). None of these tests builds a JVM fixture.
+      SEXTANT_TESTS_NO_JVM: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install
+        # From the lock, as in the full gate.
+        run: uv sync --frozen --extra dev
+      - name: Python reader tests
+        run: uv run pytest tests/ingress/extract/python tests/ingress/test_python_detector.py

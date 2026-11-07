@@ -51,6 +51,7 @@ from sextant.application.resolve.shapes.inbound_routes import (
     PATTERN_MOUNT_PATH,
     UNROOTED_PATH,
     WILDCARD_MOUNT_POINT,
+    WORDS,
     is_unrooted,
     join_prefix,
     validated_path_join,
@@ -62,20 +63,30 @@ from sextant.application.resolve.values import (
     LITERAL,
     RECEIVER,
     STRING,
+    UNPACKED_SLOT,
     Answer,
     Path,
     Producer,
     ValueIndex,
+    argument_reference,
+    argument_slot,
     producer_paths,
     resolve_positions,
 )
 from sextant.domain.closed_sets import Resolution
-from sextant.domain.symbols import returned_type
+from sextant.domain.symbols import returned_type, type_descriptor
 
 # Where a mount's prefix comes from: the path of the route the mount call is made ON
 # (`prefix_from: receiver_path`, the chain walk's own `url` capture), or one of its own
 # arguments (`prefix_arg: N`).
 RECEIVER_PATH = "receiver_path"
+# A mount whose router is what the chain its ROOT starts returns (`router_arg: chain_result`,
+# design 2026-11-06-reading-decorators §4): `@cli.group() def module` makes the `Group`
+# `cli.group()`'s result returns when applied to `module`, and mounts it on `cli`.
+CHAIN_RESULT = "chain_result"
+# The named hole a program's name is where no entry point names the router (design
+# 2026-11-06-reading-decorators §4): the program is named by how it is installed.
+UNREAD_PROGRAM = "<program>"
 # What a mount the framework refuses looks like (`refuses`), each the word its refusal is
 # filed under.
 _REFUSES = {
@@ -109,8 +120,10 @@ class MountRule:
     owners: tuple[str, ...]
     method: str
     descriptor: str | None
-    router_arg: int
-    prefix_arg: int | None
+    # The argument holding the router it mounts, or `CHAIN_RESULT`: the router is what the
+    # chain this mount call ROOTS returns, matched on the root rather than the terminal.
+    router_arg: Any
+    prefix_arg: Any
     # The mount path's trailing wildcard (`*`), removed with a `/` before it; None where the
     # framework's mount path carries none.
     wildcard: str | None
@@ -153,6 +166,11 @@ class MountPath:
     # The order the mount route was given, as the engine reads a route's order, or None for
     # its registration order: where the mount stands among the parent's own routes.
     order: Any = None
+    # A `chain_result` mount's chain end: the call whose result is the router it mounts.
+    made: Mapping[str, Any] | None = None
+    # The mount's own word where its route reads no argument for one and the catalog's
+    # `path_fallback` names it from the handler (design 2026-11-06-reading-decorators §3c).
+    named: str | None = None
 
 
 @dataclass(frozen=True)
@@ -208,8 +226,12 @@ class Prefix:
 ROOT = Prefix(None, str(Resolution.RESOLVED))
 
 
-def mount_rules_of(matches: Mapping[str, Any], source: object) -> MountRules | None:
-    """The catalog's mount words, validated; None for a catalog declaring neither."""
+def mount_rules_of(
+    matches: Mapping[str, Any], source: object, words: bool = False
+) -> MountRules | None:
+    """The catalog's mount words, validated; None for a catalog declaring neither. `words`
+    for a `root_kind: entry_point` catalog, whose prefixes are joined as words are, by one
+    space (design 2026-11-06-reading-decorators §4): it declares no `path_join`."""
     declared, types = matches.get("mount"), matches.get("router_type")
     if declared is None and types is None:
         return None
@@ -224,28 +246,50 @@ def mount_rules_of(matches: Mapping[str, Any], source: object) -> MountRules | N
         entry if isinstance(entry, str) else entry.get("method")
         for entry in matches.get("terminal", [])
     }
-    path_join = validated_path_join(matches, source, "fluent")
+    roots = {entry.get("method") for entry in matches.get("roots", []) if isinstance(entry, dict)}
+    if words and "path_join" in matches:
+        raise CatalogError(
+            f"loading catalog {source}: a `root_kind: entry_point` catalog joins its words "
+            f"with one space and declares no `path_join`"
+        )
+    path_join = WORDS if words else validated_path_join(matches, source, "fluent")
     return MountRules(
-        router_types, tuple(_rule(entry, terminals, source) for entry in declared), path_join
+        router_types,
+        tuple(_rule(entry, terminals, roots, source) for entry in declared),
+        path_join,
     )
 
 
-def _rule(entry: Any, terminals: set[Any], source: object) -> MountRule:
+def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> MountRule:
     where = f"loading catalog {source}: mount[]"
     if not isinstance(entry, dict) or not isinstance(entry.get("method"), str):
         raise CatalogError(f"{where} must be a mapping naming `owner` and `method`")
-    if not isinstance(entry.get("router_arg"), int):
-        raise CatalogError(f"{where} `{entry['method']}` must name its `router_arg`")
+    router_arg = entry.get("router_arg")
+    if router_arg != CHAIN_RESULT and argument_reference(router_arg, spelled=False) is None:
+        raise CatalogError(
+            f"{where} `{entry['method']}` must name its `router_arg`: a position, "
+            f"`{{keyword: name}}`, `{{arg: N, keyword: name}}` or `{CHAIN_RESULT}`"
+        )
     prefix_arg, prefix_from = entry.get("prefix_arg"), entry.get("prefix_from")
     if (prefix_arg is None) == (prefix_from is None) or (
-        prefix_arg is not None and not isinstance(prefix_arg, int)
+        prefix_arg is not None and argument_reference(prefix_arg, spelled=False) is None
     ):
         raise CatalogError(
             f"{where} `{entry['method']}` must name exactly one of `prefix_arg: N` and "
             f"`prefix_from: {RECEIVER_PATH}`"
         )
-    if prefix_from is not None and (
-        prefix_from != RECEIVER_PATH or entry["method"] not in terminals
+    if router_arg == CHAIN_RESULT and (
+        prefix_from != RECEIVER_PATH or entry["method"] not in roots
+    ):
+        raise CatalogError(
+            f"{where} `{entry['method']}` takes `router_arg: {CHAIN_RESULT}` only as a declared "
+            f"root with `prefix_from: {RECEIVER_PATH}`: the router is what the chain it starts "
+            f"returns, and its prefix is that chain's own path"
+        )
+    if (
+        router_arg != CHAIN_RESULT
+        and prefix_from is not None
+        and (prefix_from != RECEIVER_PATH or entry["method"] not in terminals)
     ):
         raise CatalogError(
             f"{where} `{entry['method']}` takes `prefix_from: {RECEIVER_PATH}` only as a "
@@ -270,7 +314,7 @@ def _rule(entry: Any, terminals: set[Any], source: object) -> MountRule:
         owners=catalog_symbols(entry.get("owner"), f"{where} `{entry['method']}` owner"),
         method=entry["method"],
         descriptor=str(descriptor) if descriptor is not None else None,
-        router_arg=int(entry["router_arg"]),
+        router_arg=router_arg,
         prefix_arg=prefix_arg,
         wildcard=wildcard,
         refuses=frozenset(refuses),
@@ -340,12 +384,25 @@ class MountReader:
         mounts: Sequence[Mount],
         refuses_unrooted: bool,
         configuring: frozenset[tuple[str, str, str]] = frozenset(),
+        programs: Mapping[tuple[str, int], str] | None = None,
     ) -> None:
         self._workspace = workspace
         self._index = index
         self._rules = rules
         self._declared = declared
         self._mounts = tuple(mounts)
+        # A `root_kind: entry_point` catalog's program names (design
+        # 2026-11-06-reading-decorators §4), by the call whose result an entry point names
+        # (`programs_of`); None for every other catalog, whose outermost word is as read.
+        self._programs = programs
+        # The calls whose results are the routers `chain_result` mounts mount: each a stop of
+        # the producer reader, as a router type's maker is (`router_producers`).
+        self._made = frozenset(
+            (str(at.made["caller"]), int(str(at.made["ordinal"])))
+            for mount in self._mounts
+            for at in mount.paths
+            if at.made is not None
+        )
         self._refuses_unrooted = refuses_unrooted
         self._configuring = configuring
         self._producers: dict[tuple[str, int, int | str], tuple[tuple[Producer, Path], ...]] = {}
@@ -421,10 +478,10 @@ class MountReader:
         for mount in self._mounts:
             if mount.key in mounting:
                 continue
-            for mounted, mount_path in self._producers_of(mount.site, mount.rule.router_arg):
+            for mounted, mount_path, ways in self._mounted(mount):
                 if _identity(mounted) != made:
                     continue
-                for way, at in enumerate(mount.paths):
+                for way, at in ways:
                     joined = path.joined(mount_path)
                     if joined is not None and at.within is not None:
                         joined = joined.joined(at.within)
@@ -500,6 +557,9 @@ class MountReader:
             pass
         elif at.unread:
             found.append(self._hole(mount, at, "a value the walk captured at no position"))
+        elif at.named is not None:
+            # The mount's own word, named from its handler (`path_fallback`): exact.
+            found.append(Prefix(at.named, str(Resolution.RESOLVED)))
         elif at.prefix is None:
             found.append(Prefix("", str(Resolution.RESOLVED)))
         else:
@@ -578,6 +638,11 @@ class MountReader:
             if parent.text is None or own.text is None
             else join_prefix(parent.text, own.text, self._rules.path_join)
         )
+        resolution = weaker(parent.resolution, own.resolution)
+        if self._programs is not None and parent.text is None and own.text is not None:
+            text, program = self._outermost(parent, own.text, made)
+            if program == UNREAD_PROGRAM:
+                resolution = weaker(resolution, str(Resolution.PARTIAL))
         mount = (
             ((str(at.parent["caller"]), int(str(at.parent["ordinal"]))), at.order)
             if at.parent is not None
@@ -587,12 +652,36 @@ class MountReader:
             (*place[:-1], (place[-1][0], mount), (made, None))
             for place in parent.places or (ANY_ROUTER,)
         )
-        return Prefix(
-            text,
-            weaker(parent.resolution, own.resolution),
-            (*parent.unread, *own.unread),
-            places,
+        return Prefix(text, resolution, (*parent.unread, *own.unread), places)
+
+    def _outermost(self, parent: Prefix, word: str, made: Router | None) -> tuple[str, str]:
+        """The outermost word of an entry-point prefix and the program word in it (design
+        2026-11-06-reading-decorators §4): a program is started by the name it is installed
+        under, so the outermost router's word is that name. Where the parent is a router no
+        mount names (`grp = Group()`), it has no word of its own: the program's name goes in
+        front of `word`. Where it is no router (the outermost mount sits on nothing), `word`
+        is the outermost router's own and is replaced."""
+        routers = sorted(
+            {place[-1][0] for place in parent.places or (ANY_ROUTER,)} - {None}, key=repr
         )
+        if not routers:
+            program = self.program(made)
+            return program, program
+        names = {self.program(router) for router in routers}
+        program = names.pop() if len(names) == 1 else UNREAD_PROGRAM
+        return join_prefix(program, word, self._rules.path_join), program
+
+    def outermost(self, prefix: Prefix, word: str) -> str:
+        """A command's path where its router is served at its root (`prefix.text` None) and
+        is a router no mount names: the program's name in front of `word`."""
+        return self._outermost(prefix, word, None)[0]
+
+    def program(self, router: Router | None) -> str:
+        """The name of the entry point that names the object `router` is (`programs_of`), or
+        the named hole `<program>`."""
+        if router is None or self._programs is None or router[0][0] != "call":
+            return UNREAD_PROGRAM
+        return self._programs.get((router[0][1], router[0][2]), UNREAD_PROGRAM)
 
     def joined(self, prefix: Prefix, path: str, pattern: bool) -> str:
         """A route's own `path` behind `prefix` (`path_join`); a pattern verbatim, since the
@@ -601,9 +690,37 @@ class MountReader:
             return path
         return join_prefix(prefix.text, path, None if pattern else self._rules.path_join)
 
+    def _mounted(
+        self, mount: Mount
+    ) -> tuple[tuple[Producer, Path, tuple[tuple[int, MountPath], ...]], ...]:
+        """Each router `mount` mounts, with the path it was reached on and the ways to the
+        mount it is mounted by: the producers of its router argument, by every way; or, for a
+        `chain_result` mount, the call that ends each way's chain, by that way alone."""
+        ways = tuple(enumerate(mount.paths))
+        if mount.rule.router_arg != CHAIN_RESULT:
+            return tuple(
+                (producer, path, ways)
+                for producer, path in self._producers_of(mount.site, mount.rule.router_arg)
+            )
+        return tuple(
+            (
+                Producer(caller=str(at.made["caller"]), ordinal=int(str(at.made["ordinal"]))),
+                Path(),
+                ((way, at),),
+            )
+            for way, at in ways
+            if at.made is not None
+        )
+
     def _producers_of(
-        self, site: Mapping[str, Any], slot: int | str
+        self, site: Mapping[str, Any], slot: Any
     ) -> tuple[tuple[Producer, Path], ...]:
+        """The producers of `site`'s receiver (`RECEIVER`) or of the argument a catalog's
+        reference names (`argument_slot`), each with its path."""
+        if slot != RECEIVER:
+            slot = argument_slot(site["arguments"] or [], slot)
+            if slot is None or slot == UNPACKED_SLOT:
+                return ()
         key = (str(site["caller"]), int(str(site["ordinal"])), slot)
         if key not in self._producers:
             self._producers[key] = producer_paths(
@@ -613,8 +730,43 @@ class MountReader:
                 self._declared,
                 configuring=self._configuring,
                 which_object=True,
+                declared_sites=self._made,
             )
         return self._producers[key]
+
+
+def programs_of(workspace: Workspace, index: ValueIndex) -> dict[tuple[str, int], str]:
+    """Each program the module's build declares (`module.entry_points`, design
+    2026-11-06-reading-decorators §4 and §7a), by the call whose result its target names:
+    `"sextant.cli.app:cli"` names the module-level name `cli`, the field
+    `sextant/cli/app#cli.`, and the call whose result is written to it. Extras
+    (`"a.b:main [extra]"`) are not part of the target. A target naming a function, an
+    attribute path (`a.b:obj.attr`) or a name no call in the module writes names no call: such
+    a program is not one this catalog's routers can be."""
+    targets: dict[str, str] = {}
+    for row in workspace.query("entry_points"):
+        written = row["entry_points"]
+        declared = json.loads(written) if isinstance(written, str) else written
+        if not isinstance(declared, Mapping):
+            continue
+        for name, target in sorted(declared.items()):
+            module, _, attribute = str(target).split("[", 1)[0].strip().partition(":")
+            if module and attribute.isidentifier():
+                targets.setdefault(type_descriptor(module) + attribute + ".", str(name))
+    found: dict[tuple[str, int], str] = {}
+    if not targets:
+        return found
+    for row in workspace.query("field_writes"):
+        program = targets.get(str(row["field"]))
+        value = row["value"]
+        value = json.loads(value) if isinstance(value, str) else value
+        source = value.get("source") if isinstance(value, Mapping) else None
+        if program is None or source is None:
+            continue
+        writer = str(row["written_by"])
+        for ordinal in index.producers.get((writer, int(str(source))), ()):
+            found.setdefault((writer, ordinal), program)
+    return found
 
 
 def weaker(one: str, other: str) -> str:

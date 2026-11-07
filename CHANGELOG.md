@@ -15,7 +15,171 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Changed
+
+- **A repository is read by every detector that recognises it, not the first** (OI-208). A Maven
+  or Gradle repository that also holds a Python project (a root `requirements.txt` with scripts,
+  or a `tools/pyproject.toml`) now detects as multi-module: `--workspace` is refused for it and
+  `modules.json` is written, as for any multi-module repository. Modules that share a folder get
+  a results folder each (`<folder>/.sextant/<name>`), and modules with one id keep both, the id
+  followed by `@<folder>`. A detector that fails (a malformed `pom.xml`, a Gradle run that
+  fails) still stops detection with its own message; only a detector with no module to report
+  is passed over when another found some. The JVM builds stay one choice (ruling R32): where a
+  root carries both a `pom.xml` and a `build.gradle` (`examples/spring-petclinic`), Maven reads
+  it and Gradle is not run, as before; detectors of different languages all run.
+- **A `handler` lambda is no longer folded into its registration's captures, for every
+  catalog** (OI-208 plan 1 task 9b; `shapes/chains.py` `_fold_lambda_captures`). The fold reads a
+  lambda that builds a call's value; a handler lambda is the code the registration runs, so its
+  body's chain no longer replaces the handler or adds what it collected. This is visible on the
+  JVM too, the Vert.x web and event-bus handlers included. No pinned answer changed (the field
+  pins and the suite), and `examples/vertx-examples/web-examples` analyses to the same 56
+  endpoints and the same derived tables as before the change.
+- **A field read in a Python class takes every class's writes of that field** (`self.x`, `cls.x` and an explicit `B.x` alike; ruling R33). An
+  object's attributes are one namespace, whichever class's code wrote them, so a read in class
+  `C` takes the writes of `x` on `C`, its ancestors and its subtypes (and their other parents):
+  `self.d` set to a `Session` in `B.__init__` and to a `Client` in `D(B).__init__` is both,
+  `narrowed`, where it was the base's `Session`, `resolved`; a class attribute a subclass
+  overrides (`model = …`, `serializer_class = …`) likewise; and a subclass reading what its
+  ancestor wrote reads that write, where it was `no_writer`. A parent nothing scanned (a
+  library class) may write it too: `external` beside the module's writes, and the site is
+  `partial`. JVM field reads are unchanged: javac names the declaring field.
+- **A Python name a nested function rebinds `nonlocal` is no one value, and a `match` capture
+  is a write** (OI-208 final review). `h = Session(); def cb(): nonlocal h; h = Client()` then
+  `run(cb); h.get()` was `Session`, `resolved`; when `cb` runs is not known there, so `h` is
+  now `not_readable`. `case Client() as s:` binds `s` to the subject, and every other capture
+  (`case [s, *rest]`, `**rest`) to a part of it this scanner does not split, in the case's guard
+  and body, so `s` after the `match` is no longer the value written before it.
+
 ### Added
+
+- **Sextant reads itself, end to end** (OI-208 plan 1 task 10, spec
+  `2026-11-06-python-reader-design.md` §7 item 1). `tests/e2e/test_sextant_reads_itself.py`
+  analyses the repository root once and checks, against lists written by hand from
+  `src/sextant/cli/app.py`: one `sextant` module; the six commands as six `entry_point` roots,
+  each with a trace; their 24 parameters as `request_params` rows; and every one of the 23,482
+  call sites in one of four groups, none outside them: the owner written by the scanner
+  (19,429), bound by the resolver (126), a call of a function value whose edge enters that
+  function's body (34), or unresolved with a reason from the one reason list (3,893, of which
+  104 carry several reasons, one per path). The probe
+  `scripts/probes/python_call_kinds.py --workspace <folder>` prints a workspace's call table
+  before and after receiver binding. Measured on the development Mac: Sextant 8.7 s cold,
+  8.8 s warm; polar's `server/` 27.2 s cold (target 60 s) and 27.6 s warm (target 10 s
+  missed, ceiling 30 s met), because the scan is not reused on a re-run
+  (`docs/research/2026-11-06-python-performance.md`). The Python essay
+  (`docs/coverage/python.md`) states what is read, what is not and why; the comparison with
+  pyright, Pyrefly, ty and mypy is `docs/research/2026-11-06-python-type-tools.md`.
+- **A click program's commands are `entry_point` roots** (OI-208 plan 1 task 9b, design
+  `2026-11-06-reading-decorators-design.md` §5; closes OI-22). `catalogs/click.yml` declares
+  `root_kind: entry_point`: each command is a `roots` row with no wire address, its path the
+  command's words joined by one space, the outermost the entry point's name (`sextant module
+  analyze`), or `<program>` where no entry point names the group; each `click.argument` and
+  `click.option` between the registration and the function is a `request_params` row
+  (`argument`, `option` or `flag`). Sextant's own six commands are six roots with 24 parameters.
+  The approved forms that read it: an argument reference by keyword (`{keyword: name}`,
+  `{arg: N, keyword: name}`) on `fluent` captures, `mount` and `request_params`; `path_fallback`
+  on an entry-point catalog, with a mapping form for the framework's respelling of a function
+  name; `mount[].router_arg: chain_result`; `request_params` entries that name a call; and the
+  value-model key `returns_argument` (`returns`, `result_returns`, `result_calls`), shipped for
+  click's parameter decorators, `functools.wraps`, `cache` and `lru_cache`,
+  `contextlib.contextmanager` and `asynccontextmanager`, and `tenacity.retry`
+  (`scripts/probes/click_commands.md`, `scripts/probes/python_wrappers.md`).
+
+- **A Python scanner reads the structure of `.py` source** (OI-208 plan 1 task 4, spec
+  `2026-11-06-python-reader-design.md` §3a). Modules, classes, `<clinit>` bodies, `__init__` as
+  `<init>`, module-level names as static fields with their `field_write`, typed signatures from
+  the written annotations, and decorators as the calls they are. A file Python cannot parse is
+  listed as uncovered with its reason, and the rest of the module is scanned. A Python module's
+  import roots are what is scanned, and its module fact names the `c3` lookup rule. Calls in
+  function bodies, control flow and library types are not read yet.
+- **The Python scanner reads every call, value and return** (OI-208 plan 1 task 5). Every call
+  in every body (module, class, function, nested function, `lambda`) is a `call_site` with its
+  receiver, result and arguments; f-strings are `concat`, lists `array`, functions `lambda`.
+  Every `return` and the implicit `return None` are `method_return` facts, and `self.x = …` is a
+  `field_write`. Arguments are written as written: positional ones in order, and a keyword one
+  by its name in the new optional argument key `keyword` (D00 §5), never converted to a
+  position; the resolver fills parameters by Python's calling rule (ruling R27, task 8).
+- **The Python scanner states each call's place in its body's control flow** (OI-208 plan 1
+  task 6). Every Python `call_site` carries `dominator`, `on_every_exit`, `post_dominator`,
+  `reaches_return` and `loop_group` with the JVM meanings (D00 §5 rule 9), for `if`, loops,
+  `break`/`continue`, `try`/`except`/`else`/`finally`, `with`, `return`, `raise`, `assert`,
+  `match`, `and`/`or`, conditional expressions and comprehensions. A name two branches set
+  differently is now a `merge` of both values, where it was `unresolved`.
+- **The resolver binds a Python call on a value to the type of its receiver, per path**
+  (OI-208 plan 1 task 8, spec `2026-11-06-python-reader-design.md` §3b). A call whose facts
+  name no owner is followed back on the value walk — a construction to its class, a call to
+  what its callee returns, a parameter to the arguments at its callers, a field to its writes —
+  and each path's type is a row of the new derived table `bound_receivers`, never a fact.
+  Several types from a closed list (two callers, an import bound on two branches) are
+  `narrowed`; a parameter nothing calls is `external`, one of a function handed on as a value
+  `escapes`. `call_edges` draws one edge per bound type, and one `unresolved` row with no
+  target for a call nothing bound. A class imported from another file and called is read as
+  its construction, and a name of one used as a value as that class. The edges are redrawn
+  after each round that bound something, at most eight rounds; rounds after the first walk only
+  the sites a new caller can change. Arguments fill parameters by Python's calling rule: a
+  keyword the parameter of its name, positionals in order, over each parameter's new `kind`
+  (`positional_only`, `positional`, `var_positional`, `keyword_only`, `var_keyword`), and an
+  argument unpacked from a sequence is marked `keyword: "*"` beside `**`; a parameter no
+  argument can be said to fill is `not_readable`, never a neighbour's value. Both fact fields
+  are optional and additive, so `FACT_SCHEMA_VERSION` stays 7. The scanner writes every
+  call's arguments as written, keywords by name, in every file (ruling R27); `X.__init__(…)`
+  names `<init>`, and a `@classmethod` is `static`. A method called through its class with an
+  explicit `self` (`Base.__init__(self, x)`) binds its arguments past `self`. A
+  parameter written as a union binds to each member. JVM facts always name an owner and pass
+  arguments by position, so no JVM row changes. `GRAPH_SCHEMA_VERSION` 16 → 17: the export
+  carries the new table.
+- **A decorator factory's result has a type, and a module-level name the type its file writes**
+  (OI-208 plan 1 task 9a, design `2026-11-06-reading-decorators-design.md` §3b). A library
+  call written to return `Callable[[P, ...], R]` gives a callable whose call is an `R` (a type
+  variable in `R` takes the type of the argument that fills it), so `@click.group() def cli`
+  makes `cli` a `click/core/Group#`, and `cli.group()` and `module.command("analyze")` carry
+  that owner. A module-level name read anywhere in its file has the one type every write to it
+  in that file gives; two types, or a write not read, leave the owner to the resolver. A
+  literal never fits a `Callable` parameter when an overload is chosen. On Sextant 52 call
+  sites gain an owner, on polar 37; no fact field changes.
+- **A Python module records its entry points, and another checkout is not entered** (OI-208
+  plan 1 task 9a, design §7). The module fact gains the optional `entry_points`, program name
+  to target as written, from `[project.scripts]`, `[tool.poetry.scripts]` and `setup.cfg`
+  `console_scripts`; `FACT_SCHEMA_VERSION` stays 7 (unshipped). A folder below the analysed one
+  that holds `.git` (a clone, a submodule, a git worktree such as `.claude/worktrees/…`) is
+  neither detected nor scanned, and is noted "another repository, not analysed". Analysing
+  Sextant's own repository with an agent worktree present now finds one module. An entry
+  point that cannot be read is noted.
+- **A decorated Python `def` holds its decorators' result** (OI-208 plan 1 task 9a fix round 1,
+  design §3e, ruled option A). Its name is a field written from the outermost decorator's
+  result, and is read as that field: `cli()` is a call of the `Group`, `cli.add_command(module)`
+  passes the field. `staticmethod`, `classmethod`, `property`, `cached_property`, `overload`
+  and `abstractmethod` keep the method model. A call through a library wrapper (`@retry`,
+  `@contextmanager`, a pytest fixture) now stops at the library: polar has 107 fewer edges
+  into a body (31,452 → 31,345), Sextant 27, each `external` or a library method, none to a
+  wrong owner. A function or class argument fits a `Callable` parameter when an overload is
+  chosen.
+- **Calling a Python function value runs that function** (OI-208 plan 1 task 9a fix round 2,
+  ruling R29). A `__call__` whose receiver is, on some path, a function (a decorator in the
+  project's code that returns its argument or its own wrapper, a function passed as an
+  argument) is an edge to that function's body, as a call on a JVM lambda reaches the lambda's
+  body; no owner is bound for it, and each path is its own answer.
+- **A function or class argument fits only an open `Callable` or `type`** (OI-208 plan 1 task 9a
+  fix round 3). `Callable[[int], str]`, `Callable[..., Awaitable[int]]` and `type[X]` are not
+  decided for one, so their overloads stay a closed list; `alias = module` takes `module`'s
+  type; module-level types that never settle are dropped with an uncovered line, never a stop.
+- **The Python scanner reads library signatures and types, and Python lookup follows C3**
+  (OI-208 plan 1 task 7). Libraries are read from the project's installed environment, and the
+  standard library and stub-only libraries (`requests`) from a pinned typeshed copy shipped in the
+  wheel (`resources/typeshed`, commit in `COMMIT`); nothing is imported, run or downloaded. A
+  library name is its defining symbol (`fastapi.APIRouter` is `fastapi/routing/APIRouter#`), a
+  library call's result has the class its signature returns (the overload the argument types
+  choose, an alias read through to its literals), and a name a library binds differently in
+  branches is the closed list of its bindings. As on the JVM, what is written of a library is
+  a `type_header` for every library type the module names, then up its bases, in one
+  `header_only` document labelled `<environment>`, with `origin` set to the distribution or
+  `typeshed@<commit>/<stub package>@<version>`; no library member or document is written, so
+  a call into a library method answers `external`. A library's bodies are read only when the
+  module opts in (`extract_libraries: [<distribution>]`, D04 §2a). A declared library missing
+  from the environment is named by the detector (`fastapi is not installed in the scanned
+  environment`). Method lookup is one order per type (`Dispatch.lookup_order`): the JVM's,
+  unchanged, or C3 for a `c3` module, where `__init__` is inherited, a library type is placed
+  by its header and ends the order, and a class whose parents were not all read ends the
+  order with `external`.
 
 - **A Retrofit client that Dagger or Hilt makes has its server address** (OI-304, spec
   `2026-11-05-di-recipe-hop-design.md`). A parameter the container fills (a `@Provides` method's,
@@ -198,6 +362,16 @@ here would restate those documents rather than add anything.
   `OAuth2WebClient` inherits `get` from `WebClient`. The other 19 are unchanged.
 
 ### Fixed
+
+- **A catalog's argument position counts positional arguments only** (OI-208 plan 1 task 9b,
+  design `2026-11-06-reading-decorators-design.md` §3a). The facts write a Python call's keyword
+  arguments after its positional ones, and a position counted all of them, so `arg1` of
+  `option("--dry-run", is_flag=True)` read `is_flag`'s `True`. A `*` value at or before the
+  position now leaves it unread. JVM arguments carry no keyword, so nothing there changes.
+- **A call of a function a library decorator wraps reaches its body again** (task 9b, design
+  §3e). Since 9a a decorated name holds the decorator's result, so `f()` through
+  `@functools.cache` or `@contextlib.contextmanager` ended at the library; a `result_calls`
+  statement now carries the call into `f`.
 
 - **An address with several placeholders, or a default, is filled** (OI-322, and OI-179). The per-environment address
   answer (`resolved_peers`) filled only an address with one placeholder: `${host}:${port}`

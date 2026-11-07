@@ -77,7 +77,8 @@ visited set in `resolve/dispatch.py`. Bounded traversal OVER these rows is
 `application/query/trace.py`'s, and is where a cycle costs something.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
@@ -89,7 +90,21 @@ from sextant.domain.closed_sets import Evidence, Resolution
 from sextant.domain.symbols import bare_descriptor, method_descriptor, without_type_marker
 
 
-def record_call_edges(workspace: Workspace, catalogs: Sequence[Catalog] = ()) -> None:
+@dataclass(frozen=True)
+class FunctionCalls:
+    """What a `__call__` whose receiver is a function value runs (ruling R29): the function
+    bodies its paths ended at, bare, and the site's tier over every path
+    (`receiver_binding`)."""
+
+    bodies: tuple[str, ...]
+    tier: str
+
+
+def record_call_edges(
+    workspace: Workspace,
+    catalogs: Sequence[Catalog] = (),
+    functions: Mapping[tuple[str, int], FunctionCalls] | None = None,
+) -> None:
     """Derives `call_edges` — one row per (call site, candidate callee) — and
     replaces the table whole.
 
@@ -103,6 +118,11 @@ def record_call_edges(workspace: Workspace, catalogs: Sequence[Catalog] = ()) ->
     callee is one" (D00's own note, which is why the set had no producer for two phases).
     Defaulted to none so a caller that wants the graph alone still gets it, and every
     terminal then reads `unresolved`, which is what it read before this existed.
+
+    `functions` (ruling R29): for a `__call__` the facts leave without an owner, the
+    function bodies receiver binding found its receiver to be. Each is an edge to that body,
+    looked up exactly, by the rule a JVM lambda body is (`_edge`): calling a function runs
+    it. None where binding found none, which is every JVM module.
     """
     workspace.derive("call_edges_reset")
     dispatch = dispatch_of(workspace)
@@ -124,16 +144,142 @@ def record_call_edges(workspace: Workspace, catalogs: Sequence[Catalog] = ()) ->
     # and asking them per site would repeat two queries for each of mall-admin's 24,591
     # edges.
     rules = TerminalRules(workspace, list(catalogs))
+    # A call the facts leave without an owner (D00 §5) is read with the owner each path of
+    # its receiver was bound to (`resolve/receiver_binding.py`), one edge per owner: the
+    # sites as each of their owners makes them. Empty on every JVM module.
+    bound = _bound_owners(workspace)
+    called = functions or {}
     rows: list[dict[str, object]] = []
     for site in sites:
-        rows.extend(_rows_for(site, dispatch, rules))
+        rows.extend(_site_rows(site, dispatch, rules, bound, called))
     if rows:
         workspace.derive("call_edges_insert", rows=rows)
     # F3 §4.2's two tables, written from the SAME pass and the same `Dispatch` — "which
     # method can this site run" is answered once (this module's own docstring), and a
     # second pass would be a second answer that could disagree with the edges above.
     _record_hierarchy(workspace, dispatch)
-    _record_resolution(workspace, dispatch, sites)
+    _record_resolution(workspace, dispatch, [one for site in sites for one in _owned(site, bound)])
+
+
+# The one invoke kind whose owner the facts may leave to the resolver (D00 §5).
+_VIRTUAL = "virtual"
+
+# A bound site's owners, in the order `bound_receivers` lists them, and the site's tier.
+_Bound = dict[tuple[str, int], tuple[tuple[str, ...], str]]
+
+
+def _bound_owners(workspace: Workspace) -> _Bound:
+    """Each bound call site's distinct owners, first-seen order (NFR-1), with the
+    resolution its binding rows carry."""
+    owners: dict[tuple[str, int], dict[str, None]] = {}
+    tiers: dict[tuple[str, int], str] = {}
+    for row in workspace.query("bound_receivers"):
+        if row["owner"] is None:
+            continue
+        key = (str(row["caller"]), int(str(row["ordinal"])))
+        owners.setdefault(key, {})[str(row["owner"])] = None
+        tiers[key] = str(row["resolution"])
+    return {key: (tuple(found), tiers[key]) for key, found in owners.items()}
+
+
+def _unowned(site: dict[str, object]) -> bool:
+    """A call the facts leave to the resolver to bind: `virtual`, with no owner."""
+    return site["owner"] is None and str(site["invoke_kind"]) == _VIRTUAL
+
+
+def _owned(site: dict[str, object], bound: _Bound) -> list[dict[str, object]]:
+    """`site` as each owner makes it: itself where its facts name one, once per bound owner
+    where they do not, and not at all where nothing bound it."""
+    if not _unowned(site):
+        return [site]
+    owners, _ = bound.get((str(site["caller"]), int(str(site["ordinal"]))), ((), ""))
+    return [{**site, "owner": owner} for owner in owners]
+
+
+def _site_rows(
+    site: dict[str, object],
+    dispatch: Dispatch,
+    rules: TerminalRules,
+    bound: _Bound,
+    called: Mapping[tuple[str, int], FunctionCalls] | None = None,
+) -> list[dict[str, object]]:
+    """`_rows_for`, and for a call the facts leave without an owner, the rows of each owner
+    it was bound to, as one site: its tier is over every owner's edges, `partial` where the
+    binding was, and its evidence is the binding's (`syntax`, a type worked out by a rule).
+    A site nothing bound is one row naming no target and reaching no body, `unresolved`:
+    the call is in the code, and what it calls is not known."""
+    key = (str(site["caller"]), int(str(site["ordinal"])))
+    if not _unowned(site):
+        return _with_wrapped(site, key, _rows_for(site, dispatch, rules), dispatch, rules, called)
+    owners, tier = bound.get(key, ((), str(Resolution.UNRESOLVED)))
+    function = (called or {}).get(key)
+    if function is not None:
+        # The site's tier counts the function bodies too (`receiver_binding._tier`).
+        tier = function.tier
+    if not owners and function is None:
+        return [
+            {
+                "caller": key[0],
+                "ordinal": key[1],
+                "invoke_kind": str(site["invoke_kind"]),
+                "target": None,
+                "callee": None,
+                "result": None if site["result"] is None else int(str(site["result"])),
+                "resolution": str(Resolution.UNRESOLVED),
+                "evidence": str(Evidence.COMPILER),
+                **classify(rules, None, None, str(site["invoke_kind"])),
+            }
+        ]
+    rows = [row for owned in _owned(site, bound) for row in _rows_for(owned, dispatch, rules)]
+    for body in function.bodies if function is not None else ():
+        # Exactly the body the value names, as a lambda body is looked up (`_edge`); the row
+        # keeps the site's own invoke kind, since the body runs at this call.
+        lambda_site = {**site, "invoke_kind": DYNAMIC, "implementation": body}
+        rows.extend(
+            {**row, "invoke_kind": str(site["invoke_kind"])}
+            for row in _rows_for(lambda_site, dispatch, rules)
+        )
+    if tier == str(Resolution.PARTIAL):
+        resolution = Resolution.PARTIAL
+    else:
+        resolution = Resolution.NARROWED if len(rows) > 1 else Resolution.RESOLVED
+    return [
+        {**row, "resolution": str(resolution), "evidence": str(Evidence.SYNTAX)} for row in rows
+    ]
+
+
+def _with_wrapped(
+    site: dict[str, object],
+    key: tuple[str, int],
+    rows: list[dict[str, object]],
+    dispatch: Dispatch,
+    rules: TerminalRules,
+    called: Mapping[tuple[str, int], FunctionCalls] | None,
+) -> list[dict[str, object]]:
+    """`rows`, the edges of a call whose owner the facts name, and, where it is a `__call__` on
+    a library type whose receiver the binder found to be a function (`receiver_binding
+    ._wrapped`: a function passed as a `Callable`, or the one a `result_calls` wrapper runs,
+    design 2026-11-06-reading-decorators §3e), an edge to each such function, looked up as a
+    lambda body is (ruling R29). The library edge stays: the call runs the library's
+    `__call__`, and that runs the function."""
+    function = (called or {}).get(key)
+    if function is None:
+        return rows
+    for body in function.bodies:
+        lambda_site = {**site, "invoke_kind": DYNAMIC, "implementation": body}
+        rows = [
+            *rows,
+            *(
+                {
+                    **row,
+                    "invoke_kind": str(site["invoke_kind"]),
+                    "resolution": str(function.tier),
+                    "evidence": str(Evidence.SYNTAX),
+                }
+                for row in _rows_for(lambda_site, dispatch, rules)
+            ),
+        ]
+    return rows
 
 
 def _record_hierarchy(workspace: Workspace, dispatch: Dispatch) -> None:

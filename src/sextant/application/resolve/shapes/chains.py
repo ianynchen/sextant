@@ -78,12 +78,15 @@ from sextant.application.resolve.values import (
     NON_ENUMERABLE,
     NOT_READABLE,
     RECEIVER,
+    UNPACKED_SLOT,
     Counting,
     Flow,
     HandOffs,
     Path,
     Producer,
     ValueIndex,
+    argument_reference,
+    argument_slot,
     cached_value_index,
     counts_split,
     inexact,
@@ -357,6 +360,7 @@ def chain_ends(
         catalog.hand_off_effects,
         catalog.bean_models,
         catalog.value_annotations,
+        returns_arguments=catalog.returns_arguments,
     )
     flow = Flow(walk_index)
     # Which splits count for the caller's rows: those whose call sets a part they show,
@@ -1556,7 +1560,10 @@ def _read_through(
         outer, outer_slot = position
         if outer is site:
             continue
-        held = _arg_at(outer["arguments"], outer_slot)
+        # `outer_slot` is the index of a WRITTEN argument (`values.argument_slots`), not a
+        # catalog's position, so it is read as an index.
+        outer_arguments = outer["arguments"] or []
+        held = outer_arguments[outer_slot] if 0 <= outer_slot < len(outer_arguments) else None
         if held is None:
             continue
         arguments[slot] = _captured_at(
@@ -2253,18 +2260,19 @@ def _validate_captures(
             # argument at it is read as a bean reference rather than as the
             # value itself — the container hop, `channel: {bean_via: arg0}`.
             if field in _ARGUMENT_FIELDS and not (
-                _ARG_REFERENCE.match(str(value)) or _valid_bean_via(value)
+                _capture_reference(value) is not None or _valid_bean_via(value)
             ):
                 raise CatalogError(
                     f"loading catalog {catalog.source}: `{entry['method']}` captures "
                     f"`{field}: {value}`, which is not a call-site position — an argument "
-                    f"capture reads `argN` or `{{{_BEAN_VIA}: argN}}` (D02 §4's fluent style)"
+                    f"capture reads `argN`, `{{keyword: name}}`, `{{arg: N, keyword: name}}` "
+                    f"or `{{{_BEAN_VIA}: argN}}` (D02 §4's fluent style)"
                 )
             # Spec 2026-09-21 §4: the two consumer captures, each `argN` or its
             # one literal spelling — anything else is a typo that would
             # silently capture nothing, the same reason the check above exists.
             if field == "handler" and not (
-                _ARG_REFERENCE.match(str(value)) or value == _HANDLER_NONE
+                _capture_reference(value) is not None or value == _HANDLER_NONE
             ):
                 raise CatalogError(
                     f"loading catalog {catalog.source}: `{entry['method']}` captures "
@@ -3255,9 +3263,19 @@ def _fold_lambda_captures(captures: dict[str, Any], context: "_ChainContext") ->
     spliced. One hop only: a lambda reached from inside a lambda is not followed, because
     each hop is a place the argument could belong to something else and the discipline that
     bounds `_prefix_captures` bounds this too.
+
+    **Never a `handler`.** The fold reads a lambda that BUILDS the call's value; a handler
+    lambda is the code the registration hands control to, so it is kept as the lambda it is.
     """
     for field, value in list(captures.items()):
         if not isinstance(value, dict) or value.get("kind") != "lambda":
+            continue
+        # A `handler` lambda is the CONSUMER itself, not a builder of the registration: its
+        # body is what runs when the registration fires, and a chain inside that body is a
+        # registration of its own. Folding it named a call inside the body as the handler
+        # (task 9b fix round 1: a command whose body calls `run(helper)` was handed `helper`,
+        # and one whose body opens a `with scope(…)` lost its row).
+        if field == "handler":
             continue
         symbol = value.get("symbol")
         if symbol is None:
@@ -3399,12 +3417,16 @@ def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[st
                 "caller": site["caller"],
             }
         elif _reads_an_argument(field, value):
-            slot = _arg_index(value)
-            read = _own_method(_arg_at(site["arguments"], slot), site)
-            # No slot, nothing to name: `_arg_index` answers None for a capture that is
-            # not a positional read, and a position the walk cannot be told is one it must
-            # not be asked about.
-            resolved[field] = read if slot is None else _captured_at(read, site, slot)
+            reference = _capture_reference(value)
+            read = _own_method(_arg_at(site["arguments"], reference), site)
+            # The written argument the reference names, which is the position the walk reads.
+            slot = None if reference is None else argument_slot(site["arguments"], reference)
+            # No slot, nothing to name: a capture that is not a positional read, an argument
+            # the call does not write, or one an unpacked value may be, is a position the walk
+            # cannot be told and must not be asked about.
+            resolved[field] = (
+                read if slot is None or slot == UNPACKED_SLOT else _captured_at(read, site, slot)
+            )
         else:
             resolved[field] = value
     return resolved
@@ -3479,9 +3501,16 @@ def _reads_an_argument(field: str, value: Any) -> bool:
     history) — no literal a catalog states on those fields is spelled that
     way, and a list (`channel_via`'s forms) or a mapping (`{bean_via: …}`)
     never matches the pattern."""
-    return field in _ARGUMENT_FIELDS or _ARG_REFERENCE.match(str(value)) is not None
+    return field in _ARGUMENT_FIELDS or _capture_reference(value) is not None
 
 
 def _arg_index(value: Any) -> int | None:
     match = _ARG_REFERENCE.match(str(value))
     return int(match.group(1)) if match else None
+
+
+def _capture_reference(value: Any) -> Any:
+    """A capture's argument reference: `argN`, or a keyword form `{keyword: name}` /
+    `{arg: N, keyword: name}` (design 2026-11-06-reading-decorators §3a); None for anything
+    else, `{bean_via: argN}` among them."""
+    return argument_reference(value, spelled=True)

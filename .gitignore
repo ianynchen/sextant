@@ -38,3 +38,9 @@ target/
 
 # Example projects cloned for testing — not ours, never committed
 examples/
+
+# The pinned typeshed copy (spec 2026-11-06 §3e) ships whole: its `stdlib/venv` and a stub
+# package's `examples` folder are type files, not an environment or a clone. Only those two
+# folders are named, so `__pycache__` and `.DS_Store` stay ignored there as everywhere.
+!/src/sextant/resources/typeshed/stdlib/venv/
+!/src/sextant/resources/typeshed/stubs/**/examples/

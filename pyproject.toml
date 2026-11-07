@@ -72,11 +72,17 @@ src = ["src", "tests"]
 # The formatter rewrites fenced Python in Markdown too, and `docs/` holds the
 # specs and the phase plans — documents that are a contract, not code to be
 # restyled. Their illustrative snippets stay as written.
-extend-exclude = ["docs"]
+#
+# `src/sextant/resources/typeshed` is a pinned copy of typeshed's type files, data the
+# Python scanner reads (spec 2026-11-06 §3e). It is not Sextant's code: it is neither
+# formatted, linted nor type-checked here.
+extend-exclude = ["docs", "src/sextant/resources/typeshed"]
 
 [tool.mypy]
 strict = true
 files = ["src"]
+# The typeshed copy (see `[tool.ruff]`): data, not Sextant's code.
+exclude = ["^src/sextant/resources/typeshed/"]
 
 [[tool.mypy.overrides]]
 module = "yaml"

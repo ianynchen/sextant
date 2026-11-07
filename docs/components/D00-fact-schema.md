@@ -20,7 +20,27 @@ tool — no indexer is involved. See [ARCHITECTURE.md](../ARCHITECTURE.md) DR-1.
 
 sextant-jvm  maven  com.acme/orders  2.1.0  com/acme/OrderService#save().
 sextant-jvm  maven  com.acme/orders  2.1.0  com/acme/OrderService#save(+1).
+sextant-python  .  .  .  shop/orders/OrderService#save(sig_…).
+sextant-python  pypi  shop-orders  1.4.0  shop/orders#create_order(sig_…).
 ```
+
+The scheme is `sextant-jvm` for JVM code and `sextant-python` for Python code. Python has no
+overloads, so every Python method has the one signature `(*)`. All Python methods therefore
+share one disambiguator, and a call joins its callee by name.
+
+**A Python module (file) is a namespace for its classes and a type for its own members**
+(ruling R4, 2026-11-06). For the file `shop/orders.py`:
+
+- a module-level function is `shop/orders#create_order(sig_…).`;
+- the module body is `shop/orders#<clinit>(sig_…).`;
+- a module-level name is the static field `shop/orders#app.`;
+- a class is `shop/orders/OrderService#`, and its method `shop/orders/OrderService#save(sig_…).`;
+- a nested class is `shop/orders/Outer$Inner#`, as on the JVM.
+
+So `owner_of` (the text up to the first `#`) always gives the owning type. A package's
+`__init__.py` is the module of its package path (`shop#` for `shop/__init__.py`). A published
+module writes `sextant-python pypi <name> <version> …`, with its PEP 503 name; an unpublished
+one writes `.` for the three fields.
 
 **Descriptor grammar**, unchanged from SCIP:
 
@@ -80,7 +100,7 @@ Written once per class file. Every fact points at one.
 | `origin_entry` | **The classpath entry this was read from** — the module's own output directory, or a library archive |
 | `origin_tier` | That entry's tier (§4) — module output, a declared dependency, first-party, third-party, platform |
 | `origin` | The **library** this document was extracted from, as its coordinate (`com.example:orders-soap-client`). Absent for the module's own output |
-| `header_only` | **True on the ONE synthetic document per module that holds every `type_header` fact**, absent otherwise (2026-10-21). It is not a class file this module built — its `relative_path` is the label `<classpath>` and its `content_hash` is of the classpath that was read — so every count meaning "class files read" leaves it out (`coverage.documents`), and `type_headers` counts what it holds instead. §2's "one class file is one document" is about the module's own output; a header read of two thousand referenced types is not two thousand documents opened |
+| `header_only` | **True on the ONE synthetic document per module that holds every `type_header` fact**, absent otherwise (2026-10-21). It is not a class file this module built — its `relative_path` is the label `<classpath>` (`<environment>` for a Python module, which has an environment, not a classpath) and its `content_hash` is of the classpath that was read (for Python, of the declared distributions, their versions, the Python version and the typeshed commit) — so every count meaning "class files read" leaves it out (`coverage.documents`), and `type_headers` counts what it holds instead. §2's "one class file is one document" is about the module's own output; a header read of two thousand referenced types is not two thousand documents opened |
 | `type_headers_unlocated` | **On the header-only document: how many dependency types the header read reached — named by this module's classes, or discovered as a supertype from a header it did read — were found in NO archive on its classpath** (2026-10-21, spec `2026-10-21-maven-classpath-design.md` §3e) — the JDK's own types, which the walk stops at on purpose, and every type a classpath that is not the real one leaves out. 0 on every other document. Read by `coverage` beside `type_headers`, so a document says "header read for 9, in no archive 80" rather than "9"; the header document is written whenever a classpath was handed over, with zero headers as readily as with hundreds, so that the zero is said |
 | `redaction_set_hash` | From [D04](D04-config-and-exclusion.md) |
 | `partial` | True when the file was analysed incompletely, with a reason. **Real since Step 1** — the JVM extractor wrote the literal strings `false`/`null` with no code path able to set either, so every class document claimed a complete analysis whether or not it had one. Three producers: an ARCHIVE ENTRY that could not be read, a class this build cannot parse, and a class whose language-metadata a newer compiler wrote in a form it cannot decode (scanned, facts emitted, nullability missing) |
@@ -118,7 +138,8 @@ machine whose local repository lives somewhere else. A document from the module'
 output carries **no `origin` key at all** rather than one spelled null: a module with no
 library extraction configured produces exactly the fact files it produced before opt-in
 library extraction existed, which is what makes "did enabling this change my module's
-facts?" answerable by comparing bytes.
+facts?" answerable by comparing bytes. A Python library opted into (D04 §2a) is named by
+its distribution's PEP 503 name (`fastapi`).
 
 **`origin_tier` moves with it, to `dependency`.** A class this module did not build is
 not `module_output`, and saying so would be a claim known to be false. `dependency` is
@@ -213,8 +234,8 @@ workspace HAS scanned was reported as not found, which was false rather than imp
 **`origin_tier`** — `module_output`, `dependency`, `first_party`, `third_party`,
 `platform`. Where a document's class file was read from (§2). `dependency` is the tier
 of a declared dependency's own archive, read because the module opted into it
-([D04](D04-config-and-exclusion.md) §2a); it says the class came out of a dependency and
-nothing about whose. `first_party`/`third_party` answer that second question from
+([D04](D04-config-and-exclusion.md) §2a), and of the one synthetic `header_only` document
+(§5 `type_header`); it says the class came out of a dependency and nothing about whose. `first_party`/`third_party` answer that second question from
 declared group patterns, and until those are read no producer writes either — a tier is
 an observation, never a trust judgement.
 
@@ -237,12 +258,13 @@ broker listener's root kind naming nothing in `protocol` at all. `cli_entry` bec
 `entry_point` because a `main` is a program entry point whether or not anything about it
 is a command-line interface, and `cli` claimed a surface no producer measured.
 
-**`entry_point` has no producer, and that is stated rather than left to a reader.** Which
-signature starts a program is a fact about a LANGUAGE, and [ARCHITECTURE](../ARCHITECTURE.md)
-§10 keeps language knowledge out of the language-blind half — so its producer is a catalog,
-and none declares one (`docs/open-issues.md`, OI-22). The member stays in the set because
-the traversal that reads `roots` branches on no kind at all: a root of this kind traces
-exactly as the other two do the day something writes one.
+**`entry_point`'s producer is a catalog.** Which signature starts a program is a fact about a
+LANGUAGE or a framework, and [ARCHITECTURE](../ARCHITECTURE.md) §10 keeps that knowledge out
+of the language-blind half — so a catalog declares it: `root_kind: entry_point` on a `fluent`
+catalog sends its rows to `roots` ([D02](D02-catalog-schema.md) §2's `fluent`;
+`catalogs/click.yml`, design 2026-11-06-reading-decorators §5; `docs/open-issues.md` OI-22,
+closed). The traversal that reads `roots` branches on no kind at all, so a root of this kind
+traces exactly as the other two do.
 
 **`terminal_kind`** — `outbound_call`, `returns`, `ends_silently`, `persistence`,
 `throws`, `unresolved`, `async_handoff`, `cycle`
@@ -358,13 +380,14 @@ Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 
 | Kind | Carries | Consumed by |
 |---|---|---|
-| `module` | Identifier, kind, languages, source sets, output directories, **classpath tiering**, active catalogs, and **who answered for the dependency set** (`dependency_source`: `maven` where the build tool's own resolved compile classpath did, transitives included; `declared` where this analysis read the POM chain itself, with `dependency_source_reason` saying why the build tool did not — 2026-10-21) | Dispatch tiering, noise filtering, coverage |
+| `module` | Identifier, kind, languages, source sets, output directories, **classpath tiering**, `lookup` (`jvm` by default; `c3` where methods are found by Python's method resolution order), `entry_points` (the programs a Python build declares, program name to target as written, `{"sextant": "sextant.cli.app:cli"}`, from `[project.scripts]`, `[tool.poetry.scripts]` and `console_scripts`; `{}` where it declares none, `null` for a build system with no such table — design 2026-11-06-reading-decorators §7a; the target is not a symbol here), active catalogs, and **who answered for the dependency set** (`dependency_source`: `maven` where the build tool's own resolved compile classpath did, transitives included; `declared` where this analysis read the POM chain itself, with `dependency_source_reason` saying why the build tool did not — 2026-10-21) | Dispatch tiering, noise filtering, coverage |
 | `symbol` | Identifier, construct kind, enclosing symbol, **typed signature** (§5a), visibility, **declaration modifiers** (§5a), range | Symbol graph, shapes, endpoints, class diagrams |
 | — | **`visibility` is four-valued** (`G-73`): `public`, `protected`, `package` or `private` — the four access levels a declaration can have, closed by `Visibility` (NFR-5). For a NESTED type this is the class file's OWN word, which is the coarse one: a `private` or `protected` nested type states that modifier in `InnerClasses` (JVMS 4.7.6) only, and the class file itself writes a private nested type package-private and a protected one public. Recovering the source modifier is `OI-51`; until then a nested type's visibility is its outer word. | Member-exposure rules (D02's `mapping.members`), endpoint derivation |
+| — | **`parents_unread` is set on a Python class whose written bases stop early** (`{reason, detail}`, absent otherwise): `reason` is one word of the general list (`values._REASONS`) — `not_readable` for a base the file binds to a value, a call or two different things, `external` for a base name nothing in the file binds (a star import leaves one) — and `detail` is text for a person (`base 1 'Base' is a value, not a class name; parents from here on are not read`). No code branches on the detail. `superclass` and `interfaces` hold the bases before that one. | Method lookup (`c3`) |
 | `relationship` | Subject, object, relationship kind | Hierarchy, dispatch, class diagrams |
 | `occurrence` | Symbol, range, enclosing symbol, role | Type-reference edges, `uses` |
 | `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |
-| `type_header` | **A DEPENDENCY type's place in the hierarchy, read from its class-file header in the resolved classpath** (2026-10-21, user decision A): symbol (the library's own coordinate and version), construct kind, superclass, interfaces, class-level annotations in the `annotation` fact's own `use` shape, and the `origin` jar. Emitted for every type the module's own classes refer to and did not compile, then transitively up each one's superclass and interfaces; a type in no jar on the classpath (the JDK's) gets none, so the catalog's declared roots stay the JDK boundary. **No member of the type is read** — no method, field, body or call site — so method lookup is untouched and the type stays "not scanned" to every consumer asking about its methods. **A kind of its own, deliberately**: were these `symbol`/`annotation` facts, the engines minting endpoint rows would see a library's `@RestController` or `CrudRepository` as this module's (measured risk). Only the type lattice reads them: `superclasses`, `implementations`, and `error_advice`'s class-annotation lookup | `type_hierarchy`, `supertype_dispatch`, the throwable walk, `@ResponseStatus` on a handled exception's class |
+| `type_header` | **A DEPENDENCY type's place in the hierarchy, read from its class-file header in the resolved classpath** (2026-10-21, user decision A): symbol (the library's own coordinate and version), construct kind, superclass, interfaces, class-level annotations in the `annotation` fact's own `use` shape, and the `origin` jar. Emitted for every type the module's own classes refer to and did not compile, then transitively up each one's superclass and interfaces; a type in no jar on the classpath (the JDK's) gets none, so the catalog's declared roots stay the JDK boundary. **No member of the type is read** — no method, field, body or call site — so method lookup is untouched and the type stays "not scanned" to every consumer asking about its methods. **A kind of its own, deliberately**: were these `symbol`/`annotation` facts, the engines minting endpoint rows would see a library's `@RestController` or `CrudRepository` as this module's (measured risk). Only the type lattice reads them: `superclasses`, `implementations`, and `error_advice`'s class-annotation lookup. **Python (2026-11-06, ruled A, "like Java"):** the same fact and the same meaning, read from the installed environment and the pinned typeshed copy instead of a classpath (M03 "Libraries"): a header for every library type the module's facts name (a class, or a module, which is a type, ruling R4), then up each one's bases; `superclass` is the first written base and `interfaces` the rest, in written order, as the scanner maps a module class's (`object` is not written, and is the boundary, as the JVM's root type is); no `annotations` (a decorator is a call); `origin` is the distribution's PEP 503 name, or `typeshed@<commit>/<stub package>@<version>` where the type file is typeshed's (`typeshed@13ffe24…/requests@~=2.33.0`; the standard library is the stub package `stdlib`, at the environment's Python version), and `version` the installed version (`.` for the standard library). A library class whose bases are not all read (§5a `parents_unread`) gets no header, since the fact has no key to say so: a lookup reaching it ends there. The `c3` lookup reads a header's parents to place it, and ends at it, since its methods are not read | `type_hierarchy`, `supertype_dispatch`, the throwable walk, `@ResponseStatus` on a handled exception's class |
 | `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, `receiver_parameter` (the receiver as the enclosing method's parameter N where it is one, absent otherwise), `receiver_field` (the static field a `getstatic` receiver was read from, absent otherwise), `dominator`, `on_every_exit`, `post_dominator`, `reaches_return` and `loop_group` (the call's place in the method's control flow, rule 9), structured `arguments` | Call edges, dispatch, traces, endpoints |
 | — | The invoke-kind set includes **`throw`**: a throw site is a call-site-shaped observation whose target is the thrown exception type. It is what gives traces their `throws` terminal. | Trace terminals, blast radius |
 | `field_write` | The writing method's symbol, the assigned field's symbol, and EITHER the source parameter's ordinal OR the value it was written from — a constant, or the call whose result it is | The field resolution ladder (2F), the value walk's sixth edge |
@@ -536,6 +559,15 @@ declarations, and every consumer that keys or looks a type up by a parameter rea
 `erased_symbol` instead. It is written on every parameter rather than only where the two
 differ, because a JSON path wildcard drops elements whose key is absent and a shorter list
 silently misaligns against the parameters it describes.
+
+**`kind` says how a call fills a parameter** (user ruling A, 2026-11-06), where a language
+has more than one way: `positional_only`, `positional` (by place or by name),
+`var_positional` (the positional arguments left over, `*args`), `keyword_only`, or
+`var_keyword` (the keyword arguments left over, `**kwargs`). The Python scanner writes it on
+every parameter, in Python's own order of the list (`self` or `cls` taken by the receiver is
+not one); the resolver binds a call's arguments by it (`values.parameter_slots`). Optional
+and absent on every JVM parameter, which a call fills by place. Strictly additive, as
+`keyword` was, so the fact schema version did not move.
 
 **The two lists are matched by the class file's own parameter flags, never by counting.**
 JVMS 4.7.9.1 permits a signature to omit parameters that are implicitly declared, and a
@@ -716,6 +748,27 @@ would be indistinguishable from an annotation genuinely written with none, which
 silent truncation §8 forbids. Strictly additive: an engine that does not consult a nested
 use sees exactly the keys it saw before, since a nested value previously produced no key
 at all.
+
+**A Python type reference is the type the code writes** (spec 2026-11-06 §3a, rule 1). Its
+name is bound through the file's own imports, by path: the other file is not read.
+`Optional[X]` and `X | None` are `X` with `nullable: true`. A union is the arguments of
+`typing/Union#`. `type[X]` is `X`. `Annotated[X, …]` is `X`. A type variable is its bare name,
+as on the JVM, and a PEP 695 type parameter (`def f[S]`, `class C[T]`) is also written in
+the declaration's `type_parameters`. An annotation the file writes and does not bind keeps
+its written text, bare (`Mystery`): it names no type (`names_a_type`) and is never
+`typing/Any#`, in `type` and in `erased_symbol` alike. A type variable's `erased_symbol` is
+`typing/Any#`, as a JVM one erases to its bound. A module-level alias of a name the file binds
+to a module, a class or a function (`DecodeError = jwt.DecodeError`) is bound as that name is,
+so it names the same type. An unannotated parameter is `typing/Any#`, the typing specification's rule. A name that two branches bind differently
+(`try: import ujson as json` / `except ImportError: import json`) is a closed list: as a
+type it is the union of both, and as a value it is a `merge` argument with one candidate
+each. **A Python class's parents** are its written bases in order, the first as `superclass` and
+the rest as `interfaces`, up to the first base the file cannot name as a class (a value such as
+`Base = declarative_base()`, or a call); nothing after that base is written, so no later base
+takes its place. The document is then `partial`, and `partial_reason` names the class and the
+base, so "parents not read" is never mistaken for "no parents". The class itself carries `parents_unread` (§5 table): method lookup treats such a class as "parents not read" — its lookup ends with `external` — and never as "no parents". **Evidence:** every type a Python document states is written in source, so it is
+`declared`, the word §5d gives a source origin. The document says so: `language` is the
+source language and `class_major` is 0. No reference carries an evidence field of its own.
 
 ### 5b. The wire-type vocabulary
 
@@ -940,6 +993,11 @@ The full shape, verbatim:
    {"kind": "unresolved", "source": 7},
    {"kind": "class", "symbol": "com/acme/orders/contracts/OrderView#"}]}
 ```
+
+**`target.owner` may be absent for one case:** a `virtual` call that has a `receiver`. A
+Python call on a value does not know the value's type when the scanner reads it. The scanner
+leaves the owner out, and the resolver binds it later from the receiver's value id. Every
+other `invoke_kind`, and a `virtual` call with no receiver, must name an owner.
 
 **`target.descriptor`** makes the target unambiguous. `owner.name` alone collides; two
 methods named `execute` are not the same method.
@@ -1201,6 +1259,73 @@ call on `x` — and then only INEXACTLY, because the call's effect on the value 
 Strictly additive: an engine that does not consult `merge` treats it exactly as it always
 treated `unresolved`.
 
+**`keyword` is the parameter NAME a Python keyword argument gives** (`prefix="/items"`),
+on an entry of `arguments` only, written exactly as the call writes it, whatever the scanner
+knows of the callee (ruling R27, 2026-11-06, which amends R2): argument positions are the
+order the call is written in, and the resolver binds every call's arguments to parameters by
+one calling rule (`values.parameter_slots`, over each parameter's `kind`). `**` marks keyword
+arguments unpacked from a mapping (`f(**options)`), whose names are not written, and `*` a
+positional argument unpacked from a sequence (`f(*items)`), whose entry is `unresolved` and
+stands in its place among the positional entries: after it, no later positional argument's
+parameter is known (user ruling A, 2026-11-06). Entries with no `keyword`, and `*` entries,
+are positional, in order, before the keyword entries; a parameter the call leaves out has no
+entry. Absent on every JVM argument. Strictly additive, so the fact schema version did not move.
+
+**Python (spec 2026-11-06 §3a).** The Python scanner writes these facts with the meanings
+above:
+
+- `invoke_kind` is `static` for a function, `virtual` for a call on an object, and
+  `special` for `<init>` and for `super().m()`, whose owner is the class's first written
+  parent. A call on `self` names the class with no `receiver`, as a JVM call on `this`
+  does. A call on a parameter or a local whose written type names one class names that
+  class; any other call on a value names its receiver and no owner.
+- A constructor call has no `result`; its value is `instance` with the constructor's
+  `receiver` as `source`, as `new` is on the JVM.
+- `X.__init__(…)` names `<init>`, the method the definition is. A `@classmethod`, like a
+  `@staticmethod`, is `modifiers.static` — bound to the class rather than an instance (§5a) —
+  and its `cls` is not a parameter.
+- An f-string, and `+` with a string literal, is `concat`. The concatenation is a `dynamic`
+  site `builtins/str#format`, with no receiver and no `implementation`, whose arguments are
+  the values that fill the holes. With no value in it, it is the `string` itself.
+- `a if c else b` and `a or b` are `merge`; `await x` is the value of `x`; `with x as y` is
+  the call `x.__enter__()` (`__aenter__` for `async with`), and `y` is its result.
+- A nested function is a method of the same owner, named after the function that holds it
+  (`outer$inner`), as kotlinc names a local function. A `lambda` is
+  `lambda$<method>$<n>`, as javac names a lambda body (`static` for a module or class body,
+  `new` for `__init__`), numbered per method. Both are `lambda` arguments with `captures` 0.
+  Inside them the method's `self` is the receiver, as `this` is in a JVM lambda body.
+- A name defined twice (on two branches) is one method symbol: `ordinal`, value ids and
+  `method_return.ordinal` continue from one body to the next, so no two sites of the method
+  share an ordinal or a value id.
+- `receiver_field` and a `field` argument name a field only where every name before it is a
+  module or a class (`os.path`, `Config.client`). An attribute of a variable
+  (`app.state.client`) names no symbol: a call on it names only its receiver.
+- A module-level name that branches bind to several imports (`try: import ujson as json` /
+  `except ImportError: import json`) is a static field with one `field_write` per import, so
+  a call on it names the field as `receiver_field`. As an argument it is a `merge`.
+- A name that two paths set to different values is a `merge` of them where they join, as a
+  JVM frame slot two branches wrote; `unresolved` where a path does not set it. Only paths
+  that reach the join count (a branch ending in `break`, `continue`, `return` or `raise`
+  does not). A loop ends with the values from before it, from the end of its body and from
+  each `continue`; after its `else`, those or the values at a `break`. Where an exception
+  may enter a handler or a `finally`, or a `with` may swallow it, a name the block set holds
+  its value from before the block (where it had one) or any value the block gave it.
+- Rule 9's five fields are read off each body's own graph (a module or class body, a
+  function, a `lambda`), built from the syntax tree: a call is a node before it runs and one
+  after it completed, as above. Every expression may raise, so inside a `try` every
+  statement and call has an edge to the handlers, except the point after a call that is all
+  of its statement (`a()`, `x = a()`, `return a()`), as the JVM's handler is entered only
+  where `a` did not complete. A `with` block's manager may swallow what the block raised, so
+  the code after the block can follow any point of it. A `finally` is copied for each way
+  out of its `try`, as javac copies it; a call in it is one site, which runs on every exit
+  where one of its copies does and reaches a return only where every copy does. `raise`, an
+  exception a `with` or `finally` raises again, and a failing `assert` lead nowhere, as an
+  `ATHROW` does; `python -O` may drop an `assert`. A comprehension is a loop. A generator
+  expression runs when it is consumed, possibly after the body returned, so its calls have
+  no `post_dominator` and do not reach a return. `yield` and `await` are not exits. A call
+  after a `return` is written (the JVM writes no unreachable site) with no `dominator`,
+  `post_dominator` or `loop_group`, and `on_every_exit` and `reaches_return` false.
+
 **`method_return` is a fact of its own, one per return instruction** (capability 9.18) —
 what a method hands back:
 
@@ -1244,6 +1369,12 @@ joins a `method_return` to the caller's own `result` id; the fact ships ahead of
 that is what it will consume. Recorded plainly here rather than implied: `docs/open-issues.md`
 carries it as `OI-15`.
 
+**Python:** every `return` is a `method_return`, and so is the implicit `return None`
+where the end of the body is reachable, as `{"kind": "null"}` — a Python function hands
+`None` back, so it is a value, not a void return. A generator hands back a generator object,
+so it has one `unresolved` return. An `@overload` stub, and an abstract or `Protocol` method
+whose body is only `...`, `pass` or a docstring, has no `method_return`: it has no body.
+
 **`field_write` is a fact of its own, ANY method, direct traces only** — a method assigns a
 parameter, a constant, or a call's result directly to field F. The JVM mapping: a `PUTFIELD`
 whose receiver is `this`, or a `PUTSTATIC` (which has no receiver), whose value is a bare
@@ -1273,6 +1404,11 @@ given.example.com /s resolved`, and a base `…/api` joined as `/apiorders` wher
 holds `…/api/`). The scan is syntactic — one pass over the instructions, no flow analysis —
 and errs toward reporting less: a store on a path that never reaches the write refuses it
 too.
+
+**Python:** `self.x = v` in a method writes the class's field, `C.x = v` and `module.x = v`
+write that type's field, and a `global` name written in a function writes the module's
+field. A write to an attribute of any other object is not reported, as on the JVM. `v` is
+written as it reads in an argument slot; a parameter is `from_parameter`.
 
 Three things it deliberately does not report, each because reporting them would be a claim
 nobody can check:

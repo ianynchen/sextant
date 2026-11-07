@@ -66,6 +66,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sextant.application.ports.workspace import Workspace
+from sextant.domain.facts import Lookup
 from sextant.domain.symbols import bare_descriptor, method_descriptor, method_name, owner_of
 
 # D00 §5's dispatch forms, as the extractor spells them (`MethodFlow.invokeKind`).
@@ -88,6 +89,14 @@ _NOT_INHERITED = frozenset({"<init>", "<clinit>"})
 # Where every class and interface lookup ends (JVMS 5.4.3.3, 5.4.3.4). A wire name of the
 # platform, recorded in the two language-confinement tests.
 _OBJECT = "java/lang/Object#"
+# The `c3` rule's own root (spec 2026-11-06 §3b): Python's `object`, which every class has
+# and the scanner does not write as a parent. A complete C3 order ends at it. A wire name of
+# that language, recorded as a confinement exception (ARCHITECTURE §10).
+_C3_ROOT = "builtins/object#"
+# Where a C3 order stops for a parent that was not read, tagged with the type whose parents
+# were not read (spec §3b: "an unread parent ends the order with `external`").
+type _Unread = tuple[str]
+type _Linear = list[str | _Unread]
 
 
 @dataclass(frozen=True)
@@ -116,11 +125,25 @@ class Dispatch:
     # for that method, see `candidates`. Defaulted so a `Dispatch` built by hand
     # carries none.
     default_bodies: dict[str, list[str]] = field(default_factory=dict)
+    # How a method is looked up (D00 §5 `module.lookup`): the JVM's own order, or C3 for a
+    # Python module. One analysis is one module, so one rule. Defaulted, so a `Dispatch`
+    # built by hand keeps the JVM's.
+    lookup: Lookup = "jvm"
+    # The Python classes whose written parents stop early (`SymbolFact.parents_unread`):
+    # their C3 order ends where the parent not read would come in.
+    parents_unread: frozenset[str] = frozenset()
+    # The library types known by a `type_header` alone (D00 §5): their parents are read,
+    # so C3 places them, and their methods are not, so a lookup ends at one.
+    headers: frozenset[str] = frozenset()
     # A bare type to the names of the methods it declares, every overload one name: `heirs`'
     # question, built once from `declared` with the `Dispatch` rather than by scanning every
     # declared symbol per type per call (GUIDELINES §8.7). Derived, so a `Dispatch` built by
     # hand carries the same answer.
     declared_names: dict[str, set[str]] = field(init=False, repr=False, compare=False)
+    # Each type's C3 linearization, worked out once (`_linear`).
+    _linears: dict[str, "_Linear | None"] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         names: dict[str, set[str]] = defaultdict(set)
@@ -201,23 +224,73 @@ class Dispatch:
         return self._search(owner, name, descriptor)[1]
 
     def _search(self, owner: str, name: str, descriptor: str) -> tuple[str | None, str | None]:
-        """`resolve`'s answer, and `boundary`'s beside it."""
+        """`resolve`'s answer, and `boundary`'s beside it: the first type in `owner`'s
+        lookup order that declares the method, else the type the order left the
+        workspace at."""
         if method_descriptor(owner, name, descriptor) in self.declared:
             return owner, None
         if owner not in self.scanned:
             # Never read this type at all. The genuine third-party boundary: the call IS
             # the terminal, and nothing further is knowable from this workspace.
             return None, owner
-        if name in _NOT_INHERITED:
+        if self.lookup == "jvm" and name in _NOT_INHERITED:
             # A constructor is not inherited (JLS 8.8), so walking ancestors for one
             # could only ever produce a wrong answer. No corpus has yet contained a call
             # that would, which is why this is stated rather than discovered later.
+            # Python's `__init__` IS inherited, so the `c3` order is walked for it.
             return None, None
+        order, end = self._order(owner)
+        for type_ in order[1:]:
+            # An unread type is a position in the order, never a declaration. The JVM's
+            # root type is asked whether it is read or not, as it always was.
+            if (type_ in self.scanned or type_ == _OBJECT) and method_descriptor(
+                type_, name, descriptor
+            ) in self.declared:
+                return type_, None
+        # We know MORE than "external" where `end` is set: the body is inherited from
+        # something we did not open, and `type_hierarchy` names which type that is.
+        return None, end
 
-        # The first type the search could not read, in search order (`boundary`).
-        unscanned: str | None = None
-        # Step 2: the superclass chain, to exhaustion, before any interface.
+    @property
+    def root(self) -> str:
+        """The type every type is, at the end of every lookup order of this module's rule."""
+        return _C3_ROOT if self.lookup == "c3" else _OBJECT
+
+    def lookup_order(self, owner: str) -> list[str]:
+        """The types a method is searched on for `owner`, in order, `owner` first: the
+        JVM's order for a `jvm` module, C3 for a `c3` one. It ends early where a type in
+        it was not read, and `boundary` names that type."""
+        return self._order(owner)[0]
+
+    def order_boundary(self, owner: str) -> str | None:
+        """Where `owner`'s lookup order left the workspace, the root type aside: the first
+        type in it that was not read, or None where every type it reached was read. What such
+        a type declares or writes is not known."""
+        end = self._order(owner)[1]
+        return None if end == self.root else end
+
+    def _order(self, owner: str) -> tuple[list[str], str | None]:
+        """`lookup_order`, and the type the order left the workspace at (None where it
+        read every type it reached)."""
+        if self.lookup == "c3":
+            return self._c3_order(owner)
+        return self._jvm_order(owner)
+
+    def _jvm_order(self, owner: str) -> tuple[list[str], str | None]:
+        """JVMS 5.4.3.3. The class, then the superclass chain to exhaustion, then the
+        superinterfaces, then the platform's root type.
+
+        **The order is the specification, and a breadth-first walk is not it.** 5.4.3.3
+        searches the class, then the ENTIRE superclass chain, and only then the
+        superinterfaces. A frontier seeded with every direct supertype at once answers
+        from a depth-1 interface while a depth-2 superclass holds the body — measured on
+        `A extends B implements I`, `B extends C`, both `C` and `I` declaring the
+        method: it returned `I`, where the JVM runs `C`'s. So the two arms are walked
+        separately and in order."""
+        # Step 2: the superclass chain, to exhaustion, before any interface. An unread
+        # superclass ends the chain: its own parents are not known.
         chain: list[str] = []
+        unread_parent: list[str] = []
         current: str | None = owner
         seen: set[str] = set()
         while current is not None and current not in seen:
@@ -230,11 +303,10 @@ class Dispatch:
             if parent is None:
                 break
             if parent not in self.scanned:
-                unscanned = parent
+                unread_parent.append(parent)
                 break
-            if method_descriptor(parent, name, descriptor) in self.declared:
-                return parent, None
             current = parent
+        order = chain + unread_parent
 
         # Step 3: the superinterfaces of the class and of every superclass on that
         # chain, breadth-first — which is the right shape HERE, because interfaces form
@@ -251,23 +323,69 @@ class Dispatch:
             if interface in visited:
                 continue
             visited.add(interface)
-            if interface not in self.scanned:
-                unscanned = unscanned or interface
-                continue
-            if method_descriptor(interface, name, descriptor) in self.declared:
-                return interface, None
-            frontier.extend(a for a, _kind, _ in self.ancestors.get(interface, ()))
+            order.append(interface)
+            if interface in self.scanned:
+                frontier.extend(a for a, _kind, _ in self.ancestors.get(interface, ()))
 
-        if unscanned is not None:
-            # We know MORE than "external": the body is inherited from something we did
-            # not open, and `type_hierarchy` names which type that is.
-            return None, unscanned
         # Last place, for a class (JVMS 5.4.3.3) and for an interface (5.4.3.4) alike:
-        # the platform's root type. The extractor writes no superclass fact for it, so no chain
-        # above reached it. Read, it answers; unread, it is the type the search left at.
-        if method_descriptor(_OBJECT, name, descriptor) in self.declared:
-            return _OBJECT, None
-        return None, None if _OBJECT in self.scanned else _OBJECT
+        # the platform's root type, where every type the search reached was read. The
+        # extractor writes no superclass fact for it, so no chain above reached it.
+        # Read, it answers; unread, it is the type the search left at.
+        if all(type_ in self.scanned for type_ in order[1:]) and _OBJECT not in order:
+            order.append(_OBJECT)
+        end = next((type_ for type_ in order[1:] if type_ not in self.scanned), None)
+        return order, end
+
+    def _c3_order(self, owner: str) -> tuple[list[str], str | None]:
+        """Python's method resolution order: C3 linearization over the written parents,
+        in written order, then `object`. A parent not read ends the order, and the type
+        it ends at is the boundary. A hierarchy C3 cannot order (Python refuses to make
+        such a class) has only the class itself in its order, and no boundary: the
+        lookup is `not_readable`."""
+        linear = self._linear(owner, set())
+        if linear is None:
+            return [owner], None
+        order: list[str] = []
+        for type_ in linear:
+            if not isinstance(type_, str):
+                return order, type_[0]
+            order.append(type_)
+            if type_ != owner and type_ not in self.scanned:
+                # A type whose methods were not read (a library's, known by its header
+                # alone): what it declares is not known, so the lookup ends at it.
+                return order, type_
+        if owner != _C3_ROOT:
+            order.append(_C3_ROOT)
+        return order, None if _C3_ROOT in self.scanned else _C3_ROOT
+
+    def _linear(self, type_: str, visiting: set[str]) -> "_Linear | None":
+        """`type_`'s C3 linearization without `object`, ending in an `_Unread` mark where
+        its order is not known past that point; None where C3 has no answer."""
+        if type_ in self._linears:
+            return self._linears[type_]
+        if type_ in visiting:
+            return None
+        if type_ not in self.scanned and type_ not in self.headers:
+            # Its parents were never read: neither its own facts nor a header.
+            return [type_, (type_,)]
+        visiting.add(type_)
+        parents: _Linear = [ancestor for ancestor, _, _ in self.ancestors.get(type_, ())]
+        lists: list[_Linear] = []
+        for parent in parents:
+            found = self._linear(str(parent), visiting)
+            if found is None:
+                visiting.discard(type_)
+                self._linears[type_] = None
+                return None
+            lists.append(list(found))
+        if type_ in self.parents_unread:
+            parents.append((type_,))
+        lists.append(list(parents))
+        visiting.discard(type_)
+        merged = _merge(lists)
+        result = None if merged is None else [type_, *merged]
+        self._linears[type_] = result
+        return result
 
     def candidates(self, site: dict[str, object]) -> list[str]:
         """Every method `site` can run and whose body this workspace read, as
@@ -283,6 +401,11 @@ class Dispatch:
         bootstrap factory, so composing a descriptor from it would look up a
         method nobody calls. Callers handle that form themselves.
         """
+        if site["owner"] is None:
+            # A call whose owner the facts leave to the resolver (D00 §5) names no type to
+            # look the method up on until it is bound (`resolve/receiver_binding.py`), and a
+            # bound reader asks again with the bound owner in its place.
+            return []
         name, descriptor = str(site["name"]), str(site["descriptor"])
         owner = bare_descriptor(str(site["owner"]))
         # The DECLARING type, not the named one (F3 §4.2). `Owner#setId` names `Owner`
@@ -310,7 +433,7 @@ class Dispatch:
             found = list(self.default_bodies.get(declared_method, ()))
         if site["invoke_kind"] not in VIRTUAL_DISPATCH:
             return found
-        for subtype in self.subtypes.get(bare_descriptor(str(site["owner"])), ()):
+        for subtype in self.subtypes.get(owner, ()):
             for override in self.bodies.get(method_descriptor(subtype, name, descriptor), ()):
                 if override not in found:
                     found.append(override)
@@ -320,9 +443,10 @@ class Dispatch:
 def dispatch_of(workspace: Workspace) -> Dispatch:
     """Reads the three indices once. Every one of them is a compiler fact —
     there is no framework knowledge in a call site, so nothing here gates on a
-    capability or reads a catalog."""
+    capability or reads a catalog. The lookup rule is the module fact's own."""
     ancestors, scanned = ancestry_of(workspace)
     bodies = _bodies_by_descriptor(workspace)
+    rules = {str(row["lookup"]) for row in workspace.query("lookup_rules")}
     return Dispatch(
         bodies=bodies,
         declared=_declared(workspace),
@@ -330,6 +454,50 @@ def dispatch_of(workspace: Workspace) -> Dispatch:
         ancestors=ancestors,
         scanned=scanned,
         default_bodies=_default_bodies(workspace, bodies),
+        lookup="c3" if rules == {"c3"} else "jvm",
+        parents_unread=frozenset(
+            bare_descriptor(str(row["symbol"])) for row in workspace.query("parents_unread")
+        ),
+        headers=frozenset(
+            bare_descriptor(str(row["symbol"])) for row in workspace.query("type_headers")
+        ),
+    )
+
+
+def _merge(lists: list[_Linear]) -> _Linear | None:
+    """C3's merge: take the first head, in list order, that is in no list's tail. An
+    `_Unread` mark stands for parents not known, which may hold any type, so a head is
+    taken past one only where the order is certain without them: the head is in that
+    list, or another list puts it before that list's head (a consistent order cannot
+    then have it among the unknown parents). Where it is not certain, the merge ends
+    with the mark. None where no head can be taken: C3 has no order."""
+    merged: _Linear = []
+    lists = [one for one in lists if one]
+    while lists:
+        for candidate in (one[0] for one in lists):
+            if not isinstance(candidate, str):
+                return [*merged, candidate]
+            if any(candidate in one[1:] for one in lists):
+                continue
+            unknown = next((one for one in lists if not _certain(candidate, one, lists)), None)
+            if unknown is not None:
+                return [*merged, next(m for m in unknown if not isinstance(m, str))]
+            break
+        else:
+            return None
+        merged.append(candidate)
+        lists = [[m for m in one if m != candidate] for one in lists]
+        lists = [one for one in lists if one]
+    return merged
+
+
+def _certain(candidate: str, one: _Linear, lists: list[_Linear]) -> bool:
+    if all(isinstance(m, str) for m in one) or candidate in one:
+        return True
+    head = one[0]
+    return isinstance(head, str) and any(
+        candidate in other and head in other and other.index(candidate) < other.index(head)
+        for other in lists
     )
 
 

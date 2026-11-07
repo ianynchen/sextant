@@ -6,6 +6,21 @@ from dataclasses import dataclass
 
 NOT_APPLICABLE = "."
 
+# The scheme of a Python symbol (D00 §1), beside `sextant-jvm`.
+PYTHON_SCHEME = "sextant-python"
+
+# Python has no overloads, so every Python method carries the one signature
+# `(*)`. It goes through `disambiguator_of` like any JVM descriptor, so every
+# Python method shares one disambiguator and a call joins its callee by name.
+PY_SIGNATURE = "(*)"
+
+# The typing specification's two types that are not one type (D00 §5a, spec 2026-11-06 §3a):
+# a union, whose arguments are the closed list of what the value may be, and the unknown
+# type, which may be anything. Named once, here, for the scanner that writes them and the
+# resolver that binds a receiver to a union's members.
+UNION_TYPE = "typing/Union#"
+ANY_TYPE = "typing/Any#"
+
 # D00 §5a's type marker: the character a TYPE descriptor ends at, and the one a
 # member descriptor carries its owner's name up to. Named here because this
 # module is the seam that reads the symbol grammar
@@ -475,3 +490,29 @@ def without_type_marker(symbol: str) -> str:
     by falling back to itself (`egress/render/document.py`,
     `_disambiguated_shape_names`) is exactly this case."""
     return symbol.rstrip("#")
+
+
+def member_type(owner: str, name: str) -> str | None:
+    """The type a member `name` of the type `owner` names where it is a type of its own
+    module: `app/a#` and `Session` give `app/a/Session#`, the symbol D00 §1 gives a class
+    `Session` declared at the top of module `app/a`. None where `owner` is not a type
+    descriptor. Whether that type exists is the caller's question: a call or a field that
+    names a module member a scanner could not see the kind of (spec 2026-11-06 §3b, a class
+    imported from another file) is read through this. No JVM symbol can name one: a package
+    and a type of the same name cannot both exist (JLS 7.1)."""
+    if not owner.endswith(_TYPE_MARKER):
+        return None
+    return f"{owner.removesuffix(_TYPE_MARKER)}/{name}{_TYPE_MARKER}"
+
+
+def member_field(owner: str, name: str) -> str:
+    """The field descriptor of member `name` of the type `owner`: `app/a#` and `Session`
+    give `app/a#Session.` (D00 §5a)."""
+    return f"{owner}{name}."
+
+
+def field_type(field: str) -> str | None:
+    """`member_type` of a field descriptor's own owner and name: `app/a#Session.` gives
+    `app/a/Session#`. None for a descriptor naming no owner."""
+    owner = owner_of(field)
+    return None if owner is None else member_type(owner, member_name(field))

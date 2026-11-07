@@ -49,6 +49,12 @@ class AnnotationUse(BaseModel):
     unresolved: str | None = None
 
 
+# D00 §5a's parameter kinds (`Parameter.kind`).
+ParameterKind = Literal[
+    "positional_only", "positional", "var_positional", "keyword_only", "var_keyword"
+]
+
+
 class Parameter(BaseModel):
     model_config = {"frozen": True}
     name: str | None = None
@@ -76,6 +82,12 @@ class Parameter(BaseModel):
     # declaration owns. Unrelated to `CallSiteFact.receiver`, which is the
     # argument SLOT a call's target object came from.
     receiver: bool = False
+    # How a call fills this parameter, where the language has more than one way (spec
+    # 2026-11-06 §3a, user ruling A 2026-11-06): `positional_only`, `positional` (by place
+    # or by name), `var_positional` (the extra positional arguments), `keyword_only`, or
+    # `var_keyword` (the extra keyword arguments). Absent where a call fills every parameter
+    # by place, which is every JVM declaration.
+    kind: ParameterKind | None = None
 
 
 class TypeParameter(BaseModel):
@@ -179,6 +191,10 @@ class Document(BaseModel):
     type_headers_unlocated: int = 0
 
 
+# How a method is looked up on a type (D00 §5 `module`): one named rule per language family.
+type Lookup = Literal["jvm", "c3"]
+
+
 class ModuleFact(BaseModel):
     model_config = {"frozen": True}
     kind: Literal["module"] = "module"
@@ -197,6 +213,16 @@ class ModuleFact(BaseModel):
     # the archive — one scan of a jar serves modules that target different
     # releases.
     declared_release: int | None = None
+    # How a method is looked up on a type in this module: `jvm` for the JVM's own rule,
+    # `c3` for Python's method resolution order. It is the module's, not the document's,
+    # because the resolver reads it per module and every JVM module keeps `jvm`.
+    lookup: Lookup = "jvm"
+    # The programs the module's build declares, program name to target as written
+    # (`{"sextant": "sextant.cli.app:cli"}`, design 2026-11-06-reading-decorators §7a):
+    # Python's `[project.scripts]`, `[tool.poetry.scripts]` and `console_scripts`. The
+    # target is not a symbol here; the resolver reads it. None where the build system has
+    # no such table (every JVM module).
+    entry_points: dict[str, str] | None = None
     # The reactor siblings this analysis scanned for their TYPES (F4 §5.2, W24), as
     # their coordinates, sorted. Carried on the module fact because its consumer runs at
     # RESOLVE and there is nothing else there that can tell them apart.
@@ -245,6 +271,17 @@ class ModuleFact(BaseModel):
     # must therefore treat an absent version as UNANSWERABLE, the same way the
     # dependency gate treats an absent coordinate list.
     dependency_versions: dict[str, str] = Field(default_factory=dict)
+
+
+class ParentsUnread(BaseModel):
+    """Why a class's parents were not all read: a `reason`, one word of the general reason
+    list (`application/resolve/values.py` `_REASONS`), and a `detail`, text for a person.
+    No code branches on the detail. The domain layer cannot import that list, so the
+    word is not checked here; the scanner that writes it uses the list's own words."""
+
+    model_config = {"frozen": True}
+    reason: str
+    detail: str
 
 
 class SymbolFact(BaseModel):
@@ -304,6 +341,12 @@ class SymbolFact(BaseModel):
     # `implemented_interfaces`: erased interface symbols a class declares,
     # in declaration order. Empty for a class implementing none.
     interfaces: list[str] = Field(default_factory=list)
+    # A Python class only: set where the scanner stopped reading the written bases at one it
+    # could not name as a class (`Base = declarative_base()`). `superclass` and
+    # `interfaces` then hold the bases before that one, and method lookup treats the
+    # class as "parents not read", never as "no parents". Absent on every class whose
+    # bases were all read, and on every other language's type.
+    parents_unread: ParentsUnread | None = None
     # Capability 9.14: mirrors `supertype`'s PTR-carrier rule one level over,
     # applied to `implements` instead of `extends`. `interfaces` above erases
     # `CrudRepository<Order, Long>` to a bare symbol; this is the only place
@@ -422,12 +465,19 @@ class CallArgument(BaseModel):
     # call site's `arguments`, a `method_return`'s `value` and an `array`'s
     # `elements` are all entries of the same grammar, modelled by this class.
     captures: int | None = None
+    # The parameter NAME a Python keyword argument (`prefix="/items"`) gives, set only
+    # where the scanner cannot bind it to a position: the callee's parameter list is not
+    # in the file (ruling R2, 2026-11-06). The resolver binds it to a position when it
+    # binds the callee. `**` marks keyword arguments unpacked from a mapping. Absent on
+    # every positional argument and on every argument the scanner bound.
+    keyword: str | None = None
 
 
 class CallTarget(BaseModel):
     """What a call site names. `name` and `descriptor` on every site that dispatches
-    to a method — which is every one except a THROW — and `owner` on all but a rethrow
-    whose type this pass could not read.
+    to a method — which is every one except a THROW — and `owner` on all but two: a
+    rethrow whose type this pass could not read, and a `virtual` call with a receiver,
+    whose owner the resolver binds later from that receiver (a Python call on a value).
 
     The invariant is enforced on `CallSiteFact` rather than here, because it is stated
     in terms of `invoke_kind`, which lives there. A validator on this model can only see
@@ -533,8 +583,18 @@ class CallSiteFact(BaseModel):
                 f"both — got invoke_kind={self.invoke_kind!r} with "
                 f"name={self.target.name!r}, descriptor={self.target.descriptor!r}"
             )
-        if self.invoke_kind != "throw" and self.target.owner is None:
-            raise ValueError("a dispatching call site must name an owner")
+        # A Python call on a value names no owner: the resolver binds one later, from
+        # the receiver's value id. Only a virtual call with a receiver may leave it out.
+        leaves_owner_to_resolver = self.invoke_kind == "virtual" and self.receiver is not None
+        if (
+            self.invoke_kind != "throw"
+            and self.target.owner is None
+            and not leaves_owner_to_resolver
+        ):
+            raise ValueError(
+                "a dispatching call site must name an owner, except a `virtual` call with "
+                "a receiver, which may leave its owner to the resolver"
+            )
         return self
 
 

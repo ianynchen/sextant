@@ -249,6 +249,43 @@ def analyze(
     # exists the first is still handed over, so the scanner's own refusal names it, as it
     # always has (Maven reports one).
     present = tuple(d for d in module.output_dirs if d.is_dir()) or module.output_dirs[:1]
+    # `.sextantignore` (2K design §2), loaded once and applied to the scan of a backend
+    # that walks the repository's own files and at both read loops below through
+    # `list_files` — a file it excludes is read by none of them.
+    #
+    # **`ignore_root`, not `module.root` (`A-M16`).** D04 §3 is emphatic, and
+    # is itself an amendment: "One file, at the REPOSITORY root, and every
+    # pattern in it is matched against a path made relative to THAT root."
+    # Loading at `module.root` made that false for every multi-module reactor
+    # — `api.py` analyzes each submodule with its own root, so a
+    # `.sextantignore` at the reactor root was never read for any of them, and
+    # a pattern written relative to the reactor root would not have matched if
+    # it had. For a single-module repository the two roots coincide and this
+    # is the same load it always was, which is why `module.root` is still the
+    # fallback: a caller that does not know the analysed root gets the
+    # behaviour it had rather than a silently wider jail.
+    #
+    # `IgnoreRules.matches` relativizes each path against the root it was
+    # loaded at, so a submodule's files match reactor-root patterns exactly as
+    # the document says. The BUILT-IN layer is unaffected either way — it
+    # applies at every depth (`domain/ignorefile.py`), which is why this was a
+    # coverage gap in the repository-authored layer and never a credential
+    # leak.
+    #
+    # **A reactor root is not always an ancestor of its own modules**, and that
+    # is not a corner: `<module>../orders-service</module>` is legal Maven and
+    # `fixtures/orders-reactor` is exactly that shape. A path outside the root
+    # has no root-relative form at all, so a pattern written against that root
+    # could not address it even in principle — this falls back to the module's
+    # own root there, which is the behaviour that shipped. It stops being right
+    # if a repository ever wants one ignore file to govern modules it does not
+    # contain, which is a question about where the file lives rather than about
+    # how it is read.
+    ignore = IgnoreRules.load(
+        ignore_root
+        if ignore_root is not None and module.root.is_relative_to(ignore_root)
+        else module.root
+    )
     scan_report = scanner.scan(
         ScanRequest(
             module_id=module.module_id,
@@ -262,6 +299,8 @@ def analyze(
             # none: a library is scanned whole, and its own references are not this
             # module's question.
             dependency_archives=module.dependency_archives,
+            ignore=ignore,
+            environment=module.environment,
         )
     )
     # Each opted-into library (D04 §2a) is scanned by the SAME scanner, through
@@ -340,43 +379,6 @@ def analyze(
     # Readers never see the Workspace port — this stage is the write.
     progress.start("read")
     entries = 0
-    # `.sextantignore` (2K design §2), loaded once and applied at both walk
-    # loops below through `list_files` — a file it excludes is read by
-    # neither loop, config or schema.
-    #
-    # **`ignore_root`, not `module.root` (`A-M16`).** D04 §3 is emphatic, and
-    # is itself an amendment: "One file, at the REPOSITORY root, and every
-    # pattern in it is matched against a path made relative to THAT root."
-    # Loading at `module.root` made that false for every multi-module reactor
-    # — `api.py` analyzes each submodule with its own root, so a
-    # `.sextantignore` at the reactor root was never read for any of them, and
-    # a pattern written relative to the reactor root would not have matched if
-    # it had. For a single-module repository the two roots coincide and this
-    # is the same load it always was, which is why `module.root` is still the
-    # fallback: a caller that does not know the analysed root gets the
-    # behaviour it had rather than a silently wider jail.
-    #
-    # `IgnoreRules.matches` relativizes each path against the root it was
-    # loaded at, so a submodule's files match reactor-root patterns exactly as
-    # the document says. The BUILT-IN layer is unaffected either way — it
-    # applies at every depth (`domain/ignorefile.py`), which is why this was a
-    # coverage gap in the repository-authored layer and never a credential
-    # leak.
-    #
-    # **A reactor root is not always an ancestor of its own modules**, and that
-    # is not a corner: `<module>../orders-service</module>` is legal Maven and
-    # `fixtures/orders-reactor` is exactly that shape. A path outside the root
-    # has no root-relative form at all, so a pattern written against that root
-    # could not address it even in principle — this falls back to the module's
-    # own root there, which is the behaviour that shipped. It stops being right
-    # if a repository ever wants one ignore file to govern modules it does not
-    # contain, which is a question about where the file lives rather than about
-    # how it is read.
-    ignore = IgnoreRules.load(
-        ignore_root
-        if ignore_root is not None and module.root.is_relative_to(ignore_root)
-        else module.root
-    )
     # Which loop a reader serves is the reader's own declaration (the
     # `ArtifactReader` port's `reads_schema_sources`), never a guess from the
     # root a file was found under: since 2H one schema root lives inside a
@@ -543,6 +545,12 @@ def _write_module_fact(fact_root: Path, module: ModuleModel) -> None:
         dependency_source=module.dependency_source,
         dependency_source_reason=module.dependency_source_reason,
     )
+    # Written only where the detector names its language's rule; the fact's default
+    # stands for every other module.
+    if module.lookup is not None:
+        fact = fact.model_copy(update={"lookup": module.lookup})
+    if module.entry_points is not None:
+        fact = fact.model_copy(update={"entry_points": dict(module.entry_points)})
     write_fact_file(fact_root / f"{_MODULE_DOCUMENT}.jsonl", document, [fact])
 
 

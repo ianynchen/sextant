@@ -96,6 +96,9 @@ _AUTH_VALUES = frozenset({"subscription", "api-key"})
 # outright, which no real Maven identifier has).
 _SEGMENT = r"[A-Za-z0-9_-][A-Za-z0-9_.-]*"
 _COORDINATE = re.compile(rf"{_SEGMENT}:{_SEGMENT}(:{_SEGMENT})?")
+# A Python distribution name (PEP 508's own grammar for one): letters and digits at both
+# ends, `.`, `_` and `-` between.
+_DISTRIBUTION = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
 
 
 class SextantConfigError(ValueError):
@@ -234,6 +237,23 @@ def read_extract_libraries(module_root: Path) -> tuple[str, ...]:
                 f"`groupId:artifactId:version` coordinate"
             )
     return tuple(declared)
+
+
+def read_python_extract_libraries(module_root: Path) -> tuple[str, ...]:
+    """`extract_libraries` for a Python module (D04 §2a): each entry is a distribution
+    name, returned PEP 503 normalized, in the order the file names them. The checks are
+    `read_extract_libraries`', with a distribution name where that reads a coordinate."""
+    path, document = _document(module_root)
+    declared = document.get("extract_libraries", [])
+    if not isinstance(declared, list):
+        raise SextantConfigError(
+            f"{path}: `extract_libraries` must be a list of distribution names, "
+            f"not {type(declared).__name__}"
+        )
+    for entry in declared:
+        if not isinstance(entry, str) or not _DISTRIBUTION.fullmatch(entry):
+            raise SextantConfigError(f"{path}: {entry!r} is not a distribution name")
+    return tuple(re.sub(r"[-_.]+", "-", entry).lower() for entry in declared)
 
 
 @dataclass(frozen=True)

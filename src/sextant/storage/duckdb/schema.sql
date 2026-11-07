@@ -496,10 +496,9 @@ CREATE TABLE IF NOT EXISTS roots (
     handler   TEXT,
     -- D00 §4's root_kind. `inbound_endpoint` where a row the module EXPOSES
     -- named this handler; `scheduled` where a declaration hands it to a clock.
-    -- The third member, `entry_point`, has no producer — which signature
-    -- starts a program is knowledge about a language, and ARCHITECTURE §10
-    -- keeps that out of the language-blind half, so its producer is a catalog
-    -- nobody has written (`docs/open-issues.md`, OI-22).
+    -- `entry_point` where a catalog declaring `root_kind: entry_point` read a
+    -- command (D02 §2's `fluent`, design 2026-11-06-reading-decorators §5):
+    -- that engine writes the row, with no wire address, `path` the command.
     root_kind TEXT,
     -- The wire address that reaches this root, carried from the `endpoints`
     -- row that named the handler, column for column and unformatted: the
@@ -854,6 +853,43 @@ CREATE TABLE IF NOT EXISTS method_resolution (
     detail           TEXT
 );
 
+-- Spec 2026-11-06 §3b (plan 1 task 8): the owner of a call the facts leave to the resolver
+-- (D00 §5: a `virtual` call with a `receiver` and no `target.owner`), bound from what
+-- produced its receiver, one row per PATH the value walk reached the receiver by
+-- (`resolve/values.py`, ruling M-1: per path, never combined). A derived table, never a
+-- fact: `call_sites` keeps what the scanner wrote, and `call_edges` reads a site's owner as
+-- the fact's where it names one and as these rows' where it does not, one edge per owner.
+-- Replaced whole each round by reset_bound_receivers.sql + insert_bound_receivers.sql, both
+-- run by its one writing pass (`resolve/receiver_binding.py`), the `return_flows` pairing;
+-- the pipeline also runs the reset once before the first `call_edges` of a resolve, so a
+-- reused workspace never reads the previous resolve's owners. A JVM module has no such call,
+-- so its table is empty.
+CREATE TABLE IF NOT EXISTS bound_receivers (
+    -- The call site, `call_sites.caller` and `.ordinal` verbatim.
+    caller      TEXT,
+    ordinal     INTEGER,
+    -- The path the walk reached the receiver by: its crossings, outermost first, as
+    -- `caller@ordinal` and `callee returns N` labels joined by ` > ` (empty where it crossed
+    -- nothing). Two rows of one site on two paths are two calling contexts, never a choice.
+    path_id     TEXT,
+    -- The type the receiver is on that path, bare. NULL where the path ends without one, and
+    -- `reason` then says why.
+    owner       TEXT,
+    -- D00 §4's evidence set: `syntax`, a type worked out by a rule (spec §3a's words).
+    evidence    TEXT,
+    -- D00 §4's resolution set, describing the SITE: `resolved` where every path names one
+    -- type, `narrowed` where they name several from a closed list, `partial` where some path
+    -- names none, `unresolved` on a row naming none.
+    resolution  TEXT,
+    -- NULL on a bound row. Otherwise one word of the general list (`values._REASONS`):
+    -- `external` where the receiver comes from outside the scanned code (a parameter no
+    -- call in it binds), `escapes` where it is a parameter of a function the module hands
+    -- on as a value, `not_readable` where the walk stopped in code it has.
+    reason      TEXT,
+    -- A sentence for a person naming the call and where the walk stopped. No code reads it.
+    detail      TEXT
+);
+
 CREATE TABLE IF NOT EXISTS call_edges (
     -- The method containing the call site, module-prefixed exactly as
     -- `call_sites.caller` spells it (D00 §5a).
@@ -873,8 +909,9 @@ CREATE TABLE IF NOT EXISTS call_edges (
     -- The method this edge NAMES, as a bare descriptor (D00 §5a): what the
     -- compiler wrote at the site, or — for a `dynamic` site — the
     -- implementation the bootstrap will run, which is the only thing at such a
-    -- site that names a body at all. Always present; it is what a reader sees
-    -- in the source at that line.
+    -- site that names a body at all. It is what a reader sees in the source at
+    -- that line. NULL on a rethrow whose type was unread, and on a call whose
+    -- owner the facts left to the resolver and nothing bound (`bound_receivers`).
     target      TEXT,
     -- The body this edge REACHES, module-prefixed so a walk can join it
     -- straight to that method's own rows and take the next hop. **NULL is the
@@ -893,10 +930,13 @@ CREATE TABLE IF NOT EXISTS call_edges (
     -- another). `resolved` where exactly one body can run — and where NONE
     -- can, because the compiler named that target exactly and there is no
     -- candidate set to be uncertain about; `narrowed` where several can, all
-    -- listed and none picked.
+    -- listed and none picked. On a call whose owner was bound from its receiver
+    -- (`bound_receivers`): `partial` where some path of the binding named no type,
+    -- and `unresolved` on the one row of such a call nothing bound.
     resolution  TEXT,
-    -- D00 §4's evidence set. Always `compiler`: the call site, the descriptors
-    -- and the hierarchy are what the compiler wrote into the class files.
+    -- D00 §4's evidence set. `compiler`: the call site, the descriptors and the
+    -- hierarchy are what the compiler wrote into the class files — except on an
+    -- edge drawn from a bound owner (`bound_receivers`), which is `syntax`.
     evidence    TEXT,
     -- D00 §4's `terminal_kind` (F7 §8.2, W30), and **NULL means this edge is not a
     -- terminal at all** — the walk expanded it, so there is nothing to classify. A

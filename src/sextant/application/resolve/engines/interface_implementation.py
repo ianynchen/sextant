@@ -128,6 +128,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 catalog.hand_off_effects,
                 catalog.bean_models,
                 catalog.value_annotations,
+                returns_arguments=catalog.returns_arguments,
             )
         # **The backward walk, in place of this engine's own copy of `single_call`'s
         # `channel_of`-then-`linked_channels`** (spec §2b, Task 7). The ladder it replaces

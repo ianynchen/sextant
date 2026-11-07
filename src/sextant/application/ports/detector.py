@@ -2,12 +2,14 @@
 anything reads code. Implementations are keyed by build system, never by
 language — a module records the languages present."""
 
+import re
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol
 
 from sextant.application.ports.selection import NoAdapterError
+from sextant.domain.facts import Lookup
 from sextant.domain.symbols import NOT_APPLICABLE
 
 
@@ -183,6 +185,18 @@ class ModuleModel:
     # module (Android design M6): its results go to `<root>/.sextant/<results_name>`.
     # None when the folder holds only this module, and its results go to `<root>/.sextant`.
     results_name: str | None = None
+    # The installed environment this module's libraries were read from (Python design
+    # §3e): a folder that holds `pyvenv.cfg`. None for a build system that has no such
+    # folder, and for a module with no environment on this machine.
+    environment: Path | None = None
+    # How a method is looked up on this module's types (D00 §5 `module.lookup`): set by a
+    # detector whose language has its own rule. None keeps the module fact's default.
+    lookup: Lookup | None = None
+    # The programs this module's build declares (D00 §5 `module.entry_points`): each
+    # program name with its target as written (`{"sextant": "sextant.cli.app:cli"}`). Set
+    # by a detector whose build files declare them (Python); None where the build system
+    # has no such table.
+    entry_points: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -224,3 +238,117 @@ def select_detector(detectors: Sequence[Detector], path: Path) -> Detector:
         if detector.accepts(path):
             return detector
     raise NoAdapterError(f"no detector recognises {path} as a repository it can read")
+
+
+class NoModulesFound(ValueError):
+    """A detector accepted a repository and found no module in it. Another detector may
+    still find some, so `detect_repository` treats this as "none from this detector".
+    The notes the detector made on the way are kept, and merged with the others."""
+
+    def __init__(self, message: str, notes: Sequence[str] = ()) -> None:
+        super().__init__(message)
+        self.notes = tuple(notes)
+
+
+def detect_repository(
+    detectors: Sequence[Detector], path: Path, allow_resolve: bool = False
+) -> RepositoryModel:
+    """Every module of this repository, from every detector that recognises it.
+
+    A repository can hold more than one build system (a Maven build and a Python
+    service), and each detector reads its own. The modules and the notes are merged.
+    A detector that accepts but finds no module (`NoModulesFound`) adds nothing when
+    another detector found modules; when none did, that refusal is the answer.
+
+    Two modules can have one `module_id`, from one detector or from two. Both are
+    kept, and each gets `@<its folder, relative to the repository root>` added to the
+    id; ids that no other module has stay as they are. `coordinates` are not changed.
+    """
+    accepting = [detector for detector in detectors if detector.accepts(path)]
+    if not accepting:
+        raise NoAdapterError(f"no detector recognises {path} as a repository it can read")
+    models: list[RepositoryModel] = []
+    refusals: list[NoModulesFound] = []
+    extra_notes: list[str] = []
+    for detector in accepting:
+        try:
+            model = detector.detect(path, allow_resolve=allow_resolve)
+        except NoModulesFound as none_found:
+            refusals.append(none_found)
+            extra_notes.extend(none_found.notes)
+            continue
+        if model.modules:
+            models.append(model)
+    if not models:
+        if refusals:
+            raise refusals[0]
+        raise NoAdapterError(f"no detector found a module in {path}")
+    modules = _with_own_results(
+        _with_unique_ids(path, [module for model in models for module in model.modules])
+    )
+    notes = {note for model in models for note in model.notes} | set(extra_notes)
+    return RepositoryModel(
+        root=path,
+        modules=modules,
+        notes=tuple(sorted(notes)),
+        multi_module=len(modules) > 1 or any(model.multi_module for model in models),
+    )
+
+
+def _folder_of(root: Path, module: ModuleModel) -> str:
+    """A module's folder relative to the repository root (`.` for the root itself); the
+    absolute path for a folder outside it."""
+    if module.root.is_relative_to(root):
+        return module.root.relative_to(root).as_posix()
+    return module.root.as_posix()
+
+
+def _with_unique_ids(root: Path, modules: list[ModuleModel]) -> tuple[ModuleModel, ...]:
+    """The modules, each id that more than one module has made unique by its folder."""
+    counts: dict[str, int] = {}
+    for module in modules:
+        counts[module.module_id] = counts.get(module.module_id, 0) + 1
+    renamed = [
+        replace(module, module_id=f"{module.module_id}@{_folder_of(root, module)}")
+        if counts[module.module_id] > 1
+        else module
+        for module in modules
+    ]
+    ids = [module.module_id for module in renamed]
+    still_equal = sorted({i for i in ids if ids.count(i) > 1})
+    if still_equal:
+        raise ValueError(
+            f"modules in {root} cannot be told apart, their ids are still equal: "
+            + ", ".join(still_equal)
+        )
+    return tuple(renamed)
+
+
+# Names a results folder already uses for something else.
+_RESERVED_RESULTS_NAMES = frozenset({"facts", "render", "bundles"})
+
+
+def _with_own_results(modules: tuple[ModuleModel, ...]) -> tuple[ModuleModel, ...]:
+    """Modules that share a folder get a results folder each, `<folder>/.sextant/<name>`
+    (Android design M6): the name is the module id with every character a folder name
+    should not have changed to `-`. A module alone in its folder, and a module that
+    already has a name, keep what they have."""
+    by_folder: dict[Path, list[ModuleModel]] = {}
+    for module in modules:
+        by_folder.setdefault(module.root, []).append(module)
+    taken = {
+        (module.root, module.results_name) for module in modules if module.results_name is not None
+    }
+    renamed = []
+    for module in modules:
+        if module.results_name is None and len(by_folder[module.root]) > 1:
+            base = re.sub(r"[^A-Za-z0-9._-]", "-", module.module_id).strip(".") or "module"
+            if base in _RESERVED_RESULTS_NAMES:
+                base = f"{base}-module"
+            name, number = base, 2
+            while (module.root, name) in taken:
+                name, number = f"{base}-{number}", number + 1
+            taken.add((module.root, name))
+            module = replace(module, results_name=name)
+        renamed.append(module)
+    return tuple(renamed)

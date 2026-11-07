@@ -123,6 +123,106 @@ Java's own resolution rules have to be respected: the superclass chain before in
 default methods, bridge methods so a generic override is not missed, package-private
 methods overridden only within a package.
 
+**One lookup order per type** (`resolve/dispatch.py` `Dispatch.lookup_order`, spec
+2026-11-06 §3b). Which type declares the method a call names is the first type in the
+owner's lookup order that declares it. The order is one of two named rules, chosen by the
+module fact's `lookup` (D00 §5, DR-6):
+- `jvm` — JVMS 5.4.3.3: the class, its superclass chain to exhaustion, then the
+  superinterfaces breadth-first, then `java/lang/Object`; constructors and static
+  initializers are not inherited. An unread type is a position in the order that is never
+  asked; the first one is the boundary.
+- `c3` — Python's method resolution order: C3 linearization over the written parents, in
+  written order (`superclass`, then `interfaces`), then `builtins/object`. `__init__` is
+  inherited. A library type is placed by its `type_header`, and the order ends at it,
+  since its methods are not read. A parent not read (`parents_unread`, or a type with
+  neither facts nor a header) ends the order where it would come in, as far as the order
+  is certain without it. A hierarchy C3 cannot order is only the class itself.
+
+Where the order ends at an unread type, the lookup answers `external` with that type in
+the detail (`method_resolution`); where it read every type and none declares the method,
+`not_readable`.
+
+**Receiver binding** (`resolve/receiver_binding.py`, spec 2026-11-06 §3b). A `virtual` call
+whose facts name no owner (D00 §5) is bound from what produced its receiver, on the value
+walk (`values.producer_paths`, `which_object`): a construction to its class, a call to what
+its callee returns, a parameter to the arguments at its callers, a field to its writes. Each
+path the walk reaches the receiver by is one row of the derived table `bound_receivers`
+(`caller`, `ordinal`, `path_id`, `owner`, `evidence` `syntax`, `resolution`, and `reason`/
+`detail` where the path names no type) — per path, never combined (ruling M-1). Several types
+from a closed list are `narrowed`; a path that ends without a type is `external` (a parameter
+nothing in the scanned code calls), `escapes` (a parameter of a function the module hands on
+as a value, or a path that crossed out of one) or the walk's own reason, and the site's bound
+rows are then `partial`. It never writes a fact: `call_edges` reads the fact's owner where it
+names one and these rows' where it does not, one edge per owner, evidence `syntax`; a site
+nothing bound is one row with no target, `unresolved`.
+
+**Calling a function value runs that function** (ruling R29, task 9a fix round 2). The walk
+binding a `__call__` asks what a call of the value runs (`producer_paths(..., functions=True)`):
+a path that ends at a function value (a `lambda` argument: a `def` passed or returned, a
+decorator that hands its function back) ends naming its body, and the call is an edge to
+exactly that body, the rule a JVM call on a lambda's functional interface reaches the lambda's
+body by (`call_edges._edge`'s `dynamic` lookup; the row keeps the site's `virtual`). No owner
+is written to `bound_receivers` for such a path: it has no row there, and counts in the site's
+tier as one more thing the call may run (a function on one path and a `Runner` on another are
+two edges, `narrowed`). Every other reader keeps a function value as a body and not a value
+(ruled 2026-09-22), and an f-string (`concat`) is never one (R19b). The bodies reach
+`call_edges` from the binder in memory and are stored in no other table (ruling R31): nothing
+redraws `call_edges` after binding, which `tests/architecture/test_call_edges_drawn_last.py`
+holds (two callers, the pipeline's first draw and the binder's, the binder's last).
+
+**A library call a value model states hands back an argument** (`returns_argument`, D02 §1f,
+design 2026-11-06-reading-decorators §3d/§3e, task 9b). The walk reads it where a value's
+producer is that call (`values._Walk._stated_value`): `returns: N` is the call's argument N;
+the result of a `__call__` whose receiver a `result_returns: N` call made, in the same method,
+is that `__call__`'s argument N (a decorator stack: `@click.option(...)` applied to a function
+is the function); and, for the call reader only, a value a `result_calls: N` call made stands
+for its argument N where that is a function (`@functools.cache def f`: `f()` runs `f`). The
+binder also walks a `__call__` whose owner the facts name and whose body no edge reaches — a
+library type's: `_lru_cache_wrapper`, or a parameter written `Callable[...]` — for function
+bodies alone, by ruling R29: its owner stays the facts', it gets no `bound_receivers` row, and
+each function is an edge beside the library edge (`call_edges._with_wrapped`). `values.decorators_passed` names the stated decorators a
+registration's argument passed, by the same rule, for the engines that read them.
+
+Two readings the walk applies for a call one file cannot know, both inert on the JVM:
+- **a static call naming a type is its construction** (`effective_calls`): the file that
+  writes `Session()` for a class imported from another cannot see it is a class, so the call
+  `app/a#Session` reads as `special` `<init>` on `app/a/Session#` where the workspace holds
+  that type, and its `result` is an instance of it;
+- **a binding nothing writes that names a type is that type** (`values._Walk._named_type`):
+  an imported class used as a value is read as a module field (`app/a#Session.`), declared as
+  no field.
+
+A call whose owner the facts leave out returns, on each path, what the method its bound type
+runs returns (`values._Walk._bound_returns`), so a chain through such calls binds in one walk.
+A receiver that is a parameter whose written type is a union (`Session | Client`) is each
+member, one row each, `narrowed`; a `None` member is left out and the detail says so, and a
+union holding the unknown type or the root type is no closed list.
+
+**Arguments are bound by name** (ruling R2, user ruling A) where the module's lookup rule is
+`c3`, by Python's calling rule over each parameter's `kind` (D00 §5a): positionals fill the
+positional parameters in order and the rest go to `*args`; a keyword fills the positional or
+keyword-only parameter of its name and the rest go to `**kwargs`; after a `*` argument no
+later positional's place is known, and a `**` argument may fill any parameter left. A
+parameter none of this decides — its default, one only an unpacked argument may fill, a
+`*args`/`**kwargs` parameter — is `not_readable` on that caller's path, naming the parameter
+(`values.parameter_slots`), the one calling rule: the scanner writes arguments as written
+(R27). A constructor is bound by its `__init__`'s parameters, as any callee. A method called
+through its class — a `static` call on a class, or a call whose receiver is a name that is a
+class (`Base.__init__(self, x)`, `H.use(h, x)`) — to a method that takes `self` is handed
+`self` as its first positional argument (`values.call_slots`); a classmethod or staticmethod
+takes none. A parameter no edge binds is `external` only where no call in the module names its
+method; a method that never returns normally has no body the edges reach, and its parameter is
+`not_readable`, saying so. Every JVM argument is positional, slot for slot.
+
+A bound call becomes an edge, and an edge is a caller, so binding runs in rounds until one
+binds nothing new, at most eight; a receiver still unbound when the eighth round bound
+something is `not_readable "receiver of <name> not followed after 8 rounds"`. After the first
+round only a site whose walk read the callers of a method a newly bound call reaches is walked
+again (R25), over the walk's index with those callers added from the same dispatch answer;
+`call_edges` is drawn once more after the last round. The table is the one a whole re-walk
+over `call_edges` redrawn each round leaves (`bind_until_settled(incremental=False)`, measured
+equal on polar).
+
 **None of the above is built.** The pass as designed — `dispatch`, `dispatch_site`, RTA
 narrowing, the indexed-boundary tier — does not exist in `src/`, and neither does the
 `edges` layer it would sit beside. What DOES exist is 2Q `G3`'s subset

@@ -224,6 +224,7 @@ def entries(
         catalog.hand_off_effects,
         catalog.bean_models,
         catalog.value_annotations,
+        returns_arguments=catalog.returns_arguments,
     )
     job_ends = list(chain_ends(workspace, job_walk, pairs_every_send=True))
     context = _Context(

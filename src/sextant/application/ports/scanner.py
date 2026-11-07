@@ -5,6 +5,7 @@ from typing import Protocol
 
 from sextant.application.ports.detector import LibraryRoot
 from sextant.application.ports.selection import NoAdapterError
+from sextant.domain.ignorefile import IgnoreRules
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,16 @@ class ScanRequest:
     # every directory's own types as the module's. Each document still records the
     # directory it was read from.
     more_classes_dirs: tuple[Path, ...] = ()
+    # `.sextantignore` and its built-in layer (D04 §3), for a backend that walks the
+    # repository's own files: a file they exclude is not read. A class-file scan reads build
+    # output and library archives, which the rules do not govern (2K design §2). None reads
+    # every file, as before.
+    ignore: IgnoreRules | None = None
+    # The installed environment the module's libraries are read from
+    # (`ModuleModel.environment`, a Python module's): its Python decides the standard
+    # library, and a library re-export is followed into any distribution it holds. None
+    # for a JVM module and wherever no environment was found.
+    environment: Path | None = None
 
 
 class ScanError(RuntimeError):

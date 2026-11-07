@@ -231,6 +231,7 @@ def _bases_by_interface(
         catalog.hand_off_effects,
         catalog.bean_models,
         catalog.value_annotations,
+        returns_arguments=catalog.returns_arguments,
     )
     owner = type_descriptor(str(made_by["owner"]))
     slot = int(made_by["class_arg"])

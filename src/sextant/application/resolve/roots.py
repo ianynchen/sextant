@@ -58,17 +58,18 @@ route is an address whose handler no chain reader named, so it is an endpoint
 with no root at all, and this pass cannot give a trace to a method nothing
 names.
 
-## What is NOT read, and why the absence is stated
+## The third kind is a catalog's, not this pass's
 
-`entry_point` — D00 §4's third member — has **no producer here**. Which
-signature starts a program is a fact about a LANGUAGE, and ARCHITECTURE §10
-keeps language knowledge out of the language-blind half: the descriptor a
-runtime looks for belongs in a catalog, exactly as a framework's annotation
-does, and no catalog declares one. Writing it into this pass would put a
-language's rule in the resolver, and guessing it from a method's NAME alone
-would derive a root for any method that happens to be called that — a
-fabrication with a very low bar. `docs/open-issues.md` OI-22 carries it with
-what closes it; `docs/COVERAGE.md` carries the boundary a reader meets.
+`entry_point` — D00 §4's third member — is **not derived here**. Which
+signature starts a program is a fact about a LANGUAGE or a framework, and
+ARCHITECTURE §10 keeps that knowledge out of the language-blind half: it
+belongs in a catalog, exactly as a framework's annotation does. A catalog that
+says `root_kind: entry_point` (design 2026-11-06-reading-decorators §5,
+`catalogs/click.yml`) has its engine write those rows into `roots` itself,
+since no other table holds them. So this pass replaces the two kinds it
+derives and KEEPS the entry points already there; the pipeline empties the
+table once per resolve, before any engine runs, so none survives from an
+earlier one (`docs/open-issues.md` OI-22, closed by that catalog).
 """
 
 from dataclasses import dataclass
@@ -163,34 +164,54 @@ def record_roots(workspace: Workspace) -> None:
     **Ordering is part of the answer** (NFR-1): rows are sorted by handler,
     kind, then the address, so two runs over one workspace insert the same
     bytes in the same order.
+
+    The `entry_point` rows a catalog's engine wrote (module docstring) are kept, in the same
+    order with the rest: this pass derives the other two kinds and never those.
     """
-    workspace.derive("roots_reset")
-    found = {
+    kept = {
         (
-            str(row["handler"]),
-            RootKind.INBOUND_ENDPOINT,
+            _text(row["handler"]),
+            RootKind.ENTRY_POINT,
             _text(row["protocol"]),
             _text(row["method"]),
             _text(row["path"]),
             _text(row["method_kind"]),
             _text(row["path_kind"]),
         )
-        for row in workspace.query("endpoints")
-        if row["handler"] is not None and str(row["direction"]) != str(Direction.OUTBOUND)
-    } | {
-        # No address, and none invented: a clock reaches this method, so there
-        # is no protocol, verb or path to carry (`RootIdentity`'s own rule).
-        (str(row["handler"]), RootKind.SCHEDULED, None, None, None, None, None)
-        for row in workspace.query("scheduled_work")
-        # A schedule whose job was not found has no handler: there is no code to start a
-        # trace at, and a root named "None" would claim one.
-        if row["handler"] is not None
-        # A schedule the framework REFUSES never starts its job (spec 2026-11-02 rule 7, the
-        # `refused` column ruled by the user 2026-11-02): its handler's call graph is not code
-        # that runs on this clock, so it is no root. The same handler stays a root through
-        # any row the framework accepts.
-        and row["refused"] is None
+        for row in workspace.query("roots")
+        if str(row["root_kind"]) == str(RootKind.ENTRY_POINT)
     }
+    workspace.derive("roots_reset")
+    found = (
+        {
+            (
+                str(row["handler"]),
+                RootKind.INBOUND_ENDPOINT,
+                _text(row["protocol"]),
+                _text(row["method"]),
+                _text(row["path"]),
+                _text(row["method_kind"]),
+                _text(row["path_kind"]),
+            )
+            for row in workspace.query("endpoints")
+            if row["handler"] is not None and str(row["direction"]) != str(Direction.OUTBOUND)
+        }
+        | {
+            # No address, and none invented: a clock reaches this method, so there
+            # is no protocol, verb or path to carry (`RootIdentity`'s own rule).
+            (str(row["handler"]), RootKind.SCHEDULED, None, None, None, None, None)
+            for row in workspace.query("scheduled_work")
+            # A schedule whose job was not found has no handler: there is no code to start a
+            # trace at, and a root named "None" would claim one.
+            if row["handler"] is not None
+            # A schedule the framework REFUSES never starts its job (spec 2026-11-02 rule 7, the
+            # `refused` column ruled by the user 2026-11-02): its handler's call graph is not code
+            # that runs on this clock, so it is no root. The same handler stays a root through
+            # any row the framework accepts.
+            and row["refused"] is None
+        }
+        | kept
+    )
     rows = [
         {
             "handler": handler,
@@ -203,7 +224,12 @@ def record_roots(workspace: Workspace) -> None:
         }
         for handler, kind, protocol, method, path, method_kind, path_kind in sorted(
             found,
-            key=lambda entry: (entry[0], str(entry[1]), _address_order(entry[2:])),
+            key=lambda entry: (
+                entry[0] is not None,
+                entry[0] or "",
+                str(entry[1]),
+                _address_order(entry[2:]),
+            ),
         )
     ]
     if rows:
@@ -233,6 +259,10 @@ def roots_of(workspace: Workspace) -> list[Root]:
     """
     collapsed: dict[tuple[str, RootKind], list[RootIdentity]] = {}
     for row in workspace.query("roots"):
+        # A command whose handler was not read (an entry point behind a library decorator no
+        # value model states) is a row with no handler: there is no code to start a walk at.
+        if row["handler"] is None:
+            continue
         key = (str(row["handler"]), RootKind(str(row["root_kind"])))
         identities = collapsed.setdefault(key, [])
         identity = RootIdentity(

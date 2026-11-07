@@ -116,6 +116,10 @@ _NOT_MEASURED_YET: dict[str, str] = {
 _IDENTITIES = frozenset({"reported", "assumed"})
 
 _COORDINATE = re.compile(r"^[A-Za-z0-9_.\-]+:[A-Za-z0-9_.\-]+$")
+# A Python distribution has no group: its coordinate is its name as PEP 503 normalises it
+# (`click`), the spelling a Python module's `dependency_coordinates` hold and the one design
+# 2026-11-06-reading-decorators §5 (approved) writes for `catalogs/click.yml`.
+_DISTRIBUTION = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 def declared_measurements() -> dict[str, list[dict[str, object]]]:
@@ -195,9 +199,12 @@ def test_every_measured_row_is_well_formed():
                 malformed.append(f"{where}: not a mapping")
                 continue
             artifact = row.get("artifact")
-            if not isinstance(artifact, str) or not _COORDINATE.match(artifact):
+            if not isinstance(artifact, str) or not (
+                _COORDINATE.match(artifact) or _DISTRIBUTION.match(artifact)
+            ):
                 malformed.append(
-                    f"{where}: `artifact` is not a `groupId:artifactId` — {artifact!r}"
+                    f"{where}: `artifact` is not a `groupId:artifactId` or a normalised Python "
+                    f"distribution name — {artifact!r}"
                 )
             versions = row.get("versions")
             if not isinstance(versions, list) or not versions:

@@ -17,7 +17,7 @@ this walk asks — which method, how deep, where it stops — is identical for w
 a request starts and work a clock starts, so **nothing here branches on
 `root_kind` at all**. A walk that took an endpoint would have to be reopened
 the first time something else started work; this one is already open, and the
-third root kind will cost it nothing on the day it gains a producer (OI-22).
+third root kind cost it nothing when it gained a producer (OI-22, `catalogs/click.yml`).
 
 ## Reachability, never execution
 

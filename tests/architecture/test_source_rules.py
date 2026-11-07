@@ -259,12 +259,19 @@ def test_jvm_names_stay_in_the_jvm_extractor():
     # is pinned to the exact name it may carry, so a file allowed `classpath`
     # cannot start carrying `java` without this failing.
     known_leak = {
-        "domain/facts.py": {"classpath"},
+        # `classpath` as above. `jvm` is a value of `ModuleFact.lookup`, the name of the
+        # lookup rule the JVM uses. The user approved the value in the Python reader
+        # spec (2026-11-06 §3b), so it is a wire value and not a language branch.
+        "domain/facts.py": {"classpath", "jvm"},
         "ingress/detect/gradle.py": {"classpath"},
         "ingress/detect/maven.py": {"java", "classpath"},
         # The platform's root type, where every method lookup ends (JVMS 5.4.3.3). Its name
-        # is a wire name, like `java.version`; it is not a language branch.
-        "application/resolve/dispatch.py": {"java"},
+        # is a wire name, like `java.version`; it is not a language branch. `jvm` is the
+        # name of one of the two lookup rules (`ModuleFact.lookup`, spec 2026-11-06 §3b):
+        # the JVM's order and the `c3` rule, Python's method resolution order, are two
+        # named rules because the languages differ (DR-6), and `Dispatch.lookup_order`
+        # branches on the rule's name, never on a language.
+        "application/resolve/dispatch.py": {"java", "jvm"},
     }
 
     found = offenders(files, JVM_NAMES)

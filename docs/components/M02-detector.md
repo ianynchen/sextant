@@ -13,7 +13,7 @@ Detector
 ```
 
 Implementations are keyed by **build system**, not by language: `MavenDetector`,
-`GradleDetector`, `GoWorkDetector`. One Gradle build may hold Java and Kotlin modules, and
+`GradleDetector`, `PythonDetector`, `GoWorkDetector`. One Gradle build may hold Java and Kotlin modules, and
 the detector reads it once.
 
 ## Inputs
@@ -141,6 +141,132 @@ root or a classes directory (a root or folder-only project with no compiling plu
 record anyway), is still a refusal with Gradle's own words: a build broken everywhere must not
 end with success.
 
+**The Python mechanism reads the build files, because there is no build tool to ask**
+(Python design §3e, built 2026-11-06, `src/sextant/ingress/detect/python.py`). Python has no
+one tool that knows the module list, so `PythonDetector` reads `pyproject.toml` and `Pipfile`
+with `tomllib`, `setup.cfg` with `configparser`, and `requirements*.txt` as lines. It never
+imports or runs scanned code, and nothing is downloaded: `--allow-resolve` does nothing for
+Python.
+
+- **Where.** `accepts` finds a Python build file at any depth, by name only (Maven and Gradle
+  look at the root only). The walk does not enter `.git`, `node_modules`, `.sextant`,
+  `__pycache__`, `.venv`, `.tox`, `.nox`, any folder that holds `pyvenv.cfg` (a virtual
+  environment, whatever its name), or another checkout: a folder below the analysed folder
+  that holds `.git`, a folder (a clone, a submodule) or a file (a git worktree, such as
+  `.claude/worktrees/agent-…`). Each one is a note ("another repository, not analysed:
+  <folder>"). The analysed folder is always read, whatever it holds. The scanner shares the
+  rule (`is_skipped_folder`); the Maven and Gradle detectors do not use it.
+- **What is a module.** A `pyproject.toml` with `[project]`, `[tool.poetry]` or
+  `[build-system]`, or a `setup.cfg` with `[metadata]`, marks a module. A file with only tool
+  settings marks nothing (CTFd's `setup.cfg` holds only `[nosetests]`). A uv workspace root is
+  a module only when it marks one and has Python files of its own outside its members
+  (`[tool.uv.workspace]` `members`, less `exclude`). A `requirements*.txt` or `Pipfile` marks
+  a module only when its folder holds Python code of its own (not inside a module below it),
+  whatever is above it: each service under a project is its own module, and a root lint or
+  test list with no code of its own marks nothing ("requirements with no python code of its
+  own, not a module: <files>"). A `setup.py` marks a module only when no folder above it is a
+  module and it is not inside a package (no `__init__.py` beside it or above it). The `kind`
+  is `pyproject`, `setup_cfg`, `setup_py` or `requirements`, strongest first. A repository
+  where nothing marks a module is refused: "no Python module found".
+- **Unreadable build files.** A nested build file that is not valid TOML or `setup.cfg`, or
+  not UTF-8 (a project template with `{{ }}` in it, a tool's test data), is a note ("build
+  file not read, so its folder is not a module: <file> (<error>)"), and the rest of the
+  repository is detected. Only the build file of the folder that was asked for is a refusal.
+- **Identity.** `[project]`, then `[tool.poetry]`, then `setup.cfg [metadata]`, the name
+  normalized by PEP 503 (`Shop_Orders.API` is `shop-orders-api`); the name is both the
+  `module_id` and the coordinates. A dynamic version (`dynamic = ["version"]`, `attr:`,
+  `file:`) is the version in the project's own installed `.dist-info`, else `.`. A module with
+  no name (requirements only, or `setup.py` only) is unpublished: coordinates and version
+  `.`, and its id is its folder relative to the repository root (its folder name when it is
+  the root).
+- **Import roots** (`source_roots`): the package settings of setuptools (`package-dir`,
+  `packages.find.where`, and the same keys in `setup.cfg`), hatch (`packages`) or Poetry
+  (`packages.from`); else `src/` when it holds Python files; else the module folder.
+  `output_dirs` are the same folders, because Python runs from source and they are what the
+  scanner reads; `packaging` is `wheel`. `lookup` is `c3` (D00 §5 `module`).
+- **Entry points** (`entry_points`, D00 §5 `module`; design
+  `2026-11-06-reading-decorators-design.md` §7a): each program the module folder's build
+  files declare, its name to its target as written (`sextant = "sextant.cli.app:cli"`), from
+  `[project.scripts]`, `[tool.poetry.scripts]` (the string form) and `setup.cfg`
+  `[options.entry_points] console_scripts`; a name in two tables keeps the first. The target
+  is not turned into a symbol here; extras (`a.c:main [extra]`) stay in it. GUI scripts and
+  `setup.py` `entry_points=` are not read. A module that declares none has `{}`. An entry
+  that is not a name with a target string (a number, Poetry's table form, a
+  `console_scripts` line with no `=` or no name) is a note: "<module>: entry point not
+  read, the target is not a string: <table> <name>", or "… not a name = target line:
+  setup.cfg console_scripts '<line>'".
+- **Which folders are searched for modules.** The detector's skip list (version control, tool
+  caches, `node_modules`, every folder that holds `pyvenv.cfg`), every path `.sextantignore`
+  excludes, and every path a `.gitignore` file at or below the analysed folder names are not
+  entered: a git-ignored clone or worktree is not part of the project. The analysed folder
+  itself is always read. Git's global excludes file is not read.
+- **Environment** (`ModuleModel.environment`): `.venv`, `venv` or `env` beside the build file
+  when it holds `pyvenv.cfg` (Poetry's `in-project = true` folder is `.venv`); for a uv
+  workspace member, the same names at the workspace root (uv's documented default; the
+  process environment, `UV_PROJECT_ENVIRONMENT`, is not read). For a Poetry project
+  (`[tool.poetry]`, a `poetry.toml`, or Poetry's build backend), the folder Poetry itself
+  names: under `poetry.toml [virtualenvs] path`, else Poetry's default cache
+  (`~/Library/Caches/pypoetry/virtualenvs` on macOS, `~/.cache/pypoetry/virtualenvs` on
+  Linux), the name from Poetry's own `generate_env_name` (the PEP 503 name, `-`, the first 8
+  characters of the URL-safe base64 SHA-256 of the project folder's real path) and then
+  `-py<major>.<minor>`. Two such folders are a list this detector cannot narrow, so none is
+  read and a note names them; none found is a note too. Poetry's global `config.toml` is not
+  read. `.python-version` names an interpreter and is never an environment.
+- **Dependencies.** `dependency_coordinates` is every name the module folder's build files
+  declare: `[project] dependencies`, Poetry's dependency table, `setup.cfg install_requires`,
+  each `requirements*.txt`, and `Pipfile [packages]`. `dependency_versions` is the installed
+  version of each, from `<env>/lib/python*/site-packages/*.dist-info/METADATA` (`Name`,
+  `Version`), and `dependency_archives` has one `LibraryRoot` per installed one, its archive
+  the `site-packages` folder. Where an environment was found, each declared name it does not
+  hold is a note, `<name> is not installed in the scanned environment`: that library has no
+  symbols (M03 "Libraries").
+- **Opted-in libraries** (`.sextant.yml` `extract_libraries`, D04 §2a): each named
+  distribution the module declares and its environment holds is a `library_roots` entry,
+  its archive the `site-packages` folder; any other is in `libraries_not_resolved` with its
+  reason (`<name>: the module declares no such dependency`, `<name>: not installed in the
+  scanned environment`, `<name>: its installed RECORD is missing or unreadable, so its files
+  are not known`).
+- **Notes.** Every top folder of Python files in no module ("python files in a folder with no
+  project file, not analysed: <folder>"), every `sys.path.insert`/`append` found by a text
+  search of the `.py` files beside a build file (the change is not followed).
+- **No module.** A repository where `accepts()` is true but every candidate is ruled out
+  (a Maven repository with `docs/requirements.txt` and no code) raises `NoModulesFound`,
+  which carries the notes made so far.
+
+### How a repository is detected
+
+`detect_repository` runs EVERY detector whose `accepts()` is true and merges their modules
+and notes. A repository with a Maven build and a Python service gives both. The Maven and
+Gradle detectors accept only a build file at the root; `PythonDetector` accepts a Python
+build file at any depth.
+
+- `multi_module` is true when the merged list has more than one module, or when a detector
+  reported it (a reactor that names one child is still a reactor).
+- A detector that raises `NoModulesFound` adds no modules when another detector found some.
+  When none did, its refusal is the answer.
+- **One id for two modules.** Two modules can have one `module_id`, from one detector or
+  from two (`examples/py-polar` has two `polar-sdk` projects). Both are kept. Each id that
+  more than one module has gets `@<its folder, relative to the repository root>` added
+  (`polar-sdk@sdk/python`; `@.` for the root folder). An id that no other module has does
+  not change, and `coordinates` stay what the build file says. If the ids are still equal
+  after that (two detectors, one folder), the detection is refused and names the id.
+- **One folder, several modules.** Modules from different detectors can share a folder (a
+  Maven build and a root `requirements.txt`). Each then gets a `results_name`, and its results
+  go in `<folder>/.sextant/<results_name>` (Android design M6), the module id with every
+  character that is not a letter, digit, `.`, `_` or `-` changed to `-`. A module alone in its
+  folder keeps `<folder>/.sextant`. The `@` and `/` of an id never reach a folder name.
+- **A detector that fails stops detection.** Only `NoModulesFound` (a detector with nothing
+  to report) is tolerated when another detector found modules. Any other error (a malformed
+  `pom.xml`, a Gradle run that fails, an unreadable root `pyproject.toml`) is raised with its
+  own message, so a partial answer never looks complete. The user can point Sextant at a
+  sub-folder.
+- **A JVM repository with a Python project is multi-module.** A project file marks a module
+  (user ruling), so a Maven repository with a root `requirements.txt` and scripts, or a
+  `tools/pyproject.toml`, has two modules. `--workspace` is refused for it and `modules.json`
+  is written, as for any multi-module repository.
+
+`select_detector` (the first detector that accepts) stays for a module that is already known.
+
 ### Discovery reads the build, never a convention
 
 | Build system | Where the module list lives |
@@ -150,6 +276,7 @@ end with success.
 | Go | `go.work`, or each `go.mod` |
 | Node | `pnpm-workspace.yaml`, or `workspaces` |
 | Cargo | `members` in the workspace manifest |
+| Python | each `pyproject.toml`, `setup.cfg [metadata]`, `setup.py`, `requirements*.txt` or `Pipfile`, at any depth; `[tool.uv.workspace]` members |
 
 ### A module's identity is the one its build tool gives it
 

@@ -228,6 +228,223 @@ table silently misses the other. Measured elsewhere as the one real case where a
 tier saw something the bytecode already held. The constant-value attribute. Source file and
 line numbers. Kotlin metadata for nullability.
 
+### The Python scanner
+
+`ingress/extract/python` reads `.py` source with the standard library's `ast` (spec
+`2026-11-06-python-reader-design.md` §3a). It never imports or runs the code it reads, and
+it downloads nothing. It accepts `{python}`, ranks 0, and declares `typed_signatures`,
+`annotation_args`, `type_annotations` and `value_ids`. It writes D00 §5's rule 9 flow fields,
+as the JVM scanner does, and like it does not declare `control_flow`, which is the regions a
+sequence diagram needs (above).
+
+**Input.** Python runs from source, so the module's import roots are what is read: the
+detector reports them as the module's `output_dirs`, and the scan stage hands them over as
+`classes_dir` and `more_classes_dirs`. Every `.py` file under them is one document, written
+to `<relative path>.jsonl`. Folders on the detector's skip list are not entered, and a path
+`.sextantignore` or its built-in layer excludes is not read (`ScanRequest.ignore`, matched
+as `resource_files.list_files` matches). A git-ignored file IS read: generated code such as
+`*_pb2.py` is often git-ignored and is part of the module. A file that cannot be opened (a
+broken link) goes on the uncovered list with its reason.
+
+**One file at a time.** An import binds a name by PATH only: `from app.models import
+Order` is the class `app/models/Order#`, or the module `app/models/Order` when such a file
+is in the import roots. The other file's body is not read. A name that two branches bind
+differently is a closed list of both, in written order.
+
+**What it writes** (spec §3a, D00 §1 and §5a):
+
+- `module` symbol per file, `class` (or `protocol`, `enum`) per class, with the written
+  parents as `superclass` and then `interfaces`, in written order, up to the first base
+  the file cannot name as a class; nothing after it is written, and the document is
+  `partial` with one `partial_reason` line per such class;
+- `<clinit>` per module and class body, `<init>` for `__init__`, one `method` per `def`;
+- a static `field` per name a module or class body assigns, and a `field_write` from that
+  body's `<clinit>`;
+- typed signatures from the written annotations (rule 1); `self` and `cls` are receivers,
+  not parameters;
+- decorators as `call_site` facts in the enclosing body's `<clinit>`: each decorator
+  expression in written order, then each application from the bottom up, with the
+  function as a `lambda` argument or the class as a `class` argument. A call on a value
+  is `__call__` with that value's id as `receiver`;
+- **a decorated `def` holds its decorators' result** (`f = dec(f)`, design
+  `2026-11-06-reading-decorators-design.md` §3e, ruled option A): a module-level one is a
+  static field of the module and a class-level one a field of the class, with a
+  `field_write` of the outermost decorator's result, and the name is read as that field
+  afterwards (a value `field`, a call `cli()` a `virtual` `__call__` with
+  `receiver_field`, a call on it `cli.group()` with `receiver_field`). The function itself
+  is the `lambda` the innermost decorator receives, and keeps its method symbol and body.
+  The language's own method kinds keep the method model: `staticmethod`, `classmethod`,
+  `property` (and `@x.setter`, `getter`, `deleter` of that property),
+  `functools.cached_property`, `typing.overload` and `abc.abstractmethod`, matched by the
+  symbol the decorator names, never its text. A `def` with one of them and another
+  decorator holds the outermost decorator's result. A nested `def`'s local name already
+  held it. An attribute read (`self.m()`, `C.m()`) still names the method;
+
+A call's owner is named where the file can tell: a class of the file is its `<init>`; a
+function of the file, or a member of another module, is a static call on that module's
+type. Whether an imported member is a class is in a file this scanner does not read, so
+the resolver decides. A call on a name the file assigns names the static field
+(`receiver_field`); its owner is the name's type where the file gives it one (below), and
+is otherwise left to the resolver (D00 §5's virtual call with a receiver).
+
+**A module-level name has the type of the values written to it in its file** (design
+`2026-11-06-reading-decorators-design.md` §3b): an assignment, or a `def` or `class` with
+its decorators applied. Where every write gives one class (or one callable, below), a call
+on the name, anywhere in the file, has that owner (`cli.group()` is `click/core/Group#`,
+`_PATTERN.match(…)` is `re/Pattern#`). Two types are a closed list and give no owner,
+never one of them; so does a write whose type is not known, and any binding not read as a
+write (a loop or `with` target, an import, `del`, `:=`, `except … as`, a `match` capture,
+`+=`, `global` in a function). A write from another file is not seen; the resolver's
+field walk answers those. A call of a function the file defines stays the static call to
+it. The file is read once with the writes read so far, and kept where every answer it
+gave is the one all the writes give; otherwise it is read again until no reading finds a
+new type for a name it asked about, at most one reading per module-level name plus one.
+A name written from another module-level name of the file (`alias = module`) takes that
+name's type in the same readings. Reaching the limit would be a defect in the rule (it only
+ever adds a type): the file is then read once more with no module-level types, and the
+uncovered list says `<file>: the types of its module-level names did not settle in N
+readings, so none is written`. The analysis goes on.
+
+**A file Python cannot parse** goes on the uncovered list with the reason, and the rest
+of the module is scanned. The grammar is the one of the Python that runs Sextant, and the
+reason names that version: a file written for a newer Python than that is not read.
+
+**Calls, values and returns in every body** (`calls.py`, D00 §5). Every call in a module
+body, a class body, a function, a nested function and a `lambda` is a `call_site`, with
+expression statements, `+=`, the iterated value of a `for`, `with ... as` and
+comprehensions included:
+
+- `static` for a function, `virtual` for a call on an object, `special` for `<init>` and
+  for `super().m()` (on the class's first written parent);
+- a call on `self` names the class; a call on a parameter or a local with a written type
+  names that type; any other call on a value names the receiver's value id and leaves the
+  owner to the resolver;
+- `with x as y` is the call `x.__enter__()`, and `y` is its result;
+- a constructor call gives an `instance` whose `source` is the constructor's receiver;
+- an f-string, or `+` with a string literal, is `concat`, filled by a `dynamic`
+  `builtins/str#format` site; a list or a tuple is `array`; a function is `lambda`;
+  `a if c else b` and `a or b` are `merge`; `await x` is `x`;
+- arguments are written as the call writes them (ruling R27): positional ones in order, then
+  each keyword one with its name in `keyword` (D00 §5); an unpacked argument is `unresolved`
+  with `keyword` `*` (`f(*items)`) or `**` (`f(**options)`). The resolver binds them;
+- `X.__init__(…)` names the method `<init>`, as the definition does; a `@classmethod` is
+  `modifiers.static` (bound to the class, as D00 §5a defines the word), and `cls` is not a
+  parameter;
+- every parameter of a signature carries its `kind` (`positional_only`, `positional`,
+  `var_positional`, `keyword_only`, `var_keyword`, D00 §5a).
+
+A nested function is a method of the same owner named `outer$inner`; a `lambda` is
+`lambda$<method>$<n>`, numbered per method, with `static` for a module or class body and
+`new` for `__init__`; a class inside a function is `outer$Local`. A nested function or a
+`lambda` sees the method's `self` as its receiver, as a JVM lambda body sees `this`. A name
+defined twice is one method: its bodies share one set of call ordinals, value ids and return
+ordinals. An attribute is named by a field symbol only where every name before it is a
+module or a class; an attribute of a variable (`app.state.client`) is a value, and a call on
+it names only its receiver. An import that branches of a function bind differently is the
+same closed list as at module level.
+
+A local name holds the last value written to it on the path; where paths join with
+different values it is a `merge` of them (only paths that reach the join count; a loop's
+`continue`s and `break`s, and the values an exception may leave a `try` or a swallowing
+`with` with, are paths), and `unresolved` where a path does not set it or sets a value not
+followed. A list held in a local is read once as written, and
+`unresolved` after that, because the code it was handed to can change it.
+
+Every `return` is a `method_return`, plus `return None` where the end of the body is
+reachable. A generator has one `unresolved` return. An `@overload` stub, and an abstract or
+`Protocol` method whose body is only `...`, `pass` or a docstring, has no body and no
+`method_return`. `self.x = …` and `C.x = …` are `field_write`s; a write to an attribute of
+another object is not written. A module-level name that branches bind to several imports is
+a static field with one `field_write` per import, and a module-level alias of an imported
+name (`DecodeError = jwt.DecodeError`) is bound as that import is.
+
+**Each call's place in its body's control flow** (`flow.py`, D00 §5 rule 9): `dominator`,
+`on_every_exit`, `post_dominator`, `reaches_return` and `loop_group` on every `call_site`,
+with the JVM meanings. The graph is built from the syntax tree while the body is read, a
+call as two nodes (before it runs, after it completed), with the JVM pass's algorithms on
+it. Every expression may raise, so inside a `try` every statement and call has an edge to
+the handlers, except after a call that is all of its statement (`a()`, `x = a()`,
+`return a()`); a `with` block's manager may swallow what it raised or raise it again; a
+`finally` is copied for each way out, as javac copies it; `raise`, a re-raise and a failing
+`assert` lead nowhere, as an `ATHROW` does. `python -O` may drop an `assert`. A
+comprehension is a loop; a generator expression's calls have no `post_dominator` and do not
+reach a return, since it may run after the body returned. A call after a `return` is
+written with no place: no `dominator`, `post_dominator` or `loop_group`, both flags false.
+
+**Libraries** (`libraries.py`, spec §3e "Libraries"). A name of another module is looked up
+in the libraries of the scan, read lazily, each module once:
+- the distributions the module declares and its installed environment holds
+  (`ScanRequest.dependency_archives`: the `site-packages` folder, and each distribution's
+  `*.dist-info/RECORD` for the import names it installs);
+- the standard library, from the pinned typeshed copy Sextant ships
+  (`resources/typeshed`, its commit in `COMMIT`; `stdlib/VERSIONS` says which modules the
+  environment's Python has);
+- for a distribution that ships no types (no `py.typed`), its typeshed stub package.
+
+A type file (`.pyi`) is read before a source file. Nothing is imported or run, and nothing
+is downloaded. A `sys.version_info` test in a type file is read against the environment's
+Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path); a
+`sys.platform` test gives both branches.
+
+- **A library name is its defining symbol.** A re-export is followed through the library's
+  own imports, into any distribution the environment holds (`fastapi.Request` is
+  `starlette/requests/Request#`, though only fastapi is declared), and through a star
+  import, which gives the names its module's `__all__` lists, or every name not starting
+  with `_`. `from fastapi import APIRouter` names `fastapi/routing/APIRouter#`, and
+  `requests.get(…)` is the static call `requests/api#get`. A name the library binds
+  differently in branches (a platform test, an `except ImportError` fallback) is the
+  closed list of its bindings, as a name of the module is. A declared library that is not
+  installed has no symbols, so the name stays as the import line writes it, and the
+  detector notes `<name> is not installed in the scanned environment`. Where a re-export's
+  defining distribution is not installed, the name is the one the library's import gives,
+  and the uncovered list says `<module>.<name>: defined in <top>, which is not installed in
+  the scanned environment`. Only a declared distribution starts a lookup: a name the
+  module imports from an undeclared one is not read.
+- **A library call's result has the class its signature returns.** The overload is the
+  first one the argument types match, as a type checker chooses. A literal is checked
+  against the written type, an alias read through to what it names (`OpenTextMode` to its
+  `Literal[...]` members, so `open(p, 'rb')` is a `BufferedReader`). Where an argument of
+  unknown type (the receiver among them), or one whose fit this rule cannot decide (a
+  protocol, a type variable, a class it does not read), is given different parameter types
+  by the overloads that match, the answer is the closed list of what they return
+  (`narrowed`); so is a call that unpacks `*args` or `**options`, and a function the
+  library's branches define differently. A call on a `narrowed` result leaves its owner to
+  the resolver. A type variable or a special form names no class, and also leaves the
+  owner. A literal is never callable, so it does not fit a `Callable` parameter
+  (`Group.command("analyze")` takes the overload with `*args`, not `__func: Callable`). A
+  function or a class argument fits a bare `Callable`, `Callable[..., Any]`, `object` and
+  `Any` (`@cli.command` with no parentheses is `Command`), and no literal type; a class also
+  fits `type` and `type[Any]`. Whether it fits a listed signature (`Callable[[int], str]`),
+  a written return (`Callable[..., Awaitable[int]]`) or `type[X]` is not read here, so such
+  overloads stay a closed list.
+- **A result written `Callable[[P, ...], R]` is a callable** (design
+  `2026-11-06-reading-decorators-design.md` §3b, a decorator factory's result:
+  `click.group()` returns `Callable[[F], Group]`). Calling it gives `R` where `R` is a
+  class; where `R` is a type variable, the type of the positional argument whose parameter
+  is that variable. Where that is not a class either (`option(…)`'s `Callable[[FC], FC]`
+  applied to a function), the result has no type. `evidence` stays `declared`, as for
+  every written type.
+- **What is written of a library is its type headers, as on the JVM** (ruled A,
+  2026-11-06; D00 §5 `type_header`). After the module's own files, one synthetic
+  `header_only` document, `__type_headers__.jsonl` labelled `<environment>`, holds a
+  `type_header` for every library type the module's facts name (a call's owner, a class
+  or instance argument, a written base, a parameter or return type), then for each of its
+  written bases, transitively: the defining symbol, the construct kind, the first base as
+  `superclass` and the rest as `interfaces` (as a module class's), no annotation, and the
+  `origin`. A named type no library holds counts in `type_headers_unlocated`; `object` is
+  the boundary and gets none. A library class whose bases are not all read gets none
+  either, with a line on the uncovered list. No library member, document or `symbol` fact
+  is written, so library methods are not "found" (`method_resolution` answers `external`),
+  `coverage.documents` counts the module's files only, and the `symbols` view holds the
+  module's own. Library signatures are used only inside the scanner, to type the module's
+  own calls (above).
+- **An opted-in library's bodies** (`extract_libraries`, D04 §2a) are read whole, as a
+  jar is: the detector reports the environment's `site-packages` as the library root of
+  each named distribution the module declares and has installed, and the library's own
+  scan reads exactly the `.py` files its `RECORD` lists, with no folder walk (a namespace
+  folder another distribution shares gives none of the other's), into `facts/lib/pypi/<name>/`
+  with `origin: <name>` and the dependency tier.
+
 ### Artifact readers
 
 Configuration, build files, Kubernetes manifests, Helm charts, OpenAPI documents, protobuf

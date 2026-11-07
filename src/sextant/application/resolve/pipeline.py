@@ -20,6 +20,7 @@ from sextant.application.resolve.open_questions import reset_open_questions
 from sextant.application.resolve.path_prefix import apply_path_prefixes
 from sextant.application.resolve.protocol_hint import apply_protocol_hints
 from sextant.application.resolve.reachability import record_reachability
+from sextant.application.resolve.receiver_binding import bind_until_settled
 from sextant.application.resolve.request_requirements import record_request_requirements
 from sextant.application.resolve.resolved_schedules import record_resolved_schedules
 from sextant.application.resolve.return_flow import record_return_flows
@@ -133,8 +134,10 @@ def coverage_of(workspace: Workspace) -> dict[str, object]:
         # Sorted by the query, and a dict of counts rather than a list of rows: a reader
         # asks "how many `external`", never "what was the third bucket". The
         # bucket names differ per distribution and each is the column's own vocabulary —
-        # `resolution` can only ever hold `resolved` or `narrowed`, because `call_edges`
-        # writes `NARROWED if len(callees) > 1 else RESOLVED` and nothing else.
+        # `resolution` holds `resolved` or `narrowed` (`call_edges` writes `NARROWED if
+        # len(callees) > 1 else RESOLVED`), and on a call whose owner was left to the
+        # resolver also `partial` (a binding some path did not reach) or `unresolved`
+        # (nothing bound it, spec 2026-11-06 §3b).
         coverage[key] = {str(row["bucket"]): int(str(row[unit])) for row in workspace.query(named)}
     return coverage
 
@@ -188,6 +191,10 @@ def resolve(
     # leaves empty tables rather than the previous run's rows.
     workspace.derive("scheduled_work_reset")
     workspace.derive("error_handlers_reset")
+    # `roots` likewise: a `root_kind: entry_point` catalog's engine writes its rows there,
+    # and `record_roots` far below keeps them beside the two kinds it derives (design
+    # 2026-11-06-reading-decorators §5), so the table is emptied here, once, before either.
+    workspace.derive("roots_reset")
     # 2Q `G3`, and its position says what it depends on: NOTHING any engine
     # writes. It reads `call_sites`, `method_returns` and the type hierarchy —
     # compiler facts, all loaded — and writes a table of its own, so it could
@@ -205,8 +212,18 @@ def resolve(
     # `declared` for D00 §4's `terminal_kind` alone (F7 §8.2, W30): the edges themselves
     # are compiler facts, and only the classification of what a terminal REACHES needs a
     # catalog to have said what the callee is.
+    # Spec 2026-11-06 §3b: a call whose owner the facts leave to the resolver gets it here,
+    # from its receiver, and every owner bound is an edge — which may be the caller another
+    # receiver needed. So the edges are drawn, the receivers bound, and the edges drawn again
+    # until a round binds nothing new (`receiver_binding.bind_until_settled`, at most eight
+    # rounds). Its table is emptied first, so the first edges never read the previous
+    # resolve's owners. On a module whose facts name every owner, the first round binds
+    # nothing and the edges are the ones drawn before it.
+    workspace.derive("bound_receivers_reset")
     with _timed("record_call_edges"):
         record_call_edges(workspace, declared)
+    with _timed("bind_receivers"):
+        bind_until_settled(workspace, declared)
     # F5 §6.2 (W29): emptied once, here, ahead of every engine that writes it — the
     # `open_questions`/`resolved_config` discipline. More than one catalog contributes
     # entries, so a reset owned by an engine would erase whichever ran first, and a

@@ -320,7 +320,7 @@ class HandlerReader:
             handed: list[Handler] = []
             for caller, ordinal, slot in self._index.callers.get((method, position), ()):
                 bound = (self._index.sites.get((caller, ordinal)) or {}).get("arguments") or ()
-                if slot < len(bound):
+                if 0 <= slot < len(bound):
                     handed.extend(self._declared_type(caller, bound[slot], seen))
             return handed or [
                 Handler(
@@ -442,7 +442,11 @@ class HandlerReader:
                 stands_for = [
                     m
                     for m in methods
-                    if any(c in methods for c, _, _ in self._index.callers.get((m, 0), ()))
+                    if any(
+                        c in methods
+                        for c, _, slot in self._index.callers.get((m, 0), ())
+                        if slot >= 0
+                    )
                 ]
                 return self._runs(
                     (*stands_for, *(m for m in methods if m not in stands_for)),
@@ -513,7 +517,9 @@ def handler_outcomes(
     handed: dict[tuple[str, int], list[tuple[tuple[str, int], int]]] = {}
     for parameter, binders in index.callers.items():
         for caller, ordinal, slot in binders:
-            handed.setdefault((caller, ordinal), []).append((parameter, slot))
+            # A negative slot is a parameter the call fills with nothing nameable (R2).
+            if slot >= 0:
+                handed.setdefault((caller, ordinal), []).append((parameter, slot))
     # A parameter written into a field (`written_by`): a context stored there is read back by
     # a `getfield` no fact names, so the walk cannot follow it to a `next()`.
     stored: dict[tuple[str, int], list[str]] = {}

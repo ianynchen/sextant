@@ -688,6 +688,7 @@ class ObjectKeys:
             catalog.hand_off_effects,
             catalog.bean_models,
             catalog.value_annotations,
+            returns_arguments=catalog.returns_arguments,
         )
         self._made = self._index.unscanned | frozenset(
             (built, _CONSTRUCTOR) for built in self._index.constructed
@@ -747,7 +748,7 @@ class ObjectKeys:
         """The position of the object a declared view call hands back a view of (class
         docstring), or nothing for any other call."""
         recorded = site.get("descriptor")
-        if recorded is None:
+        if recorded is None or site.get("owner") is None:
             return ()
         key = (str(site.get("owner")), str(site["name"]), parameter_types(str(recorded)))
         return (self._views[key],) if key in self._views else ()
@@ -756,6 +757,8 @@ class ObjectKeys:
         """The arguments a declared null check hands back (class docstring): where `site`
         calls a `not_hand_offs` owner or method and returns a reference, each argument whose
         declared type is the type it returns. Empty for any other call."""
+        if site.get("owner") is None:
+            return ()
         owner, descriptor = str(site.get("owner")), site.get("descriptor")
         declared = self._index.not_hand_offs
         if descriptor is None or (

@@ -318,6 +318,7 @@ def _key_classes(
         catalog.hand_off_effects,
         catalog.bean_models,
         catalog.value_annotations,
+        returns_arguments=catalog.returns_arguments,
     )
     owner = type_descriptor(str(catalog.matches["owner"]))
     classes: dict[tuple[str | None, str | None], set[str | None]] = {}

@@ -1,0 +1,16 @@
+id: click
+displayName: Click's parameter decorators, which hand the function back
+
+# WHAT THIS FILE IS (D02 §1f, `returns_argument`; design 2026-11-06-reading-decorators §3d,
+# approved). A click command is a function under a stack of decorators, and the registration
+# (`@module.command("analyze")`) receives what the stack below it returned. Each of these four
+# returns a decorator whose body ends `return f` (`scripts/probes/click_commands.md` §3): applied
+# to a function, its result IS that function. So the walk from a registration's argument goes on
+# through each of them to the function itself, and the calls it passed are the command's
+# parameter decorators (`catalogs/click.yml`'s `request_params`).
+
+returns_argument:
+  - { owner: click.decorators, method: option, result_returns: arg0, by: scripts/probes/click_commands.md }
+  - { owner: click.decorators, method: argument, result_returns: arg0, by: scripts/probes/click_commands.md }
+  - { owner: click.decorators, method: password_option, result_returns: arg0, by: scripts/probes/click_commands.md }
+  - { owner: click.decorators, method: version_option, result_returns: arg0, by: scripts/probes/click_commands.md }

@@ -139,11 +139,12 @@ from sextant.application.ports.detector import (
     Detector,
     ModuleModel,
     RepositoryModel,
+    detect_repository,
     select_detector,
 )
 from sextant.application.ports.enrichment import EnrichmentAgentError
 from sextant.application.ports.progress import NullProgress, Progress
-from sextant.application.ports.scanner import select_scanner
+from sextant.application.ports.scanner import Scanner, select_scanner
 from sextant.application.ports.selection import NoAdapterError
 from sextant.application.query.questions import QUESTIONS as _QUESTIONS
 from sextant.application.query.questions import QuestionRefused, answer
@@ -191,6 +192,7 @@ from sextant.egress.render.system import render_system_document
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.gradle import GradleDetector
 from sextant.ingress.detect.maven import MavenDetector
+from sextant.ingress.detect.python import PythonDetector
 from sextant.ingress.detect.sextant_config import (
     EnrichDefaults,
     SextantConfigError,
@@ -199,6 +201,7 @@ from sextant.ingress.detect.sextant_config import (
 )
 from sextant.ingress.extract.jvm.generated_naming import JvmGeneratedNaming
 from sextant.ingress.extract.jvm.scanner import AsmScanner
+from sextant.ingress.extract.python.scanner import PythonScanner
 from sextant.ingress.interpret.descriptors import interpret_descriptors
 from sextant.ingress.read.registry import READERS
 from sextant.resources import catalogs_dir, extractor_jar, instructions_path
@@ -421,11 +424,35 @@ class _EnrichOutcome:
 # never `click.ClickException` directly).
 # --------------------------------------------------------------------------
 
+
+class FirstAccepting:
+    """Detectors of one language, of which one reads a repository: the first that accepts
+    it (`select_detector`). Ruling R32: `detect_repository` runs every detector, so two
+    builds of one language in one folder (a `pom.xml` beside a `build.gradle`) would both
+    run, and the second's failure or a clashing id would refuse what one build read before.
+    Grouped, they keep the registry's order as the statement of which is authoritative,
+    exactly as before detectors of other languages were added."""
+
+    def __init__(self, *detectors: Detector) -> None:
+        self.detectors = detectors
+
+    def accepts(self, path: Path) -> bool:
+        return any(detector.accepts(path) for detector in self.detectors)
+
+    def detect(self, path: Path, allow_resolve: bool = False) -> RepositoryModel:
+        return select_detector(self.detectors, path).detect(path, allow_resolve=allow_resolve)
+
+
 # The one real `Detector` registry (2M Task 2 review): a future detector
 # added to only one of two hand-kept lists would send the other path to
-# `select_detector`'s own uncaught `NoAdapterError`. Order is precedence
-# (`select_detector` picks the first that `accepts()`): Maven before Gradle.
-_DETECTORS: list[Detector] = [MavenDetector(), GradleDetector()]
+# `detect_repository`'s own uncaught `NoAdapterError`. Every detector that `accepts()`
+# is run and the modules are merged, so order only sets the order of the modules. The JVM
+# builds are one choice (ruling R32): order is precedence among them (`select_detector`
+# picks the first that `accepts()`): Maven before Gradle, as before Python was added.
+_DETECTORS: list[Detector] = [
+    FirstAccepting(MavenDetector(), GradleDetector()),
+    PythonDetector(),
+]
 
 
 def _modules_json_path(path: Path) -> Path:
@@ -488,10 +515,10 @@ def _skip_reason(module: ModuleModel) -> str | None:
     return None
 
 
-def _scanners() -> list[AsmScanner]:
+def _scanners() -> list[Scanner]:
     """The one scanner registry: what the scan stage chooses from, and what `_skip_reason`
     asks before a module is analysed, so the two can never disagree."""
-    return [AsmScanner(extractor_jar())]
+    return [AsmScanner(extractor_jar()), PythonScanner()]
 
 
 def _module_json_row(outcome: ModuleOutcome) -> dict[str, object]:
@@ -1074,7 +1101,7 @@ def _analyze(
     # ahead of any workspace write, or a repository Sextant cannot analyze
     # would still leave one behind.
     try:
-        model = select_detector(_DETECTORS, path).detect(path, allow_resolve=allow_resolve)
+        model = detect_repository(_DETECTORS, path, allow_resolve=allow_resolve)
     except (SextantConfigError, ValueError, ParseError) as refused:
         raise DetectionError(str(refused)) from refused
 

@@ -12,7 +12,7 @@ Their bodies no longer live here. `needs-triage` means the item was carried over
 being verified again, so some may already be fixed.
 
 **Logging a new issue.** Create a Plane work item and add its row to the id map below; never
-write its body here. Keep the id scheme in the title (`OI-323 — …`, the next number), because
+write its body here. Keep the id scheme in the title (`OI-324 — …`, the next number), because
 code comments and documents cite issues by id.
 
 **Closing one.** Move the item to Done in Plane and name the PR that closed it. If the delivery list
@@ -53,7 +53,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-18 | [SEXTANT-161](https://app.plane.so/portolan/browse/SEXTANT-161/) | the several-implementations rule still has no real-code exercise |
 | OI-19 | [SEXTANT-163](https://app.plane.so/portolan/browse/SEXTANT-163/) | `sig_` is computed in two languages and only an uncatchable test guards the drift |
 | OI-20 | [SEXTANT-19](https://app.plane.so/portolan/browse/SEXTANT-19/) | `return_flows` had no reader until G4 |
-| OI-22 | [SEXTANT-164](https://app.plane.so/portolan/browse/SEXTANT-164/) | `root_kind`'s third member has no producer |
+| OI-22 | [SEXTANT-164](https://app.plane.so/portolan/browse/SEXTANT-164/) | `root_kind`'s third member has no producer — **closed 2026-11-06** (plan 1 task 9b: `catalogs/click.yml` declares `root_kind: entry_point`, and Sextant's six commands are its rows) |
 | OI-23 | [SEXTANT-13](https://app.plane.so/portolan/browse/SEXTANT-13/) | a functional route is an endpoint with no handler, so it has no root |
 | OI-24 | [SEXTANT-11](https://app.plane.so/portolan/browse/SEXTANT-11/) | D01 §7's conservative re-derivation rule was not enforced anywhere |
 | OI-25 | [SEXTANT-10](https://app.plane.so/portolan/browse/SEXTANT-10/) | the traversal had no reader outside its own tests |
@@ -326,6 +326,24 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-320 | [SEXTANT-314](https://app.plane.so/portolan/browse/SEXTANT-314/) | Dagger recipe hop: a platform annotation (@Deprecated, Android @SuppressLint) on a @Provides method leaves its type's unqualified slots unread_type (safe direction) |
 | OI-321 | [SEXTANT-315](https://app.plane.so/portolan/browse/SEXTANT-315/) | One reason list everywhere: configuration values, method lookup and hand-off reasons become a general reason plus a detail (ruled B, 2026-11-05) |
 | OI-322 | [SEXTANT-316](https://app.plane.so/portolan/browse/SEXTANT-316/) | Peer join fills one placeholder only: an address with two (${host}:${port}) is never resolved |
+| OI-323 | [SEXTANT-317](https://app.plane.so/portolan/browse/SEXTANT-317/) | A program that starts another program is not read as outbound |
+| OI-324 | [SEXTANT-318](https://app.plane.so/portolan/browse/SEXTANT-318/) | Python types not worked out: container elements, type-variable library returns, dataclass fields, isinstance |
+| OI-325 | [SEXTANT-319](https://app.plane.so/portolan/browse/SEXTANT-319/) | A warm Python analysis reuses nothing (polar warm 27.6 s against a 10 s target) |
+| OI-326 | [SEXTANT-320](https://app.plane.so/portolan/browse/SEXTANT-320/) | Python closures are not read: a nested def's read of an enclosing name is unresolved |
+| OI-327 | [SEXTANT-321](https://app.plane.so/portolan/browse/SEXTANT-321/) | exact_methods treats a Python classmethod as never overridden (fix before a Python catalog reads pass-through) |
+| OI-328 | [SEXTANT-322](https://app.plane.so/portolan/browse/SEXTANT-322/) | A Python parameter's default value is not a fact (FastAPI Depends / Query defaults) |
+| OI-329 | [SEXTANT-323](https://app.plane.so/portolan/browse/SEXTANT-323/) | Decorated Python methods: self.m() names the method, and the external detail does not name the decorator |
+| OI-330 | [SEXTANT-324](https://app.plane.so/portolan/browse/SEXTANT-324/) | Decorator factories and reused decorators are not stated (lru_cache(maxsize), retry(...), deco = x(...)) |
+| OI-331 | [SEXTANT-325](https://app.plane.so/portolan/browse/SEXTANT-325/) | Command-line gaps after click: typer, argparse, function entry points, group options, flag pairs, parameter types |
+| OI-332 | [SEXTANT-326](https://app.plane.so/portolan/browse/SEXTANT-326/) | roots has no reason column: a command behind an unstated decorator says nothing about why its handler is empty |
+| OI-333 | [SEXTANT-327](https://app.plane.so/portolan/browse/SEXTANT-327/) | A library module attribute answers no_writer where external may be truer (pytest.mark, System.out) |
+| OI-334 | [SEXTANT-328](https://app.plane.so/portolan/browse/SEXTANT-328/) | Python type headers: 13 standard-library classes get none, and a header cannot carry parents_unread |
+| OI-335 | [SEXTANT-329](https://app.plane.so/portolan/browse/SEXTANT-329/) | Python control flow: a missing implicit None after a swallowing with; break/continue values after a finally |
+| OI-336 | [SEXTANT-330](https://app.plane.so/portolan/browse/SEXTANT-330/) | Python scanner minors: try-import binding, two import roots, property setters, dotted closed lists, globals() |
+| OI-337 | [SEXTANT-331](https://app.plane.so/portolan/browse/SEXTANT-331/) | Python detector minors: tests/ requirements, egg-info, empty module lists, build-system-only, unreadable .gitignore |
+| OI-338 | [SEXTANT-332](https://app.plane.so/portolan/browse/SEXTANT-332/) | The call-edges-drawn-last guard misses an aliased import or a direct derive |
+| OI-339 | [SEXTANT-333](https://app.plane.so/portolan/browse/SEXTANT-333/) | A module-level for / with / except target is not a write, so a function reading that name gets the earlier value |
+| OI-340 | [SEXTANT-334](https://app.plane.so/portolan/browse/SEXTANT-334/) | A field written from outside its class (obj.x = v) is not seen, so reads of it keep the class's own value |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
