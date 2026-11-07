@@ -387,7 +387,7 @@ class Libraries:
             return None
         target = targets[0]
         if _is_callable_form(target):
-            # A function and a class are callable; no literal is.
+            # A bare `Callable`: a function and a class are callable; no literal is.
             return value is _FUNCTION_VALUE or value is _CLASS_VALUE
         if target.module == BUILTINS:
             return _fits_builtin(value, target.member or "")
@@ -411,8 +411,19 @@ class Libraries:
         if len(targets) != 1:
             return None
         target = targets[0]
+        callable_value = value is _FUNCTION_VALUE or value is _CLASS_VALUE
         if _is_callable_form(target):
-            return value is _FUNCTION_VALUE or value is _CLASS_VALUE
+            if not callable_value:
+                return False
+            # `Callable[..., Any]` takes any callable. A listed signature or a written return
+            # (`Callable[[int], str]`, `Callable[..., Awaitable[int]]`) asks what the
+            # function's own signature is, which is not read here.
+            return True if self._open_callable(written, scope) else None
+        if target.module == BUILTINS and target.member == "type" and callable_value:
+            if value is _FUNCTION_VALUE:
+                return False
+            # `type[Any]` takes any class; whether a class is a `type[X]` is not read here.
+            return True if self._is_any(written[0], scope) else None
         if target.module in _TYPING:
             if target.member == "Literal":
                 if value is _SOME_TEXT:
@@ -432,6 +443,22 @@ class Libraries:
             return None
         # A generic class (`list[str]`): the literal fits its class or does not.
         return self._fits(value, annotation.value, scope, depth - 1)
+
+    def _open_callable(self, written: list[ast.expr], scope: TypeScope) -> bool:
+        """Whether `Callable[...]`'s arguments are `..., Any`: any callable fits."""
+        return (
+            len(written) == 2
+            and isinstance(written[0], ast.Constant)
+            and written[0].value is Ellipsis
+            and self._is_any(written[1], scope)
+        )
+
+    @staticmethod
+    def _is_any(node: ast.expr, scope: TypeScope) -> bool:
+        if not _is_name(node):
+            return False
+        targets = scope.lookup(node)
+        return len(targets) == 1 and targets[0].module in _TYPING and targets[0].member == "Any"
 
     def _alias(self, target: Target) -> tuple[ast.expr, TypeScope] | None:
         """What a library name assigned once to a type names (`OpenTextMode = ...`), with

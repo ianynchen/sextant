@@ -101,6 +101,10 @@ here would restate those documents rather than add anything.
   project's code that returns its argument or its own wrapper, a function passed as an
   argument) is an edge to that function's body, as a call on a JVM lambda reaches the lambda's
   body; no owner is bound for it, and each path is its own answer.
+- **A function or class argument fits only an open `Callable` or `type`** (OI-208 plan 1 task 9a
+  fix round 3). `Callable[[int], str]`, `Callable[..., Awaitable[int]]` and `type[X]` are not
+  decided for one, so their overloads stay a closed list; `alias = module` takes `module`'s
+  type; module-level types that never settle are dropped with an uncovered line, never a stop.
 - **The Python scanner reads library signatures and types, and Python lookup follows C3**
   (OI-208 plan 1 task 7). Libraries are read from the project's installed environment, and the
   standard library and stub-only libraries (`requests`) from a pinned typeshed copy shipped in the

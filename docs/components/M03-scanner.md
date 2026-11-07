@@ -298,8 +298,12 @@ write (a loop or `with` target, an import, `del`, `:=`, `except … as`, a `matc
 field walk answers those. A call of a function the file defines stays the static call to
 it. The file is read once with the writes read so far, and kept where every answer it
 gave is the one all the writes give; otherwise it is read again until no reading finds a
-new type for a name it asked about, at most one reading per module-level name plus one;
-reaching that limit is an error, since the rule only ever adds a type.
+new type for a name it asked about, at most one reading per module-level name plus one.
+A name written from another module-level name of the file (`alias = module`) takes that
+name's type in the same readings. Reaching the limit would be a defect in the rule (it only
+ever adds a type): the file is then read once more with no module-level types, and the
+uncovered list says `<file>: the types of its module-level names did not settle in N
+readings, so none is written`. The analysis goes on.
 
 **A file Python cannot parse** goes on the uncovered list with the reason, and the rest
 of the module is scanned. The grammar is the one of the Python that runs Sextant, and the
@@ -407,9 +411,12 @@ Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path
   library's branches define differently. A call on a `narrowed` result leaves its owner to
   the resolver. A type variable or a special form names no class, and also leaves the
   owner. A literal is never callable, so it does not fit a `Callable` parameter
-  (`Group.command("analyze")` takes the overload with `*args`, not `__func: Callable`); a
-  function or a class argument is callable and fits one (`@cli.command` with no parentheses
-  is `Command`), fits `object` and `Any`, and no literal type; a class also fits `type`.
+  (`Group.command("analyze")` takes the overload with `*args`, not `__func: Callable`). A
+  function or a class argument fits a bare `Callable`, `Callable[..., Any]`, `object` and
+  `Any` (`@cli.command` with no parentheses is `Command`), and no literal type; a class also
+  fits `type` and `type[Any]`. Whether it fits a listed signature (`Callable[[int], str]`),
+  a written return (`Callable[..., Awaitable[int]]`) or `type[X]` is not read here, so such
+  overloads stay a closed list.
 - **A result written `Callable[[P, ...], R]` is a callable** (design
   `2026-11-06-reading-decorators-design.md` §3b, a decorator factory's result:
   `click.group()` returns `Callable[[F], Group]`). Calling it gives `R` where `R` is a

@@ -639,3 +639,34 @@ def test_the_languages_own_descriptors_keep_the_method_model(tmp_path: Path):
 
     fields = {w.field for w in _facts(tree, FieldWriteFact)}
     assert fields == {"app/k/K#h.", "app/k/K#i."}
+
+
+def test_a_name_written_from_another_module_name_takes_its_type(tmp_path: Path):
+    """`alias = shop` writes `alias` from the field `shop`, so `alias` has `shop`'s type."""
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "class Shop:\n    def open(self): pass\nshop = Shop()\nalias = shop\nalias.open()\n"
+            )
+        },
+    )
+
+    (call,) = [c for c in _facts(tree, CallSiteFact) if c.target.name == "open"]
+    assert call.target.owner == "app/m/Shop#"
+
+
+def test_types_that_do_not_settle_are_dropped_with_a_note(tmp_path: Path, monkeypatch):
+    """If the readings never agree (a defect in the rule), the file is read once more with
+    no module-level types, a note names it, and the analysis goes on."""
+    from sextant.ingress.extract.python import structure
+
+    monkeypatch.setattr(structure._Writer, "agrees", lambda self, found: False)
+    report, tree = _scan(
+        tmp_path,
+        {"app/m.py": "class Shop:\n    def open(self): pass\nshop = Shop()\nshop.open()\n"},
+    )
+
+    (call,) = [c for c in _facts(tree, CallSiteFact) if c.target.name == "open"]
+    assert call.target.owner is None
+    assert any(n.startswith("app/m.py: ") and "did not settle" in n for n in report.uncovered)

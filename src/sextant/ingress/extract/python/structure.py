@@ -21,7 +21,7 @@ control-flow fields are read by a later part of this scanner.
 """
 
 import ast
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from sextant.domain.closed_sets import ConstructKind
 from sextant.domain.facts import (
@@ -80,6 +80,8 @@ class FileFacts:
 
     facts: list[Fact]
     not_read: list[str]
+    # What the reading could not settle about the file as a whole, for the uncovered list.
+    notes: list[str] = field(default_factory=list)
 
 
 def file_facts(tree: ast.Module, context: FileContext, last_line: int) -> FileFacts:
@@ -108,10 +110,15 @@ def file_facts(tree: ast.Module, context: FileContext, last_line: int) -> FileFa
         if writer.agrees(found):
             return FileFacts(writer.facts, writer.not_read)
         known = found
-    raise RuntimeError(
-        f"{context.here}: the types of its module-level names did not settle in {limit} "
-        "readings; a type was taken back, which the reading rule does not allow"
+    # A defect in the rule (it only ever adds a type): the file keeps a reading with no
+    # module-level types at all, which claims nothing, and a note names it.
+    writer = _Writer(context, rebound, {})
+    writer.module(tree, last_line)
+    note = (
+        f"the types of its module-level names did not settle in {limit} readings, "
+        "so none is written"
     )
+    return FileFacts(writer.facts, writer.not_read, [note])
 
 
 def _rebound_names(tree: ast.Module) -> set[str]:

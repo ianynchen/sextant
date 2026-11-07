@@ -931,3 +931,47 @@ def test_a_bare_group_command_decorator_takes_the_callable_overload(tmp_path: Pa
 
     mains = [s for s in _owners(tree, "app/cli#<clinit>") if s[1] == "main"]
     assert mains == [("click/core/Command#", "main"), ("click/core/Group#", "main")]
+
+
+# Task 9a fix round 3: a function or class argument fits only an open Callable or type.
+
+_PICK = {
+    "pick/__init__.py": (
+        "import typing as t\n"
+        "class A: ...\nclass B: ...\nclass X: ...\nclass Y: ...\n"
+        "@t.overload\ndef make(c: type[A]) -> X: ...\n"
+        "@t.overload\ndef make(c: type[B]) -> Y: ...\n"
+        "def make(c): ...\n"
+        "@t.overload\ndef cb(f: t.Callable[[int], str]) -> X: ...\n"
+        "@t.overload\ndef cb(f: t.Callable[[str], int]) -> Y: ...\n"
+        "def cb(f): ...\n"
+        "@t.overload\ndef fx(f: t.Callable[..., t.Awaitable[int]]) -> X: ...\n"
+        "@t.overload\ndef fx(f: t.Callable[..., int]) -> Y: ...\n"
+        "def fx(f): ...\n"
+        "@t.overload\ndef anyc(f: t.Callable[..., t.Any]) -> X: ...\n"
+        "@t.overload\ndef anyc(f: str) -> Y: ...\n"
+        "def anyc(f): ...\n"
+        "@t.overload\ndef anyt(c: type[t.Any]) -> X: ...\n"
+        "@t.overload\ndef anyt(c: str) -> Y: ...\n"
+        "def anyt(c): ...\n"
+    ),
+    "pick/py.typed": "",
+}
+
+
+def test_a_function_or_class_fits_only_an_open_callable_or_type(tmp_path: Path):
+    """A class fits `type[Any]` and a function `Callable[..., Any]`, and neither fits `str`.
+    Whether a class is a `type[A]` or a `type[B]`, or a function a `Callable[[int], str]` or
+    one returning an `Awaitable`, is not read here: the overloads stay a closed list."""
+    libraries = Libraries((_install(tmp_path, "pick", "1.0", _PICK),), typeshed_dir())
+    cls = CallArgument(kind="class", symbol="pick/B#")
+    fn = CallArgument(kind="lambda", symbol="app/a#f(sig).", captures=0)
+
+    def returned(name: str, argument: CallArgument):
+        return _returns(libraries.call_returns("pick#", name, [argument]))
+
+    assert returned("make", cls) == ("narrowed", [("pick/X#", []), ("pick/Y#", [])])
+    assert returned("cb", fn) == ("narrowed", [("pick/X#", []), ("pick/Y#", [])])
+    assert returned("fx", fn) == ("narrowed", [("pick/X#", []), ("pick/Y#", [])])
+    assert returned("anyc", fn) == ("resolved", [("pick/X#", [])])
+    assert returned("anyt", cls) == ("resolved", [("pick/X#", [])])

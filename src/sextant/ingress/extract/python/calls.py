@@ -66,7 +66,13 @@ from sextant.domain.facts import (
     MethodReturnFact,
     Signature,
 )
-from sextant.domain.symbols import PY_SIGNATURE, method_descriptor, names_a_type
+from sextant.domain.symbols import (
+    PY_SIGNATURE,
+    member_name,
+    method_descriptor,
+    names_a_type,
+    owner_of,
+)
 from sextant.ingress.extract.python.flow import Flow
 from sextant.ingress.extract.python.imports import (
     Binding,
@@ -1307,7 +1313,11 @@ class BodyReader:
             or target.kind not in ("variable", "function")
         ):
             return None
-        name = target.member
+        return self._module_answer(target.member)
+
+    def _module_answer(self, name: str) -> str | CallableType | None:
+        """The type of this file's module-level `name`, as this reading answers it, and
+        recorded as asked."""
         if self._module_types is not None:
             answer = self._module_types.get(name)
         else:
@@ -1318,8 +1328,15 @@ class BodyReader:
         return answer
 
     def _module_write(self, name: str, value: CallArgument, scope: Scope) -> None:
-        """A module-level name written in this file, with the type of the value."""
-        self._module_writes.setdefault(name, []).append(_type_of(value, scope))
+        """A module-level name written in this file, with the type of the value. A value
+        read from another module-level name of this file (`alias = module`) has that name's
+        type, settled by the same readings."""
+        typed = _type_of(value, scope)
+        if typed is None and value.kind == "field" and value.symbol is not None:
+            read = str(value.symbol)
+            if owner_of(read) == type_symbol(Target(self._context.here)):
+                typed = self._module_answer(member_name(read))
+        self._module_writes.setdefault(name, []).append(typed)
 
     def _one_type(
         self, name: str, written: list[str | CallableType | None]

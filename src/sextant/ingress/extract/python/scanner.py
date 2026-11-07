@@ -121,6 +121,7 @@ class PythonScanner:
             )
             context = FileContext(here, is_package, index, prefix, document.document_id)
             read = file_facts(tree, context, len(content.splitlines()) or 1)
+            uncovered.extend(f"{relative}: {note}" for note in read.notes)
             if read.not_read:
                 document = document.model_copy(
                     update={"partial": True, "partial_reason": "\n".join(read.not_read)}

@@ -165,7 +165,10 @@ body by (`call_edges._edge`'s `dynamic` lookup; the row keeps the site's `virtua
 is written to `bound_receivers` for such a path: it has no row there, and counts in the site's
 tier as one more thing the call may run (a function on one path and a `Runner` on another are
 two edges, `narrowed`). Every other reader keeps a function value as a body and not a value
-(ruled 2026-09-22), and an f-string (`concat`) is never one (R19b).
+(ruled 2026-09-22), and an f-string (`concat`) is never one (R19b). The bodies reach
+`call_edges` from the binder in memory and are stored in no other table (ruling R31): nothing
+redraws `call_edges` after binding, which `tests/architecture/test_call_edges_drawn_last.py`
+holds (two callers, the pipeline's first draw and the binder's, the binder's last).
 
 Two readings the walk applies for a call one file cannot know, both inert on the JVM:
 - **a static call naming a type is its construction** (`effective_calls`): the file that
