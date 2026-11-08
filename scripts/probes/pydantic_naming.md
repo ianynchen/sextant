@@ -4,6 +4,29 @@ Backs N12 (`shape-models/pydantic.yml`) and N13. `pydantic_naming.py` produced e
 below, with pydantic 2.14.3 (mealie locks 2.14.2) and pyhumps 3.8.0 (the version mealie locks).
 Run it with mealie's `mealie/` folder as the one argument, in a throwaway environment.
 
+**Version scope.** pydantic **2.14.3** (mealie locks 2.14.2) and pyhumps **3.8.0** (the version
+mealie locks), each as the running process reported it: `pydantic.VERSION` and
+`importlib.metadata.version("pyhumps")`. Every verdict below holds for those two and for no other
+version.
+
+## Observations
+
+Verbatim from the table that `scripts/probes/pydantic_naming.py` generated. Each column header
+is the version that run's own process printed (`pydantic.VERSION`, and pyhumps through
+`importlib.metadata`), not the version the environment was asked to install. A cell `n/a` means
+the question is not about that library. The sections below give the other results.
+
+| Question | 2.14.3 | 3.8.0 |
+|---|---|---|
+| `humps.camelize` differs from `to_camel` (465 names) | n/a | 0 |
+| `to_pascal` differs from `to_camel` with its first letter raised | 2 | n/a |
+| `Both(Left, Right)` takes the generator of | to_pascal | n/a |
+| `alias_priority=1` with `alias` and `serialization_alias` gives output name | myField | n/a |
+| `serialization_alias` beats the generator: output name | Ser | n/a |
+| `Optional[int]` with no default is required | True | n/a |
+
+`pydantic.VERSION` printed 2.14.3; `importlib.metadata` printed pyhumps 3.8.0.
+
 ## 1. `to_camel`, `to_pascal` and `humps.main.camelize` on mealie's field names
 
 mealie's base model is `MealieModel` (`schema/_mealie/mealie_model.py:53`):

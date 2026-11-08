@@ -16,6 +16,7 @@ purpose. Sextant itself never does that (spec 7).
 from __future__ import annotations
 
 import ast
+import importlib.metadata
 import json
 import sys
 from pathlib import Path
@@ -73,7 +74,7 @@ def field_names(root: Path) -> tuple[int, set[str], set[str]]:
     return classes, public, private
 
 
-def part_one(root: Path) -> None:
+def part_one(root: Path) -> list[tuple[str, str, str]]:
     classes, names, private = field_names(root)
     rows = [(n, to_camel(n), to_pascal(n), camelize(n)) for n in sorted(names)]
     print("## Part 1: mealie field names")
@@ -90,6 +91,12 @@ def part_one(root: Path) -> None:
         "| by humps.camelize:",
         sum(1 for n, _, _, h in rows if h != n),
     )
+    differ = sum(1 for _, c, _, h in rows if c != h)
+    pascal = sum(1 for _, c, p, _ in rows if p != c[:1].upper() + c[1:])
+    return [
+        (f"`humps.camelize` differs from `to_camel` ({len(rows)} names)", "n/a", str(differ)),
+        ("`to_pascal` differs from `to_camel` with its first letter raised", str(pascal), "n/a"),
+    ]
 
 
 def up(name: str) -> str:
@@ -271,12 +278,48 @@ def part_two() -> None:
     )
 
 
+def observation_table(rows: list[tuple[str, str, str]]) -> None:
+    """The table of `pydantic_naming.md`, headed by the versions this process reported."""
+    pyhumps = importlib.metadata.version("pyhumps")
+    print("\n## Observation table (generated)")
+    print(f"| Question | {pydantic.VERSION} | {pyhumps} |")
+    print("|---|---|---|")
+    for label, in_pydantic, in_pyhumps in rows:
+        print(f"| {label} | {in_pydantic} | {in_pyhumps} |")
+    print(
+        f"\n`pydantic.VERSION` printed {pydantic.VERSION}; `importlib.metadata` printed pyhumps {pyhumps}."
+    )
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 1:
         print(__doc__)
         return 2
-    part_one(Path(argv[0]).resolve())
+    rows = part_one(Path(argv[0]).resolve())
     part_two()
+    rows += [
+        (
+            "`Both(Left, Right)` takes the generator of",
+            Both.model_config["alias_generator"].__name__,
+            "n/a",
+        ),
+        (
+            "`alias_priority=1` with `alias` and `serialization_alias` gives output name",
+            Priority1WithSerialization.model_fields["my_field"].serialization_alias or "none",
+            "n/a",
+        ),
+        (
+            "`serialization_alias` beats the generator: output name",
+            SerAlias.model_fields["my_field"].serialization_alias or "none",
+            "n/a",
+        ),
+        (
+            "`Optional[int]` with no default is required",
+            str(Misc.model_fields["opt_no_default"].is_required()),
+            "n/a",
+        ),
+    ]
+    observation_table(rows)
     return 0
 
 

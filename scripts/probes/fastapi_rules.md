@@ -4,6 +4,11 @@ Every rule the FastAPI reader mirrors (DR-6) is quoted here from FastAPI's own s
 `file:function` and line numbers. `fastapi_rules.py` runs the same rules inside FastAPI and prints
 its answer; `fastapi_shapes.py` counts the shapes in four corpora.
 
+**Version scope.** FastAPI **0.162.0**, **0.141.1** and **0.115.12**, each as the running
+process reported it through `fastapi.__version__`. Every verdict below holds for those three and
+for no other version. pydantic is 2.14.3 in all three runs; Starlette is 1.10.0 (0.162.0 and
+0.141.1) and 0.46.2 (0.115.12).
+
 **Versions.**
 
 | Version | Role | How it was run |
@@ -23,6 +28,31 @@ and nowhere else.
 
 Paths are relative to `fastapi/` (FastAPI) or `starlette/`. "R" means 0.162.0 line, "E" means
 0.115.12 line.
+
+## Observations
+
+Verbatim from the table that `fastapi_rules.py --table` generated from the JSON of three runs of
+`scripts/probes/fastapi_rules.py`. Each column header is the version that run's own
+`fastapi.__version__` printed, not the version the environment was asked to install: the
+0.141.1 column is a different package (the cached files on `PYTHONPATH`), and its `loaded from`
+line below shows the path the process imported. The table lists the rules that differ between
+versions, or that the plan relies on most; the sections after it quote the source for all rules.
+
+| Rule | 0.162.0 | 0.141.1 | 0.115.12 |
+|---|---|---|---|
+| route added to a router after it was included | served | served | not served |
+| a router included in itself | raises | raises | accepted |
+| `methods=[]` | raises | raises | raises |
+| `Annotated[Request, Depends(f)]` | accepted | accepted | raises |
+| `x: Optional[int]` with no default | required | required | required |
+| unmarked `x: list[int]` is a | body | body | body |
+| `Annotated[int, Query(alias="first"), Query(alias="second")]` alias | second | second | second |
+| `user_agent: str = Header()` wire name | user-agent | user-agent | user-agent |
+| `response_model` for `-> None` | None | None | <class 'NoneType'> |
+
+- 0.162.0: `fastapi.__version__` printed 0.162.0, starlette 1.10.0, pydantic 2.14.3, Python 3.12.13; loaded from `/private/tmp/claude-501/-Users-yining-programming-ai-sextant/b41977ee-16aa-4b60-bc7d-9fd84edb2c95/scratchpad/fastapi-probe/v0.162.0/lib/python3.12/site-packages/fastapi`
+- 0.141.1: `fastapi.__version__` printed 0.141.1, starlette 1.10.0, pydantic 2.14.3, Python 3.12.13; loaded from `/Users/yining/.cache/uv/archive-v0/eaXNlJFXNTKdmKA0/fastapi`
+- 0.115.12: `fastapi.__version__` printed 0.115.12, starlette 0.46.2, pydantic 2.14.3, Python 3.12.13; loaded from `/private/tmp/claude-501/-Users-yining-programming-ai-sextant/b41977ee-16aa-4b60-bc7d-9fd84edb2c95/scratchpad/fastapi-probe/v0.115.12/lib/python3.12/site-packages/fastapi`
 
 ---
 

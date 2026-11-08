@@ -6,6 +6,9 @@ Run it inside a throwaway environment that has FastAPI installed, never inside t
     uv venv /tmp/probe && uv pip install -p /tmp/probe/bin/python fastapi==0.162.0 httpx
     /tmp/probe/bin/python scripts/probes/fastapi_rules.py
 
+With `--table a.json b.json ...` it instead reads the JSON of earlier runs and prints the
+observation table of `fastapi_rules.md`, headed by the versions the runs themselves printed.
+
 It prints one JSON document: the FastAPI version, then one entry per rule. The rules and the
 source lines they come from are in `fastapi_rules.md`. The probe imports FastAPI and runs its
 registration code on purpose. Sextant itself never does that (spec 7).
@@ -21,9 +24,12 @@ import functools
 import json
 import sys
 import types
+from pathlib import Path as FilePath
 from typing import Annotated, Any, Optional
 
 import fastapi
+import pydantic
+import starlette
 from fastapi import (
     APIRouter,
     BackgroundTasks,
@@ -521,9 +527,66 @@ def response_models() -> dict[str, Any]:
 # ---------------------------------------------------------------------------------------------
 
 
+def _cells(doc: dict[str, Any]) -> list[str]:
+    params = doc["parameters"]
+
+    def served(value: Any) -> str:
+        return "served" if value else "not served"
+
+    def raised(value: Any) -> str:
+        return "raises" if isinstance(value, dict) and "raises" in value else "accepted"
+
+    return [
+        served(doc["lazy_versus_eager"]["after_include_is_served"]),
+        raised(doc["include_assertions"]["include_itself"]),
+        raised(doc["methods_and_head"]["methods_empty_list"]),
+        raised(params["request_typed_with_depends"]),
+        "required"
+        if params["unmarked_optional_no_default"]["query"][0]["required"]
+        else "optional",
+        next(iter(params["unmarked_list"])),
+        params["annotated_last_marker_wins"]["query"][0]["alias"],
+        params["header_default"]["header"][0]["alias"],
+        doc["response_models"]["annotation_none"],
+    ]
+
+
+_TABLE_ROWS = [
+    "route added to a router after it was included",
+    "a router included in itself",
+    "`methods=[]`",
+    "`Annotated[Request, Depends(f)]`",
+    "`x: Optional[int]` with no default",
+    "unmarked `x: list[int]` is a",
+    '`Annotated[int, Query(alias="first"), Query(alias="second")]` alias',
+    "`user_agent: str = Header()` wire name",
+    "`response_model` for `-> None`",
+]
+
+
+def table(paths: list[str]) -> None:
+    """A Markdown table, one column per run, headed by the version each run printed."""
+    docs = [json.loads(FilePath(path).read_text(encoding="utf-8")) for path in paths]
+    columns = [_cells(doc) for doc in docs]
+    print("| Rule | " + " | ".join(doc["fastapi"] for doc in docs) + " |")
+    print("|---|" + "---|" * len(docs))
+    for index, label in enumerate(_TABLE_ROWS):
+        print(f"| {label} | " + " | ".join(column[index] for column in columns) + " |")
+    print()
+    for doc in docs:
+        print(
+            f"- {doc['fastapi']}: `fastapi.__version__` printed {doc['fastapi']}, "
+            f"starlette {doc['starlette']}, pydantic {doc['pydantic']}, "
+            f"Python {doc['python']}; loaded from `{doc['fastapi_loaded_from']}`"
+        )
+
+
 def main() -> None:
     result: dict[str, Any] = {
         "fastapi": fastapi.__version__,
+        "fastapi_loaded_from": str(FilePath(fastapi.__file__).parent),
+        "starlette": starlette.__version__,
+        "pydantic": pydantic.VERSION,
         "python": sys.version.split()[0],
     }
     result["parameters"] = {name: classify(path, fn) for name, path, fn in PARAM_CASES}
@@ -544,4 +607,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 2 and sys.argv[1] == "--table":
+        table(sys.argv[2:])
+    else:
+        main()
