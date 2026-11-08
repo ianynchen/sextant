@@ -536,7 +536,14 @@ in the libraries of the scan, read lazily, each module once:
 A type file (`.pyi`) is read before a source file. Nothing is imported or run, and nothing
 is downloaded. A `sys.version_info` test in a type file is read against the environment's
 Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path); a
-`sys.platform` test gives both branches.
+`sys.platform` test gives both branches. That holds for every read of a library file, its
+names, its signatures and the facts its type headers are read from alike (ruling R22,
+2026-11-08; `imports.version_test`, one rule): only the arm that Python runs is read, so
+typeshed's `enum.pyi`, which defines `IntEnum` once per version range, gives the header of
+the running arm, `IntEnum(int, ReprEnum)` on 3.12, not the last arm written. The test is
+read as written, `sys.version_info`: a module that imports `sys` under another name
+(`import sys as _sys`) has both arms read. The module's own files are read whole, every
+branch.
 
 - **A library name is its defining symbol.** A re-export is followed through the library's
   own imports, into any distribution the environment holds (`fastapi.Request` is
@@ -626,10 +633,11 @@ Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path
   read, as before, only where one statement cannot say: a class name two class statements
   of the file hold (a class defined on two branches, or one of its name inside a
   function), since which one the facts keep is the whole file's question; a name no class
-  statement holds is no class. The headers are byte for byte what reading every module
+  statement holds is no class. The arm of a version test the environment's Python does not
+  run holds no class statement, for either read. The headers are byte for byte what reading every module
   whole writes (`test_type_headers_from_class_statements_equal_a_whole_module_read`; polar
   and Sextant's own fact trees). On polar the pass went from 596 whole-module reads (45 s)
-  to 8 (3 s), and a cold run from 69 s to 51 s.
+  to 8 (3 s), then 3 once version tests were decided, and a cold run from 69 s to 51 s.
 - **An opted-in library's bodies** (`extract_libraries`, D04 §2a) are read whole, as a
   jar is: the detector reports the environment's `site-packages` as the library root of
   each named distribution the module declares and has installed, and the library's own

@@ -558,10 +558,13 @@ def test_library_types_are_headers_up_their_bases_and_nothing_else(tmp_path: Pat
 # A library whose classes take every shape a type header reads (ruling R20): bases through
 # a re-export and a module attribute, a nested class, a protocol, an enum, a generic base,
 # PEP 695 parameters, classes inside `if` and `try`, a base that is a value, a name defined
-# twice, and a name also defined inside a function.
+# twice, a name also defined inside a function, and (ruling R22) a class each arm of a
+# version test defines, a base imported later in the file, a base through an `as` alias, and
+# a base through a star import that `__all__` lists, or does not.
 _KINDS = {
     "kinds/py.typed": "",
     "kinds/__init__.py": "from .shapes import Box as Box\n",
+    "kinds/impl.py": "__all__ = ['Exported']\nclass Exported: ...\nclass Hidden: ...\n",
     "kinds/base.py": (
         "from typing import Generic, Protocol, TypeVar\n"
         "T = TypeVar('T')\n"
@@ -594,9 +597,25 @@ _KINDS = {
         "Made = make()\n"
         "class FromCall(Made): ...\n"
         "class Paired[U](Holder[U]): ...\n"
+        "import sys\n"
+        "import typing as t\n"
+        "from . import base as b\n"
+        "if sys.version_info >= (3, 99):\n"
+        "    class Branchy(b.Speaks): ...\n"
+        "    class Future(Root): ...\n"
+        "else:\n"
+        "    class Branchy(b.Root, t.Protocol): ...\n"
+        "class UsesLate(Late): ...\n"
+        "class ViaStar(Exported): ...\n"
+        "class ViaHidden(Hidden): ...\n"
+        "from .base import Root as Late\n"
+        "from .impl import *\n"
     ),
 }
-_SINGLE = "Box, Box.Lid, Box.Lid.Hinge, Colour, Typed, Tried, FromCall, Paired"
+_SINGLE = (
+    "Box, Box.Lid, Box.Lid.Hinge, Colour, Typed, Tried, FromCall, Paired, Branchy, UsesLate, "
+    "ViaStar, ViaHidden, Future"
+)
 _AMBIGUOUS = "Twice, Local"
 
 
@@ -651,8 +670,21 @@ def test_type_headers_from_class_statements_equal_a_whole_module_read(tmp_path: 
         "kinds/base/Root#",
         "kinds/base/Holder#",
         "kinds/base/Speaks#",
+        "kinds/shapes/Branchy#",
+        "kinds/shapes/UsesLate#",
     } <= symbols
-    assert "kinds/shapes/FromCall#" not in symbols
+    # A base a star import gives is a name the file does not bind (`external`), listed in
+    # `__all__` or not: neither class gets a header.
+    assert not {"kinds/shapes/FromCall#", "kinds/shapes/ViaStar#", "kinds/shapes/ViaHidden#"} & (
+        symbols
+    )
+    headers = {bare_descriptor(fact.symbol): fact for fact in statements[1]}
+    # The live arm of the version test (ruling R22): never the dead one's class or bases.
+    assert "kinds/shapes/Future#" not in symbols
+    branchy = headers["kinds/shapes/Branchy#"]
+    assert branchy.construct_kind == "protocol"
+    assert bare_descriptor(str(branchy.superclass)) == "kinds/base/Root#"
+    assert bare_descriptor(str(headers["kinds/shapes/UsesLate#"].superclass)) == "kinds/base/Root#"
 
 
 def test_a_type_header_runs_no_whole_module_read_for_a_class_named_once(
@@ -679,6 +711,41 @@ def test_a_type_header_runs_no_whole_module_read_for_a_class_named_once(
     read.clear()
     _header_output(tmp_path / "ambiguous", _AMBIGUOUS)
     assert [module for module in read if module.startswith("kinds")] == ["kinds/shapes"]
+
+
+def test_int_enum_and_int_flag_headers_follow_the_running_python(tmp_path: Path):
+    """typeshed's `enum.pyi` defines `IntEnum` and `IntFlag` once per Python version range:
+    the headers are the arm the environment's Python runs (ruling R22), never the last arm
+    written. With no environment that is the running Python."""
+    import sys
+
+    report, tree = _scan(
+        tmp_path,
+        {"app/main.py": "import enum\nclass S(enum.IntEnum): ...\nclass F(enum.IntFlag): ...\n"},
+        (),
+    )
+
+    headers = {
+        bare_descriptor(fact.symbol): fact
+        for _, _, facts in tree
+        for fact in facts
+        if isinstance(fact, TypeHeaderFact)
+    }
+    parents = {
+        name: [
+            bare_descriptor(parent)
+            for parent in [headers[name].superclass, *headers[name].interfaces]
+            if parent is not None
+        ]
+        for name in ("enum/IntEnum#", "enum/IntFlag#")
+        if name in headers
+    }
+    assert sys.version_info >= (3, 12)
+    assert parents == {
+        "enum/IntEnum#": ["builtins/int#", "enum/ReprEnum#"],
+        "enum/IntFlag#": ["builtins/int#", "enum/ReprEnum#", "enum/Flag#"],
+    }
+    assert not [line for line in report.uncovered if line.startswith("enum.")]
 
 
 def test_a_library_class_whose_bases_are_not_all_read_gets_no_header(tmp_path: Path):

@@ -212,6 +212,10 @@ class ModuleIndex:
     asked: set[tuple[str, str]] | None = field(default=None, compare=False, repr=False)
     # The headers of the module's files (`project.py`), where the scan reads them.
     headers: ProjectNames | None = field(default=None, compare=False, repr=False)
+    # The Python a library module is read for (`libraries.py`): an `if` on its version is
+    # decided against it (`version_test`), as that Python runs only one arm (ruling R22).
+    # None for the module's own files, whose every branch is read.
+    python: tuple[int, int] | None = field(default=None, compare=False, repr=False)
     # Every module path and every folder above one: `owns`' answer, worked out once,
     # because every name of another module asks it (GUIDELINES §8.7).
     _owned: frozenset[str] = field(init=False, repr=False, compare=False)
@@ -244,6 +248,48 @@ class ModuleIndex:
             else path in (self.modules if question == "is_module" else self._owned)
             for question, path in asked
         ]
+
+
+def live_arm(node: ast.If, index: ModuleIndex) -> list[ast.stmt] | None:
+    """The one arm of `node` that runs, where `node` tests the Python version and `index`
+    reads a library for a known Python (`ModuleIndex.python`); None where both arms are
+    read."""
+    if index.python is None:
+        return None
+    decided = version_test(node.test, index.python)
+    if decided is None:
+        return None
+    return node.body if decided else node.orelse
+
+
+def version_test(test: ast.expr, python: tuple[int, int]) -> bool | None:
+    """`sys.version_info >= (3, 11)` and its other comparisons, read against `python`;
+    None for any other test."""
+    if not (
+        isinstance(test, ast.Compare)
+        and len(test.ops) == 1
+        and isinstance(test.left, ast.Attribute)
+        and test.left.attr == "version_info"
+        and isinstance(test.left.value, ast.Name)
+        and test.left.value.id == "sys"
+        and isinstance(test.comparators[0], ast.Tuple)
+    ):
+        return None
+    try:
+        written = tuple(int(ast.literal_eval(part)) for part in test.comparators[0].elts)
+    except (ValueError, TypeError):
+        return None
+    running = python[: len(written)]
+    operator = test.ops[0]
+    if isinstance(operator, ast.GtE):
+        return running >= written
+    if isinstance(operator, ast.Gt):
+        return running > written
+    if isinstance(operator, ast.Lt):
+        return running < written
+    if isinstance(operator, ast.LtE):
+        return running <= written
+    return None
 
 
 def module_path(relative: str) -> tuple[str, bool]:
@@ -351,7 +397,11 @@ class _Binder:
         elif isinstance(node, ast.Assign | ast.AnnAssign):
             self._assignment(node, names)
         elif isinstance(node, ast.If):
-            names = _either(names, [self.run(node.body, names), self.run(node.orelse, names)])
+            decided = live_arm(node, self._index)
+            if decided is not None:
+                names = self.run(decided, names)
+            else:
+                names = _either(names, [self.run(node.body, names), self.run(node.orelse, names)])
         elif isinstance(node, ast.Try | ast.TryStar):
             tried = self.run(node.orelse, self.run(node.body, names))
             handled = [self.run(handler.body, names) for handler in node.handlers]

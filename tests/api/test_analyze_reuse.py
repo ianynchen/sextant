@@ -632,3 +632,29 @@ def test_a_header_record_that_cannot_be_read_rereads_the_headers(typed: Path, tm
 
     assert _HEADERS in _rewritten(before, _modified(warm))
     _assert_same_as_fresh(typed, warm, tmp_path)
+
+
+def test_deleting_the_file_that_names_a_type_rereads_the_headers(typed: Path, tmp_path: Path):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    before = _modified(warm)
+
+    (typed / "shop" / "greeting.py").unlink()
+    _analyze(typed, warm)
+
+    assert _HEADERS in _rewritten(before, _modified(warm))
+    assert not any("Greeter" in symbol for symbol in _header_symbols(warm))
+    _assert_same_as_fresh(typed, warm, tmp_path)
+
+
+def test_an_edit_that_stops_naming_a_type_rereads_the_headers(typed: Path, tmp_path: Path):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    before = _modified(warm)
+
+    _write(typed / "shop" / "greeting.py", "def make() -> int:\n    return 1\n")
+    _analyze(typed, warm)
+
+    assert _HEADERS in _rewritten(before, _modified(warm))
+    assert not any("Greeter" in symbol for symbol in _header_symbols(warm))
+    _assert_same_as_fresh(typed, warm, tmp_path)

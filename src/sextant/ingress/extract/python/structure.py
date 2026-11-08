@@ -57,6 +57,7 @@ from sextant.ingress.extract.python.imports import (
     bind_names,
     holds_decorated_value,
     is_typing,
+    live_arm,
 )
 from sextant.ingress.extract.python.typing_rules import (
     ANY,
@@ -630,7 +631,7 @@ def header_types(
 
 
 def single_classes(
-    tree: ast.Module,
+    tree: ast.Module, index: ModuleIndex
 ) -> tuple[dict[str, list[ast.ClassDef]], frozenset[str]]:
     """Each class the file's facts name by its statement alone (ruling R20), by its path
     (`Outer.Inner`), with the class statements from the outermost to it: one at module or
@@ -638,16 +639,17 @@ def single_classes(
     them, whose name no other class statement of the file holds. A class defined twice, or
     beside one of its name inside a function, is not here: which statement the facts keep
     is the whole file's question. Beside them, the name of every class statement: a name
-    none holds is no class of the file's facts."""
+    none holds is no class of the file's facts. An arm of a version test the read does not
+    run (`imports.live_arm`) holds no class statement."""
     counts: dict[str, int] = {}
-    for every in ast.walk(tree):
+    for every in _live_nodes(tree, index):
         if isinstance(every, ast.ClassDef):
             counts[every.name] = counts.get(every.name, 0) + 1
     found: dict[str, list[ast.ClassDef]] = {}
     pending: list[tuple[list[ast.ClassDef], list[ast.stmt]]] = [([], tree.body)]
     while pending:
         outer, body = pending.pop()
-        for statement in _scope_statements(body):
+        for statement in _scope_statements(body, index):
             if isinstance(statement, ast.ClassDef):
                 chain = [*outer, statement]
                 if counts[statement.name] == 1:
@@ -656,21 +658,40 @@ def single_classes(
     return found, frozenset(counts)
 
 
-def _scope_statements(body: list[ast.stmt]) -> Iterator[ast.stmt]:
-    """Every statement of one scope: `body`'s, and those of the blocks its compound
-    statements hold, not a function's or a class's own body."""
+def _live_nodes(tree: ast.AST, index: ModuleIndex) -> Iterator[ast.AST]:
+    """Every node of `tree`, as `ast.walk` gives them, but not those of an arm of a version
+    test the read does not run."""
+    pending: list[ast.AST] = [tree]
+    while pending:
+        node = pending.pop()
+        yield node
+        live = live_arm(node, index) if isinstance(node, ast.If) else None
+        if isinstance(node, ast.If) and live is not None:
+            pending.extend([node.test, *live])
+        else:
+            pending.extend(ast.iter_child_nodes(node))
+
+
+def _scope_statements(body: list[ast.stmt], index: ModuleIndex) -> Iterator[ast.stmt]:
+    """Every statement of one scope that the read runs: `body`'s, and those of the blocks
+    its compound statements hold (one arm of a decided version test), not a function's or a
+    class's own body."""
     for node in body:
         yield node
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            continue
+        live = live_arm(node, index) if isinstance(node, ast.If) else None
+        if live is not None:
+            yield from _scope_statements(live, index)
             continue
         for _, value in ast.iter_fields(node):
             if not isinstance(value, list):
                 continue
             for item in value:
                 if isinstance(item, ast.stmt):
-                    yield from _scope_statements([item])
+                    yield from _scope_statements([item], index)
                 elif isinstance(item, ast.ExceptHandler | ast.match_case):
-                    yield from _scope_statements(item.body)
+                    yield from _scope_statements(item.body, index)
 
 
 def class_header(

@@ -90,6 +90,7 @@ from sextant.ingress.extract.python.imports import (
     Returned,
     Target,
     bind_names,
+    version_test,
 )
 from sextant.ingress.extract.python.structure import class_header, file_facts, single_classes
 from sextant.ingress.extract.python.typing_rules import (
@@ -253,7 +254,8 @@ class Libraries:
         self._tables: dict[str, _Table | None] = {}
         # The file names in each folder a module was looked for in, read once.
         self._listings: dict[Path, frozenset[str]] = {}
-        self._index = ModuleIndex(frozenset(), self)
+        # A library's own files are read for the environment's Python (ruling R22).
+        self._index = ModuleIndex(frozenset(), self, python=self._python)
         # Each library module's own `symbol` facts, read once: where a header's construct
         # kind and written bases come from. They are not written.
         self._symbols: dict[str, dict[str, SymbolFact]] = {}
@@ -1079,7 +1081,7 @@ class Libraries:
         if target.member is None:
             return _Declared(prefix + symbol, ConstructKind.MODULE, None, [], None)
         if table.classes is None:
-            table.classes = single_classes(table.tree)
+            table.classes = single_classes(table.tree, self._index)
         chains, named = table.classes
         chain = chains.get(target.member)
         if chain is None:
@@ -1447,7 +1449,7 @@ def _bound(
     names = dict(names)
     for node in body:
         if isinstance(node, ast.If):
-            decided = _version_test(node.test, python)
+            decided = version_test(node.test, python)
             if decided is None:
                 branches = [
                     _bound(node.body, names, table, package, python),
@@ -1567,7 +1569,7 @@ def _statements(body: list[ast.stmt], python: tuple[int, int]) -> Iterator[ast.s
     is decided, any other `if` gives both branches; a `try` gives its every block."""
     for node in body:
         if isinstance(node, ast.If):
-            decided = _version_test(node.test, python)
+            decided = version_test(node.test, python)
             if decided is None:
                 yield from _statements(node.body, python)
                 yield from _statements(node.orelse, python)
@@ -1579,36 +1581,6 @@ def _statements(body: list[ast.stmt], python: tuple[int, int]) -> Iterator[ast.s
             yield from _statements(node.finalbody, python)
         else:
             yield node
-
-
-def _version_test(test: ast.expr, python: tuple[int, int]) -> bool | None:
-    """`sys.version_info >= (3, 11)` and its other comparisons, read against `python`;
-    None for any other test."""
-    if not (
-        isinstance(test, ast.Compare)
-        and len(test.ops) == 1
-        and isinstance(test.left, ast.Attribute)
-        and test.left.attr == "version_info"
-        and isinstance(test.left.value, ast.Name)
-        and test.left.value.id == "sys"
-        and isinstance(test.comparators[0], ast.Tuple)
-    ):
-        return None
-    try:
-        written = tuple(int(ast.literal_eval(part)) for part in test.comparators[0].elts)
-    except (ValueError, TypeError):
-        return None
-    running = python[: len(written)]
-    operator = test.ops[0]
-    if isinstance(operator, ast.GtE):
-        return running >= written
-    if isinstance(operator, ast.Gt):
-        return running > written
-    if isinstance(operator, ast.Lt):
-        return running < written
-    if isinstance(operator, ast.LtE):
-        return running <= written
-    return None
 
 
 # -- distributions, typeshed ---------------------------------------------------------------

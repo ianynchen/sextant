@@ -96,6 +96,7 @@ from sextant.ingress.extract.python.imports import (
     Target,
     bind_names,
     is_typing,
+    live_arm,
     makes_a_class,
     resolve,
 )
@@ -603,9 +604,14 @@ class BodyReader:
             scope.flow.jump("break" if isinstance(node, ast.Break) else "continue")
         elif isinstance(node, ast.If):
             self._value(node.test, scope)
-            self._branches(
-                [node.body, node.orelse], scope, narrows=self._narrowing(node.test, scope)
-            )
+            live = live_arm(node, self._context.index)
+            if live is not None:
+                # A library read for a known Python runs one arm of a version test.
+                self._branches([live], scope)
+            else:
+                self._branches(
+                    [node.body, node.orelse], scope, narrows=self._narrowing(node.test, scope)
+                )
         elif isinstance(node, ast.For | ast.AsyncFor):
             asynchronous = isinstance(node, ast.AsyncFor)
             iterator = self._iterate(node.iter, scope, asynchronous=asynchronous)
