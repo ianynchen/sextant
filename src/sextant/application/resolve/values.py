@@ -5262,6 +5262,7 @@ class _Walk:
             return self._open_filled(
                 method,
                 index,
+                trail,
                 _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, parameter=(method, index))),
             )
         reached: list[_Reached] = []
@@ -5269,7 +5270,9 @@ class _Walk:
             if len(reached) > PATH_CAP:
                 # The cap bounds the work, not only the answer (R39): past it no more paths
                 # are enumerated, and the parameter is one path, `non_enumerable`.
-                return _only(trail, _unresolved(NON_ENUMERABLE))
+                return self._open_filled(
+                    method, index, trail, _only(trail, _unresolved(NON_ENUMERABLE))
+                )
             step = _Step((_CALLER_OF, method), f"{caller}@{ordinal}")
             merged = _combine(trail, (step,))
             if merged is None:
@@ -5281,8 +5284,10 @@ class _Walk:
                 continue
             reached.extend(self._resolve((_SLOT, caller, ordinal, argument), merged, frames))
         if len(reached) > PATH_CAP:
-            return _only(trail, _unresolved(NON_ENUMERABLE))
-        return self._open_filled(method, index, tuple(reached))
+            return self._open_filled(
+                method, index, trail, _only(trail, _unresolved(NON_ENUMERABLE))
+            )
+        return self._open_filled(method, index, trail, tuple(reached))
 
     @staticmethod
     def _unfilled(method: str, index: int) -> Answer:
@@ -5454,14 +5459,18 @@ class _Walk:
         return memo[owner]
 
     def _open_filled(
-        self, method: str, index: int, reached: tuple[_Reached, ...]
+        self, method: str, index: int, trail: _Trail, reached: tuple[_Reached, ...]
     ) -> tuple[_Reached, ...]:
         """For the type reader, each path the callers of parameter `index` of `method` leave
-        open — none calls it, or the value comes from code not scanned (`external`) — answered
-        beside its `external` with the classes the parameter is written to hold, `declared`
-        (OI-324 part 2, round 2): the callers' values come first, path by path, and the written
-        type never replaces one (`repo: Base` given a `Sub()` is a `Sub`). A written type naming
-        no class the workspace knows adds nothing."""
+        with no value — none calls it, or the path ends `external`, `not_readable`,
+        `non_enumerable`, `cycle` or any other reason but `escapes` — keeps its row and gains
+        the classes the parameter is written to hold beside it, `declared` (ruling R40, OI-324
+        part 2 round 3): the written type is the code's own statement, and replaces nothing;
+        the callers' values come first, path by path (`repo: Base` given a `Sub()` is a `Sub`).
+        An `escapes` path has a value, changed after it was made, and gains nothing. A written
+        type naming no class the workspace knows adds nothing. The written type holds on every
+        path into the parameter, so it is one row per class on the parameter's own path, not one
+        per open path: the caller paths are not multiplied (the path cap counts them)."""
         if not self._declared_types:
             return reached
         written = self._index.declared_parameters.get((method, index))
@@ -5473,12 +5482,9 @@ class _Walk:
         )
         if not declared:
             return reached
-        found: list[_Reached] = []
-        for path, answer in reached:
-            found.append((path, answer))
-            if answer.kind == UNRESOLVED and answer.reason == EXTERNAL:
-                found.extend((path, one) for one in declared)
-        return tuple(found)
+        if not any(answer.kind == UNRESOLVED and answer.reason != ESCAPES for _, answer in reached):
+            return reached
+        return (*reached, *((trail, one) for one in declared))
 
     def _plain_attribute(self, declared: str) -> bool:
         """Whether reading an attribute declared `declared` gives a `declared`: its class is

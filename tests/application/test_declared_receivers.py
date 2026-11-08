@@ -520,3 +520,78 @@ def test_the_paths_of_a_small_lattice_are_each_their_own_row(tmp_path: Path):
     assert {str(row["path_id"]) for row in rows} == expected
     assert {(row["owner"], row["reason"]) for row in rows} == {(None, "external")}
     workspace.close()
+
+
+# -- the written type beside every path with no value (round 3, ruling R40) ----------------
+
+_NODE = (
+    "class Node:\n    def visit(self):\n        return 1\n"
+    "class Leaf(Node):\n    def visit(self):\n        return 2\n"
+    "class Holder:\n"
+    "    def __init__(self, n: Node):\n        self.n = n\n"
+    "    def go(self):\n        self.n.visit()\n"
+)
+_GO = "app/a/Holder#go(sig_dd69782a)."
+
+
+def _rows_at(workspace, site) -> set[tuple]:
+    return {(row["owner"], row["evidence"], row["reason"]) for row in _bound(workspace, site)}
+
+
+def test_the_written_type_sits_beside_a_path_the_walk_could_not_read(tmp_path: Path):
+    """A caller passes a value the walk cannot read (`not_readable`, a dict literal): the path
+    keeps that row and the written `dict` stands beside it, `declared`, so `partial`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": "class Box:\n    def __init__(self, d: dict):\n        self.d = d\n"
+            "    def go(self):\n        self.d.get('x')\n"
+            "def main():\n    Box({'a': 1}).go()\n"
+        },
+    )
+    rows = _rows_at(workspace, _site(workspace, "app/a/Box#go(sig_dd69782a).", "get"))
+    assert ("builtins/dict#", "declared", None) in rows
+    assert (None, "syntax", "not_readable") in rows
+    workspace.close()
+
+
+def test_the_written_type_sits_beside_a_cycle_and_a_capped_set(tmp_path: Path):
+    """A `Holder` built only from inside a recursion ends in `cycle`; a `Node` handed down a
+    2 x 10 lattice ends `non_enumerable` past the cap. Each keeps its row, `Node` beside."""
+    walk = "def walk(n):\n    Holder(n).go()\n    walk(n)\n"
+    workspace = _resolved(tmp_path, {"a.py": _NODE + walk})
+    rows = _rows_at(workspace, _site(workspace, _GO, "visit"))
+    assert ("app/a/Node#", "declared", None) in rows
+    assert (None, "syntax", "cycle") in rows
+    workspace.close()
+
+    files = _lattice(2, 10)
+    files["repo.py"] = (
+        files["repo.py"]
+        .replace("def __init__(self, session):", "def __init__(self, session: Node):")
+        .replace("self.session.execute('select 1')", "self.session.visit()")
+        .replace("class Repo:", "class Node:\n    def visit(self):\n        return 1\nclass Repo:")
+    )
+    workspace = _resolved(tmp_path / "lattice", files)
+    rows = _rows_at(workspace, _site(workspace, _GET, "visit"))
+    assert ("app/repo/Node#", "declared", None) in rows
+    assert (None, "syntax", "non_enumerable") in rows
+    workspace.close()
+
+
+def test_the_written_type_does_not_sit_beside_a_value_that_escaped(tmp_path: Path):
+    """`make` is handed on as a value, so its parameter may also come from callers the module
+    does not show: that path `escapes`. It has a value, whichever caller made it, so the
+    written type is not added beside it."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _NODE + "def make(n: Node):\n    Holder(n).go()\n"
+            "CALLBACKS = [make]\n"
+            "def main():\n    make(Leaf())\n",
+        },
+    )
+    rows = _rows_at(workspace, _site(workspace, _GO, "visit"))
+    assert any(reason == "escapes" for _, _, reason in rows), rows
+    assert ("app/a/Node#", "declared", None) not in rows
+    workspace.close()

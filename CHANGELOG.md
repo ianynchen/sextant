@@ -59,7 +59,9 @@ here would restate those documents rather than add anything.
   lattice of 262,144 paths resolves in 0.2 s instead of 12 s per site. JVM pins and polar: no
   answer changed. **Fixed:** round 1's rule that a written parameter type is the parameter's
   answer gave a wrong `resolved` where a caller passes a subclass or a mock; callers now answer
-  first, and the written type is `declared` beside a path they leave open (`partial`).
+  first, and the written type is `declared` beside every caller path that ends with no value
+  (`external`, `not_readable`, `non_enumerable`, `cycle`; never `escapes`), one row per class on
+  the parameter's own path, so the site is `partial` (ruling R40).
   Calling a `NewType` writes no construction; the value is the argument.
 - **Python: the headers of imported module files, `Self`, and re-exports** (OI-324 part 2,
   review round 1; M03, M04, D00). A file now reads, of each module file its names lead to,

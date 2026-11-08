@@ -229,9 +229,13 @@ call on the method's own receiver (`self.m()`, `cls.m()`), that class and each s
 row each (R37's list); the body (`return cls(...)`) is not read for it. **A parameter's callers
 answer first**, path by path (round 2; round 1's "a written parameter type is that type" gave a
 wrong `resolved` where a caller passes a subclass, a structural implementation or a mock, and is
-withdrawn): a path the callers leave open (no caller, or a value from code not scanned,
-`external`) keeps that answer and gains the classes the parameter is written to hold beside it,
-`declared`, so the site is `partial`. An attribute's declaration answers only where its
+withdrawn): where any caller path ends with no value — no caller, `external`,
+`not_readable`, `non_enumerable`, `cycle`, any reason but `escapes` (ruling R40, round 3) — that
+path keeps its row and the classes the parameter is written to hold stand beside it, `declared`,
+so the site is `partial`. The written type is the code's own statement and replaces nothing; it
+holds on every path into the parameter, so it is one row per class on the parameter's own path,
+not one per open path (the path cap counts them). An `escapes` path has a value, changed after
+it was made, and gains nothing. An attribute's declaration answers only where its
 class is one of the module whose lookup order is read and defines no `__get__` (a descriptor's
 read runs `__get__`, and a library class's methods are not read here).
 
