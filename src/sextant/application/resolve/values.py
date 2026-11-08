@@ -762,17 +762,14 @@ class ValueIndex:
     # (`class ProductRepository(RepositoryBase[Product])`), across files (`_Walk._mapping`).
     class_parameters: Mapping[str, tuple[str, ...]] = dataclass_field(default_factory=dict)
     # Each parameter's written type, `(method, index)` (D00 §5 numbering), for a `c3` module:
-    # the type reader takes it as the parameter's type, as the scanner takes a written
-    # parameter type as the owner of a call on it (`_Walk._declared_parameter`).
+    # the type reader answers with it on a path the parameter's callers leave open
+    # (`_Walk._open_filled`).
     declared_parameters: Mapping[tuple[str, int], Mapping[str, Any]] = dataclass_field(
         default_factory=dict
     )
     generic_bases: Mapping[str, tuple[Mapping[str, Any], ...]] = dataclass_field(
         default_factory=dict
     )
-    # The first path segment of every class of the module (`polar`, `tests`): a type named
-    # under one is the module's, never a library's (`_Walk._declared_parameter`).
-    own_packages: frozenset[str] = frozenset()
     # `_Walk._mapping`'s answers, per class, for as long as this lives.
     mappings: dict[str, dict[str, dict[str, Mapping[str, Any]]] | None] = dataclass_field(
         default_factory=dict, compare=False, repr=False
@@ -1390,9 +1387,6 @@ def value_index(
         declared_fields={key: value for key, value in declared_fields.items() if value},
         class_parameters=_class_parameters(workspace) if by_name else {},
         declared_parameters=declared_parameters,
-        own_packages=frozenset(t.split("/")[0] for t in dispatch.scanned)
-        if by_name
-        else frozenset(),
         generic_bases=_generic_bases(workspace) if by_name else {},
     )
 
@@ -5245,13 +5239,6 @@ class _Walk:
         parameter IS the argument at that call — `log(ctx).next()` — and stopping there would
         name a handler that never received this value.
         """
-        # **A parameter with a written type is that type, for the type reader** (OI-324 part 2,
-        # round 1): as the scanner takes `s: Session` as the owner of a call on `s`, neither
-        # the call the walk came in by nor the callers are read for it. One answer per class
-        # of a written union.
-        declared = self._declared_parameter(method, index)
-        if declared:
-            return tuple((trail, answer) for answer in declared)
         frame = self._frame_in(frames, method)
         if frame is not None:
             slot = self._index.argument_slot(frame[0], frame[1], method, index)
@@ -5272,7 +5259,11 @@ class _Walk:
             return _only(trail, _unresolved(NON_ENUMERABLE))
         callers = self._index.callers.get((method, index), ())
         if not callers:
-            return _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, parameter=(method, index)))
+            return self._open_filled(
+                method,
+                index,
+                _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, parameter=(method, index))),
+            )
         reached: list[_Reached] = []
         for caller, ordinal, argument in callers:
             if len(reached) > PATH_CAP:
@@ -5291,7 +5282,7 @@ class _Walk:
             reached.extend(self._resolve((_SLOT, caller, ordinal, argument), merged, frames))
         if len(reached) > PATH_CAP:
             return _only(trail, _unresolved(NON_ENUMERABLE))
-        return tuple(reached)
+        return self._open_filled(method, index, tuple(reached))
 
     @staticmethod
     def _unfilled(method: str, index: int) -> Answer:
@@ -5462,37 +5453,32 @@ class _Walk:
         memo[owner] = None if conflict else found
         return memo[owner]
 
-    def _declared_parameter(self, method: str, index: int) -> tuple[Answer, ...]:
-        """The classes parameter `index` of `method` is written to hold, for the type
-        reader; none where it is not written, or names no class the workspace knows."""
+    def _open_filled(
+        self, method: str, index: int, reached: tuple[_Reached, ...]
+    ) -> tuple[_Reached, ...]:
+        """For the type reader, each path the callers of parameter `index` of `method` leave
+        open — none calls it, or the value comes from code not scanned (`external`) — answered
+        beside its `external` with the classes the parameter is written to hold, `declared`
+        (OI-324 part 2, round 2): the callers' values come first, path by path, and the written
+        type never replaces one (`repo: Base` given a `Sub()` is a `Sub`). A written type naming
+        no class the workspace knows adds nothing."""
         if not self._declared_types:
-            return ()
+            return reached
         written = self._index.declared_parameters.get((method, index))
-        dispatch = self._index.dispatch
-        if written is None or dispatch is None:
-            return ()
-        known = _declared_classes(written, dispatch)
-        if known:
-            return tuple(
-                Answer(kind=LITERAL, value=member, literal_kind=SYMBOL, declared=True)
-                for member in known
-            )
-        # A library type this environment does not hold (`AsyncSession` of a library that is
-        # not installed): the value is one of its objects, whose class is not read.
-        symbol = str(written.get("symbol"))
-        members = (
-            [str(m.get("symbol")) for m in written.get("arguments") or [] if isinstance(m, Mapping)]
-            if symbol == _UNION
-            else [symbol]
+        if written is None:
+            return reached
+        declared = tuple(
+            Answer(kind=LITERAL, value=member, literal_kind=SYMBOL, declared=True)
+            for member in _declared_classes(written, self._index.dispatch)
         )
-        members = [m for m in members if m != _NONE]
-        own = self._index.own_packages
-        if members and all(
-            is_type_descriptor(m) and m not in (_ANY, dispatch.root) and m.split("/")[0] not in own
-            for m in members
-        ):
-            return (_unresolved(EXTERNAL),)
-        return ()
+        if not declared:
+            return reached
+        found: list[_Reached] = []
+        for path, answer in reached:
+            found.append((path, answer))
+            if answer.kind == UNRESOLVED and answer.reason == EXTERNAL:
+                found.extend((path, one) for one in declared)
+        return tuple(found)
 
     def _plain_attribute(self, declared: str) -> bool:
         """Whether reading an attribute declared `declared` gives a `declared`: its class is

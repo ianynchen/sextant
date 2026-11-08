@@ -1102,13 +1102,10 @@ def test_a_type_of_x_value_is_the_class_so_syntax_calls_reach_no_instance_method
     iterate = _site(workspace, "app/run#each(sig_dd69782a).", "__iter__")
     rows = _bound(workspace, iterate)
     assert [(row["owner"], row["reason"]) for row in rows] == [(None, "not_readable")]
-    # The parameter's written type answers (OI-324 part 2, round 1), and the facts write
-    # `type[Colour]` as `Colour`: a declaration does not say class or instance, so the syntax
-    # call is not bound, with that detail.
-    assert "class or an instance" in str(rows[0]["detail"])
+    assert "metaclass" in str(rows[0]["detail"])
     for row in getitems:
         detail = _bound(workspace, (str(row["caller"]), int(str(row["ordinal"]))))[0]["detail"]
-        assert "class or an instance" in str(detail)
+        assert "a type form" in str(detail)
     workspace.close()
 
 

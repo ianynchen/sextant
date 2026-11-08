@@ -372,10 +372,12 @@ def test_a_class_a_package_re_exports_is_named_by_where_it_is_defined(tmp_path: 
     workspace.close()
 
 
-def test_a_parameter_with_a_written_type_is_that_type_for_the_type_reader(tmp_path: Path):
-    """`self.session` written from `__init__`'s `session: Session`: the written parameter type
-    answers, as the scanner takes it for a call on the parameter itself, and no caller is
-    read for it (round 1: on polar's repository graph that walk did not end in minutes)."""
+def test_a_written_parameter_type_fills_only_the_paths_its_callers_leave_open(
+    tmp_path: Path,
+):
+    """`self.session` written from `__init__`'s `session: Session`, called with a value that
+    comes from outside (`f(s)`, nothing calls `f`): the callers' path ends `external`, and the
+    written type answers beside it, `declared`; the site is `partial` (round 2, item 2)."""
     workspace = _resolved(
         tmp_path,
         {
@@ -387,7 +389,72 @@ def test_a_parameter_with_a_written_type_is_that_type_for_the_type_reader(tmp_pa
         },
     )
     site = _site(workspace, "app/a/Repo#go(sig_dd69782a).", "run")
-    assert _rows(workspace, site) == [("app/a/Session#", "declared", None)]
+    assert sorted(_rows(workspace, site), key=str) == [
+        ("app/a/Session#", "declared", None),
+        (None, "syntax", "external"),
+    ]
+    workspace.close()
+
+
+_INJECTED = (
+    "from typing import Protocol\n"
+    "class Repo(Protocol):\n    def get(self) -> int: ...\n"
+    "class Base:\n    def get(self):\n        return 0\n"
+    "class Sub(Base):\n    def get(self):\n        return 1\n"
+    "class Other(Base):\n    def get(self):\n        return 2\n"
+    "class SqlRepo:\n    def get(self):\n        return 3\n"
+    "class Svc:\n"
+    "    def __init__(self, repo: Repo, base: Base):\n"
+    "        self.repo = repo\n        self.base = base\n"
+    "    def run(self):\n        self.repo.get()\n        self.base.get()\n"
+)
+
+
+def test_the_callers_value_answers_before_the_written_parameter_type(tmp_path: Path):
+    """The reviewer's shapes: a `Protocol` parameter given a `SqlRepo()` is a `SqlRepo`, and a
+    `Base` parameter given a `Sub()` is a `Sub`, each `syntax`, with an edge to that class's
+    method only; the written type is never the answer where a caller states the value."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _INJECTED,
+            "b.py": "from app.a import Svc, SqlRepo, Sub\ndef main():\n    Svc(SqlRepo(), Sub()).run()\n",
+        },
+    )
+    run = "app/a/Svc#run(sig_dd69782a)."
+    repo, base = [
+        (str(row["caller"]), int(str(row["ordinal"])))
+        for row in workspace.query("call_sites")
+        if row["caller"] == _PREFIX + run and row["name"] == "get"
+    ]
+    assert _rows(workspace, repo) == [("app/a/SqlRepo#", "syntax", None)]
+    assert _rows(workspace, base) == [("app/a/Sub#", "syntax", None)]
+    assert [row["callee"] for row in _edges(workspace, base)] == [
+        _PREFIX + "app/a/Sub#get(sig_dd69782a)."
+    ]
+    workspace.close()
+
+
+def test_a_library_value_passed_for_a_written_parameter_type_is_partial(tmp_path: Path):
+    """`Svc(Mock(), Mock())`: the callers' value comes from a library (`external`), and the
+    written type answers beside it: never `resolved` on the declaration alone."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _INJECTED,
+            "b.py": "from unittest.mock import Mock\nfrom app.a import Svc\n"
+            "def main():\n    Svc(Mock(), Mock()).run()\n",
+        },
+    )
+    run = "app/a/Svc#run(sig_dd69782a)."
+    for site in [
+        (str(row["caller"]), int(str(row["ordinal"])))
+        for row in workspace.query("call_sites")
+        if row["caller"] == _PREFIX + run and row["name"] == "get"
+    ]:
+        rows = _bound(workspace, site)
+        assert {row["resolution"] for row in rows if row["owner"]} == {"partial"}
+        assert any(row["owner"] is None for row in rows)
     workspace.close()
 
 
