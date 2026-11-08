@@ -13,19 +13,6 @@ router = APIRouter(prefix="/orders", dependencies=[Depends(audit)])
 STATS_VERSION = "/v2"
 
 
-@router.get("/{order_id}", response_model=OrderOut)
-def get(
-    order_id: UUID,
-    db: DbSession,
-    who: Principal,
-    verbose: bool = False,
-    q: str | None = Query(None, alias="search"),
-    x_trace_id: Annotated[str | None, Header()] = None,
-    session_id: Annotated[str, Cookie()] = "",
-):
-    return OrderOut.model_construct(order_id=order_id, status="new")
-
-
 @router.post("")
 def create(body: OrderIn, svc: OrderService = Depends(get_service)) -> OrderOut:  # noqa: B008
     orders.create(body.customer_id, note=body.note)
@@ -63,3 +50,18 @@ def either() -> dict[str, str]:
 @router.get("/paged")
 def paged(p: Paging = Depends()) -> dict[str, int]:  # noqa: B008
     return {"limit": p.limit, "offset": p.offset}
+
+
+# After every fixed one-segment path: FastAPI matches in declaration order, so a
+# `/{order_id}` declared earlier would answer `/export`, `/raw` and the rest first.
+@router.get("/{order_id}", response_model=OrderOut)
+def get(
+    order_id: UUID,
+    db: DbSession,
+    who: Principal,
+    session_id: Annotated[str, Cookie()],
+    verbose: bool = False,
+    q: str | None = Query(None, alias="search"),
+    x_trace_id: Annotated[str | None, Header()] = None,
+):
+    return OrderOut.model_construct(order_id=order_id, status="new")

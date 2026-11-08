@@ -37,7 +37,7 @@ EXPECTED: dict[
             ("query", "search", False),
             ("header", "x-trace-id", False),
             ("header", "x-api-key", True),
-            ("cookie", "session_id", False),
+            ("cookie", "session_id", True),
         },
         [],
     ),

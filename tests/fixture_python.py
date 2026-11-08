@@ -6,9 +6,12 @@ fixture, installed once, and the suite then runs offline. The environment is the
 subprocess, so nothing of the fixture's is imported into Sextant's process.
 
 CI primes the environment online (`python tests/fixture_python.py`, a step in `pr.yml`), so the
-suite's own `synced(..., offline=True)` finds every package in the uv cache and installs nothing
-from the network. `--frozen` refuses to re-resolve: a `pyproject.toml` edited without `uv lock`
+suite's own `synced(..., offline=True)` finds every package in the uv cache, so the suite never
+reaches the network. `--frozen` refuses to re-resolve: a `pyproject.toml` edited without `uv lock`
 fails here instead of installing something the lock never saw.
+
+Every Python fixture with its own `pyproject.toml` must also be named in the repository's root
+`.sextantignore`, or Sextant reading itself finds it as a second module.
 
 Its own module rather than `conftest.py` for the reason `fixture_build.py` gives: several test
 directories have their own `conftest.py`, so a bare `from conftest import ...` fails elsewhere.

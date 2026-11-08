@@ -66,7 +66,10 @@ def routes_of(routes: Any, prefix: str = "") -> list[dict[str, Any]]:
     for route, context in _iter_routes_with_context(routes):
         if isinstance(route, Mount):
             # A mounted app is its own route table; its paths sit under the mount's path.
-            rows.extend(routes_of(route.app.router.routes, prefix + route.path))
+            # A mount with no router (`StaticFiles`, a plain ASGI app) serves no FastAPI routes.
+            router = getattr(route.app, "router", None)
+            if router is not None:
+                rows.extend(routes_of(router.routes, prefix + route.path))
         elif isinstance(route, APIRoute):
             rows.append(_row(route, context, prefix))
     return rows
