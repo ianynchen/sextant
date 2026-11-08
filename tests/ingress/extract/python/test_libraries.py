@@ -7,6 +7,8 @@ imported or run."""
 
 from pathlib import Path
 
+import pytest
+
 from sextant.application.ports.detector import LibraryRoot
 from sextant.application.ports.scanner import ScanRequest
 from sextant.domain.factfile import read_fact_tree
@@ -466,6 +468,81 @@ def test_the_environments_python_decides_the_standard_library(tmp_path: Path):
     libraries = Libraries((), typeshed_dir(), environment)
 
     assert libraries.member(Target("distutils"), "core") == (Target("distutils/core"),)
+
+
+_MICRO_TESTS = [
+    # (test, full version 3.12.4 known, only 3.12 known)
+    ("sys.version_info >= (3, 12, 1)", True, None),
+    ("sys.version_info > (3, 12)", True, True),
+    ("sys.version_info <= (3, 12)", False, False),
+    ("sys.version_info < (3, 12, 1)", False, None),
+    ("sys.version_info >= (3, 12)", True, True),
+    ("sys.version_info < (3, 13)", True, True),
+]
+
+
+@pytest.mark.parametrize(("test", "full", "partial"), _MICRO_TESTS)
+def test_a_version_test_compares_the_full_version_or_reads_both_arms(
+    test: str, full: bool, partial: bool | None
+):
+    """A test is read as CPython reads it, against the whole `sys.version_info` (task 4e
+    review): on 3.12.4 `> (3, 12)` holds, as a longer tuple is the greater. Where only 3.12
+    is known, a test is decided only where every 3.12 release gives one answer; else both
+    arms are read (None), never a guessed one."""
+    import ast
+
+    from sextant.ingress.extract.python.imports import VersionTests, version_test
+
+    written = ast.parse(test, mode="eval").body
+    names = frozenset({"sys"})
+    known = VersionTests((3, 12), names, frozenset(), release=(3, 12, 4, "final", 0))
+    assert version_test(written, known) is full
+    assert version_test(written, VersionTests((3, 12), names, frozenset())) is partial
+
+
+@pytest.mark.parametrize(("stated", "base"), [("3.12.0", "B"), ("3.12.4", "A")])
+def test_the_environments_full_version_decides_a_micro_version_test(
+    tmp_path: Path, stated: str, base: str
+):
+    """`pyvenv.cfg` states the micro version, so `>= (3, 12, 1)` is decided by it."""
+    environment = tmp_path / "env"
+    _write(environment / "pyvenv.cfg", f"home = /usr/bin\nversion_info = {stated}\n")
+    site = environment / "lib" / "python3.12" / "site-packages"
+    vers = _install(
+        site,
+        "vers",
+        "1.0",
+        {
+            "vers/py.typed": "",
+            "vers/__init__.py": (
+                "import sys\n"
+                "class A: ...\n"
+                "class B: ...\n"
+                "if sys.version_info >= (3, 12, 1):\n"
+                "    class X(A): ...\n"
+                "else:\n"
+                "    class X(B): ...\n"
+            ),
+        },
+    )
+
+    libraries = Libraries((vers,), typeshed_dir(), environment)
+    headers, _, _ = libraries.headers({"vers/X#"}, set(), "d")
+
+    (x,) = [fact for fact in headers if bare_descriptor(fact.symbol) == "vers/X#"]
+    assert bare_descriptor(str(x.superclass)) == f"vers/{base}#"
+
+
+def test_the_full_version_is_in_the_libraries_fingerprint(tmp_path: Path):
+    """Two environments on one minor version but two micro versions decide a micro test
+    differently, so a reuse key must tell them apart."""
+    prints = []
+    for stated in ("3.12.0", "3.12.4"):
+        environment = tmp_path / stated
+        _write(environment / "pyvenv.cfg", f"home = /usr/bin\nversion_info = {stated}\n")
+        (environment / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
+        prints.append(Libraries((), typeshed_dir(), environment).fingerprint)
+    assert prints[0] != prints[1]
 
 
 def test_a_star_import_honours_all_and_skips_private_names(tmp_path: Path):

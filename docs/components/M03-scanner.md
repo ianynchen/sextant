@@ -545,6 +545,13 @@ decided by what its name is bound to, not by its spelling: `sys.version_info` wh
 module's imports bind the name to the module `sys` under any name (`import sys as _sys`),
 or `version_info` where they bind it to `sys.version_info` (`from sys import version_info`);
 a name an import also binds to something else is not decided (`imports.version_tests`).
+The comparison is CPython's, against the whole `sys.version_info` where the environment
+states it (`pyvenv.cfg`'s `version_info = 3.12.4`; the running Python's where there is no
+environment): on 3.12.4 `> (3, 12)` holds and `<= (3, 12)` does not, and `>= (3, 12, 1)`
+holds. Where only the minor version is known (a `site-packages` path, or a `pyvenv.cfg`
+that does not state it), a test is decided only where every release of that minor version
+gives one answer; `>= (3, 12, 1)` on a bare 3.12 reads both arms. The whole version is in
+the libraries' fingerprint, so a micro upgrade re-reads every file.
 Every pass over a library file reads the live arm only: the names it binds, its bodies, the
 types of its module-level names, its declared returns and class members, and the class
 statements headers are read from, so a function written once per version has the live

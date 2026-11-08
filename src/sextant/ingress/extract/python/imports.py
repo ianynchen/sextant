@@ -257,14 +257,19 @@ class VersionTests:
     """What one library module's `if` on the Python version is decided against (ruling
     R22): the Python it is read for, the names the module's imports bind to the module
     `sys` (`import sys`, `import sys as _sys`), and those they bind to `sys.version_info`
-    (`from sys import version_info`)."""
+    (`from sys import version_info`). `release` is that Python's whole `sys.version_info`
+    (`(3, 12, 4, "final", 0)`) where the environment states it; None where only the minor
+    version is known."""
 
     python: tuple[int, int]
     modules: frozenset[str]
     values: frozenset[str]
+    release: tuple[int | str, ...] | None = None
 
 
-def version_tests(tree: ast.Module, python: tuple[int, int]) -> VersionTests:
+def version_tests(
+    tree: ast.Module, python: tuple[int, int], release: tuple[int | str, ...] | None = None
+) -> VersionTests:
     """The module's names for `sys` and `sys.version_info`, by its imports, wherever they
     are written. A name some import binds to anything else as well is neither: what it is
     when the test runs depends on which import ran."""
@@ -287,7 +292,7 @@ def version_tests(tree: ast.Module, python: tuple[int, int]) -> VersionTests:
                     values.add(bound)
                 else:
                     other.add(bound)
-    return VersionTests(python, frozenset(modules - other), frozenset(values - other))
+    return VersionTests(python, frozenset(modules - other), frozenset(values - other), release)
 
 
 def live_arm(node: ast.If, index: ModuleIndex, here: str) -> list[ast.stmt] | None:
@@ -315,9 +320,14 @@ def live_statements(body: list[ast.stmt], index: ModuleIndex, here: str) -> list
 
 
 def version_test(test: ast.expr, tests: VersionTests) -> bool | None:
-    """`sys.version_info >= (3, 11)` and its other comparisons, read against the Python
-    `tests` holds, `sys` and `version_info` being whatever names the module's imports bind
-    them to; None for any other test."""
+    """`sys.version_info >= (3, 11)` and its other comparisons, `sys` and `version_info`
+    being whatever names the module's imports bind them to; None for any other test.
+
+    Read as CPython reads it: the whole `sys.version_info` against the written tuple, so
+    on 3.12.4 `> (3, 12)` holds (a longer tuple with an equal start is the greater) and
+    `>= (3, 12, 1)` holds. Where only the minor version is known, the test is decided only
+    where every release of that minor version gives one answer, its first (`3.12.0`
+    alpha) and any later; else None, so both arms are read, never a guessed one."""
     if not (
         isinstance(test, ast.Compare)
         and len(test.ops) == 1
@@ -326,19 +336,38 @@ def version_test(test: ast.expr, tests: VersionTests) -> bool | None:
     ):
         return None
     try:
-        written = tuple(int(ast.literal_eval(part)) for part in test.comparators[0].elts)
+        written = tuple(ast.literal_eval(part) for part in test.comparators[0].elts)
     except (ValueError, TypeError):
         return None
-    running = tests.python[: len(written)]
-    operator = test.ops[0]
-    if isinstance(operator, ast.GtE):
-        return running >= written
-    if isinstance(operator, ast.Gt):
-        return running > written
-    if isinstance(operator, ast.Lt):
-        return running < written
-    if isinstance(operator, ast.LtE):
-        return running <= written
+    if not all(isinstance(part, int | str) and not isinstance(part, bool) for part in written):
+        return None
+    if tests.release is not None:
+        return _compared(test.ops[0], tests.release, written)
+    first = _compared(test.ops[0], (*tests.python, 0, "alpha", 0), written)
+    last = _compared(test.ops[0], (*tests.python, _LAST_MICRO), written)
+    return first if first == last else None
+
+
+# Above every micro version a release has: the last release of a minor version.
+_LAST_MICRO = 1 << 30
+
+
+def _compared(
+    operator: ast.cmpop, running: tuple[int | str, ...], written: tuple[object, ...]
+) -> bool | None:
+    try:
+        if isinstance(operator, ast.GtE):
+            return running >= written
+        if isinstance(operator, ast.Gt):
+            return running > written
+        if isinstance(operator, ast.Lt):
+            return running < written
+        if isinstance(operator, ast.LtE):
+            return running <= written
+    except TypeError:
+        # A number written where the release has its level (`(3, 12, 0, 0)`): Python
+        # itself raises.
+        return None
     return None
 
 

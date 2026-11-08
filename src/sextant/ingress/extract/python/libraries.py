@@ -234,6 +234,8 @@ class Libraries:
         self._commit = (typeshed / "COMMIT").read_text(encoding="utf-8").strip()
         self._site = _site_packages(environment) or (archives[0].archive if archives else None)
         self._python = _python_version(environment, self._site)
+        # Its whole `sys.version_info` where the environment states it (task 4e review).
+        self._release = _python_release(environment, self._site)
         self._stdlib = _stdlib_versions(typeshed / "stdlib" / "VERSIONS")
         self._stubs = {
             _normalize(folder.name): folder
@@ -295,6 +297,7 @@ class Libraries:
         them, not only the declared ones: a re-export leads into any installed distribution
         (`_other_distributions`)."""
         digest = hashlib.sha256(self.identity.encode())
+        digest.update(f"\npython release {self._release}".encode())
         for library in sorted(set(self._installed.values()), key=lambda one: one.coordinate):
             digest.update(f"\n{library.coordinate} {library.archive}".encode())
         for info in sorted(self._site.glob("*.dist-info")) if self._site else []:
@@ -1268,7 +1271,9 @@ class Libraries:
             except (OSError, SyntaxError, ValueError, RecursionError):
                 tree = None
             if tree is not None:
-                table = _Table(source, tree, versions=version_tests(tree, self._python))
+                table = _Table(
+                    source, tree, versions=version_tests(tree, self._python, self._release)
+                )
                 package = module if source.is_package else module.rpartition("/")[0]
                 _bind(tree.body, table, package)
         self._tables[module] = table
@@ -1627,6 +1632,40 @@ def _python_version(environment: Path | None, site: Path | None) -> tuple[int, i
         if found is not None:
             return int(found.group(1)), int(found.group(2))
     return sys.version_info.major, sys.version_info.minor
+
+
+# `version_info = 3.12.4` (uv) or `version = 3.13.0rc2` (venv), as `pyvenv.cfg` writes it.
+_RELEASE = re.compile(r"\s*(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?\s*$")
+_LEVELS = {"a": "alpha", "b": "beta", "rc": "candidate"}
+
+
+def _python_release(environment: Path | None, site: Path | None) -> tuple[int | str, ...] | None:
+    """The environment's Python as its whole `sys.version_info` (`(3, 12, 4, "final", 0)`),
+    where `_python_version` reads it from a statement of the full version: `pyvenv.cfg`'s,
+    or the running Python's where there is no environment. None where only the minor
+    version is known (a `pyvenv.cfg` without it, or the `site-packages` path)."""
+    config = environment / "pyvenv.cfg" if environment is not None else None
+    if config is not None and config.is_file():
+        for line in config.read_text(encoding="utf-8", errors="replace").splitlines():
+            key, _, value = line.partition("=")
+            if key.strip() not in ("version_info", "version"):
+                continue
+            found = _RELEASE.match(value)
+            if found is None:
+                return None
+            major, minor, micro, level, serial = found.groups()
+            return (
+                int(major),
+                int(minor),
+                int(micro),
+                _LEVELS[level] if level else "final",
+                int(serial) if serial else 0,
+            )
+    if site is not None and re.fullmatch(r"python(\d+)\.(\d+)t?", site.parent.name):
+        return None
+    if config is not None and config.is_file():
+        return None
+    return tuple(sys.version_info)
 
 
 def _stdlib_versions(path: Path) -> dict[str, tuple[tuple[int, int], tuple[int, int] | None]]:
