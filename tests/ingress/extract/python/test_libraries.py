@@ -610,11 +610,28 @@ _KINDS = {
         "class ViaHidden(Hidden): ...\n"
         "from .base import Root as Late\n"
         "from .impl import *\n"
+        # `sys` under another name, and `version_info` imported from it (task 4e follow-up):
+        # the test is decided by what the name is bound to, not by how it is spelled.
+        "import sys as _sys\n"
+        "from sys import version_info as _vi\n"
+        "if _sys.version_info >= (3, 99):\n"
+        "    from .base import Speaks as Picked\n"
+        "else:\n"
+        "    from .base import Root as Picked\n"
+        "class ByModuleAlias(Picked): ...\n"
+        "if _vi >= (3, 99):\n"
+        "    class ByValue(b.Speaks): ...\n"
+        "else:\n"
+        "    class ByValue(b.Root): ...\n"
+        "if _sys.version_info >= (3, 99):\n"
+        "    def pick() -> Speaks: ...\n"
+        "else:\n"
+        "    def pick() -> Root: ...\n"
     ),
 }
 _SINGLE = (
     "Box, Box.Lid, Box.Lid.Hinge, Colour, Typed, Tried, FromCall, Paired, Branchy, UsesLate, "
-    "ViaStar, ViaHidden, Future"
+    "ViaStar, ViaHidden, Future, ByModuleAlias, ByValue"
 )
 _AMBIGUOUS = "Twice, Local"
 
@@ -685,6 +702,10 @@ def test_type_headers_from_class_statements_equal_a_whole_module_read(tmp_path: 
     assert branchy.construct_kind == "protocol"
     assert bare_descriptor(str(branchy.superclass)) == "kinds/base/Root#"
     assert bare_descriptor(str(headers["kinds/shapes/UsesLate#"].superclass)) == "kinds/base/Root#"
+    for name in ("ByModuleAlias", "ByValue"):
+        assert bare_descriptor(str(headers[f"kinds/shapes/{name}#"].superclass)) == (
+            "kinds/base/Root#"
+        )
 
 
 def test_a_type_header_runs_no_whole_module_read_for_a_class_named_once(
@@ -711,6 +732,90 @@ def test_a_type_header_runs_no_whole_module_read_for_a_class_named_once(
     read.clear()
     _header_output(tmp_path / "ambiguous", _AMBIGUOUS)
     assert [module for module in read if module.startswith("kinds")] == ["kinds/shapes"]
+
+
+def test_a_library_function_written_per_version_returns_the_live_arms_type(tmp_path: Path):
+    """`pick` is defined once per arm of `if _sys.version_info >= (3, 99)`, `sys` imported
+    as `_sys`: the call on its result is owned by the live arm's return, never a closed list
+    of both."""
+    kinds = _install(tmp_path / "site", "kinds", "1.0", _KINDS)
+    _, tree = _scan(
+        tmp_path,
+        {"app/main.py": "from kinds import shapes\ndef use():\n    return shapes.pick().go()\n"},
+        (kinds,),
+    )
+
+    (go,) = [site for site in _sites(tree, "app/main#use") if site.target.name == "go"]
+    assert go.target.owner == "kinds/base/Root#"
+
+
+def _library_index(here: str):
+    from sextant.ingress.extract.python.imports import ModuleIndex, version_tests
+
+    def index_for(tree):
+        tests = version_tests(tree, (3, 12))
+        return ModuleIndex(frozenset(), None, versions=lambda module: tests)
+
+    return index_for
+
+
+_PER_VERSION = (
+    "import sys\n"
+    "class A:\n    def go(self) -> None: ...\n"
+    "class B:\n    def go(self) -> None: ...\n"
+    "if sys.version_info >= (3, 99):\n"
+    "    def f() -> A: ...\n"
+    "    import json as codec\n"
+    "else:\n"
+    "    def f() -> B: ...\n"
+    "    codec = B()\n"
+    "def use():\n"
+    "    codec.go()\n"
+)
+
+
+def test_a_library_files_declared_returns_read_only_the_live_arm():
+    """`declared_types` of a library file read for 3.12 sees the `def` of the live arm, and
+    only it; the module's own files, read for no one Python, see neither, as before."""
+    import ast
+
+    from sextant.ingress.extract.python.imports import ModuleIndex, bind_names
+    from sextant.ingress.extract.python.structure import declared_types
+    from sextant.ingress.extract.python.typing_rules import TypeScope
+
+    tree = ast.parse(_PER_VERSION)
+    found = {}
+    for index in (_library_index("lib/m")(tree), ModuleIndex(frozenset())):
+        names = bind_names(tree.body, "lib/m", is_package=False, index=index)
+        types = TypeScope(names=names, here="lib/m", index=index)
+        returns, _ = declared_types(tree.body, "lib/m", types, is_package=False, index=index)
+        found[index.versions is not None] = {
+            key: value.symbol for key, value in returns.items() if "#f(" in key
+        }
+    assert list(found[True].values()) == ["lib/m/B#"]
+    assert found[False] == {}
+
+
+def test_a_library_files_module_names_are_typed_from_the_live_arm_only():
+    """`codec` is imported in the dead arm and written `B()` in the live one: read for 3.12,
+    its one write types it, so `codec.go()` is owned by `B`."""
+    import ast
+
+    from sextant.domain.facts import CallSiteFact
+    from sextant.ingress.extract.python.calls import FileContext
+    from sextant.ingress.extract.python.structure import file_facts
+
+    tree = ast.parse(_PER_VERSION)
+    index = _library_index("lib/m")(tree)
+    read = file_facts(tree, FileContext("lib/m", False, index, "p ", "d"), 20)
+    owners = [
+        fact.target.owner
+        for fact in read.facts
+        if isinstance(fact, CallSiteFact)
+        and fact.target.name == "go"
+        and bare_descriptor(fact.caller).startswith("lib/m#use")
+    ]
+    assert owners == ["lib/m/B#"]
 
 
 def test_int_enum_and_int_flag_headers_follow_the_running_python(tmp_path: Path):

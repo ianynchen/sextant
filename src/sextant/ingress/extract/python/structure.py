@@ -58,6 +58,7 @@ from sextant.ingress.extract.python.imports import (
     holds_decorated_value,
     is_typing,
     live_arm,
+    live_statements,
 )
 from sextant.ingress.extract.python.typing_rules import (
     ANY,
@@ -109,7 +110,7 @@ def file_facts(tree: ast.Module, context: FileContext, last_line: int) -> FileFa
     types, each time with the types the reading before found, until a reading finds no
     new type for a name it asked about. A type is only ever added there (a write whose
     type is known stays known), so those readings end, at most one per name."""
-    rebound = _rebound_names(tree)
+    rebound = _rebound_names(tree, context.index, context.here)
     writer = _Writer(context, rebound, None)
     writer.module(tree, last_line)
     if writer.agrees(writer.module_types()):
@@ -140,11 +141,14 @@ def class_shapes(
 ) -> dict[str, ClassShape]:
     """The type parameters, written bases and members of each class the module body and
     its class bodies define, read before any body so a use above the class sees it. A name
-    bound more than once (a class defined on two branches) is not one class: none."""
+    bound more than once (a class defined on two branches) is not one class: none. A
+    library file's version tests are decided (`imports.live_statements`)."""
     found: dict[str, ClassShape] = {}
     seen: set[str] = set()
     pending: list[tuple[str | None, ast.ClassDef]] = [
-        (None, node) for node in body if isinstance(node, ast.ClassDef)
+        (None, node)
+        for node in live_statements(body, types.index, here)
+        if isinstance(node, ast.ClassDef)
     ]
     while pending:
         outer, node = pending.pop(0)
@@ -156,21 +160,23 @@ def class_shapes(
             seen.add(symbol)
             continue
         seen.add(symbol)
-        found[symbol] = class_shape(node, types, node.body)
-        pending += [(path, inner) for inner in node.body if isinstance(inner, ast.ClassDef)]
+        members = live_statements(node.body, types.index, here)
+        found[symbol] = class_shape(node, types, members)
+        pending += [(path, inner) for inner in members if isinstance(inner, ast.ClassDef)]
     return found
 
 
-def _rebound_names(tree: ast.Module) -> set[str]:
+def _rebound_names(tree: ast.Module, index: ModuleIndex, here: str) -> set[str]:
     """The module-level names some statement binds to a value this scanner does not read
     as a write: a loop or `with` target, an import, `del`, `:=`, an `except ... as`, a
     `match` capture, `+=`, or a `global` in a function. Such a name's
-    writes are not all known, so it has no class."""
+    writes are not all known, so it has no class. A library file's version tests are
+    decided: the arm its Python does not run binds nothing."""
     rebound: set[str] = set()
-    for node in ast.walk(tree):
+    for node in _live_nodes(tree, index, here):
         if isinstance(node, ast.Global):
             rebound.update(node.names)
-    for node in _module_level(tree.body):
+    for node in _module_level(tree.body, index, here):
         if isinstance(node, ast.Import | ast.ImportFrom):
             rebound.update(
                 (alias.asname or alias.name).partition(".")[0]
@@ -195,14 +201,19 @@ def _rebound_names(tree: ast.Module) -> set[str]:
     return rebound
 
 
-def _module_level(body: list[ast.stmt]) -> list[ast.AST]:
+def _module_level(body: list[ast.stmt], index: ModuleIndex, here: str) -> list[ast.AST]:
     """Every node of the module's own scope: its statements and expressions, not the
-    bodies of the functions and classes it defines (a comprehension's `:=` binds here)."""
+    bodies of the functions and classes it defines (a comprehension's `:=` binds here),
+    nor the arm of a version test a library file's Python does not run."""
     found: list[ast.AST] = []
     pending: list[ast.AST] = list(body)
     while pending:
         node = pending.pop()
         found.append(node)
+        live = live_arm(node, index, here) if isinstance(node, ast.If) else None
+        if isinstance(node, ast.If) and live is not None:
+            pending.extend([node.test, *live])
+            continue
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
             # Its decorators and defaults run here; its body does not.
             pending.extend(getattr(node, "decorator_list", []))
@@ -631,7 +642,7 @@ def header_types(
 
 
 def single_classes(
-    tree: ast.Module, index: ModuleIndex
+    tree: ast.Module, here: str, index: ModuleIndex
 ) -> tuple[dict[str, list[ast.ClassDef]], frozenset[str]]:
     """Each class the file's facts name by its statement alone (ruling R20), by its path
     (`Outer.Inner`), with the class statements from the outermost to it: one at module or
@@ -642,14 +653,14 @@ def single_classes(
     none holds is no class of the file's facts. An arm of a version test the read does not
     run (`imports.live_arm`) holds no class statement."""
     counts: dict[str, int] = {}
-    for every in _live_nodes(tree, index):
+    for every in _live_nodes(tree, index, here):
         if isinstance(every, ast.ClassDef):
             counts[every.name] = counts.get(every.name, 0) + 1
     found: dict[str, list[ast.ClassDef]] = {}
     pending: list[tuple[list[ast.ClassDef], list[ast.stmt]]] = [([], tree.body)]
     while pending:
         outer, body = pending.pop()
-        for statement in _scope_statements(body, index):
+        for statement in _scope_statements(body, index, here):
             if isinstance(statement, ast.ClassDef):
                 chain = [*outer, statement]
                 if counts[statement.name] == 1:
@@ -658,21 +669,21 @@ def single_classes(
     return found, frozenset(counts)
 
 
-def _live_nodes(tree: ast.AST, index: ModuleIndex) -> Iterator[ast.AST]:
+def _live_nodes(tree: ast.AST, index: ModuleIndex, here: str) -> Iterator[ast.AST]:
     """Every node of `tree`, as `ast.walk` gives them, but not those of an arm of a version
     test the read does not run."""
     pending: list[ast.AST] = [tree]
     while pending:
         node = pending.pop()
         yield node
-        live = live_arm(node, index) if isinstance(node, ast.If) else None
+        live = live_arm(node, index, here) if isinstance(node, ast.If) else None
         if isinstance(node, ast.If) and live is not None:
             pending.extend([node.test, *live])
         else:
             pending.extend(ast.iter_child_nodes(node))
 
 
-def _scope_statements(body: list[ast.stmt], index: ModuleIndex) -> Iterator[ast.stmt]:
+def _scope_statements(body: list[ast.stmt], index: ModuleIndex, here: str) -> Iterator[ast.stmt]:
     """Every statement of one scope that the read runs: `body`'s, and those of the blocks
     its compound statements hold (one arm of a decided version test), not a function's or a
     class's own body."""
@@ -680,18 +691,18 @@ def _scope_statements(body: list[ast.stmt], index: ModuleIndex) -> Iterator[ast.
         yield node
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             continue
-        live = live_arm(node, index) if isinstance(node, ast.If) else None
+        live = live_arm(node, index, here) if isinstance(node, ast.If) else None
         if live is not None:
-            yield from _scope_statements(live, index)
+            yield from _scope_statements(live, index, here)
             continue
         for _, value in ast.iter_fields(node):
             if not isinstance(value, list):
                 continue
             for item in value:
                 if isinstance(item, ast.stmt):
-                    yield from _scope_statements([item], index)
+                    yield from _scope_statements([item], index, here)
                 elif isinstance(item, ast.ExceptHandler | ast.match_case):
-                    yield from _scope_statements(item.body, index)
+                    yield from _scope_statements(item.body, index, here)
 
 
 def class_header(
@@ -722,9 +733,9 @@ def factory_calls(tree: ast.Module, types: TypeScope) -> dict[str, tuple[Target,
     R17). A name some statement binds in a way not read as a write (`_rebound_names`), that
     the file also binds as a function, a class or an import, or that a write gives any other
     value, has none: the resolver follows its writes."""
-    rebound = _rebound_names(tree)
+    rebound = _rebound_names(tree, types.index, types.here)
     written: dict[str, list[Target | None]] = {}
-    for node in _module_level(tree.body):
+    for node in _module_level(tree.body, types.index, types.here):
         if isinstance(node, ast.Assign):
             targets, value = node.targets, node.value
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
@@ -773,14 +784,16 @@ def declared_types(
     what a call of it declares it gives (`calls.own_return_type`). A name defined twice
     keeps one only where every definition declares the same; a decorated one has none.
     Beside them, the type each class body declares for an attribute (`client:
-    HttpClient`, PEP 526), by field symbol, read the same way."""
+    HttpClient`, PEP 526), by field symbol, read the same way. In a library file, a
+    statement of the live arm of a version test is read as one of the body it is in, and
+    the other arm is not read (`imports.live_statements`)."""
     found: dict[str, TypeRef | None] = {}
     fields: dict[str, TypeRef | None] = {}
     pending: list[tuple[str | None, list[ast.stmt], TypeScope]] = [(None, body, types)]
     while pending:
         path, statements, scope = pending.pop(0)
         owner = type_symbol(Target(here, path))
-        for node in statements:
+        for node in live_statements(statements, index, here):
             if isinstance(node, ast.ClassDef):
                 inner = f"{path}.{node.name}" if path else node.name
                 generic = scope.with_type_parameters(node.type_params)

@@ -541,9 +541,14 @@ names, its signatures and the facts its type headers are read from alike (ruling
 2026-11-08; `imports.version_test`, one rule): only the arm that Python runs is read, so
 typeshed's `enum.pyi`, which defines `IntEnum` once per version range, gives the header of
 the running arm, `IntEnum(int, ReprEnum)` on 3.12, not the last arm written. The test is
-read as written, `sys.version_info`: a module that imports `sys` under another name
-(`import sys as _sys`) has both arms read. The module's own files are read whole, every
-branch.
+decided by what its name is bound to, not by its spelling: `sys.version_info` where the
+module's imports bind the name to the module `sys` under any name (`import sys as _sys`),
+or `version_info` where they bind it to `sys.version_info` (`from sys import version_info`);
+a name an import also binds to something else is not decided (`imports.version_tests`).
+Every pass over a library file reads the live arm only: the names it binds, its bodies, the
+types of its module-level names, its declared returns and class members, and the class
+statements headers are read from, so a function written once per version has the live
+arm's return, never both. The module's own files are read whole, every branch.
 
 - **A library name is its defining symbol.** A re-export is followed through the library's
   own imports, into any distribution the environment holds (`fastapi.Request` is

@@ -212,10 +212,12 @@ class ModuleIndex:
     asked: set[tuple[str, str]] | None = field(default=None, compare=False, repr=False)
     # The headers of the module's files (`project.py`), where the scan reads them.
     headers: ProjectNames | None = field(default=None, compare=False, repr=False)
-    # The Python a library module is read for (`libraries.py`): an `if` on its version is
-    # decided against it (`version_test`), as that Python runs only one arm (ruling R22).
-    # None for the module's own files, whose every branch is read.
-    python: tuple[int, int] | None = field(default=None, compare=False, repr=False)
+    # How a library module's version tests are decided (`libraries.py`), by module path:
+    # the Python it is read for and its names for `sys` (`VersionTests`), as that Python runs
+    # only one arm (ruling R22). None for the module's own files, whose every branch is read.
+    versions: "Callable[[str], VersionTests | None] | None" = field(
+        default=None, compare=False, repr=False
+    )
     # Every module path and every folder above one: `owns`' answer, worked out once,
     # because every name of another module asks it (GUIDELINES §8.7).
     _owned: frozenset[str] = field(init=False, repr=False, compare=False)
@@ -250,28 +252,76 @@ class ModuleIndex:
         ]
 
 
-def live_arm(node: ast.If, index: ModuleIndex) -> list[ast.stmt] | None:
+@dataclass(frozen=True)
+class VersionTests:
+    """What one library module's `if` on the Python version is decided against (ruling
+    R22): the Python it is read for, the names the module's imports bind to the module
+    `sys` (`import sys`, `import sys as _sys`), and those they bind to `sys.version_info`
+    (`from sys import version_info`)."""
+
+    python: tuple[int, int]
+    modules: frozenset[str]
+    values: frozenset[str]
+
+
+def version_tests(tree: ast.Module, python: tuple[int, int]) -> VersionTests:
+    """The module's names for `sys` and `sys.version_info`, by its imports, wherever they
+    are written. A name some import binds to anything else as well is neither: what it is
+    when the test runs depends on which import ran."""
+    modules: set[str] = set()
+    values: set[str] = set()
+    other: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "sys":
+                    modules.add(alias.asname or "sys")
+                else:
+                    other.add(alias.asname or alias.name.partition(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                bound = alias.asname or alias.name
+                if node.module == "sys" and node.level == 0 and alias.name == "version_info":
+                    values.add(bound)
+                else:
+                    other.add(bound)
+    return VersionTests(python, frozenset(modules - other), frozenset(values - other))
+
+
+def live_arm(node: ast.If, index: ModuleIndex, here: str) -> list[ast.stmt] | None:
     """The one arm of `node` that runs, where `node` tests the Python version and `index`
-    reads a library for a known Python (`ModuleIndex.python`); None where both arms are
-    read."""
-    if index.python is None:
-        return None
-    decided = version_test(node.test, index.python)
+    reads the library module `here` for a known Python (`ModuleIndex.versions`); None where
+    both arms are read."""
+    tests = index.versions(here) if index.versions is not None else None
+    decided = None if tests is None else version_test(node.test, tests)
     if decided is None:
         return None
     return node.body if decided else node.orelse
 
 
-def version_test(test: ast.expr, python: tuple[int, int]) -> bool | None:
-    """`sys.version_info >= (3, 11)` and its other comparisons, read against `python`;
-    None for any other test."""
+def live_statements(body: list[ast.stmt], index: ModuleIndex, here: str) -> list[ast.stmt]:
+    """`body` with each `if` on the Python version that `live_arm` decides replaced by the
+    statements of its live arm, at every depth; every other statement as it is."""
+    found: list[ast.stmt] = []
+    for node in body:
+        live = live_arm(node, index, here) if isinstance(node, ast.If) else None
+        if live is None:
+            found.append(node)
+        else:
+            found.extend(live_statements(live, index, here))
+    return found
+
+
+def version_test(test: ast.expr, tests: VersionTests) -> bool | None:
+    """`sys.version_info >= (3, 11)` and its other comparisons, read against the Python
+    `tests` holds, `sys` and `version_info` being whatever names the module's imports bind
+    them to; None for any other test."""
     if not (
         isinstance(test, ast.Compare)
         and len(test.ops) == 1
-        and isinstance(test.left, ast.Attribute)
-        and test.left.attr == "version_info"
-        and isinstance(test.left.value, ast.Name)
-        and test.left.value.id == "sys"
+        and _names_version_info(test.left, tests)
         and isinstance(test.comparators[0], ast.Tuple)
     ):
         return None
@@ -279,7 +329,7 @@ def version_test(test: ast.expr, python: tuple[int, int]) -> bool | None:
         written = tuple(int(ast.literal_eval(part)) for part in test.comparators[0].elts)
     except (ValueError, TypeError):
         return None
-    running = python[: len(written)]
+    running = tests.python[: len(written)]
     operator = test.ops[0]
     if isinstance(operator, ast.GtE):
         return running >= written
@@ -290,6 +340,17 @@ def version_test(test: ast.expr, python: tuple[int, int]) -> bool | None:
     if isinstance(operator, ast.LtE):
         return running <= written
     return None
+
+
+def _names_version_info(node: ast.expr, tests: VersionTests) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in tests.values
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "version_info"
+        and isinstance(node.value, ast.Name)
+        and node.value.id in tests.modules
+    )
 
 
 def module_path(relative: str) -> tuple[str, bool]:
@@ -397,7 +458,7 @@ class _Binder:
         elif isinstance(node, ast.Assign | ast.AnnAssign):
             self._assignment(node, names)
         elif isinstance(node, ast.If):
-            decided = live_arm(node, self._index)
+            decided = live_arm(node, self._index, self._here)
             if decided is not None:
                 names = self.run(decided, names)
             else:

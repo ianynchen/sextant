@@ -604,7 +604,7 @@ class BodyReader:
             scope.flow.jump("break" if isinstance(node, ast.Break) else "continue")
         elif isinstance(node, ast.If):
             self._value(node.test, scope)
-            live = live_arm(node, self._context.index)
+            live = live_arm(node, self._context.index, self._context.here)
             if live is not None:
                 # A library read for a known Python runs one arm of a version test.
                 self._branches([live], scope)

@@ -89,8 +89,10 @@ from sextant.ingress.extract.python.imports import (
     ModuleIndex,
     Returned,
     Target,
+    VersionTests,
     bind_names,
     version_test,
+    version_tests,
 )
 from sextant.ingress.extract.python.structure import class_header, file_facts, single_classes
 from sextant.ingress.extract.python.typing_rules import (
@@ -192,6 +194,8 @@ class _Table:
     # Read on first use: the classes a header reads by their statement alone
     # (`structure.single_classes`), and the name of every class statement of the file.
     classes: tuple[dict[str, list[ast.ClassDef]], frozenset[str]] | None = None
+    # How its version tests are decided (ruling R22), read with the tree.
+    versions: VersionTests | None = None
 
 
 @dataclass(frozen=True)
@@ -255,7 +259,7 @@ class Libraries:
         # The file names in each folder a module was looked for in, read once.
         self._listings: dict[Path, frozenset[str]] = {}
         # A library's own files are read for the environment's Python (ruling R22).
-        self._index = ModuleIndex(frozenset(), self, python=self._python)
+        self._index = ModuleIndex(frozenset(), self, versions=self._version_tests)
         # Each library module's own `symbol` facts, read once: where a header's construct
         # kind and written bases come from. They are not written.
         self._symbols: dict[str, dict[str, SymbolFact]] = {}
@@ -300,6 +304,12 @@ class Libraries:
             except OSError:
                 digest.update(b"no RECORD")
         return "sha256:" + digest.hexdigest()
+
+    def _version_tests(self, module: str) -> VersionTests | None:
+        """How the library module `module`'s version tests are decided: read with its tree
+        (`_table`), which every read of the module starts from."""
+        table = self._tables.get(module)
+        return None if table is None else table.versions
 
     # -- the scanner's questions (`imports.LibraryNames`) ------------------------------
 
@@ -524,7 +534,7 @@ class Libraries:
         if table is not None and node is not None:
             inside, self._inside = self._inside, True
             try:
-                body = list(_statements(node.body, self._python))
+                body = list(_statements(node.body, table.versions))
                 self._shapes[symbol] = class_shape(node, self._scope(table), body)
             finally:
                 self._inside = inside
@@ -583,7 +593,7 @@ class Libraries:
             return None
         defined = [
             node
-            for node in _statements(body, self._python)
+            for node in _statements(body, table.versions)
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name
         ]
         return (table, target, defined) if defined else None
@@ -1081,7 +1091,7 @@ class Libraries:
         if target.member is None:
             return _Declared(prefix + symbol, ConstructKind.MODULE, None, [], None)
         if table.classes is None:
-            table.classes = single_classes(table.tree, self._index)
+            table.classes = single_classes(table.tree, table.source.module, self._index)
         chains, named = table.classes
         chain = chains.get(target.member)
         if chain is None:
@@ -1193,7 +1203,7 @@ class Libraries:
             found = next(
                 (
                     node
-                    for node in _statements(body, self._python)
+                    for node in _statements(body, table.versions)
                     if isinstance(node, ast.ClassDef) and node.name == part
                 ),
                 None,
@@ -1210,7 +1220,7 @@ class Libraries:
             found = next(
                 (
                     node
-                    for node in _statements(body, self._python)
+                    for node in _statements(body, table.versions)
                     if isinstance(node, ast.ClassDef) and node.name == part
                 ),
                 None,
@@ -1258,9 +1268,9 @@ class Libraries:
             except (OSError, SyntaxError, ValueError, RecursionError):
                 tree = None
             if tree is not None:
-                table = _Table(source, tree)
+                table = _Table(source, tree, versions=version_tests(tree, self._python))
                 package = module if source.is_package else module.rpartition("/")[0]
-                _bind(tree.body, table, package, self._python)
+                _bind(tree.body, table, package)
         self._tables[module] = table
         return table
 
@@ -1432,8 +1442,8 @@ def _argument_symbols(argument: CallArgument, into: set[str]) -> None:
 # -- the top-level names of a library module ----------------------------------------------
 
 
-def _bind(body: list[ast.stmt], table: _Table, package: str, python: tuple[int, int]) -> None:
-    table.names = _bound(body, {}, table, package, python)
+def _bind(body: list[ast.stmt], table: _Table, package: str) -> None:
+    table.names = _bound(body, {}, table, package)
 
 
 def _bound(
@@ -1441,36 +1451,32 @@ def _bound(
     names: dict[str, tuple[_Entry, ...]],
     table: _Table,
     package: str,
-    python: tuple[int, int],
 ) -> dict[str, tuple[_Entry, ...]]:
     """The names after `body` ran, read as `imports.py` reads a module: a later binding
     replaces an earlier one, and branches that bind a name differently add up. An `if` on
-    the Python version is decided."""
+    the Python version is decided (`table.versions`)."""
     names = dict(names)
     for node in body:
         if isinstance(node, ast.If):
-            decided = version_test(node.test, python)
+            decided = None if table.versions is None else version_test(node.test, table.versions)
             if decided is None:
                 branches = [
-                    _bound(node.body, names, table, package, python),
-                    _bound(node.orelse, names, table, package, python),
+                    _bound(node.body, names, table, package),
+                    _bound(node.orelse, names, table, package),
                 ]
                 names = _either(names, branches)
             else:
                 chosen = node.body if decided else node.orelse
-                names = _bound(chosen, names, table, package, python)
+                names = _bound(chosen, names, table, package)
         elif isinstance(node, ast.Try | ast.TryStar):
             tried = _bound(
                 node.orelse,
-                _bound(node.body, names, table, package, python),
+                _bound(node.body, names, table, package),
                 table,
                 package,
-                python,
             )
-            handled = [_bound(h.body, names, table, package, python) for h in node.handlers]
-            names = _bound(
-                node.finalbody, _either(names, [tried, *handled]), table, package, python
-            )
+            handled = [_bound(h.body, names, table, package) for h in node.handlers]
+            names = _bound(node.finalbody, _either(names, [tried, *handled]), table, package)
         else:
             for name, entry in _bindings(node, table, package):
                 names[name] = (entry,)
@@ -1564,21 +1570,22 @@ def _from_base(node: ast.ImportFrom, package: str) -> str | None:
     return "/".join(part for part in (package, written) if part)
 
 
-def _statements(body: list[ast.stmt], python: tuple[int, int]) -> Iterator[ast.stmt]:
+def _statements(body: list[ast.stmt], versions: VersionTests | None) -> Iterator[ast.stmt]:
     """The statements of a module or class body that run: an `if` on the Python version
-    is decided, any other `if` gives both branches; a `try` gives its every block."""
+    is decided (`versions`, the module's), any other `if` gives both branches; a `try`
+    gives its every block."""
     for node in body:
         if isinstance(node, ast.If):
-            decided = version_test(node.test, python)
+            decided = None if versions is None else version_test(node.test, versions)
             if decided is None:
-                yield from _statements(node.body, python)
-                yield from _statements(node.orelse, python)
+                yield from _statements(node.body, versions)
+                yield from _statements(node.orelse, versions)
             else:
-                yield from _statements(node.body if decided else node.orelse, python)
+                yield from _statements(node.body if decided else node.orelse, versions)
         elif isinstance(node, ast.Try | ast.TryStar):
             for block in (node.body, *(h.body for h in node.handlers), node.orelse):
-                yield from _statements(block, python)
-            yield from _statements(node.finalbody, python)
+                yield from _statements(block, versions)
+            yield from _statements(node.finalbody, versions)
         else:
             yield node
 
