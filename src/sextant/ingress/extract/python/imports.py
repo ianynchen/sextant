@@ -18,7 +18,7 @@ json` binds `json` to `ujson` and to `json`, and never to the first one silently
 import ast
 import builtins
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from sextant.domain.facts import CallArgument, TypeRef
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 # What a name of THIS file is, where the file can tell. An imported name has no kind:
 # whether `fastapi.FastAPI` is a class or a function is in a file this scanner does not
 # read.
-Kind = Literal["class", "function", "variable", "type_variable", "type_alias"]
+Kind = Literal["class", "function", "variable", "type_variable", "type_alias", "new_type"]
 
 # The calls that make a name a type variable (the typing specification's three).
 _TYPE_VARIABLE_FACTORIES = frozenset({"TypeVar", "ParamSpec", "TypeVarTuple"})
@@ -125,6 +125,38 @@ class LibraryNames(Protocol):
         ...
 
 
+class ProjectNames(Protocol):
+    """What the headers of the module's other files say (`project.py`)."""
+
+    def member(self, module: str, name: str) -> tuple[Target, ...] | None:
+        """Where `module.name` is defined, through the module files' re-exports."""
+        ...
+
+    def digest(self, module: str) -> str | None:
+        """The digest of `module`'s header, for the reuse key."""
+        ...
+
+    def shape_of(self, symbol: str) -> "ClassShape | None":
+        """A class another file of the module defines, by its header."""
+        ...
+
+    def names_a_value(self, module: str, name: str) -> bool:
+        """Whether `module.name` is bound, where it is defined, to a value, not a class."""
+        ...
+
+    def returns(self, descriptor: str) -> TypeRef | None:
+        """The return a `def` of another file of the module declares."""
+        ...
+
+    def field(self, field: str) -> TypeRef | None:
+        """The type a class body of another file of the module declares for an attribute."""
+        ...
+
+
+# The question a file asks for another file's header (`project.HEADER`).
+_HEADER_QUESTION = "header"
+
+
 @dataclass(frozen=True)
 class ModuleIndex:
     """The module paths that exist in the scanned module's import roots, by file path
@@ -138,6 +170,8 @@ class ModuleIndex:
     # files, so a later scan keeps the file's facts only where every answer is the same
     # (OI-325). None records nothing.
     asked: set[tuple[str, str]] | None = field(default=None, compare=False, repr=False)
+    # The headers of the module's files (`project.py`), where the scan reads them.
+    headers: ProjectNames | None = field(default=None, compare=False, repr=False)
     # Every module path and every folder above one: `owns`' answer, worked out once,
     # because every name of another module asks it (GUIDELINES §8.7).
     _owned: frozenset[str] = field(init=False, repr=False, compare=False)
@@ -161,10 +195,13 @@ class ModuleIndex:
             self.asked.add(("owns", path))
         return path in self._owned
 
-    def answers(self, asked: Iterable[tuple[str, str]]) -> list[bool]:
-        """What this index answers to each question, in order, recording none."""
+    def answers(self, asked: Iterable[tuple[str, str]]) -> list[bool | str | None]:
+        """What this index answers to each question, in order, recording none: for another
+        file's header, its digest."""
         return [
-            path in (self.modules if question == "is_module" else self._owned)
+            (None if self.headers is None else self.headers.digest(path))
+            if question == _HEADER_QUESTION
+            else path in (self.modules if question == "is_module" else self._owned)
             for question, path in asked
         ]
 
@@ -190,11 +227,18 @@ def member_of(
     after it (`from fastapi import routing`, then `routing.APIRouter`). Where a library
     read says (`libraries.py`), its answer is taken: a submodule, or the member's defining
     symbol (`fastapi.APIRouter` is `fastapi.routing.APIRouter`), or the closed list of
-    them where the library's branches bind the name differently."""
+    them where the library's branches bind the name differently. A module file's header
+    answers the same way for the module's own re-exports (`project.py`)."""
     if index.libraries is not None and not index.owns(target.module):
         found = index.libraries.member(target, name)
         if found is not None:
             return found
+    if index.headers is not None and target.member is None and index.owns(target.module):
+        # A file of the module re-exports or aliases the name: it is where it is defined, as a
+        # library's is (round 1, item 3), read off that file's header.
+        defined = index.headers.member(target.module, name)
+        if defined is not None:
+            return defined
     if target.member is not None and not index.owns(target.module):
         submodule = f"{target.module}/{target.member.replace('.', '/')}"
         return member_of(Target(submodule), name, index, more_follow=more_follow)
@@ -306,15 +350,31 @@ class _Binder:
     ) -> tuple[str, Binding] | None:
         """A module-level name given another name of a module, a class or a function
         (`DecodeError = jwt.DecodeError`) is bound as that name is, as an import binds
-        it. A computed value, or a name of a value, stays a value."""
+        it, and so is a `NewType` of a class. A computed value, or a name of a value, stays a
+        value."""
         value = node.value
         if self._owner is not None or value is None or len(targets) != 1:
             return None
+        new_type = (
+            isinstance(value, ast.Call)
+            and len(value.args) == 2
+            and self._is_typing(value.func, names, {"NewType"})
+        )
+        if isinstance(value, ast.Call) and new_type:
+            # `UserId = NewType("UserId", int)`: at run time the name is a function that hands
+            # its argument back, so every value of the type is an `int`, whose methods run (the
+            # typing specification's NewType). As a type it names the type it wraps; called, it
+            # is no construction (`new_type`).
+            value = value.args[1]
         if not isinstance(targets[0], ast.Name) or not isinstance(value, ast.Name | ast.Attribute):
             return None
         found = resolve(value, names, self._index)
-        if not found or any(target.kind not in (None, "class", "function") for target in found):
+        if not found or any(
+            target.kind not in (None, "class", "function", "new_type") for target in found
+        ):
             return None
+        if new_type:
+            found = tuple(replace(target, kind="new_type") for target in found)
         return targets[0].id, Binding(found)
 
     def _assigned(

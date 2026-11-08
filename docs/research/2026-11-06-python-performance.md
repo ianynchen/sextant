@@ -136,6 +136,62 @@ the scan writes about 15% more facts on polar, and the resolver walks the receiv
 sites it cannot type. Under `cProfile` the type-variable rule itself
 (`calls._library_returns`, which asks the libraries) is 2.7 s of a 36 s profiled scan.
 
+### After the module's own declared types (OI-324 part 2, 2026-11-07)
+
+Branch `cov/python-types` from `cov/python-generics` cf939727 (main with per-file reuse,
+#97). One cold and one warm run each (warm: nothing changed, every file reused), same
+machine and Python 3.14. "Before" is cf939727.
+
+| Tree | Cold before → after | Warm before → after | Cold target 60 s | Warm ceiling 30 s |
+|---|---|---|---|---|
+| Sextant (repository root) | 11.4 s → 13.0 s | 3.9 s → 4.4 s | met | met |
+| polar `server/` | 37.7 s → 36.5 s | 3.1 s → 3.0 s | met | met |
+
+The work added per call is a dictionary read: the scanner reads each file's declared returns
+and class-body annotations once, in the pass that already reads its class shapes, and looks
+one up per call on a value of a class of the file; the resolver reads `signature.returns`,
+the field types, `type_parameters` and the generic parents once per resolve, and asks them
+only where a return path or an attribute read ended with no type, memoising each class's
+type-parameter mapping. Nothing a file's facts say depends on another file, so the per-file
+reuse key (#97, `scan_reuse`) is unchanged and still complete; the cross-file reading
+(declared returns of another file, generic parents) is the resolver's, which re-runs whenever
+any fact file changes. Sextant's cold rise is mostly its own new code (it analyses itself).
+
+### After the first review round (headers, `Self`, re-exports; 2026-11-07)
+
+| Tree | Cold | Warm | Cold target 60 s | Warm ceiling 30 s |
+|---|---|---|---|---|
+| Sextant (repository root) | 13.0 s → 14.6 s | 4.4 s → 4.8 s | met | met |
+| polar `server/` | 36.5 s → 40.9 s | 3.0 s → 3.8 s | met | met |
+
+The added cold cost is one more parse of each module file the others import (its header, once
+per scan, `project.py`), and receiver binding over the real lookup orders that re-exports now
+give (round 1 binds 13,898 sites in 4 s). The warm run reads no header of a file that did not
+change: its digest is the one its reuse record kept. **Measured on the way:** following
+re-exports made polar's repository classes' orders readable, and the walk then followed
+`self.session` through every `cls(session)` call to every caller; receiver binding did not
+finish in ten minutes. Taking a parameter's written type as its type for the type reader (as
+the scanner does for a call on the parameter) ended it at 4 s, with `NewType("X", T)` read as
+`T` and a written library type the environment lacks answered `external`. There is still no
+cap on the walk (§3a); a module whose deep paths run through untyped parameters may need one,
+which is a ruling, not a constant.
+
+### After the walk fix (ruling R39, round 2; 2026-11-08)
+
+`walkbug-report.md` found the walk exponential, not looping: a parameter's answer was memoised
+per full path, which never repeats, and `PATH_CAP` trimmed only after the walk below had built
+every path. Each parameter's and binding's paths upward are now worked out once per round and
+capped while built, and round 1's shortcut (a written parameter type as the answer) is withdrawn.
+
+| Tree | Cold | Warm |
+|---|---|---|
+| Sextant | 13.4 s | 4.2 s |
+| polar `server/` | 43.7 s | 3.0 s |
+
+The lattice reproduction (`width × depth` services, every one calling every one of the next level),
+whole analyze: 2 × 8 0.20 s (256 paths, one row each), 2 × 12 0.20 s, 2 × 16 0.22 s, 2 × 18 0.21 s
+(was 12.0 s for the one site), 2 × 22 0.21 s, 2 × 30 0.22 s, 3 × 11 0.21 s (was 5.5 s).
+
 ### What changed since the Task 0 projection
 
 Task 0 projected 13 s cold for polar from a parse-only probe and the JVM resolver's rate. The

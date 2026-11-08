@@ -85,11 +85,20 @@ _CALL = "__call__"
 # the value's type: on a class object that is the metaclass, or `__class_getitem__` for a
 # subscript, never the class body's own method (ruling R37).
 _PROTOCOL = frozenset({"__getitem__", "__iter__", "__next__", "__aiter__", "__anext__"})
+_SYNTAX = _PROTOCOL | {_CALL}
+# The receiver reader's key in the index's shared upward paths (`ValueIndex.suffixes`, R39):
+# every site's walk over one round's index reads them.
+_RECEIVER_READER = "receiver"
+
 # What a path's crossings are joined by in `path_id`, outermost first.
 _JOIN = " > "
 
-# One path's end: (path_id, owner, reason, detail), owner None exactly where reason is set.
-_Found = tuple[str, str | None, str | None, str | None]
+# One path's end: (path_id, owner, reason, detail), owner None exactly where reason is set,
+# and the end's evidence where it is not the walk's own (`declared`, OI-324 part 2).
+_Found = (
+    tuple[str, str | None, str | None, str | None]
+    | tuple[str, str | None, str | None, str | None, Evidence]
+)
 # A written union a parameter carries: its member types, and whether `None` is one.
 _Union = tuple[tuple[str, ...], bool]
 
@@ -107,7 +116,7 @@ class _Walked:
 
     @property
     def owners(self) -> frozenset[str]:
-        return frozenset(owner for _, owner, _, _ in self.found if owner is not None)
+        return frozenset(owner for _, owner, *_ in self.found if owner is not None)
 
     @property
     def reached(self) -> frozenset[str]:
@@ -383,6 +392,7 @@ def _with_new_callers(
         reached=index.reached | {(str(e["caller"]), int(str(e["ordinal"]))) for e in edges},
         objects={},
         slots_memo={},
+        suffixes={},
     )
     return patched, frozenset(str(edge["callee"]) for edge in edges)
 
@@ -433,7 +443,15 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
     handed_on = context.handed_on
     functions: list[str] = []
     for producer, path in producer_paths(
-        index, site, RECEIVER, frozenset(), which_object=True, dropped=dropped, functions=True
+        index,
+        site,
+        RECEIVER,
+        frozenset(),
+        which_object=True,
+        dropped=dropped,
+        functions=True,
+        declared_types=True,
+        shared=_RECEIVER_READER,
     ):
         path_id = _JOIN.join(path.labels())
         crossed = path.crossed_out_of()
@@ -461,6 +479,21 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
                         ),
                     )
                 )
+        elif owner is not None and ended is not None and ended.declared and name in _SYNTAX:
+            # A declared type does not say whether the value is the class or an instance of
+            # it (the facts write `type[X]` as `X`), and a call syntax makes differs between
+            # the two (ruling R37): not followed on a declaration alone.
+            found.append(
+                (
+                    path_id,
+                    None,
+                    NOT_READABLE,
+                    (
+                        f"receiver of {name} is declared {bare_descriptor(owner)}, which does "
+                        "not say whether it is the class or an instance of it"
+                    ),
+                )
+            )
         elif owner is not None and name in _PROTOCOL and ended is not None and ended.class_object:
             found.append(
                 (
@@ -471,7 +504,10 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
                 )
             )
         elif owner is not None:
-            found.append((path_id, owner, None, None))
+            if ended is not None and ended.declared:
+                found.append((path_id, owner, None, None, Evidence.DECLARED))
+            else:
+                found.append((path_id, owner, None, None))
         elif body is not None:
             if body not in functions:
                 functions.append(body)
@@ -685,20 +721,20 @@ def _rows(
         {
             "caller": caller,
             "ordinal": ordinal,
-            "path_id": path_id,
-            "owner": owner,
-            "evidence": str(Evidence.SYNTAX),
-            "resolution": str(bound_tier if owner is not None else Resolution.UNRESOLVED),
-            "reason": reason,
-            "detail": detail,
+            "path_id": end[0],
+            "owner": end[1],
+            "evidence": str(end[4] if len(end) > 4 else Evidence.SYNTAX),
+            "resolution": str(bound_tier if end[1] is not None else Resolution.UNRESOLVED),
+            "reason": end[2],
+            "detail": end[3],
         }
-        for path_id, owner, reason, detail in found
+        for end in found
     ]
 
 
 def _tier(walked: _Walked) -> Resolution:
     """The site's tier over every path: owners and function bodies alike."""
-    if any(owner is None for _, owner, _, _ in walked.found):
+    if any(owner is None for _, owner, *_ in walked.found):
         return Resolution.PARTIAL
     if len(walked.owners) + len(walked.functions) > 1:
         return Resolution.NARROWED

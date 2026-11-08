@@ -1,0 +1,597 @@
+"""Receiver binding with declared types (OI-324 part 2): what the module's own code declares
+answers where the code it runs does not.
+
+The walk follows a call's result into its callee's body first, path by path; on a return path
+the body answers with no type, and for a method with no body (a `Protocol`'s, an abstract
+one), the method's declared return type answers, with `declared` evidence. Each test scans a
+small tree with the real scanner and runs the real pipeline (`test_receiver_binding`)."""
+
+from pathlib import Path
+
+from test_receiver_binding import _PREFIX, _bound, _edges, _resolved, _site
+
+_USER = "app/a/User#"
+_MODELS = (
+    "from typing import Protocol\n"
+    "class User:\n"
+    "    def save(self):\n"
+    "        return 1\n"
+    "class Admin(User):\n"
+    "    def save(self):\n"
+    "        return 2\n"
+)
+_F = "app/b#f(sig_dd69782a)."
+
+
+def _rows(workspace, site):
+    return [(row["owner"], row["evidence"], row["reason"]) for row in _bound(workspace, site)]
+
+
+def test_a_declared_return_answers_beside_a_library_value_the_body_returns(tmp_path: Path):
+    """`load() -> User` returns what an unread library call gives (`json.loads`, or a
+    `Mock()`): the declared `User` answers, `declared`, with edges to `User.save` and its
+    override, and the body's own answer, `external`, stays beside it as its own path: the
+    declaration may not hold for it (round 1, item 6)."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _MODELS + "import json\ndef load() -> User:\n    return json.loads('x')\n",
+            "b.py": "from app.a import load\ndef f():\n    load().save()\n",
+        },
+    )
+    site = _site(workspace, _F, "save")
+    assert sorted(_rows(workspace, site), key=str) == [
+        (_USER, "declared", None),
+        (None, "syntax", "external"),
+    ]
+    assert {row["resolution"] for row in _bound(workspace, site)} == {"partial", "unresolved"}
+    assert sorted(str(row["callee"]) for row in _edges(workspace, site) if row["callee"]) == [
+        _PREFIX + "app/a/Admin#save(sig_dd69782a).",
+        _PREFIX + "app/a/User#save(sig_dd69782a).",
+    ]
+    workspace.close()
+
+
+def test_the_bodys_own_type_stays_the_answer_on_its_path(tmp_path: Path):
+    """`make() -> User` returning `Admin()`: the body's `Admin` is what runs, `syntax`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _MODELS + "def make() -> User:\n    return Admin()\n",
+            "b.py": "from app.a import make\ndef f():\n    make().save()\n",
+        },
+    )
+    assert _rows(workspace, _site(workspace, _F, "save")) == [("app/a/Admin#", "syntax", None)]
+    workspace.close()
+
+
+def test_a_protocol_method_with_no_body_answers_with_its_declaration(tmp_path: Path):
+    """A `Protocol` method has no body: its declared `User` is the only answer."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _MODELS + "class Store(Protocol):\n    def get(self) -> User: ...\n",
+            "b.py": "from app.a import Store\ndef f(store: Store):\n    store.get().save()\n",
+        },
+    )
+    assert _rows(workspace, _site(workspace, _F, "save")) == [(_USER, "declared", None)]
+    workspace.close()
+
+
+def test_a_declared_union_is_each_of_its_classes(tmp_path: Path):
+    """`-> User | Store` is a closed list: one row per class, the site `narrowed`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _MODELS
+            + "class Store:\n    def save(self):\n        return 3\n"
+            + "def pick() -> User | Store | None:\n    return unknown()\n",
+            "b.py": "from app.a import pick\ndef f():\n    pick().save()\n",
+        },
+    )
+    rows = _bound(workspace, _site(workspace, _F, "save"))
+    assert sorted((row["owner"], row["evidence"], row["resolution"]) for row in rows) == [
+        ("app/a/Store#", "declared", "narrowed"),
+        (_USER, "declared", "narrowed"),
+    ]
+    workspace.close()
+
+
+def test_a_call_syntax_makes_is_not_bound_on_a_declaration_alone(tmp_path: Path):
+    """A declared type does not say whether the value is the class or an instance (the facts
+    write `type[User]` as `User`), so `m.kind()()`, with `m` bound by the resolver, is not
+    read as `User.__call__`. (Where the scanner reads `kind`'s header itself, it knows the
+    class object and writes the construction.)"""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _MODELS
+            + "class Maker:\n    def kind(self) -> type[User]:\n        return unknown()\n",
+            "b.py": "from app.a import Maker\ndef f(m):\n    m.kind()()\n"
+            "def g():\n    f(Maker())\n",
+        },
+    )
+    site = _site(workspace, "app/b#f(sig_dd69782a).", "__call__")
+    ((owner, _, reason),) = _rows(workspace, site)
+    assert (owner, reason) == (None, "not_readable")
+    assert not [row for row in _edges(workspace, site) if row["callee"]]
+    workspace.close()
+
+
+def test_an_unannotated_callee_is_followed_as_before(tmp_path: Path):
+    """No declaration, no new answer: the body's unread result stays a reason."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _MODELS + "import json\ndef load():\n    return json.loads('x')\n",
+            "b.py": "from app.a import load\ndef f():\n    load().save()\n",
+        },
+    )
+    ((owner, _, reason),) = _rows(workspace, _site(workspace, _F, "save"))
+    assert owner is None and reason is not None
+    workspace.close()
+
+
+def test_a_decorated_function_declares_nothing_for_its_call(tmp_path: Path):
+    """`@contextmanager`-shaped: the name holds what the decorator made, so a call of it is
+    that value's, which `load`'s own `-> User` does not describe."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _MODELS
+            + "import json, functools\n"
+            + "def deco(f):\n    return functools.partial(f)\n"
+            + "@deco\ndef load() -> User:\n    return json.loads('x')\n",
+            "b.py": "from app.a import load\ndef f():\n    load().save()\n",
+        },
+    )
+    assert not [row for row in _bound(workspace, _site(workspace, _F, "save")) if row["owner"]]
+    workspace.close()
+
+
+def test_a_call_in_the_callees_own_file_takes_its_declaration_too(tmp_path: Path):
+    """The call on the result of a same-file function keeps its owner to the resolver, which
+    answers as for a call from another file."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _MODELS
+            + "import json\ndef load() -> User:\n    return json.loads('x')\n"
+            + "def f():\n    load().save()\n",
+        },
+    )
+    assert sorted(
+        _rows(workspace, _site(workspace, "app/a#f(sig_dd69782a).", "save")), key=str
+    ) == [
+        (_USER, "declared", None),
+        (None, "syntax", "external"),
+    ]
+    workspace.close()
+
+
+# -- attributes declared in a class body (step 3) ------------------------------------------
+
+_CLIENTS = (
+    "class HttpClient:\n"
+    "    def get(self):\n"
+    "        return 1\n"
+    "class FastClient(HttpClient):\n"
+    "    def get(self):\n"
+    "        return 2\n"
+)
+
+
+def test_an_attribute_no_code_writes_is_its_declaration(tmp_path: Path):
+    """A dataclass's `client: HttpClient`: its generated `__init__` is not code we read, so
+    the declaration answers, `declared`, and the edges reach the override too."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _CLIENTS
+            + "from dataclasses import dataclass\n@dataclass\nclass Service:\n"
+            + "    client: HttpClient\n    def run(self):\n        self.client.get()\n",
+        },
+    )
+    site = _site(workspace, "app/a/Service#run(sig_dd69782a).", "get")
+    assert _rows(workspace, site) == [("app/a/HttpClient#", "declared", None)]
+    assert len(_edges(workspace, site)) == 2
+    workspace.close()
+
+
+def test_a_subclass_redeclaring_the_attribute_is_one_more_class(tmp_path: Path):
+    """Ruling R33: a read in `Service` takes `Service`'s declaration and each subtype's, here
+    `Fast`'s narrower `client: FastClient` in another file: a closed list, one row each."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _CLIENTS
+            + "class Service:\n    client: HttpClient\n"
+            + "    def run(self):\n        self.client.get()\n",
+            "b.py": "from app.a import Service, FastClient\n"
+            "class Fast(Service):\n    client: FastClient\n",
+        },
+    )
+    site = _site(workspace, "app/a/Service#run(sig_dd69782a).", "get")
+    assert sorted(_rows(workspace, site)) == [
+        ("app/a/FastClient#", "declared", None),
+        ("app/a/HttpClient#", "declared", None),
+    ]
+    workspace.close()
+
+
+def test_a_write_the_walk_reads_a_type_of_stays_the_answer(tmp_path: Path):
+    """`self.client = FastClient()` is what the object holds: `syntax`, the declaration aside."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _CLIENTS
+            + "class Service:\n    client: HttpClient\n"
+            + "    def __init__(self):\n        self.client = FastClient()\n"
+            + "    def run(self):\n        self.client.get()\n",
+        },
+    )
+    site = _site(workspace, "app/a/Service#run(sig_dd69782a).", "get")
+    assert _rows(workspace, site) == [("app/a/FastClient#", "syntax", None)]
+    workspace.close()
+
+
+def test_a_declaration_naming_another_files_alias_is_the_aliased_class(tmp_path: Path):
+    """`Alias = HttpClient` in `a.py` is a field there; `c: Alias` in `b.py` names the class
+    the alias is (round 1, item 3, read off `a.py`'s header), never the path `app/a/Alias#`,
+    which no class carries."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _CLIENTS + "Alias = HttpClient\n",
+            "b.py": "from app.a import Alias\nclass S:\n    c: Alias\n"
+            "    def run(self):\n        self.c.get()\n",
+        },
+    )
+    site = _site(workspace, "app/b/S#run(sig_dd69782a).", "get")
+    assert [row["owner"] for row in _bound(workspace, site) if row["owner"]] == [
+        "app/a/HttpClient#"
+    ]
+    workspace.close()
+
+
+# -- a generic class from another file (step 6) --------------------------------------------
+
+_REPO = (
+    _MODELS
+    + "from typing import Generic, TypeVar\n"
+    + "T = TypeVar('T')\n"
+    + "class Repo[M]:\n"
+    + "    def get(self) -> M:\n"
+    + "        return unknown()\n"
+    + "class Old(Generic[T]):\n"
+    + "    def first(self) -> T | None:\n        return unknown()\n"
+    + "class Mid[X](Repo[X]):\n"
+    + "    pass\n"
+)
+
+
+def test_a_subclass_in_another_file_fills_its_generic_parents_parameters(tmp_path: Path):
+    """`UserRepo(Repo[User])`: `get`'s declared `M` is `User` on a `UserRepo`, through the
+    parent's written type arguments, PEP 695 or `Generic[T]`, one hop or two."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _REPO,
+            "b.py": "from app.a import Repo, Old, Mid, User\n"
+            "class UserRepo(Repo[User]):\n    pass\n"
+            "class OldRepo(Old[User]):\n    pass\n"
+            "class Leaf(Mid[User]):\n    pass\n"
+            "def f(r: UserRepo, o: OldRepo, l: Leaf):\n"
+            "    r.get().save()\n"
+            "    o.first().save()\n"
+            "    l.get().save()\n",
+        },
+    )
+    saves = sorted(
+        (int(str(row["ordinal"])), row["owner"], row["evidence"])
+        for row in workspace.query("bound_receivers")
+        if str(row["caller"]).endswith(_F) and row["owner"]
+    )
+    assert [(owner, evidence) for _, owner, evidence in saves] == [(_USER, "declared")] * 3
+    workspace.close()
+
+
+def test_a_generic_parent_itself_leaves_its_parameter_unfilled(tmp_path: Path):
+    """On a bare `Repo` nothing fills `M`: no answer, never a guessed one."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _REPO,
+            "b.py": "from app.a import Repo\ndef f(r: Repo):\n    r.get().save()\n",
+        },
+    )
+    assert not [row for row in _bound(workspace, _site(workspace, _F, "save")) if row["owner"]]
+    workspace.close()
+
+
+# -- `Self` (round 1, item 1) ------------------------------------------------------------
+
+_FACTORY = (
+    "from typing import Self\n"
+    "class Repo:\n"
+    "    @classmethod\n    def make(cls) -> Self:\n        return cls()\n"
+    "    def find(self):\n        return 0\n"
+    "    def again(self):\n        return self.make()\n"
+    "class Other(Repo):\n    def find(self):\n        return 1\n"
+)
+
+
+def test_self_is_the_class_the_call_was_made_through(tmp_path: Path):
+    """`UserRepo.make()`, `make` on `Repo` declared `-> Self`: the result is a `UserRepo`,
+    exactly, though `UserRepo` is another file's class the resolver binds."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _FACTORY,
+            "b.py": "from app.a import Repo\nclass UserRepo(Repo):\n"
+            "    def find(self):\n        return 2\n"
+            "def f():\n    UserRepo.make().find()\n",
+        },
+    )
+    site = _site(workspace, _F, "find")
+    assert [(r["owner"], r["evidence"], r["resolution"]) for r in _bound(workspace, site)] == [
+        ("app/b/UserRepo#", "declared", "resolved")
+    ]
+    workspace.close()
+
+
+def test_self_through_the_methods_own_receiver_is_the_class_or_a_subclass(tmp_path: Path):
+    """`self.make()` inside `Repo`: the receiver is a `Repo` or any subclass, one row each."""
+    workspace = _resolved(
+        tmp_path,
+        {"a.py": _FACTORY + "def f(r: Repo):\n    r.again().find()\n"},
+    )
+    site = _site(workspace, "app/a#f(sig_dd69782a).", "find")
+    assert sorted(str(r["owner"]) for r in _bound(workspace, site)) == [
+        "app/a/Other#",
+        "app/a/Repo#",
+    ]
+    workspace.close()
+
+
+def test_a_class_a_package_re_exports_is_named_by_where_it_is_defined(tmp_path: Path):
+    """`from app.pkg import Order`, `app/pkg/__init__.py` re-exporting it from `.order`: the
+    call names `app/pkg/order/Order#`, the class, and reaches its body (round 1, item 3)."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "pkg/__init__.py": "from .order import Order\n",
+            "pkg/order.py": "class Order:\n    def total(self):\n        return 1\n",
+            "b.py": "from app.pkg import Order\ndef f(o: Order):\n    o.total()\n",
+        },
+    )
+    site = _site(workspace, _F, "total")
+    assert [row["callee"] for row in _edges(workspace, site)] == [
+        _PREFIX + "app/pkg/order/Order#total(sig_dd69782a)."
+    ]
+    workspace.close()
+
+
+def test_a_written_parameter_type_fills_only_the_paths_its_callers_leave_open(
+    tmp_path: Path,
+):
+    """`self.session` written from `__init__`'s `session: Session`, called with a value that
+    comes from outside (`f(s)`, nothing calls `f`): the callers' path ends `external`, and the
+    written type answers beside it, `declared`; the site is `partial` (round 2, item 2)."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": "class Session:\n    def run(self):\n        return 1\n"
+            "class Repo:\n"
+            "    def __init__(self, session: Session):\n        self.session = session\n"
+            "    def go(self):\n        self.session.run()\n",
+            "b.py": "from app.a import Repo\ndef f(s):\n    Repo(s).go()\n",
+        },
+    )
+    site = _site(workspace, "app/a/Repo#go(sig_dd69782a).", "run")
+    assert sorted(_rows(workspace, site), key=str) == [
+        ("app/a/Session#", "declared", None),
+        (None, "syntax", "external"),
+    ]
+    workspace.close()
+
+
+_INJECTED = (
+    "from typing import Protocol\n"
+    "class Repo(Protocol):\n    def get(self) -> int: ...\n"
+    "class Base:\n    def get(self):\n        return 0\n"
+    "class Sub(Base):\n    def get(self):\n        return 1\n"
+    "class Other(Base):\n    def get(self):\n        return 2\n"
+    "class SqlRepo:\n    def get(self):\n        return 3\n"
+    "class Svc:\n"
+    "    def __init__(self, repo: Repo, base: Base):\n"
+    "        self.repo = repo\n        self.base = base\n"
+    "    def run(self):\n        self.repo.get()\n        self.base.get()\n"
+)
+
+
+def test_the_callers_value_answers_before_the_written_parameter_type(tmp_path: Path):
+    """The reviewer's shapes: a `Protocol` parameter given a `SqlRepo()` is a `SqlRepo`, and a
+    `Base` parameter given a `Sub()` is a `Sub`, each `syntax`, with an edge to that class's
+    method only; the written type is never the answer where a caller states the value."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _INJECTED,
+            "b.py": "from app.a import Svc, SqlRepo, Sub\ndef main():\n    Svc(SqlRepo(), Sub()).run()\n",
+        },
+    )
+    run = "app/a/Svc#run(sig_dd69782a)."
+    repo, base = [
+        (str(row["caller"]), int(str(row["ordinal"])))
+        for row in workspace.query("call_sites")
+        if row["caller"] == _PREFIX + run and row["name"] == "get"
+    ]
+    assert _rows(workspace, repo) == [("app/a/SqlRepo#", "syntax", None)]
+    assert _rows(workspace, base) == [("app/a/Sub#", "syntax", None)]
+    assert [row["callee"] for row in _edges(workspace, base)] == [
+        _PREFIX + "app/a/Sub#get(sig_dd69782a)."
+    ]
+    workspace.close()
+
+
+def test_a_library_value_passed_for_a_written_parameter_type_is_partial(tmp_path: Path):
+    """`Svc(Mock(), Mock())`: the callers' value comes from a library (`external`), and the
+    written type answers beside it: never `resolved` on the declaration alone."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _INJECTED,
+            "b.py": "from unittest.mock import Mock\nfrom app.a import Svc\n"
+            "def main():\n    Svc(Mock(), Mock()).run()\n",
+        },
+    )
+    run = "app/a/Svc#run(sig_dd69782a)."
+    for site in [
+        (str(row["caller"]), int(str(row["ordinal"])))
+        for row in workspace.query("call_sites")
+        if row["caller"] == _PREFIX + run and row["name"] == "get"
+    ]:
+        rows = _bound(workspace, site)
+        assert {row["resolution"] for row in rows if row["owner"]} == {"partial"}
+        assert any(row["owner"] is None for row in rows)
+    workspace.close()
+
+
+# -- the walk over a lattice of callers (round 2, ruling R39) ------------------------------
+
+
+def _lattice(width: int, depth: int) -> dict[str, str]:
+    """A session handed down `depth` levels of `width` services, every service calling every
+    service of the next level, the last one building a `Repo` that reads `self.session`:
+    `width ** depth` paths over `width * depth` parameters (polar's repository shape)."""
+    lines = ["from app.repo import Repo\n"]
+    for level in range(depth):
+        for one in range(width):
+            lines.append(f"def s{level}_{one}(session):\n")
+            if level == depth - 1:
+                lines.append("    return Repo(session).get()\n")
+            else:
+                lines.extend(f"    s{level + 1}_{k}(session)\n" for k in range(width))
+    lines.append("def main(session):\n" + "".join(f"    s0_{k}(session)\n" for k in range(width)))
+    return {
+        "repo.py": "class Repo:\n    def __init__(self, session):\n        self.session = session\n"
+        "    def get(self):\n        return self.session.execute('select 1')\n",
+        "service.py": "".join(lines),
+    }
+
+
+_GET = "app/repo/Repo#get(sig_dd69782a)."
+
+
+def test_a_lattice_of_callers_is_walked_once_per_parameter(tmp_path: Path):
+    """2 x 18 is 262,144 paths over 36 parameters: the walk works out each parameter's paths
+    upward once and stops enumerating at the path cap, so it ends at once, `non_enumerable`."""
+    import time
+
+    started = time.perf_counter()
+    workspace = _resolved(tmp_path, _lattice(2, 18))
+    elapsed = time.perf_counter() - started
+    rows = _bound(workspace, _site(workspace, _GET, "execute"))
+    assert {row["reason"] for row in rows} == {"non_enumerable"}
+    assert elapsed < 5
+    workspace.close()
+
+
+def test_the_paths_of_a_small_lattice_are_each_their_own_row(tmp_path: Path):
+    """2 x 4 is 16 paths, under the cap: one row per path, each `external` (`main` has no
+    caller), exactly the product of the choices at each level, never combined."""
+    workspace = _resolved(tmp_path, _lattice(2, 4))
+    rows = _bound(workspace, _site(workspace, _GET, "execute"))
+    prefix = _PREFIX + "app/service#"
+    expected = {
+        " > ".join(
+            [f"{prefix}main(sig_dd69782a).@{a}"]
+            + [
+                f"{prefix}s{level}_{choice}(sig_dd69782a).@{nxt}"
+                for level, (choice, nxt) in enumerate(zip((a, b, c, d), (b, c, d, 0), strict=True))
+            ]
+        )
+        for a in (0, 1)
+        for b in (0, 1)
+        for c in (0, 1)
+        for d in (0, 1)
+    }
+    assert {str(row["path_id"]) for row in rows} == expected
+    assert {(row["owner"], row["reason"]) for row in rows} == {(None, "external")}
+    workspace.close()
+
+
+# -- the written type beside every path with no value (round 3, ruling R40) ----------------
+
+_NODE = (
+    "class Node:\n    def visit(self):\n        return 1\n"
+    "class Leaf(Node):\n    def visit(self):\n        return 2\n"
+    "class Holder:\n"
+    "    def __init__(self, n: Node):\n        self.n = n\n"
+    "    def go(self):\n        self.n.visit()\n"
+)
+_GO = "app/a/Holder#go(sig_dd69782a)."
+
+
+def _rows_at(workspace, site) -> set[tuple]:
+    return {(row["owner"], row["evidence"], row["reason"]) for row in _bound(workspace, site)}
+
+
+def test_the_written_type_sits_beside_a_path_the_walk_could_not_read(tmp_path: Path):
+    """A caller passes a value the walk cannot read (`not_readable`, a dict literal): the path
+    keeps that row and the written `dict` stands beside it, `declared`, so `partial`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": "class Box:\n    def __init__(self, d: dict):\n        self.d = d\n"
+            "    def go(self):\n        self.d.get('x')\n"
+            "def main():\n    Box({'a': 1}).go()\n"
+        },
+    )
+    rows = _rows_at(workspace, _site(workspace, "app/a/Box#go(sig_dd69782a).", "get"))
+    assert ("builtins/dict#", "declared", None) in rows
+    assert (None, "syntax", "not_readable") in rows
+    workspace.close()
+
+
+def test_the_written_type_sits_beside_a_cycle_and_a_capped_set(tmp_path: Path):
+    """A `Holder` built only from inside a recursion ends in `cycle`; a `Node` handed down a
+    2 x 10 lattice ends `non_enumerable` past the cap. Each keeps its row, `Node` beside."""
+    walk = "def walk(n):\n    Holder(n).go()\n    walk(n)\n"
+    workspace = _resolved(tmp_path, {"a.py": _NODE + walk})
+    rows = _rows_at(workspace, _site(workspace, _GO, "visit"))
+    assert ("app/a/Node#", "declared", None) in rows
+    assert (None, "syntax", "cycle") in rows
+    workspace.close()
+
+    files = _lattice(2, 10)
+    files["repo.py"] = (
+        files["repo.py"]
+        .replace("def __init__(self, session):", "def __init__(self, session: Node):")
+        .replace("self.session.execute('select 1')", "self.session.visit()")
+        .replace("class Repo:", "class Node:\n    def visit(self):\n        return 1\nclass Repo:")
+    )
+    workspace = _resolved(tmp_path / "lattice", files)
+    rows = _rows_at(workspace, _site(workspace, _GET, "visit"))
+    assert ("app/repo/Node#", "declared", None) in rows
+    assert (None, "syntax", "non_enumerable") in rows
+    workspace.close()
+
+
+def test_the_written_type_does_not_sit_beside_a_value_that_escaped(tmp_path: Path):
+    """`make` is handed on as a value, so its parameter may also come from callers the module
+    does not show: that path `escapes`. It has a value, whichever caller made it, so the
+    written type is not added beside it."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _NODE + "def make(n: Node):\n    Holder(n).go()\n"
+            "CALLBACKS = [make]\n"
+            "def main():\n    make(Leaf())\n",
+        },
+    )
+    rows = _rows_at(workspace, _site(workspace, _GO, "visit"))
+    assert any(reason == "escapes" for _, _, reason in rows), rows
+    assert ("app/a/Node#", "declared", None) not in rows
+    workspace.close()

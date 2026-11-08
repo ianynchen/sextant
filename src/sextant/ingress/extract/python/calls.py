@@ -98,6 +98,7 @@ from sextant.ingress.extract.python.imports import (
 from sextant.ingress.extract.python.typing_rules import (
     ANY,
     BUILTINS,
+    SELF,
     TUPLE,
     UNION,
     ClassShape,
@@ -108,6 +109,7 @@ from sextant.ingress.extract.python.typing_rules import (
     substitute,
     type_ref,
     type_symbol,
+    union_of,
 )
 
 INIT = "<init>"
@@ -124,10 +126,13 @@ _NEXT = "__next__"
 _ASYNC_ITER = "__aiter__"
 _ASYNC_NEXT = "__anext__"
 _GETITEM = "__getitem__"
+# A descriptor's method: reading an attribute declared with its class runs it.
+_GET = "__get__"
 _SLICE = TypeRef(symbol="builtins/slice#")
 # The type of a class object: `type[X]`, as the scanner holds a value written `type[X]` or
 # `Type[X]` (a written type reads it as `X`, for a call through the class).
 _TYPE_OF = "builtins/type#"
+_NONE = "builtins/None#"
 # The awaitables whose awaited value is their last type argument, as `async for` awaits
 # what `__anext__` returns.
 _AWAITABLES = frozenset({"typing/Awaitable#", "typing/Coroutine#"})
@@ -150,6 +155,19 @@ _UNPACKED_POSITIONAL = "*"
 # The name prefix javac gives a lambda body in a static initializer and in a constructor.
 _PREFIXES = {CLINIT: "static", INIT: "new"}
 
+# The class a literal or a comprehension builds (OI-324 part 2).
+_LITERAL_CLASSES: dict[type[ast.expr], str] = {
+    ast.List: "builtins/list#",
+    ast.Tuple: TUPLE,
+    ast.Set: "builtins/set#",
+    ast.Dict: "builtins/dict#",
+}
+_COMPREHENSION_CLASSES: dict[type[ast.expr], str] = {
+    ast.ListComp: "builtins/list#",
+    ast.SetComp: "builtins/set#",
+    ast.DictComp: "builtins/dict#",
+}
+
 _UNKNOWN = CallArgument(kind="unresolved")
 # The receiver of a method (`self`, `cls`). It is never a parameter (D00 §5 numbering) and
 # reads as `unresolved` where it is used as a value; only its identity is tested.
@@ -164,12 +182,31 @@ class _Part(CallArgument):
     _typed: TypeRef | None = PrivateAttr(default=None)
 
 
+class _Narrowed(_Part):
+    """A local's value inside a branch an `isinstance` test chose: the same value, every
+    field as it was (so every fact reads as before), with the type the test gives it."""
+
+
+def _narrowed(value: CallArgument, typed: TypeRef) -> CallArgument:
+    found = _Narrowed(**dict(value))
+    found._typed = typed
+    return found
+
+
+def _is_part(value: CallArgument) -> bool:
+    """Whether `value` is an `unresolved` value only the scanner knows the type of: it folds
+    as unknown where paths give different ones. A typed `array` keeps its own fact."""
+    return isinstance(value, _Part) and value.kind == "unresolved"
+
+
 def _part(typed: TypeRef) -> CallArgument:
     found = _Part(kind="unresolved")
     found._typed = typed
     return found
 
 
+# A literal a local holds that the code it is handed to can change: read once as written.
+_MUTABLE = (ast.List, ast.Dict, ast.Set, ast.ListComp, ast.DictComp, ast.SetComp)
 _NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 _COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
 
@@ -202,6 +239,12 @@ class Body:
     returned: dict[int, TypeRef] = field(default_factory=dict)
     # The callable a library call's result is (`Callable[[P, ...], R]`), keyed the same way.
     callables: dict[int, CallableType] = field(default_factory=dict)
+    # The type a call of a function or method of this file DECLARES it returns, keyed by the
+    # call's `result`: no owner is written from it for a call on the result, since the body's
+    # returns, which the resolver follows, are what runs; it types only what the scanner
+    # reads off the result through a library's signature (an element, a part, an entered
+    # value), which nothing else can answer.
+    declared: dict[int, TypeRef] = field(default_factory=dict)
 
     def value_id(self) -> int:
         found = self.next_value
@@ -221,6 +264,9 @@ class Callee:
     receiver_field_kind: Literal["instance"] | None = None
     # The whole type written for the receiver, type arguments and all, where one is.
     typed: TypeRef | None = None
+    # `typed` is what a function of this file declares it returns (`Body.declared`), not
+    # the receiver's own written type: it gives the call no owner.
+    hinted: bool = False
 
 
 @dataclass
@@ -309,6 +355,13 @@ class BodyReader:
     # the lookup orders they and the libraries' classes give (`typing_rules.Hierarchy`).
     _local_classes: dict[str, ClassShape]
     _hierarchy: Hierarchy
+    # The return type each function and method of this file declares, by bare descriptor,
+    # type variables kept (`own_return_type`); a name defined twice with two different
+    # declared returns has none.
+    _own_returns: dict[str, TypeRef]
+    # The type each class of this file declares for an attribute in its body (`client:
+    # HttpClient`, PEP 526), by bare field symbol (`app/m/C#client.`).
+    _own_fields: dict[str, TypeRef]
 
     def _body(self, caller: str) -> Body:
         return self._bodies.setdefault(caller, Body(caller))
@@ -496,7 +549,7 @@ class BodyReader:
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 for target in targets:
                     self._store(target, value, scope)
-                    if isinstance(node.value, ast.List) and isinstance(target, ast.Name):
+                    if isinstance(node.value, _MUTABLE) and isinstance(target, ast.Name):
                         frame.mutable.add(target.id)
             if _only_a_call(node):
                 scope.flow.quiet()
@@ -523,7 +576,9 @@ class BodyReader:
             scope.flow.jump("break" if isinstance(node, ast.Break) else "continue")
         elif isinstance(node, ast.If):
             self._value(node.test, scope)
-            self._branches([node.body, node.orelse], scope)
+            self._branches(
+                [node.body, node.orelse], scope, narrows=self._narrowing(node.test, scope)
+            )
         elif isinstance(node, ast.For | ast.AsyncFor):
             asynchronous = isinstance(node, ast.AsyncFor)
             iterator = self._iterate(node.iter, scope, asynchronous=asynchronous)
@@ -660,12 +715,16 @@ class BodyReader:
         scope: Scope,
         starts: list[int | None] | None = None,
         captures: list[list[tuple[str, CallArgument]]] | None = None,
+        narrows: list[dict[str, TypeRef]] | None = None,
     ) -> None:
         """Each body runs from the same names, and from `starts` in the control flow (by
         default, from where the branch is); after them, a name keeps a value only where
         every body that reaches the end gives it the same one, and is a `merge` where they
         give different ones. `captures` are the names each body starts by writing (a
-        `match` case's pattern)."""
+        `match` case's pattern). `narrows` are the types an `isinstance` test gives a name
+        in each body (`_narrowing`): the name holds its value with that type there, and past
+        the branch only where that body is the one that reaches its end (the other returned
+        or raised) and did not write the name."""
         frame = scope.frame
         flow = scope.flow
         if starts is None:
@@ -683,16 +742,87 @@ class BodyReader:
             return
         before = frame.values
         ends = []
-        for body, start, captured in zip(bodies, starts, captures, strict=True):
+        narrowed: list[tuple[str, CallArgument, CallArgument]] = []
+        for position, (body, start, captured) in enumerate(
+            zip(bodies, starts, captures, strict=True)
+        ):
             flow.at(start)
             frame.values = dict(before)
+            for name, typed in (narrows[position] if narrows else {}).items():
+                held = frame.values.get(name)
+                if held is not None and held is not _SELF:
+                    frame.values[name] = _narrowed(held, typed)
+                    narrowed.append((name, frame.values[name], held))
             self._capture(captured, scope)
             self._statements(body, scope)
             points.append(flow.here())
             if flow.here() is not None:
                 ends.append(frame.values)
         flow.join(points)
+        if len(ends) > 1:
+            # A narrowed type holds only on its own body's paths: where another body reaches
+            # the join too, the name holds the value it had, untyped by the test.
+            for end in ends:
+                for name, made, held in narrowed:
+                    if end.get(name) is made:
+                        end[name] = held
         frame.values = _join(ends) if ends else dict(before)
+
+    def _narrowing(self, test: ast.expr, scope: Scope) -> list[dict[str, TypeRef]] | None:
+        """The types an `if` test gives local names in its two bodies (the typing
+        specification's `isinstance` narrowing): `isinstance(x, C)` makes `x` a `C` in the
+        body, `not isinstance(x, C)` in the `else`, and `a and b` gives the body both. A tuple
+        of classes is their union, a closed list. A class the file does not name, a name that
+        is not a local, or anything else narrows nothing."""
+        frame = scope.frame
+        if frame is None:
+            return None
+        positive = not (isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not))
+        tested = test if positive else test.operand  # type: ignore[attr-defined]
+        conjuncts = (
+            list(tested.values)
+            if positive and isinstance(tested, ast.BoolOp) and isinstance(tested.op, ast.And)
+            else [tested]
+        )
+        found: dict[str, TypeRef] = {}
+        for part in conjuncts:
+            narrowed = self._isinstance_test(part, scope)
+            if narrowed is not None:
+                found[narrowed[0]] = narrowed[1]
+        if not found:
+            return None
+        return [found, {}] if positive else [{}, found]
+
+    def _isinstance_test(self, test: ast.expr, scope: Scope) -> tuple[str, TypeRef] | None:
+        """`isinstance(x, C)` on a local `x`, as `(x, C)`; a tuple of classes `(A, B)` as
+        their union. None for any other expression."""
+        if not (
+            isinstance(test, ast.Call)
+            and len(test.args) == 2
+            and not test.keywords
+            and isinstance(test.args[0], ast.Name)
+            and isinstance(test.func, ast.Name)
+        ):
+            return None
+        targets = self._targets(test.func, scope)
+        if targets != (Target(BUILTINS, "isinstance"),):
+            return None
+        name = test.args[0].id
+        frame = scope.frame
+        if frame is None or name not in frame.local_names or name not in frame.values:
+            return None
+        written = test.args[1]
+        classes = list(written.elts) if isinstance(written, ast.Tuple) else [written]
+        found: list[TypeRef | None] = []
+        for one in classes:
+            named = (
+                type_ref(one, scope.types) if isinstance(one, ast.Name | ast.Attribute) else None
+            )
+            if named is None or _class_of(named) is None or named.arguments:
+                return None
+            found.append(TypeRef(symbol=named.symbol))
+        joined = union_of(found)
+        return None if joined is None else (name, joined)
 
     def _capture(self, captured: list[tuple[str, CallArgument]], scope: Scope) -> None:
         """Write each name a `match` pattern captured."""
@@ -911,6 +1041,10 @@ class BodyReader:
     # -- calls ---------------------------------------------------------------------------
 
     def _call(self, node: ast.Call, scope: Scope) -> CallArgument:
+        if self._names_a_new_type(node.func, scope) and len(node.args) == 1 and not node.keywords:
+            # Calling a `NewType` hands its argument back (the typing specification): no call
+            # runs that the facts could name, and the value is the argument.
+            return self._value(node.args[0], scope)
         callee = self._callee(node.func, scope)
         positional = []
         types: list[TypeRef | None] = []
@@ -992,6 +1126,10 @@ class BodyReader:
                 scope.body.callables[result] = returned
             elif returned is not None:
                 scope.body.returned[result] = returned
+            else:
+                hinted = self._declared_result(callee)
+                if hinted is not None:
+                    scope.body.declared[result] = hinted
             return CallArgument(kind="unresolved", source=result)
         libraries = self._context.index.libraries
         if callee.receiver is not None and libraries is not None and not unpacked:
@@ -1093,6 +1231,13 @@ class BodyReader:
                 )
         return self._on_value(self._value(func, scope), CALL, scope)
 
+    def _names_a_new_type(self, func: ast.expr, scope: Scope) -> bool:
+        """Whether `func` names a `NewType` (`imports.py`), on every binding it has."""
+        if not isinstance(func, ast.Name | ast.Attribute):
+            return False
+        targets = self._targets(func, scope)
+        return bool(targets) and all(target.kind == "new_type" for target in targets or ())
+
     def _library_member(self, owner: Target, name: str) -> Target | None:
         """`module.name` for a library module, as the library defines it: a re-export is
         its defining module's (`requests.get` is `requests.api.get`)."""
@@ -1135,6 +1280,8 @@ class BodyReader:
             return None
         name = str(callee.target.name)
         typed = callee.typed
+        if owner is None and callee.hinted and typed is not None and typed.symbol != UNION:
+            return self._returns_on(typed, name, arguments, types, unpacked=unpacked)
         if owner is None:
             if typed is None or typed.symbol != UNION:
                 return None
@@ -1163,16 +1310,17 @@ class BodyReader:
         libraries = self._context.index.libraries
         assert libraries is not None
         owner = receiver.symbol
-        if owner in self._local_classes:
+        shape = self._project_shape(owner)
+        if shape is not None:
             order = self._hierarchy.order(owner)
             entries = [] if order is None else order
             defining = next(
                 (e for e in entries if name in _members(self._hierarchy.shape_of(e.symbol))),
                 None,
             )
-            if defining is None or defining.symbol in self._local_classes:
+            if defining is None or self._project_shape(defining.symbol) is not None:
                 return None
-            given = parameter_mapping(receiver, self._local_classes[owner])
+            given = parameter_mapping(receiver, shape)
             instance = substitute(defining, given) or TypeRef(symbol=defining.symbol)
             found = libraries.call_returns(
                 defining.symbol,
@@ -1195,6 +1343,128 @@ class BodyReader:
         if returned.symbol == UNION or _class_of(returned) is not None:
             return returned
         return None
+
+    def _declared_result(self, callee: Callee) -> TypeRef | None:
+        """The type a call of a function or method of this file declares it returns: a
+        module-level function's, or the method a class of this file defines for the
+        receiver (C3, through bases of this file), its type variables filled by the
+        receiver's type arguments. None where the callee is another file's or a library's,
+        or declares nothing that names a class."""
+        owner, name = callee.target.owner, callee.target.name
+        if name is None or name == INIT:
+            return None
+        if owner is None:
+            typed = callee.typed if callee.hinted else None
+            return None if typed is None else self._declared_on(typed, name)
+        if self._project_shape(owner) is None and callee.invoke_kind == "static":
+            # A module-level function, of this file or (by its header) another of the module.
+            return _a_class(self._project_return(method_descriptor(owner, name, PY_SIGNATURE)))
+        if self._project_shape(owner) is not None:
+            typed = callee.typed
+            receiver = (
+                typed if typed is not None and typed.symbol == owner else TypeRef(symbol=owner)
+            )
+            return self._declared_on(receiver, name)
+        return None
+
+    def _declared_on(self, receiver: TypeRef, name: str) -> TypeRef | None:
+        """What `name` called on a `receiver` of a class of this file declares it returns."""
+        owner = receiver.symbol
+        shape = self._project_shape(owner)
+        if shape is None:
+            return None
+        order = self._hierarchy.order(owner)
+        entries = [TypeRef(symbol=owner)] if order is None else order
+        defining = next(
+            (e for e in entries if name in _members(self._hierarchy.shape_of(e.symbol))), None
+        )
+        defining_shape = None if defining is None else self._project_shape(defining.symbol)
+        if defining is None or defining_shape is None:
+            return None
+        written = self._project_return(method_descriptor(defining.symbol, name, PY_SIGNATURE))
+        if written is None:
+            return None
+        instance = substitute(defining, parameter_mapping(receiver, shape)) or defining
+        mapping = parameter_mapping(instance, defining_shape)
+        # `Self` is the receiver's own class (the class the call was made through).
+        return _a_class(substitute(written, {**mapping, SELF: receiver}))
+
+    def _declared_field_on(self, receiver: TypeRef, name: str) -> TypeRef | None:
+        """The type a class of this file (or a base of this file, by C3) declares for the
+        attribute `name` of a `receiver`, its type variables filled by the receiver's type
+        arguments; None where no class of this file declares it, or it names no class."""
+        owner = receiver.symbol
+        shape = self._project_shape(owner)
+        if shape is None:
+            return None
+        order = self._hierarchy.order(owner)
+        entries = [TypeRef(symbol=owner)] if order is None else order
+        defining = next(
+            (e for e in entries if name in _members(self._hierarchy.shape_of(e.symbol))), None
+        )
+        defining_shape = None if defining is None else self._project_shape(defining.symbol)
+        if defining is None or defining_shape is None:
+            return None
+        written = self._project_field(f"{defining.symbol}{name}.")
+        if written is None:
+            return None
+        instance = substitute(defining, parameter_mapping(receiver, shape)) or defining
+        mapping = parameter_mapping(instance, defining_shape)
+        return self._read_through(_a_class(substitute(written, mapping)), receiver)
+
+    def _read_through(self, declared: TypeRef | None, receiver: TypeRef) -> TypeRef | None:
+        """What reading an attribute declared `declared` on a `receiver` gives: the declared
+        type itself, unless its class is a descriptor (it has `__get__`, as SQLAlchemy's
+        `Mapped[T]` has), whose `__get__` runs and gives what it is written to return for an
+        instance (`T`); None where that is not known, or a union holds a descriptor."""
+        if declared is None:
+            return None
+        members = list(declared.arguments) if declared.symbol == UNION else [declared]
+        if not any(self._is_descriptor(member) for member in members):
+            return declared
+        if declared.symbol == UNION or self._context.index.libraries is None:
+            return None
+        got = self._returns_on(
+            declared, "__get__", [_UNKNOWN, _UNKNOWN], [receiver, None], unpacked=False
+        )
+        return got if isinstance(got, TypeRef) and _a_class(got) is not None else None
+
+    def _is_descriptor(self, typed: TypeRef) -> bool:
+        """Whether `typed`'s class defines `__get__`, by its lookup order; a class whose
+        order is not read counts as one, since it may."""
+        owner = _class_of(typed)
+        if owner is None:
+            return False
+        order = self._hierarchy.order(owner)
+        if order is None:
+            return self._hierarchy.shape_of(owner) is None or _GET in _members(
+                self._hierarchy.shape_of(owner)
+            )
+        return any(_GET in _members(self._hierarchy.shape_of(entry.symbol)) for entry in order)
+
+    def _project_shape(self, symbol: str) -> ClassShape | None:
+        """A class of the module: this file's, else another file's by its header."""
+        found = self._local_classes.get(symbol)
+        headers = self._context.index.headers
+        if found is None and headers is not None:
+            found = headers.shape_of(symbol)
+        return found
+
+    def _project_return(self, descriptor: str) -> TypeRef | None:
+        """The return a `def` of the module declares: this file's, else by its header."""
+        found = self._own_returns.get(descriptor)
+        headers = self._context.index.headers
+        if found is None and headers is not None:
+            found = headers.returns(descriptor)
+        return found
+
+    def _project_field(self, field: str) -> TypeRef | None:
+        """The type a class body of the module declares for an attribute."""
+        found = self._own_fields.get(field)
+        headers = self._context.index.headers
+        if found is None and headers is not None:
+            found = headers.field(field)
+        return found
 
     def _super(self, name: str, scope: Scope) -> Callee:
         """`super().m()` from a method: `special` on the class's first written parent, as
@@ -1232,15 +1502,32 @@ class BodyReader:
             )
         if value.kind in ("string", "concat"):
             declared = TypeRef(symbol=_STRING)
+        if isinstance(value, _Narrowed):
+            # The `isinstance` test chose this branch: the value is that class here, whatever
+            # its annotation says it may be.
+            declared = value._typed
         if declared is None:
             declared = _known_type(value, scope)
+        # What a function of this file declares the value is: it names no owner (the body's
+        # returns run, and the resolver follows them), and types only what is read off it.
+        hinted = False
+        if declared is None:
+            declared = _hinted(value, scope)
+            if declared is None and value.kind == "field" and on_self and value.symbol:
+                # `self.client`: what the class declares the attribute holds. Its writes, which
+                # the resolver follows (ruling R33), are what the object holds.
+                declared = self._declared_field_on(
+                    TypeRef(symbol=scope.owner), member_name(str(value.symbol))
+                )
+            hinted = declared is not None
         if protocol and declared is not None and declared.symbol == _TYPE_OF:
             declared = None
         if name == CALL and declared is not None and declared.symbol == _TYPE_OF:
             # Calling a class object constructs it (R37): `X` or a subclass, as `cls()` is.
             name = INIT
             declared = declared.arguments[0] if len(declared.arguments) == 1 else None
-        owner = _class_of(declared)
+            hinted = False
+        owner = None if hinted else _class_of(declared)
         if value.kind == "parameter" and isinstance(value.value, int):
             return Callee(
                 _target(owner, name),
@@ -1258,8 +1545,9 @@ class BodyReader:
                 receiver_field=value.symbol,
                 receiver_field_kind="instance" if on_self else None,
                 typed=declared,
+                hinted=hinted,
             )
-        return Callee(_target(owner, name), "virtual", receiver, typed=declared)
+        return Callee(_target(owner, name), "virtual", receiver, typed=declared, hinted=hinted)
 
     def _closed_list_field(self, node: ast.expr, scope: Scope) -> str | None:
         """The static field a module-level name bound to a closed list is read as."""
@@ -1305,11 +1593,31 @@ class BodyReader:
                 if len(targets) == 1:
                     return _reference(targets[0])
                 return CallArgument(kind="merge", candidates=[_reference(t) for t in targets])
+        if isinstance(node, ast.Attribute):
+            # An attribute of a value (`obj.client`): the type a class of this file declares
+            # for it (`client: HttpClient` in its body, PEP 526), where the value's class is
+            # known; else a value this scanner does not follow.
+            base = self._value(node.value, scope)
+            held = self._typed(node.value, base, scope) or _hinted(base, scope)
+            declared = None if held is None else self._declared_field_on(held, node.attr)
+            return _UNKNOWN if declared is None else _part(declared)
         if isinstance(node, ast.List | ast.Tuple):
             elements = [self._value(element, scope) for element in node.elts]
+            typed = self._literal_type(node, node.elts, elements, scope)
             if any(isinstance(element, ast.Starred) for element in node.elts):
-                return _UNKNOWN
-            return CallArgument(kind="array", elements=elements)
+                return _part(typed)
+            found = _Part(kind="array", elements=elements)
+            found._typed = typed
+            return found
+        if isinstance(node, ast.Dict | ast.Set):
+            children = [c for c in ast.iter_child_nodes(node) if isinstance(c, ast.expr)]
+            read = {id(child): self._value(child, scope) for child in children}
+            if isinstance(node, ast.Set):
+                return _part(
+                    self._literal_type(node, node.elts, [read[id(e)] for e in node.elts], scope)
+                )
+            keys = [None if k is None else read[id(k)] for k in node.keys]
+            return _part(self._dict_type(node, keys, [read[id(v)] for v in node.values], scope))
         if isinstance(node, ast.Lambda):
             return self._lambda(node, scope)
         if isinstance(node, ast.IfExp):
@@ -1428,8 +1736,8 @@ class BodyReader:
                 self._value(condition, scope)
                 flow.loop_test(loops[-1])
         parts = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
-        for part in parts:
-            self._value(part, scope)
+        made = [(part, self._value(part, scope)) for part in parts]
+        typed = [self._element_type(part, value, scope) for part, value in made]
         if lazy:
             flow.defer(False)
         # An exhausted inner loop takes the outer loop's next element.
@@ -1438,7 +1746,77 @@ class BodyReader:
         flow.loop_end(loops[0])
         if frame is not None and saved is not None:
             frame.values, frame.local_names = saved
-        return _UNKNOWN
+        if lazy:
+            return _UNKNOWN
+        # The object it builds is its class, with the type of what each pass adds.
+        symbol = _COMPREHENSION_CLASSES[type(node)]
+        if any(part is None for part in typed):
+            return _part(TypeRef(symbol=symbol))
+        return _part(TypeRef(symbol=symbol, arguments=[p for p in typed if p is not None]))
+
+    # -- container literals (OI-324 part 2) ----------------------------------------------
+
+    def _literal_type(
+        self,
+        node: ast.List | ast.Tuple | ast.Set,
+        written: list[ast.expr],
+        elements: list[CallArgument],
+        scope: Scope,
+    ) -> TypeRef:
+        """The type a list, tuple or set literal builds: its class, with its elements'
+        types where every one is known. Several types are their union (a closed list, never
+        one of them); a tuple keeps them by position. An empty literal, a starred element or
+        an element of no known type gives the class alone."""
+        symbol = _LITERAL_CLASSES[type(node)]
+        if not written or any(isinstance(element, ast.Starred) for element in written):
+            return TypeRef(symbol=symbol)
+        types = [self._element_type(w, e, scope) for w, e in zip(written, elements, strict=True)]
+        if any(found is None for found in types):
+            return TypeRef(symbol=symbol)
+        if isinstance(node, ast.Tuple):
+            return TypeRef(symbol=symbol, arguments=[t for t in types if t is not None])
+        joined = union_of(list(types))
+        return TypeRef(symbol=symbol, arguments=[] if joined is None else [joined])
+
+    def _dict_type(
+        self,
+        node: ast.Dict,
+        keys: list[CallArgument | None],
+        values: list[CallArgument],
+        scope: Scope,
+    ) -> TypeRef:
+        """A dict literal's type: `dict[K, V]` where every key and value has a known type,
+        each the union of what is written; an unpacked `**mapping` or an unknown one gives
+        `dict` alone."""
+        dict_type = TypeRef(symbol=_LITERAL_CLASSES[ast.Dict])
+        if not keys or any(key is None for key in keys):
+            return dict_type
+        key_types = [
+            self._element_type(w, k, scope)
+            for w, k in zip(node.keys, keys, strict=True)
+            if w is not None and k is not None
+        ]
+        value_types = [
+            self._element_type(w, v, scope) for w, v in zip(node.values, values, strict=True)
+        ]
+        joined = [union_of(list(key_types)), union_of(list(value_types))]
+        if any(t is None for t in [*key_types, *value_types]) or any(j is None for j in joined):
+            return dict_type
+        return dict_type.model_copy(update={"arguments": [j for j in joined if j is not None]})
+
+    def _element_type(self, node: ast.expr, value: CallArgument, scope: Scope) -> TypeRef | None:
+        """The type of one element the code writes: a literal's own class, else what the
+        scanner knows of the value (`_typed`). None where it is not known."""
+        if isinstance(node, ast.Constant):
+            if node.value is None:
+                return TypeRef(symbol=_NONE, nullable=True)
+            literal = type(node.value)
+            if literal in (str, int, float, bool, bytes, complex):
+                return TypeRef(symbol=f"{BUILTINS}/{literal.__name__}#")
+            return None
+        if value.kind in ("string", "concat"):
+            return TypeRef(symbol=_STRING)
+        return self._typed(node, value, scope)
 
     # -- names ---------------------------------------------------------------------------
 
@@ -1484,7 +1862,11 @@ class BodyReader:
                     # reaches another call does: the first read gets the literal, a
                     # later read gets `unresolved`.
                     current.mutable.discard(name)
-                    current.values[name] = _UNKNOWN
+                    # Its class does not change; what it holds may have (OI-324 part 2).
+                    typed = value._typed if isinstance(value, _Part) else None
+                    current.values[name] = (
+                        _UNKNOWN if typed is None else _part(TypeRef(symbol=typed.symbol))
+                    )
                 return value
             current, nested = current.enclosing, True
         return None
@@ -1783,6 +2165,8 @@ def _parts(value: CallArgument, targets: list[ast.expr], scope: Scope) -> list[T
     many parts. None where the value's type says no arity (`tuple[A, ...]`, a list) or a
     name is starred."""
     typed = _known_type(value, scope)
+    if typed is None and value.kind == "unresolved" and value.source is not None:
+        typed = scope.body.declared.get(value.source)
     if (
         typed is None
         or typed.symbol != TUPLE
@@ -1857,7 +2241,7 @@ def _merge(candidates: list[CallArgument]) -> CallArgument:
     """One of several values, identical ones folded (D00 §5 `merge`). A tuple part is an
     `unresolved` value in the facts, and folds as one where the parts differ."""
     if any(candidate != candidates[0] for candidate in candidates):
-        candidates = [_UNKNOWN if isinstance(c, _Part) else c for c in candidates]
+        candidates = [_UNKNOWN if _is_part(c) else c for c in candidates]
     folded: list[CallArgument] = []
     for candidate in candidates:
         if candidate not in folded:
@@ -1880,7 +2264,7 @@ def _one_of(values: list[CallArgument]) -> CallArgument:
     value this scanner did not follow, else their `merge`."""
     if all(value == values[0] for value in values):
         return values[0]
-    if any(value == _UNKNOWN or isinstance(value, _Part) for value in values):
+    if any(value == _UNKNOWN or _is_part(value) for value in values):
         return _UNKNOWN
     return _merge([c for value in values for c in (value.candidates or [value])])
 
@@ -1894,6 +2278,36 @@ def _declared_type(annotation: ast.expr, types: TypeScope) -> TypeRef | None:
     if is_class_object(annotation, types):
         return TypeRef(symbol=_TYPE_OF, arguments=[found], nullable=found.nullable)
     return found
+
+
+def own_return_type(annotation: ast.expr, types: TypeScope) -> TypeRef | None:
+    """The type a function of this file declares it returns, as the scanner reads it off a
+    call's result: the written type, type variables kept for the receiver's type arguments to
+    fill, and `type[X]` the class object (`_declared_type`). None where the file does not
+    name it, or it is `Any`."""
+    found = type_ref(annotation, types)
+    if found is None or found.symbol == ANY:
+        return None
+    if is_class_object(annotation, types):
+        return TypeRef(symbol=_TYPE_OF, arguments=[found], nullable=found.nullable)
+    return found
+
+
+def _hinted(value: CallArgument, scope: Scope) -> TypeRef | None:
+    """What a function of this file declares a call result is (`Body.declared`)."""
+    if value.kind == "unresolved" and value.source is not None:
+        return scope.body.declared.get(value.source)
+    return None
+
+
+def _a_class(typed: TypeRef | None) -> TypeRef | None:
+    """`typed` where it names a class, a class object or a union of them; None for a type
+    variable left unfilled, `Any`, an unnamed type or `None` itself."""
+    if typed is None or typed.symbol in (ANY, _NONE):
+        return None
+    if typed.symbol == UNION:
+        return typed if all(_class_of(member) for member in typed.arguments) else None
+    return typed if _class_of(typed) is not None else None
 
 
 def _class_of(typed: TypeRef | None) -> str | None:

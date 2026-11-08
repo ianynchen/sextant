@@ -52,6 +52,49 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **The value walk works out each parameter's paths upward once** (ruling R39; M04). A
+  parameter's (and a plainly read binding's) set of paths upward is computed once per
+  `(position, frames)` and joined onto every path that reaches it, shared by every receiver
+  site of a binding round, and `PATH_CAP` now stops the enumeration where the set is built. A
+  lattice of 262,144 paths resolves in 0.2 s instead of 12 s per site. JVM pins and polar: no
+  answer changed. **Fixed:** round 1's rule that a written parameter type is the parameter's
+  answer gave a wrong `resolved` where a caller passes a subclass or a mock; callers now answer
+  first, and the written type is `declared` beside every caller path that ends with no value
+  (`external`, `not_readable`, `non_enumerable`, `cycle`; never `escapes`), one row per class on
+  the parameter's own path, so the site is `partial` (ruling R40).
+  Calling a `NewType` writes no construction; the value is the argument.
+- **Python: the headers of imported module files, `Self`, and re-exports** (OI-324 part 2,
+  review round 1; M03, M04, D00). A file now reads, of each module file its names lead to,
+  the header and nothing else (names, re-exports, aliases, `NewType`s, class bases and type
+  parameters, declared returns, class-body attributes), parsed once per scan: another file's
+  declarations type elements (`for r in rows()`) and `obj.x` as this file's do, and a
+  re-export or alias of the module is named by where it is defined (polar: call sites owning a
+  non-class path 4,403 -> 10; edges reaching a body 32,287 -> 39,084). A header edit re-reads
+  the files that read it, a body edit does not (the reuse key records each header's digest).
+  `-> Self` is kept as written and filled per path with the class the call was made through
+  (all 2,722 polar calls on a `from_session(...)` result bind one class; 242 before). A bare
+  `Final`/`ClassVar` is no type; a descriptor-typed attribute (`Mapped[T]`) is what its
+  `__get__` gives; a body's `external` answer stays beside a declared one (`partial`); a
+  written parameter type is the type reader's answer for the parameter. polar cold 40.9 s,
+  warm 3.8 s.
+- **Python: the types the module's own code declares** (OI-324, second part; M03, M04).
+  A function's declared return (`def load() -> list[User]`) answers, in the resolver, where
+  the body's returns give no type, and for a method with no body (a `Protocol`'s); in the
+  scanner it types what is read off the result (elements, parts). A container literal is its
+  class with its elements' types (`[u, u]` is `list[User]`, mixed elements a union, never one
+  of them). A class-level annotation (`client: HttpClient`, PEP 526: dataclass, `NamedTuple`,
+  `TypedDict`, attrs and pydantic fields alike, no framework named) is the attribute's type
+  where no write says more, over the R33 namespace. `isinstance(x, C)` narrows a local in its
+  branch and after an early exit on the negated test. A generic class's type parameters are
+  filled through a subclass's written parents in another file (`ProductRepository(
+  RepositoryBase[Product])`). **No fact field was added:** declared returns and annotations
+  were already `signature.returns`; a Python class now also writes the JVM's `supertype`,
+  `generic_interfaces` and (for `Generic[...]`) `type_parameters`; `bound_receivers.evidence`
+  is `declared` on a row a declaration answered. A declared type never binds a call syntax
+  makes (`__call__`, `__getitem__`, `__iter__`, ...): the facts write `type[X]` as `X`.
+  **Measured:** container-method sites typed 254 → 1,012 of 2,558 (Sextant) and 117 → 664 of
+  2,261 (polar); scanner-owned 24,598 → 27,974 and 82,541 → 85,435; bound 354 → 629 and
+  10,177 → 10,534; `not_readable` 7,264 → 4,647 and 15,232 → 12,267.
 - **Python: a type variable in a library return takes the type that fills it, and a `for`
   loop is the iteration it is** (OI-324, first part; M03 "Libraries"). `list[User].pop()` is a
   `User`, `dict[str, Client].get(k)` a `Client` (`X | None` is `X`, as `Optional[X]` is), a class

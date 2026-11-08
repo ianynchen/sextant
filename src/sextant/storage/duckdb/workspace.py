@@ -922,6 +922,20 @@ _NAMED_QUERIES = {
           AND document_id IN (SELECT document_id FROM selected_documents)
         ORDER BY symbol
     """,
+    # Each class's written parents with their type arguments (D00 §5a `supertype` and
+    # `generic_interfaces`), for mapping a generic class's type parameters through its
+    # subclasses (OI-324 part 2). A class with no generic parent has no row.
+    "generic_bases": """
+        SELECT payload ->> 'symbol'            AS symbol,
+               payload -> 'supertype'          AS supertype,
+               payload -> 'generic_interfaces' AS generic_interfaces
+        FROM raw_facts
+        WHERE kind = 'symbol'
+          AND (json_type(payload -> 'supertype') NOT IN ('NULL')
+               OR json_array_length(payload -> 'generic_interfaces') > 0)
+          AND document_id IN (SELECT document_id FROM selected_documents)
+        ORDER BY symbol
+    """,
     "type_hierarchy": "SELECT * FROM type_hierarchy ORDER BY child, position, ancestor",
     # F5 §6.2 (W29). Ordered on the whole row because nothing shorter is total: one call
     # may carry several headers, and two callers may reach one address with different ones
@@ -1819,6 +1833,7 @@ _FACT_ONLY = frozenset(
         "located_annotations",
         "located_symbols",
         "type_parameters",
+        "generic_bases",
         "facts",
         "selected_documents",
         "constants",

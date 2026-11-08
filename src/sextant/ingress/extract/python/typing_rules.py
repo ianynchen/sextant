@@ -6,7 +6,8 @@ typing specification defines it:
 - a union is the type arguments of `typing/Union#`;
 - `type[X]` is `X` itself, so a factory that returns a class reads as that class;
 - `Annotated[X, ...]`, `ClassVar[X]`, `Final[X]`, `Required[X]`, `NotRequired[X]` and
-  `ReadOnly[X]` are `X`;
+  `ReadOnly[X]` are `X`, and each of those qualifiers written bare (`x: Final = 3`) is no
+  type;
 - a type variable is its bare name, as a JVM type variable is (D00 §5a);
 - `Self` is the enclosing class;
 - `List`, `Dict` and typing's other aliases of a builtin or `collections` class are that
@@ -26,7 +27,7 @@ keeps the symbol its import line gives.
 
 import ast
 import builtins
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Container, Mapping
 from dataclasses import dataclass, field, replace
 
 from sextant.domain.facts import TypeRef
@@ -51,6 +52,9 @@ _RESOLVED = "resolved"
 _BUILTIN_NAMES = frozenset(dir(builtins))
 # Forms whose meaning is their one type argument.
 _WRAPPERS = frozenset({"ClassVar", "Final", "Required", "NotRequired", "ReadOnly", "Type"})
+# The qualifiers among them: written bare (`x: Final = 3`), each says how a name is bound,
+# never what type it holds, so a bare one gives no type.
+_QUALIFIERS = _WRAPPERS - {"Type"}
 # A bound on how deep a written type is followed, so an alias that names itself ends.
 _DEPTH = 32
 # typing's names for builtin and `collections` classes (PEP 585), and `LiteralString`,
@@ -184,8 +188,21 @@ def _named(target: Target, scope: TypeScope, depth: int) -> TypeRef | None:
         return _read(target.alias_of, scope, depth - 1)
     if target.kind in ("variable", "function"):
         return None
+    headers = scope.index.headers
+    if (
+        target.kind is None
+        and target.member is not None
+        and headers is not None
+        and scope.index.owns(target.module)
+        and headers.names_a_value(target.module, target.member)
+    ):
+        # Another file of the module binds the name to a value or an alias of a type its own
+        # scope reads (`SaveFixture = Callable[...]`): as a type here it names no class.
+        return None
     if is_typing(target, "Any"):
         return TypeRef(symbol=ANY)
+    if any(is_typing(target, qualifier) for qualifier in _QUALIFIERS):
+        return None
     if target.module in _TYPING_NAMES and target.member in _ALIASES:
         return _known(_ALIASES[target.member])
     if is_typing(target, "Self"):
@@ -229,6 +246,11 @@ def _alternatives(node: ast.expr) -> list[ast.expr]:
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
         return [*_alternatives(node.left), *_alternatives(node.right)]
     return [node]
+
+
+def union_of(members: list[TypeRef | None]) -> TypeRef | None:
+    """`_union`, for a reader outside the written types: the one type several are."""
+    return _union(members)
 
 
 def _union(members: list[TypeRef | None]) -> TypeRef | None:
@@ -414,7 +436,7 @@ class Hierarchy:
         self,
         shape_of: Callable[[str], ClassShape | None],
         shared: "Hierarchy | None" = None,
-        own: frozenset[str] = frozenset(),
+        own: Container[str] = frozenset(),
     ) -> None:
         self.shape_of = shape_of
         self._orders: dict[str, list[TypeRef] | None] = {}
