@@ -846,3 +846,31 @@ def test_every_catalog_carries_every_configuration_annotation_the_catalogs_name(
     assert {c.value_annotations for c in catalogs} == {
         ("org.springframework.beans.factory.annotation.Value",)
     }
+
+
+def test_a_python_coordinate_is_its_normalised_distribution_name(tmp_path: Path):
+    """A Python module's build records each dependency by its PEP 503 name (`fastapi`), so a
+    catalog names it so; a `groupId:artifactId` stays the JVM spelling (D02 §1)."""
+    (tmp_path / "invented-py.yml").write_text(
+        _HEADER + "detect: {coordinates: [fastapi, sqlalchemy-utils, 'org.acme:web']}\n"
+        "matches: {}\n",
+        encoding="utf-8",
+    )
+
+    [catalog] = YamlCatalogSource(tmp_path).load()
+
+    assert catalog.detect_coordinates == ("fastapi", "sqlalchemy-utils", "org.acme:web")
+
+
+@pytest.mark.parametrize("written", ["FastAPI", "sqlalchemy_utils", "a b"])
+def test_a_coordinate_in_no_build_s_spelling_is_refused(tmp_path: Path, written: str):
+    """A name the detector never writes (upper case, `_`, a space) would match nothing while
+    reading as a framework the module does not use."""
+    (tmp_path / "invented-py.yml").write_text(
+        _HEADER + f"detect: {{coordinates: ['{written}']}}\nmatches: {{}}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).load()
+
+    assert "detect.coordinates" in str(raised.value)

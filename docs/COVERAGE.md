@@ -725,7 +725,7 @@ the JAX-RS line. Apache Camel was ruled out of scope earlier that day, and the d
 | **Go** | **`go/packages`** + `go/ssa` | Full | No (deps only) | **`callgraph/{cha,rta,vta}` ships with the Go toolchain** | `registration_call` |
 | **TypeScript** | **`ts.TypeChecker`** compiler API | Full where annotated | No | `Jelly` | `registration_call` + `annotation` + `filesystem` |
 | **Swift** | **IndexStoreDB** (index-while-building) | Full | Yes (macOS) | Index carries call relations | `registration_call` |
-| **Python** | None exists, so **our own scanner** over the standard library's `ast`, with typeshed and the installed environment's type files (pyright, Pyrefly and ty answer over a language server; mypy's documented API returns report text only: [comparison](research/2026-11-06-python-type-tools.md)) | What the code and libraries write: annotations, unions, `type[X]`, overloads. **Not** a generic's elements, `isinstance` narrowing, or annotation-only fields ([essay](coverage/python.md)) | No: the installed environment is read, never built or run | We write it, as for the JVM: receiver binding per path, C3 lookup | `fluent` with `entry_point` roots (click) ✅ built; FastAPI, Flask, Django not yet |
+| **Python** | None exists, so **our own scanner** over the standard library's `ast`, with typeshed and the installed environment's type files (pyright, Pyrefly and ty answer over a language server; mypy's documented API returns report text only: [comparison](research/2026-11-06-python-type-tools.md)) | What the code and libraries write: annotations, unions, `type[X]`, overloads. **Not** a generic's elements, `isinstance` narrowing, or annotation-only fields ([essay](coverage/python.md)) | No: the installed environment is read, never built or run | We write it, as for the JVM: receiver binding per path, C3 lookup | `fluent` with `entry_point` roots (click) ✅ built; FastAPI routes in progress (verbs, paths, handlers and responses built; router and include prefixes, request parameters and pydantic shapes not yet); Flask, Django not yet |
 | **Rust** | ⛔ **None stable.** `syn` has no types; rustdoc JSON needs `cargo +nightly … -Z unstable-options` and its `FORMAT_VERSION` breaks between releases | Syntax only | — | None | `annotation` (syntax-only) |
 | **JavaScript** | `ts.TypeChecker` via `allowJs` + `checkJs` | Inferred, plus JSDoc | No | `Jelly` | as TypeScript |
 | **C# / .NET** | Compiled assemblies — IL plus metadata — via `System.Reflection.Metadata` or Mono.Cecil; Roslyn's semantic model where source is needed | Full | Yes (or the published assemblies) | We would write it, as for the JVM | `annotation` + `registration_call` |
@@ -808,7 +808,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**118 of 132 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**119 of 133 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -832,6 +832,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |  | `jakarta.enterprise:jakarta.enterprise.cdi-api` | 4.1.0 |
 |  | `javax.enterprise:cdi-api` | 1.0.0, 2.0.0 |
 | `click` | `click` | 8.5.0 |
+| `fastapi` | `fastapi` | 0.115.12, 0.162.0 |
 | `google-pubsub-client` | `com.google.cloud:google-cloud-pubsub` | 1.129.3 |
 | `google-pubsub-subscriber` | `com.google.cloud:google-cloud-pubsub` | 1.127.3 |
 | `grpc-java` | `io.grpc:protoc-gen-grpc-java` | 1.62.2, 1.81.0 |

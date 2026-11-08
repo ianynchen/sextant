@@ -1,0 +1,28 @@
+id: fastapi
+displayName: FastAPI's route decorators, which hand the function back
+
+# WHAT THIS FILE IS (D02 §1f, `returns_argument`; design 2026-11-06-reading-decorators §3d,
+# approved). A route decorator's inner `decorator(func)` registers the function and ends
+# `return func` (`scripts/probes/fastapi_rules.md`), so applied to a function its result IS that
+# function. A function under two route decorators is then registered by both, one row each
+# (`catalogs/fastapi.yml`).
+
+returns_argument:
+  - { owner: fastapi.routing.APIRouter, method: get, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.routing.APIRouter, method: post, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.routing.APIRouter, method: put, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.routing.APIRouter, method: patch, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.routing.APIRouter, method: delete, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.routing.APIRouter, method: head, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.routing.APIRouter, method: options, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.routing.APIRouter, method: trace, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.routing.APIRouter, method: api_route, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.applications.FastAPI, method: get, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.applications.FastAPI, method: post, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.applications.FastAPI, method: put, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.applications.FastAPI, method: patch, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.applications.FastAPI, method: delete, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.applications.FastAPI, method: head, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.applications.FastAPI, method: options, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.applications.FastAPI, method: trace, result_returns: arg0, by: scripts/probes/fastapi_rules.md }
+  - { owner: fastapi.applications.FastAPI, method: api_route, result_returns: arg0, by: scripts/probes/fastapi_rules.md }

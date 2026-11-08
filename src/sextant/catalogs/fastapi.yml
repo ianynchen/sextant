@@ -1,0 +1,71 @@
+id: fastapi
+displayName: FastAPI (routes on an app or a router)
+style: fluent
+protocol: http
+direction: inbound
+
+# Every decorator is the call it is (design 2026-11-06-reading-decorators §3a, ruled):
+# `@router.get("/x")` over `def f` is a call of `APIRouter.get` whose result is called with the
+# function (`__call__`). `router.add_api_route("/x", f)` is the same registration made in one
+# call. Every rule below is FastAPI's own, quoted from its source with lines in
+# `scripts/probes/fastapi_rules.md` (plan 2026-11-08-python-fastapi-inbound N8, N9, ruling R1).
+#
+# A route's path is kept exactly as written (ruling R4): FastAPI asserts a leading `/` on a
+# prefix, never on a route's own path, so this catalog does not declare
+# `refuses_unrooted_path`. The router's own prefix and the include prefixes are plan 2 Task 6.
+
+detect:
+  coordinates: [fastapi]
+
+measured:
+  - { artifact: fastapi, versions: ["0.115.12", "0.162.0"], identity: reported,
+      by: scripts/probes/fastapi_rules.md }
+
+# NO `requires`, the click catalog's reason: the engine reads call sites, which every scanner
+# writes, and a module whose build holds no FastAPI has no call it matches.
+
+# Pydantic's naming is plan 2 Task 9; until then a model's fields are named as written.
+shape_model: json
+
+matches:
+  # THE REGISTRATIONS (probe §3, §6). `APIRouter` and `FastAPI` (which hands each of these to
+  # its own router unchanged) both define them. Each verb method's path is its first
+  # parameter, positional or named (`path`), and its response type is `response_model` where
+  # one is written.
+  roots:
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: get,
+        captures: { http_method: GET, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: post,
+        captures: { http_method: POST, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: put,
+        captures: { http_method: PUT, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: patch,
+        captures: { http_method: PATCH, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: delete,
+        captures: { http_method: DELETE, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: head,
+        captures: { http_method: HEAD, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: options,
+        captures: { http_method: OPTIONS, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: trace,
+        captures: { http_method: TRACE, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+    # `methods` (probe §3): `if methods is None: methods = ["GET"]`, then each upper-cased. An
+    # empty list is refused (`generate_unique_id` asserts `route.methods`), never GET.
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: api_route,
+        captures: { http_method: { keyword: methods, absent: GET, case: upper },
+                    url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+    # The registration in one call: the function is its second parameter (`endpoint`).
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: add_api_route,
+        captures: { http_method: { keyword: methods, absent: GET, case: upper },
+                    url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    handler: { arg: 1, keyword: endpoint } } }
+  # The decorator a verb method returns, called with the function it registers: the handler is
+  # that argument, followed back through every decorator below the registration
+  # (`value-models/fastapi.yml`: a route decorator hands the function back).
+  steps:
+    - { method: __call__, captures: { handler: arg0 } }
+  terminal: [__call__, add_api_route]
+  # THE RESPONSE WHERE `response_model` IS NOT WRITTEN (probe §6, N9). `response_model=None`
+  # is no response. Not written, the handler's return annotation is the response, except a
+  # `Response` subclass, which is none; with no annotation, the type the handler returns.
+  response_fallback: { from: handler_return, none_types: [starlette.responses.Response] }

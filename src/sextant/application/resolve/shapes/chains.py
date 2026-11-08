@@ -230,6 +230,17 @@ _WHEN_KEYS = {"arg", "equals"}
 # shared-mutable-state bug this constant should not have to defend against.
 _UNRESOLVED_ARGUMENT = MappingProxyType({"kind": "unresolved"})
 
+# A verb read from a LIST the call writes (D02 §2's `fluent` style; plan
+# 2026-11-08-python-fastapi-inbound N8): `http_method: {keyword: methods, absent: GET, case:
+# upper}` reads the argument at the reference as a list of verbs, one row each. `absent` is the
+# verb where nothing is written there or the code writes `None` (the framework's default); `case`
+# respells each written verb as the framework does before it serves it. The two keys beside the
+# reference are what makes the mapping a list read rather than a plain argument reference.
+_VERB_LIST_KEYS = frozenset({"absent", "case"})
+_REFERENCE_KEYS = frozenset({"arg", "keyword"})
+# The respellings `case` names.
+_VERB_CASES = {"upper": str.upper}
+
 
 @dataclass(frozen=True)
 class ChainEnd:
@@ -1130,6 +1141,11 @@ def _walk_back(
             # catalog naming its terminal by name alone (`build`) does not reach another
             # builder's `build()`.
             if producer.reason != NON_ENUMERABLE and str(terminal["owner"]) not in rootless.types:
+                continue
+            # A terminal called on a value of no type the facts name (a function value's
+            # `__call__`) is not known to be this catalog's terminal at all: every call of
+            # every callable is one, so past the path cap it reads no chain either.
+            if terminal["owner"] is None:
                 continue
             captures: dict[str, Any] = {}
             _fold_site(terminal, captures, context)
@@ -2256,6 +2272,15 @@ def _validate_captures(
     misplaced or malformed guard."""
     for entry in entries:
         for field, value in entry["captures"].items():
+            # N8's list form: a reference beside `absent` and `case`, each checked, because a
+            # misspelt one would load and read every row as GET.
+            if field == "http_method" and _is_verb_list(value) and not _valid_verb_list(value):
+                raise CatalogError(
+                    f"loading catalog {catalog.source}: `{entry['method']}` captures "
+                    f"`http_method: {value!r}` — a verb list reads `{{keyword: name}}` or "
+                    f"`{{arg: N, keyword: name}}` beside `absent: <verb>` and `case: "
+                    f"{'|'.join(_VERB_CASES)}` (D02 §2's `fluent` style)"
+                )
             # `{bean_via: argN}` is a position too (spec 2026-09-21 §4): the
             # argument at it is read as a bean reference rather than as the
             # value itself — the container hop, `channel: {bean_via: arg0}`.
@@ -3416,6 +3441,8 @@ def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[st
                 "argument": _arg_at(site["arguments"], _arg_index(value[_BEAN_VIA])),
                 "caller": site["caller"],
             }
+        elif field == "http_method" and _is_verb_list(value):
+            resolved[field] = _listed_verbs(value, site)
         elif _reads_an_argument(field, value):
             reference = _capture_reference(value)
             read = _own_method(_arg_at(site["arguments"], reference), site)
@@ -3430,6 +3457,46 @@ def _resolve_captures(declared: dict[str, Any], site: dict[str, Any]) -> dict[st
         else:
             resolved[field] = value
     return resolved
+
+
+def _is_verb_list(value: Any) -> bool:
+    """Whether an `http_method` capture is the list form (`_VERB_LIST_KEYS`)."""
+    return isinstance(value, Mapping) and bool(_VERB_LIST_KEYS & set(value))
+
+
+def _listed_verbs(declared: Mapping[str, Any], site: dict[str, Any]) -> Any:
+    """The verbs a list-form `http_method` capture reads off `site` (N8): the `absent` verb
+    where the argument is not written or is `None`; one string argument per element, each
+    respelled by `case`, where it is a list or set the code writes (an empty one is an empty
+    tuple: no verb at all, which the engine reads as a refusal); and the argument itself where
+    it is anything else, which reads as no verb, the honest gap."""
+    reference = {key: declared[key] for key in _REFERENCE_KEYS if key in declared}
+    argument = _arg_at(site["arguments"], reference)
+    respell = _VERB_CASES.get(str(declared.get("case")), lambda verb: verb)
+    if argument is None or argument.get("kind") == "null":
+        absent = declared.get("absent")
+        return None if absent is None else respell(str(absent))
+    if argument.get("kind") != "array":
+        return argument
+    return tuple(
+        {**element, "value": respell(str(element["value"]))}
+        if _string_value(element) is not None
+        else element
+        for element in argument.get("elements") or ()
+    )
+
+
+def _valid_verb_list(value: Mapping[str, Any]) -> bool:
+    """Whether a list-form `http_method` capture is well formed: an argument reference beside
+    `absent` (a verb) and `case` (one of `_VERB_CASES`), and nothing else."""
+    reference = {key: value[key] for key in _REFERENCE_KEYS if key in value}
+    return (
+        set(value) <= _REFERENCE_KEYS | _VERB_LIST_KEYS
+        and "keyword" in reference
+        and argument_reference(reference, spelled=True) is not None
+        and ("absent" not in value or (isinstance(value["absent"], str) and value["absent"] != ""))
+        and ("case" not in value or value["case"] in _VERB_CASES)
+    )
 
 
 def _captured_at(

@@ -190,6 +190,11 @@ style … today `derived_resource` alone" after `config_join` had joined the set
 after `detect.required` shipped; it is corrected here rather than left as a document a
 reader would have to disbelieve (§5.3).*
 
+**A coordinate is spelled as the module's build records it**: `groupId:artifactId` for a JVM
+build, and for a Python one the distribution name as PEP 503 normalizes it (`fastapi`,
+`sqlalchemy-utils`), which is how the Python detector writes `dependency_coordinates`. Any other
+spelling is refused at load.
+
 **`detect.required` (F2 §3.6) makes the coordinates a conjunct for ONE CATALOG whose style
 is not gated.** Style was a proxy for "is this catalog's evidence enough to name its
 framework", and `spring-stomp` / `spring-rsocket` are the pair where the proxy fails: both
@@ -2284,6 +2289,56 @@ reader `combinator`'s `vocabulary.verb_values.fields` uses (§2's `combinator` s
 the table does not name is no verb: `method` NULL at `unresolved`, never the root's default. A
 `verb_values` holding anything but `fields`, and a key that is not one owner and one field, are
 refused at load.
+
+**A verb list** (plan 2026-11-08-python-fastapi-inbound N8, `fastapi.yml`'s `api_route`):
+`http_method: { keyword: methods, absent: GET, case: upper }` — an argument reference (`{keyword:
+name}` or `{arg: N, keyword: name}`) beside either or both of two keys — reads the argument as a
+list of verbs. A list or set the code writes gives one row per element, a repeated verb once (an
+enumerable set is exact); an element that is not a string literal is a row of its own with
+`method` NULL at `unresolved`. **`absent`** is the verb where the argument is not written or the
+code writes `None` (the framework's default). **`case: upper`** respells each verb as the
+framework does before it serves it (the only case word). An EMPTY list derives no row and is
+filed as a `refused_registration` open question (reason `no_methods`): FastAPI asserts a route
+has a method. Any other argument (a module name holding a list) is no verb read: one row,
+`method` NULL at `unresolved`. A verb list with any other key, no keyword, an empty `absent` or
+another `case` is refused at load.
+
+**`matches.response_fallback: { from: handler_return, none_types: [<type>, …] }`** (N9) reads
+the response of an inbound row whose `response` capture writes no argument from the handler
+instead (`from: handler_return`, the one word), FastAPI's rule where `response_model` is not
+written. A capture whose argument is written keeps the capture's rule: the type it names, an
+explicit `None` being no response at `resolved`. From the handler:
+- **Its written return type**: no response where it is a `none_types` type or a subtype of one
+  (by the module's type hierarchy; a type whose supertypes were not read is neither); the
+  descriptor the type roots at otherwise, which is no response for a type that reaches no wire
+  (the `None` type, a generator's iterator) — the `annotation_driven` response rule. A union
+  naming a `none_types` type beside others derives no row and is filed as a
+  `refused_registration` (reason `invalid_response_type`): FastAPI cannot build a response
+  field for it. Any other union, and the unknown type (`Any`), name no one type: the response
+  is not read.
+- **No return type written**: the one type every value the handler returns is, a construction
+  being an instance of its class. Several types, or a value whose type is not read, leave the
+  response not read.
+- **The handler not read** reads no response.
+
+A response not read here leaves the row's address read and its response column NULL, so the
+row is no surer than `partial` (where checkpoint ruling I1 drops an unread written capture to
+`unresolved`). Anything but the one form is refused at load.
+
+**A response written as a module name** (`response_model=Out`, `Out` imported from another
+file: a `field`-kind argument) is the class that name holds, read through the value walk on the
+chain's own path, where every path answers the same type. Any other answer leaves the argument
+as written.
+
+**A handler that is not itself a function value** (a decorated function under a second route
+decorator, a function under a decorator) is followed back as a call of it would be (design
+2026-11-06-reading-decorators §3d): through each decorator a value model states hands the
+function back (`returns_argument`), into module code, to each function a path reaches — one
+row's handler, or one alternative each, `narrowed`. Where no path reaches a function because a
+library call no value model states made the value OF one of the module's functions (a decorator
+applied to it, a wrapper handed it), the handler is not read: the row keeps its address at
+`partial` with `handler` NULL, and a `handler_pass_through` open question names the call
+(reason `external`). Any other handler argument reads as before.
 
 **`matches.refuses_unrooted_path: true`** (DR-6, Vert.x spec §3a) declares that the framework
 THROWS on an inbound path that is empty or has no leading `/` (Vert.x's `RouteImpl.checkPath`),

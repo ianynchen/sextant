@@ -18,7 +18,7 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import product
-from typing import Any
+from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
@@ -83,8 +83,11 @@ from sextant.application.resolve.shapes.client_base import (
     client_defaults,
     options_parts,
 )
+from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.inbound_routes import (
+    INVALID_RESPONSE_TYPE,
+    NO_METHODS,
     UNROOTED_PATH,
     WORDS,
     fallback_word,
@@ -137,10 +140,12 @@ from sextant.application.resolve.shapes.pass_through import (
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.application.resolve.values import (
     EXPRESSION,
+    EXTERNAL,
     INT,
     LITERAL,
     RECEIVER,
     STRING,
+    SYMBOL,
     UNPACKED_SLOT,
     Answer,
     Path,
@@ -151,6 +156,7 @@ from sextant.application.resolve.values import (
     decorators_passed,
     producer_paths,
     resolve_positions,
+    undecorated_maker,
 )
 from sextant.domain.closed_sets import (
     PATH_KIND_PATTERN,
@@ -161,7 +167,7 @@ from sextant.domain.closed_sets import (
 )
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import REDACTED, Redactor
-from sextant.domain.symbols import bare_descriptor, method_name
+from sextant.domain.symbols import ANY_TYPE, UNION_TYPE, bare_descriptor, method_name, names_a_type
 
 # D00 §5's kind for an address the code ASSEMBLES. Spelled here because `_url_arguments`
 # treats it as the catalog's own declared position rather than as a hop - see there.
@@ -353,6 +359,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     )
     client_base = client_base_of(matches, catalog.source)
     _validate_options_capture([*roots, *bean_roots, *steps], client_base, catalog)
+    response_fallback = _response_fallback_of(matches, catalog, workspace)
     if catalog.root_kind is not None:
         _run_entry_points(
             workspace,
@@ -465,6 +472,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 mounts=mounts,
                 routers=routers,
                 unread_prefixes=unread_prefixes,
+                response_fallback=response_fallback,
             )
         # A mount's chain (spec §3c) is not a route: what Vert.x refuses of it is recorded,
         # and it derives a row only where it was given a handler as well.
@@ -890,6 +898,10 @@ class _DeriveContext:
     # The root call of the end being derived (`ChainEnd.root`), for a `client_base` whose client
     # is that call's receiver (`client_arg: receiver`, Vert.x spec §3d). None otherwise.
     root: Mapping[str, Any] | None = None
+    # `matches.response_fallback` (N9): where an inbound chain's `response` capture writes no
+    # argument, the response is read from the handler. None for every catalog not declaring
+    # it, whose unwritten response capture reads as unread, as it always has.
+    response_fallback: "_ResponseFallback | None" = None
 
 
 def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
@@ -1088,9 +1100,26 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
     # so calling it once per row rather than once per destination keeps
     # that list from carrying the same shape root once per channel.
     request_shape = argument_descriptor(body_argument, context.facts, context.carrier_rules)
+    # A response type the call names through a module name (`response_model=Out`, `Out` imported
+    # from another file) is the class that name holds, read through the value walk.
+    response_argument = _class_named(response_argument, context)
     response_shape = _response_descriptor(
         response_argument, captures.get("response_is"), context.facts, context.carrier_rules
     )
+    # Checkpoint ruling I1: a declared response capture that was not read drops the row.
+    response = _Response(
+        response_shape,
+        _capture_resolved("response" in captures, response_argument, response_shape),
+    )
+    # N9: a response capture that writes nothing is read from the handler instead.
+    if (
+        context.response_fallback is not None
+        and "response" in captures
+        and response_argument is None
+        and direction == "inbound"
+    ):
+        response = _handler_response(answering, context.response_fallback, context)
+        response_shape = response.shape
     # Spec 2026-09-21 §3c: the consumer, on an inbound row alone — an outbound
     # registration hands its messages to nobody in this module. Where the
     # chain's link sits AFTER a handler (finding 3), the row's handler is
@@ -1120,6 +1149,32 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
     link = _string_value(captures.get("channel_link"))
     # The media a served route declares; an outbound row serves nothing, so it carries none.
     consumes, produces = media_columns(captures) if direction == "inbound" else (None, None)
+    # DR-6: a registration the framework raises on derives no row, and is filed once per
+    # address it names: a verb list written empty (N8, ruling R1), or a response type the
+    # framework cannot build (N9).
+    refused = (
+        NO_METHODS
+        if declared_verb == ()
+        else INVALID_RESPONSE_TYPE
+        if response is _REFUSED_RESPONSE
+        else None
+    )
+    if refused is not None:
+        if direction == "inbound" and context.refusals is not None:
+            for verb, (_, path, _) in product(verbs or [None], destinations):
+                if path is None:
+                    continue
+                file_refusal(
+                    context.refusals,
+                    protocol=context.catalog.protocol,
+                    method=verb,
+                    method_kind=method_kind,
+                    path=path,
+                    reason=refused,
+                    caller=context.caller,
+                    handler=handler,
+                )
+        return
     # Vert.x throws at `route("bad")`, before any `method(…)` on the route runs: a refused path
     # is ONE refusal, under the verb the root named, however many verbs the chain went on to
     # add (`file_refusal` keeps one row per address).
@@ -1231,13 +1286,17 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
             # What the captures PRODUCED, the `single_call` change one engine along
             # (`OI-77`, W43's review): a body capture that filled its column did not fail.
             and _capture_resolved("body" in captures, body_argument, request_shape)
-            and _capture_resolved("response" in captures, response_argument, response_shape)
+            and response.read
         )
         resolution = (
             url_resolution
             if captures_read and url_resolution != str(Resolution.UNRESOLVED)
             else str(Resolution.UNRESOLVED)
         )
+        # N9: a response read from the handler that names no one type leaves the row's address
+        # read and its response not, so the row is no surer than `partial`.
+        if not response.whole and resolution == str(Resolution.RESOLVED):
+            resolution = str(Resolution.PARTIAL)
         # A handler not readable here (spec §3b): its identity is read, whether it passes the
         # request on is decided in code this analysis does not read, so the row is `partial`
         # and a `handler_pass_through` question names that code.
@@ -1493,7 +1552,11 @@ def _root_verb(end: ChainEnd, context: "_DeriveContext") -> str | None:
     if root is None or "http_method" not in root["captures"]:
         return None
     captured = _resolve_captures({"http_method": root["captures"]["http_method"]}, dict(end.root))
-    return _verb_of(captured["http_method"], context)
+    verb = captured["http_method"]
+    # A verb list (N8) names the root's verb only where it holds exactly one.
+    if isinstance(verb, tuple):
+        verb = verb[0] if len(verb) == 1 else None
+    return _verb_of(verb, context)
 
 
 def _root_method_kind(end: ChainEnd, context: "_DeriveContext") -> str | None:
@@ -1787,6 +1850,9 @@ def _answering(captured: Any, context: "_DeriveContext") -> _Judged | None:
     arguments = captured if isinstance(captured, tuple) else (captured,)
     if context.judged is None:
         first = arguments[0] if arguments else None
+        walked = _walked_handler(first, context)
+        if walked is not None:
+            return walked
         return _Judged(_handler_symbol(first, context.method_symbols), ANSWERS)
     for argument in arguments:
         judged = context.judged.get(_handler_key(argument)) if isinstance(argument, dict) else None
@@ -2681,6 +2747,237 @@ def _response_descriptor(
         "item": json.loads(descriptor_json),
     }
     return json.dumps(wrapped, sort_keys=True, separators=(",", ":"))
+
+
+@dataclass(frozen=True)
+class _Response:
+    """What a row's response capture read: its descriptor (None for no response), whether the
+    capture was read at all (`read`: checkpoint ruling I1, False drops the row to `unresolved`),
+    and whether it named one type (`whole`: N9, False leaves the row no surer than `partial`)."""
+
+    shape: str | None
+    read: bool
+    whole: bool = True
+
+
+# A response type the framework refuses to build a response from (N9): the route is refused.
+_REFUSED_RESPONSE = _Response(None, False)
+
+
+@dataclass(frozen=True)
+class _ResponseFallback:
+    """`matches.response_fallback` (N9): the response of a route whose response capture writes
+    nothing is read from the handler's return (`from: handler_return`). `none_types` are the
+    types that are no response model, each with its subtypes; `ancestors` the module's type
+    hierarchy they are looked up in, and `returns` each method's declared return type."""
+
+    none_types: frozenset[str]
+    ancestors: Mapping[str, Sequence[tuple[str, str, bool]]]
+    returns: Mapping[str, Any]
+
+
+# A construction's name at a call site (D00 §5).
+_INIT = "<init>"
+# `response_fallback.from`'s one word: the handler's own return.
+_HANDLER_RETURN = "handler_return"
+
+
+def _response_fallback_of(
+    matches: Mapping[str, Any], catalog: Catalog, workspace: Workspace
+) -> _ResponseFallback | None:
+    """`matches.response_fallback`, checked (D02 §2's `fluent` style): `from: handler_return`
+    and a non-empty `none_types` list of types, and nothing else. None where it is not
+    declared. Anything else is a broken file, never read as absent."""
+    declared = matches.get("response_fallback")
+    if declared is None:
+        return None
+    none_types = declared.get("none_types") if isinstance(declared, dict) else None
+    if (
+        not isinstance(declared, dict)
+        or set(declared) != {"from", "none_types"}
+        or declared["from"] != _HANDLER_RETURN
+        or not isinstance(none_types, list)
+        or not none_types
+        or not all(isinstance(each, str) and each for each in none_types)
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `response_fallback` is `{{from: "
+            f"{_HANDLER_RETURN}, none_types: [<type>, ...]}}`, got {declared!r} (D02 §2's "
+            f"`fluent` style)"
+        )
+    return _ResponseFallback(
+        none_types=frozenset(_catalog_symbol(each) for each in none_types),
+        ancestors=workspace.once(dispatch_of).ancestors,
+        returns=workspace.once(_declared_returns),
+    )
+
+
+def _declared_returns(workspace: Workspace) -> dict[str, Any]:
+    """Each declared method's written return type (D00 §5a), by full symbol; None where the
+    method writes none. The `Workspace.once` builder `_handler_response` reads."""
+    return {
+        str(row["symbol"]): cast(dict[str, Any], row["signature"] or {}).get("returns")
+        for row in workspace.query("method_declarations")
+    }
+
+
+def _handler_response(
+    answering: _Judged | None, fallback: _ResponseFallback, context: "_DeriveContext"
+) -> _Response:
+    """The response of a route whose response capture writes nothing (N9), from the handler:
+    - its written return type: none for a `none_types` type or a subtype of one, refused for a
+      union naming one beside other types, unread for a union or the unknown type (several
+      types, or any), and otherwise the descriptor the type roots at (none for a type that
+      reaches no wire: `None`, a generator's iterator);
+    - with none written, the one type every value it returns is (`return_flow`'s values):
+      unread where they are several types or one is not read.
+    A handler that is not read reads no response."""
+    handler = None if answering is None else answering.symbol
+    if handler is None:
+        return _Response(None, True, whole=False)
+    written = fallback.returns.get(handler)
+    if isinstance(written, dict):
+        symbol = str(written.get("symbol"))
+        if symbol == UNION_TYPE:
+            members = [str(member.get("symbol")) for member in written.get("arguments") or ()]
+            if any(_is_none_type(member, fallback) for member in members):
+                return _REFUSED_RESPONSE
+            return _Response(None, True, whole=False)
+        if symbol == ANY_TYPE:
+            return _Response(None, True, whole=False)
+        if _is_none_type(symbol, fallback):
+            return _Response(None, True)
+        rules = context.carrier_rules
+        return _Response(
+            _payload_descriptor(
+                written, rules.rules, rules.enums, context.facts.referenced, rules.rules.wrappers
+            ),
+            True,
+        )
+    returned = () if context.values is None else context.values.returned_values.get(handler, ())
+    shapes = {
+        argument_descriptor(
+            _constructed(handler, entry, context.values), context.facts, context.carrier_rules
+        )
+        for _, entry in returned
+    }
+    if len(shapes) != 1 or None in shapes:
+        return _Response(None, True, whole=False)
+    return _Response(shapes.pop(), True)
+
+
+def _constructed(
+    method: str, entry: Mapping[str, Any], index: "ValueIndex | None"
+) -> dict[str, Any]:
+    """A value `method` returns, as an `instance` of its class where a construction in the
+    method made it (`<init>`, D00 §5), which is the value's type; the value as written
+    otherwise."""
+    source = entry.get("source")
+    if index is None or entry.get("kind") != "unresolved" or source is None:
+        return dict(entry)
+    made = index.producers.get((method, int(str(source))))
+    site = index.sites.get((method, min(made))) if made else None
+    if site is None or site["name"] != _INIT or site.get("owner") is None:
+        return dict(entry)
+    return {**entry, "kind": "instance", "symbol": str(site["owner"])}
+
+
+def _is_none_type(symbol: str, fallback: _ResponseFallback) -> bool:
+    """Whether `symbol` is one of the `none_types` or a subtype of one, by the module's type
+    hierarchy (a type whose supertypes were not read is neither)."""
+    seen: set[str] = set()
+    pending = [symbol]
+    while pending:
+        current = pending.pop()
+        if current in fallback.none_types:
+            return True
+        if current in seen:
+            continue
+        seen.add(current)
+        pending.extend(ancestor for ancestor, _, _ in fallback.ancestors.get(current, ()))
+    return False
+
+
+def _class_named(argument: Any, context: "_DeriveContext") -> Any:
+    """A captured argument that is a module name (`field`) holding a class, as that class
+    (`class`): the value walk reads the name on the chain's own path, and only where every
+    path answers the same type is it that type. Every other argument is returned as it is."""
+    if (
+        not isinstance(argument, dict)
+        or argument.get("kind") != "field"
+        or context.workspace is None
+        or context.values is None
+    ):
+        return argument
+    at = argument.get(_CAPTURED_AT)
+    site = context.values.sites.get((str(at[0]), int(str(at[1])))) if at is not None else None
+    if site is None or at is None:
+        return argument
+    named = {
+        answers["type"].value
+        if answers["type"].kind == LITERAL and answers["type"].literal_kind == SYMBOL
+        else None
+        for answers in resolve_positions(
+            context.workspace, {"type": (site, int(at[2]))}, context.values, within=context.path
+        )
+    }
+    if len(named) != 1:
+        return argument
+    (symbol,) = named
+    if symbol is None or not names_a_type(str(symbol)):
+        return argument
+    return {**argument, "kind": "class", "symbol": str(symbol)}
+
+
+def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None":
+    """The function a handler argument that is not itself a function names (design
+    2026-11-06-reading-decorators §3d): followed back as a call of it would be, through each
+    decorator a value model states hands the function back and into module code, to each
+    function a path reaches — one answering handler, or one alternative each. Where no path
+    reaches a function because a library call no value model states made the value, the
+    handler is not read here (`external`, the call named). None otherwise, and for an
+    argument the walk cannot be asked about, which reads as it always has."""
+    if not isinstance(argument, dict) or argument.get("kind") == "lambda" or context.values is None:
+        return None
+    at = argument.get(_CAPTURED_AT)
+    site = context.values.sites.get((str(at[0]), int(str(at[1])))) if at is not None else None
+    if site is None or at is None:
+        return None
+    slot = int(at[2])
+    handlers = _entry_handlers(context.values, site, slot, context.method_symbols)
+    if handlers:
+        alternatives = tuple(_Judged(symbol, ANSWERS) for symbol in handlers)
+        return _Judged(handlers[0], ANSWERS, (), alternatives if len(handlers) > 1 else ())
+    # Only a value a library call made OF a function the module defines (a decorator applied to
+    # it, a wrapper handed it): any other object a library builds is no function at all, and
+    # its handler reads as it always has.
+    made = undecorated_maker(context.values, site, slot)
+    if made is None:
+        return None
+    made_with, maker = made
+    if maker.get("owner") is None or not any(
+        argument.get("kind") == "lambda" for argument in made_with["arguments"] or ()
+    ):
+        return None
+    ended = {
+        producer.reason
+        for producer, _ in producer_paths(context.values, site, slot, frozenset(), functions=True)
+    }
+    if ended != {EXTERNAL}:
+        return None
+    return _Judged(
+        None,
+        UNREADABLE,
+        (
+            (
+                EXTERNAL,
+                (
+                    f"the function is what the library call {maker['owner']}{maker['name']} "
+                    "returns, which no value model states"
+                ),
+            ),
+        ),
+    )
 
 
 def _validate_url_channel_exclusivity(

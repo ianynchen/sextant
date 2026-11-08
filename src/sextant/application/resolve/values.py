@@ -2294,6 +2294,38 @@ def decorators_passed(
     whose receiver a `result_returns` call made, then that `__call__`'s own argument. Ends at
     the first value made any other way (the function itself, module code, a library call no
     value model states), which the value walk reads on its own."""
+    return _stated_decorators(index, site, slot)[0]
+
+
+def undecorated_maker(
+    index: ValueIndex, site: Mapping[str, Any], slot: int
+) -> tuple[Mapping[str, Any], Mapping[str, Any]] | None:
+    """The call that made the value the stated decorators at `site`'s argument `slot` were
+    applied to (`decorators_passed`), where a call in this method made it, and the call that
+    names it: the call itself, or, for a decorator applied with `__call__`, the call that made
+    that decorator (`click/decorators#pass_context`). None where the value is the function
+    itself or was not made by a call — for a reader naming in a detail what the walk ended at."""
+    method = str(site["caller"])
+    held = _stated_decorators(index, site, slot)[1]
+    if held is None or held.get("source") is None or held.get("kind") == "lambda":
+        return None
+    made = index.producers.get((method, int(str(held["source"]))))
+    row = index.sites.get((method, min(made))) if made else None
+    if row is None:
+        return None
+    if row["name"] != _CALL or row.get("owner") is not None:
+        return row, row
+    receiver = row.get("receiver")
+    makers = index.producers.get((method, int(str(receiver)))) if receiver is not None else None
+    maker = index.sites.get((method, min(makers))) if makers else None
+    return None if maker is None else (row, maker)
+
+
+def _stated_decorators(
+    index: ValueIndex, site: Mapping[str, Any], slot: int
+) -> tuple[tuple[tuple[str, int], ...], Mapping[str, Any] | None]:
+    """`decorators_passed`'s walk: the stated decorators, nearest first, and the argument it
+    stopped at (None where there is none)."""
     method = str(site["caller"])
     found: list[tuple[str, int]] = []
     arguments = site["arguments"] or []
@@ -2316,7 +2348,7 @@ def decorators_passed(
         found.append((method, int(str(maker["ordinal"]))))
         at = argument_slot(row["arguments"] or [], applied[1])
         held = None if at is None or at == UNPACKED_SLOT else (row["arguments"] or [])[at]
-    return tuple(found)
+    return tuple(found), held
 
 
 def _entered(trail: "_Trail", index: ValueIndex) -> "_Trail | None":
@@ -4797,6 +4829,35 @@ class _Walk:
         dispatch = self._index.dispatch
         reached: list[_Reached] = []
         for path, answer in self._resolve((_SLOT, method, ordinal, RECEIVER), trail, frames):
+            # **Calling a function value runs that function** (ruling R29): the call returns
+            # what its body returns, read in its frame — a decorator factory's inner
+            # `decorator(endpoint)` hands back the function it was applied to. The body is the
+            # one `call_edges` bound this call to, named by the value.
+            function = called_function(answer) if row["name"] == _CALL else None
+            bodies = [
+                callee
+                for callee in self._index.callees.get(site, ())
+                if function is not None and bare_descriptor(callee) == function
+            ]
+            if bodies:
+                for callee in bodies:
+                    for return_ordinal, entry in self._index.returned_values.get(callee, ()):
+                        step = _Step(
+                            (_RETURN_OF, method, value), f"{callee} returns {return_ordinal}"
+                        )
+                        merged = _combine(path, (step,))
+                        if merged is None:
+                            continue
+                        reached.extend(
+                            self._entry(
+                                entry,
+                                callee,
+                                (_RETURN_OF, callee, return_ordinal),
+                                merged,
+                                frames + ((callee, (method, ordinal)),),
+                            )
+                        )
+                continue
             owner = bound_owner(answer)
             if owner is not None and row["name"] == _CALL and answer.class_object:
                 # Calling a class constructs it (ruling R37): an instance of that class.

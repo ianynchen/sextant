@@ -176,6 +176,12 @@ UNROOTED_PATH = "unrooted_path"
 EXACT_MOUNT_PATH = "exact_mount_path"
 PATTERN_MOUNT_PATH = "pattern_mount_path"
 WILDCARD_MOUNT_POINT = "wildcard_mount_point"
+# A route given an empty list of verbs (`http_method`'s list form, D02 §2's `fluent` style): the
+# framework refuses a route that serves no verb at all.
+NO_METHODS = "no_methods"
+# A route whose response type the framework cannot build a response from: a union naming a
+# type the catalog says is no response model (`response_fallback.none_types`) beside others.
+INVALID_RESPONSE_TYPE = "invalid_response_type"
 
 
 # What an unread piece of a partly read path starts with, each spelled by the layer that

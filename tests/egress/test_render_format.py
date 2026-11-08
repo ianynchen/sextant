@@ -912,6 +912,11 @@ def test_a_refused_registration_question_names_the_registering_method_and_handle
         ("exact_mount_path", "refuses to mount a router on a path with no trailing wildcard"),
         ("pattern_mount_path", "refuses to mount a router on a regular expression path"),
         ("wildcard_mount_point", "refuses a mount point that ends in the wildcard it adds"),
+        ("no_methods", "refuses a route given an empty list of methods"),
+        (
+            "invalid_response_type",
+            "refuses a response type that unites a response class with others",
+        ),
     ],
 )
 def test_a_refused_mount_question_says_why_the_framework_refuses_it(reason: str, phrase: str):

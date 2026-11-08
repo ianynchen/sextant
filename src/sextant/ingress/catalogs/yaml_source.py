@@ -1485,6 +1485,13 @@ def _slice_outside(raw: dict[str, object], path: Path) -> tuple[dict[str, object
     return tuple(outside)
 
 
+# A Python module's coordinate (D00 §5's `dependency_coordinates`): the distribution name as
+# PEP 503 normalizes it, which is how the Python detector records it (`detect/python.py`'s
+# `normalize_name`) — lower case, each run of `-`, `_` and `.` one `-`. Any other spelling
+# matches nothing the detector writes.
+_DISTRIBUTION_NAME = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*")
+
+
 def _coordinates(raw: dict[str, Any], path: Path) -> tuple[str, ...]:
     """D02 §1's `detect.coordinates`, checked here for the reason every other
     value in this file is: it reaches a comparison against the coordinates a
@@ -1512,12 +1519,15 @@ def _coordinates(raw: dict[str, Any], path: Path) -> tuple[str, ...]:
         )
     declared = detect.get("coordinates", [])
     valid = isinstance(declared, list) and all(
-        isinstance(entry, str) and entry.count(":") == 1 for entry in declared
+        isinstance(entry, str)
+        and (entry.count(":") == 1 or _DISTRIBUTION_NAME.fullmatch(entry) is not None)
+        for entry in declared
     )
     if not valid:
         raise CatalogError(
             f"loading catalog {path}: `detect.coordinates` must be a list of "
-            f"`groupId:artifactId` coordinates — got {declared!r} (D02 §1)"
+            f"`groupId:artifactId` coordinates or PEP 503 distribution names — got "
+            f"{declared!r} (D02 §1)"
         )
     return tuple(declared)
 

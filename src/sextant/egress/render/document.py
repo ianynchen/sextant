@@ -1251,6 +1251,8 @@ _REFUSAL_PHRASES = {
     "exact_mount_path": "refuses to mount a router on a path with no trailing wildcard",
     "pattern_mount_path": "refuses to mount a router on a regular expression path",
     "wildcard_mount_point": "refuses a mount point that ends in the wildcard it adds",
+    "no_methods": "refuses a route given an empty list of methods",
+    "invalid_response_type": "refuses a response type that unites a response class with others",
 }
 
 
