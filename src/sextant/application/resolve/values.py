@@ -473,6 +473,11 @@ class Answer:
     # say whether the value is the class or an instance of it (the facts write `type[X]` as
     # `X`), so a reader of syntax calls cannot take it (`receiver_binding`).
     declared: bool = False
+    # **The `absent` value is the code's `null` (`None`)**, D00 §5's `null` kind: set only
+    # there. An empty array or an empty argument list is `absent` too, and is not `null`; a
+    # reader saying which one the code holds tells them apart by this (`receiver_binding`).
+    # Part of what the answer is: no value and an empty collection are two values.
+    null: bool = False
 
 
 @dataclass(frozen=True)
@@ -3419,7 +3424,7 @@ class _Walk:
             # and not a miss, so it is `absent` rather than a reason: a consumer told
             # `not_readable` would look for a value that is not there to be found, which is
             # a different and false claim about the code.
-            return _only(trail, Answer(kind=ABSENT))
+            return _only(trail, Answer(kind=ABSENT, null=True))
         source = argument.get("source")
         if source is None:
             return _only(trail, _unresolved(NOT_READABLE))
@@ -5303,8 +5308,8 @@ class _Walk:
         two `external` answers at two parameters are two ends — the parameter is outside the
         answer's equality (`Answer.parameter`), so it is keyed here too: two field writers
         nothing calls, `m1(p)` and `m2(q)`, name both. So is the library call an `external`
-        answer ended at (`Answer.made_by`): one writer writing a field from `Query()` on one
-        branch and `Header()` on the other has two ends (plan 2026-11-08 Task 4). Every other
+        answer ended at (`Answer.made_by`): one writer writing a field from `a()` on one branch
+        and `b()` on the other, both library calls, has two ends (plan 2026-11-08 Task 4). Every other
         reader dedupes on the answer alone, as before, since `resolve_site` does not dedupe
         again and two equal `external` answers would be two bindings saying one thing."""
         if not self._parameters_apart:

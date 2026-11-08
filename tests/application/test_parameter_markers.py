@@ -16,7 +16,7 @@ _SIG = "(sig_dd69782a)."
 
 
 def _markers(tmp_path: Path, files: dict[str, str], method: str, index: int) -> list[tuple]:
-    """`(where, order, owner, name, caller)` of each marker of one parameter."""
+    """`(where, order, path, owner, name, caller)` of each marker of one parameter."""
     workspace = _resolved(tmp_path, files)
     found = parameter_markers(value_index(workspace)).get((_PREFIX + method + _SIG, index), ())
     workspace.close()
@@ -24,6 +24,7 @@ def _markers(tmp_path: Path, files: dict[str, str], method: str, index: int) -> 
         (
             marker.where,
             marker.order,
+            marker.path,
             marker.site["owner"],
             marker.site["name"],
             str(marker.site["caller"]).removeprefix(_PREFIX),
@@ -40,7 +41,7 @@ def test_a_default_marker_is_found(tmp_path: Path):
         "app/run#h",
         0,
     )
-    assert found == [("default", 0, "fastapi#", "Query", "app/run#<clinit>" + _SIG)]
+    assert found == [("default", 0, 0, "fastapi#", "Query", "app/run#<clinit>" + _SIG)]
 
 
 def test_a_literal_default_has_no_marker(tmp_path: Path):
@@ -52,22 +53,23 @@ def test_a_literal_default_has_no_marker(tmp_path: Path):
 
 
 def test_an_annotated_marker_is_found_in_written_order(tmp_path: Path):
-    """`Annotated[str, Query(max_length=3), Header()]`: two markers, `Query` then `Header`;
-    the type itself (`str`) is no marker."""
+    """`Annotated[str, "doc", Query(max_length=3), Header()]`: two markers on one path, each
+    at its written position among the metadata (`"doc"` is position 0 and no marker); the
+    type itself (`str`) is no marker."""
     found = _markers(
         tmp_path,
         {
             "run.py": "from typing import Annotated\n"
             "from fastapi import Header, Query\n"
-            "def h(q: Annotated[str, Query(max_length=3), Header()]):\n    return q\n"
+            "def h(q: Annotated[str, 'doc', Query(max_length=3), Header()]):\n    return q\n"
         },
         "app/run#h",
         0,
     )
     clinit = "app/run#<clinit>" + _SIG
     assert found == [
-        ("annotation", 0, "fastapi#", "Query", clinit),
-        ("annotation", 1, "fastapi#", "Header", clinit),
+        ("annotation", 1, 0, "fastapi#", "Query", clinit),
+        ("annotation", 2, 0, "fastapi#", "Header", clinit),
     ]
 
 
@@ -88,7 +90,7 @@ def test_an_alias_marker_in_another_file_is_found(tmp_path: Path):
         "app/run#f",
         0,
     )
-    assert found == [("annotation", 0, "fastapi#", "Depends", "app/deps#<clinit>" + _SIG)]
+    assert found == [("annotation", 0, 0, "fastapi#", "Depends", "app/deps#<clinit>" + _SIG)]
 
 
 def test_a_marker_two_paths_give_is_two_markers(tmp_path: Path):
@@ -108,9 +110,9 @@ def test_a_marker_two_paths_give_is_two_markers(tmp_path: Path):
         0,
     )
     clinit = "app/run#<clinit>" + _SIG
-    assert sorted(found) == [
-        ("default", 0, "fastapi#", "Header", clinit),
-        ("default", 0, "fastapi#", "Query", clinit),
+    assert found == [
+        ("default", 0, 0, "fastapi#", "Query", clinit),
+        ("default", 0, 1, "fastapi#", "Header", clinit),
     ]
 
 
@@ -118,3 +120,26 @@ def test_a_jvm_module_has_no_markers(resolved_fixture):
     """No JVM parameter has a `default` or an `annotation_value`, so there is nothing to read."""
     workspace, _ = resolved_fixture
     assert parameter_markers(value_index(workspace)) == {}
+
+
+def test_alternative_element_paths_are_two_paths_not_one_list(tmp_path: Path):
+    """`Annotated[str, MARK]`, where the module writes `MARK` on two branches: each write is
+    its own path, so a reader never takes the two markers as one list."""
+    found = _markers(
+        tmp_path,
+        {
+            "run.py": "import os\n"
+            "from typing import Annotated\n"
+            "from fastapi import Header, Query\n"
+            "if os.environ.get('STRICT'):\n    MARK = Query()\n"
+            "else:\n    MARK = Header()\n"
+            "def h(d: Annotated[str, MARK]):\n    return d\n"
+        },
+        "app/run#h",
+        0,
+    )
+    clinit = "app/run#<clinit>" + _SIG
+    assert found == [
+        ("annotation", 0, 0, "fastapi#", "Query", clinit),
+        ("annotation", 0, 1, "fastapi#", "Header", clinit),
+    ]

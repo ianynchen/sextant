@@ -268,7 +268,8 @@ rule, plan 2026-11-08-python-fastapi-inbound Task 4, rulings R15 and R16), on th
 path: the parameter's `default` (D00 §5a) is resolved in the frame of the body that runs the
 `def` (`values.defining_body`), with the rest of that body as its `escapes` window. `= None`
 is `absent`, so the type reader adds no declared type beside it (R40 adds one only beside an
-open path). A parameter a call's unpacked argument may fill is not left to its default
+open path); the answer carries `null`, so a receiver read there says the value is None, where
+an empty collection (`()`, `[]`, also `absent`) says it is one. A parameter a call's unpacked argument may fill is not left to its default
 (`values.unpacked_may_fill`): a `*` value may fill a `positional_only` or `positional`
 parameter, a `**` mapping a `positional` or `keyword_only` one. That path, a parameter with no
 default and a `*args`/`**kwargs` parameter are `not_readable` on that caller's path, naming
@@ -285,7 +286,9 @@ are both declared, the body is not known and no default is read.
 parameter, the call that produced its `default` and the call that produced each element of
 its `Annotated` metadata (the static `__class_getitem__` call of `typing/Annotated#` or
 `typing_extensions/Annotated#`, R8, after its first argument, flattened where that argument
-is itself such a form), in written order, one `Marker` per path. Each value is read through
+is itself such a form), in written order, one `Marker` per path: `order` is the element's
+written position among the metadata, and `path` the index of the path it was read on, so
+markers on one path hold together and two paths stay alternatives. Each value is read through
 `values.producer_paths`, so an alias in a module field or another file's field, an alias of an
 alias, a helper returning the call and each write of a field are followed; a path ending
 anywhere but a call (a literal, a construction, a value the walk cannot read) gives no

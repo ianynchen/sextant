@@ -587,9 +587,13 @@ empty_recipe: parameter_type     # Depends() with nothing: the parameter's type 
   - `parameter_markers(index: ValueIndex) -> Mapping[tuple[str, int], tuple[Marker, ...]]`,
     cached on the index like `suffixes` (ruling R14: `workspace.once` cannot read the derived
     tables `producer_paths` needs);
-  - `Marker(site: Mapping[str, Any], where: Literal["default", "annotation"], order: int)`:
+  - `Marker(site: Mapping[str, Any], where: Literal["default", "annotation"], order: int,
+    path: int)`:
     - the producing call of the default, or of each `Annotated` metadata element, in written
-      order;
+      order: `order` is the element's written position among the metadata (slot index − 1;
+      0 for a default);
+    - `path` is the index of the producer path it was read on, among that `where`'s paths:
+      markers sharing a `path` hold together, two paths are alternatives (task 4 review);
     - read through `values.producer_paths`, so aliases (module fields, other files) are
       followed;
     - one marker per path.

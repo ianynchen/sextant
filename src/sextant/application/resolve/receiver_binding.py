@@ -514,9 +514,20 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
             if body not in functions:
                 functions.append(body)
         elif ended is not None and ended.kind == ABSENT:
-            # The code states the value is None on this path: a default the call leaves
-            # (`= None`, ruling R16) or a `None` written. None has no method to bind.
-            found.append((path_id, None, NOT_READABLE, f"receiver of {name} is None on this path"))
+            # The code states the value on this path: `None` (a default the call leaves, `=
+            # None`, ruling R16, or a `None` written), which has no method to bind, or an
+            # empty collection (`()`, `[]`), whose type the facts do not write.
+            found.append(
+                (
+                    path_id,
+                    None,
+                    NOT_READABLE,
+                    f"receiver of {name} is None on this path"
+                    if ended.null
+                    else f"receiver of {name} is an empty collection on this path, of a type "
+                    "the facts do not write",
+                )
+            )
         else:
             found.append(
                 (

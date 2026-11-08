@@ -57,16 +57,20 @@ _FORM_READER = "parameter_markers:form"
 class Marker:
     """One call that marks a parameter, on one path: `site` the producing call's row, `where`
     whether it made the `default` or an `Annotated` metadata element, `order` the element's
-    place among the metadata in written order (0 for a default)."""
+    written position among the metadata (its index after the type, the first argument; 0 for
+    a default), and `path` the index of the path it was read on among that `where`'s paths.
+    Markers sharing a `path` hold together; two paths are alternatives, never one list."""
 
     site: Mapping[str, Any]
     where: Literal["default", "annotation"]
     order: int
+    path: int
 
 
 def parameter_markers(index: ValueIndex) -> Mapping[tuple[str, int], tuple[Marker, ...]]:
-    """Each parameter's markers, `(method, index)` -> in written order (defaults first), for
-    every parameter that has one. Built once per `index` (module docstring)."""
+    """Each parameter's markers, `(method, index)` -> defaults' then annotations', each by
+    path and in written order, for every parameter that has one. Built once per `index`
+    (module docstring)."""
     if index.markers:
         return cast(Mapping[tuple[str, int], tuple[Marker, ...]], index.markers[0])
     found: dict[tuple[str, int], tuple[Marker, ...]] = {}
@@ -75,16 +79,20 @@ def parameter_markers(index: ValueIndex) -> Mapping[tuple[str, int], tuple[Marke
             continue
         markers: list[Marker] = []
         if values.default is not None:
-            for producer in _ends(index, values.body, values.default, frozenset(), _DEFAULT_READER):
+            ends = _ends(index, values.body, values.default, frozenset(), _DEFAULT_READER)
+            for path, producer in enumerate(ends):
                 site = _site(index, producer)
                 if site is not None:
-                    markers.append(Marker(site=site, where="default", order=0))
+                    markers.append(Marker(site=site, where="default", order=0, path=path))
         if values.annotation is not None:
             forms = _ends(index, values.body, values.annotation, _ANNOTATED, _FORM_READER)
-            for elements in (one for form in forms for one in _metadata(index, form)):
+            for path, elements in enumerate(
+                one for form in forms for one in _metadata(index, form)
+            ):
                 markers.extend(
-                    Marker(site=site, where="annotation", order=order)
+                    Marker(site=site, where="annotation", order=order, path=path)
                     for order, site in enumerate(elements)
+                    if site is not None
                 )
         if markers:
             found[key] = tuple(markers)
@@ -105,38 +113,33 @@ def _ends(
     return [producer for producer, _ in producer_paths(index, holder, 0, declared, shared=reader)]
 
 
-def _metadata(index: ValueIndex, form: Producer) -> list[list[Mapping[str, Any]]]:
-    """For one path to an `Annotated` form, each path through its metadata: the producing
-    call of each element, in written order. One list per combination of the elements' paths,
-    so two paths are two lists, never one merged list. A form a path does not end at gives
-    none."""
+def _metadata(index: ValueIndex, form: Producer) -> list[list[Mapping[str, Any] | None]]:
+    """For one path to an `Annotated` form, each path through its metadata: one entry per
+    written element, in written order, the element's producing call or None where that path
+    ends at no call. One list per combination of the elements' paths, so two paths are two
+    lists, never one merged list. A path that ends at no form gives none."""
     if form.caller is None or form.ordinal is None or form.identity not in _ANNOTATED:
         return []
     site = index.sites.get((form.caller, form.ordinal))
     if site is None:
         return []
     arguments = site.get("arguments") or []
-    combined: list[list[Mapping[str, Any]]] = [[]]
     # The first argument is the type; where it is an `Annotated` form itself, Python flattens
-    # it, and its metadata come first.
-    inner = [
+    # it, and its metadata come first. A path to anything else adds no element.
+    combined: list[list[Mapping[str, Any] | None]] = [
         nested
         for producer, _ in producer_paths(index, site, 0, _ANNOTATED, shared=_FORM_READER)
-        for nested in _metadata(index, producer)
+        for nested in (_metadata(index, producer) or [[]])
     ]
-    if inner:
-        combined = inner
     for slot in range(1, len(arguments)):
         made = [
-            one
+            _site(index, producer)
             for producer, _ in producer_paths(
                 index, site, slot, frozenset(), shared=_DEFAULT_READER
             )
-            if (one := _site(index, producer)) is not None
         ]
-        if made:
-            combined = [chosen + [one] for chosen in combined for one in made]
-    return combined if any(combined) else []
+        combined = [chosen + [one] for chosen in combined for one in made]
+    return combined
 
 
 def _site(index: ValueIndex, producer: Producer) -> Mapping[str, Any] | None:

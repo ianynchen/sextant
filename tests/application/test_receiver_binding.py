@@ -575,6 +575,31 @@ def test_a_keyword_naming_no_parameter_fills_none(tmp_path: Path):
     workspace.close()
 
 
+@pytest.mark.parametrize("default", ["()", "[]"])
+def test_an_empty_collection_default_is_not_none(tmp_path: Path, default: str):
+    """The near-miss of the `None` default (task 4 review): `x=()` and `x=[]` are `absent`
+    too, as an empty array is, but the code holds an empty collection there, not `None`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "h.py": f"def h(x={default}):\n    x.count(1)\n",
+            "b.py": "from app.h import h\ndef f():\n    h()\n",
+        },
+    )
+    rows = _bound(workspace, _site(workspace, "app/h#h(sig_dd69782a).", "count"))
+    assert [(row["owner"], row["reason"], row["detail"]) for row in rows] == [
+        (
+            None,
+            "not_readable",
+            (
+                "receiver of count is an empty collection on this path, of a type the facts "
+                "do not write"
+            ),
+        )
+    ]
+    workspace.close()
+
+
 def test_an_unpacked_mapping_decides_no_parameter(tmp_path: Path):
     """`h(**options)` may fill any parameter: `x` is `not_readable` on that path."""
     workspace = _resolved(
