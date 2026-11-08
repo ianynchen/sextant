@@ -853,11 +853,15 @@ and FR-11's drift report — never Java types against spec types directly.
 
 **A Python type reference carries the wire type the language fixes, and nothing else**
 (plan 2 task 3), in the JVM's words: `str` is `string`, `int` `integer`, `float` `number`,
-`bool` `boolean`; `list`, `set`, `frozenset`, `tuple` and `Sequence` are `array`; `dict` and
-`Mapping` are `map`; every other class is `object`. `bytes`, `bytearray` and the classes of `datetime`, `uuid` and `decimal` have no wire
+`bool` `boolean`; `list`, `set`, `frozenset`, `tuple`, `deque`, and `Sequence`,
+`MutableSequence`, `Collection`, `Iterable`, `MutableSet` (`typing` and `collections.abc`
+alike) are `array`; `dict`, `defaultdict`, `OrderedDict`, `Counter`, `Mapping` and
+`MutableMapping` are `map`; a type parameter of the enclosing class or function (PEP 695,
+`Generic[T]`, a function's `TypeVar`, and `Self` in a class) is `object`, as the JVM's `T`
+is, so a generic model's `T` field stays open; every other class is `object`. `bytes`, `bytearray` and the classes of `datetime`, `uuid` and `decimal` have no wire
 type: a serializer chooses the scalar each becomes, so a catalog's `known_types` says it, as
 it does for a JVM `Instant`. `None` has none: written for a field it is a `null` on the wire,
-for a return no payload, and the vocabulary has one word for neither. A type variable, a special form (`Any`, a union, `Literal`) and a
+for a return no payload, and the vocabulary has one word for neither. A special form (`Any`, a union, `Literal`) and a
 written text that names no type have none either. `wire_format` is not set: the language
 fixes no width. The projection reaches every level of a reference (`Optional[list[str]]` is a
 nullable `array` whose argument is a `string`) and every reference a Python fact carries.

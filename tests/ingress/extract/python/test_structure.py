@@ -328,11 +328,13 @@ def test_pep_695_type_parameters_are_type_variables(tmp_path: Path):
     symbols = _symbols(tree)
     ident = symbols[f"app/m#ident({DIS})."][0]
     assert ident.signature is not None
-    assert ident.signature.parameters[0].type == TypeRef(symbol="S")
-    assert ident.signature.returns == TypeRef(symbol="S")
+    # A type parameter is an object on the wire, as the JVM's `T` is (D00 §5b).
+    assert ident.signature.parameters[0].type == TypeRef(symbol="S", wire_type="object")
+    assert ident.signature.returns == TypeRef(symbol="S", wire_type="object")
     assert ident.type_parameters == [TypeParameter(name="S")]
     get = symbols[f"app/m/Box#get({DIS})."][0]
-    assert get.signature is not None and get.signature.returns == TypeRef(symbol="T")
+    assert get.signature is not None
+    assert get.signature.returns == TypeRef(symbol="T", wire_type="object")
     assert symbols["app/m/Box#"][0].type_parameters == [TypeParameter(name="T")]
 
 

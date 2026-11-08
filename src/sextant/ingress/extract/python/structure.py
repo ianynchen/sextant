@@ -346,11 +346,11 @@ class _Writer(BodyReader):
                 parents_unread=parents_unread,
                 type_parameters=_type_parameters(node.type_params, generic)
                 or self._generic_parameters(owner),
-                supertype=wire_projected(generic_bases[0])
+                supertype=wire_projected(generic_bases[0], generic)
                 if generic_bases and generic_bases[0] is not None
                 else None,
                 generic_interfaces=[
-                    wire_projected(base) for base in generic_bases[1:] if base is not None
+                    wire_projected(base, generic) for base in generic_bases[1:] if base is not None
                 ],
             )
         )
@@ -446,7 +446,9 @@ class _Writer(BodyReader):
                         scope.owner,
                         node.lineno,
                         node.end_lineno or node.lineno,
-                        signature=Signature(returns=written) if written is not None else None,
+                        signature=Signature(returns=wire_projected(written, scope.types))
+                        if written is not None
+                        else None,
                         # A module-level name belongs to the module. In a class body an
                         # annotated name not written `ClassVar` declares an instance
                         # variable, whatever its value (PEP 526); a name assigned with no
@@ -517,7 +519,9 @@ class _Writer(BodyReader):
             scope.owner,
             node.lineno,
             node.end_lineno or node.lineno,
-            signature=self._signature(node, generic, skip_first=receiver_taken, values=values),
+            signature=_wire_signature(
+                self._signature(node, generic, skip_first=receiver_taken, values=values), generic
+            ),
             type_parameters=_type_parameters(node.type_params, generic),
             modifiers={
                 "abstract": abstract,
@@ -632,7 +636,7 @@ class _Writer(BodyReader):
                 symbol=self._full(descriptor),
                 construct_kind=kind,
                 enclosing=None if enclosing is None else self._full(enclosing),
-                signature=None if signature is None else _wire_signature(signature),
+                signature=signature,
                 line_start=start,
                 line_end=end,
                 modifiers=modifiers or {},
@@ -759,7 +763,7 @@ def _type_parameters(written: list[ast.type_param], scope: TypeScope) -> list[Ty
     for parameter in written:
         bound = getattr(parameter, "bound", None)
         bounds = (
-            [wire_projected(written_type(bound, scope))]
+            [wire_projected(written_type(bound, scope), scope)]
             if bound is not None and not isinstance(bound, ast.Tuple)
             else []
         )
@@ -767,14 +771,18 @@ def _type_parameters(written: list[ast.type_param], scope: TypeScope) -> list[Ty
     return found
 
 
-def _wire_signature(signature: Signature) -> Signature:
-    """A signature as it is written to the facts: every type with its wire type (D00 §5b)."""
+def _wire_signature(signature: Signature, types: TypeScope) -> Signature:
+    """A signature as it is written to the facts: every type with its wire type (D00 §5b),
+    read in the scope the signature was read in."""
     return signature.model_copy(
         update={
             "parameters": [
-                p.model_copy(update={"type": wire_projected(p.type)}) for p in signature.parameters
+                p.model_copy(update={"type": wire_projected(p.type, types)})
+                for p in signature.parameters
             ],
-            "returns": None if signature.returns is None else wire_projected(signature.returns),
+            "returns": None
+            if signature.returns is None
+            else wire_projected(signature.returns, types),
         }
     )
 

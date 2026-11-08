@@ -92,9 +92,23 @@ _WIRE_TYPES = {
     "builtins/tuple#": "array",
     "typing/Sequence#": "array",
     "collections/abc/Sequence#": "array",
+    "typing/MutableSequence#": "array",
+    "collections/abc/MutableSequence#": "array",
+    "typing/Collection#": "array",
+    "collections/abc/Collection#": "array",
+    "typing/Iterable#": "array",
+    "collections/abc/Iterable#": "array",
+    "typing/MutableSet#": "array",
+    "collections/abc/MutableSet#": "array",
+    "collections/deque#": "array",
     "builtins/dict#": "map",
     "typing/Mapping#": "map",
     "collections/abc/Mapping#": "map",
+    "typing/MutableMapping#": "map",
+    "collections/abc/MutableMapping#": "map",
+    "collections/defaultdict#": "map",
+    "collections/OrderedDict#": "map",
+    "collections/Counter#": "map",
 }
 # Classes a serializer writes as a scalar of its own choosing (N12 `known_types`): the
 # language fixes none of them, so they carry no wire type here.
@@ -168,17 +182,21 @@ def written_type(node: ast.expr, scope: TypeScope) -> TypeRef:
     return TypeRef(symbol=ast.unparse(node))
 
 
-def wire_projected(written: TypeRef) -> TypeRef:
+def wire_projected(written: TypeRef, scope: TypeScope) -> TypeRef:
     """`written` with D00 §5b's wire type at every level, where the language fixes it:
-    `str` is a string, `list` an array, `dict` a map, any other class an object. `None`, a
-    type variable, a special form (`Any`, a union, `Literal`), a written text that names no
-    type, and a class a serializer writes as a scalar of its own choosing carry none."""
-    arguments = [wire_projected(argument) for argument in written.arguments]
+    `str` is a string, `list` an array, `dict` a map, any other class an object. A type
+    parameter of the enclosing class or function (`T`, `Self`) is an object, as the JVM's
+    `T` is: what fills it is a type, never a scalar the language fixes. `None`, a special
+    form (`Any`, a union, `Literal`), a written text that names no type, and a class a
+    serializer writes as a scalar of its own choosing carry none."""
+    arguments = [wire_projected(argument, scope) for argument in written.arguments]
     symbol = written.symbol
     module = symbol.partition("/")[0]
     wire: str | None
     if symbol in _WIRE_TYPES:
         wire = _WIRE_TYPES[symbol]
+    elif _is_type_parameter(symbol, scope):
+        wire = "object"
     elif (
         symbol == NONE
         or not names_a_type(symbol)
@@ -190,6 +208,18 @@ def wire_projected(written: TypeRef) -> TypeRef:
     else:
         wire = "object"
     return written.model_copy(update={"arguments": arguments, "wire_type": wire})
+
+
+def _is_type_parameter(symbol: str, scope: TypeScope) -> bool:
+    """Whether a bare symbol is a type variable the scope binds (`class C[T]`, `def f[S]`,
+    `T = TypeVar("T")`), or `Self` inside a class: the one way a type reference is a bare
+    name that names a type to come, rather than text the file does not name."""
+    if symbol == SELF:
+        return scope.self_type is not None
+    if names_a_type(symbol) or not symbol.isidentifier():
+        return False
+    targets = scope.lookup(ast.Name(id=symbol))
+    return len(targets) == 1 and targets[0].kind == "type_variable"
 
 
 def is_class_variable(annotation: ast.expr, scope: TypeScope, depth: int = _DEPTH) -> bool:

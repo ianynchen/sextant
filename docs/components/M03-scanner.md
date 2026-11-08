@@ -289,12 +289,16 @@ file that did not change.
 - typed signatures from the written annotations (rule 1); `self` and `cls` are receivers,
   not parameters. Every type a fact carries (a signature's parameters and return, a field's
   type, a bound, a generic parent) has D00 §5b's `wire_type` at every level where the
-  language fixes it: `str` string, `int` integer, `float` number, `bool` boolean, `list`,
-  `set`, `frozenset`, `tuple` and `Sequence` array, `dict` and `Mapping` map, any other class
-  object. `bytes`, `bytearray` and the classes of
+  language fixes it: `str` string, `int` integer, `float` number, `bool` boolean; `list`,
+  `set`, `frozenset`, `tuple`, `deque`, and `Sequence`, `MutableSequence`, `Collection`,
+  `Iterable`, `MutableSet` in their `typing` and `collections.abc` spellings, array; `dict`,
+  `defaultdict`, `OrderedDict`, `Counter`, and `Mapping`, `MutableMapping` in both spellings,
+  map; a type parameter of the enclosing class or function (`T` of `class C[T]`, of
+  `Generic[T]` or of a function's `TypeVar`, and `Self` in a class) object, as the JVM's `T`
+  is; any other class object. `bytes`, `bytearray` and the classes of
   `datetime`, `uuid` and `decimal` are written as a scalar the serializer chooses, so they
   carry none and are left to a catalog's `known_types`; so do `None` (a field written `None`
-  is a `null` on the wire, a return written `None` no payload), a type variable, a special form
+  is a `null` on the wire, a return written `None` no payload), a special form
   (`Any`, a union, `Literal`) and a written text that names no type. `wire_format` is never
   set: the language fixes no format (a Python `int` has no width). The types the scanner
   reads with (a header, a receiver's type) carry none;
