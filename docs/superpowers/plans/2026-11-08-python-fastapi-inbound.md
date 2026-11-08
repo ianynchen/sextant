@@ -192,6 +192,9 @@ empty_recipe: parameter_type     # Depends() with nothing: the parameter's type 
 - **Option A:** `http_method: { keyword: methods, absent: GET, case: upper }`. A list or set
   written there gives one row per element (enumerable is exact).
 - **Recommend A.** Measured: polar `methods=` 66.
+- **Corrected by Task 0 (DR-6):** the source is `if methods is None: methods = ["GET"]`. So `absent`
+  means not written or `None`. An empty list is a refused registration (`generate_unique_id`
+  asserts `route.methods`), never GET.
 
 **N9 — The response when `response_model` is not written.**
 - FastAPI's rule (`routing.py:1134-1155`):
@@ -236,13 +239,18 @@ empty_recipe: parameter_type     # Depends() with nothing: the parameter's type 
   - `name_generator`:
     - `{ config_field: model_config, config_call: pydantic.config.ConfigDict, arg: { keyword:
       alias_generator } }`;
-    - merged along the C3 lookup order, as pydantic merges a model's config;
+    - merged over the written bases in written order, the last base winning, then the class's own
+      (pydantic `ConfigWrapper.for_model`; corrected by Task 0 — not the C3 order);
     - `functions: [{ function, strategy, by }]`.
   - Two strategy words, `camel` and `pascal`, which are pydantic's `to_camel`/`to_pascal`
     exactly. `humps.main.camelize` (mealie) maps to `camel` only if Task 0's probe shows they
     agree on every mealie field name. Otherwise it gets its own word.
   - `required: no_default`: a field is required when it writes no default (validation mode).
   - `private_prefix: "_"`: pydantic's private attributes are not fields.
+  - `alias_priority`: the order above holds while it is unset or 2. A literal `alias_priority=1` lets
+    the generator replace `alias` and `serialization_alias` (Task 0); a value not readable →
+    `partial`. A `Field` wrapper that passes these through `**kwargs` (mealie `UpdatedAtField`) →
+    `partial`.
 - A generator no entry names → those fields are `unresolved` and the shape is open. This is
   §2g's "not guessed at".
 - **Recommend as written.** Alternative: per-model strategies in code (con: framework
@@ -683,7 +691,8 @@ empty_recipe: parameter_type     # Depends() with nothing: the parameter's type 
     - { owner: fastapi.applications.FastAPI, method: include_router, … the same … }
     - { owner: fastapi.applications.FastAPI, method: mount, router_arg: { arg: 1, keyword: app },
         prefix_arg: { arg: 0, keyword: path }, strip_trailing: "/" }
-  refuses_unrooted_path: false   # FastAPI keeps a route path as written
+  refuses_unrooted_path: false   # FastAPI keeps a route path as written ("x" is served)
+  # a PREFIX must start with "/": `unrooted` in a prefix entry's `refuses` (Task 0)
   ```
 - **`strip_trailing`** is Starlette's `path.rstrip("/")`. If it is not expressible with the
   existing `wildcard` key, it is added to N7 before building.
