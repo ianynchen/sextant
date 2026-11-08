@@ -151,6 +151,7 @@ from sextant.domain.symbols import (
     returned_type,
     slot_of_type,
     with_descriptor,
+    with_method_name,
 )
 
 # §1d's CLOSED vocabulary. Each names a different thing a reader can act on, which is the
@@ -540,6 +541,17 @@ class Producer:
 
 
 @dataclass(frozen=True)
+class ParameterValues:
+    """What a parameter's `def` evaluates for it (D00 §5a, N1): its `default` and its
+    `annotation_value`, each an entry of the argument grammar, and `body`, the method whose
+    frame resolves them (`defining_body`): None where the naming rule names two."""
+
+    body: str | None
+    default: Mapping[str, Any] | None
+    annotation: Mapping[str, Any] | None
+
+
+@dataclass(frozen=True)
 class ValueIndex:
     """The six reads the walk needs, folded once (GUIDELINES §8.7: cost is a design
     input, decided before the code exists — and this walk is asked about one position at
@@ -770,6 +782,15 @@ class ValueIndex:
     generic_bases: Mapping[str, tuple[Mapping[str, Any], ...]] = dataclass_field(
         default_factory=dict
     )
+    # Each parameter that writes a `default` or an `annotation_value`, `(method, index)` (D00
+    # §5a, N1): what an unfilled argument passes (`_Walk._default`) and what
+    # `parameter_markers` reads. Empty for a JVM module, whose parameters write neither.
+    parameter_values: Mapping[tuple[str, int], ParameterValues] = dataclass_field(
+        default_factory=dict
+    )
+    # `parameter_markers`' answer for this index, once built (ruling R14): its one entry, or
+    # none yet. Emptied with the index each binding round, as `suffixes` is.
+    markers: list[Any] = dataclass_field(default_factory=list, compare=False, repr=False)
     # `_Walk._mapping`'s answers, per class, for as long as this lives.
     mappings: dict[str, dict[str, dict[str, Mapping[str, Any]]] | None] = dataclass_field(
         default_factory=dict, compare=False, repr=False
@@ -921,6 +942,62 @@ def parameter_slots(
             if position is not None and filled[position] == UNFILLED:
                 filled[position] = slot
     return tuple(filled)
+
+
+def unpacked_may_fill(arguments: Sequence[Mapping[str, Any]], kind: str | None) -> bool:
+    """Whether a call's unpacked argument may fill a parameter of `kind` that no written
+    argument fills (`parameter_slots`' `UNFILLED`), by Python's calling rule: a `*` value fills
+    positional places, so a `positional_only` or `positional` parameter; a `**` mapping fills
+    names, so a `positional` or `keyword_only` one. Where one may, the call does not leave the
+    parameter to its default."""
+    keywords = {entry.get("keyword") for entry in arguments}
+    by_place = kind in ("positional_only", "positional") and _UNPACKED_SEQUENCE in keywords
+    by_name = kind in ("positional", "keyword_only") and _UNPACKED_MAPPING in keywords
+    return by_place or by_name
+
+
+def held_at_end(body: str, entry: Mapping[str, Any]) -> Mapping[str, Any]:
+    """A call row holding one argument, `entry`, a value of `body`'s frame, at the end of
+    `body`, where no call of it sits: for a reader of a value no call is handed, such as a
+    parameter's default (`parameter_markers`), to read it through `producer_paths`. A `def`
+    runs after its defaults are made, so the `escapes` window is the rest of the body, as
+    `_Walk._default` reads the same value."""
+    return {"caller": body, "ordinal": _END_OF_BODY, "arguments": [entry]}
+
+
+# The method a body-level `lambda` or nested function is named after where that method is a
+# module or class body (`static`) or a constructor (`new`) (D00 §5a, M03).
+_NAMED_AFTER = {"static": "<clinit>", "new": "<init>"}
+_LAMBDA = "lambda$"
+
+
+def defining_body(symbol: str, declared: AbstractSet[str]) -> str | None:
+    """The method whose body runs the `def` of method `symbol`, and so evaluates its default
+    and its annotation (D00 §5a, ruling R15), read from the naming rule D00 §5a and M03 state:
+
+    - a name with no `$` is a module function or a method: its owner's `<clinit>` (the module
+      or the class body);
+    - `outer$inner` is a function nested in `outer`: `outer`;
+    - `lambda$<method>$<n>` is a lambda in `<method>`: `<method>`.
+
+    A Python name holds no `$`, so the split is exact. `static` and `new` name a body
+    (`<clinit>`, `<init>`), and a function may also be named `static` or `new`: where both
+    are `declared`, the body is not known and the answer is None."""
+    if owner_of(bare_descriptor(symbol)) is None:
+        return None
+    name = method_name(symbol)
+    if name.startswith(_LAMBDA):
+        outer = name.removeprefix(_LAMBDA).rpartition("$")[0]
+    elif "$" in name:
+        outer = name.rpartition("$")[0]
+    else:
+        return with_method_name(symbol, "<clinit>")
+    named = [
+        with_method_name(symbol, one)
+        for one in dict.fromkeys((_NAMED_AFTER.get(outer, outer), outer))
+    ]
+    found = [one for one in named if one in declared]
+    return found[0] if len(found) == 1 else None
 
 
 # The slot an argument reference names where an unpacked `*`/`**` value may be the argument
@@ -1179,6 +1256,7 @@ def value_index(
         if isinstance(modifiers, dict) and modifiers.get("static") is False:
             instance_methods.add(str(row["symbol"]))
     declared_parameters: dict[tuple[str, int], Mapping[str, Any]] = {}
+    evaluated: dict[tuple[str, int], tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]] = {}
     for row in (
         *workspace.query("method_declarations"),
         *workspace.query("constructor_declarations"),
@@ -1190,6 +1268,16 @@ def value_index(
                 held = entry.get("type") if isinstance(entry, dict) else None
                 if isinstance(held, dict):
                     declared_parameters[(str(row["symbol"]), position)] = held
+        if isinstance(parsed, dict):
+            for position, entry in enumerate(parsed.get("parameters") or []):
+                if not isinstance(entry, dict):
+                    continue
+                default, annotation = entry.get("default"), entry.get("annotation_value")
+                if isinstance(default, dict) or isinstance(annotation, dict):
+                    evaluated[(str(row["symbol"]), position)] = (
+                        default if isinstance(default, dict) else None,
+                        annotation if isinstance(annotation, dict) else None,
+                    )
         if isinstance(parsed, dict):
             call_parameters[str(row["symbol"])] = tuple(
                 (
@@ -1388,6 +1476,10 @@ def value_index(
         class_parameters=_class_parameters(workspace) if by_name else {},
         declared_parameters=declared_parameters,
         generic_bases=_generic_bases(workspace) if by_name else {},
+        parameter_values={
+            key: ParameterValues(defining_body(key[0], call_parameters.keys()), *values)
+            for key, values in evaluated.items()
+        },
     )
 
 
@@ -2182,7 +2274,9 @@ def producer_paths(
             # A path no `Path` can hold (one helper entered through two calls) is left out of
             # the answer; a caller that must know the answer is incomplete asks for these.
             dropped.append(producer)
-    return tuple(dict.fromkeys(found))
+    # Keyed with `made_by`, which is outside `Producer`'s equality: two paths ending at two
+    # library calls are two ends to this reader (`_Walk._distinct`).
+    return tuple({(pair, pair[0].made_by): pair for pair in found}.values())
 
 
 def decorators_passed(
@@ -5208,13 +5302,18 @@ class _Walk:
         """`reached` with repeats removed, keeping the first of each. For the producer reader
         two `external` answers at two parameters are two ends — the parameter is outside the
         answer's equality (`Answer.parameter`), so it is keyed here too: two field writers
-        nothing calls, `m1(p)` and `m2(q)`, name both. Every other reader dedupes on the
-        answer alone, as before, since `resolve_site` does not dedupe again and two equal
-        `external` answers would be two bindings saying one thing."""
+        nothing calls, `m1(p)` and `m2(q)`, name both. So is the library call an `external`
+        answer ended at (`Answer.made_by`): one writer writing a field from `Query()` on one
+        branch and `Header()` on the other has two ends (plan 2026-11-08 Task 4). Every other
+        reader dedupes on the answer alone, as before, since `resolve_site` does not dedupe
+        again and two equal `external` answers would be two bindings saying one thing."""
         if not self._parameters_apart:
             return tuple(dict.fromkeys(reached))
         return tuple(
-            {(path, answer, answer.parameter): (path, answer) for path, answer in reached}.values()
+            {
+                (path, answer, answer.parameter, answer.made_by): (path, answer)
+                for path, answer in reached
+            }.values()
         )
 
     def _parameter(
@@ -5243,7 +5342,7 @@ class _Walk:
         if frame is not None:
             slot = self._index.argument_slot(frame[0], frame[1], method, index)
             if slot == UNFILLED:
-                return _only(trail, self._unfilled(method, index))
+                return self._default(method, index, frame, trail, frames)
             return self._resolve((_SLOT, frame[0], frame[1], slot), trail, frames)
         if method in self._stop_at_parameters_of:
             return _only(trail, Answer(kind=_PRODUCED, value=Producer(parameter=(method, index))))
@@ -5280,7 +5379,7 @@ class _Walk:
                 # this caller is not on it. Another slot's path holds that caller.
                 continue
             if argument == UNFILLED:
-                reached.append((merged, self._unfilled(method, index)))
+                reached.extend(self._default(method, index, (caller, ordinal), merged, frames))
                 continue
             reached.extend(self._resolve((_SLOT, caller, ordinal, argument), merged, frames))
         if len(reached) > PATH_CAP:
@@ -5288,6 +5387,26 @@ class _Walk:
                 method, index, trail, _only(trail, _unresolved(NON_ENUMERABLE))
             )
         return self._open_filled(method, index, trail, tuple(reached))
+
+    def _default(
+        self, method: str, index: int, call: tuple[str, int], trail: _Trail, frames: "_Frames"
+    ) -> tuple[_Reached, ...]:
+        """Parameter `index` of `method`, which the call at `call` fills with no argument: it
+        passes the parameter's `default` (Python's rule, N1), resolved in the frame of the body
+        that runs the `def` (`defining_body`), on this caller's path. The origin names the
+        parameter and has no ordinal, so the `escapes` window is the rest of that body, as for
+        a field a call's result is written to. `_unfilled` where there is no default (every
+        JVM parameter), where the body is not known, and where the call's `*` or `**` argument
+        may fill the parameter (`unpacked_may_fill`): then no default is passed for certain."""
+        held = self._index.parameter_values.get((method, index))
+        if held is None or held.default is None or held.body is None:
+            return _only(trail, self._unfilled(method, index))
+        site = self._index.sites.get(call)
+        declared = self._index.call_parameters.get(method, ())
+        kind = declared[index][1] if index < len(declared) else None
+        if site is None or unpacked_may_fill(site.get("arguments") or [], kind):
+            return _only(trail, self._unfilled(method, index))
+        return self._entry(held.default, held.body, (_PARAMETER, method, index), trail, frames)
 
     @staticmethod
     def _unfilled(method: str, index: int) -> Answer:

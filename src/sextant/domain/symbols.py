@@ -81,6 +81,17 @@ def with_owner(descriptor: str, owner: str) -> str:
     return owner + descriptor.rpartition(_TYPE_MARKER)[2]
 
 
+def with_method_name(symbol: str, name: str) -> str:
+    """The method `name` of the same owner as the method `symbol`, with the same argument
+    list and coordinates: `app/run#f(sig_1).` with `<clinit>` is `app/run#<clinit>(sig_1).`.
+    For a reader that finds a method by the naming rule D00 §5a states (the body a `def` runs
+    in, plan 2026-11-08-python-fastapi-inbound ruling R15), where every method of the language
+    carries one argument list."""
+    owner, marker, member = symbol.rpartition(_TYPE_MARKER)
+    _, paren, arguments = member.partition(_ARGUMENTS_OPEN)
+    return owner + marker + name + paren + arguments
+
+
 def owner_of(descriptor: str) -> str | None:
     """The owning type's descriptor, trailing `#` included, or `None` for a
     free-function descriptor — SCIP spells those with no `#` at all, and an

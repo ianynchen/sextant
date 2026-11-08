@@ -551,7 +551,7 @@ def test_a_keyword_argument_fills_the_parameter_of_its_name(tmp_path: Path):
 
 def test_a_keyword_naming_no_parameter_fills_none(tmp_path: Path):
     """A keyword that names no parameter feeds none: `h(q=Session())` leaves `x` to its
-    default, which is `not_readable` on that caller's path, never the `Session`."""
+    default, `None` on that caller's path (ruling R16), never the `Session`."""
     workspace = _resolved(
         tmp_path,
         {
@@ -570,7 +570,7 @@ def test_a_keyword_naming_no_parameter_fills_none(tmp_path: Path):
         (_CLIENT, "None"),
     ]
     unfilled = next(row for row in rows if row["owner"] is None)
-    assert "parameter 0" in str(unfilled["detail"])
+    assert str(unfilled["detail"]) == "receiver of get is None on this path"
     assert {row["resolution"] for row in rows if row["owner"]} == {"partial"}
     workspace.close()
 
@@ -752,7 +752,7 @@ def test_a_positional_argument_to_a_variadic_function_fills_its_first_parameter(
 
 def test_a_keyword_only_parameter_is_filled_by_name_or_left_to_its_default(tmp_path: Path):
     """`def f(a, *, b=None)`: `f(x, b=Client())` fills `b`; `f(x)` leaves it to its default,
-    `not_readable` naming parameter 1."""
+    `None` (ruling R16), `not_readable` with that detail."""
     workspace = _resolved(
         tmp_path,
         {
@@ -769,7 +769,7 @@ def test_a_keyword_only_parameter_is_filled_by_name_or_left_to_its_default(tmp_p
         (_CLIENT, "None"),
     ]
     unfilled = next(row for row in rows if row["owner"] is None)
-    assert "parameter 1" in str(unfilled["detail"])
+    assert str(unfilled["detail"]) == "receiver of get is None on this path"
     kinds = {
         str(row["symbol"]).rsplit(" ", 1)[-1]: [
             parameter.get("kind") for parameter in row["signature"]["parameters"]

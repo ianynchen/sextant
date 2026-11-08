@@ -261,11 +261,39 @@ same reasons on fewer path rows.
 `c3`, by Python's calling rule over each parameter's `kind` (D00 §5a): positionals fill the
 positional parameters in order and the rest go to `*args`; a keyword fills the positional or
 keyword-only parameter of its name and the rest go to `**kwargs`; after a `*` argument no
-later positional's place is known, and a `**` argument may fill any parameter left. A
-parameter none of this decides — its default, one only an unpacked argument may fill, a
-`*args`/`**kwargs` parameter — is `not_readable` on that caller's path, naming the parameter
+later positional's place is known, and a `**` argument may fill any parameter left
 (`values.parameter_slots`), the one calling rule: the scanner writes arguments as written
-(R27). A constructor is bound by its `__init__`'s parameters, as any callee. A method called
+(R27). **A call that fills no argument for a parameter passes its `default`** (Python's
+rule, plan 2026-11-08-python-fastapi-inbound Task 4, rulings R15 and R16), on that caller's
+path: the parameter's `default` (D00 §5a) is resolved in the frame of the body that runs the
+`def` (`values.defining_body`), with the rest of that body as its `escapes` window. `= None`
+is `absent`, so the type reader adds no declared type beside it (R40 adds one only beside an
+open path). A parameter a call's unpacked argument may fill is not left to its default
+(`values.unpacked_may_fill`): a `*` value may fill a `positional_only` or `positional`
+parameter, a `**` mapping a `positional` or `keyword_only` one. That path, a parameter with no
+default and a `*args`/`**kwargs` parameter are `not_readable` on that caller's path, naming
+the parameter. No JVM parameter has a `default`.
+
+**The body that runs a `def`** is read from the naming rule D00 §5a and M03 state, since no
+fact names it (ruling R15): a name with no `$` (a module function or a method) is run by its
+owner's `<clinit>`, the module or class body; `outer$inner` by `outer`; `lambda$<m>$<n>` by
+`<m>`, where `static` is `<clinit>` and `new` is `<init>`. A Python name holds no `$`, so the
+split is exact; where a function named `static` or `new` and the body that name stands for
+are both declared, the body is not known and no default is read.
+
+**Parameter markers** (`resolve/parameter_markers.py`, N1, N2, ruling R14): for each
+parameter, the call that produced its `default` and the call that produced each element of
+its `Annotated` metadata (the static `__class_getitem__` call of `typing/Annotated#` or
+`typing_extensions/Annotated#`, R8, after its first argument, flattened where that argument
+is itself such a form), in written order, one `Marker` per path. Each value is read through
+`values.producer_paths`, so an alias in a module field or another file's field, an alias of an
+alias, a helper returning the call and each write of a field are followed; a path ending
+anywhere but a call (a literal, a construction, a value the walk cannot read) gives no
+marker. The producer reader keeps two ends at two library calls apart (`Answer.made_by`), as
+it keeps two ends at two parameters apart. Built once per `ValueIndex` and kept on it, as
+the walk's upward paths are: the index reads derived tables, so `Workspace.once` cannot hold
+it, and the function takes the index, so it cannot be asked before the catalog-aware index
+exists. It names no framework; which marker calls mean what is catalog data. A constructor is bound by its `__init__`'s parameters, as any callee. A method called
 through its class — a `static` call on a class, or a call whose receiver is a name that is a
 class (`Base.__init__(self, x)`, `H.use(h, x)`) — to a method that takes `self` is handed
 `self` as its first positional argument (`values.call_slots`); a classmethod or staticmethod

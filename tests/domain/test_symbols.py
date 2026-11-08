@@ -17,6 +17,7 @@ from sextant.domain.symbols import (
     short_class_name,
     simple_name,
     type_descriptor,
+    with_method_name,
     without_type_marker,
 )
 
@@ -247,3 +248,13 @@ def test_short_class_name_reads_a_nested_class_with_a_dot_and_drops_a_generated_
 
 def test_every_python_method_shares_one_disambiguator():
     assert method_descriptor("a/b#", "f", PY_SIGNATURE) == "a/b#f(" + disambiguator_of("(*)") + ")."
+
+
+def test_with_method_name_keeps_the_owner_the_arguments_and_the_coordinates():
+    """The body a `def` runs in, by the naming rule (ruling R15): same owner, same argument
+    list, another name, on a full symbol and on a bare one."""
+    assert (
+        with_method_name("sextant-python pypi shop 1 app/run/C#m$inner(sig_1).", "m")
+        == "sextant-python pypi shop 1 app/run/C#m(sig_1)."
+    )
+    assert with_method_name("app/run#f(sig_1).", "<clinit>") == "app/run#<clinit>(sig_1)."

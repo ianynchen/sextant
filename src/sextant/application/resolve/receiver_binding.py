@@ -49,6 +49,7 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.call_edges import FunctionCalls, record_call_edges
 from sextant.application.resolve.values import (
+    ABSENT,
     ESCAPES,
     EXTERNAL,
     NOT_READABLE,
@@ -393,6 +394,7 @@ def _with_new_callers(
         objects={},
         slots_memo={},
         suffixes={},
+        markers=[],
     )
     return patched, frozenset(str(edge["callee"]) for edge in edges)
 
@@ -511,6 +513,10 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
         elif body is not None:
             if body not in functions:
                 functions.append(body)
+        elif ended is not None and ended.kind == ABSENT:
+            # The code states the value is None on this path: a default the call leaves
+            # (`= None`, ruling R16) or a `None` written. None has no method to bind.
+            found.append((path_id, None, NOT_READABLE, f"receiver of {name} is None on this path"))
         else:
             found.append(
                 (
