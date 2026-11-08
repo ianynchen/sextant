@@ -86,6 +86,9 @@ _CALL = "__call__"
 # subscript, never the class body's own method (ruling R37).
 _PROTOCOL = frozenset({"__getitem__", "__iter__", "__next__", "__aiter__", "__anext__"})
 _SYNTAX = _PROTOCOL | {_CALL}
+# The receiver reader's key in the index's shared upward paths (`ValueIndex.suffixes`, R39):
+# every site's walk over one round's index reads them.
+_RECEIVER_READER = "receiver"
 
 # What a path's crossings are joined by in `path_id`, outermost first.
 _JOIN = " > "
@@ -389,6 +392,7 @@ def _with_new_callers(
         reached=index.reached | {(str(e["caller"]), int(str(e["ordinal"]))) for e in edges},
         objects={},
         slots_memo={},
+        suffixes={},
     )
     return patched, frozenset(str(edge["callee"]) for edge in edges)
 
@@ -447,6 +451,7 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
         dropped=dropped,
         functions=True,
         declared_types=True,
+        shared=_RECEIVER_READER,
     ):
         path_id = _JOIN.join(path.labels())
         crossed = path.crossed_out_of()

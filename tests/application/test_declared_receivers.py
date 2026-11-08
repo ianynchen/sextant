@@ -389,3 +389,67 @@ def test_a_parameter_with_a_written_type_is_that_type_for_the_type_reader(tmp_pa
     site = _site(workspace, "app/a/Repo#go(sig_dd69782a).", "run")
     assert _rows(workspace, site) == [("app/a/Session#", "declared", None)]
     workspace.close()
+
+
+# -- the walk over a lattice of callers (round 2, ruling R39) ------------------------------
+
+
+def _lattice(width: int, depth: int) -> dict[str, str]:
+    """A session handed down `depth` levels of `width` services, every service calling every
+    service of the next level, the last one building a `Repo` that reads `self.session`:
+    `width ** depth` paths over `width * depth` parameters (polar's repository shape)."""
+    lines = ["from app.repo import Repo\n"]
+    for level in range(depth):
+        for one in range(width):
+            lines.append(f"def s{level}_{one}(session):\n")
+            if level == depth - 1:
+                lines.append("    return Repo(session).get()\n")
+            else:
+                lines.extend(f"    s{level + 1}_{k}(session)\n" for k in range(width))
+    lines.append("def main(session):\n" + "".join(f"    s0_{k}(session)\n" for k in range(width)))
+    return {
+        "repo.py": "class Repo:\n    def __init__(self, session):\n        self.session = session\n"
+        "    def get(self):\n        return self.session.execute('select 1')\n",
+        "service.py": "".join(lines),
+    }
+
+
+_GET = "app/repo/Repo#get(sig_dd69782a)."
+
+
+def test_a_lattice_of_callers_is_walked_once_per_parameter(tmp_path: Path):
+    """2 x 18 is 262,144 paths over 36 parameters: the walk works out each parameter's paths
+    upward once and stops enumerating at the path cap, so it ends at once, `non_enumerable`."""
+    import time
+
+    started = time.perf_counter()
+    workspace = _resolved(tmp_path, _lattice(2, 18))
+    elapsed = time.perf_counter() - started
+    rows = _bound(workspace, _site(workspace, _GET, "execute"))
+    assert {row["reason"] for row in rows} == {"non_enumerable"}
+    assert elapsed < 5
+    workspace.close()
+
+
+def test_the_paths_of_a_small_lattice_are_each_their_own_row(tmp_path: Path):
+    """2 x 4 is 16 paths, under the cap: one row per path, each `external` (`main` has no
+    caller), exactly the product of the choices at each level, never combined."""
+    workspace = _resolved(tmp_path, _lattice(2, 4))
+    rows = _bound(workspace, _site(workspace, _GET, "execute"))
+    prefix = _PREFIX + "app/service#"
+    expected = {
+        " > ".join(
+            [f"{prefix}main(sig_dd69782a).@{a}"]
+            + [
+                f"{prefix}s{level}_{choice}(sig_dd69782a).@{nxt}"
+                for level, (choice, nxt) in enumerate(zip((a, b, c, d), (b, c, d, 0), strict=True))
+            ]
+        )
+        for a in (0, 1)
+        for b in (0, 1)
+        for c in (0, 1)
+        for d in (0, 1)
+    }
+    assert {str(row["path_id"]) for row in rows} == expected
+    assert {(row["owner"], row["reason"]) for row in rows} == {(None, "external")}
+    workspace.close()

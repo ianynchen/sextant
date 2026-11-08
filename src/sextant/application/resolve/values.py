@@ -779,6 +779,14 @@ class ValueIndex:
     )
     # `argument_slots`' answers, per (caller, ordinal, callee), for as long as this lives.
     slots_memo: dict[Any, Any] = dataclass_field(default_factory=dict, compare=False, repr=False)
+    # **Each parameter's and each binding's paths upward, once** (ruling R39, OI-324 part 2
+    # round 2): `(reader, position, frames)` -> the paths from that position to where they end,
+    # each with its answer, computed on the empty path and joined onto every path that reaches
+    # the position (`_Walk._resolve`). Shared by every site a reader walks over this index, and
+    # emptied with the index each binding round (the callers change).
+    suffixes: dict[Any, tuple["_Reached", ...]] = dataclass_field(
+        default_factory=dict, compare=False, repr=False
+    )
     # `_Walk._namespace`'s answers, per field symbol, for as long as this lives.
     namespaces: dict[str, tuple[tuple[str, ...], bool]] = dataclass_field(
         default_factory=dict, compare=False, repr=False
@@ -2104,6 +2112,7 @@ def producer_paths(
     functions: bool = False,
     declared_sites: AbstractSet[tuple[str, int]] = frozenset(),
     declared_types: bool = False,
+    shared: Any = None,
 ) -> tuple[tuple[Producer, Path], ...]:
     """`producers_of`, with the PATH each producer was reached by, one pair per distinct
     path — for a reader that goes on to read other positions on that same path.
@@ -2159,6 +2168,7 @@ def producer_paths(
         functions=functions,
         declared_sites=declared_sites,
         declared_types=declared_types,
+        shared=shared,
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[tuple[Producer, Path]] = []
@@ -2944,8 +2954,15 @@ class _Walk:
         functions: bool = False,
         declared_sites: AbstractSet[tuple[str, int]] = frozenset(),
         declared_types: bool = False,
+        shared: Any = None,
     ) -> None:
         self._index = index
+        # The reader's key in the index's shared upward paths (`ValueIndex.suffixes`, R39):
+        # every walk of one reader over one index shares them. None, they are this walk's own.
+        self._shared = shared
+        self._suffixes: dict[Any, tuple[_Reached, ...]] = (
+            index.suffixes if shared is not None else {}
+        )
         # The type reader (`producer_paths(..., declared_types=True)`): where a body gives a
         # call's result no type, the callee's declared return does. False for every other
         # reader, which never reads a declaration as a value.
@@ -3051,6 +3068,8 @@ class _Walk:
         pushed only by a return crossing, and that crossing is on the path with the callee
         and the return it chose.
         """
+        if self._upward(position):
+            return self._joined_upward(position, trail, frames)
         key = (position, trail)
         cached = self._memo.get(key)
         if cached is not None:
@@ -3067,6 +3086,47 @@ class _Walk:
         if not unresolved_back_edges:
             self._memo[key] = reached
         return reached
+
+    def _upward(self, position: _Position) -> bool:
+        """Whether `position`'s answer is the same set of paths upward whatever path reached
+        it (R39): a parameter, read through its callers, and a binding read plainly (not on an
+        object, not unseen), outside an object walk, whose answers depend on the asker's
+        frames through reads it records."""
+        if self._base is not None:
+            return False
+        return position[0] == _PARAMETER or (position[0] == _BINDING and len(position) == 2)
+
+    def _joined_upward(
+        self, position: _Position, trail: _Trail, frames: "_Frames"
+    ) -> tuple[_Reached, ...]:
+        """`position`'s paths upward (ruling R39), each joined onto `trail` by the coherence
+        rule: a path that chose another context than `trail` already chose is not on it, and
+        is dropped, as the walk would have dropped it at that crossing. The paths are kept
+        apart, never combined (ruling M-1). They are worked out once per `(position, frames)`
+        on the empty path, which the prefix can change only through those refusals, so the
+        work is bounded by the positions, not by the paths through them: polar's
+        `self.session` was 833,097 paths over 4,655 parameters. An answer resting on a
+        position still being worked out (a cycle) is not kept, as before."""
+        key = (self._shared, position, frames)
+        upward = self._suffixes.get(key)
+        if upward is None:
+            if position in self._pending:
+                self._open.add(position)
+                return _only(trail, _unresolved(CYCLE))
+            self._pending.add(position)
+            outer, self._open = self._open, set()
+            upward = self._compute(position, (), frames)
+            unresolved_back_edges = self._open - {position}
+            self._open = outer | unresolved_back_edges
+            self._pending.discard(position)
+            if not unresolved_back_edges:
+                self._suffixes[key] = upward
+        found: list[_Reached] = []
+        for path, answer in upward:
+            merged = _combine(trail, path)
+            if merged is not None:
+                found.append((merged, answer))
+        return tuple(found)
 
     def _compute(
         self, position: _Position, trail: _Trail, frames: "_Frames"
@@ -5215,6 +5275,10 @@ class _Walk:
             return _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, parameter=(method, index)))
         reached: list[_Reached] = []
         for caller, ordinal, argument in callers:
+            if len(reached) > PATH_CAP:
+                # The cap bounds the work, not only the answer (R39): past it no more paths
+                # are enumerated, and the parameter is one path, `non_enumerable`.
+                return _only(trail, _unresolved(NON_ENUMERABLE))
             step = _Step((_CALLER_OF, method), f"{caller}@{ordinal}")
             merged = _combine(trail, (step,))
             if merged is None:
@@ -5225,6 +5289,8 @@ class _Walk:
                 reached.append((merged, self._unfilled(method, index)))
                 continue
             reached.extend(self._resolve((_SLOT, caller, ordinal, argument), merged, frames))
+        if len(reached) > PATH_CAP:
+            return _only(trail, _unresolved(NON_ENUMERABLE))
         return tuple(reached)
 
     @staticmethod
@@ -5623,12 +5689,16 @@ class _Walk:
             else:
                 reached.append((trail, _unresolved(NOT_READABLE)))
         for method, index in written:
+            if len(reached) > PATH_CAP:
+                return _only(trail, _unresolved(NON_ENUMERABLE))
             reached.extend(self._resolve((_PARAMETER, method, index), trail, frames))
         for method, entry in produced:
             # The origin names the write and has no ordinal, so `_through`'s `escapes` window
             # is the whole of the writing method after the call: a call made on the stored
             # object anywhere there changes what every later reader of the field sees.
             reached.extend(self._entry(entry, method, (_BINDING, symbol, method), trail, frames))
+        if len(reached) > PATH_CAP:
+            return _only(trail, _unresolved(NON_ENUMERABLE))
         return self._distinct(reached)
 
     def _object_site(

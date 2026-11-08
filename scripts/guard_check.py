@@ -4723,9 +4723,9 @@ GUARDS: dict[str, Guard] = {
             Edit(
                 path=_VALUES,
                 find="        for method, index in written:\n"
-                "            reached.extend(self._resolve((_PARAMETER, method, index), trail, frames))",
+                "            if len(reached) > PATH_CAP:\n",
                 replace="        for method, index in ():  # guard disabled by guard_check.py\n"
-                "            reached.extend(self._resolve((_PARAMETER, method, index), trail, frames))",
+                "            if len(reached) > PATH_CAP:\n",
             ),
         ),
     ),
@@ -11483,8 +11483,10 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="            if len(reached) > PATH_CAP:\n",
-                replace="            if False:  # guard disabled\n",
+                find="            if len(reached) > PATH_CAP:\n"
+                "                # The cap counts the WHOLE path",
+                replace="            if False:  # guard disabled\n"
+                "                # The cap counts the WHOLE path",
             ),
             Edit(
                 path=_VALUES,
