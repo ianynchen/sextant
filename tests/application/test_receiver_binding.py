@@ -266,6 +266,31 @@ def test_a_class_attribute_a_subclass_overrides_is_both_values(tmp_path: Path):
     workspace.close()
 
 
+def test_a_self_read_still_takes_the_class_body_write(tmp_path: Path):
+    """Ruling R33, unchanged by PEP 526: `c: Session = Session()` declares an instance
+    variable, and its value is still the class body's write. `self.c` in the base is either
+    class's value."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "b.py": "from app.a import Session, Client\n"
+            "class B:\n"
+            "    c: Session = Session()\n"
+            "    def use(self):\n"
+            "        self.c.get(1)\n"
+            "class D(B):\n"
+            "    c: Client = Client()\n",
+        },
+    )
+    site = _site(workspace, "app/b/B#use(sig_dd69782a).", "get")
+    assert _owners(workspace, site) == [
+        (_CLIENT, "narrowed", "None"),
+        (_SESSION, "narrowed", "None"),
+    ]
+    workspace.close()
+
+
 def test_a_field_an_ancestor_writes_is_read_in_the_subclass(tmp_path: Path):
     """`self.d` read in `D`, written only in `B.__init__`: the ancestor's write, one value."""
     workspace = _resolved(

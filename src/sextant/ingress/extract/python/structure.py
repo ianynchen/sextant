@@ -66,9 +66,11 @@ from sextant.ingress.extract.python.typing_rules import (
     Hierarchy,
     TypeScope,
     class_shape,
+    is_class_variable,
     type_parameter_name,
     type_ref,
     type_symbol,
+    wire_projected,
     written_type,
 )
 
@@ -344,8 +346,12 @@ class _Writer(BodyReader):
                 parents_unread=parents_unread,
                 type_parameters=_type_parameters(node.type_params, generic)
                 or self._generic_parameters(owner),
-                supertype=generic_bases[0] if generic_bases else None,
-                generic_interfaces=[base for base in generic_bases[1:] if base is not None],
+                supertype=wire_projected(generic_bases[0])
+                if generic_bases and generic_bases[0] is not None
+                else None,
+                generic_interfaces=[
+                    wire_projected(base) for base in generic_bases[1:] if base is not None
+                ],
             )
         )
         class_names = bind_names(
@@ -421,8 +427,10 @@ class _Writer(BodyReader):
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
         value = None if node.value is None else self._value(node.value, scope)
         written = None
+        instance = False
         if isinstance(node, ast.AnnAssign):
             written = written_type(node.annotation, scope.types)
+            instance = not is_class_variable(node.annotation, scope.types)
         for target in targets:
             if value is not None and isinstance(target, ast.Attribute | ast.Subscript):
                 self._store(target, value, scope)
@@ -439,10 +447,11 @@ class _Writer(BodyReader):
                         node.lineno,
                         node.end_lineno or node.lineno,
                         signature=Signature(returns=written) if written is not None else None,
-                        # A module-level name, or a class attribute given a value in
-                        # the class body, belongs to the type. An annotation alone in a
-                        # class body declares an instance attribute.
-                        modifiers={"static": scope.class_path is None or value is not None},
+                        # A module-level name belongs to the module. In a class body an
+                        # annotated name not written `ClassVar` declares an instance
+                        # variable, whatever its value (PEP 526); a name assigned with no
+                        # annotation, or a `ClassVar`, belongs to the class.
+                        modifiers={"static": scope.class_path is None or not instance},
                     )
                 if value is None:
                     continue
@@ -623,7 +632,7 @@ class _Writer(BodyReader):
                 symbol=self._full(descriptor),
                 construct_kind=kind,
                 enclosing=None if enclosing is None else self._full(enclosing),
-                signature=signature,
+                signature=None if signature is None else _wire_signature(signature),
                 line_start=start,
                 line_end=end,
                 modifiers=modifiers or {},
@@ -750,12 +759,24 @@ def _type_parameters(written: list[ast.type_param], scope: TypeScope) -> list[Ty
     for parameter in written:
         bound = getattr(parameter, "bound", None)
         bounds = (
-            [written_type(bound, scope)]
+            [wire_projected(written_type(bound, scope))]
             if bound is not None and not isinstance(bound, ast.Tuple)
             else []
         )
         found.append(TypeParameter(name=type_parameter_name(parameter), bounds=bounds))
     return found
+
+
+def _wire_signature(signature: Signature) -> Signature:
+    """A signature as it is written to the facts: every type with its wire type (D00 §5b)."""
+    return signature.model_copy(
+        update={
+            "parameters": [
+                p.model_copy(update={"type": wire_projected(p.type)}) for p in signature.parameters
+            ],
+            "returns": None if signature.returns is None else wire_projected(signature.returns),
+        }
+    )
 
 
 def _unsubscripted(node: ast.expr) -> ast.expr:

@@ -79,6 +79,27 @@ _ALIASES = {
 _TYPING_NAMES = frozenset({"typing", "typing_extensions"})
 OBJECT = "builtins/object#"
 TUPLE = "builtins/tuple#"
+# D00 §5b: the wire type of each class whose wire form the language itself fixes, in the
+# vocabulary's own words. A map's keys are arbitrary, which `object` cannot say.
+_WIRE_TYPES = {
+    "builtins/str#": "string",
+    "builtins/int#": "integer",
+    "builtins/float#": "number",
+    "builtins/bool#": "boolean",
+    "builtins/list#": "array",
+    "builtins/set#": "array",
+    "builtins/frozenset#": "array",
+    "builtins/tuple#": "array",
+    "typing/Sequence#": "array",
+    "collections/abc/Sequence#": "array",
+    "builtins/dict#": "map",
+    "typing/Mapping#": "map",
+    "collections/abc/Mapping#": "map",
+}
+# Classes a serializer writes as a scalar of its own choosing (N12 `known_types`): the
+# language fixes none of them, so they carry no wire type here.
+_SERIALIZERS = frozenset({"builtins/bytes#", "builtins/bytearray#"})
+_SERIALIZER_MODULES = frozenset({"datetime", "uuid", "decimal"})
 # The type variable `Self` is read as in a library's signature: the receiver's type fills it.
 SELF = "Self"
 # The forms whose type arguments are a class's own type parameters, and nothing else.
@@ -145,6 +166,56 @@ def written_type(node: ast.expr, scope: TypeScope) -> TypeRef:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return TypeRef(symbol=node.value.strip())
     return TypeRef(symbol=ast.unparse(node))
+
+
+def wire_projected(written: TypeRef) -> TypeRef:
+    """`written` with D00 §5b's wire type at every level, where the language fixes it:
+    `str` is a string, `list` an array, `dict` a map, any other class an object. `None`, a
+    type variable, a special form (`Any`, a union, `Literal`), a written text that names no
+    type, and a class a serializer writes as a scalar of its own choosing carry none."""
+    arguments = [wire_projected(argument) for argument in written.arguments]
+    symbol = written.symbol
+    module = symbol.partition("/")[0]
+    wire: str | None
+    if symbol in _WIRE_TYPES:
+        wire = _WIRE_TYPES[symbol]
+    elif (
+        symbol == NONE
+        or not names_a_type(symbol)
+        or module in _TYPING_NAMES
+        or module in _SERIALIZER_MODULES
+        or symbol in _SERIALIZERS
+    ):
+        wire = None
+    else:
+        wire = "object"
+    return written.model_copy(update={"arguments": arguments, "wire_type": wire})
+
+
+def is_class_variable(annotation: ast.expr, scope: TypeScope, depth: int = _DEPTH) -> bool:
+    """Whether a class-body annotation is `ClassVar`, bare or with its type argument, in a
+    string, or as the first argument of `Annotated`: the one form that makes an annotated
+    class-body name the class's own rather than an instance variable (PEP 526)."""
+    if depth == 0:
+        return False
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            annotation = ast.parse(annotation.value.strip(), mode="eval").body
+        except SyntaxError:
+            return False
+    head = annotation.value if isinstance(annotation, ast.Subscript) else annotation
+    if not isinstance(head, ast.Name | ast.Attribute):
+        return False
+    targets = scope.lookup(head)
+    if len(targets) != 1:
+        return False
+    if is_typing(targets[0], "ClassVar"):
+        return True
+    if is_typing(targets[0], "Annotated") and isinstance(annotation, ast.Subscript):
+        written = annotation.slice
+        first = written.elts[0] if isinstance(written, ast.Tuple) else written
+        return is_class_variable(first, scope, depth - 1)
+    return False
 
 
 def type_symbol(target: Target) -> str:

@@ -279,10 +279,25 @@ file that did not change.
   the file cannot name as a class; nothing after it is written, and the document is
   `partial` with one `partial_reason` line per such class;
 - `<clinit>` per module and class body, `<init>` for `__init__`, one `method` per `def`;
-- a static `field` per name a module or class body assigns, and a `field_write` from that
-  body's `<clinit>`;
+- a `field` per name a module or class body assigns or annotates, and a `field_write` from
+  that body's `<clinit>` where it is given a value. A module's names are `static`. In a class
+  body an annotated name not written `ClassVar` (bare, dotted, in a string, or as
+  `Annotated`'s first argument) declares an instance variable, `static: false`, whatever its
+  value (PEP 526); a name assigned with no annotation, or a `ClassVar`, is the class's own,
+  `static: true`. The instance variable's value is still its class-body `field_write`, which a
+  `self.x` read takes with every class's writes (ruling R33);
 - typed signatures from the written annotations (rule 1); `self` and `cls` are receivers,
-  not parameters;
+  not parameters. Every type a fact carries (a signature's parameters and return, a field's
+  type, a bound, a generic parent) has D00 §5b's `wire_type` at every level where the
+  language fixes it: `str` string, `int` integer, `float` number, `bool` boolean, `list`,
+  `set`, `frozenset`, `tuple` and `Sequence` array, `dict` and `Mapping` map, any other class
+  object. `bytes`, `bytearray` and the classes of
+  `datetime`, `uuid` and `decimal` are written as a scalar the serializer chooses, so they
+  carry none and are left to a catalog's `known_types`; so do `None` (a field written `None`
+  is a `null` on the wire, a return written `None` no payload), a type variable, a special form
+  (`Any`, a union, `Literal`) and a written text that names no type. `wire_format` is never
+  set: the language fixes no format (a Python `int` has no width). The types the scanner
+  reads with (a header, a receiver's type) carry none;
 - decorators as `call_site` facts in the enclosing body's `<clinit>`: each decorator
   expression in written order, then each application from the bottom up, with the
   function as a `lambda` argument or the class as a `class` argument. A call on a value

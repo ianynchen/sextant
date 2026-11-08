@@ -851,6 +851,17 @@ Java `long` and an OpenAPI `integer/int64` meet in the middle as `integer/int64`
 vocabulary is a closed set, and it is the comparison level of DR-5's structural matching
 and FR-11's drift report — never Java types against spec types directly.
 
+**A Python type reference carries the wire type the language fixes, and nothing else**
+(plan 2 task 3), in the JVM's words: `str` is `string`, `int` `integer`, `float` `number`,
+`bool` `boolean`; `list`, `set`, `frozenset`, `tuple` and `Sequence` are `array`; `dict` and
+`Mapping` are `map`; every other class is `object`. `bytes`, `bytearray` and the classes of `datetime`, `uuid` and `decimal` have no wire
+type: a serializer chooses the scalar each becomes, so a catalog's `known_types` says it, as
+it does for a JVM `Instant`. `None` has none: written for a field it is a `null` on the wire,
+for a return no payload, and the vocabulary has one word for neither. A type variable, a special form (`Any`, a union, `Literal`) and a
+written text that names no type have none either. `wire_format` is not set: the language
+fixes no width. The projection reaches every level of a reference (`Optional[list[str]]` is a
+nullable `array` whose argument is a `string`) and every reference a Python fact carries.
+
 **An enumeration reaches the wire as `enum`, never as a record.** A type reference cannot say
 which of the two it points at, so the answer comes from the referenced type's own
 `construct_kind` (§4) — generic fact data, which is why the language-blind half may read it.
