@@ -162,7 +162,13 @@ class ProjectHeaders:
         found: list[Target] = []
         for target in binding.targets:
             if target.module == module and target.member == name:
-                found.append(Target(module, name))
+                # A class a call makes keeps saying so (`new_class`); every other own name is
+                # followed by what it is bound to.
+                found.append(
+                    Target(module, name, "new_class")
+                    if target.kind == "new_class"
+                    else Target(module, name)
+                )
             elif target.member is not None and "." not in target.member:
                 deeper = self.member(target.module, target.member, seen | {(module, name)})
                 reached = deeper or (Target(target.module, target.member),)
@@ -171,8 +177,9 @@ class ProjectHeaders:
                     reached = tuple(replace(one, kind="new_type") for one in reached)
                 found.extend(reached)
             else:
-                # A `NewType` keeps saying it is one: a call of it is no construction.
-                kind = target.kind if target.kind == "new_type" else None
+                # A `NewType`, or a class a call makes, keeps saying it is one: a call of it
+                # is no construction of a known class.
+                kind = target.kind if target.kind in ("new_type", "new_class") else None
                 found.append(Target(target.module, target.member, kind))
         return tuple(dict.fromkeys(found))
 
@@ -189,7 +196,7 @@ class ProjectHeaders:
                 return False
             binding = header.names.get(target.member or "")
             if binding is None or any(
-                own.kind not in ("variable", "function", "type_alias")
+                own.kind not in ("variable", "function", "type_alias", "new_class")
                 for own in binding.targets
                 if own.module == target.module
             ):
@@ -273,6 +280,15 @@ class ProjectHeaders:
         header = self.header(module)
         written = None if header is None else header.aliases.get(name)
         return None if written is None else self._typed(written)
+
+    def binds_class(self, module: str, name: str) -> bool:
+        """Whether `module` binds `name` to its own class `name` alone, its one binding the
+        class statement: `Session = Client` after `class Session` binds the name to `Client`,
+        and `Session = make()` makes it a variable, as `effective_calls._class_calls` reads
+        both."""
+        header = self.header(module)
+        binding = None if header is None else header.names.get(name)
+        return binding is not None and binding.targets == (Target(module, name, "class"),)
 
     def class_object(self, module: str, name: str) -> str | None:
         """The class `X` that `module.name` holds, where every write to it in that file is a

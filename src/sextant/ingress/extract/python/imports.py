@@ -29,10 +29,17 @@ if TYPE_CHECKING:
 # What a name of THIS file is, where the file can tell. An imported name has no kind:
 # whether `fastapi.FastAPI` is a class or a function is in a file this scanner does not
 # read.
-Kind = Literal["class", "function", "variable", "type_variable", "type_alias", "new_type"]
+# `new_class` is a name bound to a class the code makes by a call (the typing
+# specification's functional `NamedTuple` and `TypedDict`): a new class with no class
+# symbol, so the name names no type and a call of it is no construction of a known class.
+Kind = Literal[
+    "class", "function", "variable", "type_variable", "type_alias", "new_type", "new_class"
+]
 
 # The calls that make a name a type variable (the typing specification's three).
 _TYPE_VARIABLE_FACTORIES = frozenset({"TypeVar", "ParamSpec", "TypeVarTuple"})
+# The typing specification's functional forms that make a new class (ruling R17 review).
+_CLASS_FACTORIES = frozenset({"NamedTuple", "TypedDict"})
 _TYPING_MODULES = frozenset({"typing", "typing_extensions"})
 
 
@@ -115,6 +122,19 @@ class LibraryNames(Protocol):
         filled by the arguments, or None."""
         ...
 
+    def metaclass_call(
+        self,
+        metaclass: str,
+        arguments: Sequence[CallArgument],
+        argument_types: Sequence[TypeRef | None],
+        *,
+        unpacked: bool,
+    ) -> TypeRef | bool:
+        """What calling a class of the metaclass `metaclass` gives: True for an instance of
+        the class called, the one other class it names, or False where it makes a new class
+        or cannot be told."""
+        ...
+
     @property
     def hierarchy(self) -> "Hierarchy":
         """The lookup orders of the libraries' classes, worked out once per scan."""
@@ -160,6 +180,11 @@ class ProjectNames(Protocol):
     def alias(self, module: str, name: str) -> TypeRef | None:
         """The type `module.name` is, where that file binds it to a module-level type alias
         (`DbSession = Annotated[Session, ...]` is `Session`). None for any other name."""
+        ...
+
+    def binds_class(self, module: str, name: str) -> bool:
+        """Whether that file binds `module.name` to its own class `name` alone, and to no other
+        value on any statement: a call of it constructs that class."""
         ...
 
     def class_object(self, module: str, name: str) -> str | None:
@@ -410,6 +435,8 @@ class _Binder:
             value.func, names, _TYPE_VARIABLE_FACTORIES
         ):
             return "type_variable", None
+        if isinstance(value, ast.Call) and self._is_typing(value.func, names, _CLASS_FACTORIES):
+            return "new_class", None
         return "variable", None
 
     def _is_typing(
@@ -538,6 +565,13 @@ def holds_decorated_value(
     it carries a decorator that is not one of the language's own method kinds. With both
     kinds, the name holds the outermost decorator's result (design §3e)."""
     return any(not is_descriptor(d, node.name, lookup) for d in node.decorator_list)
+
+
+def makes_a_class(target: Target) -> bool:
+    """Whether calling `target` makes a new class: one of the typing specification's
+    functional forms (`NamedTuple("Point", ...)`, `TypedDict("Movie", ...)`), never by the
+    name alone."""
+    return any(is_typing(target, name) for name in _CLASS_FACTORIES)
 
 
 def is_typing(target: Target, name: str) -> bool:

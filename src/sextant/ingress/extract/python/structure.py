@@ -396,7 +396,7 @@ class _Writer(BodyReader):
         written: list[str] = []
         for position, base in enumerate(node.bases, 1):
             targets = types.lookup(_unsubscripted(base))
-            if len(targets) != 1 or targets[0].kind in ("variable", "function"):
+            if len(targets) != 1 or targets[0].kind in ("variable", "function", "new_class"):
                 text = ast.unparse(base)
                 if not targets and isinstance(_unsubscripted(base), ast.Name | ast.Attribute):
                     reason = _EXTERNAL

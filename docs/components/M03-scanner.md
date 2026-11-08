@@ -338,9 +338,18 @@ level. The class gets a type header (below). **A name holding a class object** i
 `X` where the code writes `type[X]`: a parameter or local annotated so, a call whose written
 return is `type[X]` (a library's, or a `def` of the module), or a module-level name every
 write to which in its file is such a call. Another file's name is read through that file's
-header (`ModuleHeader.class_objects`: polar's `APIRouter = get_api_router_class(APIRoute)`).
+header (`ModuleHeader.factories`, the function each write calls: polar's `APIRouter = get_api_router_class(APIRoute)`).
 Calling such a name is the `virtual <init>` of `X` with the name's field as
-`receiver_field` (R37: `X` or a subclass), and its result is an `X`. A module-level name of
+`receiver_field` (R37: `X` or a subclass), and its result is an `X`. **What a class call makes is
+read as the typing specification reads it.** A metaclass (the class's own, or a base's) that
+defines its own `__call__` decides: where the overloads the arguments choose all return a type
+variable or `Self`, the result is an instance (`HTTPStatus(200)`); where one returns a class
+object, the call makes a new class (`Enum("Color", "RED GREEN")`), which has no class symbol,
+so the result has no type. The functional `NamedTuple(...)` and `TypedDict(...)` make a new
+class too: the name they are bound to is a `new_class` (as a `NewType` is a `new_type`), which
+names no type and whose call names no owner. A class of another file is constructed only
+where its module binds the name to that class alone (`class Session` then `Session = Client`
+is no `Session`), as the resolver reads it (`effective_calls._class_calls`). A module-level name of
 another file that holds an instance is not typed in the file that reads it: a write in a
 third file cannot be seen, and the resolver follows the name's writes.
 

@@ -86,6 +86,7 @@ from sextant.domain.symbols import (
     method_descriptor,
     names_a_type,
     owner_of,
+    without_type_marker,
 )
 from sextant.ingress.extract.python.flow import Flow
 from sextant.ingress.extract.python.imports import (
@@ -95,6 +96,7 @@ from sextant.ingress.extract.python.imports import (
     Target,
     bind_names,
     is_typing,
+    makes_a_class,
     resolve,
 )
 from sextant.ingress.extract.python.typing_rules import (
@@ -1330,7 +1332,7 @@ class BodyReader:
             called = scope.body.callables.get(callee.receiver)
             given = None if called is None else _call_gives(called, arguments, scope)
             return TypeRef(symbol=given) if isinstance(given, str) else given
-        constructed = self._constructed(callee, arguments, types)
+        constructed = self._constructed(callee, arguments, types, unpacked=unpacked)
         if constructed is not None:
             return constructed
         if libraries is None or callee.target.name is None:
@@ -1352,7 +1354,12 @@ class BodyReader:
         return self._returns_on(receiver, name, arguments, types, unpacked=unpacked)
 
     def _constructed(
-        self, callee: Callee, arguments: list[CallArgument], types: list[TypeRef | None]
+        self,
+        callee: Callee,
+        arguments: list[CallArgument],
+        types: list[TypeRef | None],
+        *,
+        unpacked: bool,
     ) -> TypeRef | None:
         """The instance a static call naming a class makes (ruling R17): the file writes
         `module#Name`, since it cannot see that another file's name is a class, and calling a
@@ -1363,15 +1370,57 @@ class BodyReader:
         if callee.invoke_kind != "static" or owner is None or name is None:
             return None
         named = member_type(owner, name)
-        if named is None:
+        module = without_type_marker(owner)
+        if named is None or makes_a_class(Target(module, name)):
+            # A functional `NamedTuple` or `TypedDict` makes a new class, which has no class
+            # symbol: the result has no type.
             return None
         if self._project_shape(named) is not None:
-            # The call names the module that defines the class (`ProjectHeaders.member`).
+            # The call names the module that defines the class (`ProjectHeaders.member`), and
+            # is a construction only where that module binds the name to the class alone, as
+            # the resolver reads it (`effective_calls._class_calls`).
+            headers = self._context.index.headers
+            if module != self._context.here and (
+                headers is None or not headers.binds_class(module, name)
+            ):
+                return None
             return TypeRef(symbol=named)
         libraries = self._context.index.libraries
         if libraries is None or libraries.shape_of(named) is None:
             return None
-        return libraries.construct(named, arguments, types) or TypeRef(symbol=named)
+        return self._metaclass_made(named, arguments, types, unpacked=unpacked)
+
+    def _metaclass_made(
+        self,
+        named: str,
+        arguments: list[CallArgument],
+        types: list[TypeRef | None],
+        *,
+        unpacked: bool,
+    ) -> TypeRef | None:
+        """What calling the library class `named` makes, by the typing specification: an
+        instance of it, unless a metaclass (its own, or a base's) defines a `__call__` that
+        gives something else (`Libraries.metaclass_call`): another class, or a new class
+        with no class symbol (`Enum("Color", "RED GREEN")`), which has no type."""
+        libraries = self._context.index.libraries
+        assert libraries is not None
+        metaclass = next(
+            (
+                shape.metaclass
+                for entry in [TypeRef(symbol=named), *(libraries.hierarchy.order(named) or [])]
+                if (shape := libraries.shape_of(entry.symbol)) is not None
+                and shape.metaclass is not None
+            ),
+            None,
+        )
+        made = (
+            True
+            if metaclass is None
+            else libraries.metaclass_call(metaclass, arguments, types, unpacked=unpacked)
+        )
+        if made is True:
+            return libraries.construct(named, arguments, types) or TypeRef(symbol=named)
+        return made if isinstance(made, TypeRef) else None
 
     def _returns_on(
         self,

@@ -304,6 +304,43 @@ def test_editing_an_alias_rereads_a_file_that_reads_it_through_another_alias(
     _assert_same_as_fresh(project, warm, tmp_path)
 
 
+def test_editing_a_factorys_class_rereads_the_files_that_call_its_name(
+    project: Path, tmp_path: Path
+):
+    """`shop/routing.py` binds `Made` to a call of `shop/kit.py`'s factory, written to return
+    `type[Order]`, and `shop/service.py` constructs `Made`. Editing the factory's return to
+    `type[Invoice]` re-reads `shop/service.py`, whose construction then names `Invoice`
+    (ruling R17), as a fresh run does."""
+    _write(project / "shop" / "models.py", _ALIASED_MODELS)
+    _write(
+        project / "shop" / "kit.py",
+        "from shop.models import Invoice, Order\n\n\ndef make() -> type[Order]:\n"
+        "    return Order\n",
+    )
+    _write(project / "shop" / "routing.py", "from shop.kit import make\n\nMade = make()\n")
+    _write(
+        project / "shop" / "service.py",
+        "from shop.routing import Made\n\n\ndef run():\n    return Made()\n",
+    )
+    warm = tmp_path / "warm"
+    _analyze(project, warm)
+    before = _modified(warm)
+    assert "shop/models/Order#" in (warm / "facts" / "shop" / "service.py.jsonl").read_text()
+
+    _write(
+        project / "shop" / "kit.py",
+        "from shop.models import Invoice, Order\n\n\ndef make() -> type[Invoice]:\n"
+        "    return Invoice\n",
+    )
+    _analyze(project, warm)
+
+    assert "shop/service.py.jsonl" in _rewritten(before, _modified(warm))
+    written = (warm / "facts" / "shop" / "service.py.jsonl").read_text()
+    assert "shop/models/Invoice#" in written
+    assert "shop/models/Order#" not in written
+    _assert_same_as_fresh(project, warm, tmp_path)
+
+
 def test_editing_a_body_beside_an_alias_rereads_only_that_file(project: Path, tmp_path: Path):
     """A body of `shop/models.py` changes and its alias does not: only that file is read
     again."""

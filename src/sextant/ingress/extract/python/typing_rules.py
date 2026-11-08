@@ -291,7 +291,7 @@ def _named(target: Target, scope: TypeScope, depth: int) -> TypeRef | None:
         return TypeRef(symbol=target.member.rpartition(".")[2])
     if target.kind == "type_alias" and target.alias_of is not None:
         return _read(target.alias_of, scope, depth - 1)
-    if target.kind in ("variable", "function"):
+    if target.kind in ("variable", "function", "new_class"):
         return None
     headers = scope.index.headers
     if (
@@ -407,6 +407,9 @@ class ClassShape:
     bases: tuple[TypeRef, ...] | None
     members: frozenset[str]
     methods: frozenset[str] = frozenset()
+    # The metaclass the class statement writes (`class Enum(metaclass=EnumMeta)`), by its
+    # symbol; None where none is written. A base's is the class's too (`metaclass_of`).
+    metaclass: str | None = None
 
 
 def class_shape(node: ast.ClassDef, scope: TypeScope, body: list[ast.stmt]) -> ClassShape:
@@ -439,7 +442,17 @@ def class_shape(node: ast.ClassDef, scope: TypeScope, body: list[ast.stmt]) -> C
         n.name for n in body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
     )
     held = None if bases is None else tuple(bases)
-    return ClassShape(tuple(listed), held, class_members(body), methods)
+    metaclass = next(
+        (
+            written.symbol
+            for keyword in node.keywords
+            if keyword.arg == "metaclass"
+            for written in [type_ref(keyword.value, generic)]
+            if written is not None and names_a_type(written.symbol)
+        ),
+        None,
+    )
+    return ClassShape(tuple(listed), held, class_members(body), methods, metaclass)
 
 
 def is_class_object(annotation: ast.expr, types: TypeScope, depth: int = 8) -> bool:

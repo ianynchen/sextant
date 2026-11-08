@@ -195,3 +195,75 @@ def test_a_name_rebound_in_another_file_is_not_typed_here(tmp_path: Path):
     assert _calls(tree, "app/a#<clinit>")[-1] == (_APP, "get", "virtual")
     (get,) = _sites(tree, "app/c#<clinit>")
     assert get.target.owner is None
+
+
+def test_a_functional_named_tuple_makes_a_class_with_no_owner(tmp_path: Path):
+    """Dispatch's shape (`dispatch_slack/middleware.py`): `Subject = NamedTuple("Subject",
+    ...)` makes a new class (the typing specification's functional form), not a `NamedTuple`.
+    The new class has no class symbol, so the name has no type and a call of it names no
+    owner, at module level and in a function."""
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/mw.py": "from typing import NamedTuple\n"
+            "Subject = NamedTuple('Subject', subject=int, db_session=str)\n"
+            "Subject(subject=1, db_session='x')\n"
+            "def f():\n"
+            "    s = Subject(subject=1, db_session='x')\n"
+            "    s.count(1)\n"
+            "    Local = NamedTuple('Local', [('a', int)])\n"
+            "    Local(a=1).count(1)\n"
+        },
+        (),
+    )
+
+    assert [c for c in _calls(tree, "app/mw#<clinit>") if c[1] == "__call__"] == [
+        (None, "__call__", "virtual")
+    ]
+    assert [c for c in _calls(tree, "app/mw#f") if c[1] in ("__call__", "count")] == [
+        (None, "__call__", "virtual"),
+        (None, "count", "virtual"),
+        (None, "__call__", "virtual"),
+        (None, "count", "virtual"),
+    ]
+
+
+def test_an_enum_called_with_a_name_and_members_makes_a_class(tmp_path: Path):
+    """`Enum('Color', 'RED GREEN')`: the metaclass's `__call__` chooses the overload that
+    returns `type[Enum]`, a new class with no class symbol, so `Color` has no type. A member
+    lookup (`HTTPStatus(200)`) chooses the overload that returns the member: an instance."""
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/colors.py": "from enum import Enum\n"
+            "from http import HTTPStatus\n"
+            "Color = Enum('Color', 'RED GREEN')\n"
+            "Color('RED')\n"
+            "ok = HTTPStatus(200)\n"
+            "ok.bit_length()\n"
+        },
+        (),
+    )
+
+    calls = _calls(tree, "app/colors#<clinit>")
+    assert (None, "__call__", "virtual") in calls
+    assert not any(owner == "enum/Enum#" for owner, _, _ in calls)
+    assert ("http/HTTPStatus#", "bit_length", "virtual") in calls
+
+
+def test_a_class_name_the_module_rebinds_is_no_construction(tmp_path: Path):
+    """`a.py` defines `Session`, then binds the name to `Client`: `aa.Session()` runs
+    `Client`, as the resolver reads it (the name is a variable), so no `Session` is written."""
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/a.py": "class Session:\n    def get(self):\n        return 1\n"
+            "class Client:\n    def get(self):\n        return 2\n"
+            "Session = Client\n",
+            "app/b.py": "import app.a as aa\ns = aa.Session()\ns.get()\n",
+        },
+        (),
+    )
+
+    assert _calls(tree, "app/b#<clinit>")[-1] != ("app/a/Session#", "get", "virtual")

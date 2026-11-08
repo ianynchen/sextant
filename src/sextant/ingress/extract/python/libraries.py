@@ -360,6 +360,61 @@ class Libraries:
             return None
         return found
 
+    def metaclass_call(
+        self,
+        metaclass: str,
+        arguments: Sequence[CallArgument],
+        argument_types: Sequence[TypeRef | None],
+        *,
+        unpacked: bool,
+    ) -> TypeRef | bool:
+        """What calling a class whose metaclass is `metaclass` gives, by the typing
+        specification: the `__call__` the metaclass's lookup order defines decides it. True
+        where that is `type.__call__`, or where every overload the arguments choose returns a
+        type variable or `Self` (the class called: `EnumMeta.__call__`'s member lookup); the
+        one class every chosen overload names otherwise. False where an overload returns a
+        class object (`-> type[Enum]`: a new class), where the overloads disagree, or where
+        none is chosen: what the call makes is not one class this rule can name."""
+        defining = self._defining_class(metaclass, _CALL, None, None)
+        if defining is None:
+            return False
+        found_in, _ = defining
+        if found_in == _TYPE_OF:
+            return True
+        known = self._function(found_in, _CALL)
+        if known is None:
+            return False
+        table, _, defined = known
+        recording, self._recording = self._recording, False
+        inside, self._inside = self._inside, True
+        try:
+            scope = replace(self._scope(table), self_type=SELF)
+            chosen = self._choose(
+                defined,
+                list(arguments),
+                list(argument_types),
+                scope,
+                method=True,
+                unpacked=unpacked or any(a.keyword == _UNPACKED for a in arguments),
+            )
+            answers: set[str] = set()
+            for node, _ in chosen or []:
+                if node.returns is None or is_class_object(node.returns, scope):
+                    return False
+                written = written_type(node.returns, scope)
+                answers.add(
+                    _INSTANCE
+                    if written.symbol == SELF or not names_a_type(written.symbol)
+                    else written.symbol
+                )
+        finally:
+            self._recording = recording
+            self._inside = inside
+        if len(answers) != 1:
+            return False
+        (answer,) = answers
+        return True if answer == _INSTANCE else TypeRef(symbol=answer)
+
     def construct(
         self,
         owner: str,
@@ -917,7 +972,9 @@ class Libraries:
         seen = set(own) | {_C3_ROOT}
         queue = [symbol for symbol in sorted(set(referenced)) if symbol not in seen]
         seen.update(queue)
-        maybe = sorted(set(called) - seen)
+        # Only a member the library's own file defines as a class: deciding it reads the
+        # class statements of one parsed file, where a declaration reads the whole module.
+        maybe = sorted(symbol for symbol in set(called) - seen if self._names_a_class(symbol))
         seen.update(maybe)
         queue += maybe
         maybe_types = set(maybe)
@@ -1677,6 +1734,10 @@ _UNPACKED = "**"
 # Where `_bind_arguments` puts the receiver's written type (`self`), beside the arguments'
 # positions.
 _RECEIVER = -1
+# A metaclass `__call__` answer: an instance of the class called (`metaclass_call`).
+_INSTANCE = "instance"
+# What calling a value runs: `type(value).__call__`.
+_CALL = "__call__"
 
 
 def _makes_type_variable(value: ast.expr) -> bool:
