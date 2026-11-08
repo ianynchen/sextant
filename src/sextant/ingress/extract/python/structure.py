@@ -21,6 +21,7 @@ control-flow fields are read by a later part of this scanner.
 """
 
 import ast
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 
 from sextant.domain.closed_sets import ConstructKind
@@ -302,20 +303,10 @@ class _Writer(BodyReader):
         owner = type_symbol(Target(self._context.here, path))
         generic = scope.types.with_type_parameters(node.type_params)
         unread = len(self.not_read)
-        written, parents_unread = self._parents(node, generic)
-        kind = ConstructKind.CLASS
-        if any(
-            is_typing(target, "Protocol")
-            for base_node in node.bases
-            for target in scope.types.lookup(_unsubscripted(base_node))
-        ):
-            kind = ConstructKind.PROTOCOL
-        elif any(
-            target.module == "enum" and target.member in _ENUM_BASES
-            for base_node in node.bases
-            for target in scope.types.lookup(_unsubscripted(base_node))
-        ):
-            kind = ConstructKind.ENUM
+        written, parents_unread, line = _parents(node, generic)
+        if line is not None:
+            self.not_read.append(line)
+        kind = _class_kind(node, scope.types)
         # Each written parent with its type arguments, where it has any (`RepositoryBase
         # [Product]`), as the JVM's generic supertype and interfaces (D00 §5a): what a class
         # of another file's type parameters are, read through this one.
@@ -381,45 +372,6 @@ class _Writer(BodyReader):
         self._bind_nested(node.name, applied, scope)
         if scope.frame is None and scope.class_path is None:
             self._module_write(node.name, applied, scope)
-
-    def _parents(
-        self, node: ast.ClassDef, types: TypeScope
-    ) -> tuple[list[str], ParentsUnread | None]:
-        """The written parents' symbols, in written order, up to the first one this file
-        cannot name as a class: a value (`Base = declarative_base()`), a call, or a name
-        it does not bind. Nothing after that one is written, so no later parent moves
-        into its place. The class then carries `parents_unread` (`not_readable` for a
-        value, a call or two different bindings; `external` for a name no statement of
-        the file binds, as a star import leaves it), and the document says the class's
-        parents were not all read. `object` is the root every class has, and is not
-        written, as the JVM's root is not (D00 §5 `superclass`)."""
-        written: list[str] = []
-        for position, base in enumerate(node.bases, 1):
-            targets = types.lookup(_unsubscripted(base))
-            if len(targets) != 1 or targets[0].kind in ("variable", "function", "new_class"):
-                text = ast.unparse(base)
-                if not targets and isinstance(_unsubscripted(base), ast.Name | ast.Attribute):
-                    reason = _EXTERNAL
-                    detail = f"base {position} '{text}' is a name this file does not bind"
-                elif len(targets) > 1:
-                    reason = _NOT_READABLE
-                    detail = f"base {position} '{text}' is bound two ways, so it names no one class"
-                elif isinstance(_unsubscripted(base), ast.Call):
-                    reason = _NOT_READABLE
-                    detail = f"base {position} '{text}' is a call result, not a class name"
-                else:
-                    reason = _NOT_READABLE
-                    detail = f"base {position} '{text}' is a value, not a class name"
-                self.not_read.append(
-                    f"{node.name}: base {position} '{text}' is not a class name "
-                    "this file can read; parents from here on are not read"
-                )
-                return written, ParentsUnread(
-                    reason=reason, detail=f"{detail}; parents from here on are not read"
-                )
-            if targets[0] != Target(BUILTINS, "object"):
-                written.append(type_symbol(targets[0]))
-        return written, None
 
     # -- module and class names ----------------------------------------------------------
 
@@ -677,6 +629,70 @@ def header_types(
     return classes, returns, fields, aliases, factories
 
 
+def single_classes(
+    tree: ast.Module,
+) -> tuple[dict[str, list[ast.ClassDef]], frozenset[str]]:
+    """Each class the file's facts name by its statement alone (ruling R20), by its path
+    (`Outer.Inner`), with the class statements from the outermost to it: one at module or
+    class-body level, through `if`, `try`, `with`, loops and `match` as `file_facts` reads
+    them, whose name no other class statement of the file holds. A class defined twice, or
+    beside one of its name inside a function, is not here: which statement the facts keep
+    is the whole file's question. Beside them, the name of every class statement: a name
+    none holds is no class of the file's facts."""
+    counts: dict[str, int] = {}
+    for every in ast.walk(tree):
+        if isinstance(every, ast.ClassDef):
+            counts[every.name] = counts.get(every.name, 0) + 1
+    found: dict[str, list[ast.ClassDef]] = {}
+    pending: list[tuple[list[ast.ClassDef], list[ast.stmt]]] = [([], tree.body)]
+    while pending:
+        outer, body = pending.pop()
+        for statement in _scope_statements(body):
+            if isinstance(statement, ast.ClassDef):
+                chain = [*outer, statement]
+                if counts[statement.name] == 1:
+                    found[".".join(part.name for part in chain)] = chain
+                pending.append((chain, statement.body))
+    return found, frozenset(counts)
+
+
+def _scope_statements(body: list[ast.stmt]) -> Iterator[ast.stmt]:
+    """Every statement of one scope: `body`'s, and those of the blocks its compound
+    statements hold, not a function's or a class's own body."""
+    for node in body:
+        yield node
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            continue
+        for _, value in ast.iter_fields(node):
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                if isinstance(item, ast.stmt):
+                    yield from _scope_statements([item])
+                elif isinstance(item, ast.ExceptHandler | ast.match_case):
+                    yield from _scope_statements(item.body)
+
+
+def class_header(
+    chain: list[ast.ClassDef], here: str, types: TypeScope, *, is_package: bool
+) -> tuple[ConstructKind, list[str], ParentsUnread | None]:
+    """What a type header says of the last class of `chain` (`single_classes`): its
+    construct kind, its written parents and whether they stop early, read against the
+    names `file_facts` reads its bases against (`types`, the module's, then each outer
+    class body's), so the two agree."""
+    path: str | None = None
+    for outer in chain[:-1]:
+        path = f"{path}.{outer.name}" if path else outer.name
+        generic = types.with_type_parameters(outer.type_params)
+        class_names = bind_names(
+            outer.body, here, is_package=is_package, index=types.index, owner=path
+        )
+        types = replace(generic, class_names=class_names, self_type=type_symbol(Target(here, path)))
+    node = chain[-1]
+    written, parents_unread, _ = _parents(node, types.with_type_parameters(node.type_params))
+    return _class_kind(node, types), written, parents_unread
+
+
 def factory_calls(tree: ast.Module, types: TypeScope) -> dict[str, tuple[Target, ...]]:
     """The function each module-level name is written from, where every write to it in the
     file is a call of a named function (`APIRouter = get_api_router_class(APIRoute)`), by
@@ -844,6 +860,66 @@ def _wire_signature(signature: Signature, types: TypeScope) -> Signature:
             else wire_projected(signature.returns, types),
         }
     )
+
+
+def _parents(
+    node: ast.ClassDef, types: TypeScope
+) -> tuple[list[str], ParentsUnread | None, str | None]:
+    """The written parents' symbols, in written order, up to the first one this file
+    cannot name as a class: a value (`Base = declarative_base()`), a call, or a name
+    it does not bind. Nothing after that one is written, so no later parent moves
+    into its place. The class then carries `parents_unread` (`not_readable` for a
+    value, a call or two different bindings; `external` for a name no statement of
+    the file binds, as a star import leaves it), and the document says the class's
+    parents were not all read: the third value is its line. `object` is the root every
+    class has, and is not written, as the JVM's root is not (D00 §5 `superclass`)."""
+    written: list[str] = []
+    for position, base in enumerate(node.bases, 1):
+        targets = types.lookup(_unsubscripted(base))
+        if len(targets) != 1 or targets[0].kind in ("variable", "function", "new_class"):
+            text = ast.unparse(base)
+            if not targets and isinstance(_unsubscripted(base), ast.Name | ast.Attribute):
+                reason = _EXTERNAL
+                detail = f"base {position} '{text}' is a name this file does not bind"
+            elif len(targets) > 1:
+                reason = _NOT_READABLE
+                detail = f"base {position} '{text}' is bound two ways, so it names no one class"
+            elif isinstance(_unsubscripted(base), ast.Call):
+                reason = _NOT_READABLE
+                detail = f"base {position} '{text}' is a call result, not a class name"
+            else:
+                reason = _NOT_READABLE
+                detail = f"base {position} '{text}' is a value, not a class name"
+            line = (
+                f"{node.name}: base {position} '{text}' is not a class name "
+                "this file can read; parents from here on are not read"
+            )
+            return (
+                written,
+                ParentsUnread(reason=reason, detail=f"{detail}; parents from here on are not read"),
+                line,
+            )
+        if targets[0] != Target(BUILTINS, "object"):
+            written.append(type_symbol(targets[0]))
+    return written, None, None
+
+
+def _class_kind(node: ast.ClassDef, types: TypeScope) -> ConstructKind:
+    """A protocol where a written base is `Protocol`, an enum where one is an `enum` base,
+    else a class; the bases read where the class statement is."""
+    if any(
+        is_typing(target, "Protocol")
+        for base_node in node.bases
+        for target in types.lookup(_unsubscripted(base_node))
+    ):
+        return ConstructKind.PROTOCOL
+    if any(
+        target.module == "enum" and target.member in _ENUM_BASES
+        for base_node in node.bases
+        for target in types.lookup(_unsubscripted(base_node))
+    ):
+        return ConstructKind.ENUM
+    return ConstructKind.CLASS
 
 
 def _unsubscripted(node: ast.expr) -> ast.expr:

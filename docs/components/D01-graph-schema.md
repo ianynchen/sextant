@@ -1675,8 +1675,8 @@ no document field names are added to it, because a fact can depend on them:
   editing an installed library by hand.
 
 **The type headers** (ruling R19, 2026-11-08). The Python scanner's one `header_only`
-document reads whole library modules (596 on polar, 45 of a 46 s warm scan), so it is kept
-like a document. Its key is the scan's inputs above (Sextant's code, the stamps, the running
+document reads library modules (596 whole ones on polar, 45 of a 46 s warm scan, before
+[M03](M03-scanner.md)'s class-statement read cut that to 3 s), so it is kept like a document. Its key is the scan's inputs above (Sextant's code, the stamps, the running
 Python, the module, and the libraries' fingerprint, which holds the environment's Python)
 and the three sets of types its read starts from: the types the module's facts name
 (`referenced_types`), the classes a static call may name (`called_types`), and the module's

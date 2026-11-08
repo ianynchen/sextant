@@ -555,6 +555,132 @@ def test_library_types_are_headers_up_their_bases_and_nothing_else(tmp_path: Pat
     assert report.documents == 1
 
 
+# A library whose classes take every shape a type header reads (ruling R20): bases through
+# a re-export and a module attribute, a nested class, a protocol, an enum, a generic base,
+# PEP 695 parameters, classes inside `if` and `try`, a base that is a value, a name defined
+# twice, and a name also defined inside a function.
+_KINDS = {
+    "kinds/py.typed": "",
+    "kinds/__init__.py": "from .shapes import Box as Box\n",
+    "kinds/base.py": (
+        "from typing import Generic, Protocol, TypeVar\n"
+        "T = TypeVar('T')\n"
+        "class Root: ...\n"
+        "class Holder(Generic[T]): ...\n"
+        "class Speaks(Protocol): ...\n"
+    ),
+    "kinds/shapes.py": (
+        "import enum\n"
+        "import typing\n"
+        "from . import base\n"
+        "from .base import Holder, Root, Speaks\n"
+        "class Box(Root, base.Speaks):\n"
+        "    class Lid(Holder[int]):\n"
+        "        class Hinge(Root): ...\n"
+        "class Colour(enum.Enum):\n"
+        "    RED = 1\n"
+        "if typing.TYPE_CHECKING:\n"
+        "    class Typed(Root): ...\n"
+        "try:\n"
+        "    class Tried(Speaks): ...\n"
+        "except ImportError:\n"
+        "    pass\n"
+        "class Twice(Root): ...\n"
+        "class Twice(Holder[str]): ...\n"
+        "def make():\n"
+        "    class Local(Root): ...\n"
+        "    return Local\n"
+        "class Local(Holder[int]): ...\n"
+        "Made = make()\n"
+        "class FromCall(Made): ...\n"
+        "class Paired[U](Holder[U]): ...\n"
+    ),
+}
+_SINGLE = "Box, Box.Lid, Box.Lid.Hinge, Colour, Typed, Tried, FromCall, Paired"
+_AMBIGUOUS = "Twice, Local"
+
+
+def _kinds_app(names: str) -> dict[str, str]:
+    parameters = ", ".join(
+        f"p{position}: shapes.{name}" for position, name in enumerate(names.split(", "))
+    )
+    return {
+        "app/main.py": (
+            f"from kinds import shapes\ndef use({parameters}):\n    return shapes.make()\n"
+        )
+    }
+
+
+def _header_output(tmp_path: Path, names: str):
+    kinds = _install(tmp_path / "site", "kinds", "1.0", _KINDS)
+    report, tree = _scan(tmp_path, _kinds_app(names), (kinds,))
+    ((document, facts),) = [
+        (document, facts) for _, document, facts in tree if document.header_only
+    ]
+    return document, facts, report.uncovered
+
+
+def test_type_headers_from_class_statements_equal_a_whole_module_read(tmp_path: Path, monkeypatch):
+    """The header pass reads only the class statements a header needs (ruling R20), and
+    what it writes is what a read of every whole library module writes: every header, the
+    document record, and every line the scan reports."""
+    from sextant.ingress.extract.python import libraries
+
+    names = f"{_SINGLE}, {_AMBIGUOUS}"
+    statements = _header_output(tmp_path / "statements", names)
+    monkeypatch.setattr(
+        libraries.Libraries,
+        "_class_declaration",
+        lambda self, table, target, symbol: libraries.WHOLE_MODULE,
+    )
+    whole = _header_output(tmp_path / "whole", names)
+
+    assert statements == whole
+    symbols = {bare_descriptor(fact.symbol) for fact in statements[1]}
+    assert {
+        "kinds/shapes/Box#",
+        "kinds/shapes/Box$Lid#",
+        "kinds/shapes/Box$Lid$Hinge#",
+        "kinds/shapes/Colour#",
+        "kinds/shapes/Typed#",
+        "kinds/shapes/Tried#",
+        "kinds/shapes/Paired#",
+        "kinds/shapes/Twice#",
+        "kinds/shapes/Local#",
+        "kinds/shapes#",
+        "kinds/base/Root#",
+        "kinds/base/Holder#",
+        "kinds/base/Speaks#",
+    } <= symbols
+    assert "kinds/shapes/FromCall#" not in symbols
+
+
+def test_a_type_header_runs_no_whole_module_read_for_a_class_named_once(
+    tmp_path: Path, monkeypatch
+):
+    """A class whose name one class statement of its file holds, at module or class-body
+    level, is read from that statement: no library module is read whole for it. A name
+    two statements hold is read whole, as before, since which one the facts keep is the
+    whole file's question."""
+    from sextant.ingress.extract.python import libraries
+
+    read: list[str] = []
+    real = libraries.file_facts
+
+    def counted(tree, context, lines):
+        read.append(context.here)
+        return real(tree, context, lines)
+
+    monkeypatch.setattr(libraries, "file_facts", counted)
+
+    _header_output(tmp_path / "single", _SINGLE)
+    assert [module for module in read if module.startswith("kinds")] == []
+
+    read.clear()
+    _header_output(tmp_path / "ambiguous", _AMBIGUOUS)
+    assert [module for module in read if module.startswith("kinds")] == ["kinds/shapes"]
+
+
 def test_a_library_class_whose_bases_are_not_all_read_gets_no_header(tmp_path: Path):
     """`class Model(Base)` where `Base = declarative_base()`: the class's parents are not
     all read (Task 5b's rule), and `type_header` has no key to say so, so no header is

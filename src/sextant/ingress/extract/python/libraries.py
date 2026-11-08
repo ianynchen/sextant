@@ -68,6 +68,7 @@ from sextant.domain.facts import (
     Fact,
     FieldWriteFact,
     MethodReturnFact,
+    ParentsUnread,
     SymbolFact,
     TypeHeaderFact,
     TypeRef,
@@ -90,7 +91,7 @@ from sextant.ingress.extract.python.imports import (
     Target,
     bind_names,
 )
-from sextant.ingress.extract.python.structure import file_facts
+from sextant.ingress.extract.python.structure import class_header, file_facts, single_classes
 from sextant.ingress.extract.python.typing_rules import (
     ANY,
     BUILTINS,
@@ -105,6 +106,7 @@ from sextant.ingress.extract.python.typing_rules import (
     parameter_mapping,
     substitute,
     type_ref,
+    type_symbol,
     written_type,
 )
 
@@ -186,6 +188,29 @@ class _Table:
     values: dict[str, list[ast.expr]] = field(default_factory=dict)
     # Read on first use: the names as the scanner binds them, for a written type.
     scope: TypeScope | None = None
+    # Read on first use: the classes a header reads by their statement alone
+    # (`structure.single_classes`), and the name of every class statement of the file.
+    classes: tuple[dict[str, list[ast.ClassDef]], frozenset[str]] | None = None
+
+
+@dataclass(frozen=True)
+class _Declared:
+    """What a type header says of a library type: its symbol, construct kind, written
+    parents, and whether they stop early."""
+
+    symbol: str
+    construct_kind: ConstructKind
+    superclass: str | None
+    interfaces: list[str]
+    parents_unread: ParentsUnread | None
+
+
+class _WholeModule:
+    """`Libraries._class_declaration`'s answer where only a read of the whole module says
+    what its facts hold for the symbol."""
+
+
+WHOLE_MODULE = _WholeModule()
 
 
 type _Function = tuple[_Table, Target, list[ast.FunctionDef | ast.AsyncFunctionDef]]
@@ -1010,28 +1035,79 @@ class Libraries:
                     queue.append(bare)
         return facts, unlocated, not_read
 
-    def _declaration(self, symbol: str) -> tuple[SymbolFact, _Provider] | None:
-        """The library's own `symbol` fact for the type `symbol` (a class or a module),
-        read as the scanner reads a module file, and where it was read from."""
+    def _declaration(self, symbol: str) -> tuple[_Declared, _Provider] | None:
+        """What the library's own `symbol` fact for the type `symbol` (a class or a module)
+        says, as the scanner reads a module file, and where it was read from. Read from the
+        class statement alone where that is what the fact rests on (ruling R20), else from
+        the whole module."""
         target = self._target_of(symbol)
         if target is None:
             return None
         table = self._table(target.module)
         if table is None:
             return None
-        declared = self._module_symbols(table).get(symbol)
+        declared = self._class_declaration(table, target, symbol)
+        if isinstance(declared, _WholeModule):
+            fact = self._module_symbols(table).get(symbol)
+            declared = (
+                None
+                if fact is None
+                else _Declared(
+                    fact.symbol,
+                    fact.construct_kind,
+                    fact.superclass,
+                    list(fact.interfaces),
+                    fact.parents_unread,
+                )
+            )
         if declared is None or declared.construct_kind not in _TYPE_KINDS:
             return None
         return declared, table.source.provider
+
+    def _class_declaration(
+        self, table: _Table, target: Target, symbol: str
+    ) -> _Declared | _WholeModule | None:
+        """The type `symbol` as its module's `symbol` facts would say, read without them:
+        a module is a module; a class one class statement of the file holds is read from
+        that statement, its bases looked up as `file_facts` looks them up (a library's own
+        file, so any installed distribution, recording no note); a name no class statement
+        holds is no type. Anything else is the whole module's question."""
+        source = table.source
+        prefix = _prefix(source.provider)
+        if type_symbol(target) != symbol:
+            return WHOLE_MODULE
+        if target.member is None:
+            return _Declared(prefix + symbol, ConstructKind.MODULE, None, [], None)
+        if table.classes is None:
+            table.classes = single_classes(table.tree)
+        chains, named = table.classes
+        chain = chains.get(target.member)
+        if chain is None:
+            return WHOLE_MODULE if target.member.rpartition(".")[2] in named else None
+        recording, self._recording = self._recording, False
+        inside, self._inside = self._inside, True
+        try:
+            kind, written, parents_unread = class_header(
+                chain, source.module, self._scope(table), is_package=source.is_package
+            )
+        finally:
+            self._recording = recording
+            self._inside = inside
+        return _Declared(
+            prefix + symbol,
+            kind,
+            prefix + written[0] if written else None,
+            [prefix + parent for parent in written[1:]],
+            parents_unread,
+        )
 
     def _module_symbols(self, table: _Table) -> dict[str, SymbolFact]:
         module = table.source.module
         if module not in self._symbols:
             source = table.source
-            provider = source.provider
-            manager = NOT_APPLICABLE if provider.package == NOT_APPLICABLE else _PACKAGE_MANAGER
-            prefix = f"{PYTHON_SCHEME} {manager} {provider.package} {provider.version} "
-            context = FileContext(module, source.is_package, self._index, prefix, "")
+            context = FileContext(
+                module, source.is_package, self._index, _prefix(source.provider), ""
+            )
             recording, self._recording = self._recording, False
             inside, self._inside = self._inside, True
             try:
@@ -1536,6 +1612,12 @@ def _version_test(test: ast.expr, python: tuple[int, int]) -> bool | None:
 
 
 # -- distributions, typeshed ---------------------------------------------------------------
+
+
+def _prefix(provider: _Provider) -> str:
+    """The symbol prefix of a library module's facts: its distribution and version."""
+    manager = NOT_APPLICABLE if provider.package == NOT_APPLICABLE else _PACKAGE_MANAGER
+    return f"{PYTHON_SCHEME} {manager} {provider.package} {provider.version} "
 
 
 def _normalize(name: str) -> str:

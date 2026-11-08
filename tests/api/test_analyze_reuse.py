@@ -522,17 +522,19 @@ def typed(project: Path) -> Path:
 
 @pytest.fixture
 def library_reads(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """One entry per library module the header pass reads facts from."""
+    """One entry per library module a scan reads: each module the libraries look up for the
+    first time, whatever then reads it (a header, a name, a signature)."""
     from sextant.ingress.extract.python import libraries
 
     read: list[str] = []
-    real = libraries.file_facts
+    real = libraries.Libraries._table
 
-    def counted(tree, context, lines):
-        read.append(context.here)
-        return real(tree, context, lines)
+    def counted(self, module):
+        if module not in self._tables:
+            read.append(module)
+        return real(self, module)
 
-    monkeypatch.setattr(libraries, "file_facts", counted)
+    monkeypatch.setattr(libraries.Libraries, "_table", counted)
     return read
 
 

@@ -617,6 +617,19 @@ Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path
   `coverage.documents` counts the module's files only, and the `symbols` view holds the
   module's own. Library signatures are used only inside the scanner, to type the module's
   own calls (above).
+- **A header reads its class statement, not its module** (ruling R20, 2026-11-08). What a
+  header carries (the construct kind, the written parents and whether they stop early) is
+  read from the class statement alone: its bases are looked up against the names the
+  module binds and, for a nested class, each outer class body's, as the module's own facts
+  would look them up, so a re-export or a module attribute (`base.Speaks`) is followed to
+  its defining class as before. A module is a type with no parents. The whole module is
+  read, as before, only where one statement cannot say: a class name two class statements
+  of the file hold (a class defined on two branches, or one of its name inside a
+  function), since which one the facts keep is the whole file's question; a name no class
+  statement holds is no class. The headers are byte for byte what reading every module
+  whole writes (`test_type_headers_from_class_statements_equal_a_whole_module_read`; polar
+  and Sextant's own fact trees). On polar the pass went from 596 whole-module reads (45 s)
+  to 8 (3 s), and a cold run from 69 s to 51 s.
 - **An opted-in library's bodies** (`extract_libraries`, D04 §2a) are read whole, as a
   jar is: the detector reports the environment's `site-packages` as the library root of
   each named distribution the module declares and has installed, and the library's own
@@ -631,8 +644,9 @@ a document's fact file where a fresh read would write the same bytes: the file's
 hash, the document's stamps, Sextant's code, the module's identity, the libraries and the
 Python are the same, and so is every answer the module index gave the file (which other
 files exist). A kept document adds to the report what it added the first time: its fact
-count, its uncovered lines and its library notes. The library type headers are read again
-on every run, from the types every document names. An opted-in library's scan keeps nothing:
+count, its uncovered lines and its library notes. The library type headers are kept the
+same way, while the libraries and the types every document names are the same (D01 §7
+"The type headers"). An opted-in library's scan keeps nothing:
 its subtree is discarded before every run. A file the scan neither keeps nor writes — deleted,
 newly ignored, or no longer readable — loses its fact file, as on a first run. On polar
 `server/`, a run with no file changed scans in 1.5 s instead of 14 s.
