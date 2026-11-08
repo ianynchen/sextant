@@ -449,6 +449,13 @@ class Answer:
     # producer reader to hand on (`Producer.made_by`), so a reader can name the decorator a
     # walk stopped at. Outside equality, as `parameter` is.
     made_by: tuple[str, int] | None = dataclass_field(default=None, compare=False, repr=False)
+    # **The value IS the class (or module) the symbol names, not an object built from it**
+    # (ruling R37): set on a `class` reference and on a name read as the type it is
+    # (`_named_type`). A `symbol` answer is both "the class" and "the type a value was built
+    # from"; a protocol call Python looks up on the value's type (`xs[i]`, `for x in xs`)
+    # differs between the two, so the reader of a receiver tells them apart. Part of what
+    # the answer is: a class and an object of it are two values.
+    class_object: bool = False
 
 
 @dataclass(frozen=True)
@@ -3053,7 +3060,15 @@ class _Walk:
             symbol = argument.get("symbol")
             if symbol is None:
                 return _only(trail, _unresolved(NOT_READABLE))
-            return _only(trail, Answer(kind=LITERAL, value=str(symbol), literal_kind=SYMBOL))
+            return _only(
+                trail,
+                Answer(
+                    kind=LITERAL,
+                    value=str(symbol),
+                    literal_kind=SYMBOL,
+                    class_object=kind == "class",
+                ),
+            )
         if kind == "field":
             symbol = argument.get("symbol")
             if symbol is None:
@@ -4327,6 +4342,18 @@ class _Walk:
             and row.get("owner") is not None
         ):
             return _only(trail, Answer(kind=LITERAL, value=str(row["owner"]), literal_kind=SYMBOL))
+        # **A class object called is a construction of the class it was called through**
+        # (ruling R37): `cls()` in a classmethod, or `c()` with `c: type[X]`, written as a
+        # `virtual` `<init>` on `X`. Which class that is is the closed list of `X` and its
+        # subtypes, one answer each, with `external` beside them where a type in their lookup
+        # orders was not read and may be one more (the shape R33 reads an attribute by).
+        if (
+            row is not None
+            and row["name"] == _INIT
+            and row.get("invoke_kind") == "virtual"
+            and row.get("owner") is not None
+        ):
+            return self._constructed_through(str(row["owner"]), trail)
         # **A call whose owner the facts left to the resolver returns what the method its
         # receiver's type runs returns**, on each path the receiver is read by.
         if row is not None and row.get("owner") is None and row.get("invoke_kind") != DYNAMIC:
@@ -4404,6 +4431,19 @@ class _Walk:
             return _only(trail, _unresolved(NOT_READABLE))
         return self._resolve((_SLOT, site[0], site[1], slot), trail, frames)
 
+    def _constructed_through(self, owner: str, trail: _Trail) -> tuple[_Reached, ...]:
+        """The classes a call of the class object `owner` may construct: `owner` and each of
+        its subtypes, one answer each, and `external` where one of their lookup orders left
+        the scanned code."""
+        dispatch = self._index.dispatch
+        types = [owner, *(() if dispatch is None else dispatch.subtypes.get(owner, ()))]
+        reached: list[_Reached] = [
+            (trail, Answer(kind=LITERAL, value=type_, literal_kind=SYMBOL)) for type_ in types
+        ]
+        if dispatch is not None and any(dispatch.order_boundary(t) is not None for t in types):
+            reached.append((trail, _unresolved(EXTERNAL)))
+        return tuple(reached)
+
     def _bound_returns(
         self,
         site: tuple[str, int],
@@ -4426,6 +4466,10 @@ class _Walk:
         reached: list[_Reached] = []
         for path, answer in self._resolve((_SLOT, method, ordinal, RECEIVER), trail, frames):
             owner = bound_owner(answer)
+            if owner is not None and row["name"] == _CALL and answer.class_object:
+                # Calling a class constructs it (ruling R37): an instance of that class.
+                reached.append((path, Answer(kind=LITERAL, value=owner, literal_kind=SYMBOL)))
+                continue
             if owner is None or dispatch is None:
                 reached.append(
                     (path, answer if answer.kind == UNRESOLVED else _unresolved(NOT_READABLE))
@@ -4972,7 +5016,10 @@ class _Walk:
                 return _only(trail, _unresolved(EXTERNAL))
             named = self._named_type(symbol)
             if named is not None:
-                return _only(trail, Answer(kind=LITERAL, value=named, literal_kind=SYMBOL))
+                return _only(
+                    trail,
+                    Answer(kind=LITERAL, value=named, literal_kind=SYMBOL, class_object=True),
+                )
             return _only(trail, _unresolved(NO_WRITER))
         reached: list[_Reached] = []
         for one in written_ones:
@@ -5130,7 +5177,12 @@ class _Walk:
                     (trail, Answer(kind=LITERAL, value=entry["value"], literal_kind=literal_kind))
                 )
             elif named is not None:
-                reached.append((trail, Answer(kind=LITERAL, value=named, literal_kind=SYMBOL)))
+                reached.append(
+                    (
+                        trail,
+                        Answer(kind=LITERAL, value=named, literal_kind=SYMBOL, class_object=True),
+                    )
+                )
             else:
                 reached.append((trail, _unresolved(NOT_READABLE)))
         for method, index in written:

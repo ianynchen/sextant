@@ -971,3 +971,260 @@ def test_a_library_wrapper_stops_at_the_library(tmp_path: Path):
     ]
     assert [(e["target"], e["callee"]) for e in _edges(workspace, retried)] == [(None, None)]
     workspace.close()
+
+
+# OI-324 fix round 1, ruling R37: a subscript of a CLASS OBJECT is a type form
+# (`__class_getitem__`, or the metaclass's `__getitem__`), never the instance's `__getitem__`.
+
+_MODELS = (
+    "from typing import Generic, TypeVar\n"
+    "T = TypeVar('T')\n"
+    "class User:\n"
+    "    def save(self): ...\n"
+    "class Repo(Generic[T]):\n"
+    "    def __getitem__(self, k):\n"
+    "        return k\n"
+)
+_GETITEM = _PREFIX + "app/models/Repo#__getitem__(sig_dd69782a)."
+
+
+def test_a_subscripted_class_from_another_file_draws_no_edge_to_its_getitem(tmp_path: Path):
+    """The reviewer's two-file repository: `class Users(Repo[User])`, `cast(Repo[User], y)`,
+    an alias `R = Repo[User]`, `make(Repo[User])` and `models.Repo[User]`. The class body's
+    `__getitem__` never runs for any of them; an instance's subscript still reaches it."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "models.py": _MODELS,
+            "run.py": (
+                "from typing import cast\n"
+                "from app import models\n"
+                "from app.models import Repo, User\n"
+                "class Users(Repo[User]):\n"
+                "    pass\n"
+                "R = Repo[User]\n"
+                "def make(t): ...\n"
+                "def f(y):\n"
+                "    make(Repo[User])\n"
+                "    make(models.Repo[User])\n"
+                "    return cast(Repo[User], y)\n"
+                "def g():\n"
+                "    return Repo()[0]\n"
+            ),
+        },
+    )
+    callers = {
+        str(row["caller"]).removeprefix(_PREFIX)
+        for row in workspace.query("call_edges")
+        if row["callee"] == _GETITEM
+    }
+    assert callers == {"app/run#g(sig_dd69782a)."}
+    subscripts = [
+        row
+        for row in workspace.query("call_sites")
+        if row["name"] == "__getitem__" and str(row["caller"]).startswith(_PREFIX + "app/run#f")
+    ]
+    for row in subscripts:
+        rows = _bound(workspace, (str(row["caller"]), int(str(row["ordinal"]))))
+        assert [(b["owner"], b["reason"]) for b in rows] == [(None, "not_readable")]
+        assert "a type form" in str(rows[0]["detail"])
+    workspace.close()
+
+
+def test_a_class_on_one_path_and_an_instance_on_another_is_decided_per_path(tmp_path: Path):
+    workspace = _resolved(
+        tmp_path,
+        {
+            "models.py": _MODELS,
+            "run.py": (
+                "from app.models import Repo\n"
+                "def use(r):\n"
+                "    return r[0]\n"
+                "def f():\n"
+                "    use(Repo)\n"
+                "    use(Repo())\n"
+            ),
+        },
+    )
+    site = _site(workspace, "app/run#use(sig_dd69782a).", "__getitem__")
+    rows = sorted(((row["owner"], row["reason"]) for row in _bound(workspace, site)), key=str)
+    assert rows == [("app/models/Repo#", None), (None, "not_readable")]
+    workspace.close()
+
+
+# OI-324 fix round 2: a value whose type is written `type[X]` is the class, not an instance.
+
+_COLOURS = (
+    "import enum\n"
+    "class Colour(enum.Enum):\n"
+    "    RED = 1\n"
+    "    def __iter__(self):\n"
+    "        return iter(())\n"
+)
+
+
+def test_a_type_of_x_value_is_the_class_so_syntax_calls_reach_no_instance_method(
+    tmp_path: Path,
+):
+    """`c: type[Repo]` (or `Type[Repo]`) holds the class: `c[0]` is a type form and
+    `for m in enum_cls` runs the metaclass, so no edge reaches the class body's own
+    `__getitem__` or `__iter__`. An explicit call through the class keeps its owner."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "models.py": _MODELS,
+            "colours.py": _COLOURS,
+            "run.py": (
+                "from typing import Type\n"
+                "from app.models import Repo\n"
+                "from app.colours import Colour\n"
+                "def typed(c: type[Repo], d: Type[Repo]):\n"
+                "    c[0]\n"
+                "    d[0]\n"
+                "def each(enum_cls: type[Colour]):\n"
+                "    for m in enum_cls:\n"
+                "        pass\n"
+                "def go():\n"
+                "    typed(Repo, Repo)\n"
+                "    each(Colour)\n"
+            ),
+        },
+    )
+    callees = {str(row["callee"]) for row in workspace.query("call_edges")}
+    assert _GETITEM not in callees
+    assert _PREFIX + "app/colours/Colour#__iter__(sig_dd69782a)." not in callees
+    getitems = [
+        row
+        for row in workspace.query("call_sites")
+        if row["name"] == "__getitem__" and str(row["caller"]).endswith("#typed(sig_dd69782a).")
+    ]
+    assert [row["owner"] for row in getitems] == [None, None]
+    iterate = _site(workspace, "app/run#each(sig_dd69782a).", "__iter__")
+    rows = _bound(workspace, iterate)
+    assert [(row["owner"], row["reason"]) for row in rows] == [(None, "not_readable")]
+    assert "metaclass" in str(rows[0]["detail"])
+    for row in getitems:
+        detail = _bound(workspace, (str(row["caller"]), int(str(row["ordinal"]))))[0]["detail"]
+        assert "a type form" in str(detail)
+    workspace.close()
+
+
+def test_a_module_alias_of_a_class_is_the_class_too(tmp_path: Path):
+    """`Alias = Repo` in a third file: a read of `Alias` takes that write, which names the
+    class, so `Alias[User]` is a type form on that arm too."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "models.py": _MODELS,
+            "aliases.py": "from app import models\nAlias = models.Repo\n",
+            "run.py": (
+                "from app.aliases import Alias\n"
+                "from app.models import User\n"
+                "def make(t): ...\n"
+                "def f():\n"
+                "    make(Alias[User])\n"
+            ),
+        },
+    )
+    site = _site(workspace, "app/run#f(sig_dd69782a).", "__getitem__")
+    assert [(row["owner"], row["reason"]) for row in _bound(workspace, site)] == [
+        (None, "not_readable")
+    ]
+    assert _GETITEM not in {str(row["callee"]) for row in workspace.query("call_edges")}
+    workspace.close()
+
+
+# OI-324 fix round 3 (ruling R37): calling a class object constructs it.
+
+_SHAPES = (
+    "class Repo:\n"
+    "    def __init__(self):\n"
+    "        self.n = 0\n"
+    "    def __call__(self):\n"
+    "        return 1\n"
+    "    def go(self):\n"
+    "        return 2\n"
+    "    @classmethod\n"
+    "    def make(cls):\n"
+    "        return cls()\n"
+    "class Special(Repo):\n"
+    "    def __init__(self):\n"
+    "        self.n = 1\n"
+    "    def go(self):\n"
+    "        return 3\n"
+)
+_REPO_INIT = _PREFIX + "app/shapes/Repo#<init>(sig_dd69782a)."
+_SPECIAL_INIT = _PREFIX + "app/shapes/Special#<init>(sig_dd69782a)."
+_REPO_CALL = _PREFIX + "app/shapes/Repo#__call__(sig_dd69782a)."
+
+
+def _callees(workspace: DuckDbWorkspace, method: str) -> set[str]:
+    return {
+        str(row["callee"])
+        for row in workspace.query("call_edges")
+        if row["caller"] == _PREFIX + method
+    }
+
+
+def test_calling_a_class_object_constructs_it(tmp_path: Path):
+    """`c()` with `c: type[Repo]`, `cls()` in a classmethod and `build(Repo)` calling its
+    parameter all construct: an edge to the constructors, never to the instance's
+    `__call__`. `cls()` may be called through a subclass: both constructors, `narrowed`.
+    A plain `Repo()` is unchanged."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "shapes.py": _SHAPES,
+            "run.py": (
+                "from app.shapes import Repo\n"
+                "def typed(c: type[Repo]):\n"
+                "    return c()\n"
+                "def build(c):\n"
+                "    return c()\n"
+                "def plain():\n"
+                "    return Repo()\n"
+                "def go():\n"
+                "    build(Repo)\n"
+                "    typed(Repo)\n"
+            ),
+        },
+    )
+    assert _callees(workspace, "app/run#typed(sig_dd69782a).") == {_REPO_INIT, _SPECIAL_INIT}
+    assert _callees(workspace, "app/run#build(sig_dd69782a).") == {_REPO_INIT}
+    assert _callees(workspace, "app/run#plain(sig_dd69782a).") == {_REPO_INIT}
+    assert _callees(workspace, "app/shapes/Repo#make(sig_dd69782a).") == {
+        _REPO_INIT,
+        _SPECIAL_INIT,
+    }
+    assert _REPO_CALL not in {str(row["callee"]) for row in workspace.query("call_edges")}
+    workspace.close()
+
+
+def test_what_a_class_object_call_made_is_an_instance(tmp_path: Path):
+    """`cls().go()` and `Repo.make().go()` are calls on an instance of the class (or of a
+    subclass it was called through): `go` runs on `Repo` or `Special`, one row each."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "shapes.py": _SHAPES,
+            "run.py": (
+                "from app.shapes import Repo\n"
+                "def f():\n"
+                "    return Repo.make().go()\n"
+                "def build(c):\n"
+                "    return c().go()\n"
+                "def g():\n"
+                "    build(Repo)\n"
+            ),
+        },
+    )
+    made = _site(workspace, "app/run#f(sig_dd69782a).", "go")
+    assert sorted(str(row["owner"]) for row in _bound(workspace, made)) == [
+        "app/shapes/Repo#",
+        "app/shapes/Special#",
+    ]
+    built = _site(workspace, "app/run#build(sig_dd69782a).", "go")
+    assert [(row["owner"], row["resolution"]) for row in _bound(workspace, built)] == [
+        ("app/shapes/Repo#", "resolved")
+    ]
+    workspace.close()

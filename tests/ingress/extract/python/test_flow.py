@@ -103,9 +103,13 @@ def test_for_and_while_with_else(tmp_path: Path):
     )
 
     assert _flow(_sites(facts)) == {
-        "items": (None, True, "b", True, None),
-        "a": ("items", False, "b", True, "a"),
-        "b": ("items", True, "more", True, None),
+        "items": (None, True, "__iter__", True, None),
+        # `for` is `__iter__`, then `__next__` at the head of every pass, the loop's test as
+        # `more()` is the `while`'s.
+        "__iter__": ("items", True, "__next__", True, None),
+        "__next__": ("__iter__", True, "b", True, "__next__"),
+        "a": ("__next__", False, "__next__", True, "__next__"),
+        "b": ("__next__", True, "more", True, None),
         "more": ("b", True, "d", True, "more"),
         "c": ("more", False, "more", True, "more"),
         "d": ("more", True, "e", True, None),
@@ -138,12 +142,14 @@ def test_break_and_continue(tmp_path: Path):
     )
 
     assert _flow(_sites(facts)) == {
-        "a": (None, False, "e", True, "a"),
-        "b": ("a", False, "e", True, "a"),
-        "c": ("b", False, "e", True, "a"),
+        "__iter__": (None, True, "__next__", True, None),
+        "__next__": ("__iter__", True, "e", True, "__next__"),
+        "a": ("__next__", False, "e", True, "__next__"),
+        "b": ("a", False, "e", True, "__next__"),
+        "c": ("b", False, "__next__", True, "__next__"),
         # A `break` skips the `else`.
-        "d": (None, False, "e", True, None),
-        "e": (None, True, None, True, None),
+        "d": ("__next__", False, "e", True, None),
+        "e": ("__next__", True, None, True, None),
     }
 
 
@@ -276,9 +282,11 @@ def test_async_and_await(tmp_path: Path):
         "a": (None, True, "stream", True, None),
         "b": ("a", False, "stream", True, None),
         "d": ("a", False, "stream", True, None),
-        "stream": ("a", True, "h", True, None),
-        "g": ("stream", False, "h", True, "g"),
-        "h": ("stream", True, None, True, None),
+        "stream": ("a", True, "__aiter__", True, None),
+        "__aiter__": ("stream", True, "__anext__", True, None),
+        "__anext__": ("__aiter__", True, "h", True, "__anext__"),
+        "g": ("__anext__", False, "__anext__", True, "__anext__"),
+        "h": ("__anext__", True, None, True, None),
     }
 
 
@@ -300,10 +308,12 @@ def test_a_comprehension_is_a_loop(tmp_path: Path):
 
     assert _flow(_sites(facts)) == {
         "a": (None, True, "items", True, None),
-        "items": ("a", True, "d", True, None),
-        "c": ("items", False, "d", True, "c"),
-        "b": ("c", False, "d", True, "c"),
-        "d": ("items", True, None, True, None),
+        "items": ("a", True, "__iter__", True, None),
+        "__iter__": ("items", True, "__next__", True, None),
+        "__next__": ("__iter__", True, "d", True, "__next__"),
+        "c": ("__next__", False, "__next__", True, "__next__"),
+        "b": ("c", False, "__next__", True, "__next__"),
+        "d": ("__next__", True, None, True, None),
     }
 
 
@@ -314,11 +324,13 @@ def test_a_generator_expression_may_run_after_the_function_returned(tmp_path: Pa
     )
 
     assert _flow(_sites(facts)) == {
-        "items": (None, True, "d", True, None),
-        # It runs when it is consumed, possibly after `f` returned: nothing is known to
-        # follow it.
-        "b": ("items", False, None, False, "b"),
-        "d": ("items", True, None, True, None),
+        "items": (None, True, "__iter__", True, None),
+        # Its `iter()` runs at once; its `next()` and its element run when it is consumed,
+        # possibly after `f` returned: nothing is known to follow them.
+        "__iter__": ("items", True, "d", True, None),
+        "__next__": ("__iter__", False, None, False, "__next__"),
+        "b": ("__next__", False, None, False, "__next__"),
+        "d": ("__iter__", True, None, True, None),
     }
 
 
@@ -415,7 +427,8 @@ def _s(text: str) -> CallArgument:
 
 
 def _used(facts) -> CallArgument:
-    (argument,) = _sites(facts)["use"].arguments
+    (site,) = [f for f in facts if isinstance(f, CallSiteFact) and f.target.name == "use"]
+    (argument,) = site.arguments
     return argument
 
 

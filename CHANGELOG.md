@@ -52,6 +52,27 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Python: a type variable in a library return takes the type that fills it, and a `for`
+  loop is the iteration it is** (OI-324, first part; M03 "Libraries"). `list[User].pop()` is a
+  `User`, `dict[str, Client].get(k)` a `Client` (`X | None` is `X`, as `Optional[X]` is), a class
+  of the file written `class Users(list[User])` or `class Box[T](Sequence[T])` maps its
+  parameters through its bases, `-> Self` is the receiver's own class, and a function's own
+  type variable is filled by its argument (`sorted(users)`, `enumerate(users)`). The method is
+  found by C3 order through the written bases; one a class of the scanned file defines is a
+  body the resolver follows, as before. `for x in xs` is now written as the call sites
+  `xs.__iter__()` and `__next__()`, as javac writes `iterator()` and `next()`; comprehensions
+  and `async for` (`__aiter__`, `__anext__`) too; `for k, v in d.items()` takes a `tuple[K, V]`
+  apart by position. `xs[i]` is the call `xs.__getitem__(i)`, and a slice keeps the container's
+  type; subscripting a class or a typing form is a type and writes no call. A bare `list`, `Any`,
+  an unknown receiver, an undecided overload, or a union whose members give different types
+  leaves the result untyped, as before. `typing.List` and the other PEP 585 aliases are their
+  builtin classes, and `LiteralString` is `str`. **Visible in the facts:** Sextant's call sites
+  go from 23,532 to 35,653 and polar's from 129,009 to 146,852 (the new `__iter__`, `__next__` and
+  `__getitem__` sites); of the call sites that existed before, the scanner now writes the owner
+  of 19,798 (was 19,470) on Sextant and 79,438 (was 79,219) on polar, and of Sextant's 2,558
+  container-method sites that were `not_readable`, 254 are typed and 250 more are `external`.
+  The field pins are unchanged.
+
 - **A re-run keeps what did not change** (OI-325; D01 §7 "Reuse"). `module analyze` into a
   workspace it analysed before keeps each Python file's facts whose inputs are all the same —
   the file's bytes, which other files exist, the libraries installed, the Python, Sextant's

@@ -42,7 +42,14 @@ after the facts is the existing one, extended where Python needs it.
 - **Types written in the code:** annotations, `Optional`, unions, `type[X]`, `@overload` chosen
   by argument types (a closed list where they cannot be told apart), PEP 695 type parameters,
   and the library signatures of the installed environment (`.venv`, `venv`, or the one uv or
-  Poetry names) and of typeshed, pinned at commit `13ffe24f`. Library classes are
+  Poetry names) and of typeshed, pinned at commit `13ffe24f`. A type variable in a library
+  return takes the type the receiver's type arguments, the class's written bases or the
+  arguments fill it with (`list[User].pop()` is a `User`, `dict[str, Client].get(k)` a
+  `Client`, `class Users(list[User])` a list of users, `-> Self` the receiver's own class;
+  OI-324). `for x in xs` is written as the `__iter__` and `__next__` calls it is, as javac
+  writes `iterator()` and `next()`, so `x` has the element type; comprehensions and `async
+  for` too, and `for k, v in d.items()` takes the `tuple[K, V]` apart. `xs[i]` is the call
+  `xs.__getitem__(i)`, and a slice keeps the list's, `str`'s or tuple's own type. Library classes are
   `type_header` facts, hierarchy only. A call into a library stays `external`; library bodies
   are read only under the existing `extract_libraries` opt-in.
 - **Receiver binding** (M04). A call whose owner one file cannot know is bound by the value
@@ -71,6 +78,11 @@ On the development Mac, Python 3.14.10. Full figures and commands:
 | Warm analysis, no file changed (target 10 s, ceiling 30 s) | 3.9 s | 3.0 s |
 | Warm analysis, one file edited | 5.8 s | 16.1 s |
 
+- **The table is plan 1's.** Since OI-324's first part writes `for` loops and subscripts as
+  the `__iter__`, `__next__` and `__getitem__` calls they are, both trees have more call sites
+  (Sextant 35,653, polar 146,852) and longer cold runs (12.1 s, 32.0 s); polar's warm run on a
+  branch without reuse is 31.9 s, over the 30 s ceiling. The figures are in the performance
+  file.
 - **Sextant's six commands** are six `entry_point` roots with traces, and their 24 parameters
   (7 arguments, 13 options, 4 flags) are `request_params` rows. Both lists were read by hand
   from `src/sextant/cli/app.py` and are pinned by the test.
@@ -88,13 +100,22 @@ Every item is recorded in the plan's ledger (`.superpowers/sdd/2026-11-06-python
 or a task report, with its ruling where one was made. "Unknown" below always means a reason
 from the one reason list, never a guessed value.
 
-**Types the reader does not work out** (measured on Sextant: 2,541 of its 2,996 `not_readable`
-sites call a `dict`, `list`, `str`, `set` or `tuple` method):
+**Types the reader does not work out.** Measured on Sextant at plan 1's end: 2,541 of its
+2,996 `not_readable` sites called a `dict`, `list`, `str`, `set` or `tuple` method. The
+type-variable rule and iteration (OI-324, first part) type 254 of the 2,558 such sites on
+`main` at e45b88fe, and move 250 more to `external` (their receiver is now a library call's
+result); the rest are the shapes below. Figures and commands:
+`docs/research/2026-11-06-python-performance.md`.
 
 | Shape | What happens | Why |
 |---|---|---|
-| an element taken out of a container: `xs[0].strip()`, `for x in xs: x.strip()` | `not_readable` | a generic's type arguments are not carried to its elements |
-| the result of a library method whose return is a type variable: `d.get(k).strip()` | `external` | a library return written as a type variable gives no type (Task 7) |
+| an element of a container whose type is not written: a bare `list`, `list[Any]`, a parameter with no annotation | `not_readable`, or `external` where the container is a library call's result | nothing fills the type variable, and nothing is guessed |
+| a container literal (`found = []`, `d = {}`), then `found.append(x)` | `not_readable` | a literal's class is not read as the owner (the largest remaining group: of the container-method sites still `not_readable`, 1,176 of 2,159 on Sextant and 1,408 of 2,042 on polar have a receiver no call produced: a literal, a `merge` or an untyped local) |
+| the result of a call into the scanned code (`workspace.query(...)`, a `Protocol` method) | the value walk follows its body; where there is none, or it returns a value of no type, `not_readable` | a scanned function's written return type is not read as its result's type |
+| a union receiver whose members give different element types (`list[A] \| list[B]`) | the element has no owner; the resolver leaves it unbound | several types are never one, and a call site holds one owner: one row per member would need a fact field (not built, a question for the user) |
+| a tuple of unknown arity (`tuple[A, ...]`), or a starred target | the names stay untyped | the arity is not written |
+| a subscript of a class another file defines (`make(Page[User])`, `R = Repo[User]`) | a `__getitem__` call site, answered `not_readable` ("a type form") on each path whose receiver is the class itself; no edge to the class's own `__getitem__` | ruling R37: subscripting a class object is `__class_getitem__`; this file cannot see the name is a class, the resolver can |
+| a class of another file as the receiver (`r: Repo[Order]`, `Repo` imported) | its library-inherited methods are not typed | its bases are in a file this scanner does not read (M03), and a class's written bases carry no type arguments in the facts |
 | a field declared only by a class-level annotation (dataclass, `NamedTuple`) | `not_readable` | the annotation is not read as the field's type |
 | a value typed `Any`, narrowed by `isinstance` | `external` | `isinstance` tests are not read; `is not None` is |
 | an attribute of a library module: `pytest.mark`, `alembic.op` | `no_writer` (12,683 polar rows) | a library field has no writer in the scanned code, as the JVM answers `System.out` (ruling R26, logged) |

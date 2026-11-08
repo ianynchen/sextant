@@ -117,6 +117,25 @@ parsing is small (Task 0 measured read, parse and walk at 1.6 s). On Sextant the
 headers are about a third of the scan, because Sextant's own environment holds pydantic, duckdb
 and click, whose types are read.
 
+### After the type-variable rule and iteration (OI-324 part 1, 2026-11-07)
+
+Same machine and Python, branch `cov/python-generics` from `main` e45b88fe. `for` loops,
+comprehensions and subscripts are now written as the `__iter__`, `__next__` and `__getitem__`
+calls they are, so both trees have more call sites; the times are wall time, one cold and one
+warm run each (`main` reuses nothing, so warm is cold).
+
+| Tree | Call sites before → after | Cold before → after | Warm after | Cold target 60 s | Warm ceiling 30 s |
+|---|---|---|---|---|---|
+| Sextant (repository root) | 23,532 → 35,653 | 9.0 s → 12.1 s (scan 6.1 s, resolve 4.4 s) | 12.1 s | met | met; target 10 s **missed** |
+| polar `server/` | 129,009 → 146,852 | 28.6 s → 32.0 s (scan 16.4 s, resolve 14.3 s) | 31.9 s | met (1.9 times under) | **missed by 1.9 s** |
+
+The warm figure on `main` is the cold one because nothing is reused; the reuse branch
+(`cov/python-reuse`, PR #97, not merged here) measured polar's warm run at 2.75 s, which this
+change does not alter in kind: a reused file keeps its facts. The added cost is the new sites:
+the scan writes about 15% more facts on polar, and the resolver walks the receivers of the new
+sites it cannot type. Under `cProfile` the type-variable rule itself
+(`calls._library_returns`, which asks the libraries) is 2.7 s of a 36 s profiled scan.
+
 ### What changed since the Task 0 projection
 
 Task 0 projected 13 s cold for polar from a parse-only probe and the JVM resolver's rate. The
