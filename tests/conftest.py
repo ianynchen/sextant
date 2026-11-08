@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+import fixture_python
 import fixture_stub
 from fixture_build import FIXTURES, compile_fixture
 from sextant.cli.app import cli
@@ -35,6 +36,18 @@ def stub_library_in_the_local_repository() -> Path:
         return fixture_stub.local_repository_jar()
     fixture_stub.install_all(offline=True)
     return fixture_stub.local_repository_jar()
+
+
+@pytest.fixture(scope="session")
+def orders_fastapi_env() -> Path:
+    """`fixtures/orders-fastapi`'s own interpreter, from its locked environment.
+
+    Synced offline: CI's priming step fetched the packages, so a missing one fails here rather
+    than reaching the network. Needs no JVM, so it runs in the light Python job too.
+    """
+    root = FIXTURES / "orders-fastapi"
+    fixture_python.synced(root, offline=True)
+    return fixture_python.interpreter(root)
 
 
 @pytest.fixture(scope="session")

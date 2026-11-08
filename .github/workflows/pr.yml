@@ -96,6 +96,12 @@ jobs:
           python tests/fixture_stub.py
           python tests/fixture_build.py
 
+      - name: Prime the Python fixtures' environments
+        # The Python counterpart of the Maven step above: `fixtures/orders-fastapi` has its
+        # own locked environment, and the suite syncs it `--offline`, so this is the one step
+        # allowed to fetch. It needs only `uv`, which the dependency step already installed.
+        run: python tests/fixture_python.py
+
       - name: Prime the Gradle fixture's dependencies
         # The Gradle counterpart of the step above — the ONE fetch-allowed
         # Gradle step (2M design §4). `tests/e2e/test_gradle_fixture_builds.py`
@@ -160,5 +166,8 @@ jobs:
       - name: Install
         # From the lock, as in the full gate.
         run: uv sync --frozen --extra dev
+      - name: Prime the Python fixtures' environments
+        # The fixture test runs FastAPI in the fixture's own environment, synced offline.
+        run: python tests/fixture_python.py
       - name: Python reader tests
-        run: uv run pytest tests/ingress/extract/python tests/ingress/test_python_detector.py
+        run: uv run pytest tests/ingress/extract/python tests/ingress/test_python_detector.py tests/e2e/test_orders_fastapi.py
