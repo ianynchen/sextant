@@ -304,3 +304,17 @@ analyses it, and then every file is read again, as it must be.
   in 264 files, and those 264 are read again. Every kept file was compared with a fresh
   analysis of the changed tree: the fact files are byte for byte the same, and so are the
   tables and `metadata.json`.
+
+## Baseline for FastAPI plan 2 (Task 0, 2026-11-08)
+
+Branch `cov/python-fastapi` at c11c7bd9, which holds `main` plus plan 2's documents only (no
+reader code changed). Same machine, Python and command as "Final measurements" above:
+`sextant module analyze examples/py-polar/server --workspace <new folder>`, wall time of the whole
+command, one run each. Cold is a new folder. Warm is the same command again, no file changed.
+
+| Tree | Cold | Warm | Cold target 60 s / ceiling 300 s | Warm target 10 s / ceiling 30 s |
+|---|---|---|---|---|
+| polar `server/` | 42.5 s (scan 20.1 s for 229,689 facts, resolve 21.1 s) | 3.2 s | met | met |
+
+The run reads the same 2,053 files as before. The cold figure is within the 36.5 s to 43.7 s
+range of the earlier rounds. Every later task of plan 2 compares with these two numbers.

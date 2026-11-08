@@ -84,7 +84,7 @@ Format: what the item is, the options, then **Recommend**.
     <X's field>}`, also across files, through the headers reader.
   - `...` is the builtin constant it is: `{kind: field, symbol: builtins#Ellipsis.}` (the
     existing `field` kind).
-  - Pro: one general rule, no new field. Polar has 179 such aliases; dispatch has 712 params
+  - Pro: one general rule, no new field. Polar has 179 such aliases; dispatch has 582 params
     typed by one.
 - **Option B — a new `metadata: list[CallArgument]` field on `Parameter`.** Con: a cross-file
   alias still needs A's link.
@@ -333,7 +333,7 @@ empty_recipe: parameter_type     # Depends() with nothing: the parameter's type 
 
 1. **A dependency through an alias in another file**
    - Shape: `db_session: DbSession`, with `DbSession = Annotated[Session, Depends(get_db)]` in
-     `deps.py` (dispatch: 712 parameters typed by a bare name).
+     `deps.py` (dispatch: 582 parameters typed by a bare name).
    - Expected:
      - no query row for `db_session`;
      - the recipe `get_db` is found;
