@@ -84,6 +84,8 @@ class PythonScanner:
         )
         modules = frozenset(_module_paths(relative for _, relative in files))
         previous = {record.target: record for record in request.previous}
+        # The header document's record is not a source file's (`_kept_headers`).
+        previous_headers = previous.pop(_HEADER_FILE, None)
         # The module's own files, read by header for the files that import them (round 1,
         # user choice A): one parse each per scan, against an index that reads no headers.
         project = (
@@ -221,17 +223,52 @@ class PythonScanner:
             # After every module file, as the JVM scanner reads its classpath: the one
             # synthetic document of every library type's header. It is not a file this
             # module holds, so `documents` does not count it.
-            libraries.notes = []
+            #
+            # It reads whole library modules, so it is kept as a document is (D01 §7
+            # "Reuse", ruling R19): its key is the scan's inputs (the libraries' fingerprint,
+            # both Pythons, Sextant's code, the module) and the types the facts name, the
+            # module's own among them. A changed set reads it again whole: the headers are
+            # written in the order a read from the referenced types meets them, which a
+            # merge of the new types' headers into the kept ones would not keep.
+            assert inputs is not None
             document_id = hashlib.sha256(f"type-headers:{request.module_id}".encode()).hexdigest()
-            headers, unlocated, not_read = libraries.headers(referenced, own, document_id, called)
-            write_fact_file(
-                request.out_dir / _HEADER_FILE,
-                _header_document(request, document_id, libraries.identity, unlocated),
-                list(headers),
+            key = _headers_key(inputs, referenced, own, called)
+            path = request.out_dir / _HEADER_FILE
+            kept_headers = _kept_headers(
+                previous_headers, key, request, document_id, libraries, path
             )
-            facts += len(headers)
-            uncovered.extend(dict.fromkeys([*library_notes, *libraries.notes]))
-            uncovered.extend(not_read)
+            if kept_headers is None:
+                libraries.notes = []
+                headers, unlocated, not_read = libraries.headers(
+                    referenced, own, document_id, called
+                )
+                write_fact_file(
+                    path,
+                    _header_document(request, document_id, libraries.identity, unlocated),
+                    list(headers),
+                )
+                kept_headers = _KeptHeaders(
+                    ReuseRecord(
+                        target=_HEADER_FILE,
+                        key=key,
+                        detail=json.dumps(
+                            {
+                                "facts": len(headers),
+                                "unlocated": unlocated,
+                                "notes": list(libraries.notes),
+                                "not_read": not_read,
+                            },
+                            separators=(",", ":"),
+                        ),
+                    ),
+                    len(headers),
+                    list(libraries.notes),
+                    not_read,
+                )
+            records.append(kept_headers.record)
+            facts += kept_headers.facts
+            uncovered.extend(dict.fromkeys([*library_notes, *kept_headers.notes]))
+            uncovered.extend(kept_headers.not_read)
         return ScanReport(
             documents=documents,
             facts=facts,
@@ -254,6 +291,50 @@ class _Kept:
     declared: list[str]
     referenced: list[str]
     called: list[str]
+
+
+@dataclass(frozen=True)
+class _KeptHeaders:
+    """The header document a scan keeps or writes, and what it added to the scan's report."""
+
+    record: ReuseRecord
+    facts: int
+    notes: list[str]
+    not_read: list[str]
+
+
+def _headers_key(inputs: str, referenced: set[str], own: set[str], called: set[str]) -> str:
+    """The header document's key: the scan's inputs, and the types its read starts from."""
+    text = json.dumps([inputs, sorted(referenced), sorted(own), sorted(called)])
+    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+
+
+def _kept_headers(
+    record: ReuseRecord | None,
+    key: str,
+    request: ScanRequest,
+    document_id: str,
+    libraries: Libraries,
+    path: Path,
+) -> _KeptHeaders | None:
+    """The previous scan's header document, where a fresh read would write the same: the
+    key is the same, and the fact file still holds the document that scan wrote."""
+    if record is None or record.key != key:
+        return None
+    try:
+        detail = json.loads(record.detail)
+        unlocated = int(detail["unlocated"])
+        kept = _KeptHeaders(
+            record,
+            int(detail["facts"]),
+            [str(note) for note in detail["notes"]],
+            [str(line) for line in detail["not_read"]],
+        )
+    except (ValueError, TypeError, KeyError):
+        return None
+    if read_document(path) != _header_document(request, document_id, libraries.identity, unlocated):
+        return None
+    return kept
 
 
 def _inputs(request: ScanRequest, prefix: str, libraries: Libraries | None) -> str:

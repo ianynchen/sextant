@@ -1674,6 +1674,21 @@ no document field names are added to it, because a fact can depend on them:
   installer rewrites `RECORD` and a hand edit does not. Analyse into a new workspace after
   editing an installed library by hand.
 
+**The type headers** (ruling R19, 2026-11-08). The Python scanner's one `header_only`
+document reads whole library modules (596 on polar, 45 of a 46 s warm scan), so it is kept
+like a document. Its key is the scan's inputs above (Sextant's code, the stamps, the running
+Python, the module, and the libraries' fingerprint, which holds the environment's Python)
+and the three sets of types its read starts from: the types the module's facts name
+(`referenced_types`), the classes a static call may name (`called_types`), and the module's
+own types, which get no header. Each set comes from every document, kept or read, so an edit
+that names no new type keeps the headers, and one that names a new type, or drops one, reads
+them all again. The read is redone whole rather than merged: headers are written in the
+order a read from the sorted referenced types meets them, and the count of unlocated types
+is over the whole set, so the new types' headers merged into the kept ones would not be the
+bytes a fresh read writes. The record (target `__type_headers__.jsonl`) holds the header
+count, the unlocated count, and the report lines the read added; the kept fact file must
+still hold the document record a fresh read would write. Polar warm: 28.3 s to 1.9 s.
+
 The record of each document is a workspace table, `scan_reuse`, that the scanner fills and
 reads through the scan port (`ReuseRecord`) and no other command reads; it is emptied before
 a scan runs, so a scan that stops part-way leaves none. The Python scanner is the first to

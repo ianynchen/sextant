@@ -50,7 +50,9 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _install(site: Path, version: str) -> None:
+def _install(
+    site: Path, version: str, source: str = "def hello() -> str:\n    return 'hi'\n"
+) -> None:
     """`greet` as an installer leaves it: its file, and a `.dist-info` whose `RECORD`
     lists it."""
     for old in site.glob("greet-*.dist-info"):
@@ -59,7 +61,7 @@ def _install(site: Path, version: str) -> None:
         old.rmdir()
     info = site / f"greet-{version}.dist-info"
     _write(info / "METADATA", f"Metadata-Version: 2.1\nName: greet\nVersion: {version}\n\n")
-    _write(site / "greet" / "__init__.py", "def hello() -> str:\n    return 'hi'\n")
+    _write(site / "greet" / "__init__.py", source)
     _write(site / "greet" / "py.typed", "")
     record = ["greet/__init__.py,sha256=x,1", "greet/py.typed,,"]
     record += [f"{info.name}/METADATA,,", f"{info.name}/RECORD,,"]
@@ -493,3 +495,138 @@ def test_a_record_that_cannot_be_read_rereads_its_file(project: Path, tmp_path: 
         "shop/models.py.jsonl",
     }
     _assert_same_as_fresh(project, warm, tmp_path)
+
+
+# The type-header pass (D01 §7 "Reuse", ruling R19): `greet` declares classes, and a module
+# file names one, so the header document holds library types and their bases.
+_GREET_CLASSES = (
+    "class Base:\n    pass\n\n\n"
+    "class Other:\n    pass\n\n\n"
+    "class Greeter(Base):\n    pass\n\n\n"
+    "class Waver(Other):\n    pass\n\n\n"
+    "def hello() -> str:\n    return 'hi'\n"
+)
+_HEADERS = "__type_headers__.jsonl"
+
+
+@pytest.fixture
+def typed(project: Path) -> Path:
+    """The project with `greet` declaring classes and `shop/greeting.py` naming one."""
+    _install(project / ".venv" / "lib" / "python3.12" / "site-packages", "1.0", _GREET_CLASSES)
+    _write(
+        project / "shop" / "greeting.py",
+        "from greet import Greeter\n\n\ndef make() -> Greeter:\n    return Greeter()\n",
+    )
+    return project
+
+
+@pytest.fixture
+def library_reads(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """One entry per library module the header pass reads facts from."""
+    from sextant.ingress.extract.python import libraries
+
+    read: list[str] = []
+    real = libraries.file_facts
+
+    def counted(tree, context, lines):
+        read.append(context.here)
+        return real(tree, context, lines)
+
+    monkeypatch.setattr(libraries, "file_facts", counted)
+    return read
+
+
+def _header_symbols(workspace: Path) -> list[str]:
+    lines = (workspace / "facts" / _HEADERS).read_text().splitlines()[1:]
+    return [json.loads(line)["symbol"] for line in lines]
+
+
+def test_a_warm_run_reads_no_library_file(typed: Path, tmp_path: Path, library_reads: list[str]):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    assert library_reads, "the first run reads the library's headers"
+    assert any("Greeter" in symbol for symbol in _header_symbols(warm))
+    library_reads.clear()
+
+    _analyze(typed, warm)
+
+    assert library_reads == []
+
+
+def test_an_edit_naming_no_new_type_keeps_the_headers(typed: Path, tmp_path: Path):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    before = _modified(warm)
+
+    # A body edit: the file names the same types as before.
+    _write(
+        typed / "shop" / "service.py",
+        "from shop.api import handle\n\n\ndef run():\n    handle()\n    return handle()\n",
+    )
+    _analyze(typed, warm)
+
+    assert "shop/service.py.jsonl" in _rewritten(before, _modified(warm))
+    assert _HEADERS not in _rewritten(before, _modified(warm))
+    _assert_same_as_fresh(typed, warm, tmp_path)
+
+
+def test_reused_headers_equal_a_fresh_run(typed: Path, tmp_path: Path):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    before = _modified(warm)
+
+    _analyze(typed, warm)
+
+    assert _HEADERS not in _rewritten(before, _modified(warm))
+    _assert_same_as_fresh(typed, warm, tmp_path)
+
+
+def test_a_library_upgrade_rereads_the_headers(typed: Path, tmp_path: Path):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    before = _modified(warm)
+
+    # 2.0 moves `Greeter` onto another base: its header must say so.
+    _install(
+        typed / ".venv" / "lib" / "python3.12" / "site-packages",
+        "2.0",
+        _GREET_CLASSES.replace("class Greeter(Base)", "class Greeter(Other)"),
+    )
+    _analyze(typed, warm)
+
+    assert _HEADERS in _rewritten(before, _modified(warm))
+    assert any("Other" in symbol for symbol in _header_symbols(warm))
+    _assert_same_as_fresh(typed, warm, tmp_path)
+
+
+def test_a_newly_named_library_type_rereads_the_headers(typed: Path, tmp_path: Path):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    assert not any("Waver" in symbol for symbol in _header_symbols(warm))
+    before = _modified(warm)
+
+    _write(
+        typed / "shop" / "service.py",
+        "from greet import Waver\n\n\ndef run() -> Waver:\n    return Waver()\n",
+    )
+    _analyze(typed, warm)
+
+    assert _HEADERS in _rewritten(before, _modified(warm))
+    assert any("Waver" in symbol for symbol in _header_symbols(warm))
+    _assert_same_as_fresh(typed, warm, tmp_path)
+
+
+def test_a_header_record_that_cannot_be_read_rereads_the_headers(typed: Path, tmp_path: Path):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    before = _modified(warm)
+    connection = duckdb.connect(str(warm / "workspace.duckdb"))
+    try:
+        connection.execute(f"UPDATE scan_reuse SET detail = '{{}}' WHERE target = '{_HEADERS}'")
+    finally:
+        connection.close()
+
+    _analyze(typed, warm)
+
+    assert _HEADERS in _rewritten(before, _modified(warm))
+    _assert_same_as_fresh(typed, warm, tmp_path)
