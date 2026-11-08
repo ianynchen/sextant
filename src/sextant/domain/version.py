@@ -96,6 +96,14 @@ SEXTANT_VERSION = version("sextant")
 #             is refused and re-extracted. While 7 was unshipped, `module` also gained
 #             `entry_points` (the programs a Python build declares; design
 #             2026-11-06-reading-decorators §7a, approved by the user 2026-11-06).
+#     8       a parameter gains `default` and `annotation_value` (the values its default and
+#             its annotation evaluate to, in the call-argument grammar) and the model keeps
+#             `declares_default`, which the JVM extractor already wrote (plan
+#             2026-11-08-python-fastapi-inbound N1, N2; OI-328; approved by the user
+#             2026-11-08). A subscript of a type form is the static call
+#             `<form>#__class_getitem__`, and `...` is the field `builtins#Ellipsis.`. A fact
+#             set of the older vintage has no parameter values, so a reader would take every
+#             Python parameter for one with no default; it is refused and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -234,6 +242,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 7
+FACT_SCHEMA_VERSION = 8
 GRAPH_SCHEMA_VERSION = 17
 BOUNDARY_VOCABULARY_VERSION = 5

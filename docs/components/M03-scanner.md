@@ -251,14 +251,17 @@ broken link) goes on the uncovered list with its reason.
 member `Order` of the module `app/models`, or the module `app/models/Order` when such a file
 is in the import roots, and then, where another file of the module is the one named, through
 that file's HEADER: its module-level names (imports, re-exports, aliases, `NewType`s), its
-classes' written bases and type parameters, each `def`'s declared return and each class
-body's attribute declarations. Nothing else of its bodies is read. A re-export or an alias is
+classes' written bases and type parameters, each `def`'s declared return, each class
+body's attribute declarations and the type each module-level type alias is. Nothing else of
+its bodies is read. A re-export or an alias is
 followed to where the name is defined (a class of the module, or a library's defining symbol),
 as a library re-export is; a `NewType` names the class it wraps, and a call of it
 (`AccessibleOrganizationID(oid)`) is no construction: no call is written, and the value is the
-argument; a name the other file binds to a value or to a type alias its own
-scope reads (`SaveFixture = Callable[...]`) names no type here, rather than a path that is no
-class. A header is parsed once per scan however many files ask, and is bound against an index
+argument; a name the other file binds to a module-level type alias (`DbSession =
+Annotated[Session, Depends(get_db)]`, `X: TypeAlias = ...`, `type X = ...`; plan
+2026-11-08-python-fastapi-inbound N2) is the type the alias is, followed through each alias of
+another file to the type the last one is; a name the other file binds to any other value
+(`SaveFixture = Callable[...]`) names no type here, rather than a path that is no class. A header is parsed once per scan however many files ask, and is bound against an index
 that reads no headers, so what a file reads never depends on which file asked first. A name
 that two branches bind differently is a closed list of both, in written order.
 
@@ -348,9 +351,14 @@ comprehensions included:
 - `xs[i]` is the call `xs.__getitem__(i)`. A slice is an `unresolved` argument (the
   grammar holds no slice object) that chooses a `slice` overload. Subscripting a class
   object makes a type (`__class_getitem__`), never the instance's `__getitem__` (ruling
-  R37): no call is written for a subscript in a type expression (a class base, `cast`'s
-  type, `isinstance`'s or `issubclass`'s class), nor for one of a class of this file, a
-  builtin, a typing form or a library class. A name imported from another file of the
+  R37): no `__getitem__` is written for a subscript in a type expression (a class base,
+  `cast`'s type, `isinstance`'s or `issubclass`'s class), nor for one of a class of this
+  file, a builtin, a typing form or a library class. Where the subscripted name is one such
+  class or form, the subscript is the `static` call `<form>#__class_getitem__`, one argument
+  per index element in written order (plan 2026-11-08 N2): `Annotated[int, Depends(f)]` is
+  `typing/Annotated#__class_getitem__` with `int` and the `Depends` call's result, and
+  `list[Item]` is `builtins/list#__class_getitem__(Item)`. Where it names none or several,
+  the parts are read and no call is written. A name imported from another file of the
   module may be a class too, which this file cannot see: the call is written, and the
   resolver answers a path whose receiver is the class itself `not_readable` ("a type
   form"), so no edge reaches the class's own `__getitem__`; the same holds for `__iter__`
@@ -372,7 +380,17 @@ comprehensions included:
   `modifiers.static` (bound to the class, as D00 §5a defines the word), and `cls` is not a
   parameter;
 - every parameter of a signature carries its `kind` (`positional_only`, `positional`,
-  `var_positional`, `keyword_only`, `var_keyword`, D00 §5a).
+  `var_positional`, `keyword_only`, `var_keyword`, D00 §5a);
+- **a parameter carries what its default and its annotation evaluate to** (plan
+  2026-11-08-python-fastapi-inbound N1, N2; D00 §5a): a `def` evaluates its defaults, then
+  each annotation that is not a plain type, where it is defined, so their calls are written
+  in the body that runs it (the owner's `<clinit>`, or the enclosing function for a nested
+  `def`), and the parameter's `default` and `annotation_value` name them, with
+  `declares_default`. An `Annotated[...]` annotation is the `__class_getitem__` call below;
+  a name bound to a module-level type alias (`X = Annotated[T, ...]`, `X: TypeAlias = ...`,
+  `type X = ...`, in this file or, through its header, another) is that alias's `field`, and
+  the parameter's type is `T`. A `type X = ...` statement's value is evaluated lazily, so
+  nothing of it is written. `...` is the field `builtins#Ellipsis.`.
 
 **Types the module's own code declares** (OI-324 part 2):
 

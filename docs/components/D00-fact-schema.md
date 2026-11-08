@@ -719,7 +719,46 @@ exactly as the nullability projection is — never on a partial alignment. It is
 not `ext.kotlin`, because a binding rule compares it across languages: Spring's binder treats a
 defaulted Kotlin parameter as optional (`MethodParameter.isOptional` → `KotlinDelegate.isOptional`,
 spring-core 6.1.6), and a .NET extractor sets the same key from a parameter's `HasDefault` (R1,
-2026-09-19).
+2026-09-19). The Python scanner writes it on every parameter with `= ...` written (plan
+2026-11-08-python-fastapi-inbound N1, approved by the user 2026-11-08). The model writes the
+key back only where it is true, so a JVM fact file it rewrites keeps its bytes.
+
+**A Python parameter carries the values its default and its annotation evaluate to** (N1, N2,
+OI-328; approved by the user 2026-11-08), in the call-argument grammar (§5 `call_site`), the
+two values `inspect.signature` gives a framework:
+
+- `default`: the default's value, set wherever `declares_default` is. `limit: int = 10` is
+  `{kind: int, value: 10}`; `db = Depends(get_db)` is `{kind: unresolved, source: n}`.
+- `annotation_value`: the annotation's value, written only where it is not a plain type. An
+  `Annotated[...]` is the result of the call that makes it (below). A name bound to a
+  module-level type alias is `{kind: field, symbol: <the alias's field>}`, in this file or in
+  another file of the module (`d: DbSession` is `{kind: field, symbol: app/deps#DbSession.}`).
+  Absent for every other annotation, whose value `type` already says.
+- **Where a `source` points.** A `def` evaluates its defaults, then its annotations, in the
+  body that runs it, and the scanner writes their calls there: the owner type's `<clinit>`
+  for a module function or a method (a module body or a class body), the enclosing function
+  for a nested `def`. A `source` in either field names a call `result` of that body.
+- **A subscript of a type form, evaluated as a value, is the static call
+  `<form>#__class_getitem__`** (ruling R37), with one argument per index element in written
+  order, each read as a type expression is; its result is the form.
+  `Annotated[str, Query(max_length=3)]` is `typing/Annotated#__class_getitem__` with the
+  arguments `{kind: class, symbol: builtins/str#}` and the `Query` call's result;
+  `response_model=list[Item]` is `builtins/list#__class_getitem__(Item)`. The form is named
+  where the subscripted name is one class of this file, a builtin class, a typing form or a
+  library class; where it is none of these, or several, no call is written and the value is
+  `unresolved`.
+- **A module-level type alias** is `X = Annotated[T, …]`, `X: TypeAlias = …` or `type X = …`.
+  A parameter annotated `X` has the type `T`. Another file's alias is read through that file's
+  header (M03), and an alias of another file's alias ends at the type the last one is, never
+  at the path of an alias, which names no class. A `type X = …` statement's value is
+  evaluated lazily, when it is first asked for, so no call or `field_write` is written for it
+  and its field has no symbol: `annotation_value` names the field, and a walk of it ends
+  there.
+- **`...` is the builtin constant it is**: `{kind: field, symbol: builtins#Ellipsis.}`
+  (`Query(...)`, which means required), never `unresolved`.
+
+Absent on every JVM parameter: a Kotlin default's expression lives in the `$default` bridge's
+body. Both fields are written back only where set. They moved the fact schema version to 8.
 
 **Literal values have a typed model**: string, number, boolean, enum reference, **class
 reference — captured as a symbol reference, not a string** — and arrays of these. This is
@@ -754,7 +793,8 @@ at all.
 **A Python type reference is the type the code writes** (spec 2026-11-06 §3a, rule 1). Its
 name is bound through the file's own imports, by path: the other file is not read.
 `Optional[X]` and `X | None` are `X` with `nullable: true`. A union is the arguments of
-`typing/Union#`. `type[X]` is `X`. `Annotated[X, …]` is `X`. A type variable is its bare name,
+`typing/Union#`. `type[X]` is `X`. `Annotated[X, …]` is `X`, and a module-level type alias is
+the type it is written to be (above). A type variable is its bare name,
 as on the JVM, and a PEP 695 type parameter (`def f[S]`, `class C[T]`) is also written in
 the declaration's `type_parameters`. An annotation the file writes and does not bind keeps
 its written text, bare (`Mystery`): it names no type (`names_a_type`) and is never
@@ -792,8 +832,9 @@ written text, which names none. **A type named through another file of the modul
 by where it is defined** (round 1): a re-export (`from .order import Order` in a package
 `__init__`), a module-level alias and a `NewType` of a class are followed through the
 module files' headers to the class, or to a library's defining symbol where the chain leaves
-the module, as a library re-export is (M03 "Libraries"); a name another file binds to a value
-or to an alias its own scope reads names no type here. The class itself carries `parents_unread` (§5 table): method lookup treats such a class as "parents not read" — its lookup ends with `external` — and never as "no parents". **Evidence:** every type a Python document states is written in source, so it is
+the module, as a library re-export is (M03 "Libraries"); a name another file binds to a
+module-level type alias is the type the alias is, and a name it binds to any other value
+names no type here. The class itself carries `parents_unread` (§5 table): method lookup treats such a class as "parents not read" — its lookup ends with `external` — and never as "no parents". **Evidence:** every type a Python document states is written in source, so it is
 `declared`, the word §5d gives a source origin. The document says so: `language` is the
 source language and `class_major` is 0. No reference carries an evidence field of its own.
 
@@ -1324,6 +1365,9 @@ above:
   the values that fill the holes. With no value in it, it is the `string` itself.
 - `a if c else b` and `a or b` are `merge`; `await x` is the value of `x`; `with x as y` is
   the call `x.__enter__()` (`__aenter__` for `async with`), and `y` is its result.
+- A subscript of a type form, evaluated as a value, is the `static` call
+  `<form>#__class_getitem__`, one argument per index element (§5a), and `...` is the field
+  `builtins#Ellipsis.`.
 - A nested function is a method of the same owner, named after the function that holds it
   (`outer$inner`), as kotlinc names a local function. A `lambda` is
   `lambda$<method>$<n>`, as javac names a lambda body (`static` for a module or class body,

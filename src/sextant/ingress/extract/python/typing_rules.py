@@ -19,6 +19,10 @@ written bases map them on to theirs (`class Users(list[User])`): `substitute` an
 `Hierarchy`, the typing specification's rules for generic classes, read by the scanner to
 type what a library method returns (OI-324).
 
+A module-level type alias (`X = Annotated[T, ...]`, `X: TypeAlias = ...`, `type X = ...`) is
+the type it is written to be, in this file and, through its header, in every file that
+imports it (`project.py`).
+
 A name the file does not bind gives no type: it is never guessed. A name bound to a closed
 list (`imports.py`) is the union of what each binding names. A name of a library is its
 defining symbol where the scan's libraries say (`libraries.py`); elsewhere an imported name
@@ -189,6 +193,17 @@ def _named(target: Target, scope: TypeScope, depth: int) -> TypeRef | None:
     if target.kind in ("variable", "function"):
         return None
     headers = scope.index.headers
+    if (
+        target.kind is None
+        and target.member is not None
+        and headers is not None
+        and scope.index.owns(target.module)
+    ):
+        # Another file of the module binds the name to a module-level type alias
+        # (`DbSession = Annotated[Session, ...]`): as a type here it is what the alias is.
+        aliased = headers.alias(target.module, target.member)
+        if aliased is not None:
+            return aliased
     if (
         target.kind is None
         and target.member is not None

@@ -42,6 +42,7 @@ from sextant.ingress.extract.python.calls import (
     INIT,
     BodyReader,
     FileContext,
+    ParameterValues,
     Scope,
     is_stub_body,
     own_return_type,
@@ -486,10 +487,9 @@ class _Writer(BodyReader):
             name = name + _SETTER_SUFFIX
         descriptor = method_descriptor(scope.owner, name, PY_SIGNATURE)
         callees = self._decorators(node, scope)
-        # The defaults are read where the function is defined, before it is decorated.
-        for default in [*node.args.defaults, *node.args.kw_defaults]:
-            if default is not None:
-                self._value(default, scope)
+        # The defaults, then the annotations that are not a plain type, are read where the
+        # function is defined, before it is decorated.
+        values = self._parameter_values(node.args, scope)
         if nested:
             self._method_known(descriptor, scope.owner, name)
         applied = self._apply(
@@ -510,7 +510,7 @@ class _Writer(BodyReader):
             scope.owner,
             node.lineno,
             node.end_lineno or node.lineno,
-            signature=self._signature(node, generic, skip_first=receiver_taken),
+            signature=self._signature(node, generic, skip_first=receiver_taken, values=values),
             type_parameters=_type_parameters(node.type_params, generic),
             modifiers={
                 "abstract": abstract,
@@ -559,6 +559,7 @@ class _Writer(BodyReader):
         types: TypeScope,
         *,
         skip_first: bool,
+        values: ParameterValues | None = None,
     ) -> Signature:
         written = node.args
         # Each parameter with how a call fills it (D00 §5a `kind`), in the order Python lists
@@ -573,6 +574,8 @@ class _Writer(BodyReader):
         ordered += [(a, "keyword_only") for a in written.kwonlyargs]
         ordered += [(a, "var_keyword") for a in (written.kwarg,) if a is not None]
         parameters = []
+        defaults = {} if values is None else values.defaults
+        annotated = {} if values is None else values.annotated
         for argument, kind in ordered:
             found = (
                 UNANNOTATED
@@ -590,6 +593,9 @@ class _Writer(BodyReader):
                     type=found,
                     erased_symbol=found.symbol if names_a_type(found.symbol) or unnamed else ANY,
                     kind=kind,
+                    declares_default=argument.arg in defaults,
+                    default=defaults.get(argument.arg),
+                    annotation_value=annotated.get(argument.arg),
                 )
             )
         returned = (
@@ -630,15 +636,26 @@ class _Writer(BodyReader):
 
 def header_types(
     tree: ast.Module, module: str, types: TypeScope, is_package: bool
-) -> tuple[dict[str, ClassShape], dict[str, TypeRef], dict[str, TypeRef]]:
+) -> tuple[dict[str, ClassShape], dict[str, TypeRef], dict[str, TypeRef], dict[str, TypeRef]]:
     """What another file's header says (`project.ProjectHeaders`): its class shapes, the
-    returns its `def`s declare and the attributes its class bodies declare, read as this
-    file's own are."""
+    returns its `def`s declare, the attributes its class bodies declare and the type each
+    module-level type alias is, read as this file's own are. An alias bound two ways, or
+    whose type the file does not name, has none."""
     classes = class_shapes(tree.body, module, types.names, types)
     returns, fields = declared_types(
         tree.body, module, types, is_package=is_package, index=types.index
     )
-    return classes, returns, fields
+    aliases: dict[str, TypeRef] = {}
+    for name, binding in types.names.items():
+        if len(binding.targets) != 1:
+            continue
+        (target,) = binding.targets
+        if target.kind != "type_alias" or target.module != module or target.member != name:
+            continue
+        typed = type_ref(target.alias_of, types) if target.alias_of is not None else None
+        if typed is not None:
+            aliases[name] = typed
+    return classes, returns, fields, aliases
 
 
 def declared_types(

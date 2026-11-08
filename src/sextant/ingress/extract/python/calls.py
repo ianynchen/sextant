@@ -93,6 +93,7 @@ from sextant.ingress.extract.python.imports import (
     ModuleIndex,
     Target,
     bind_names,
+    is_typing,
     resolve,
 )
 from sextant.ingress.extract.python.typing_rules import (
@@ -126,6 +127,11 @@ _NEXT = "__next__"
 _ASYNC_ITER = "__aiter__"
 _ASYNC_NEXT = "__anext__"
 _GETITEM = "__getitem__"
+# What subscripting a type form calls (ruling R37; plan 2026-11-08 N2): the form's own
+# `__class_getitem__`, a static call whose result is the type it makes.
+_CLASS_GETITEM = "__class_getitem__"
+# `...`: the builtin constant it is (N2), the existing `field` kind.
+_ELLIPSIS = CallArgument(kind="field", symbol=f"{BUILTINS}#Ellipsis.")
 # A descriptor's method: reading an attribute declared with its class runs it.
 _GET = "__get__"
 _SLICE = TypeRef(symbol="builtins/slice#")
@@ -209,6 +215,15 @@ def _part(typed: TypeRef) -> CallArgument:
 _MUTABLE = (ast.List, ast.Dict, ast.Set, ast.ListComp, ast.DictComp, ast.SetComp)
 _NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 _COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+
+@dataclass(frozen=True)
+class ParameterValues:
+    """What a `def` evaluates for its parameters, by parameter name (D00 §5a `default`,
+    `annotation_value`): the defaults, and the annotations that are not a plain type."""
+
+    defaults: dict[str, CallArgument]
+    annotated: dict[str, CallArgument]
 
 
 @dataclass(frozen=True)
@@ -386,6 +401,7 @@ class BodyReader:
         types: TypeScope,
         *,
         skip_first: bool,
+        values: ParameterValues | None = None,
     ) -> Signature:
         raise NotImplementedError
 
@@ -1652,6 +1668,64 @@ class BodyReader:
                 self._value(child, scope)
         return _UNKNOWN
 
+    def _parameter_values(self, written: ast.arguments, scope: Scope) -> ParameterValues:
+        """What a `def` or a `lambda` evaluates for its parameters where it is defined, in
+        `scope`, the body that runs it (plan 2026-11-08 N1): each default, then each
+        annotation that is not a plain type (`_annotation_value`), in Python's order. Every
+        call in them is written there, and each parameter's value names it."""
+        positional = [*written.posonlyargs, *written.args]
+        defaults: dict[str, CallArgument] = {}
+        # `defaults` fill the last positional parameters; `kw_defaults` is None where a
+        # keyword-only parameter has none.
+        for argument, default in zip(
+            positional[len(positional) - len(written.defaults) :], written.defaults, strict=True
+        ):
+            defaults[argument.arg] = self._value(default, scope)
+        for keyword, given in zip(written.kwonlyargs, written.kw_defaults, strict=True):
+            if given is not None:
+                defaults[keyword.arg] = self._value(given, scope)
+        annotated: dict[str, CallArgument] = {}
+        everyone = [*positional, written.vararg, *written.kwonlyargs, written.kwarg]
+        for parameter in everyone:
+            if parameter is not None and parameter.annotation is not None:
+                value = self._annotation_value(parameter.annotation, scope)
+                if value is not None:
+                    annotated[parameter.arg] = value
+        return ParameterValues(defaults, annotated)
+
+    def _annotation_value(self, annotation: ast.expr, scope: Scope) -> CallArgument | None:
+        """An annotation's value where it is not a plain type (N2): an `Annotated[...]` is the
+        `__class_getitem__` call that makes it; a name bound to a module-level type alias, of
+        this file or another file of the module (`DbSession`), is that alias's `field`. None
+        for any other annotation, whose value the type already says."""
+        if isinstance(annotation, ast.Subscript) and isinstance(
+            annotation.value, ast.Name | ast.Attribute
+        ):
+            targets = self._targets(annotation.value, scope)
+            if targets is not None and len(targets) == 1 and is_typing(targets[0], "Annotated"):
+                return self._type_form(annotation, scope)
+            return None
+        if not isinstance(annotation, ast.Name | ast.Attribute):
+            return None
+        targets = self._targets(annotation, scope)
+        if targets is None or len(targets) != 1:
+            return None
+        target = targets[0]
+        member = target.member
+        if member is None:
+            return None
+        if target.kind == "type_alias":
+            return _reference(target)
+        headers = self._context.index.headers
+        if (
+            target.kind is None
+            and headers is not None
+            and self._context.index.owns(target.module)
+            and headers.alias(target.module, member) is not None
+        ):
+            return _reference(target)
+        return None
+
     def _concat(self, parts: list[ast.expr], scope: Scope) -> CallArgument:
         """A string the code assembles: the template with `{}` for each value, and the
         `dynamic` site whose arguments are those values (D00 §5 `concat`). With no value
@@ -1677,9 +1751,7 @@ class BodyReader:
     def _lambda(self, node: ast.Lambda, scope: Scope) -> CallArgument:
         """A `lambda` is a method of its own, named as javac names a lambda body
         (`lambda$<method>$<n>`, numbered per method); its value is its one return."""
-        for default in [*node.args.defaults, *node.args.kw_defaults]:
-            if default is not None:
-                self._value(default, scope)
+        values = self._parameter_values(node.args, scope)
         prefix = scope.frame.prefix if scope.frame is not None else _PREFIXES[CLINIT]
         name = f"lambda${prefix}${scope.body.lambdas}"
         scope.body.lambdas += 1
@@ -1691,7 +1763,7 @@ class BodyReader:
             scope.owner,
             node.lineno,
             node.end_lineno or node.lineno,
-            signature=self._signature(node, scope.types, skip_first=False),
+            signature=self._signature(node, scope.types, skip_first=False, values=values),
             modifiers={"abstract": False, "static": True, "varargs": node.args.vararg is not None},
         )
         frame = self._frame(node.args, [], scope, scope.types, name, receiver_taken=False)
@@ -1977,15 +2049,18 @@ class BodyReader:
         argument grammar does not hold: it is `unresolved`, with the type `slice` for the
         overload it chooses. `pair[1]` on a `tuple[A, B]` is that position's type, the
         typing specification's rule for a tuple. Subscripting a class or a typing form
-        (`list[int]`, `Optional[X]`) makes a type, and no call is written for it."""
+        (`list[int]`, `Optional[X]`) makes a type: the static call `<form>#__class_getitem__`
+        (`_class_getitem`)."""
         if self._names_a_type_form(node.value, scope):
+            form = self._form(node.value, scope)
+            if form is not None:
+                return self._class_getitem(form, node, scope)
             self._value(node.value, scope)
             self._value(node.slice, scope)
             return _UNKNOWN
         container = self._value(node.value, scope)
-        if container.kind == "class":
-            self._value(node.slice, scope)
-            return _UNKNOWN
+        if container.kind == "class" and container.symbol is not None:
+            return self._class_getitem(container.symbol, node, scope)
         if isinstance(node.slice, ast.Slice):
             for bound in (node.slice.lower, node.slice.upper, node.slice.step):
                 if bound is not None:
@@ -2013,8 +2088,13 @@ class BodyReader:
     def _type_form(self, node: ast.expr, scope: Scope) -> CallArgument:
         """A type expression (ruling R37): a class base, `cast`'s type, `isinstance`'s
         class. A subscript in it makes a type (`__class_getitem__`), whatever its name
-        binds to, so it is no `__getitem__` call; any other part is read as a value."""
+        binds to, so it is no `__getitem__` call: it is the form's `__class_getitem__` where the
+        form is named (`_form`), and its parts read as before where it is not. Any other part
+        is read as a value."""
         if isinstance(node, ast.Subscript):
+            form = self._form(node.value, scope)
+            if form is not None:
+                return self._class_getitem(form, node, scope)
             self._type_form(node.value, scope)
             self._type_form(node.slice, scope)
             return _UNKNOWN
@@ -2025,6 +2105,24 @@ class BodyReader:
                 self._type_form(part, scope)
             return _UNKNOWN
         return self._value(node, scope)
+
+    def _class_getitem(self, form: str, node: ast.Subscript, scope: Scope) -> CallArgument:
+        """`form[a, b]` evaluated: the static call `<form>#__class_getitem__` (plan 2026-11-08
+        N2), one argument per index element in written order, each read as a type expression
+        is (`Annotated[int, Depends(f)]` writes `Depends(f)` and hands its result on). Its
+        result is the type form."""
+        written = node.slice.elts if isinstance(node.slice, ast.Tuple) else [node.slice]
+        arguments = [self._type_form(element, scope) for element in written]
+        return self._invoke(Callee(_target(form, _CLASS_GETITEM), "static"), arguments, scope)
+
+    def _form(self, node: ast.expr, scope: Scope) -> str | None:
+        """The one type form `node` names, as `_names_a_type_form` reads it: a class of this
+        file, a builtin class, a typing form or a library class. None where it names none of
+        them, or several: the form is not known, and no call is written for it."""
+        if not self._names_a_type_form(node, scope):
+            return None
+        targets = self._targets(node, scope)
+        return type_symbol(targets[0]) if targets is not None and len(targets) == 1 else None
 
     def _names_a_type_form(self, node: ast.expr, scope: Scope) -> bool:
         """Whether `node` names a class or one of typing's forms, whose subscript is a
@@ -2234,6 +2332,8 @@ def _constant(value: object) -> CallArgument:
         return CallArgument(kind="string", value=value)
     if value is None:
         return CallArgument(kind="null")
+    if value is Ellipsis:
+        return _ELLIPSIS
     return _UNKNOWN
 
 

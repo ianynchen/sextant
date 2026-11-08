@@ -88,6 +88,23 @@ class Parameter(BaseModel):
     # `var_keyword` (the extra keyword arguments). Absent where a call fills every parameter
     # by place, which is every JVM declaration.
     kind: ParameterKind | None = None
+    # The parameter declares a default value (D00 §5a, R1). Absent means false, as `receiver`
+    # is: the JVM extractor writes the key only where it is true, so a fact it wrote and this
+    # model writes back keeps its bytes.
+    declares_default: bool = Field(default=False, exclude_if=lambda held: not held)
+    # The default's VALUE, in the call-argument grammar (N1, OI-328): the value
+    # `inspect.signature` gives a framework. A `source` names a call of the body that runs the
+    # `def` (the owner's `<clinit>` for a module function or a method, the enclosing function
+    # for a nested `def`). Set wherever a Python parameter `declares_default`; absent on every
+    # JVM parameter, whose default lives in a bridge's body.
+    default: "CallArgument | None" = Field(default=None, exclude_if=lambda held: held is None)
+    # The annotation's VALUE, in the same grammar, written only where it is not a plain type:
+    # an `Annotated[...]` (the result of the `__class_getitem__` call that makes it, whose
+    # arguments are its parts) or a name bound to a module-level type alias (a `field` naming
+    # the alias). `type` keeps the type either one gives.
+    annotation_value: "CallArgument | None" = Field(
+        default=None, exclude_if=lambda held: held is None
+    )
 
 
 class TypeParameter(BaseModel):

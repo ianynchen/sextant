@@ -240,6 +240,55 @@ def test_a_file_another_imports_edited_in_its_header_rereads_its_importers(
     _assert_same_as_fresh(project, warm, tmp_path)
 
 
+# A module-level type alias in `shop/models.py` and a parameter annotated with it in
+# `shop/service.py` (plan 2026-11-08 N2): the parameter's type and annotation value are read
+# through `shop/models.py`'s header.
+_ALIASED_MODELS = (
+    "from typing import Annotated\n"
+    "class Order:\n    def total(self) -> int:\n        return 1\n"
+    "class Invoice:\n    pass\n"
+    "OrderRef = Annotated[Order, 'ref']\n"
+)
+_ALIASED_SERVICE = "from shop.models import OrderRef\n\n\ndef run(o: OrderRef):\n    return 1\n"
+
+
+def test_editing_an_alias_rereads_the_files_that_import_it(project: Path, tmp_path: Path):
+    """`OrderRef` changes what it is an alias of: `shop/service.py`, whose parameter is typed
+    by it, is read again, and its facts are a fresh run's."""
+    _write(project / "shop" / "models.py", _ALIASED_MODELS)
+    _write(project / "shop" / "service.py", _ALIASED_SERVICE)
+    warm = tmp_path / "warm"
+    _analyze(project, warm)
+    before = _modified(warm)
+
+    _write(
+        project / "shop" / "models.py",
+        _ALIASED_MODELS.replace("Annotated[Order, ", "Annotated[Invoice, "),
+    )
+    _analyze(project, warm)
+
+    rewritten = _rewritten(before, _modified(warm)) - _MODULE_DOCUMENTS
+    assert {"shop/models.py.jsonl", "shop/service.py.jsonl"} <= rewritten
+    assert "Invoice#" in (warm / "facts" / "shop" / "service.py.jsonl").read_text()
+    _assert_same_as_fresh(project, warm, tmp_path)
+
+
+def test_editing_a_body_beside_an_alias_rereads_only_that_file(project: Path, tmp_path: Path):
+    """A body of `shop/models.py` changes and its alias does not: only that file is read
+    again."""
+    _write(project / "shop" / "models.py", _ALIASED_MODELS)
+    _write(project / "shop" / "service.py", _ALIASED_SERVICE)
+    warm = tmp_path / "warm"
+    _analyze(project, warm)
+    before = _modified(warm)
+
+    _write(project / "shop" / "models.py", _ALIASED_MODELS.replace("return 1", "return 2"))
+    _analyze(project, warm)
+
+    assert _rewritten(before, _modified(warm)) - _MODULE_DOCUMENTS == {"shop/models.py.jsonl"}
+    _assert_same_as_fresh(project, warm, tmp_path)
+
+
 def test_one_file_added_rereads_it_and_every_file_whose_import_it_changes(
     project: Path, tmp_path: Path
 ):

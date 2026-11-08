@@ -229,6 +229,36 @@ def test_an_older_hand_built_symbol_fact_still_validates_without_the_2b_fields()
     assert fact.superclass is None
 
 
+def test_jvm_parameters_validate_unchanged():
+    """A JVM parameter as the extractor writes it (`declares_default` only where true, no
+    Python value): the model keeps `declares_default` (D00 §5a, R1) and writes back exactly
+    the keys it read, so a JVM fact file rewritten by `write_fact_file` keeps its bytes. The
+    two Python values (N1) are absent, never `null`."""
+    written = {
+        "annotations": [],
+        "erased_symbol": "java/lang/Integer#",
+        "kind": None,
+        "name": "page",
+        "receiver": False,
+        "type": {
+            "arguments": [],
+            "nullable": False,
+            "nullable_resolution": "resolved",
+            "symbol": "java/lang/Integer#",
+            "wire_format": "int32",
+            "wire_type": "integer",
+        },
+    }
+    defaulted = Parameter.model_validate({**written, "declares_default": True})
+    plain = Parameter.model_validate(written)
+
+    assert defaulted.declares_default
+    assert defaulted.model_dump(mode="json") == {**written, "declares_default": True}
+    assert not plain.declares_default
+    assert plain.model_dump(mode="json") == written
+    assert plain.default is None and plain.annotation_value is None
+
+
 def test_a_class_symbol_lists_its_implemented_interfaces_in_declaration_order():
     # `implemented_interfaces`: erased interface symbols, in the order the
     # class declares them (D00 §5a) — round-trips like `supertype` above.

@@ -152,6 +152,11 @@ class ProjectNames(Protocol):
         """The type a class body of another file of the module declares for an attribute."""
         ...
 
+    def alias(self, module: str, name: str) -> TypeRef | None:
+        """The type `module.name` is, where that file binds it to a module-level type alias
+        (`DbSession = Annotated[Session, ...]` is `Session`). None for any other name."""
+        ...
+
 
 # The question a file asks for another file's header (`project.HEADER`).
 _HEADER_QUESTION = "header"
@@ -387,6 +392,10 @@ class _Binder:
         ):
             return "type_alias", node.value
         value = node.value
+        if isinstance(value, ast.Subscript) and self._is_typing(value.value, names, {"Annotated"}):
+            # `X = Annotated[T, ...]` (plan 2026-11-08 N2): the name holds the form, and as a
+            # type it is `T`, as a `TypeAlias` is what it is written to be.
+            return "type_alias", value
         if isinstance(value, ast.Call) and self._is_typing(
             value.func, names, _TYPE_VARIABLE_FACTORIES
         ):
