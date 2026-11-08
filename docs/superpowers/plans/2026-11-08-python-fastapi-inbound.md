@@ -656,6 +656,31 @@ the header pass that lists referenced types; `domain/version.py` (facts +1); M03
   bound receivers before and after, each change by cause; time polar.
 - [ ] **Step 5:** Commit (`feat(python): the scanner types constructions (plan 2 task 4b)`).
 
+### Task 4c: Reuse the type-header pass (ruling R19)
+
+**Why:** with polar's own environment synced, a warm run is 28.3 s (target 10 s, ceiling 30 s).
+Measured cause: the type-header pass reads whole library modules (596 files) on every scan,
+even when every source file is reused. Per-file reuse is a given (user ruling).
+
+**Files:** the Python scanner's header pass (`ingress/extract/python/libraries.py` and its
+caller), the reuse store beside `scan_reuse` (D01 §7 "Reuse"), tests in
+`tests/api/test_analyze_reuse.py`.
+
+**Interfaces — produces:** the type-header facts are reused when this key is unchanged: the
+library fingerprint the scan key already holds, a digest of the set of types the module's facts
+name (referenced and called), the Python version, and the Sextant code digest. Any change
+re-runs the pass. The output is identical to a fresh run.
+
+- [ ] **Step 1: Failing tests:**
+  - `test_a_warm_run_reads_no_library_file`;
+  - `test_a_library_upgrade_rereads_the_headers`;
+  - `test_a_newly_named_library_type_rereads_the_headers`;
+  - `test_reused_headers_equal_a_fresh_run`.
+- [ ] **Step 2:** Run; expect FAIL.
+- [ ] **Step 3:** Implement. D01 §7 states the key.
+- [ ] **Step 4:** Gate and pins. Polar warm (target under 10 s) and cold; Sextant warm.
+- [ ] **Step 5:** Commit (`perf(python): reuse the type-header pass (plan 2 task 4c)`).
+
 ### Task 5: `fastapi.yml` routes — verbs, paths, handlers, responses
 
 **Needs:** N8, N9.
