@@ -52,6 +52,15 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **The value walk works out each parameter's paths upward once** (ruling R39; M04). A
+  parameter's (and a plainly read binding's) set of paths upward is computed once per
+  `(position, frames)` and joined onto every path that reaches it, shared by every receiver
+  site of a binding round, and `PATH_CAP` now stops the enumeration where the set is built. A
+  lattice of 262,144 paths resolves in 0.2 s instead of 12 s per site. JVM pins and polar: no
+  answer changed. **Fixed:** round 1's rule that a written parameter type is the parameter's
+  answer gave a wrong `resolved` where a caller passes a subclass or a mock; callers now answer
+  first, and the written type is `declared` beside a path they leave open (`partial`).
+  Calling a `NewType` writes no construction; the value is the argument.
 - **Python: the headers of imported module files, `Self`, and re-exports** (OI-324 part 2,
   review round 1; M03, M04, D00). A file now reads, of each module file its names lead to,
   the header and nothing else (names, re-exports, aliases, `NewType`s, class bases and type

@@ -254,7 +254,9 @@ that file's HEADER: its module-level names (imports, re-exports, aliases, `NewTy
 classes' written bases and type parameters, each `def`'s declared return and each class
 body's attribute declarations. Nothing else of its bodies is read. A re-export or an alias is
 followed to where the name is defined (a class of the module, or a library's defining symbol),
-as a library re-export is; a name the other file binds to a value or to a type alias its own
+as a library re-export is; a `NewType` names the class it wraps, and a call of it
+(`AccessibleOrganizationID(oid)`) is no construction: no call is written, and the value is the
+argument; a name the other file binds to a value or to a type alias its own
 scope reads (`SaveFixture = Callable[...]`) names no type here, rather than a path that is no
 class. A header is parsed once per scan however many files ask, and is bound against an index
 that reads no headers, so what a file reads never depends on which file asked first. A name

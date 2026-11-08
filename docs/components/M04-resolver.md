@@ -226,12 +226,32 @@ on a value, whose result is the wrapper's. A path whose body answers from code n
 was made through, on each path: the owner the walk bound for the receiver (`Order.from_session
 (s)` is an `Order`, though `Order` is another file's class bound by the resolver), or, for a
 call on the method's own receiver (`self.m()`, `cls.m()`), that class and each subclass, one
-row each (R37's list); the body (`return cls(...)`) is not read for it. **A parameter with a
-written type is that type** for this reader, as the scanner takes it for a call on the
-parameter: neither the entering call nor the callers are read for it; a written library type
-the environment does not hold is `external`. An attribute's declaration answers only where its
+row each (R37's list); the body (`return cls(...)`) is not read for it. **A parameter's callers
+answer first**, path by path (round 2; round 1's "a written parameter type is that type" gave a
+wrong `resolved` where a caller passes a subclass, a structural implementation or a mock, and is
+withdrawn): a path the callers leave open (no caller, or a value from code not scanned,
+`external`) keeps that answer and gains the classes the parameter is written to hold beside it,
+`declared`, so the site is `partial`. An attribute's declaration answers only where its
 class is one of the module whose lookup order is read and defines no `__get__` (a descriptor's
 read runs `__get__`, and a library class's methods are not read here).
+
+**Each parameter's and binding's paths upward are worked out once** (ruling R39, round 2;
+`walkbug-report.md`). A parameter's answer, and a binding read plainly (not on an object, not
+unseen, outside an object walk), is the set of its paths upward, worked out once per `(position,
+frames)` on the empty path and joined onto every path that reaches it by the coherence rule
+(`_combine`): a path that chose another context than the prefix already chose is dropped, as
+the walk dropped it at that crossing, so the paths are the same and stay apart (M-1). The
+receiver reader keeps these sets on the index (`ValueIndex.suffixes`), shared by every site of a
+round and emptied with each round's new index; every other reader keeps its own. An answer
+resting on a position still being worked out (a cycle) is not kept, as before. **`PATH_CAP`
+bounds the work, not only the answer**: a parameter's loop over its callers and a binding's
+writes stop once past 256 paths, `non_enumerable`, so the work is positions × 256 rather than the
+paths through them (polar's `self.session` was 833,097 paths over 4,655 parameters, 48 distinct
+ends, about 13 s per site and per round; a 2 × 18 lattice of 262,144 paths now resolves in
+0.2 s). A set past the cap now closes where it is built rather than at the window above, so a
+`non_enumerable` row can sit lower on a path than before: on the six JVM field pins and on polar
+no answer changed; on Sextant's own tree five unbound sites in the recursive walk code keep the
+same reasons on fewer path rows.
 
 **Arguments are bound by name** (ruling R2, user ruling A) where the module's lookup rule is
 `c3`, by Python's calling rule over each parameter's `kind` (D00 §5a): positionals fill the

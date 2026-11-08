@@ -176,6 +176,22 @@ the scanner does for a call on the parameter) ended it at 4 s, with `NewType("X"
 cap on the walk (§3a); a module whose deep paths run through untyped parameters may need one,
 which is a ruling, not a constant.
 
+### After the walk fix (ruling R39, round 2; 2026-11-08)
+
+`walkbug-report.md` found the walk exponential, not looping: a parameter's answer was memoised
+per full path, which never repeats, and `PATH_CAP` trimmed only after the walk below had built
+every path. Each parameter's and binding's paths upward are now worked out once per round and
+capped while built, and round 1's shortcut (a written parameter type as the answer) is withdrawn.
+
+| Tree | Cold | Warm |
+|---|---|---|
+| Sextant | 13.4 s | 4.2 s |
+| polar `server/` | 43.7 s | 3.0 s |
+
+The lattice reproduction (`width × depth` services, every one calling every one of the next level),
+whole analyze: 2 × 8 0.20 s (256 paths, one row each), 2 × 12 0.20 s, 2 × 16 0.22 s, 2 × 18 0.21 s
+(was 12.0 s for the one site), 2 × 22 0.21 s, 2 × 30 0.22 s, 3 × 11 0.21 s (was 5.5 s).
+
 ### What changed since the Task 0 projection
 
 Task 0 projected 13 s cold for polar from a parse-only probe and the JVM resolver's rate. The
