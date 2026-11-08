@@ -584,8 +584,9 @@ empty_recipe: parameter_type     # Depends() with nothing: the parameter's type 
 
 **Interfaces:**
 - **Produces:**
-  - `parameter_markers(workspace: Workspace) -> Mapping[tuple[str, int], tuple[Marker, ...]]`,
-    built once through `workspace.once`;
+  - `parameter_markers(index: ValueIndex) -> Mapping[tuple[str, int], tuple[Marker, ...]]`,
+    cached on the index like `suffixes` (ruling R14: `workspace.once` cannot read the derived
+    tables `producer_paths` needs);
   - `Marker(site: Mapping[str, Any], where: Literal["default", "annotation"], order: int)`:
     - the producing call of the default, or of each `Annotated` metadata element, in written
       order;
@@ -779,8 +780,8 @@ empty_recipe: parameter_type     # Depends() with nothing: the parameter's type 
 **Files:**
 - Create: `src/sextant/catalogs/bean-models/fastapi.yml`.
 - Modify:
-  - `application/resolve/beans.py` (`injected_parameters`: the `names_recipe` mode over
-    `parameter_markers`);
+  - `application/resolve/beans.py` (the `names_recipe` mode's catalog reading; the recipe itself
+    is read from `parameter_markers` in `values._parameter` at walk time, beside callers — R14);
   - `values.py` (`_parameter`: the recipe as a path beside callers; a generator recipe reads
     its yields);
   - `ingress/extract/python/calls.py` (yields, N10);
