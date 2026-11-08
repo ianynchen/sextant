@@ -245,6 +245,18 @@ class ProjectHeaders:
         """The type a class body of another module file declares for an attribute."""
         return self._declared(field, lambda header: header.fields)
 
+    def names_an_alias(self, module: str, name: str) -> bool:
+        """Whether `module` binds `name`, on its one binding, to a module-level type alias of its
+        own, whether or not the type the alias is can be named."""
+        header = self.header(module)
+        binding = None if header is None else header.names.get(name)
+        return (
+            binding is not None
+            and len(binding.targets) == 1
+            and binding.targets[0].kind == "type_alias"
+            and binding.targets[0].module == module
+        )
+
     def alias(self, module: str, name: str) -> TypeRef | None:
         """The type `module.name` is where that file binds it to a module-level type alias,
         its types by their defining symbols. None for any other name."""

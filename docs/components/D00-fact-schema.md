@@ -750,10 +750,11 @@ two values `inspect.signature` gives a framework:
 - **A module-level type alias** is `X = Annotated[T, …]`, `X: TypeAlias = …` or `type X = …`.
   A parameter annotated `X` has the type `T`. Another file's alias is read through that file's
   header (M03), and an alias of another file's alias ends at the type the last one is, never
-  at the path of an alias, which names no class. A `type X = …` statement's value is
-  evaluated lazily, when it is first asked for, so no call or `field_write` is written for it
-  and its field has no symbol: `annotation_value` names the field, and a walk of it ends
-  there.
+  at the path of an alias, which names no class. A cross-file alias's `annotation_value` names
+  its field whether or not the type it is can be named. **A `type X = v` statement is read as
+  `X = v` is** (ruling R6): the same calls in `<clinit>`, a static field `X`, and a
+  `field_write` of the result to it. Python evaluates `v` when it is first asked for (FastAPI
+  reads it through `__value__`); that changes when it runs, not what it is.
 - **`...` is the builtin constant it is**: `{kind: field, symbol: builtins#Ellipsis.}`
   (`Query(...)`, which means required), never `unresolved`.
 

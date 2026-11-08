@@ -13,7 +13,13 @@ from pathlib import Path
 
 from sextant.application.ports.scanner import ScanRequest
 from sextant.domain.factfile import read_fact_tree
-from sextant.domain.facts import CallArgument, CallSiteFact, Parameter, SymbolFact
+from sextant.domain.facts import (
+    CallArgument,
+    CallSiteFact,
+    FieldWriteFact,
+    Parameter,
+    SymbolFact,
+)
 from sextant.domain.symbols import bare_descriptor
 from sextant.ingress.extract.python.scanner import PythonScanner
 
@@ -218,16 +224,20 @@ def test_an_alias_of_an_alias_in_a_third_file_is_the_type_it_ends_at(tmp_path: P
 
 
 def test_an_alias_in_the_same_file_in_each_spelling_is_its_type_and_its_field(tmp_path: Path):
-    """`X = Annotated[T, ...]`, `X: TypeAlias = ...` and `type X = ...` are type aliases."""
+    """`X = Annotated[T, ...]`, `X: TypeAlias = ...` and `type X = ...` are type aliases. A
+    `type` statement is read as `X = v` is (ruling R6): its calls run in `<clinit>` and their
+    result is written to `X`, whose value FastAPI reads through `__value__`."""
     tree = _scan(
         tmp_path,
         {
             "db.py": _DB,
             "run.py": "from typing import Annotated, TypeAlias\n"
+            "from fastapi import Depends\n"
             "from app.db import Session\n"
+            "def get_c():\n    return 1\n"
             "A = Annotated[Session, 'a']\n"
             "B: TypeAlias = Annotated[Session, 'b']\n"
-            "type C = Annotated[Session, 'c']\n"
+            "type C = Annotated[Session, Depends(get_c)]\n"
             "def f(a: A, b: B, c: C):\n    pass\n",
         },
     )
@@ -236,6 +246,40 @@ def test_an_alias_in_the_same_file_in_each_spelling_is_its_type_and_its_field(tm
         parameter = _parameter(tree, "app/run#f", name)
         assert parameter.type.symbol == "app/db/Session#", name
         assert parameter.annotation_value == CallArgument(kind="field", symbol=f"app/run#{alias}.")
+    depends = _site(tree, "app/run#<clinit>", "fastapi#", "Depends")
+    forms = [
+        site
+        for site in _sites(tree, "app/run#<clinit>")
+        if site.target.owner == _ANNOTATED and site.target.name == _CLASS_GETITEM
+    ]
+    (form,) = [f for f in forms if f.arguments[1].source == depends.result]
+    writes = [
+        fact
+        for fact in _facts(tree)
+        if isinstance(fact, FieldWriteFact) and bare_descriptor(fact.field) == "app/run#C."
+    ]
+    assert [write.value for write in writes] == [
+        CallArgument(kind="unresolved", source=form.result)
+    ]
+
+
+def test_another_files_alias_whose_type_is_not_named_is_still_its_field(tmp_path: Path):
+    """`Opaque = Annotated[Mystery, Depends(get_db)]`, `Mystery` bound nowhere: the type is not
+    named, and the annotation value still names the alias's field, as in the alias's own file."""
+    tree = _scan(
+        tmp_path,
+        {
+            "deps.py": "from typing import Annotated\n"
+            "from fastapi import Depends\n"
+            "def get_db():\n    return 1\n"
+            "Opaque = Annotated[Mystery, Depends(get_db)]\n",
+            "run.py": "from app.deps import Opaque\ndef f(o: Opaque):\n    pass\n",
+        },
+    )
+
+    o = _parameter(tree, "app/run#f", "o")
+    assert o.annotation_value == CallArgument(kind="field", symbol="app/deps#Opaque.")
+    assert o.type.symbol == "Opaque"
 
 
 def test_ellipsis_is_the_builtin_constant(tmp_path: Path):

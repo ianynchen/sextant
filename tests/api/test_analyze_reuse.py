@@ -273,6 +273,37 @@ def test_editing_an_alias_rereads_the_files_that_import_it(project: Path, tmp_pa
     _assert_same_as_fresh(project, warm, tmp_path)
 
 
+def test_editing_an_alias_rereads_a_file_that_reads_it_through_another_alias(
+    project: Path, tmp_path: Path
+):
+    """`shop/service.py` imports `Ref` from `shop/more.py`, an alias of `shop/models.py`'s
+    `OrderRef`: editing `OrderRef` alone re-reads `shop/service.py`, whose parameter's type
+    the chain ends at."""
+    _write(project / "shop" / "models.py", _ALIASED_MODELS)
+    _write(
+        project / "shop" / "more.py",
+        "from typing import Annotated\nfrom shop.models import OrderRef\n"
+        "Ref = Annotated[OrderRef, 'more']\n",
+    )
+    _write(
+        project / "shop" / "service.py",
+        "from shop.more import Ref\n\n\ndef run(o: Ref):\n    return 1\n",
+    )
+    warm = tmp_path / "warm"
+    _analyze(project, warm)
+    before = _modified(warm)
+
+    _write(
+        project / "shop" / "models.py",
+        _ALIASED_MODELS.replace("Annotated[Order, ", "Annotated[Invoice, "),
+    )
+    _analyze(project, warm)
+
+    assert "shop/service.py.jsonl" in _rewritten(before, _modified(warm))
+    assert "Invoice#" in (warm / "facts" / "shop" / "service.py.jsonl").read_text()
+    _assert_same_as_fresh(project, warm, tmp_path)
+
+
 def test_editing_a_body_beside_an_alias_rereads_only_that_file(project: Path, tmp_path: Path):
     """A body of `shop/models.py` changes and its alias does not: only that file is read
     again."""

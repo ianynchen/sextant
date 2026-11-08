@@ -160,7 +160,7 @@ def class_shapes(
 def _rebound_names(tree: ast.Module) -> set[str]:
     """The module-level names some statement binds to a value this scanner does not read
     as a write: a loop or `with` target, an import, `del`, `:=`, an `except ... as`, a
-    `match` capture, `+=`, a `type` alias, or a `global` in a function. Such a name's
+    `match` capture, `+=`, or a `global` in a function. Such a name's
     writes are not all known, so it has no class."""
     rebound: set[str] = set()
     for node in ast.walk(tree):
@@ -188,8 +188,6 @@ def _rebound_names(tree: ast.Module) -> set[str]:
             rebound.add(node.name)
         elif isinstance(node, ast.MatchMapping) and node.rest is not None:
             rebound.add(node.rest)
-        elif isinstance(node, ast.TypeAlias):
-            rebound.update(_names(node.name))
     return rebound
 
 

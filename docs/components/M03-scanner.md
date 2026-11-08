@@ -389,8 +389,10 @@ comprehensions included:
   `declares_default`. An `Annotated[...]` annotation is the `__class_getitem__` call below;
   a name bound to a module-level type alias (`X = Annotated[T, ...]`, `X: TypeAlias = ...`,
   `type X = ...`, in this file or, through its header, another) is that alias's `field`, and
-  the parameter's type is `T`. A `type X = ...` statement's value is evaluated lazily, so
-  nothing of it is written. `...` is the field `builtins#Ellipsis.`.
+  the parameter's type is `T`. A `type X = v` statement is read as `X = v` is (ruling R6):
+  its calls in the body, and a `field_write` of the result to `X`; Python evaluating `v` when
+  it is first asked for changes when it runs, not what it is. `...` is the field
+  `builtins#Ellipsis.`.
 
 **Types the module's own code declares** (OI-324 part 2):
 

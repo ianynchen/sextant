@@ -152,6 +152,11 @@ class ProjectNames(Protocol):
         """The type a class body of another file of the module declares for an attribute."""
         ...
 
+    def names_an_alias(self, module: str, name: str) -> bool:
+        """Whether that file binds `module.name` to a module-level type alias, whether or not
+        the type it is can be named."""
+        ...
+
     def alias(self, module: str, name: str) -> TypeRef | None:
         """The type `module.name` is, where that file binds it to a module-level type alias
         (`DbSession = Annotated[Session, ...]` is `Session`). None for any other name."""

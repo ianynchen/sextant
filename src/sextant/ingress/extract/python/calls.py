@@ -551,6 +551,11 @@ class BodyReader:
 
     def _statement(self, node: ast.stmt, scope: Scope) -> None:
         frame = scope.frame
+        if isinstance(node, ast.TypeAlias) and isinstance(node.name, ast.Name):
+            # `type X = v` is read as `X = v` (ruling R6): the same calls, and a write of the
+            # result to `X`. Python evaluates `v` when it is first asked for (`__value__`, as
+            # FastAPI reads it), which changes when it runs, not what it is.
+            node = ast.copy_location(ast.Assign(targets=[node.name], value=node.value), node)
         if not _raises_nothing(node):
             scope.flow.statement()
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -1721,7 +1726,7 @@ class BodyReader:
             target.kind is None
             and headers is not None
             and self._context.index.owns(target.module)
-            and headers.alias(target.module, member) is not None
+            and headers.names_an_alias(target.module, member)
         ):
             return _reference(target)
         return None
