@@ -536,3 +536,34 @@ def test_another_files_alias_of_a_type_or_a_value_names_no_class(tmp_path: Path)
     )
     assert _owner_of(tree, "app/b#f", "__call__") == [None]
     assert _owner_of(tree, "app/b#f", "send") == ["app/a/Client#"]
+
+
+def test_calling_a_newtype_hands_back_its_argument(tmp_path: Path):
+    """`ClientId(c)`, `ClientId = NewType("ClientId", Client)`, is no construction: at run time
+    it hands `c` back, so no call is written and the value is `c` (round 2, item 3)."""
+    tree = _scan_files(
+        tmp_path,
+        {
+            "a.py": _OTHER + "from typing import NewType\nClientId = NewType('ClientId', Client)\n",
+            "b.py": "from app.a import ClientId, Client\n"
+            "def f(c: Client):\n    ClientId(c).send()\n",
+        },
+    )
+    sites = _sites(tree, "app/b#f")
+    # The receiver is the parameter `c` itself, which the resolver follows.
+    assert [(s.target.name, s.receiver_parameter) for s in sites] == [("send", 0)]
+
+
+def test_a_newtype_of_a_newtype_is_still_the_class_it_wraps(tmp_path: Path):
+    """polar's `AsyncReadSession = NewType(..., _AsyncSession)` then `AsyncSession =
+    NewType(..., AsyncReadSession)`: a parameter written `AsyncSession` holds the class."""
+    tree = _scan_files(
+        tmp_path,
+        {
+            "a.py": _OTHER + "from typing import NewType\n"
+            "ReadClient = NewType('ReadClient', Client)\n"
+            "WriteClient = NewType('WriteClient', ReadClient)\n",
+            "b.py": "from app.a import WriteClient\ndef f(c: WriteClient):\n    c.send()\n",
+        },
+    )
+    assert _owner_of(tree, "app/b#f", "send") == ["app/a/Client#"]

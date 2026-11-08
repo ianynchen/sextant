@@ -18,7 +18,7 @@ json` binds `json` to `ujson` and to `json`, and never to the first one silently
 import ast
 import builtins
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from sextant.domain.facts import CallArgument, TypeRef
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 # What a name of THIS file is, where the file can tell. An imported name has no kind:
 # whether `fastapi.FastAPI` is a class or a function is in a file this scanner does not
 # read.
-Kind = Literal["class", "function", "variable", "type_variable", "type_alias"]
+Kind = Literal["class", "function", "variable", "type_variable", "type_alias", "new_type"]
 
 # The calls that make a name a type variable (the typing specification's three).
 _TYPE_VARIABLE_FACTORIES = frozenset({"TypeVar", "ParamSpec", "TypeVarTuple"})
@@ -355,20 +355,26 @@ class _Binder:
         value = node.value
         if self._owner is not None or value is None or len(targets) != 1:
             return None
-        if (
+        new_type = (
             isinstance(value, ast.Call)
             and len(value.args) == 2
             and self._is_typing(value.func, names, {"NewType"})
-        ):
-            # `UserId = NewType("UserId", int)`: at run time the name is the function that
-            # hands its argument back, so every value of the type is an `int`, whose methods
-            # run (the typing specification's NewType). It names the type it wraps.
+        )
+        if isinstance(value, ast.Call) and new_type:
+            # `UserId = NewType("UserId", int)`: at run time the name is a function that hands
+            # its argument back, so every value of the type is an `int`, whose methods run (the
+            # typing specification's NewType). As a type it names the type it wraps; called, it
+            # is no construction (`new_type`).
             value = value.args[1]
         if not isinstance(targets[0], ast.Name) or not isinstance(value, ast.Name | ast.Attribute):
             return None
         found = resolve(value, names, self._index)
-        if not found or any(target.kind not in (None, "class", "function") for target in found):
+        if not found or any(
+            target.kind not in (None, "class", "function", "new_type") for target in found
+        ):
             return None
+        if new_type:
+            found = tuple(replace(target, kind="new_type") for target in found)
         return targets[0].id, Binding(found)
 
     def _assigned(

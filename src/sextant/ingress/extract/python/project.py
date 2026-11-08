@@ -145,9 +145,15 @@ class ProjectHeaders:
                 found.append(Target(module, name))
             elif target.member is not None and "." not in target.member:
                 deeper = self.member(target.module, target.member, seen | {(module, name)})
-                found.extend(deeper or (Target(target.module, target.member),))
+                reached = deeper or (Target(target.module, target.member),)
+                if target.kind == "new_type":
+                    # A `NewType` keeps saying it is one: a call of it is no construction.
+                    reached = tuple(replace(one, kind="new_type") for one in reached)
+                found.extend(reached)
             else:
-                found.append(Target(target.module, target.member))
+                # A `NewType` keeps saying it is one: a call of it is no construction.
+                kind = target.kind if target.kind == "new_type" else None
+                found.append(Target(target.module, target.member, kind))
         return tuple(dict.fromkeys(found))
 
     def names_a_value(self, module: str, name: str) -> bool:

@@ -1041,6 +1041,10 @@ class BodyReader:
     # -- calls ---------------------------------------------------------------------------
 
     def _call(self, node: ast.Call, scope: Scope) -> CallArgument:
+        if self._names_a_new_type(node.func, scope) and len(node.args) == 1 and not node.keywords:
+            # Calling a `NewType` hands its argument back (the typing specification): no call
+            # runs that the facts could name, and the value is the argument.
+            return self._value(node.args[0], scope)
         callee = self._callee(node.func, scope)
         positional = []
         types: list[TypeRef | None] = []
@@ -1226,6 +1230,13 @@ class BodyReader:
                     receiver_field=self._closed_list_field(func, scope),
                 )
         return self._on_value(self._value(func, scope), CALL, scope)
+
+    def _names_a_new_type(self, func: ast.expr, scope: Scope) -> bool:
+        """Whether `func` names a `NewType` (`imports.py`), on every binding it has."""
+        if not isinstance(func, ast.Name | ast.Attribute):
+            return False
+        targets = self._targets(func, scope)
+        return bool(targets) and all(target.kind == "new_type" for target in targets or ())
 
     def _library_member(self, owner: Target, name: str) -> Target | None:
         """`module.name` for a library module, as the library defines it: a re-export is
