@@ -4840,6 +4840,7 @@ class _Walk:
                 if function is not None and bare_descriptor(callee) == function
             ]
             if bodies:
+                entered = False
                 for callee in bodies:
                     for return_ordinal, entry in self._index.returned_values.get(callee, ()):
                         step = _Step(
@@ -4848,6 +4849,7 @@ class _Walk:
                         merged = _combine(path, (step,))
                         if merged is None:
                             continue
+                        entered = True
                         reached.extend(
                             self._entry(
                                 entry,
@@ -4857,6 +4859,10 @@ class _Walk:
                                 frames + ((callee, (method, ordinal)),),
                             )
                         )
+                if not entered:
+                    # A body that states no return this path can enter (none written, or every
+                    # one on another path): the value is not read, and the path says so.
+                    reached.append((path, _unresolved(NOT_READABLE)))
                 continue
             owner = bound_owner(answer)
             if owner is not None and row["name"] == _CALL and answer.class_object:
@@ -5829,7 +5835,7 @@ class _Walk:
         """The answers `_binding`'s writes give: each constant as its literal, each parameter
         write through the writer's callers, each call-result write in the writer's frame."""
         reached: list[_Reached] = []
-        for _, entry in constants:
+        for writer, entry in constants:
             # **A CONSTANT write needs no crossing** (`OI-138` cause 2): the value is in the
             # fact, so the answer is that literal on the path already travelled.
             #
@@ -5861,6 +5867,14 @@ class _Walk:
                     (
                         trail,
                         Answer(kind=LITERAL, value=named, literal_kind=SYMBOL, class_object=True),
+                    )
+                )
+            elif entry.get("kind") == "array":
+                # A list the write states element by element (`VERBS = ["GET", "POST"]`): each
+                # element its own path, as an array argument is read (§1c).
+                reached.extend(
+                    self._elements(
+                        entry, str(writer or ""), (_BINDING, symbol, writer), trail, frames
                     )
                 )
             else:

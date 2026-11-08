@@ -1254,6 +1254,17 @@ _REFUSAL_PHRASES = {
     "no_methods": "refuses a route given an empty list of methods",
     "invalid_response_type": "refuses a response type that unites a response class with others",
 }
+# What the refusal does to the application, per reason word where it is not the route's own
+# loss: a framework that raises when the route is registered (at import) stops the application
+# starting at all.
+_RAISES_AT_IMPORT = (
+    "raising when the route is registered, at import, so the application does not start"
+)
+_REFUSAL_CONSEQUENCES = {
+    "no_methods": _RAISES_AT_IMPORT,
+    "invalid_response_type": _RAISES_AT_IMPORT,
+}
+_SERVES_NOTHING = "so it serves nothing for it"
 
 
 def _candidate_line(question: str, candidate: dict[str, object]) -> str:
@@ -1415,9 +1426,11 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
         # the sentence names the registering method and the handler, which are what a
         # reader opens, and says the reason the framework refuses it.
         handler = candidate["handler"] or "no handler read"
+        reason = str(candidate["reason"])
+        consequence = _REFUSAL_CONSEQUENCES.get(reason, _SERVES_NOTHING)
         return (
             f"registered by {candidate['caller']} ({handler}); the framework "
-            f"{_REFUSAL_PHRASES[str(candidate['reason'])]}, so it serves nothing for it"
+            f"{_REFUSAL_PHRASES[reason]}, {consequence}"
         )
     if question == "handler_pass_through":
         # Vert.x spec §3b: an inbound row whose handler is not readable here, filed by

@@ -850,9 +850,13 @@ def test_every_catalog_carries_every_configuration_annotation_the_catalogs_name(
 
 def test_a_python_coordinate_is_its_normalised_distribution_name(tmp_path: Path):
     """A Python module's build records each dependency by its PEP 503 name (`fastapi`), so a
-    catalog names it so; a `groupId:artifactId` stays the JVM spelling (D02 §1)."""
+    catalog measured on that distribution names it so; a `groupId:artifactId` stays the JVM
+    spelling (D02 §1)."""
     (tmp_path / "invented-py.yml").write_text(
         _HEADER + "detect: {coordinates: [fastapi, sqlalchemy-utils, 'org.acme:web']}\n"
+        "measured:\n"
+        "  - { artifact: fastapi, versions: ['0.162.0'], identity: reported, by: x.md }\n"
+        "  - { artifact: sqlalchemy-utils, versions: ['0.41.2'], identity: reported, by: x.md }\n"
         "matches: {}\n",
         encoding="utf-8",
     )
@@ -868,6 +872,25 @@ def test_a_coordinate_in_no_build_s_spelling_is_refused(tmp_path: Path, written:
     reading as a framework the module does not use."""
     (tmp_path / "invented-py.yml").write_text(
         _HEADER + f"detect: {{coordinates: ['{written}']}}\nmatches: {{}}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(tmp_path).load()
+
+    assert "detect.coordinates" in str(raised.value)
+
+
+def test_a_group_less_jvm_coordinate_is_still_refused(tmp_path: Path):
+    """`spring-boot-starter-web` is shaped like a distribution name, but a catalog measured on
+    `org.springframework.boot:spring-boot-starter-web` writing it without its group is the
+    missing-group typo, which matches no JVM build."""
+    (tmp_path / "invented-jvm.yml").write_text(
+        _HEADER + "detect: {coordinates: [spring-boot-starter-web]}\n"
+        "measured:\n"
+        "  - { artifact: 'org.springframework.boot:spring-boot-starter-web', versions: ['3.3.0'],\n"
+        "      identity: reported, by: x.md }\n"
+        "matches: {}\n",
+        encoding="utf-8",
     )
 
     with pytest.raises(CatalogError) as raised:

@@ -912,11 +912,6 @@ def test_a_refused_registration_question_names_the_registering_method_and_handle
         ("exact_mount_path", "refuses to mount a router on a path with no trailing wildcard"),
         ("pattern_mount_path", "refuses to mount a router on a regular expression path"),
         ("wildcard_mount_point", "refuses a mount point that ends in the wildcard it adds"),
-        ("no_methods", "refuses a route given an empty list of methods"),
-        (
-            "invalid_response_type",
-            "refuses a response type that unites a response class with others",
-        ),
     ],
 )
 def test_a_refused_mount_question_says_why_the_framework_refuses_it(reason: str, phrase: str):
@@ -939,6 +934,41 @@ def test_a_refused_mount_question_says_why_the_framework_refuses_it(reason: str,
     assert (
         "registered by com/acme/Routes#wire(). (no handler read); the framework "
         f"{phrase}, so it serves nothing for it"
+    ) in text
+
+
+@pytest.mark.parametrize(
+    ("reason", "phrase"),
+    [
+        ("no_methods", "refuses a route given an empty list of methods"),
+        (
+            "invalid_response_type",
+            "refuses a response type that unites a response class with others",
+        ),
+    ],
+)
+def test_a_route_refused_at_import_says_the_application_does_not_start(reason: str, phrase: str):
+    """A route the framework refuses when it is registered raises at import: the sentence says
+    the application does not start, not only that the route serves nothing. A refused route
+    whose path was not read is still filed, with no path."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": "GET",
+            "path": None,
+            "question": "refused_registration",
+            "candidates": json.dumps(
+                [{"caller": "app/main#<clinit>().", "handler": "app/main#x().", "reason": reason}]
+            ),
+            "evidence": "app/main#<clinit>().",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "registered by app/main#<clinit>(). (app/main#x().); the framework "
+        f"{phrase}, raising when the route is registered, at import, so the application does "
+        "not start"
     ) in text
 
 

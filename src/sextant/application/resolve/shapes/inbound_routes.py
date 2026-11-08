@@ -207,12 +207,12 @@ def is_unrooted(path: str, read_whole: bool) -> bool:
 
 
 def file_refusal(
-    refusals: dict[tuple[str, str | None, str], dict[str, Any]],
+    refusals: dict[tuple[str, str | None, str | None], dict[str, Any]],
     *,
     protocol: str,
     method: str | None,
     method_kind: str | None,
-    path: str,
+    path: str | None,
     reason: str,
     caller: str,
     handler: str | None,
@@ -222,7 +222,8 @@ def file_refusal(
     `refusals` is the run's accumulator, written to `open_questions` once at the end. An
     `open_questions` row is identified by `(protocol, method, path, question)`, so every
     registration of one refused address shares one row and each is a candidate of it,
-    sorted (NFR-1) when the rows are built by `refusal_rows`."""
+    sorted (NFR-1) when the rows are built by `refusal_rows`. A refused registration whose
+    path was not read is filed with `path` None: the framework still refuses it."""
     row = refusals.setdefault(
         (protocol, method, path),
         {
@@ -239,11 +240,11 @@ def file_refusal(
 
 
 def refusal_rows(
-    refusals: Mapping[tuple[str, str | None, str], dict[str, Any]],
+    refusals: Mapping[tuple[str, str | None, str | None], dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """The `open_questions` rows of a run's refusals, in a stable order."""
     rows = []
-    for key in sorted(refusals, key=lambda k: (k[0], k[1] or "", k[2])):
+    for key in sorted(refusals, key=lambda k: (k[0], k[1] or "", k[2] or "")):
         candidates = sorted(
             refusals[key]["candidates"], key=lambda c: json.dumps(c, sort_keys=True)
         )

@@ -64,6 +64,7 @@ from sextant.application.resolve.shapes.chains import (
     _LINK_SENDER,
     _READS_LINK,
     _UNRESOLVED_ARGUMENT,
+    VERBS_TO_READ,
     ChainEnd,
     _captured_at,
     _declared_entries,
@@ -74,6 +75,7 @@ from sextant.application.resolve.shapes.chains import (
     _site_key,
     chain_ends,
     configuring_calls,
+    respell_verb,
 )
 from sextant.application.resolve.shapes.client_base import (
     CLIENT_IS_RECEIVER,
@@ -83,7 +85,7 @@ from sextant.application.resolve.shapes.client_base import (
     client_defaults,
     options_parts,
 )
-from sextant.application.resolve.shapes.contracts import _payload_descriptor
+from sextant.application.resolve.shapes.contracts import payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.inbound_routes import (
     INVALID_RESPONSE_TYPE,
@@ -139,10 +141,12 @@ from sextant.application.resolve.shapes.pass_through import (
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.application.resolve.values import (
+    ABSENT,
     EXPRESSION,
     EXTERNAL,
     INT,
     LITERAL,
+    NOT_READABLE,
     RECEIVER,
     STRING,
     SYMBOL,
@@ -167,7 +171,15 @@ from sextant.domain.closed_sets import (
 )
 from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import REDACTED, Redactor
-from sextant.domain.symbols import ANY_TYPE, UNION_TYPE, bare_descriptor, method_name, names_a_type
+from sextant.domain.symbols import (
+    ANY_TYPE,
+    UNION_TYPE,
+    bare_descriptor,
+    member_name,
+    method_name,
+    names_a_type,
+    owner_of,
+)
 
 # D00 §5's kind for an address the code ASSEMBLES. Spelled here because `_url_arguments`
 # treats it as the catalog's own declared position rather than as a hop - see there.
@@ -399,7 +411,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     metadata: list[dict[str, Any]] = []
     # DR-6: the declarations the framework would raise on, accumulated across every caller
     # and filed once, the `rows`/`metadata` discipline.
-    refusals: dict[tuple[str, str | None, str], dict[str, Any]] = {}
+    refusals: dict[tuple[str, str | None, str | None], dict[str, Any]] = {}
     # Spec §3b: which handler on a chain answers, judged once for every handler the chains
     # name, before any row is derived — the chains are read whole first, because each
     # handler's outcome is one backward walk per `passes_on` call over the whole module.
@@ -856,7 +868,7 @@ class _DeriveContext:
     # resolved path of that shape is filed in `refusals` and derives no row. False for
     # every catalog not declaring it, whose paths are repaired as they always were.
     refuses_unrooted: bool = False
-    refusals: dict[tuple[str, str | None, str], dict[str, Any]] | None = None
+    refusals: dict[tuple[str, str | None, str | None], dict[str, Any]] | None = None
     # The catalog's roots, so a refusal is filed under the verb its ROOT named
     # (`_root_verb`): the framework throws when the route is made, before any later step.
     roots: Sequence[dict[str, Any]] = ()
@@ -994,6 +1006,9 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
     # string, and None where nothing could read it — the honest gap, not the
     # root's default.
     declared_verb = captures.get("http_method")
+    # A verb list the call does not write as literals (N8): read through the value walk.
+    if _unread_verbs(declared_verb):
+        declared_verb = _walked_verbs(declared_verb, context)
     # Several verbs accumulated on one chain (`repeats`) are one row each (Vert.x spec §3f:
     # `method(GET).method(DELETE)` serves both), in call order, a repeated verb once. One
     # nobody could read is a row of its own, `unresolved` with `method` NULL, so the list
@@ -1162,8 +1177,6 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
     if refused is not None:
         if direction == "inbound" and context.refusals is not None:
             for verb, (_, path, _) in product(verbs or [None], destinations):
-                if path is None:
-                    continue
                 file_refusal(
                     context.refusals,
                     protocol=context.catalog.protocol,
@@ -2849,18 +2862,25 @@ def _handler_response(
             return _Response(None, True)
         rules = context.carrier_rules
         return _Response(
-            _payload_descriptor(
+            payload_descriptor(
                 written, rules.rules, rules.enums, context.facts.referenced, rules.rules.wrappers
             ),
             True,
         )
     returned = () if context.values is None else context.values.returned_values.get(handler, ())
-    shapes = {
-        argument_descriptor(
-            _constructed(handler, entry, context.values), context.facts, context.carrier_rules
-        )
-        for _, entry in returned
-    }
+    typed = [_constructed(handler, entry, context.values) for _, entry in returned]
+    # A returned value of a `none_types` class (a `RedirectResponse`) is no response model, as
+    # the annotation of one is: every value one gives no response; some one and some another
+    # name no one type.
+    none = [
+        entry.get("kind") == "instance" and _is_none_type(str(entry.get("symbol")), fallback)
+        for entry in typed
+    ]
+    if none and all(none):
+        return _Response(None, True)
+    if any(none):
+        return _Response(None, True, whole=False)
+    shapes = {argument_descriptor(entry, context.facts, context.carrier_rules) for entry in typed}
     if len(shapes) != 1 or None in shapes:
         return _Response(None, True, whole=False)
     return _Response(shapes.pop(), True)
@@ -2944,13 +2964,37 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
     if site is None or at is None:
         return None
     slot = int(at[2])
-    handlers = _entry_handlers(context.values, site, slot, context.method_symbols)
+    handlers = _entry_handlers(context.values, site, slot, context.method_symbols) or (
+        _bound_methods(argument, context)
+    )
     if handlers:
         alternatives = tuple(_Judged(symbol, ANSWERS) for symbol in handlers)
         return _Judged(handlers[0], ANSWERS, (), alternatives if len(handlers) > 1 else ())
     # Only a value a library call made OF a function the module defines (a decorator applied to
     # it, a wrapper handed it): any other object a library builds is no function at all, and
     # its handler reads as it always has.
+    if argument.get("kind") == "unresolved" and argument.get("source") is None:
+        # A value the facts state nothing about (an attribute of a local object, `s.h`):
+        # which function it is, is not read here.
+        return _Judged(
+            None,
+            UNREADABLE,
+            ((NOT_READABLE, "the handler is a value whose source the scanned facts do not state"),),
+        )
+    if argument.get("kind") == "field" and not _written(argument, context.values):
+        return _Judged(
+            None,
+            UNREADABLE,
+            (
+                (
+                    NOT_READABLE,
+                    (
+                        f"the handler is {argument.get('symbol')}, which nothing writes and no "
+                        "class of its namespace defines as a method"
+                    ),
+                ),
+            ),
+        )
     made = undecorated_maker(context.values, site, slot)
     if made is None:
         return None
@@ -2978,6 +3022,80 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
             ),
         ),
     )
+
+
+def _written(argument: Mapping[str, Any], index: "ValueIndex") -> bool:
+    """Whether anything in the module writes the binding a `field` argument reads."""
+    symbol = str(argument.get("symbol"))
+    return bool(
+        index.writers.get(symbol) or index.constants.get(symbol) or index.produced.get(symbol)
+    )
+
+
+def _bound_methods(argument: Mapping[str, Any], context: "_DeriveContext") -> tuple[str, ...]:
+    """The methods a `field` argument nothing writes names on its class (`self.endpoint`, a
+    method read through its receiver's type, rulings R29 and R33): for the class and each of
+    its subtypes, the first type of its lookup order defining a method of that name, each
+    once. Empty for any other argument, and where no class of the namespace defines one."""
+    if (
+        argument.get("kind") != "field"
+        or context.values is None
+        or context.workspace is None
+        or _written(argument, context.values)
+    ):
+        return ()
+    symbol = str(argument.get("symbol"))
+    owner, name = owner_of(symbol), member_name(symbol)
+    if owner is None:
+        return ()
+    dispatch = context.workspace.once(dispatch_of)
+    by_type: dict[str, list[str]] = {}
+    for bare, full in context.method_symbols.items():
+        if method_name(bare) == name and (declaring := owner_of(bare)) is not None:
+            by_type.setdefault(declaring, []).append(full)
+    found: list[str] = []
+    for type_ in (owner, *dispatch.subtypes.get(owner, ())):
+        for candidate in dispatch.lookup_order(type_):
+            if candidate in by_type:
+                found.extend(full for full in by_type[candidate] if full not in found)
+                break
+    return tuple(found)
+
+
+def _unread_verbs(declared: Any) -> bool:
+    """Whether an `http_method` capture is a verb list the call did not write as literals
+    (`chains._listed_verbs`), which the value walk reads."""
+    return isinstance(declared, dict) and VERBS_TO_READ in declared
+
+
+def _walked_verbs(declared: Any, context: "_DeriveContext") -> Any:
+    """A verb list read through the value walk (N8, M1): one verb per value the walk reads
+    (a module constant's elements, a parameter's arguments), respelled; the `absent` verb for
+    an explicit `None`; no verb at all where every value is an empty list (a refusal); and an
+    unread argument (no verb) for each value not read, beside the rest."""
+    case, absent = declared[VERBS_TO_READ]
+    at = declared.get(_CAPTURED_AT)
+    site = (
+        None
+        if at is None or context.values is None
+        else context.values.sites.get((str(at[0]), int(str(at[1]))))
+    )
+    if site is None or at is None or context.workspace is None:
+        return None
+    verbs: list[Any] = []
+    for answers in resolve_positions(
+        context.workspace, {"verb": (site, int(at[2]))}, context.values, within=context.path
+    ):
+        answer = answers["verb"]
+        if answer.kind == LITERAL and answer.literal_kind == STRING and not answer.inexact:
+            verbs.append(respell_verb(str(answer.value), case))
+        elif answer.kind == ABSENT and answer.null:
+            verbs.append(absent)
+        elif answer.kind == ABSENT:
+            continue
+        else:
+            verbs.append(None)
+    return tuple(dict.fromkeys(verbs))
 
 
 def _validate_url_channel_exclusivity(

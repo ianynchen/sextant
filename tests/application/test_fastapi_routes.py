@@ -122,7 +122,7 @@ def _response(row: dict) -> str | None:
 
 
 def _rows(workspace: DuckDbWorkspace) -> list[tuple[object, ...]]:
-    return sorted(
+    rows = [
         (
             row["method"],
             row["path"],
@@ -132,7 +132,8 @@ def _rows(workspace: DuckDbWorkspace) -> list[tuple[object, ...]]:
         )
         for row in workspace.query("endpoints")
         if row["catalog_id"] == "fastapi"
-    )
+    ]
+    return sorted(rows, key=lambda row: tuple("" if part is None else str(part) for part in row))
 
 
 def _questions(workspace: DuckDbWorkspace, question: str) -> list[dict]:
@@ -428,6 +429,99 @@ def test_a_module_decorator_under_the_route_is_walked_into(tmp_path: Path, libra
     )
 
     assert _rows(workspace) == [("GET", "/v", _handler("v"), "resolved", "string")]
+
+
+def test_a_returned_response_subclass_is_no_response(tmp_path: Path, libraries):
+    """With no annotation, a handler returning a `Response` subclass (`RedirectResponse`,
+    `FileResponse`) gives no response model, as the annotation of one would; one beside a
+    model names no one type, so the row is `partial`."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "models.py": _MODELS,
+            "main.py": _ROUTER
+            + "from fastapi.responses import FileResponse, RedirectResponse\n"
+            + "from app.models import Out\n"
+            + "@router.get('/r')\ndef r():\n    return RedirectResponse('/x')\n"
+            + "@router.get('/f')\ndef f():\n    return FileResponse('x')\n"
+            + "@router.get('/m')\ndef m(flag: bool):\n"
+            + "    if flag:\n        return RedirectResponse('/x')\n    return Out(id=1)\n",
+        },
+    )
+
+    assert _rows(workspace) == [
+        ("GET", "/f", _handler("f"), "resolved", None),
+        ("GET", "/m", _handler("m"), "partial", None),
+        ("GET", "/r", _handler("r"), "resolved", None),
+    ]
+
+
+def test_a_bound_method_is_read_through_its_class(tmp_path: Path, libraries):
+    """`self.endpoint` names the method on the instance's class (a bound method): FastAPI calls
+    that method. `s.h` on a local object is a value the facts state no source for, so the
+    handler is not read: `partial`, with a `not_readable` question."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _ROUTER
+            + "class Api:\n"
+            + "    def __init__(self, path):\n"
+            + "        router.add_api_route(path, self.endpoint)\n"
+            + "    def endpoint(self) -> int:\n        return 1\n"
+            + "Api('/e')\n"
+            + "class S:\n    def h(self) -> str:\n        return ''\n"
+            + "def wire():\n    s = S()\n    router.add_api_route('/cm', s.h)\n"
+        },
+    )
+
+    assert _rows(workspace) == [
+        ("GET", "/cm", None, "partial", None),
+        ("GET", "/e", "app/main/Api#endpoint(sig_", "resolved", "integer"),
+    ]
+    (question,) = _questions(workspace, "handler_pass_through")
+    ((unread,),) = [json.loads(question["candidates"])[0]["unread"]]
+    assert unread["reason"] == "not_readable"
+
+
+def test_a_verb_list_held_elsewhere_is_read_through_the_walk(tmp_path: Path, libraries):
+    """`methods=VERBS` (a module constant) and an element that is a parameter are traced to
+    their values: one row per verb read."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _ROUTER
+            + "VERBS = ['get', 'post']\n"
+            + "@router.api_route('/c', methods=VERBS)\ndef c() -> str:\n    return ''\n"
+            + "def make(method):\n"
+            + "    @router.api_route('/p', methods=[method])\n"
+            + "    def p() -> str:\n        return ''\n"
+            + "make('PUT')\nmake('delete')\n"
+        },
+    )
+
+    rows = [row[:2] for row in _rows(workspace)]
+    assert rows == [("DELETE", "/p"), ("GET", "/c"), ("POST", "/c"), ("PUT", "/p")]
+
+
+def test_a_refused_route_with_an_unread_path_is_still_filed(tmp_path: Path, libraries):
+    """FastAPI refuses `methods=[]` whatever the path: a path not read is no reason to drop the
+    question."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _ROUTER
+            + "def wire(path):\n"
+            + "    router.add_api_route(path(), wire, methods=[])\n"
+        },
+    )
+
+    assert _rows(workspace) == []
+    (question,) = _questions(workspace, "refused_registration")
+    assert question["path"] is None
 
 
 def test_a_library_wrapper_under_the_route_is_partial_external(tmp_path: Path, libraries):

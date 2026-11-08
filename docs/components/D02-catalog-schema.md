@@ -192,8 +192,10 @@ reader would have to disbelieve (§5.3).*
 
 **A coordinate is spelled as the module's build records it**: `groupId:artifactId` for a JVM
 build, and for a Python one the distribution name as PEP 503 normalizes it (`fastapi`,
-`sqlalchemy-utils`), which is how the Python detector writes `dependency_coordinates`. Any other
-spelling is refused at load.
+`sqlalchemy-utils`), which is how the Python detector writes `dependency_coordinates`. A
+distribution name is accepted only where one of the catalog's `measured` rows names it as the
+artifact the rule was read from, so a JVM catalog's group-less `spring-boot-starter-web` is
+still the missing-group typo it looks like. Any other spelling is refused at load.
 
 **`detect.required` (F2 §3.6) makes the coordinates a conjunct for ONE CATALOG whose style
 is not gated.** Style was a proxy for "is this catalog's evidence enough to name its
@@ -2294,13 +2296,15 @@ refused at load.
 `http_method: { keyword: methods, absent: GET, case: upper }` — an argument reference (`{keyword:
 name}` or `{arg: N, keyword: name}`) beside either or both of two keys — reads the argument as a
 list of verbs. A list or set the code writes gives one row per element, a repeated verb once (an
-enumerable set is exact); an element that is not a string literal is a row of its own with
-`method` NULL at `unresolved`. **`absent`** is the verb where the argument is not written or the
+enumerable set is exact). A list that is not all string literals — a module constant
+(`methods=VERBS`), an element that is a parameter — is read through the value walk: one row per
+verb it reads, and one row with `method` NULL at `unresolved` for what stays unread. **`absent`** is the verb where the argument is not written or the
 code writes `None` (the framework's default). **`case: upper`** respells each verb as the
 framework does before it serves it (the only case word). An EMPTY list derives no row and is
 filed as a `refused_registration` open question (reason `no_methods`): FastAPI asserts a route
-has a method. Any other argument (a module name holding a list) is no verb read: one row,
-`method` NULL at `unresolved`. A verb list with any other key, no keyword, an empty `absent` or
+has a method. A refused registration whose path was not read is filed too, its path NULL. The
+rendered question says the framework raises when the route is registered, at import, so the
+application does not start. A verb list with any other key, no keyword, an empty `absent` or
 another `case` is refused at load.
 
 **`matches.response_fallback: { from: handler_return, none_types: [<type>, …] }`** (N9) reads
@@ -2317,7 +2321,8 @@ explicit `None` being no response at `resolved`. From the handler:
   field for it. Any other union, and the unknown type (`Any`), name no one type: the response
   is not read.
 - **No return type written**: the one type every value the handler returns is, a construction
-  being an instance of its class. Several types, or a value whose type is not read, leave the
+  being an instance of its class. Every value a `none_types` class (or subtype) is no response;
+  such a value beside others, several types, or a value whose type is not read, leave the
   response not read.
 - **The handler not read** reads no response.
 
@@ -2338,7 +2343,12 @@ row's handler, or one alternative each, `narrowed`. Where no path reaches a func
 library call no value model states made the value OF one of the module's functions (a decorator
 applied to it, a wrapper handed it), the handler is not read: the row keeps its address at
 `partial` with `handler` NULL, and a `handler_pass_through` open question names the call
-(reason `external`). Any other handler argument reads as before.
+(reason `external`). A module name nothing writes that names a method on its class
+(`self.endpoint`, a bound method) is that method, read through the class's lookup order and each
+subtype's (rulings R29, R33); where no class defines it, or the handler is a value whose source
+the facts do not state (`s.h` on a local object), the handler is not read: `partial`, and a
+`handler_pass_through` question with reason `not_readable`. Any other handler argument reads as
+before.
 
 **`matches.refuses_unrooted_path: true`** (DR-6, Vert.x spec §3a) declares that the framework
 THROWS on an inbound path that is empty or has no leading `/` (Vert.x's `RouteImpl.checkPath`),

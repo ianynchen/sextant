@@ -487,6 +487,18 @@ def _is_bound(
     return container and bool(members.get(symbol, set()) & binders)
 
 
+def payload_descriptor(
+    reference: dict[str, Any] | None,
+    rules: "_Rules",
+    enums: set[str],
+    referenced: list[str],
+    wrappers: list[dict[str, Any]],
+) -> str | None:
+    """`_payload_descriptor`, for an engine outside this module: the wire descriptor a
+    signature-level type reference roots at, or None for no payload."""
+    return _payload_descriptor(reference, rules, enums, referenced, wrappers)
+
+
 def _payload_descriptor(
     reference: dict[str, Any] | None,
     rules: "_Rules",

@@ -240,6 +240,10 @@ _VERB_LIST_KEYS = frozenset({"absent", "case"})
 _REFERENCE_KEYS = frozenset({"arg", "keyword"})
 # The respellings `case` names.
 _VERB_CASES = {"upper": str.upper}
+# A reserved key a list-form capture's argument carries where the call does not write its
+# verbs as literals (a module constant, a parameter element): the engine reads it through the
+# value walk, with the `case` and `absent` it was declared with, `(case, absent)`.
+VERBS_TO_READ = "\x00verbs_to_read"
 
 
 @dataclass(frozen=True)
@@ -3472,18 +3476,34 @@ def _listed_verbs(declared: Mapping[str, Any], site: dict[str, Any]) -> Any:
     it is anything else, which reads as no verb, the honest gap."""
     reference = {key: declared[key] for key in _REFERENCE_KEYS if key in declared}
     argument = _arg_at(site["arguments"], reference)
-    respell = _VERB_CASES.get(str(declared.get("case")), lambda verb: verb)
+    case = declared.get("case")
+    absent = declared.get("absent")
     if argument is None or argument.get("kind") == "null":
-        absent = declared.get("absent")
-        return None if absent is None else respell(str(absent))
-    if argument.get("kind") != "array":
+        return None if absent is None else respell_verb(str(absent), case)
+    elements = argument.get("elements")
+    if argument.get("kind") == "array" and all(
+        _string_value(element) is not None for element in elements or ()
+    ):
+        return tuple(
+            {**element, "value": respell_verb(str(element["value"]), case)}
+            for element in elements or ()
+        )
+    # Anything else is a value the walk reads (a module constant, a parameter element), at the
+    # position the call wrote it.
+    slot = argument_slot(site["arguments"], reference)
+    if slot is None or slot == UNPACKED_SLOT:
         return argument
-    return tuple(
-        {**element, "value": respell(str(element["value"]))}
-        if _string_value(element) is not None
-        else element
-        for element in argument.get("elements") or ()
-    )
+    return {
+        **(_captured_at(argument, site, slot) or {}),
+        VERBS_TO_READ: (case, None if absent is None else respell_verb(str(absent), case)),
+    }
+
+
+def respell_verb(verb: str, case: Any) -> str:
+    """`verb` as a verb list's `case` respells it (`_VERB_CASES`); as written where it names
+    none."""
+    respell = _VERB_CASES.get(str(case))
+    return verb if respell is None else respell(verb)
 
 
 def _valid_verb_list(value: Mapping[str, Any]) -> bool:

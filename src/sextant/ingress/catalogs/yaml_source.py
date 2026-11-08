@@ -1518,16 +1518,28 @@ def _coordinates(raw: dict[str, Any], path: Path) -> tuple[str, ...]:
             f"— got {detect!r} (D02 §1)"
         )
     declared = detect.get("coordinates", [])
+    # A distribution name is a Python build's coordinate only where the catalog's rule was read
+    # out of that distribution (`measured[].artifact`): a JVM catalog's group-less
+    # `spring-boot-starter-web` is shaped like one and is still the missing-group typo.
+    measured = raw.get("measured")
+    distributions = {
+        str(row.get("artifact"))
+        for row in (measured if isinstance(measured, list) else [])
+        if isinstance(row, dict)
+    }
     valid = isinstance(declared, list) and all(
         isinstance(entry, str)
-        and (entry.count(":") == 1 or _DISTRIBUTION_NAME.fullmatch(entry) is not None)
+        and (
+            entry.count(":") == 1
+            or (_DISTRIBUTION_NAME.fullmatch(entry) is not None and entry in distributions)
+        )
         for entry in declared
     )
     if not valid:
         raise CatalogError(
             f"loading catalog {path}: `detect.coordinates` must be a list of "
-            f"`groupId:artifactId` coordinates or PEP 503 distribution names — got "
-            f"{declared!r} (D02 §1)"
+            f"`groupId:artifactId` coordinates, or PEP 503 distribution names the catalog's "
+            f"`measured` rows read its rule from — got {declared!r} (D02 §1)"
         )
     return tuple(declared)
 
