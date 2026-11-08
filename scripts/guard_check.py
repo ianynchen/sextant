@@ -4868,9 +4868,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="            return _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, "
-                "parameter=(method, index)))",
-                replace="            return _only(trail, _unresolved(EXTERNAL))  "
+                find="                _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, "
+                "parameter=(method, index))),",
+                replace="                _only(trail, _unresolved(EXTERNAL)),  "
                 "# guard disabled by scripts/guard_check.py",
             ),
         ),
