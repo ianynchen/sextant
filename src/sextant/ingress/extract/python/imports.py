@@ -162,6 +162,11 @@ class ProjectNames(Protocol):
         (`DbSession = Annotated[Session, ...]` is `Session`). None for any other name."""
         ...
 
+    def class_object(self, module: str, name: str) -> str | None:
+        """The class `X` that `module.name` holds, where every write to it in that file gives
+        a written `type[X]` (ruling R17). None for any other name."""
+        ...
+
 
 # The question a file asks for another file's header (`project.HEADER`).
 _HEADER_QUESTION = "header"

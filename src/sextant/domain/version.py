@@ -104,6 +104,13 @@ SEXTANT_VERSION = version("sextant")
 #             `<form>#__class_getitem__`, and `...` is the field `builtins#Ellipsis.`. A fact
 #             set of the older vintage has no parameter values, so a reader would take every
 #             Python parameter for one with no default; it is refused and re-extracted.
+#     9       no shape change: a Python call on a name a construction or a written `type[X]`
+#             fixes is written with its `target.owner` (plan 2026-11-08-python-fastapi-inbound
+#             Task 4b, ruling R17), a call of a name holding a class object is a `virtual
+#             <init>` of that class, and a library class that a static call names gets a type
+#             header. A fact set of the older vintage leaves those owners to the resolver,
+#             which reads none of them on a library class it has no header for; it is refused
+#             and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -242,6 +249,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 8
+FACT_SCHEMA_VERSION = 9
 GRAPH_SCHEMA_VERSION = 17
 BOUNDARY_VOCABULARY_VERSION = 5

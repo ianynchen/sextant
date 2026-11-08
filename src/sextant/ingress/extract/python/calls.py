@@ -82,6 +82,7 @@ from sextant.domain.facts import (
 from sextant.domain.symbols import (
     PY_SIGNATURE,
     member_name,
+    member_type,
     method_descriptor,
     names_a_type,
     owner_of,
@@ -137,7 +138,10 @@ _GET = "__get__"
 _SLICE = TypeRef(symbol="builtins/slice#")
 # The type of a class object: `type[X]`, as the scanner holds a value written `type[X]` or
 # `Type[X]` (a written type reads it as `X`, for a call through the class).
-_TYPE_OF = "builtins/type#"
+TYPE_OF = "builtins/type#"
+# What a module-level name of this file holds, by every write to it (design §3b): the class
+# of an instance (its symbol), a callable, or a class object (`type[X]`, ruling R17).
+ModuleType = str | CallableType | TypeRef
 _NONE = "builtins/None#"
 # The awaitables whose awaited value is their last type argument, as `async for` awaits
 # what `__anext__` returns.
@@ -357,15 +361,15 @@ class BodyReader:
     # this file, as the previous reading of the file found them (`structure.file_facts`).
     # None on a first reading, which answers from the writes read so far and is kept only
     # where every answer it gave is the one all the file's writes give.
-    _module_types: dict[str, str | CallableType] | None
+    _module_types: dict[str, "ModuleType"] | None
     # The module-level names some statement binds to a value that is not read as a write
     # (a loop, an import, `global`): their writes are not all known, so they have no type.
     _rebound: set[str]
     # Each module-level name's writes in this reading: the type of each value, None where
     # it is not known.
-    _module_writes: dict[str, list[str | CallableType | None]]
+    _module_writes: dict[str, list["ModuleType | None"]]
     # Each module-level name this reading asked about, with every answer it gave.
-    consulted: dict[str, list[str | CallableType | None]]
+    consulted: dict[str, list["ModuleType | None"]]
     # The type parameters, written bases and members of each class this file defines, and
     # the lookup orders they and the libraries' classes give (`typing_rules.Hierarchy`).
     _local_classes: dict[str, ClassShape]
@@ -1180,6 +1184,17 @@ class BodyReader:
                 if defined is not None:
                     method_owner, method_name = _split(defined)
                     return Callee(_target(method_owner, method_name), "static")
+                held = (
+                    self._held_class(Target(owner.module, attr)) if owner.member is None else None
+                )
+                if held is not None:
+                    # `routing.APIRouter(...)`, the name holding the class `X`: its construction.
+                    return Callee(
+                        _target(held, INIT),
+                        "virtual",
+                        scope.body.value_id(),
+                        receiver_field=_field_of(Target(owner.module, attr)),
+                    )
                 if owner.member is None or owner.kind == "class" or _is_builtin_class(owner):
                     return Callee(_target(type_symbol(owner), attr), "static")
                 if owner.kind in (None, "variable"):
@@ -1230,6 +1245,15 @@ class BodyReader:
                 if target.kind == "variable":
                     typed = self._module_type(target)
                     receiver = scope.body.value_id()
+                    if isinstance(typed, TypeRef):
+                        # The name holds the class `X` (a written `type[X]`): calling it
+                        # constructs `X` or a subclass, as `cls()` does (R37).
+                        return Callee(
+                            _target(_class_of(typed), INIT),
+                            "virtual",
+                            receiver,
+                            receiver_field=_field_of(target),
+                        )
                     if isinstance(typed, CallableType):
                         # The name holds a callable: what calling it gives is read with
                         # its arguments, as for a call's own result.
@@ -1238,6 +1262,15 @@ class BodyReader:
                         _target(typed if isinstance(typed, str) else None, CALL),
                         "virtual",
                         receiver,
+                        receiver_field=_field_of(target),
+                    )
+                held = self._held_class(target)
+                if held is not None:
+                    # Another file's name that holds the class `X`: the same construction.
+                    return Callee(
+                        _target(held, INIT),
+                        "virtual",
+                        scope.body.value_id(),
                         receiver_field=_field_of(target),
                     )
                 if target.member is not None and target.kind in (None, "function"):
@@ -1297,6 +1330,9 @@ class BodyReader:
             called = scope.body.callables.get(callee.receiver)
             given = None if called is None else _call_gives(called, arguments, scope)
             return TypeRef(symbol=given) if isinstance(given, str) else given
+        constructed = self._constructed(callee, arguments, types)
+        if constructed is not None:
+            return constructed
         if libraries is None or callee.target.name is None:
             return None
         name = str(callee.target.name)
@@ -1314,6 +1350,28 @@ class BodyReader:
             return first if first is not None and all(t == first for t in each) else None
         receiver = typed if typed is not None and typed.symbol == owner else TypeRef(symbol=owner)
         return self._returns_on(receiver, name, arguments, types, unpacked=unpacked)
+
+    def _constructed(
+        self, callee: Callee, arguments: list[CallArgument], types: list[TypeRef | None]
+    ) -> TypeRef | None:
+        """The instance a static call naming a class makes (ruling R17): the file writes
+        `module#Name`, since it cannot see that another file's name is a class, and calling a
+        class gives an instance of it. A class of the module is known by its header, a
+        library's by the library's own file, whose constructor fills the class's type
+        parameters where it can. None for a call naming no class."""
+        owner, name = callee.target.owner, callee.target.name
+        if callee.invoke_kind != "static" or owner is None or name is None:
+            return None
+        named = member_type(owner, name)
+        if named is None:
+            return None
+        if self._project_shape(named) is not None:
+            # The call names the module that defines the class (`ProjectHeaders.member`).
+            return TypeRef(symbol=named)
+        libraries = self._context.index.libraries
+        if libraries is None or libraries.shape_of(named) is None:
+            return None
+        return libraries.construct(named, arguments, types) or TypeRef(symbol=named)
 
     def _returns_on(
         self,
@@ -1541,9 +1599,9 @@ class BodyReader:
                     TypeRef(symbol=scope.owner), member_name(str(value.symbol))
                 )
             hinted = declared is not None
-        if protocol and declared is not None and declared.symbol == _TYPE_OF:
+        if protocol and declared is not None and declared.symbol == TYPE_OF:
             declared = None
-        if name == CALL and declared is not None and declared.symbol == _TYPE_OF:
+        if name == CALL and declared is not None and declared.symbol == TYPE_OF:
             # Calling a class object constructs it (R37): `X` or a subclass, as `cls()` is.
             name = INIT
             declared = declared.arguments[0] if len(declared.arguments) == 1 else None
@@ -1997,8 +2055,10 @@ class BodyReader:
         if isinstance(node, ast.Name):
             targets = self._targets(node, scope)
             if targets is not None and len(targets) == 1:
-                found = self._module_class(targets[0])
-                return None if found is None else TypeRef(symbol=found)
+                typed = self._module_type(targets[0])
+                if isinstance(typed, TypeRef):
+                    return typed
+                return TypeRef(symbol=typed) if isinstance(typed, str) else None
         return None
 
     def _typed(self, node: ast.expr, value: CallArgument, scope: Scope) -> TypeRef | None:
@@ -2156,10 +2216,29 @@ class BodyReader:
         )
 
     def _module_class(self, target: Target) -> str | None:
+        """The class whose instance (or, for a class object, whose class) a module-level
+        name of this file holds: the owner of a call made on the name."""
         typed = self._module_type(target)
+        if isinstance(typed, TypeRef):
+            return _class_of(typed)
         return typed if isinstance(typed, str) else None
 
-    def _module_type(self, target: Target) -> str | CallableType | None:
+    def _held_class(self, target: Target) -> str | None:
+        """The class `X` a module-level name of another file of the module holds, where every
+        write in that file gives it a written `type[X]` (`project.ProjectHeaders`). A write
+        in a third file is not seen (design 2026-11-06-reading-decorators §3b): the resolver
+        follows the name's writes."""
+        headers = self._context.index.headers
+        if (
+            headers is None
+            or target.member is None
+            or "." in target.member
+            or target.module == self._context.here
+        ):
+            return None
+        return headers.class_object(target.module, target.member)
+
+    def _module_type(self, target: Target) -> "ModuleType | None":
         """The type every write in this file gives the module-level name `target`, where
         it is one of this file's own names; None for any other target."""
         if (
@@ -2171,7 +2250,7 @@ class BodyReader:
             return None
         return self._module_answer(target.member)
 
-    def _module_answer(self, name: str) -> str | CallableType | None:
+    def _module_answer(self, name: str) -> "ModuleType | None":
         """The type of this file's module-level `name`, as this reading answers it, and
         recorded as asked."""
         if self._module_types is not None:
@@ -2194,18 +2273,16 @@ class BodyReader:
                 typed = self._module_answer(member_name(read))
         self._module_writes.setdefault(name, []).append(typed)
 
-    def _one_type(
-        self, name: str, written: list[str | CallableType | None]
-    ) -> str | CallableType | None:
+    def _one_type(self, name: str, written: list["ModuleType | None"]) -> "ModuleType | None":
         """The one type every write gives; None where there is none, where a write's type
         is not known, or where writes give two (a closed list is never narrowed)."""
         if name in self._rebound or not written or written[0] is None:
             return None
         return written[0] if all(t == written[0] for t in written) else None
 
-    def module_types(self) -> dict[str, str | CallableType]:
+    def module_types(self) -> dict[str, "ModuleType"]:
         """Each module-level name whose every write in this reading gives one type."""
-        found: dict[str, str | CallableType] = {}
+        found: dict[str, ModuleType] = {}
         for name, written in self._module_writes.items():
             typed = self._one_type(name, written)
             if typed is not None:
@@ -2216,7 +2293,7 @@ class BodyReader:
         """The module-level names this reading saw written."""
         return list(self._module_writes)
 
-    def agrees(self, found: dict[str, str | CallableType]) -> bool:
+    def agrees(self, found: dict[str, "ModuleType"]) -> bool:
         """Whether every answer this reading gave is the type all the file's writes give."""
         return all(
             answer == found.get(name)
@@ -2232,17 +2309,32 @@ def _target(owner: str | None, name: str) -> CallTarget:
     return CallTarget(owner=owner, name=name, descriptor=PY_SIGNATURE)
 
 
-def _type_of(value: CallArgument, scope: Scope) -> str | CallableType | None:
+def _type_of(value: CallArgument, scope: Scope) -> "ModuleType | None":
     """The type of a value this body made: a constructed object's class, or the class or
-    callable a call's written signature gives. None for any other value."""
+    callable a call's written signature gives. A call written to give `type[X]` gives the
+    class object `X` (ruling R17): a function of this file that declares it too, since the
+    written type fixes the class, where an instance type it declares names no owner
+    (`Callee.hinted`). None for any other value."""
     if value.kind == "instance":
         return value.symbol
     if isinstance(value, _Part):
         return _class_of(value._typed)
     if value.kind == "unresolved" and value.source is not None:
         typed = scope.body.returned.get(value.source)
-        return _class_of(typed) if typed is not None else scope.body.callables.get(value.source)
+        if typed is None:
+            held = _class_object(scope.body.declared.get(value.source))
+            return held or scope.body.callables.get(value.source)
+        return _class_object(typed) or _class_of(typed)
     return None
+
+
+def _class_object(typed: TypeRef | None) -> TypeRef | None:
+    """`type[X]` for one class `X`, as a module-level name holding the class object is
+    typed; None for anything else."""
+    if typed is None or typed.symbol != TYPE_OF or len(typed.arguments) != 1:
+        return None
+    held = _class_of(typed.arguments[0])
+    return None if held is None else TypeRef(symbol=TYPE_OF, arguments=[TypeRef(symbol=held)])
 
 
 def _members(shape: ClassShape | None) -> frozenset[str]:
@@ -2283,7 +2375,7 @@ def _parts(value: CallArgument, targets: list[ast.expr], scope: Scope) -> list[T
 
 def _call_gives(
     called: CallableType, arguments: list[CallArgument], scope: Scope
-) -> str | CallableType | None:
+) -> "ModuleType | None":
     """What a call of `Callable[[P, ...], R]` gives: `R` where it is a class; where `R` is
     a type variable, the type of the positional argument whose parameter is that
     variable. None where neither is known (`Callable[[FC], FC]` applied to a function)."""
@@ -2381,7 +2473,7 @@ def _declared_type(annotation: ast.expr, types: TypeScope) -> TypeRef | None:
     if found is None or not names_a_type(found.symbol) or found.symbol == ANY:
         return None
     if is_class_object(annotation, types):
-        return TypeRef(symbol=_TYPE_OF, arguments=[found], nullable=found.nullable)
+        return TypeRef(symbol=TYPE_OF, arguments=[found], nullable=found.nullable)
     return found
 
 
@@ -2394,7 +2486,7 @@ def own_return_type(annotation: ast.expr, types: TypeScope) -> TypeRef | None:
     if found is None or found.symbol == ANY:
         return None
     if is_class_object(annotation, types):
-        return TypeRef(symbol=_TYPE_OF, arguments=[found], nullable=found.nullable)
+        return TypeRef(symbol=TYPE_OF, arguments=[found], nullable=found.nullable)
     return found
 
 
@@ -2419,7 +2511,7 @@ def _class_of(typed: TypeRef | None) -> str | None:
     """The one class a type names, as the owner of a call on a value of it. A union,
     `Any` or a type variable gives none. A class object's (`type[X]`) is `X`: a call
     through the class, as the scanner has always read it."""
-    if typed is not None and typed.symbol == _TYPE_OF and len(typed.arguments) == 1:
+    if typed is not None and typed.symbol == TYPE_OF and len(typed.arguments) == 1:
         return _class_of(typed.arguments[0])
     if typed is None or not names_a_type(typed.symbol) or typed.symbol in (UNION, ANY):
         return None

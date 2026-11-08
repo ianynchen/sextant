@@ -322,10 +322,27 @@ file that did not change.
 
 A call's owner is named where the file can tell: a class of the file is its `<init>`; a
 function of the file, or a member of another module, is a static call on that module's
-type. Whether an imported member is a class is in a file this scanner does not read, so
-the resolver decides. A call on a name the file assigns names the static field
-(`receiver_field`); its owner is the name's type where the file gives it one (below), and
-is otherwise left to the resolver (D00 §5's virtual call with a receiver).
+type, and the resolver reads it as the construction where the member is a class. A call on
+a name the file assigns names the static field (`receiver_field`); its owner is the name's
+type where the file gives it one (below), and is otherwise left to the resolver (D00 §5's
+virtual call with a receiver).
+
+**Calling a class gives an instance of it** (ruling R17; design
+`2026-11-06-reading-decorators-design.md` §3b option A, extended to constructions). The
+scanner knows a member of another module is a class by that module's header (a class of
+the module) or by the library's own file: the static call's result is then that class, its
+type parameters filled as the library's constructor fills them. So `app = FastAPI()` makes
+`app.get(...)` a call on `fastapi/applications/FastAPI#`, and `s = Session()` with `Session`
+from another file makes `s.get()` a call on that `Session`, in a function body or at module
+level. The class gets a type header (below). **A name holding a class object** is the class
+`X` where the code writes `type[X]`: a parameter or local annotated so, a call whose written
+return is `type[X]` (a library's, or a `def` of the module), or a module-level name every
+write to which in its file is such a call. Another file's name is read through that file's
+header (`ModuleHeader.class_objects`: polar's `APIRouter = get_api_router_class(APIRoute)`).
+Calling such a name is the `virtual <init>` of `X` with the name's field as
+`receiver_field` (R37: `X` or a subclass), and its result is an `X`. A module-level name of
+another file that holds an instance is not typed in the file that reads it: a write in a
+third file cannot be seen, and the resolver follows the name's writes.
 
 **A module-level name has the type of the values written to it in its file** (design
 `2026-11-06-reading-decorators-design.md` §3b): an assignment, or a `def` or `class` with
@@ -582,7 +599,9 @@ Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path
   or instance argument, a written base, a parameter or return type), then for each of its
   written bases, transitively: the defining symbol, the construct kind, the first base as
   `superclass` and the rest as `interfaces` (as a module class's), no annotation, and the
-  `origin`. A named type no library holds counts in `type_headers_unlocated`; `object` is
+  `origin`, and for every library class a static call names as a member of its module
+  (`FastAPI()` names `fastapi/applications/FastAPI#`). A named type no library holds counts
+  in `type_headers_unlocated`, except such a member, which may be a function; `object` is
   the boundary and gets none. A library class whose bases are not all read gets none
   either, with a line on the uncovered list. No library member, document or `symbol` fact
   is written, so library methods are not "found" (`method_resolution` answers `external`),

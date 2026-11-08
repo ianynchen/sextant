@@ -77,6 +77,7 @@ from sextant.domain.symbols import (
     PYTHON_SCHEME,
     bare_descriptor,
     is_type_descriptor,
+    member_type,
     names_a_type,
     without_type_marker,
 )
@@ -892,7 +893,11 @@ class Libraries:
     # -- the facts -----------------------------------------------------------------------
 
     def headers(
-        self, referenced: Iterable[str], own: set[str], document_id: str
+        self,
+        referenced: Iterable[str],
+        own: set[str],
+        document_id: str,
+        called: Iterable[str] = (),
     ) -> tuple[list[TypeHeaderFact], int, list[str]]:
         """A `type_header` (D00 §5) for every library type the module refers to, then
         transitively up each one's written bases, as the JVM scanner reads a classpath:
@@ -901,18 +906,27 @@ class Libraries:
         `object` not written), no annotation (a decorator is a call), and the `origin`.
         Also how many referenced types no library holds (`type_headers_unlocated`), and a
         line for each library class whose bases are not all read: `type_header` has no
-        key to say so, so it gets no header, and a lookup reaching it ends there."""
+        key to say so, so it gets no header, and a lookup reaching it ends there.
+
+        `called` are the classes a static call may name (`called_types`): each gets a header
+        where a library declares that class, and is no unlocated type where none does, since
+        the call may name a function."""
         facts: list[TypeHeaderFact] = []
         unlocated = 0
         not_read: list[str] = []
         seen = set(own) | {_C3_ROOT}
         queue = [symbol for symbol in sorted(set(referenced)) if symbol not in seen]
         seen.update(queue)
+        maybe = sorted(set(called) - seen)
+        seen.update(maybe)
+        queue += maybe
+        maybe_types = set(maybe)
         while queue:
             symbol = queue.pop(0)
             found = self._declaration(symbol)
             if found is None:
-                unlocated += 1
+                if symbol not in maybe_types:
+                    unlocated += 1
                 continue
             declared, provider = found
             if declared.parents_unread is not None:
@@ -1246,6 +1260,25 @@ def referenced_types(facts: Iterable[Fact]) -> set[str]:
         elif isinstance(fact, MethodReturnFact | FieldWriteFact) and fact.value is not None:
             _argument_symbols(fact.value, found)
     return {bare for bare in map(bare_descriptor, found) if is_type_descriptor(bare)}
+
+
+def called_types(facts: Iterable[Fact]) -> set[str]:
+    """The class each static call of the module's own facts may name: `fastapi/applications#`
+    called `FastAPI` names `fastapi/applications/FastAPI#` where that is a class (ruling R17).
+    A file writes the call on the module, as it cannot see what the name is, and calling a
+    class constructs it: the class gets a header so the resolver can read the construction."""
+    found: set[str] = set()
+    for fact in facts:
+        if (
+            isinstance(fact, CallSiteFact)
+            and fact.invoke_kind == "static"
+            and fact.target.owner is not None
+            and fact.target.name is not None
+        ):
+            named = member_type(fact.target.owner, fact.target.name)
+            if named is not None:
+                found.add(bare_descriptor(named))
+    return found
 
 
 def _type_symbols(written: TypeRef, into: set[str]) -> None:

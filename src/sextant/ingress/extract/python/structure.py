@@ -42,6 +42,7 @@ from sextant.ingress.extract.python.calls import (
     INIT,
     BodyReader,
     FileContext,
+    ModuleType,
     ParameterValues,
     Scope,
     is_stub_body,
@@ -49,7 +50,6 @@ from sextant.ingress.extract.python.calls import (
 )
 from sextant.ingress.extract.python.imports import (
     Binding,
-    CallableType,
     ModuleIndex,
     ProjectNames,
     Target,
@@ -112,7 +112,7 @@ def file_facts(tree: ast.Module, context: FileContext, last_line: int) -> FileFa
     writer.module(tree, last_line)
     if writer.agrees(writer.module_types()):
         return FileFacts(writer.facts, writer.not_read)
-    known: dict[str, str | CallableType] = {}
+    known: dict[str, ModuleType] = {}
     # Each reading that does not end adds a type to at least one name.
     limit = len(writer.written_names()) + 1
     for _ in range(limit):
@@ -218,7 +218,7 @@ class _Writer(BodyReader):
         self,
         context: FileContext,
         rebound: set[str],
-        module_types: dict[str, str | CallableType] | None,
+        module_types: dict[str, ModuleType] | None,
     ) -> None:
         self._context = context
         self.facts: list[Fact] = []
@@ -647,15 +647,23 @@ class _Writer(BodyReader):
 
 def header_types(
     tree: ast.Module, module: str, types: TypeScope, is_package: bool
-) -> tuple[dict[str, ClassShape], dict[str, TypeRef], dict[str, TypeRef], dict[str, TypeRef]]:
+) -> tuple[
+    dict[str, ClassShape],
+    dict[str, TypeRef],
+    dict[str, TypeRef],
+    dict[str, TypeRef],
+    dict[str, tuple[Target, ...]],
+]:
     """What another file's header says (`project.ProjectHeaders`): its class shapes, the
-    returns its `def`s declare, the attributes its class bodies declare and the type each
-    module-level type alias is, read as this file's own are. An alias bound two ways, or
-    whose type the file does not name, has none."""
+    returns its `def`s declare, the attributes its class bodies declare, the type each
+    module-level type alias is and the function each module-level name is written from
+    (`factory_calls`), read as this file's own are. An alias bound two ways, or whose
+    type the file does not name, has none."""
     classes = class_shapes(tree.body, module, types.names, types)
     returns, fields = declared_types(
         tree.body, module, types, is_package=is_package, index=types.index
     )
+    factories = factory_calls(tree, types)
     aliases: dict[str, TypeRef] = {}
     for name, binding in types.names.items():
         if len(binding.targets) != 1:
@@ -666,7 +674,58 @@ def header_types(
         typed = type_ref(target.alias_of, types) if target.alias_of is not None else None
         if typed is not None:
             aliases[name] = typed
-    return classes, returns, fields, aliases
+    return classes, returns, fields, aliases, factories
+
+
+def factory_calls(tree: ast.Module, types: TypeScope) -> dict[str, tuple[Target, ...]]:
+    """The function each module-level name is written from, where every write to it in the
+    file is a call of a named function (`APIRouter = get_api_router_class(APIRoute)`), by
+    name: the function's target, as the file binds it. What the call returns is read by
+    `project.ProjectHeaders.class_object`, which may read another file's header (ruling
+    R17). A name some statement binds in a way not read as a write (`_rebound_names`), that
+    the file also binds as a function, a class or an import, or that a write gives any other
+    value, has none: the resolver follows its writes."""
+    rebound = _rebound_names(tree)
+    written: dict[str, list[Target | None]] = {}
+    for node in _module_level(tree.body):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        called = _called_function(value, types)
+        for target in targets:
+            for name in _names(target):
+                written.setdefault(name, []).append(
+                    called if isinstance(target, ast.Name) else None
+                )
+    found: dict[str, tuple[Target, ...]] = {}
+    for name, writes in written.items():
+        binding = types.names.get(name)
+        if (
+            name in rebound
+            or binding is None
+            or any(target.kind != "variable" for target in binding.targets)
+            or any(write is None for write in writes)
+        ):
+            continue
+        found[name] = tuple(dict.fromkeys(write for write in writes if write is not None))
+    return found
+
+
+def _called_function(value: ast.expr, types: TypeScope) -> Target | None:
+    """The one function a call written `f(...)` names, as the file binds `f`; None for any
+    other value."""
+    if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Name):
+        return None
+    binding = types.names.get(value.func.id)
+    if binding is None or len(binding.targets) != 1:
+        return None
+    (target,) = binding.targets
+    if target.kind not in (None, "function") or target.member is None or "." in target.member:
+        return None
+    return target
 
 
 def declared_types(

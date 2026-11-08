@@ -112,8 +112,9 @@ def _edges(workspace: DuckDbWorkspace, site: tuple[str, int]) -> list[dict[str, 
 
 def test_constructor_local_binds(tmp_path: Path):
     """`from app.a import Session; s = Session(); s.get()`: the scanner writes the class
-    call as a static call on the module (it cannot see that `Session` is a class), and the
-    resolver reads it as that class's constructor, so `s` is a `Session`."""
+    call as a static call on the module, and the resolver reads it as that class's
+    constructor. The scanner also knows `Session` is a class by `a.py`'s header (ruling R17),
+    so `s.get` is written with its owner and needs no bound receiver."""
     workspace = _resolved(
         tmp_path,
         {
@@ -122,10 +123,13 @@ def test_constructor_local_binds(tmp_path: Path):
         },
     )
     site = _site(workspace, "app/b#f(sig_dd69782a).", "get")
-    rows = _bound(workspace, site)
-    assert [(row["owner"], row["resolution"], row["evidence"]) for row in rows] == [
-        (_SESSION, "resolved", "syntax")
+    (owner,) = [
+        row["owner"]
+        for row in workspace.query("call_sites")
+        if (row["caller"], row["ordinal"]) == site
     ]
+    assert owner == _SESSION
+    assert _bound(workspace, site) == []
     assert [row["callee"] for row in _edges(workspace, site)] == [
         _PREFIX + "app/a/Session#get(sig_dd69782a)."
     ]
@@ -467,16 +471,19 @@ def test_no_caller_is_external(tmp_path: Path):
 
 
 def test_rounds_stop_when_nothing_new_binds(tmp_path: Path):
-    """`r.run(Session())` in another file than `Runner` is bound in round 1; only then is
-    `Runner.run` called by anything, so its parameter's call binds in round 2; round 3 binds
-    nothing and the rounds stop."""
+    """`r.run(Session())` in another file than `Runner` is bound in round 1 (`r` is what
+    `make` returns, which the scanner does not type); only then is `Runner.run` called by
+    anything, so its parameter's call binds in round 2; round 3 binds nothing and the rounds
+    stop."""
     facts = _facts(
         tmp_path,
         {
             "a.py": _A + "class Runner:\n    def run(self, s):\n        s.get('/r')\n",
             "b.py": "from app.a import Runner, Session\n"
+            "def make():\n"
+            "    return Runner()\n"
             "def main():\n"
-            "    r = Runner()\n"
+            "    r = make()\n"
             "    r.run(Session())\n",
         },
     )

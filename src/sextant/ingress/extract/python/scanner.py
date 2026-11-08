@@ -25,6 +25,7 @@ from sextant.ingress.extract.python.calls import FileContext
 from sextant.ingress.extract.python.imports import ModuleIndex, module_path
 from sextant.ingress.extract.python.libraries import (
     Libraries,
+    called_types,
     record_files,
     referenced_types,
 )
@@ -109,6 +110,9 @@ class PythonScanner:
         # from (D00 §5 `type_header`).
         own: set[str] = set()
         referenced: set[str] = set()
+        # The classes a static call may name (`called_types`): a header where a library
+        # declares one, and no count of unlocated types where none does.
+        called: set[str] = set()
         # Only the module's own scan keeps documents (OI-325): an opted-in library's is read
         # whole into a subtree the stage discards before every run (D04 §2a).
         inputs = _inputs(request, prefix, libraries) if request.origin is None else None
@@ -156,6 +160,7 @@ class PythonScanner:
                 library_notes.extend(kept.library_notes)
                 own.update(kept.declared)
                 referenced.update(kept.referenced)
+                called.update(kept.called)
                 records.append(kept.record)
                 continue
             try:
@@ -185,9 +190,11 @@ class PythonScanner:
             facts += len(read.facts)
             declared = _declared(read.facts)
             types = referenced_types(read.facts)
+            maybe = called_types(read.facts)
             if libraries is not None:
                 own.update(declared)
                 referenced |= types
+                called |= maybe
             if inputs is not None:
                 asked = sorted(index.asked)
                 records.append(
@@ -202,6 +209,7 @@ class PythonScanner:
                                 "library_notes": file_library_notes,
                                 "declared": sorted(declared),
                                 "referenced": sorted(types),
+                                "called": sorted(maybe),
                                 "content_hash": document.content_hash,
                                 "header": own_header,
                             },
@@ -215,7 +223,7 @@ class PythonScanner:
             # module holds, so `documents` does not count it.
             libraries.notes = []
             document_id = hashlib.sha256(f"type-headers:{request.module_id}".encode()).hexdigest()
-            headers, unlocated, not_read = libraries.headers(referenced, own, document_id)
+            headers, unlocated, not_read = libraries.headers(referenced, own, document_id, called)
             write_fact_file(
                 request.out_dir / _HEADER_FILE,
                 _header_document(request, document_id, libraries.identity, unlocated),
@@ -245,6 +253,7 @@ class _Kept:
     library_notes: list[str]
     declared: list[str]
     referenced: list[str]
+    called: list[str]
 
 
 def _inputs(request: ScanRequest, prefix: str, libraries: Libraries | None) -> str:
@@ -297,6 +306,7 @@ def _kept(
             [str(note) for note in detail["library_notes"]],
             [str(symbol) for symbol in detail["declared"]],
             [str(symbol) for symbol in detail["referenced"]],
+            [str(symbol) for symbol in detail["called"]],
         )
     except (ValueError, TypeError, KeyError):
         # A record this build cannot read — a damaged row, or one an older build wrote in
