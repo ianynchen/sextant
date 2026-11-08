@@ -327,7 +327,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-321 | [SEXTANT-315](https://app.plane.so/portolan/browse/SEXTANT-315/) | One reason list everywhere: configuration values, method lookup and hand-off reasons become a general reason plus a detail (ruled B, 2026-11-05) |
 | OI-322 | [SEXTANT-316](https://app.plane.so/portolan/browse/SEXTANT-316/) | Peer join fills one placeholder only: an address with two (${host}:${port}) is never resolved |
 | OI-323 | [SEXTANT-317](https://app.plane.so/portolan/browse/SEXTANT-317/) | A program that starts another program is not read as outbound |
-| OI-324 | [SEXTANT-318](https://app.plane.so/portolan/browse/SEXTANT-318/) | Python types not worked out: container elements, type-variable library returns, dataclass fields, isinstance |
+| OI-324 | [SEXTANT-318](https://app.plane.so/portolan/browse/SEXTANT-318/) | Python types not worked out: container elements, type-variable library returns, dataclass fields, isinstance — **closed 2026-11-08** (#98, #99; leftovers OI-345) |
 | OI-325 | [SEXTANT-319](https://app.plane.so/portolan/browse/SEXTANT-319/) | A warm Python analysis reuses nothing (polar warm 27.6 s against a 10 s target) — **closed 2026-11-07** (branch `cov/python-reuse`: a re-run keeps each unchanged file's facts and an unchanged resolve, D01 §7 "Reuse"; polar warm 3.0 s) |
 | OI-326 | [SEXTANT-320](https://app.plane.so/portolan/browse/SEXTANT-320/) | Python closures are not read: a nested def's read of an enclosing name is unresolved |
 | OI-327 | [SEXTANT-321](https://app.plane.so/portolan/browse/SEXTANT-321/) | exact_methods treats a Python classmethod as never overridden (fix before a Python catalog reads pass-through) |
@@ -348,6 +348,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-342 | [SEXTANT-336](https://app.plane.so/portolan/browse/SEXTANT-336/) | Constructor dispatch adds only a subtype's own __init__, missing an inherited mixin __init__ |
 | OI-343 | [SEXTANT-337](https://app.plane.so/portolan/browse/SEXTANT-337/) | The second binding round costs 5 s on polar after constructions answer instances |
 | OI-344 | [SEXTANT-338](https://app.plane.so/portolan/browse/SEXTANT-338/) | Type-variable rule limits: Enum members, constrained TypeVars, overload type arguments, __new__, imported class subscripts |
+| OI-345 | [SEXTANT-339](https://app.plane.so/portolan/browse/SEXTANT-339/) | Python type gaps left after OI-324: union receivers per member, body-first in the scanner, star imports in headers |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
