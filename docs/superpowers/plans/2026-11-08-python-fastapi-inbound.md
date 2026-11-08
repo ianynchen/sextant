@@ -616,6 +616,46 @@ empty_recipe: parameter_type     # Depends() with nothing: the parameter's type 
 - [ ] **Step 4:** Run, then the gate. Time polar (target: under 1 s added).
 - [ ] **Step 5:** Commit.
 
+### Task 4b: The scanner types constructions (ruling R17)
+
+**Needs:** nothing new: decorator design §3b option A (approved) and spec §3a ("read as the
+typing specification defines them").
+
+**Why:** Task 5 found every route call owner-less in the facts. `app = FastAPI()` and polar's
+`router = APIRouter(...)` (the class from a factory typed `type[_APIRouter]` in another file)
+give their names no type, so `app.get` / `router.get` have no `target.owner` and no `fluent`
+root can match (polar: 1,653 calls). The design's "already read" was not true.
+
+**Files:** `ingress/extract/python/calls.py`, `libraries.py`, `project.py`, `typing_rules.py`;
+the header pass that lists referenced types; `domain/version.py` (facts +1); M03, D00.
+
+**Interfaces — produces:**
+- Calling a class (library or project) gives an instance of it: the call's result is typed
+  `X`, and a later `name.m()` on the name it is bound to is written with `owner: X`,
+  `evidence: declared` (as click's `Group` in plan 1).
+- A name whose value is typed `type[X]` (a parameter, a return, a module field, in this file or
+  another file through the project headers) is the class `X`; calling it gives an instance of
+  `X`. A `virtual <init>` stays as written where the class is not known (R37 unchanged).
+- A module-level name read later in the same file takes the type of the values written to it in
+  that file (design §3b): one type or the closed list. Writes from other files stay the
+  resolver's.
+- `referenced_types` counts a class that a static call names, so `fastapi/applications/FastAPI#`
+  gets a type header.
+
+- [ ] **Step 1: Failing tests:**
+  - `test_a_library_class_call_types_the_name_it_is_bound_to` (`app = FastAPI()`, `app.get` →
+    owner `fastapi/applications/FastAPI#`);
+  - `test_a_type_of_x_factory_in_another_file_types_the_construction` (polar's shape);
+  - `test_a_project_class_construction_types_its_name`;
+  - `test_a_name_written_two_classes_is_the_closed_list`;
+  - `test_a_class_only_a_static_call_names_gets_a_header`;
+  - `test_a_name_rebound_in_another_file_is_not_typed_here`.
+- [ ] **Step 2:** Run; expect FAIL.
+- [ ] **Step 3:** Implement. Update M03 and D00.
+- [ ] **Step 4:** Gate and pins (JVM identical). Polar and Sextant: report owned call sites and
+  bound receivers before and after, each change by cause; time polar.
+- [ ] **Step 5:** Commit (`feat(python): the scanner types constructions (plan 2 task 4b)`).
+
 ### Task 5: `fastapi.yml` routes — verbs, paths, handlers, responses
 
 **Needs:** N8, N9.
