@@ -772,7 +772,7 @@ wire names, required fields and JSON types, and closes the shape where every fie
 is pinned. On two real services, measured against FastAPI's own route table in each service's
 own environment: polar 668 of 671 (method, path) pairs (the 3 others are one `partial` row),
 mealie 289 of 289. The §5.1 FastAPI row ships, so the Python REST-in cell changes. The essay
-has what is read, what is not, and the open issues (OI-347 to OI-409).
+has what is read, what is not, and the open issues (OI-346 to OI-416).
 
 Per-language essays — toolchain detail, payload handling, structural oddities:
 [Go](coverage/go.md) · [Rust](coverage/rust.md) · [Python](coverage/python.md) ·

@@ -59,14 +59,16 @@ here would restate those documents rather than add anything.
   parameters, recipes and wire names with what FastAPI and pydantic print for the same code
   (`tests/e2e/fastapi_oracle.py`); every row Sextant writes for the fixture is pinned. Measured
   against FastAPI's own route table: polar 668 of 671 (method, path) pairs, mealie 289 of 289.
-  Polar cold 53.5 s (target 60 s), warm 2.2 s; mealie 15.2 s and 1.3 s. By task:
-  - **Facts** (tasks 2, 3, 4b, 8, 9c; fact schema 7 → 12). A parameter's default and its
+  Polar cold 36.7 s (target 60 s), warm 1.5 s; mealie 12.4 s and 1.2 s (test code not read). By
+  task:
+  - **Facts** (tasks 2, 3, 4b, 8, 9, 9c, 10b; fact schema 7 → 13). A parameter's default and its
     annotation's value are facts (`Parameter.default`, `annotation_value`), and a subscripted
     class is the `__class_getitem__` call it is. `type X = v` writes `v` as `X`'s value
     (ruling R6). A class-body annotation is an instance field with its class-body value
     (PEP 526). A construction is typed by the scanner (calling a class gives an instance of it;
     a metaclass `__call__` decides), so `app = FastAPI(); @app.get` has an owner on the facts.
-    A generator's yields are facts (N10). Library class headers carry their fields, read by the
+    A generator's yields are facts (N10), `yielded` written only where true so a rewritten JVM
+    fact file keeps its bytes. Library class headers carry their fields, read by the
     same reader as module classes. Old fact sets are read again once.
   - **Speed** (tasks 4c, 4d, 4e, 8, 9b). The library type headers are kept when nothing they
     depend on changed (polar warm 28.3 s → 1.95 s), and the header pass reads only the class
@@ -137,7 +139,7 @@ here would restate those documents rather than add anything.
     (else `test_*.py` and `*_test.py`), every `conftest.py`, and every `tests` or `test`
     folder. Polar loses the 31 rows of apps that its tests build, and 648 of 2,053 files are
     not read; mealie loses no row, and 209 of 705 files are not read.
-  - **Open issues** OI-347 to OI-409 (Plane SEXTANT-341 to SEXTANT-403) record what is not
+  - **Open issues** OI-346 to OI-416 (Plane SEXTANT-340 to SEXTANT-410) record what is not
     read; the Python essay (`docs/coverage/python.md`) lists them by shape.
 
 - **The value walk works out each parameter's paths upward once** (ruling R39; M04). A

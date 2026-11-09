@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any, get_origin
 
+from fastapi.dependencies.utils import _get_flat_fields_from_params
 from fastapi.routing import APIRoute, _iter_routes_with_context
 from starlette.routing import Mount
 
@@ -76,7 +77,9 @@ def _row(route: Any, context: Any, prefix: str) -> dict[str, Any]:
         "endpoint": source.endpoint.__qualname__,
         "endpoint_module": source.endpoint.__module__,
         "response_model": _model_name(source.response_model),
-        "query": _fields(flat["query"]),
+        # A query model (`f: Annotated[Filter, Query()]`) is read as its fields, as FastAPI 0.162
+        # reads it (`request_params_to_args`, `_get_flat_fields_from_params`).
+        "query": _fields(_get_flat_fields_from_params(flat["query"])),
         "header": _fields(flat["header"]),
         "cookie": _fields(flat["cookie"]),
         "path_params": _fields(flat["path"]),

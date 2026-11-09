@@ -382,7 +382,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-376 | [SEXTANT-370](https://app.plane.so/portolan/browse/SEXTANT-370/) | The scanner types pydantic's UUID4 (an Annotated alias) as object |
 | OI-377 | [SEXTANT-371](https://app.plane.so/portolan/browse/SEXTANT-371/) | Recipe paths count toward PATH_CAP, so 10 polar sites lost an owner to non_enumerable |
 | OI-378 | [SEXTANT-372](https://app.plane.so/portolan/browse/SEXTANT-372/) | A dependency's own body parameters are not read, so they give no request column |
-| OI-379 | [SEXTANT-373](https://app.plane.so/portolan/browse/SEXTANT-373/) | A dataclass or library class used as a recipe has no __init__ body read: no parameters, no root |
+| OI-379 | [SEXTANT-373](https://app.plane.so/portolan/browse/SEXTANT-373/) | A dataclass, library class or pydantic model used as a recipe has no __init__ body read: no parameters, no root |
 | OI-380 | [SEXTANT-374](https://app.plane.so/portolan/browse/SEXTANT-374/) | A recipe that is a bound method or a staticmethod read through its class ends not_readable |
 | OI-381 | [SEXTANT-375](https://app.plane.so/portolan/browse/SEXTANT-375/) | The named-function rule takes a @property getter as the function, and a def written twice as both bodies |
 | OI-382 | [SEXTANT-376](https://app.plane.so/portolan/browse/SEXTANT-376/) | The marker reader loses the call at a list element (dependencies=[Depends(f)]) |
@@ -396,7 +396,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-390 | [SEXTANT-384](https://app.plane.so/portolan/browse/SEXTANT-384/) | Generic models in shapes: a nested type argument is lost, and a directly bound type variable has no nullability |
 | OI-391 | [SEXTANT-385](https://app.plane.so/portolan/browse/SEXTANT-385/) | pydantic configuration merge differs from pydantic in two contrived forms (breadth-first generator, unset vs False) |
 | OI-392 | [SEXTANT-386](https://app.plane.so/portolan/browse/SEXTANT-386/) | The known_types mirror test chooses entries by their by: suffix, so a duplicate type entry is not caught |
-| OI-393 | [SEXTANT-387](https://app.plane.so/portolan/browse/SEXTANT-387/) | model_fields imports parameter_markers._site, a private name, and the mirror test imports the scanner module |
+| OI-393 | [SEXTANT-387](https://app.plane.so/portolan/browse/SEXTANT-387/) | model_fields imports private names (parameter_markers._site, rooting._catalog_symbol) and duplicates mounts.weaker; the mirror test imports the scanner module |
 | OI-394 | [SEXTANT-388](https://app.plane.so/portolan/browse/SEXTANT-388/) | required differs from pydantic where a default is given twice (Annotated metadata and value) or by a constant holding `...` |
 | OI-395 | [SEXTANT-389](https://app.plane.so/portolan/browse/SEXTANT-389/) | response_model=List[X] (typing.List, Dict) is unresolved |
 | OI-396 | [SEXTANT-390](https://app.plane.so/portolan/browse/SEXTANT-390/) | 16 pydantic fields keep required NULL: Field arguments through *args (UpdatedAtField), a computed default |
@@ -419,6 +419,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-413 | [SEXTANT-407](https://app.plane.so/portolan/browse/SEXTANT-407/) | A call cycle memoises a partial answer, which can invent an alternative or drop a test |
 | OI-414 | [SEXTANT-408](https://app.plane.so/portolan/browse/SEXTANT-408/) | A test that chooses WHAT is registered (a loop's hasattr filter) marks the row "not evaluated" |
 | OI-415 | [SEXTANT-409](https://app.plane.so/portolan/browse/SEXTANT-409/) | _simplest keeps the lexicographically first order of a guard set reached in two orders, not the outermost-first one |
+| OI-416 | [SEXTANT-410](https://app.plane.so/portolan/browse/SEXTANT-410/) | An include_router of a router a library builds loses its routes with no trace |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

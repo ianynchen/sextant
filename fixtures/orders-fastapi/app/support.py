@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
-# Served only where the deployment turns the support routes on (`app/flags.py`, `app/main.py`).
+# Included only under `if flags.SUPPORT_ROUTES:` (`app/main.py`), a repository constant
+# (`app/flags.py`) that Sextant does not evaluate.
 router = APIRouter()
 
 

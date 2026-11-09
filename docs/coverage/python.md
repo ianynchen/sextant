@@ -160,11 +160,11 @@ environment: it imports the app and asks FastAPI. Sextant never runs the code it
 | | `fixtures/orders-fastapi` | polar `server/` | mealie |
 |---|---|---|---|
 | FastAPI routes (method, path pairs) | 13 (14) | 625 (671) | 289 (289) |
-| Sextant FastAPI rows | 14 | 720 | 293 |
+| Sextant FastAPI rows | 14 | 689 | 293 |
 | Pairs FastAPI serves that Sextant finds | 14 of 14 | 668 of 671 | 289 of 289 |
-| Rows `resolved` / `partial` / `unresolved` | 14 / 0 / 0 | 614 / 61 / 45 | 245 / 47 / 1 |
-| Cold analysis (target 60 s, ceiling 300 s) | 2.4 s | 53.5 s | 15.2 s |
-| Warm analysis, no file changed (target 10 s) | | 2.2 s | 1.3 s |
+| Rows `resolved` / `partial` / `unresolved` | 14 / 0 / 0 | 583 / 61 / 45 | 245 / 47 / 1 |
+| Cold analysis (target 60 s, ceiling 300 s) | 2.3 s | 36.7 s | 12.4 s |
+| Warm analysis, no file changed (target 10 s) | | 1.5 s | 1.2 s |
 
 - **The fixture equals FastAPI.** `tests/e2e/test_orders_fastapi.py` compares each route's
   method, path, handler and response model, its parameters (kind, wire name, required), its
@@ -275,7 +275,7 @@ The comparison with a type checker, which solves the first four exactly, is
 | a group made by a class constructor | not tied to its entry-point name | Task 9b re-review, logged |
 | a program started by the code (`subprocess`, `java -jar`) | not recorded | OI-323 |
 
-**FastAPI and pydantic** (each an open issue in Plane; the full list is OI-347 to OI-409 in
+**FastAPI and pydantic** (each an open issue in Plane; the full list is OI-346 to OI-416 in
 `docs/open-issues.md`):
 
 | Shape | What happens | Record |

@@ -259,6 +259,21 @@ def test_jvm_parameters_validate_unchanged():
     assert plain.default is None and plain.annotation_value is None
 
 
+def test_a_return_writes_no_yielded_key_unless_it_yields(tmp_path: Path):
+    """`yielded` is written only where true (plan 2 final review Minor 1): a JVM `method_return`
+    as the extractor writes it has no such key, so a JVM fact file rewritten by
+    `write_fact_file` keeps its bytes; a Python `yield` keeps `"yielded":true`."""
+    line = '{"document_id":"doc_1","kind":"method_return","method":"m","ordinal":0,"value":null}'
+    written = {"document_id": "doc_1", "kind": "method_return", "method": "m", "ordinal": 0}
+    path = tmp_path / "facts.jsonl"
+    write_fact_file(path, DOCUMENT, [MethodReturnFact.model_validate_json(line)])
+
+    assert path.read_text().splitlines()[1] == line
+    yielded = MethodReturnFact.model_validate({**written, "yielded": True})
+    assert yielded.model_dump(mode="json")["yielded"] is True
+    assert "yielded" not in MethodReturnFact.model_validate(written).model_dump(mode="json")
+
+
 def test_a_class_symbol_lists_its_implemented_interfaces_in_declaration_order():
     # `implemented_interfaces`: erased interface symbols, in the order the
     # class declares them (D00 §5a) — round-trips like `supertype` above.
