@@ -24,12 +24,17 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.open_questions import record_open_questions
-from sextant.application.resolve.parameter_markers import parameter_markers
+from sextant.application.resolve.parameter_markers import (
+    parameter_markers,
+    producing_calls,
+    recipe_sites,
+)
 from sextant.application.resolve.request_requirements import (
     ParameterReading,
     ParameterRules,
     body_field_requirement,
     parameter_rules,
+    read_dependant,
     read_parameters,
     request_param_calls,
     request_param_rows,
@@ -174,6 +179,7 @@ from sextant.application.resolve.values import (
     called_function,
     decorators_passed,
     producer_paths,
+    recipe_bodies,
     resolve_positions,
     undecorated_maker,
 )
@@ -267,8 +273,10 @@ _UNREAD_ORDER = "unread"
 # address (`path`, `peer`, `path_kind`, from the url, its parts, the options object a client was
 # built from and the channel a messaging chain names), the payloads (`request_shape`,
 # `response_shape`), the handler and its media (`consumes`, `produces`), whether and in which order
-# the chain derives a row at all (`serves`, `order`), and what a `collects` step gathers
-# (`collected`, the metadata). A column added to the row adds its capture here.
+# the chain derives a row at all (`serves`, `order`), what a `collects` step gathers
+# (`collected`, the metadata), and the recipes a route runs before its handler (`dependencies`,
+# their parameters the metadata, plan 2026-11-08 N6). A column added to the row adds its
+# capture here.
 PUBLISHED_PARTS = frozenset(
     {
         "http_method",
@@ -293,6 +301,7 @@ PUBLISHED_PARTS = frozenset(
         "serves",
         "order",
         "collected",
+        "dependencies",
     }
 )
 # The capture names a fluent step may carry that are no part of a row (review 3 re-review 2,
@@ -430,6 +439,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # discipline: a per-caller insert would be one statement per method in the module.
     caller_parameters = workspace.once(declared_parameters_of)
     metadata: list[dict[str, Any]] = []
+    # The recipes a route's framework runs before its handler, one `roots` row each at the
+    # route's address (plan 2026-11-08 N11), and the recipe calls each `dependencies=` written
+    # on a route, a router or an include names, read once per place and path.
+    recipe_roots: dict[tuple[str, str | None, str | None, str | None, str | None, str | None], None]
+    recipe_roots = {}
+    dependency_calls: dict[Any, tuple[Mapping[str, Any], ...]] = {}
     # DR-6: the declarations the framework would raise on, accumulated across every caller
     # and filed once, the `rows`/`metadata` discipline.
     refusals: dict[tuple[str, str | None, str | None], dict[str, Any]] = {}
@@ -507,6 +522,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 unread_prefixes=unread_prefixes,
                 response_fallback=response_fallback,
                 parameter_rules=parameters,
+                recipe_roots=recipe_roots,
+                dependency_calls=dependency_calls,
             )
         # A mount's chain (spec §3c) is not a route: what Vert.x refuses of it is recorded,
         # and it derives a row only where it was given a handler as well.
@@ -571,6 +588,26 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 handler=None,
             )
     workspace.derive("call_endpoints", rows=rows)
+    if recipe_roots:
+        # Written beside the endpoint rows, and kept by `record_roots` as the entry points are.
+        workspace.derive(
+            "roots_insert",
+            rows=[
+                {
+                    "handler": handler,
+                    "root_kind": str(RootKind.INBOUND_ENDPOINT),
+                    "protocol": protocol,
+                    "method": method,
+                    "path": path,
+                    "method_kind": method_kind,
+                    "path_kind": path_kind,
+                }
+                for handler, protocol, method, path, method_kind, path_kind in sorted(
+                    recipe_roots,
+                    key=lambda key: tuple((part is not None, part or "") for part in key),
+                )
+            ],
+        )
     if bindings:
         workspace.derive("channel_bindings_insert", rows=bindings)
     # After the endpoints, never before: an entry names the endpoint it belongs to by that
@@ -962,6 +999,13 @@ class _DeriveContext:
     # handler's parameters carry (plan 2026-11-08-python-fastapi-inbound N3, N4), read on each
     # row with the request body (`_row_parameters`). None for every other catalog.
     parameter_rules: ParameterRules | None = None
+    # The recipes the rows' framework runs before their handlers (`_row_parameters`), as
+    # `roots` rows to write (N11), and the recipe calls a `dependencies=` position names,
+    # read once (`_dependency_calls`). None for a catalog that reads no parameters.
+    recipe_roots: (
+        dict[tuple[str, str | None, str | None, str | None, str | None, str | None], None] | None
+    ) = None
+    dependency_calls: dict[Any, tuple[Mapping[str, Any], ...]] | None = None
 
 
 def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
@@ -1385,9 +1429,17 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
         # body among them: read per row, since a path variable a prefix adds is the path's.
         row_request_shape = request_shape
         parameter_entries: list[dict[str, Any]] = []
+        recipes: tuple[str, ...] = ()
         if context.parameter_rules is not None and direction == "inbound" and handler is not None:
-            refused_by, row_request_shape, parameter_entries = _row_parameters(
-                handler, verb, path, url_resolution, context.parameter_rules, context
+            refused_by, row_request_shape, parameter_entries, recipes = _row_parameters(
+                handler,
+                verb,
+                path,
+                url_resolution,
+                context.parameter_rules,
+                context,
+                captures.get("dependencies"),
+                prefix,
             )
             # A refused route is never published, whether or not this run files questions.
             if refused_by is not None:
@@ -1520,6 +1572,7 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                 entries,
             )
             seen = context.seen.get(key)
+            _recipe_roots(context, recipes, verb, path, method_kind, path_kind)
             if seen is not None:
                 seen.merged(published, resolution)
                 continue
@@ -1560,6 +1613,7 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                 entries,
             )
             seen = context.exact.get(one_call)
+            _recipe_roots(context, recipes, verb, path, method_kind, path_kind)
             if seen is not None:
                 seen.merged(published, resolution)
                 continue
@@ -2237,20 +2291,29 @@ def _row_parameters(
     address: str,
     rules: ParameterRules,
     context: "_DeriveContext",
-) -> tuple[str | None, str | None, list[dict[str, Any]]]:
+    dependencies: Any = None,
+    prefix: Prefix = ROOT,
+) -> tuple[str | None, str | None, list[dict[str, Any]], tuple[str, ...]]:
     """What the handler's parameters demand of a request on one row (plan
     2026-11-08-python-fastapi-inbound N3, N4): the reason the framework refuses the registration
     (None where it does not), the request body's descriptor, and one `endpoint_metadata` entry
     per request parameter (`request_requirements.read_parameters`), `caller` the handler as on
     every inbound entry. The body is the parameter the catalog's `request_body` rule picks with
     each parameter's marker call and kind beside its signature (`contracts._body_parameter`).
-    A handler whose parameters were not read demands nothing that can be said."""
+    A handler whose parameters were not read demands nothing that can be said.
+
+    **The recipes the framework runs first** (N5, N6), last: each a handler parameter's marker
+    names, and each the row's `dependencies=` name (the route's own, `dependencies`, and every
+    router's and include's it is served through, `MountReader.dependencies_of` on `prefix`).
+    Their own parameters join the row's, recursively (`request_requirements.read_dependant`),
+    and the bodies that run are returned for the row's `roots` (N11)."""
     workspace, index = context.workspace, context.values
     if workspace is None or index is None:
-        return None, None, []
-    parameters = workspace.once(declared_parameters_of).get(handler)
+        return None, None, [], ()
+    declared = workspace.once(declared_parameters_of)
+    parameters = declared.get(handler)
     if parameters is None:
-        return None, None, []
+        return None, None, [], ()
     markers = parameter_markers(index)
     carrier = context.carrier_rules
     dispatch = workspace.once(dispatch_of)
@@ -2273,7 +2336,30 @@ def _row_parameters(
         weaker(str(Resolution.RESOLVED), address),
     )
     if reading.refused is not None:
-        return reading.refused, None, []
+        return reading.refused, None, [], ()
+    recipe_calls = index.recipes.calls
+    rows = list(reading.rows)
+    recipes: tuple[str, ...] = ()
+    if recipe_calls:
+        calls: list[tuple[Mapping[str, Any], tuple[str, int] | None]] = [
+            (site, (handler, position))
+            for position in range(len(parameters))
+            for site in recipe_sites(markers.get((handler, position), ()), recipe_calls)
+        ]
+        calls.extend((site, None) for site in _dependency_calls(dependencies, prefix, context))
+        dependant = read_dependant(
+            rules,
+            calls,
+            lambda call, parameter: recipe_bodies(index, call, parameter),
+            declared.get,
+            lambda method, position: markers.get((method, position), ()),
+            lambda found: recipe_sites(found, recipe_calls),
+            variables,
+            kind_of,
+            weaker(str(Resolution.RESOLVED), address),
+        )
+        rows.extend(row for row in dependant.rows if row not in reading.rows)
+        recipes = dependant.recipes
     every: list[tuple[int, dict[str, Any]]] = []
     body = _body_type(
         {"parameters": list(parameters)},
@@ -2312,9 +2398,67 @@ def _row_parameters(
             "evidence": str(Evidence.DECLARED),
             "requirement": requirement,
         }
-        for kind, name, requirement, resolution in reading.rows
+        for kind, name, requirement, resolution in rows
     ]
-    return None, shape, entries
+    return None, shape, entries, recipes
+
+
+def _dependency_calls(
+    dependencies: Any, prefix: Prefix, context: "_DeriveContext"
+) -> tuple[Mapping[str, Any], ...]:
+    """The recipe calls the `dependencies=` a row runs name (N6): the route's own captured
+    argument, read on the row's path, then every router's and include's it is served through
+    (`MountReader.dependencies_of`), each element of a list its own call, each position read
+    once per path (`_DeriveContext.dependency_calls`)."""
+    index = context.values
+    if index is None:
+        return ()
+    positions: list[tuple[Mapping[str, Any], int, Path | None]] = []
+    at = dependencies.get(_CAPTURED_AT) if isinstance(dependencies, dict) else None
+    site = None if at is None else index.sites.get((str(at[0]), int(str(at[1]))))
+    if site is not None and at is not None:
+        positions.append((site, int(at[2]), context.path))
+    reader = context.mounts or context.routers
+    if reader is not None:
+        positions.extend(reader.dependencies_of(prefix))
+    found: dict[tuple[str, int], Mapping[str, Any]] = {}
+    cache = context.dependency_calls if context.dependency_calls is not None else {}
+    for written, slot, path in positions:
+        key = (str(written["caller"]), int(str(written["ordinal"])), slot, path)
+        if key not in cache:
+            cache[key] = tuple(
+                call
+                for call in producing_calls(index, written, slot, within=path)
+                if (str(call.get("owner")), str(call["name"])) in index.recipes.calls
+            )
+        for call in cache[key]:
+            found.setdefault((str(call["caller"]), int(str(call["ordinal"]))), call)
+    return tuple(found.values())
+
+
+def _recipe_roots(
+    context: "_DeriveContext",
+    recipes: Sequence[str],
+    verb: str | None,
+    path: str | None,
+    method_kind: str | None,
+    path_kind: str | None,
+) -> None:
+    """One `roots` row per recipe the row's framework runs before its handler (N11): at the
+    row's own address, `inbound_endpoint`, so the trace from that address starts at each."""
+    if context.recipe_roots is None:
+        return
+    for recipe in recipes:
+        context.recipe_roots.setdefault(
+            (
+                recipe,
+                context.catalog.protocol,
+                verb,
+                path,
+                method_kind,
+                path_kind if path is not None else None,
+            )
+        )
 
 
 def _embeds_one(

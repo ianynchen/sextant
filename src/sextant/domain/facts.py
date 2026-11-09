@@ -649,8 +649,8 @@ class MethodReturnFact(BaseModel):
     value: CallArgument | None = None
     # A generator's `yield` (plan 2026-11-08-python-fastapi-inbound N10): `value` is what it
     # hands out, not what a call of the method returns, which is the generator object (the
-    # method's own `unresolved` return beside it). False for every return, and for every JVM
-    # fact, which never writes it.
+    # method's own `unresolved` return beside it). False for every return; the JVM extractor
+    # never writes it.
     yielded: bool = False
 
 

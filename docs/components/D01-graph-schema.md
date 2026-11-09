@@ -1298,7 +1298,14 @@ row per command path that reaches a handler — `protocol`, `method` and both ma
 `path` the command's words joined by one space, the outermost the program's name
 (`sextant module analyze`), and `handler` NULL where the command's function is behind a
 library decorator no value model states (such a row starts no trace) — and `record_roots`
-keeps those rows beside the two kinds it derives. The table is emptied once per resolve by the pipeline, before any engine runs
+keeps those rows beside the two kinds it derives. **A recipe a framework runs before a route's
+handler is a root at that route's address** (plan 2026-11-08 N11): an `inbound_endpoint` row
+whose `handler` is the recipe's body (FastAPI's `Depends`: a function, a class's constructor,
+an instance's class `__call__`) and whose address is the endpoint row's, written by the engine
+that reads the route's parameters ([D02](D02-catalog-schema.md) §2k) and kept by `record_roots`
+as an entry point is. It means: a request to this address runs this method before the handler,
+and its trace starts there too. The handler does not call it, so no `call_edges` row stands in
+for it. The table is emptied once per resolve by the pipeline, before any engine runs
 (design 2026-11-06-reading-decorators §5; `docs/open-issues.md` OI-22, closed).
 
 **One ROOT per handler and kind; one ROW per address that reaches it.** A method serving

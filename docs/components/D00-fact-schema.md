@@ -1483,8 +1483,8 @@ generator object's own return, so `(method, ordinal)` stays one fact. A yield is
 call of the method still hands back the generator object, and the `method_returns` view leaves
 yields out; the one reader asking what a generator yields reads them apart (`method_yields`),
 as FastAPI hands a yield dependency's first yield to the parameter it fills. `yield from` hands
-on another iterator's values and is no value here. `yielded` is false on every other return and
-absent from every JVM fact. An `@overload` stub, and an abstract or `Protocol` method
+on another iterator's values and is no value here. `yielded` is false on every other return: the JVM
+extractor writes none, which reads as false. An `@overload` stub, and an abstract or `Protocol` method
 whose body is only `...`, `pass` or a docstring, has no `method_return`: it has no body.
 
 **`field_write` is a fact of its own, ANY method, direct traces only** — a method assigns a

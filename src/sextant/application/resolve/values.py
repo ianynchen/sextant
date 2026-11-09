@@ -131,11 +131,19 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from itertools import product
-from typing import Any
+from typing import Any, cast
 from weakref import WeakKeyDictionary
 
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.beans import Ambiguous, Injection, ProvidedBy, injected_parameters
+from sextant.application.resolve.beans import (
+    PARAMETER_TYPE,
+    Ambiguous,
+    Injection,
+    ProvidedBy,
+    RecipeCalls,
+    injected_parameters,
+    recipe_calls,
+)
 from sextant.application.resolve.dispatch import DYNAMIC, Dispatch, dispatch_of
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.domain.config_keys import carries_expression
@@ -796,6 +804,24 @@ class ValueIndex:
     # `parameter_markers`' answer for this index, once built (ruling R14): its one entry, or
     # none yet. Emptied with the index each binding round, as `suffixes` is.
     markers: list[Any] = dataclass_field(default_factory=list, compare=False, repr=False)
+    # What each generator yields (`method_return.yielded`, plan 2026-11-08 N10), by method, in
+    # `returned_values`' form: read only where a framework hands a parameter what a recipe
+    # yields (`_Walk._recipe_runs`). Empty for a JVM module.
+    yielded_values: Mapping[str, tuple[tuple[int, Mapping[str, Any]], ...]] = dataclass_field(
+        default_factory=dict
+    )
+    # Each function and method of a `c3` module by the name it binds, `(owner, name)` -> bare
+    # descriptors: what the call reader answers a read of that name with where nothing else
+    # writes it (`_Walk._binding`). Empty for a JVM module, whose names a `def` binds none.
+    named_functions: Mapping[tuple[str, str], tuple[str, ...]] = dataclass_field(
+        default_factory=dict
+    )
+    # The calls that name the recipe a parameter is filled with (`beans.recipe_calls`, N5,
+    # ruling R14), read at walk time beside the parameter's callers (`_Walk._parameter`).
+    recipes: RecipeCalls = dataclass_field(default_factory=RecipeCalls)
+    # `recipe_values`' answer per recipe call, for as long as this lives. Emptied with the
+    # index each binding round, as `suffixes` is.
+    recipes_read: dict[Any, Any] = dataclass_field(default_factory=dict, compare=False, repr=False)
     # `_Walk._mapping`'s answers, per class, for as long as this lives.
     mappings: dict[str, dict[str, dict[str, Mapping[str, Any]]] | None] = dataclass_field(
         default_factory=dict, compare=False, repr=False
@@ -1383,6 +1409,16 @@ def value_index(
             (int(str(row["ordinal"])), entry),
         )
 
+    yielded_values: dict[str, tuple[tuple[int, Mapping[str, Any]], ...]] = {}
+    for row in workspace.query("method_yields"):
+        text = row["value"]
+        entry = None if text is None else json.loads(str(text))
+        if isinstance(entry, dict):
+            method = str(row["method"])
+            yielded_values[method] = yielded_values.get(method, ()) + (
+                (int(str(row["ordinal"])), entry),
+            )
+
     edges = [row for row in workspace.query("call_edges") if row["callee"] is not None]
     class_receivers = (
         _class_receivers(sites, dispatch, writers, constants, produced) if by_name else frozenset()
@@ -1485,7 +1521,24 @@ def value_index(
             key: ParameterValues(defining_body(key[0], call_parameters.keys()), *values)
             for key, values in evaluated.items()
         },
+        yielded_values=yielded_values,
+        named_functions=_named_functions(dispatch) if by_name else {},
+        recipes=recipe_calls(bean_models),
     )
+
+
+def _named(bare: str) -> tuple[str, str]:
+    """A field or a method as `(owner, name)`, the name a `def` binds."""
+    return (str(owner_of(bare)), method_name(bare))
+
+
+def _named_functions(dispatch: Dispatch) -> dict[tuple[str, str], tuple[str, ...]]:
+    """`ValueIndex.named_functions`: every method the module declares a body for, by the name
+    its `def` binds, sorted (NFR-1)."""
+    found: dict[tuple[str, str], list[str]] = {}
+    for method in sorted(dispatch.bodies):
+        found.setdefault(_named(method), []).append(method)
+    return {key: tuple(value) for key, value in found.items()}
 
 
 def named_type(symbol: str, dispatch: Dispatch | None) -> str | None:
@@ -2778,6 +2831,98 @@ def called_function(answer: Answer) -> str | None:
     named = str(answer.value)
     # A method descriptor ends with its parameter list: `app/a#f(sig_…).`.
     return named if named.endswith(").") else None
+
+
+# The descriptor every Python method is called by (D00 §5a): its arguments are bound by name and
+# position at the call, not by a written signature.
+_ANY_ARGUMENTS = "(*)"
+# The reader a recipe's value is read by (`recipe_values`): the call reader, its upward paths
+# shared under this key.
+_RECIPE_READER = "values:recipe"
+
+
+def recipe_values(
+    index: ValueIndex, site: Mapping[str, Any], parameter: tuple[str, int] | None
+) -> tuple["_Reached", ...]:
+    """The recipe a recipe call `site` names (`beans.RecipeCalls`, N5), one answer per path:
+    its `recipe_arg` read by the call reader (`producer_paths(..., functions=True)`), so a
+    function value names its body, a class is the class object and a construction its
+    instance. A call handed no recipe, or `None`, names the type `parameter` is written to
+    hold under `empty_recipe: parameter_type`, a class object each; `not_readable` where the
+    parameter writes none, or the call's argument may be in an unpacked one. Read once per
+    call and parameter for as long as `index` lives; a recipe whose value is read through
+    itself is a `cycle`."""
+    key = (str(site["caller"]), int(str(site["ordinal"])), parameter)
+    if key in index.recipes_read:
+        held = index.recipes_read[key]
+        return cast(tuple[_Reached, ...], held) if held is not None else (((), _unresolved(CYCLE)),)
+    index.recipes_read[key] = None
+    reference = index.recipes.calls.get((str(site.get("owner")), str(site["name"])))
+    slot = argument_slot(site["arguments"] or [], reference)
+    found: list[_Reached] = []
+    if slot == UNPACKED_SLOT:
+        found.append(((), _unresolved(NOT_READABLE)))
+    elif slot is None:
+        found.extend(_parameter_type(index, parameter))
+    else:
+        for path, answer in _Walk(index, functions=True, shared=_RECIPE_READER).at(site, slot):
+            if answer.kind == ABSENT and answer.null:
+                found.extend((path, one) for _, one in _parameter_type(index, parameter))
+            else:
+                found.append((path, answer))
+    index.recipes_read[key] = tuple(found)
+    return tuple(found)
+
+
+def _parameter_type(index: ValueIndex, parameter: tuple[str, int] | None) -> tuple["_Reached", ...]:
+    """`empty_recipe: parameter_type`'s recipe: each class `parameter` is written to hold, as
+    the class object; `not_readable` where the rule is not declared or no class is written."""
+    written = None if parameter is None else index.declared_parameters.get(parameter)
+    classes = (
+        _declared_classes(written, index.dispatch)
+        if written is not None and index.recipes.empty == PARAMETER_TYPE
+        else ()
+    )
+    if not classes:
+        return (((), _unresolved(NOT_READABLE)),)
+    return tuple(
+        ((), Answer(kind=LITERAL, value=one, literal_kind=SYMBOL, class_object=True))
+        for one in classes
+    )
+
+
+def recipe_runs(index: ValueIndex, answer: Answer) -> tuple[str, ...]:
+    """The bodies calling the recipe value `answer` runs, by the call-of-a-value rules: a
+    function its own body (ruling R29), a class its constructor by lookup order (ruling R37),
+    an instance its class's `__call__` by lookup order. Empty where no such body was read."""
+    dispatch = index.dispatch
+    if dispatch is None:
+        return ()
+    function = called_function(answer)
+    if function is not None:
+        return tuple(dispatch.bodies.get(function, ()))
+    owner = bound_owner(answer)
+    if owner is None:
+        return ()
+    name = _INIT if answer.class_object else _CALL
+    call: dict[str, object] = {
+        "owner": owner,
+        "name": name,
+        "descriptor": _ANY_ARGUMENTS,
+        "invoke_kind": "virtual",
+    }
+    return tuple(dispatch.candidates(call))
+
+
+def recipe_bodies(
+    index: ValueIndex, site: Mapping[str, Any], parameter: tuple[str, int] | None
+) -> tuple[str, ...]:
+    """Every body a recipe call `site` makes the framework run (`recipe_values`, then
+    `recipe_runs`), each once, in the order its paths give them."""
+    found: dict[str, None] = {}
+    for _, answer in recipe_values(index, site, parameter):
+        found.update(dict.fromkeys(recipe_runs(index, answer)))
+    return tuple(found)
 
 
 def _used_at(origin: _Position) -> int | None:
@@ -5448,13 +5593,21 @@ class _Walk:
             return self._filled_by(method, index, injected.provider, trail, frames)
         if isinstance(injected, Ambiguous):
             return _only(trail, _unresolved(NON_ENUMERABLE))
+        # **A parameter that names its recipe is also what the framework's call of it hands
+        # over** (plan 2026-11-08 N5, ruling R14): one more path BESIDE the callers in the
+        # module, never before them, so a caller passing an argument stays its own path. With
+        # no caller, it is the only path: the framework's fill is no longer outside the code.
+        recipe = self._recipe_paths(method, index, trail, frames)
         callers = self._index.callers.get((method, index), ())
         if not callers:
             return self._open_filled(
                 method,
                 index,
                 trail,
-                _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, parameter=(method, index))),
+                recipe
+                or _only(
+                    trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, parameter=(method, index))
+                ),
             )
         reached: list[_Reached] = []
         for caller, ordinal, argument in callers:
@@ -5474,6 +5627,7 @@ class _Walk:
                 reached.extend(self._default(method, index, (caller, ordinal), merged, frames))
                 continue
             reached.extend(self._resolve((_SLOT, caller, ordinal, argument), merged, frames))
+        reached.extend(recipe)
         if len(reached) > PATH_CAP:
             return self._open_filled(
                 method, index, trail, _only(trail, _unresolved(NON_ENUMERABLE))
@@ -5524,6 +5678,70 @@ class _Walk:
                 self._entry(entry, recipe, (_RETURN_OF, recipe, return_ordinal), merged, frames)
             )
         return tuple(reached) if reached else _only(trail, _unresolved(NOT_READABLE))
+
+    def _recipe_paths(
+        self, method: str, index: int, trail: _Trail, frames: "_Frames"
+    ) -> tuple[_Reached, ...]:
+        """What the framework hands parameter `index` of `method` where a marker call names its
+        recipe (N5): each recipe the parameter's markers name (`recipe_sites`), read as a value
+        (`recipe_values`), then run (`_recipe_runs`), one path each. Empty where no marker
+        names one, which is every JVM parameter and every Python one no `names_recipe` model
+        reads."""
+        if not self._index.recipes.calls or (method, index) not in self._index.parameter_values:
+            return ()
+        # Imported here: `parameter_markers` reads every value through this module's walk.
+        from sextant.application.resolve.parameter_markers import (
+            parameter_markers,
+            recipe_sites,
+        )
+
+        markers = parameter_markers(self._index).get((method, index), ())
+        reached: list[_Reached] = []
+        for site in recipe_sites(markers, self._index.recipes.calls):
+            for path, answer in recipe_values(self._index, site, (method, index)):
+                merged = _combine(trail, path)
+                if merged is not None:
+                    reached.extend(self._recipe_runs(answer, method, index, merged, frames))
+        return tuple(reached)
+
+    def _recipe_runs(
+        self, answer: Answer, method: str, index: int, trail: _Trail, frames: "_Frames"
+    ) -> tuple[_Reached, ...]:
+        """What calling the recipe `answer` hands parameter `index` of `method`, by the
+        call-of-a-value rules: a class constructs an instance of it (ruling R37); a function
+        gives its returns, a generator its yields (N10: the framework enters it as a context
+        manager, which allows one yield per run, so every yield is a first one); an instance
+        gives what its class's `__call__` returns (ruling R29). Each return is a path, read in
+        the recipe's own body with no frame pushed, as `_filled_by` reads a container's recipe.
+        A recipe whose body is not read is `external` where its lookup left the scanned code,
+        else `not_readable`; an answer naming no callable keeps its own reason."""
+        owner = bound_owner(answer)
+        if called_function(answer) is None and owner is not None and answer.class_object:
+            return _only(trail, Answer(kind=LITERAL, value=owner, literal_kind=SYMBOL))
+        if called_function(answer) is None and owner is None:
+            return _only(trail, answer if answer.kind == UNRESOLVED else _unresolved(NOT_READABLE))
+        reached: list[_Reached] = []
+        for body in recipe_runs(self._index, answer):
+            entries = self._index.yielded_values.get(body) or self._index.returned_values.get(
+                body, ()
+            )
+            for return_ordinal, entry in entries:
+                step = _Step((_FILLED_BY, method, index), f"{body} returns {return_ordinal}")
+                merged = _combine(trail, (step,))
+                if merged is not None:
+                    reached.extend(
+                        self._entry(entry, body, (_RETURN_OF, body, return_ordinal), merged, frames)
+                    )
+        if reached:
+            return tuple(reached)
+        dispatch = self._index.dispatch
+        if (
+            owner is not None
+            and dispatch is not None
+            and dispatch.boundary(owner, _CALL, _ANY_ARGUMENTS)
+        ):
+            return _only(trail, _unresolved(EXTERNAL))
+        return _only(trail, _unresolved(NOT_READABLE))
 
     def _binding(
         self,
@@ -5596,6 +5814,20 @@ class _Walk:
         if not written_ones:
             if beyond:
                 return _only(trail, _unresolved(EXTERNAL))
+            # **A name a `def` binds is that function** (Python's rule), for the call reader: a
+            # file importing it reads it as a field, which nothing writes because the `def` is
+            # the binding (`from deps import get_db`, then `Depends(get_db)`). One answer per
+            # function of the name, as a `lambda` entry names its body.
+            named_functions = (
+                self._index.named_functions.get(_named(bare_descriptor(symbol)), ())
+                if self._functions
+                else ()
+            )
+            if named_functions:
+                return tuple(
+                    (trail, Answer(kind=LITERAL, literal_kind=SYMBOL, value=function))
+                    for function in named_functions
+                )
             named = self._named_type(symbol)
             if named is not None:
                 return _only(

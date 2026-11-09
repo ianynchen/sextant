@@ -165,7 +165,10 @@ exactly that body, the rule a JVM call on a lambda's functional interface reache
 body by (`call_edges._edge`'s `dynamic` lookup; the row keeps the site's `virtual`). No owner
 is written to `bound_receivers` for such a path: it has no row there, and counts in the site's
 tier as one more thing the call may run (a function on one path and a `Runner` on another are
-two edges, `narrowed`). Every other reader keeps a function value as a body and not a value
+two edges, `narrowed`). A name a `def` binds, read as a field nothing writes (a function
+another file imports and uses as a value: `from deps import get_db`, then `Depends(get_db)`), is
+that function to this reader too (`ValueIndex.named_functions`, plan 2026-11-08 Task 8), one
+answer per function of the name. Every other reader keeps a function value as a body and not a value
 (ruled 2026-09-22), and an f-string (`concat`) is never one (R19b). The bodies reach
 `call_edges` from the binder in memory and are stored in no other table (ruling R31): nothing
 redraws `call_edges` after binding, which `tests/architecture/test_call_edges_drawn_last.py`
@@ -296,7 +299,24 @@ marker. The producer reader keeps two ends at two library calls apart (`Answer.m
 it keeps two ends at two parameters apart. Built once per `ValueIndex` and kept on it, as
 the walk's upward paths are: the index reads derived tables, so `Workspace.once` cannot hold
 it, and the function takes the index, so it cannot be asked before the catalog-aware index
-exists. It names no framework; which marker calls mean what is catalog data. A constructor is bound by its `__init__`'s parameters, as any callee. A method called
+exists. It names no framework; which marker calls mean what is catalog data.
+
+**A parameter that names its recipe** (plan 2026-11-08-python-fastapi-inbound N5, ruling R14;
+[D02](D02-catalog-schema.md) §1c `injection: names_recipe`): where one of a parameter's markers
+is a recipe call a bean model names (the last in its `Annotated` metadata on each path, else
+its default's), `values._Walk._parameter` reads one more path BESIDE the parameter's callers
+— never before them, so a direct call's argument stays that caller's own path, and with no
+caller it is the only path, the framework's fill being no longer outside the code. The recipe
+is the call's `recipe_arg`, read by the call reader (`recipe_values`, once per call and
+parameter per index); a call handed none, or `None`, is the parameter's written type under
+`empty_recipe: parameter_type`. It is called by the call-of-a-value rules (`_recipe_runs`): a
+class is constructed (R37), a function gives its returns — a generator its yields (D00 §5,
+N10), every yield a first one since the framework runs it as a context manager — and an
+instance its class's `__call__` returns (R29), each return a path step `filled-by` read in the
+recipe's own body with no frame pushed, as a container's recipe is (di-recipe-hop). A recipe
+whose body is not read is `external` where its lookup leaves the scanned code. The marker
+pass's own walks see no recipe: they stop at calls, so a recipe is no part of where they end.
+Dagger's and Spring's `injected` recipes are read before callers, as before. A constructor is bound by its `__init__`'s parameters, as any callee. A method called
 through its class — a `static` call on a class, or a call whose receiver is a name that is a
 class (`Base.__init__(self, x)`, `H.use(h, x)`) — to a method that takes `self` is handed
 `self` as its first positional argument (`values.call_slots`); a classmethod or staticmethod

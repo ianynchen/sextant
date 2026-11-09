@@ -2240,10 +2240,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find='_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel", "host", '
-                '"port", "options")\n',
-                replace='_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel")  '
-                "# guard disabled by scripts/guard_check.py\n",
+                find='    "host",\n    "port",\n    "options",\n    "dependencies",\n)\n',
+                replace='    "options",\n    "dependencies",\n)  # guard disabled by scripts/guard_check.py\n',
             ),
         ),
     ),
@@ -4869,10 +4867,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="                _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, "
-                "parameter=(method, index))),",
-                replace="                _only(trail, _unresolved(EXTERNAL)),  "
-                "# guard disabled by scripts/guard_check.py",
+                find="                    trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, "
+                "parameter=(method, index))\n",
+                replace="                    trail, _unresolved(EXTERNAL)\n",
             ),
         ),
     ),

@@ -1303,6 +1303,56 @@ def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
 
 
 _INJECTIONS = ("exact_key", "candidates")
+_NAMES_RECIPE = "names_recipe"
+_EMPTY_RECIPES = ("parameter_type",)
+
+
+def _check_names_recipe(raw: dict[str, Any], where: str) -> None:
+    """`injection: names_recipe`'s keys (`_check_injection`): a misspelt one would leave every
+    marked parameter filled by nothing, read as a parameter no call fills."""
+    if "declaring_annotation" in raw:
+        raise CatalogError(
+            f"{where}: `injection: names_recipe` reads the recipe a call names; it declares no "
+            "`declaring_annotation`"
+        )
+    calls = raw.get("recipe_calls")
+    if not isinstance(calls, list) or not calls:
+        raise CatalogError(f"{where}: `injection: names_recipe` needs a non-empty `recipe_calls`")
+    for entry in calls:
+        reference = entry.get("recipe_arg") if isinstance(entry, dict) else None
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"owner", "method", "recipe_arg"}
+            or not all(isinstance(entry[key], str) and entry[key] for key in ("owner", "method"))
+            or not _is_argument_reference(reference)
+        ):
+            raise CatalogError(
+                f"{where}: a `recipe_calls` entry is `{{owner, method, recipe_arg}}`, "
+                f"`recipe_arg` a position, `{{keyword: name}}` or `{{arg: N, keyword: name}}`, "
+                f"got {entry!r}"
+            )
+    if raw.get("empty_recipe", _EMPTY_RECIPES[0]) not in _EMPTY_RECIPES:
+        raise CatalogError(
+            f"{where}: `empty_recipe` is one of {list(_EMPTY_RECIPES)}, got {raw['empty_recipe']!r}"
+        )
+
+
+def _is_argument_reference(value: Any) -> bool:
+    """A position, or `{keyword: name}` / `{arg: N, keyword: name}` (`_check_argument_references`'
+    form)."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value >= 0
+    if not isinstance(value, dict) or not set(value) <= _REFERENCE_KEYS:
+        return False
+    keyword, position = value.get("keyword"), value.get("arg", 0)
+    return (
+        isinstance(keyword, str)
+        and keyword.isidentifier()
+        and isinstance(position, int)
+        and not isinstance(position, bool)
+        and position >= 0
+    )
+
 
 # Spring's rungs (D02 §1c): `candidates` weighs the candidates by them, `exact_key` reads none.
 _LADDER_KEYS = ("qualifier_annotation", "name_attrs", "primary_annotation")
@@ -1313,7 +1363,15 @@ def _check_injection(raw: dict[str, Any], where: str) -> None:
     §2c). The value walk reads every model, so a model that declares recipes must say how
     the container matches a parameter to one: `exact_key` (Dagger's qualifier and full type)
     or `candidates` (Spring's ladder, whose keys it then needs). A model with no
-    `declaring_annotation` declares no recipe and says nothing about injection."""
+    `declaring_annotation` declares no recipe and says nothing about injection.
+
+    `names_recipe` (plan 2026-11-08 N5) is the third: the recipe is the value a marker call is
+    handed, so the model names those calls (`recipe_calls`: `{owner, method, recipe_arg}`,
+    `recipe_arg` an argument reference) and, optionally, what a call handed none makes the
+    recipe (`empty_recipe: parameter_type`), and declares no `declaring_annotation`."""
+    if raw.get("injection") == _NAMES_RECIPE:
+        _check_names_recipe(raw, where)
+        return
     if "declaring_annotation" not in raw:
         for key in ("injection", "multibinding_annotations", "injecting_annotations"):
             if key in raw:

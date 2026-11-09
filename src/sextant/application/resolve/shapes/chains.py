@@ -114,8 +114,19 @@ from sextant.domain.symbols import (
 # the `url` capture at derive time rather than read as an address of its own.
 # `host` and `port` (Vert.x spec 2026-10-30 §3d) are the authority's two parts where a call
 # names them apart from its path (`client.get(8080, "inventory", "/stock")`), composed with
-# `url` at derive time into one peer, `host` or `host:port`.
-_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel", "host", "port", "options")
+# `url` at derive time into one peer, `host` or `host:port`. `dependencies` (plan 2026-11-08 N6)
+# is the recipes a route's framework runs before its handler, read for their parameters.
+_ARGUMENT_FIELDS = (
+    "url",
+    "base",
+    "body",
+    "response",
+    "channel",
+    "host",
+    "port",
+    "options",
+    "dependencies",
+)
 
 # Every other capture field a catalog may spell EITHER as its own literal or
 # as an `argN` reference, and the value itself says which (`_reads_an_argument`).

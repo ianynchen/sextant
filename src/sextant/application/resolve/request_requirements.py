@@ -29,6 +29,7 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
+from functools import partial
 from itertools import product
 from typing import Any
 
@@ -48,7 +49,7 @@ from sextant.application.resolve.shapes.inbound_routes import (
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.application.resolve.values import argument_reference
 from sextant.domain.redaction import REDACTED, Redactor
-from sextant.domain.symbols import bare_descriptor
+from sextant.domain.symbols import bare_descriptor, names_a_type
 
 # The redactor every ORIGIN writer of `endpoint_metadata` holds, built as
 # `engines/fluent.py` and `resolve/endpoint_attributes.py` build theirs: the built-ins
@@ -1013,6 +1014,61 @@ def read_parameters(
     return ParameterReading(rows=tuple(rows), calls=calls, refused=None, marked=marked)
 
 
+@dataclass(frozen=True)
+class Dependant:
+    """What the recipes a route's framework runs before its handler demand of a request (plan
+    2026-11-08 N5, N6, N11): their own parameters' rows, in `read_parameters`' form, and the
+    recipe bodies that run, each once, in the order they were met."""
+
+    rows: tuple[tuple[str, str | None, str | None, str], ...]
+    recipes: tuple[str, ...]
+
+
+def read_dependant(
+    rules: ParameterRules,
+    calls: Sequence[tuple[Mapping[str, Any], tuple[str, int] | None]],
+    bodies: Callable[[Mapping[str, Any], tuple[str, int] | None], Sequence[str]],
+    parameters: Callable[[str], Sequence[Mapping[str, Any]] | None],
+    markers: Callable[[str, int], Sequence[Marker]],
+    recipe_calls: Callable[[Sequence[Marker]], Sequence[Mapping[str, Any]]],
+    variables: frozenset[str],
+    scalar: Callable[[Mapping[str, Any]], bool | None],
+    address: str,
+) -> Dependant:
+    """The route's dependant flattened, as FastAPI flattens it (`get_flat_dependant`): each
+    recipe call in `calls` (a handler parameter's marker, with that parameter, or a
+    `dependencies=` entry, with none) names the bodies that run (`bodies`); each body's own
+    parameters (`parameters`, the receiver aside) are read as a handler's are
+    (`read_parameters`, on the same row's path variables and address), and each of those
+    parameters' own recipe calls (`recipe_calls` over `markers`) is read in turn. A body met
+    twice is read once, so a recipe that depends on itself ends. What a refused reading of a
+    recipe's parameter would say is not read: the route's own reading decides refusal."""
+    rows: dict[tuple[str, str | None, str | None, str], None] = {}
+    ran: dict[str, None] = {}
+    pending = list(calls)
+    while pending:
+        call, parameter = pending.pop(0)
+        for body in bodies(call, parameter):
+            if body in ran:
+                continue
+            ran[body] = None
+            declared = parameters(body) or ()
+            reading = read_parameters(
+                rules,
+                declared,
+                partial(markers, body),
+                variables,
+                scalar,
+                address,
+            )
+            rows.update(dict.fromkeys(reading.rows))
+            for position in range(len(declared)):
+                pending.extend(
+                    (site, (body, position)) for site in recipe_calls(markers(body, position))
+                )
+    return Dependant(rows=tuple(rows), recipes=tuple(ran))
+
+
 def _call_of(marker: Marker) -> tuple[str, str]:
     """A marker's call, as `(owner, method)`."""
     return (str(marker.site.get("owner")), str(marker.site["name"]))
@@ -1062,8 +1118,13 @@ def _reading(
     # A parameter of a class's type names no one value: the framework reads the class's fields
     # as the parameters (FastAPI's query, header and cookie models, `_get_flat_fields_from_
     # params`), which are not read here. One row of the entry's kind, its name and requirement
-    # not read, so the row never names a parameter the request does not carry.
-    if scalar(parameter["type"]) is False and parameter["type"].get("wire_type") == "object":
+    # not read, so the row never names a parameter the request does not carry. So too for a
+    # type written as text naming no type (a class defined in a function, polar's
+    # `SortingGetter`): it may be such a class.
+    kind = scalar(parameter["type"])
+    if (kind is False and parameter["type"].get("wire_type") == "object") or (
+        kind is None and not names_a_type(str(parameter["type"].get("symbol")))
+    ):
         return None, call, [(str(entry["kind"]), None, None, "unresolved")]
     return None, call, [parameter_request_row(entry, marker, parameter)]
 

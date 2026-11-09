@@ -340,9 +340,14 @@ def _hold(entry: Any, source: object) -> HoldRule:
     where = f"loading catalog {source}: router_holds[]"
     if not isinstance(entry, dict) or not isinstance(entry.get("method"), str):
         raise CatalogError(f"{where} must be a mapping naming `owner` and `method`")
-    if argument_reference(entry.get("prefix_arg"), spelled=False) is None:
-        raise CatalogError(f"{where} `{entry['method']}` must name its `prefix_arg`")
     dependencies = _dependencies_arg(entry, where)
+    # A construction may hold dependencies and no prefix (N6: `FastAPI(dependencies=...)`).
+    if argument_reference(entry.get("prefix_arg"), spelled=False) is None and not (
+        "prefix_arg" not in entry and dependencies is not None
+    ):
+        raise CatalogError(
+            f"{where} `{entry['method']}` must name its `prefix_arg`, or only a `dependencies_arg`"
+        )
     refuses = entry.get("refuses", [])
     if not isinstance(refuses, list) or any(word not in _HOLD_REFUSES for word in refuses):
         raise CatalogError(
@@ -351,7 +356,7 @@ def _hold(entry: Any, source: object) -> HoldRule:
     return HoldRule(
         owners=catalog_symbols(entry.get("owner"), f"{where} `{entry['method']}` owner"),
         method=entry["method"],
-        prefix_arg=entry["prefix_arg"],
+        prefix_arg=entry.get("prefix_arg"),
         dependencies_arg=dependencies,
         refuses=frozenset(refuses),
     )
@@ -588,7 +593,11 @@ class MountReader:
         found: dict[tuple[str, int, str, str], tuple[Mapping[str, Any], str, str]] = {}
         for site in self._index.sites.values():
             rule = self._hold_rule(site)
-            slot = None if rule is None else argument_slot(site["arguments"] or [], rule.prefix_arg)
+            slot = (
+                None
+                if rule is None or rule.prefix_arg is None
+                else argument_slot(site["arguments"] or [], rule.prefix_arg)
+            )
             if rule is None or slot is None or slot == UNPACKED_SLOT:
                 continue
             for answers in resolve_positions(
@@ -601,8 +610,74 @@ class MountReader:
                     found.setdefault(key, (site, text[0], reason))
         return tuple(found.values())
 
-    def _hold_rule(self, site: Mapping[str, Any]) -> HoldRule | None:
-        return next((rule for rule in self._rules.holds if rule.matches(site)), None)
+    def dependencies_of(self, prefix: Prefix) -> tuple[tuple[Mapping[str, Any], int, Path], ...]:
+        """Where the dependencies a route served under `prefix` takes are written (plan
+        2026-11-08 N6), as `(call, slot, path)` to read each at, every place once: on each of
+        its places (`Prefix.places`), outermost first, each router's own (`router_holds`'
+        `dependencies_arg`, read where its prefix is, `_held_at`) and each mount's
+        (`mount[].dependencies_arg`). A mount declaring none hands no dependency on, its own
+        or any router's above it: it serves its router as an application of its own (a
+        Starlette `mount`), where an include registers the router's routes on the router it
+        includes them in. A router handed in from outside names no construction, and none."""
+        found: dict[tuple[str, int, int, Path], tuple[Mapping[str, Any], int, Path]] = {}
+        for place in prefix.places:
+            held: list[tuple[Mapping[str, Any], int, Path]] = []
+            for step, (router, mount) in enumerate(place):
+                if router is not None:
+                    held.extend(self._held_dependencies(router))
+                if mount is None:
+                    continue
+                rule_site = self._mount_at(mount[0])
+                if rule_site is None:
+                    continue
+                rule, site = rule_site
+                if rule.dependencies_arg is None:
+                    held = []
+                    continue
+                slot = argument_slot(site["arguments"] or [], rule.dependencies_arg)
+                below = place[step + 1][0] if step + 1 < len(place) else None
+                if slot is not None and slot != UNPACKED_SLOT:
+                    held.append((site, slot, Path() if below is None else below[1]))
+            for site, slot, path in held:
+                key = (str(site["caller"]), int(str(site["ordinal"])), slot, path)
+                found.setdefault(key, (site, slot, path))
+        return tuple(found.values())
+
+    def _held_dependencies(self, router: Router) -> list[tuple[Mapping[str, Any], int, Path]]:
+        """Where the router `router` holds dependencies from its construction (`router_holds`),
+        read where its prefix is read (`_held_at`)."""
+        made, path = router
+        site = self._index.sites.get((made[1], made[2])) if made[0] == "call" else None
+        if site is None or not self._rules.holds:
+            return []
+        found: list[tuple[Mapping[str, Any], int, Path]] = []
+        for rule, at, on in self._held_at(site, path, frozenset(), "dependencies_arg") or []:
+            slot = argument_slot(at["arguments"] or [], rule.dependencies_arg)
+            if slot is not None and slot != UNPACKED_SLOT:
+                found.append((at, slot, on))
+        return found
+
+    def _mount_at(self, key: tuple[str, int]) -> tuple[MountRule, Mapping[str, Any]] | None:
+        """The mount whose call, or one of whose ways' parent call, is `key` (a `Place`'s
+        mount), with its rule."""
+        for mount in self._mounts:
+            if mount.key == key or any(
+                at.parent is not None
+                and (str(at.parent["caller"]), int(str(at.parent["ordinal"]))) == key
+                for at in mount.paths
+            ):
+                return mount.rule, mount.site
+        return None
+
+    def _hold_rule(self, site: Mapping[str, Any], holding: str = "prefix_arg") -> HoldRule | None:
+        return next(
+            (
+                rule
+                for rule in self._rules.holds
+                if rule.matches(site) and getattr(rule, holding) is not None
+            ),
+            None,
+        )
 
     def _holds(self, made: tuple[str, str, int], path: Path) -> tuple[Prefix, ...] | None:
         """The prefixes the router `made` holds from its construction (`router_holds`), read
@@ -645,7 +720,11 @@ class MountReader:
         return held
 
     def _held_at(
-        self, site: Mapping[str, Any], path: Path, seen: frozenset[tuple[str, int]]
+        self,
+        site: Mapping[str, Any],
+        path: Path,
+        seen: frozenset[tuple[str, int]],
+        holding: str = "prefix_arg",
     ) -> list[tuple[HoldRule, Mapping[str, Any], Path]] | None:
         """Where the prefix a router construction holds is written: the construction itself
         where a hold entry names it (its owners widened to the heirs that inherit the
@@ -654,13 +733,20 @@ class MountReader:
         makes (`super().__init__(prefix=prefix)`), read on the path entering that body from
         this construction, so its parameters are this call's arguments. None where the
         construction makes no router that holds a prefix; empty where it does and the body
-        that runs hands none on that can be read (the prefix is then not read)."""
-        rule = self._hold_rule(site)
+        that runs hands none on that can be read (the prefix is then not read). `holding` is
+        the hold entries' key read: `prefix_arg`, or `dependencies_arg` for what a router's
+        construction holds besides (N6); only the entries declaring it are read."""
+        rule = self._hold_rule(site, holding)
         if rule is not None:
             return [(rule, site, path)]
         dispatch = self._dispatch
         owner = str(site.get("owner"))
-        holders = frozenset(owner for rule in self._rules.holds for owner in rule.owners)
+        holders = frozenset(
+            owner
+            for rule in self._rules.holds
+            if getattr(rule, holding) is not None
+            for owner in rule.owners
+        )
         if site["name"] != "<init>" or dispatch is None or owner in holders:
             return None
         if not _is_a(owner, holders, dispatch.ancestors):
@@ -680,7 +766,7 @@ class MountReader:
                     or not _is_a(owner, frozenset({inner_owner}), dispatch.ancestors)
                 ):
                     continue
-                deeper = self._held_at(inner, entered, seen | {key})
+                deeper = self._held_at(inner, entered, seen | {key}, holding)
                 if deeper:
                     found.extend(deeper)
         return found
@@ -700,7 +786,9 @@ class MountReader:
         """The prefixes one hold-matching construction writes, read within `path`: one per
         value read, each with the paths it was read on (`read_on`); the named hole where it
         is not read whole; none where the framework refuses it. None where the call writes
-        none (the framework's default, the empty prefix)."""
+        none (the framework's default, the empty prefix), or the rule reads none."""
+        if rule.prefix_arg is None:
+            return None
         slot = argument_slot(site["arguments"] or [], rule.prefix_arg)
         at = MountPath(site, None if slot is None or slot == UNPACKED_SLOT else (site, slot))
         if slot == UNPACKED_SLOT:

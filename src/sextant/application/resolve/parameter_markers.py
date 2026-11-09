@@ -30,12 +30,13 @@ and the index is the one built with the catalogs' arguments. The signature takes
 so nothing can reach this before it exists. The alias walks are shared across parameters
 through the index's upward paths (R39), so each alias is read once."""
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from sextant.application.resolve.values import (
     EXTERNAL,
+    Path,
     Producer,
     ValueIndex,
     held_at_end,
@@ -53,6 +54,7 @@ _ANNOTATED = frozenset(
 # stop set, since a path's end depends on it.
 _DEFAULT_READER = "parameter_markers:default"
 _FORM_READER = "parameter_markers:form"
+_LIST_READER = "parameter_markers:list"
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,10 @@ def parameter_markers(index: ValueIndex) -> Mapping[tuple[str, int], tuple[Marke
     if index.markers:
         return cast(Mapping[tuple[str, int], tuple[Marker, ...]], index.markers[0])
     found: dict[tuple[str, int], tuple[Marker, ...]] = {}
+    # Held while the pass runs: its own walks reach parameters, and a parameter reads its
+    # recipe from here (`values._Walk._recipe_paths`). Those walks stop at a call, so what a
+    # recipe hands a parameter is no part of where they end; they read none.
+    index.markers.append({})
     stops = _constructions(index)
     for key, values in index.parameter_values.items():
         if values.body is None:
@@ -99,8 +105,54 @@ def parameter_markers(index: ValueIndex) -> Mapping[tuple[str, int], tuple[Marke
                 )
         if markers:
             found[key] = tuple(markers)
-    index.markers.append(found)
+    index.markers[0] = found
     return found
+
+
+def recipe_sites(
+    markers: Sequence[Marker], calls: Collection[tuple[str, str]]
+) -> tuple[Mapping[str, Any], ...]:
+    """The recipe calls (`calls`, `beans.RecipeCalls`, N5) a parameter's `markers` name, as
+    FastAPI reads a parameter (`analyze_param`): the last one in its `Annotated` metadata on
+    each path, else its default's on each path. Each call once."""
+    annotated: dict[int, Marker] = {}
+    for marker in markers:
+        if marker.where == "annotation" and _call_of(marker) in calls:
+            held = annotated.get(marker.path)
+            if held is None or marker.order > held.order:
+                annotated[marker.path] = marker
+    chosen = list(annotated.values()) or [
+        marker for marker in markers if marker.where == "default" and _call_of(marker) in calls
+    ]
+    return tuple(
+        {
+            (str(one.site["caller"]), int(str(one.site["ordinal"]))): one.site for one in chosen
+        }.values()
+    )
+
+
+def producing_calls(
+    index: ValueIndex, site: Mapping[str, Any], slot: int, within: Path | None = None
+) -> tuple[Mapping[str, Any], ...]:
+    """The call each path of `site`'s argument at `slot` ends at (`_site`), the walk stopping
+    at every construction and every recipe call (`ValueIndex.recipes`): each element of a list
+    written there is a path of its own, so `dependencies=[Depends(a), Depends(b)]` gives both
+    calls. `within`, a path the reader already took, keeps only the paths agreeing with it.
+    Each call once."""
+    found: dict[tuple[str, int], Mapping[str, Any]] = {}
+    stops = _constructions(index) | frozenset(index.recipes.calls)
+    for producer, path in producer_paths(index, site, slot, stops, shared=_LIST_READER):
+        if within is not None and path.joined(within) is None:
+            continue
+        made = _site(index, producer)
+        if made is not None:
+            found[(str(made["caller"]), int(str(made["ordinal"])))] = made
+    return tuple(found.values())
+
+
+def _call_of(marker: Marker) -> tuple[str, str]:
+    """A marker's call, as `(owner, method)`."""
+    return (str(marker.site.get("owner")), str(marker.site["name"]))
 
 
 def _ends(

@@ -477,6 +477,7 @@ jar (`by:`):
 | `presence` | `@ConditionalOnMissingBean` / `@ConditionalOnBean`: `missing`, `present`, `type_attrs` (`value` and `type`, one set), `name_attrs`, `annotation_attrs` (a separate criterion), `order_reason` (what a loop holding a `missing` condition says), `present_cycle_reason` (what a loop of `present` conditions alone says) | CP-44 rows 1-3 |
 | `qualifier_meta_annotations` | the annotations that make another annotation a QUALIFIER (JSR-330's `@Qualifier`, Jakarta and javax). Read by the dispatch registration reader: an observer whose event parameter also carries a qualifier is kept with no key (§2m). Declared in `catalogs/bean-models/cdi.yml`, which the two CDI event catalogs name; a non-empty list of names, refused at load otherwise | CDI's observer resolution (stated, not probed: CP-59 bounds it) |
 | `injection` | how the container matches a parameter to a recipe (spec 2026-11-05 di-recipe-hop §2c): `exact_key` — Dagger's key, the qualifier annotation with all its attributes plus the full type with its type arguments, an unqualified parameter matching an unqualified recipe only, no name rung and no primary; or `candidates` — Spring's ladder (`qualifier_annotation`, the only bean of the type, `primary_annotation`, the name). Required on a model that declares `declaring_annotation`. The ladder keys are required for `candidates` only; `exact_key` requires `qualifier_meta_annotations`. Refused at load otherwise | Dagger: measured on a kapt probe (investigation `oi-304-investigation.md` §2); Spring: CP-27 row 15 |
+| `injection: names_recipe` | the third mode (plan 2026-11-08-python-fastapi-inbound N5): a parameter NAMES its recipe, the value a marker call is handed, so there is no key and no candidate. `recipe_calls: [{owner, method, recipe_arg}, …]` names the calls (`owner` dotted, `method` as a call site spells it, `<init>` for a construction) and the argument holding the recipe (a position, `{keyword: name}` or `{arg: N, keyword: name}`); `empty_recipe: parameter_type` makes the parameter's written type the recipe where the call is handed none or `None`. The value walk reads it at walk time (`values._Walk._parameter`, ruling R14): the parameter's markers (`parameter_markers`) name the call — the last in its `Annotated` metadata on each path, else its default's — and the recipe, read by the call reader, is called by the call-of-a-value rules: a function's returns (a generator's yields, D00 §5), a class's construction, an instance's class `__call__` return. That is one more path BESIDE the parameter's callers in the module, never before them (a direct call passing an argument stays its own path), and with no caller the only one. The recipe's own parameters are filled the same way. Declares no `declaring_annotation`; refused at load otherwise. In `catalogs/bean-models/fastapi.yml` (`Depends`, `Security`) | FastAPI 0.162.0 `dependencies/utils.py` (`analyze_param`, `solve_dependencies`) |
 | `multibinding_annotations` | the annotations that make a recipe add to a collection (`@IntoSet`, `@IntoMap`, `@ElementsIntoSet`). Such a recipe is never a candidate for `T` itself. In `catalogs/bean-models/dagger.yml` | Dagger's multibinding rule (stated) |
 | `injecting_annotations` | the annotations marking a constructor whose parameters the container fills (`javax.inject.Inject`, `jakarta.inject.Inject`). In `catalogs/bean-models/dagger.yml` | JSR-330 (stated) |
 | `interface_registrations` | a list of `{supertypes, annotation, excluded_by, by}`: an interface assignable to a listed supertype, or carrying `annotation` (itself, a meta-annotation, or an interface it extends), and not carrying `excluded_by` itself, is a bean the framework implements at run time (Spring Data repositories) | CP-46 |
@@ -2479,11 +2480,14 @@ starting with `/`; reason `unrooted_path`), `trailing_slash` (a non-empty prefix
 a lone `/` included) and `empty_path` (a mount whose own prefix is empty, of a route whose path
 below the mount — every prefix inside it included — is empty too: decided per route, which has
 no row; the router's other routes keep theirs). `dependencies_arg` (plan N6) names the argument
-holding the dependencies a mount adds to every route below it; it is captured for the request
-reader. A malformed entry, either key without the other, or a `prefix_from` mount that is not a
+holding the dependencies a mount adds to every route below it, read by the request reader (each
+element of the list written there one recipe call, `injection: names_recipe`, §1c). **A mount
+declaring none hands no dependency on, its own or any router's above it**: it serves the router
+as an application of its own (Starlette's `mount`), where an include registers each route on
+the router it includes it in, behind that router's own dependencies. A malformed entry, either key without the other, or a `prefix_from` mount that is not a
 terminal, is refused at load.
 
-**`matches.router_holds: [{owner, method, prefix_arg, dependencies_arg?, refuses?}, …]`** (plan
+**`matches.router_holds: [{owner, method, prefix_arg?, dependencies_arg?, refuses?}, …]`** (plan
 2026-11-08 N7, approved) declares a prefix a router HOLDS from its construction
 (`APIRouter(prefix="/orders")`), which is not a mount: the framework composes it with the
 prefixes the router is served under, where two mounts are two serving places. Where a route's
@@ -2513,8 +2517,11 @@ included per call — the route is derived once per path, its captures (path, ve
 handler) read on that path with that path's prefixes alone: polar's
 `get_oauth_login_router("apple", callback_method="POST")` serves POST under `/apple` only, and a
 CRUD factory `make(prefix, handler)` serves each caller's handler at that caller's prefix.
-`dependencies_arg` is the mount entry's. The key
-needs `router_type`; anything malformed is refused at load. Cost: one cached read per router
+`dependencies_arg` is the mount entry's: the dependencies the construction holds run before
+every route registered on that router and every route included in it (N6). An entry may hold
+dependencies and no prefix — `prefix_arg` left out, `dependencies_arg` written —
+(`FastAPI(dependencies=...)`, whose own router holds them). The key needs `router_type`;
+anything malformed is refused at load. Cost: one cached read per router
 construction a route or mount reaches, per path.
 
 **An argument capture may name a keyword** (design 2026-11-06-reading-decorators §3a,
@@ -6461,7 +6468,8 @@ request_params:
 - **A marked parameter of a class's type** (an `object` the module knows as a class) names no
   one value: the framework reads the class's fields as the parameters (FastAPI's query, header
   and cookie models). One row of the entry's kind with `name` and `requirement` NULL at
-  `unresolved`, never the parameter's own name.
+  `unresolved`, never the parameter's own name. So too for a type written as text naming no
+  type (a class defined inside a function, polar's `SortingGetter`): it may be such a class.
 - **No row** for a parameter whose marker is no entry's (the path's `Path`, a body marker, a
   dependency), for a path variable, for a receiver, or for a handler whose parameters are not
   read.
@@ -6476,6 +6484,17 @@ request_params:
 - **A path not read whole.** An `unmarked` row on a route whose address is `partial` or
   `unresolved` takes that resolution, never `resolved`: the parameter may name one of the
   path's unread variables. A parameter refused on one path and not on another is read on the paths that are not.
+- **The recipes the route runs first** (plan 2026-11-08 N5, N6, approved). Every recipe call
+  (`injection: names_recipe`, §1c) a handler parameter's marker names, and every element of a
+  `dependencies` capture on the route's root (`dependencies: { keyword: dependencies }`, an
+  argument capture of §2's `fluent`), of a `router_holds[].dependencies_arg` on each router the
+  row is served through and of a `mount[].dependencies_arg` on each include, names the bodies
+  that run: a function's own, a class's constructor by lookup order, an instance's class
+  `__call__`. Each body's parameters (its receiver aside) are read as the handler's are, on the
+  same row's path variables and address, and their own recipe calls in turn, each body once
+  (FastAPI's `get_flat_dependant`): their rows are the row's. Each body is a `roots` row at the
+  row's address (D01). A recipe parameter's reading never refuses the route; a recipe's body
+  parameters are not read (a gap: FastAPI flattens them into the body).
 - `caller` is the handler, `value` NULL, `evidence` `declared`, as for a command. Each entry is
   bound to its row and follows it (Ruling 7). An `unmarked` entry, an `equals_field` not
   dotted, an `annotated_default` other than `parameter`, a `spelling` of another shape, or any

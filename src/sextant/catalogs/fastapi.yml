@@ -31,34 +31,45 @@ matches:
   # THE REGISTRATIONS (probe §3, §6). `APIRouter` and `FastAPI` (which hands each of these to
   # its own router unchanged) both define them. Each verb method's path is its first
   # parameter, positional or named (`path`), and its response type is `response_model` where
-  # one is written.
+  # one is written. `dependencies=` (N6) are recipes FastAPI runs before the handler
+  # (`get_dependant`'s `dependencies`): their own parameters are the route's, and each is a root
+  # at the route's address (N11).
   roots:
     - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: get,
-        captures: { http_method: GET, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+        captures: { http_method: GET, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
     - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: post,
-        captures: { http_method: POST, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+        captures: { http_method: POST, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
     - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: put,
-        captures: { http_method: PUT, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+        captures: { http_method: PUT, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
     - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: patch,
-        captures: { http_method: PATCH, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+        captures: { http_method: PATCH, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
     - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: delete,
-        captures: { http_method: DELETE, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+        captures: { http_method: DELETE, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
     - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: head,
-        captures: { http_method: HEAD, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+        captures: { http_method: HEAD, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
     - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: options,
-        captures: { http_method: OPTIONS, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+        captures: { http_method: OPTIONS, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
     - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: trace,
-        captures: { http_method: TRACE, url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+        captures: { http_method: TRACE, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
     # `methods` (probe §3): `if methods is None: methods = ["GET"]`, then each upper-cased. An
     # empty list is refused (`generate_unique_id` asserts `route.methods`), never GET.
     - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: api_route,
         captures: { http_method: { keyword: methods, absent: GET, case: upper },
-                    url: { arg: 0, keyword: path }, response: { keyword: response_model } } }
+                    url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
     # The registration in one call: the function is its second parameter (`endpoint`).
     - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: add_api_route,
         captures: { http_method: { keyword: methods, absent: GET, case: upper },
                     url: { arg: 0, keyword: path }, response: { keyword: response_model },
-                    handler: { arg: 1, keyword: endpoint } } }
+                    handler: { arg: 1, keyword: endpoint }, dependencies: { keyword: dependencies } } }
   # The decorator a verb method returns, called with the function it registers: the handler is
   # that argument, followed back through every decorator below the registration
   # (`value-models/fastapi.yml`: a route decorator hands the function back).
@@ -108,12 +119,19 @@ matches:
   # `Mount` asserts `path == "" or path.startswith("/")` (`unrooted`). An app mounted that is no
   # router (`StaticFiles(...)`) serves no route of this catalog.
   #
-  # `dependencies=` on a router and on an include (N6) is captured here (`dependencies_arg`);
-  # the dependencies' parameters are read by plan 2 Task 8.
+  # `dependencies=` (N6) on a router's construction (`router_holds`) and on an include
+  # (`mount`) run before every route below them, as the route's own do: `add_api_route` starts
+  # from `self.dependencies`, and `include_router` registers each included route on the router
+  # it is made on, its own `dependencies` in front of the route's. The app holds its own
+  # (`FastAPI(dependencies=...)` builds `self.router = APIRouter(dependencies=...)`). A
+  # sub-application `mount` declares none, so no dependency crosses it, the parent's included:
+  # Starlette serves the mounted app as an application of its own.
   router_type: [fastapi.routing.APIRouter, fastapi.applications.FastAPI]
   router_holds:
     - { owner: fastapi.routing.APIRouter, method: <init>, prefix_arg: { keyword: prefix },
         dependencies_arg: { keyword: dependencies }, refuses: [unrooted, trailing_slash] }
+    - { owner: fastapi.applications.FastAPI, method: <init>,
+        dependencies_arg: { keyword: dependencies } }
   mount:
     - { owner: fastapi.routing.APIRouter, method: include_router, router_arg: { arg: 0, keyword: router },
         prefix_arg: { keyword: prefix }, dependencies_arg: { keyword: dependencies },

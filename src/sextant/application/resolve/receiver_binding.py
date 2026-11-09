@@ -156,7 +156,9 @@ def bind_until_settled(
     if not incremental:
         return _every_round_whole(workspace, catalogs)
     started = time.perf_counter()
-    index = value_index(workspace, returns_arguments=_returns_arguments(catalogs))
+    index = value_index(
+        workspace, returns_arguments=_returns_arguments(catalogs), **_beans(catalogs)
+    )
     context = _context(workspace, index)
     walked: dict[tuple[str, int], _Walked] = {}
     gained: frozenset[str] | None = None
@@ -196,7 +198,9 @@ def _every_round_whole(workspace: Workspace, catalogs: Sequence[Catalog]) -> tup
     for round_number in range(1, ROUNDS + 1):
         started = time.perf_counter()
         before = {key: one.reached for key, one in walked.items()}
-        index = value_index(workspace, returns_arguments=_returns_arguments(catalogs))
+        index = value_index(
+            workspace, returns_arguments=_returns_arguments(catalogs), **_beans(catalogs)
+        )
         walked = _walk(index, _context(workspace, index), None, {})
         newly = sum(1 for key, one in walked.items() if one.reached - before.get(key, frozenset()))
         counts.append(newly)
@@ -219,6 +223,19 @@ def _returns_arguments(catalogs: Sequence[Catalog]) -> tuple[dict[str, Any], ...
     .returns_arguments`, the same on every catalog): a call of a wrapper one of them made runs
     the function it wraps (design 2026-11-06-reading-decorators §3e)."""
     return catalogs[0].returns_arguments if catalogs else ()
+
+
+def _beans(catalogs: Sequence[Catalog]) -> dict[str, Any]:
+    """The bean models and value annotations every catalog carries (`Catalog.bean_models`,
+    `Catalog.value_annotations`): a parameter a framework fills is read as it fills it, a
+    recipe a marker call names beside the callers (plan 2026-11-08 N5), as every other reader
+    of the index reads it. None and empty with no catalog."""
+    if not catalogs:
+        return {}
+    return {
+        "bean_models": catalogs[0].bean_models,
+        "value_annotations": catalogs[0].value_annotations,
+    }
 
 
 def _functions(walked: Mapping[tuple[str, int], _Walked]) -> dict[tuple[str, int], FunctionCalls]:
@@ -395,6 +412,7 @@ def _with_new_callers(
         slots_memo={},
         suffixes={},
         markers=[],
+        recipes_read={},
     )
     return patched, frozenset(str(edge["callee"]) for edge in edges)
 

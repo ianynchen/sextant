@@ -523,6 +523,30 @@ def test_a_query_model_names_no_parameter_it_does_not_carry(tmp_path: Path, libr
     assert _bodies(workspace) == {("GET", "/x"): None}
 
 
+def test_a_marked_parameter_of_a_type_named_by_no_symbol_names_nothing(tmp_path: Path, libraries):
+    """polar's `SortingGetter`: a model class defined in the function that returns the recipe is
+    written as text naming no type, so whether it is a query model (its fields the parameters)
+    or a scalar is not known: one row of the marker's kind naming nothing, at `unresolved`,
+    never a parameter named after the argument."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _HEAD + "def getter():\n"
+            "    class Params(BaseModel):\n"
+            "        sorting: str = 'id'\n"
+            "    def get(params: Annotated[Params, Query()]) -> str:\n"
+            "        return params.sorting\n"
+            "    return get\n"
+            "@router.get('/x')\n"
+            "def handler(s: str = Depends(getter())) -> str:\n"
+            "    return s\n"
+        },
+    )
+
+    assert _params(workspace) == [("GET", "/x", "query", None, None, "unresolved")]
+
+
 def test_an_alias_read_as_a_type_is_neither_a_query_nor_the_body(tmp_path: Path, libraries):
     """pydantic's `UUID4 = Annotated[UUID, UuidVersion(4)]` is no class, so the `object` wire a
     type reference carries for it says nothing about its kind: the parameter is not claimed as
