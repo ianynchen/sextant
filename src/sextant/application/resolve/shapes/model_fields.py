@@ -38,6 +38,7 @@ from sextant.application.resolve.parameter_markers import _ANNOTATED, _site
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.application.resolve.values import (
     EXTERNAL,
+    RECEIVER,
     UNPACKED_SLOT,
     ValueIndex,
     argument_slot,
@@ -52,6 +53,11 @@ from sextant.domain.symbols import bare_descriptor, owner_of
 _VALUE_READER = "model_fields:value"
 _CONFIG_READER = "model_fields:config"
 _FORM_READER = "model_fields:form"
+_OUTPUT_FIELD_READER = "model_fields:output_field"
+_OUTPUT_OPEN_READER = "model_fields:output_open"
+# The name the facts give a call of a value (`f(x)` on a value `f`, D00 §5): a decorator
+# written as a call is applied by calling its result.
+_CALL_OF_VALUE = "__call__"
 # A default's state while the naming calls are merged (`ModelNames._required`).
 _NONE_WRITTEN = "none_written"
 _WRITTEN = "written"
@@ -116,6 +122,18 @@ class Naming:
     # `excluded_when` (task 9 review M4, ruled 2026-11-09): the argument of a naming call, and
     # the literal it is written as, that drops the field from output. None where not declared.
     excluded_when: tuple[Any, Any] | None = None
+    # `open_when` (task 9c, approved 2026-11-09): the configuration argument, and the literals
+    # it may be written as, that let a model take keys no field declares. None where not
+    # declared.
+    open_when: tuple[Any, frozenset[str]] | None = None
+    # `output_fields`: each decorator whose method is a field written on output and never read,
+    # with the argument naming it and the one whose presence lets it be left out.
+    output_fields: tuple[tuple[tuple[str, str], Any, Any], ...] = ()
+    # `output_open_when`: the decorators whose method writes the output itself, and the methods
+    # that build the schema (`(name, also_input, declared_by_default)`: whether the input is
+    # built too, and the class whose own declaration is the default no one overrides).
+    output_open_decorators: frozenset[tuple[str, str]] = frozenset()
+    output_open_methods: tuple[tuple[str, bool, str | None], ...] = ()
 
     @property
     def calls(self) -> frozenset[tuple[str, str]]:
@@ -151,10 +169,16 @@ def naming_of(serialization: Mapping[str, Any]) -> Naming | None:
         or "private_prefix" in serialization
         or "input_name_from" in serialization
         or "excluded_when" in serialization
+        or "open_when" in serialization
+        or "output_fields" in serialization
+        or "output_open_when" in serialization
     ):
         return None
     priority = serialization.get("alias_priority")
     excluded = serialization.get("excluded_when")
+    opened = serialization.get("open_when")
+    config_calls = generator.get("config_call", [])
+    hooks = serialization.get("output_open_when", [])
     return Naming(
         name_from=tuple((_call(entry["call"]), entry["arg"]) for entry in calls),
         input_name_from=tuple(
@@ -167,7 +191,8 @@ def naming_of(serialization: Mapping[str, Any]) -> Naming | None:
         defaults=tuple(_defaults(entry) for entry in serialization.get("defaults", [])),
         config_field=generator.get("config_field"),
         config_calls=frozenset(
-            [_call(generator["config_call"])] if "config_call" in generator else []
+            _call(call)
+            for call in ([config_calls] if isinstance(config_calls, str) else config_calls)
         ),
         generator_arg=generator.get("arg"),
         by_name_args=tuple(generator.get("by_name") or []),
@@ -180,6 +205,27 @@ def naming_of(serialization: Mapping[str, Any]) -> Naming | None:
         excluded_when=None
         if excluded is None
         else ({"keyword": excluded["keyword"]}, excluded["value"]),
+        open_when=None
+        if opened is None
+        else (opened["arg"], frozenset(str(value) for value in opened["values"])),
+        output_fields=tuple(
+            (_call(entry["decorator"]), entry.get("name_from"), entry.get("absent_when"))
+            for entry in serialization.get("output_fields", [])
+        ),
+        output_open_decorators=frozenset(
+            _call(entry["decorator"]) for entry in hooks if "decorator" in entry
+        ),
+        output_open_methods=tuple(
+            (
+                str(entry["method"]),
+                bool(entry.get("also_input", False)),
+                _catalog_symbol(entry["except_declared_by"])
+                if "except_declared_by" in entry
+                else None,
+            )
+            for entry in hooks
+            if "method" in entry
+        ),
     )
 
 
@@ -228,6 +274,10 @@ class _Config:
 
     generator: tuple[str, ...] | None
     by_name: bool | None
+    # `open_when`'s argument: None where no class on the way writes it, True or False where
+    # the last one writing it writes a listed literal or another, `_UNREAD` where it is not
+    # read (task 9c).
+    opened: Any = None
 
 
 @dataclass
@@ -243,6 +293,12 @@ class ModelNames:
     _configs: dict[str, _Config] = field(default_factory=dict)
     _values: dict[str, list[Mapping[str, Any] | None] | None] = field(default_factory=dict)
     _bodies: dict[str, str] | None = None
+    _headers: "dict[str, LibraryBody] | None" = None
+    _methods: dict[str, dict[str, Any]] | None = None
+    _decorations: dict[
+        tuple[str, str, frozenset[tuple[str, str]]],
+        tuple[Mapping[str, Any], Mapping[str, Any] | None] | None,
+    ] = field(default_factory=dict)
 
     def is_private(self, name: str) -> bool:
         """Whether a declared name is no field at all (`private_prefix`)."""
@@ -418,7 +474,18 @@ class ModelNames:
     ) -> list[list[Mapping[str, Any]]]:
         """Each path through the field's `Annotated` metadata: the naming calls among its
         elements, in written order (a nested `Annotated` first, as Python flattens it).
-        `[[]]` where the field's annotation carries none."""
+        `[[]]` where the field's annotation carries none. A library class's are its header's
+        (task 9c)."""
+        library = self._library().get(holder)
+        if library is not None:
+            entry = library.fields.get(name) or {}
+            return [
+                [
+                    call
+                    for call in entry.get("annotation_calls") or []
+                    if _call_of(call) in self.naming.calls
+                ]
+            ]
         body = self._class_bodies().get(holder) if annotation is not None else None
         if body is None or annotation is None:
             return [[]]
@@ -465,6 +532,14 @@ class ModelNames:
         writes no value. Read once per field."""
         if symbol in self._values:
             return self._values[symbol] or [_NO_VALUE]
+        holder = owner_of(symbol)
+        library = None if holder is None else self._library().get(holder)
+        if library is not None:
+            read = [
+                self._header_end(library.fields.get(symbol[len(str(holder)) :].removesuffix(".")))
+            ]
+            self._values[symbol] = read
+            return read
         written = self._class_body_writes().get(symbol)
         ends: list[Mapping[str, Any] | None] | None = None
         if written:
@@ -492,6 +567,24 @@ class ModelNames:
         self._values[symbol] = ends
         return ends or [_NO_VALUE]
 
+    def _header_end(self, entry: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+        """`_paths`' answer for a library class's field, read off its header (task 9c): the
+        naming call that made its value; `_VALUE_NOT_READ` for another call or a value not
+        read; `_NO_VALUE` where none is written or the value writes none (`...`); None for
+        any other value, a default."""
+        value = None if entry is None else entry.get("value")
+        if entry is None or value is None:
+            return _NO_VALUE
+        call = entry.get("call")
+        if call is not None:
+            return call if _call_of(call) in self.naming.calls else _VALUE_NOT_READ
+        if value.get("kind") == "unresolved":
+            return _VALUE_NOT_READ
+        nothing = {ellipsis for *_, ellipsis in self.naming.defaults if ellipsis is not None}
+        if value.get("kind") == "field" and value.get("symbol") in nothing:
+            return _NO_VALUE
+        return None
+
     def _writes_none(self, producer: Any, value: Mapping[str, Any]) -> bool:
         """Whether a class-body value is the one a `defaults` entry's `required_when` names as
         writing no default (`...`), written directly or reached by the walk."""
@@ -506,6 +599,12 @@ class ModelNames:
         if self._bodies is None:
             self._bodies = self.workspace.once(_class_bodies)
         return self._bodies
+
+    def _library(self) -> "dict[str, LibraryBody]":
+        """Each library class whose header read its body, by bare class symbol (task 9c)."""
+        if self._headers is None:
+            self._headers = self.workspace.once(library_bodies)
+        return self._headers
 
     def _class_body_writes(self) -> dict[str, list[tuple[str, Mapping[str, Any]]]]:
         """Each field's writes made by its own class's body, by bare field symbol."""
@@ -533,18 +632,23 @@ class ModelNames:
         self._configs[symbol] = _Config(None, False)
         generator: tuple[str, ...] | None = None
         by_name: bool | None = False
+        opened: Any = None
         for parent, _, _ in self._parents().get(symbol, []):
             inherited = self._config(parent)
             if inherited.generator is not None:
                 generator = inherited.generator
             by_name = inherited.by_name if inherited.by_name is not False else by_name
+            if inherited.opened is not None:
+                opened = inherited.opened
         own = self._own_config(symbol)
         if own is not None:
             if own.generator is not None:
                 generator = own.generator
             if own.by_name is not False:
                 by_name = own.by_name
-        merged = _Config(generator, by_name)
+            if own.opened is not None:
+                opened = own.opened
+        merged = _Config(generator, by_name, opened)
         self._configs[symbol] = merged
         return merged
 
@@ -554,6 +658,15 @@ class ModelNames:
         name = self.naming.config_field
         if name is None:
             return None
+        library = self._library().get(symbol)
+        if library is not None:
+            entry = library.fields.get(name)
+            if entry is None or entry.get("value") is None:
+                return None
+            call = entry.get("call")
+            if call is None or _call_of(call) not in self.naming.config_calls:
+                return _Config(_NOT_READ, None, _UNREAD)
+            return self._config_call(list(call.get("arguments") or []))
         written = self._class_body_writes().get(f"{symbol}{name}.")
         if not written:
             return None
@@ -568,17 +681,17 @@ class ModelNames:
             ):
                 site = _site(self.index, producer)
                 if _call_of(site) not in self.naming.config_calls or site is None:
-                    readings.append(_Config(_NOT_READ, None))
+                    readings.append(_Config(_NOT_READ, None, _UNREAD))
                     continue
                 readings.append(self._config_call(list(site.get("arguments") or [])))
         if not readings or any(reading != readings[0] for reading in readings[1:]):
-            return _Config(_NOT_READ, None)
+            return _Config(_NOT_READ, None, _UNREAD)
         return readings[0]
 
     def _config_call(self, arguments: list[Any]) -> _Config:
         """One configuration call's generator and `by_name`, read off its arguments."""
         if any(entry.get("keyword") == "**" for entry in arguments):
-            return _Config(_NOT_READ, None)
+            return _Config(_NOT_READ, None, _UNREAD)
         written = _argument(arguments, self.naming.generator_arg)
         generator: tuple[str, ...] | None
         if written is None:
@@ -596,7 +709,158 @@ class ModelNames:
                 by_name = None
             elif value is True and by_name is not None:
                 by_name = True
-        return _Config(generator, by_name)
+        opened: Any = None
+        if self.naming.open_when is not None:
+            reference, values = self.naming.open_when
+            literal = _literal(_argument(arguments, reference))
+            opened = literal if literal is None or literal is _UNREAD else literal in values
+        return _Config(generator, by_name, opened)
+
+    def opened(self, model: str) -> bool:
+        """Whether `model` may carry keys no field declares (`open_when`, task 9c): its merged
+        configuration writes a listed literal, or writes the argument as one not read, or is
+        not read itself."""
+        if self.naming.open_when is None:
+            return False
+        opened = self._config(model).opened
+        return opened is True or opened is _UNREAD
+
+    def output_field(
+        self, model: str, holder: str, name: str
+    ) -> tuple[FieldName, Mapping[str, Any] | None] | None:
+        """The class-level name `name` of `holder` as a field written on output only
+        (`output_fields`, task 9c), with the type its method returns; None where no such
+        decorator made it. Named by the decorator's argument, else the generator's name for
+        it, as a field is; required unless the argument letting it be left out is written."""
+        entries = {
+            decorator: (named, absent) for decorator, named, absent in self.naming.output_fields
+        }
+        found = self._decorated(holder, name, frozenset(entries), _OUTPUT_FIELD_READER)
+        if found is None:
+            return None
+        site, returns = found
+        named, absent = entries[_call_of(site)]  # type: ignore[index]
+        arguments = list(site.get("arguments") or [])
+        resolution = _RESOLVED
+        if any(entry.get("keyword") in ("*", "**") for entry in arguments):
+            resolution = _PARTIAL
+        written = _literal(_argument(arguments, named))
+        generated: str | None = name
+        generator = self._generator(model, holder)
+        if generator is not None and generator != _NONE:
+            if generator[0] in STRATEGIES:
+                generated = STRATEGIES[generator[0]](name)
+            elif generator == _NOT_READ:
+                resolution = _PARTIAL
+            else:
+                generated = None
+        if written is _UNREAD or (written is not None and not isinstance(written, str)):
+            resolution = _PARTIAL
+        output = written if isinstance(written, str) else generated
+        if output is None:
+            resolution = _UNRESOLVED
+        required = absent is None or _argument(arguments, absent) is None
+        return FieldName(output, None, required, resolution, resolution), returns
+
+    def output_opens(self, model: str) -> tuple[bool, bool]:
+        """Whether `model`'s output, and its input, are built by something other than its
+        fields (`output_open_when`, task 9c): a method on its way up carrying one of the
+        decorators, or, for each method entry, the nearest declaration of that method on its
+        way up where that is not the default one the entry names."""
+        output = inputs = False
+        closure = _closure(model, self._parents())
+        decorators = self.naming.output_open_decorators
+        if decorators and any(
+            self._decorated(holder, name, decorators, _OUTPUT_OPEN_READER) is not None
+            for holder in closure
+            for name in self._decorated_names(holder)
+        ):
+            output = True
+        for method, also_input, default in self.naming.output_open_methods:
+            declarer = next((holder for holder in closure if method in self._members(holder)), None)
+            if declarer is not None and declarer != default:
+                output = True
+                inputs = inputs or also_input
+        return output, inputs
+
+    def _members(self, holder: str) -> Mapping[str, Any]:
+        """The functions `holder` defines, each to what it returns: a library class's off its
+        header, a module class's off its method facts."""
+        library = self._library().get(holder)
+        if library is not None:
+            return {name: method.get("returns") for name, method in library.methods.items()}
+        if self._methods is None:
+            self._methods = self.workspace.once(_class_methods)
+        return self._methods.get(holder, {})
+
+    def _decorated_names(self, holder: str) -> list[str]:
+        """The functions `holder` defines whose name holds their decorators' result (D00
+        §5a): a library class's decorated methods, a module class's methods its body also
+        writes as a name."""
+        library = self._library().get(holder)
+        if library is not None:
+            return [name for name, method in library.methods.items() if method.get("decorators")]
+        writes = self._class_body_writes()
+        return [name for name in self._members(holder) if f"{holder}{name}." in writes]
+
+    def _decorated(
+        self, holder: str, name: str, stops: frozenset[tuple[str, str]], reader: str
+    ) -> tuple[Mapping[str, Any], Mapping[str, Any] | None] | None:
+        """The decorator call among `stops` that made `holder`'s name `name`, and what the
+        decorated method returns; None where none did. A library class's is read off its
+        header; a module class's through the walk from the value its body writes the name: the
+        decorator call itself, or the call of the value a decorator call returned
+        (`@decorator(...)`)."""
+        key = (holder, name, stops)
+        if key in self._decorations:
+            return self._decorations[key]
+        found: tuple[Mapping[str, Any], Mapping[str, Any] | None] | None = None
+        library = self._library().get(holder)
+        if library is not None:
+            method = library.methods.get(name) or {}
+            site = next(
+                (call for call in method.get("decorators") or [] if _call_of(call) in stops),
+                None,
+            )
+            if site is not None:
+                found = (site, method.get("returns"))
+        else:
+            returns = self._members(holder).get(name)
+            for writer, value in self._class_body_writes().get(f"{holder}{name}.", []):
+                site = self._decorator_site(writer, value, stops, reader)
+                if site is not None:
+                    found = (site, returns)
+                    break
+        self._decorations[key] = found
+        return found
+
+    def _decorator_site(
+        self, writer: str, value: Mapping[str, Any], stops: frozenset[tuple[str, str]], reader: str
+    ) -> Mapping[str, Any] | None:
+        """The decorator call among `stops` that made a class-body value: the walk's end, or,
+        for a decorator written as a call (`@decorator(...)`), whose result the facts call as a
+        value with no owner to walk through (`__call__`, D00 §5), the call that made that
+        value, read from the call the value comes from."""
+        for producer, _ in producer_paths(
+            self.index, held_at_end(writer, value), 0, stops, shared=reader
+        ):
+            site = _site(self.index, producer)
+            if site is not None and _call_of(site) in stops:
+                return site
+        source = value.get("source")
+        applied = None if source is None else self.index.sites.get((writer, int(source)))
+        if (
+            applied is None
+            or applied.get("result") != source
+            or applied.get("name") != _CALL_OF_VALUE
+            or applied.get("receiver") is None
+        ):
+            return None
+        for producer, _ in producer_paths(self.index, applied, RECEIVER, stops, shared=reader):
+            made = _site(self.index, producer)
+            if made is not None and _call_of(made) in stops:
+                return made
+        return None
 
     def _parents(self) -> dict[str, list[tuple[str, str, bool]]]:
         if self._ancestry is None:
@@ -620,6 +884,51 @@ def _class_bodies(workspace: Workspace) -> dict[str, str]:
         owner = owner_of(bare)
         if owner is not None and bare.startswith(owner + _CLASS_BODY):
             found[owner] = symbol
+    return found
+
+
+@dataclass(frozen=True)
+class LibraryBody:
+    """A library class's body, read off its type header (fact schema 12, task 9c): each name
+    it declares and each function it defines, by name."""
+
+    fields: Mapping[str, Mapping[str, Any]]
+    methods: Mapping[str, Mapping[str, Any]]
+
+
+def library_bodies(workspace: Workspace) -> dict[str, LibraryBody]:
+    """Each library class whose header read its body, by bare class symbol. Read through
+    `Workspace.once`: facts only."""
+    found: dict[str, LibraryBody] = {}
+    for row in workspace.query("type_header_bodies"):
+        fields = _json(row["fields"]) or []
+        methods = _json(row["methods"]) or []
+        found[bare_descriptor(str(row["symbol"]))] = LibraryBody(
+            fields={str(entry["name"]): entry for entry in fields},
+            methods={str(entry["name"]): entry for entry in methods},
+        )
+    return found
+
+
+def _json(value: Any) -> Any:
+    """A JSON column as the workspace hands it back: text, or already read."""
+    return json.loads(value) if isinstance(value, str) else value
+
+
+def _class_methods(workspace: Workspace) -> dict[str, dict[str, Any]]:
+    """Each module class's methods, by bare class symbol, each name to its declared return.
+    Read through `Workspace.once`: facts only."""
+    found: dict[str, dict[str, Any]] = {}
+    for row in workspace.query("method_declarations"):
+        bare = bare_descriptor(str(row["symbol"]))
+        owner = owner_of(bare)
+        if owner is None:
+            continue
+        name = bare[len(owner) :].split("(")[0]
+        signature = _json(row["signature"]) or {}
+        found.setdefault(owner, {}).setdefault(
+            name, signature.get("returns") if isinstance(signature, dict) else None
+        )
     return found
 
 

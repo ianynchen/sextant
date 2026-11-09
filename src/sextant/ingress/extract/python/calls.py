@@ -65,7 +65,7 @@ A call's owner is the type the code writes for its receiver (design
 
 import ast
 import builtins
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -78,6 +78,7 @@ from sextant.domain.facts import (
     CallTarget,
     Fact,
     FieldWriteFact,
+    HeaderCall,
     MethodReturnFact,
     Signature,
     TypeRef,
@@ -2461,6 +2462,86 @@ def _call_gives(
         if parameter.symbol == result:
             return _type_of(argument, scope)
     return None
+
+
+def dict_construction(node: ast.expr | None) -> ast.expr | None:
+    """A dict display whose every key is text, `{"a": x}`, as the `dict(a=x)` it builds (task
+    9c): the same object, written as a call a reader of call arguments reads. Any other value
+    as it is."""
+    if not isinstance(node, ast.Dict) or not node.keys:
+        return node
+    if not all(isinstance(key, ast.Constant) and isinstance(key.value, str) for key in node.keys):
+        return node
+    call = ast.Call(
+        func=ast.Name(id="dict", ctx=ast.Load()),
+        args=[],
+        keywords=[
+            ast.keyword(arg=key.value, value=value)  # type: ignore[union-attr]
+            for key, value in zip(node.keys, node.values, strict=True)
+        ],
+    )
+    return ast.fix_missing_locations(ast.copy_location(call, node))
+
+
+def header_value(
+    node: ast.expr, types: TypeScope, is_class: Callable[[Target], bool]
+) -> tuple[CallArgument, HeaderCall | None]:
+    """A library class body's value for its type header (fact schema 12), with no call-site
+    fact to point at: a literal, or a name read as `_value` reads one; a call as `unresolved`
+    beside the call that made it (`header_call`); anything else `unresolved`."""
+    if isinstance(node, ast.Constant):
+        return _constant(node.value), None
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, ast.USub)
+        and isinstance(node.operand, ast.Constant)
+        and type(node.operand.value) is int
+    ):
+        return CallArgument(kind="int", value=-node.operand.value), None
+    displayed = dict_construction(node)
+    if isinstance(displayed, ast.Call):
+        return _UNKNOWN, header_call(displayed, types, is_class)
+    if isinstance(node, ast.Name | ast.Attribute) and _is_dotted(node):
+        targets = types.lookup(node)
+        if len(targets) == 1:
+            return _reference(targets[0]), None
+    return _UNKNOWN, None
+
+
+def header_call(
+    node: ast.expr, types: TypeScope, is_class: Callable[[Target], bool]
+) -> HeaderCall | None:
+    """A call a library class body writes, as its call-site row would name it once read as a
+    construction where it calls a class (`effective_calls._as_construction`): the callee, and
+    the arguments as `_arguments` orders them (positional, then each keyword with its name,
+    `*` and `**` for an unpacked value), each read by `header_value` with no call of its own.
+    A decorator written as a name is its call with no argument. None where the callee is not
+    one name."""
+    called = node.func if isinstance(node, ast.Call) else node
+    if not isinstance(called, ast.Name | ast.Attribute) or not _is_dotted(called):
+        return None
+    targets = types.lookup(called)
+    if len(targets) != 1 or targets[0].member is None:
+        return None
+    target = targets[0]
+    if target.kind == "class" or _is_builtin_class(target) or is_class(target):
+        owner, name = type_symbol(target), INIT
+    else:
+        owner, name = _split(target)
+    arguments: list[CallArgument] = []
+    if isinstance(node, ast.Call):
+        for argument in node.args:
+            if isinstance(argument, ast.Starred):
+                arguments.append(_UNKNOWN.model_copy(update={"keyword": _UNPACKED_POSITIONAL}))
+            else:
+                arguments.append(header_value(argument, types, is_class)[0])
+        for keyword in node.keywords:
+            arguments.append(
+                header_value(keyword.value, types, is_class)[0].model_copy(
+                    update={"keyword": keyword.arg or _UNPACKED}
+                )
+            )
+    return HeaderCall(owner=owner, name=name, arguments=arguments)
 
 
 def _split(target: Target) -> tuple[str, str]:

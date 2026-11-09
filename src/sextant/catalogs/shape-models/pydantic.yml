@@ -40,7 +40,13 @@ serialization:
   # wire name (`unresolved`) and the shape is open (§2g).
   name_generator:
     config_field: model_config
-    config_call: pydantic.config.ConfigDict.<init>   # a construction (ruling R17)
+    # Each a construction (ruling R17). pydantic-settings' `SettingsConfigDict` extends
+    # `ConfigDict`, and a plain dict display is read as the `dict(...)` it builds (task 9c,
+    # `pydantic_field_sets.md` §11).
+    config_call:
+      - pydantic.config.ConfigDict.<init>
+      - pydantic_settings.main.SettingsConfigDict.<init>
+      - builtins.dict.<init>
     arg: { keyword: alias_generator }
     # `populate_by_name` (and 2.11's `validate_by_name`): a renamed field accepts its own name.
     by_name: [{ keyword: populate_by_name }, { keyword: validate_by_name }]
@@ -70,6 +76,31 @@ serialization:
   # it stays at `partial` (one shape holds both directions, N13 B). Merged as names are: a later
   # `exclude=False` keeps it.
   excluded_when: { keyword: exclude, value: true }
+  # TASK 9c (approved 2026-11-09), read by `scripts/probes/pydantic_field_sets.py`
+  # (`pydantic_field_sets.md`), pydantic 2.14.3 and 2.14.1 alike.
+  #
+  # OPEN (§3, §11, §12): `extra='allow'` in the configuration merged as `alias_generator` is
+  # (the last class writing it wins) writes and reads keys no field declares
+  # (`additionalProperties: true`, and `model_dump` writes them), so the shape is open. A value
+  # written as no literal, or a configuration not read, may be `allow`: open too.
+  open_when: { arg: { keyword: extra }, values: [allow] }
+  # OUTPUT FIELDS (§4, §9, §10): a `@computed_field` is written on output and never read. Its
+  # name is `alias=`, else the generator's, else the method's; its type what the method
+  # returns; it is required in the serialization schema unless `exclude_if=` is written.
+  output_fields:
+    - { decorator: pydantic.fields.computed_field, name_from: { keyword: alias },
+        absent_when: { keyword: exclude_if } }
+  # OUTPUT BUILT ELSEWHERE (§6, §7): a `@model_serializer` (plain or wrap) writes whatever it
+  # returns (`additionalProperties: true`, no properties), so the output is open; the input
+  # is still the fields. A class's own `__get_pydantic_core_schema__` may build any schema,
+  # input and output (§7b); what it returns is not read (ruling 2026-11-09), so polar's
+  # `handler(source)` ones are open too. `BaseModel`'s own is the default pydantic never
+  # calls (`_generate_schema.py`, `getattr(get_schema, '__func__', None) is not
+  # BaseModel_.__get_pydantic_core_schema__.__func__`).
+  output_open_when:
+    - { decorator: pydantic.functional_serializers.model_serializer }
+    - { method: __get_pydantic_core_schema__, also_input: true,
+        except_declared_by: pydantic.main.BaseModel }
 
 # pydantic 2's JSON mode (`pydantic_known_types.md`): each of these is written as a string, with
 # the `format` pydantic's own JSON schema states for it, the same in serialization and

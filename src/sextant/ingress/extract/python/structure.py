@@ -21,7 +21,7 @@ control-flow fields are read by a later part of this scanner.
 """
 
 import ast
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 
 from sextant.domain.closed_sets import ConstructKind
@@ -29,6 +29,9 @@ from sextant.domain.facts import (
     CallArgument,
     Fact,
     FieldWriteFact,
+    HeaderCall,
+    HeaderField,
+    HeaderMethod,
     Parameter,
     ParameterKind,
     ParentsUnread,
@@ -46,6 +49,9 @@ from sextant.ingress.extract.python.calls import (
     ModuleType,
     ParameterValues,
     Scope,
+    dict_construction,
+    header_call,
+    header_value,
     is_stub_body,
     own_return_type,
 )
@@ -397,7 +403,12 @@ class _Writer(BodyReader):
 
     def _assignment(self, node: ast.Assign | ast.AnnAssign, scope: Scope) -> None:
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        value = None if node.value is None else self._value(node.value, scope)
+        held = node.value
+        if scope.class_path is not None and scope.frame is None:
+            # A class body's dict display with text keys is the `dict(key=...)` it builds
+            # (task 9c): written so, a reader of a class's configuration reads it as a call.
+            held = dict_construction(held)
+        value = None if held is None else self._value(held, scope)
         written = None
         instance = False
         annotated = None
@@ -744,6 +755,114 @@ def class_header(
     node = chain[-1]
     written, parents_unread, _ = _parents(node, types.with_type_parameters(node.type_params))
     return _class_kind(node, types), written, parents_unread
+
+
+def class_members(
+    chain: list[ast.ClassDef],
+    here: str,
+    types: TypeScope,
+    *,
+    is_package: bool,
+    is_class: Callable[[Target], bool],
+) -> tuple[list[HeaderField], list[HeaderMethod]]:
+    """What a type header says of the body of the last class of `chain` (`single_classes`,
+    fact schema 12): each name it declares, as `file_facts` writes a field (the first
+    statement naming it gives its type and whether it is the class's own), with the value the
+    body writes it, and each function it defines, with its return type and its decorators.
+    Read against the names the class body sees (`_Writer._class`'s scope), through the blocks
+    `file_facts` reads (`_scope_statements`). A name written more than once has a value not
+    read. `is_class` tells a call of a class, a construction, from a call of a function."""
+    path: str | None = None
+    for outer in chain:
+        path = f"{path}.{outer.name}" if path else outer.name
+        generic = types.with_type_parameters(outer.type_params)
+        class_names = bind_names(
+            outer.body, here, is_package=is_package, index=types.index, owner=path
+        )
+        types = replace(generic, class_names=class_names, self_type=type_symbol(Target(here, path)))
+    node = chain[-1]
+    total = not any(
+        keyword.arg == "total"
+        and isinstance(keyword.value, ast.Constant)
+        and keyword.value.value is False
+        for keyword in node.keywords
+    )
+    fields: dict[str, HeaderField] = {}
+    writes: dict[str, int] = {}
+    methods: dict[str, HeaderMethod] = {}
+    for statement in _scope_statements(node.body, types.index, here):
+        if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
+            if statement.name not in methods:
+                generic = types.with_type_parameters(statement.type_params)
+                methods[statement.name] = HeaderMethod(
+                    name=statement.name,
+                    returns=None
+                    if statement.returns is None
+                    else wire_projected(written_type(statement.returns, generic), generic),
+                    decorators=[
+                        found
+                        for decorator in statement.decorator_list
+                        if (found := header_call(decorator, types, is_class)) is not None
+                    ],
+                )
+            continue
+        if not isinstance(statement, ast.Assign | ast.AnnAssign):
+            continue
+        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+        for target in targets:
+            if not isinstance(target, ast.Name):
+                continue
+            name = target.id
+            if statement.value is not None:
+                writes[name] = writes.get(name, 0) + 1
+            if name not in fields:
+                returns = None
+                static = True
+                optional_key = False
+                annotation_calls: list[HeaderCall] = []
+                if isinstance(statement, ast.AnnAssign):
+                    returns = wire_projected(written_type(statement.annotation, types), types)
+                    static = is_class_variable(statement.annotation, types)
+                    optional_key = not static and is_not_required(
+                        statement.annotation, types, total=total
+                    )
+                    annotation_calls = _metadata_calls(statement.annotation, types, is_class)
+                fields[name] = HeaderField(
+                    name=name,
+                    returns=returns,
+                    static=static,
+                    not_required=optional_key,
+                    annotation_calls=annotation_calls,
+                )
+            if statement.value is not None:
+                value, call = (
+                    (CallArgument(kind="unresolved"), None)
+                    if writes[name] > 1
+                    else header_value(statement.value, types, is_class)
+                )
+                fields[name] = fields[name].model_copy(update={"value": value, "call": call})
+    return list(fields.values()), list(methods.values())
+
+
+def _metadata_calls(
+    annotation: ast.expr, types: TypeScope, is_class: Callable[[Target], bool]
+) -> list[HeaderCall]:
+    """The calls an `Annotated[T, ...]` annotation's metadata writes, in written order; none
+    for any other annotation."""
+    if not isinstance(annotation, ast.Subscript) or not isinstance(
+        annotation.value, ast.Name | ast.Attribute
+    ):
+        return []
+    targets = types.lookup(annotation.value)
+    if len(targets) != 1 or not is_typing(targets[0], "Annotated"):
+        return []
+    elements = annotation.slice.elts if isinstance(annotation.slice, ast.Tuple) else []
+    return [
+        found
+        for element in elements[1:]
+        if isinstance(element, ast.Call)
+        and (found := header_call(element, types, is_class)) is not None
+    ]
 
 
 def factory_calls(tree: ast.Module, types: TypeScope) -> dict[str, tuple[Target, ...]]:

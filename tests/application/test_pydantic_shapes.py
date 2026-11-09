@@ -465,6 +465,9 @@ def test_a_query_model_expands_to_one_param_per_field(tmp_path: Path, libraries)
         ("{defaults: [{call: a.f, default_arg: 0}]}", "defaults"),
         ("{naming: camel}", "serialization.naming"),
         ("{excluded_when: {keyword: exclude}}", "excluded_when"),
+        ("{open_when: {arg: {keyword: extra}, values: []}}", "open_when"),
+        ("{output_fields: [{decorator: computed_field}]}", "output_fields"),
+        ("{output_open_when: [{method: __x__, also_input: yes_please}]}", "output_open_when"),
     ],
 )
 def test_a_malformed_shape_model_is_refused_by_file(tmp_path: Path, serialization: str, says: str):
@@ -778,3 +781,422 @@ def test_skip_json_schema_is_the_shape_models_envelope(tmp_path: Path):
     assert any(
         wrapper["type"] == "pydantic.json_schema.SkipJsonSchema" for wrapper in catalog.wrappers
     )
+
+
+# -- Task 9c: library classes' fields read from their headers, so a shape can close ----------
+
+
+def _with_library(tmp_path: Path, libraries, source: str):
+    """The FastAPI environment plus `basekit`, a library installed beside it holding `source`
+    as `basekit/__init__.py`: every entry of the environment's site linked into a new site."""
+    from sextant.application.ports.detector import LibraryRoot
+
+    real = libraries[0].archive
+    site = tmp_path / "site"
+    site.mkdir()
+    for entry in real.iterdir():
+        (site / entry.name).symlink_to(entry)
+    (site / "basekit").mkdir()
+    (site / "basekit" / "__init__.py").write_text(source, encoding="utf-8")
+    info = site / "basekit-1.0.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: basekit\nVersion: 1.0\n\n", encoding="utf-8"
+    )
+    (info / "RECORD").write_text(
+        f"basekit/__init__.py,sha256=x,1\n{info.name}/METADATA,,\n{info.name}/RECORD,,\n",
+        encoding="utf-8",
+    )
+    return (
+        *(LibraryRoot(root.coordinate, root.version, site) for root in libraries),
+        LibraryRoot("basekit", "1.0", site),
+    )
+
+
+def test_a_model_extending_base_model_is_closed(tmp_path: Path, libraries):
+    """`BaseModel`'s class body declares only `ClassVar`s and names starting with `_`
+    (`scripts/probes/pydantic_field_sets.md` §0), so read from its header it contributes no
+    field, and a model extending it is described completely by its own body."""
+    workspace = _resolved(tmp_path, libraries, _program("class Item(BaseModel):\n    a: int\n"))
+
+    assert _fields(workspace) == {"a": ("integer", None, True, "resolved")}
+    assert _open(workspace) is False
+
+
+def test_a_library_base_with_fields_contributes_them(tmp_path: Path, libraries):
+    """A library base's own fields join the model's (probe §2), named and defaulted by the
+    shape model's rules as a module class's are; its `ClassVar` and private names are none. Its
+    configuration's generator names the model's fields, and its computed field is a field of a
+    response (probe §4b)."""
+    library = _with_library(
+        tmp_path,
+        libraries,
+        "from typing import ClassVar\n"
+        "from pydantic import BaseModel, ConfigDict, Field, computed_field\n"
+        "from pydantic.alias_generators import to_camel\n"
+        "class Stamped(BaseModel):\n"
+        "    model_config = ConfigDict(alias_generator=to_camel)\n"
+        "    id: int\n"
+        "    created_at: str = Field('now', alias='Created')\n"
+        "    _hidden: int = 0\n"
+        "    kind: ClassVar[str] = 'x'\n"
+        "    @computed_field\n"
+        "    @property\n"
+        "    def label_text(self) -> str:\n"
+        "        return ''\n",
+    )
+    workspace = _resolved(
+        tmp_path,
+        library,
+        {
+            "main.py": _HEAD + "from basekit import Stamped\n"
+            "class Item(Stamped):\n"
+            "    item_name: str\n"
+            "@router.get('/x')\n"
+            "def handler() -> Item:\n"
+            "    return Item()\n"
+        },
+    )
+
+    assert _fields(workspace) == {
+        "itemName": ("string", None, True, "resolved"),
+        "id": ("integer", None, True, "resolved"),
+        "Created": ("string", None, False, "resolved"),
+        "labelText": ("string", None, True, "resolved"),
+    }
+    assert _open(workspace) is False
+
+
+def test_extra_allow_keeps_the_shape_open(tmp_path: Path, libraries):
+    """`open_when` (probe §3, §11, §12): `extra='allow'` writes and reads keys no field
+    declares, so the shape is open, set on the class, inherited from a module or a library base,
+    or written as a plain dict; a child setting `extra='ignore'` over it closes it again, as
+    the configuration merge says; a value written as no literal may be `allow`, so it is open."""
+    library = _with_library(
+        tmp_path,
+        libraries,
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class Loose(BaseModel):\n"
+        "    model_config = ConfigDict(extra='allow')\n",
+    )
+    workspace = _resolved(
+        tmp_path,
+        library,
+        _program(
+            "from basekit import Loose\n"
+            "def mode() -> str:\n"
+            "    return 'allow'\n"
+            "class Allows(BaseModel):\n"
+            "    model_config = ConfigDict(extra='allow')\n"
+            "    a: int = 0\n"
+            "class Inherits(Allows):\n"
+            "    b: int = 0\n"
+            "class Ignores(Allows):\n"
+            "    model_config = ConfigDict(extra='ignore')\n"
+            "class Forbids(BaseModel):\n"
+            "    model_config = ConfigDict(extra='forbid')\n"
+            "    a: int = 0\n"
+            "class Displayed(BaseModel):\n"
+            "    model_config = {'extra': 'allow'}\n"
+            "    a: int = 0\n"
+            "class DisplayedForbids(BaseModel):\n"
+            "    model_config = {'extra': 'forbid', 'alias_generator': to_camel}\n"
+            "    a_b: int = 0\n"
+            "class Unread(BaseModel):\n"
+            "    model_config = ConfigDict(extra=mode())\n"
+            "    a: int = 0\n"
+            "class FromLibrary(Loose):\n"
+            "    a: int = 0\n"
+            "class Item(BaseModel):\n"
+            "    allows: Allows\n"
+            "    inherits: Inherits\n"
+            "    ignores: Ignores\n"
+            "    forbids: Forbids\n"
+            "    displayed: Displayed\n"
+            "    displayed_forbids: DisplayedForbids\n"
+            "    unread: Unread\n"
+            "    from_library: FromLibrary\n"
+        ),
+    )
+
+    assert {
+        shape: _open(workspace, shape)
+        for shape in (
+            "Allows",
+            "Inherits",
+            "Ignores",
+            "Forbids",
+            "Displayed",
+            "DisplayedForbids",
+            "Unread",
+            "FromLibrary",
+            "Item",
+        )
+    } == {
+        "Allows": True,
+        "Inherits": True,
+        "Ignores": False,
+        "Forbids": False,
+        "Displayed": True,
+        "DisplayedForbids": False,
+        "Unread": True,
+        "FromLibrary": True,
+        "Item": False,
+    }
+    assert list(_fields(workspace, "DisplayedForbids")) == ["aB"]
+
+
+def test_computed_field_is_a_response_field_not_a_request_field(tmp_path: Path, libraries):
+    """`output_fields` (probe §4, §9, §10): a `@computed_field` is written on output and never
+    read. It is a field of a shape only responses reach, typed by what its method returns,
+    required unless `exclude_if` is written, named by its `alias=`, else by the generator; it
+    is no field of a shape only requests reach; in one both reach it is `partial` (N13 B). An
+    inherited one counts."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _HEAD + "from pydantic import computed_field\n"
+            "class Out(BaseModel):\n"
+            "    model_config = ConfigDict(alias_generator=to_camel)\n"
+            "    a: int = 0\n"
+            "    @computed_field\n"
+            "    @property\n"
+            "    def doubled_value(self) -> int:\n"
+            "        return 2\n"
+            "    @computed_field(alias='T')\n"
+            "    @property\n"
+            "    def tripled(self) -> int:\n"
+            "        return 3\n"
+            "    @computed_field(exclude_if=lambda v: v > 5)\n"
+            "    @property\n"
+            "    def maybe(self) -> str:\n"
+            "        return ''\n"
+            "class OutChild(Out):\n"
+            "    b: int = 0\n"
+            "class In(BaseModel):\n"
+            "    a: int = 0\n"
+            "    @computed_field\n"
+            "    @property\n"
+            "    def doubled(self) -> int:\n"
+            "        return 2\n"
+            "class Both(BaseModel):\n"
+            "    a: int = 0\n"
+            "    @computed_field\n"
+            "    @property\n"
+            "    def doubled(self) -> int:\n"
+            "        return 2\n"
+            "@router.get('/out')\n"
+            "def out() -> Out:\n"
+            "    return Out()\n"
+            "@router.get('/child')\n"
+            "def child() -> OutChild:\n"
+            "    return OutChild()\n"
+            "@router.post('/in')\n"
+            "def take(item: In) -> str:\n"
+            "    return ''\n"
+            "@router.post('/both')\n"
+            "def both(item: Both) -> Both:\n"
+            "    return item\n"
+        },
+    )
+
+    assert _fields(workspace, "Out") == {
+        "a": ("integer", None, False, "resolved"),
+        "doubledValue": ("integer", None, True, "resolved"),
+        "T": ("integer", None, True, "resolved"),
+        "maybe": ("string", None, False, "resolved"),
+    }
+    assert set(_fields(workspace, "OutChild")) == {"b", "a", "doubledValue", "T", "maybe"}
+    assert _fields(workspace, "In") == {"a": ("integer", None, False, "resolved")}
+    assert _fields(workspace, "Both") == {
+        "a": ("integer", None, False, "resolved"),
+        "doubled": ("integer", None, True, "partial"),
+    }
+    assert {shape: _open(workspace, shape) for shape in ("Out", "OutChild", "In", "Both")} == {
+        "Out": False,
+        "OutChild": False,
+        "In": False,
+        "Both": False,
+    }
+
+
+def test_an_unreadable_base_keeps_the_shape_open(tmp_path: Path, libraries):
+    """A base no library holds, and a library class whose bases are not read (a call result,
+    so it gets no header), may declare fields nobody here can see: the shape stays open."""
+    library = _with_library(
+        tmp_path,
+        libraries,
+        "from pydantic import BaseModel\n"
+        "def make_base():\n"
+        "    return BaseModel\n"
+        "class Made(make_base()):\n"
+        "    x: int = 0\n",
+    )
+    workspace = _resolved(
+        tmp_path,
+        library,
+        _program(
+            "from basekit import Made\n"
+            "from notinstalled import Missing\n"
+            "class FromCall(Made):\n"
+            "    a: int = 0\n"
+            "class FromMissing(Missing):\n"
+            "    a: int = 0\n"
+            "class Item(BaseModel):\n"
+            "    from_call: FromCall\n"
+            "    from_missing: FromMissing\n"
+        ),
+    )
+
+    assert _open(workspace, "FromCall") is True
+    assert _open(workspace, "FromMissing") is True
+
+
+def test_a_model_serializer_opens_the_response_shape_only(tmp_path: Path, libraries):
+    """`output_open_when` (probe §6): a `@model_serializer`, plain or wrap, writes whatever it
+    returns, so a shape a response reaches is open; the input it reads is the fields, so a
+    shape only requests reach is closed."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _HEAD + "from pydantic import model_serializer\n"
+            "class Out(BaseModel):\n"
+            "    a: int = 0\n"
+            "    @model_serializer\n"
+            "    def dump(self) -> dict:\n"
+            "        return {}\n"
+            "class Wrapped(BaseModel):\n"
+            "    a: int = 0\n"
+            "    @model_serializer(mode='wrap')\n"
+            "    def dump(self, handler) -> dict:\n"
+            "        return handler(self)\n"
+            "class In(BaseModel):\n"
+            "    a: int = 0\n"
+            "    @model_serializer\n"
+            "    def dump(self) -> dict:\n"
+            "        return {}\n"
+            "@router.get('/out')\n"
+            "def out() -> Out:\n"
+            "    return Out()\n"
+            "@router.get('/wrapped')\n"
+            "def wrapped() -> Wrapped:\n"
+            "    return Wrapped()\n"
+            "@router.post('/in')\n"
+            "def take(item: In) -> str:\n"
+            "    return ''\n"
+        },
+    )
+
+    assert {shape: _open(workspace, shape) for shape in ("Out", "Wrapped", "In")} == {
+        "Out": True,
+        "Wrapped": True,
+        "In": False,
+    }
+
+
+def test_a_core_schema_hook_keeps_the_shape_open(tmp_path: Path, libraries):
+    """`output_open_when` (probe §7): a model's own `__get_pydantic_core_schema__` may build
+    any schema, so the shape is open in both directions, declared on the model or inherited;
+    `BaseModel`'s own is the default pydantic does not call (`_generate_schema.py`), so a plain
+    model stays closed. Whether the method returns `handler(source)` is not read (ruling)."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _HEAD + "class Hooked(BaseModel):\n"
+            "    a: int = 0\n"
+            "    @classmethod\n"
+            "    def __get_pydantic_core_schema__(cls, source, handler, /):\n"
+            "        return handler(source)\n"
+            "class Heir(Hooked):\n"
+            "    b: int = 0\n"
+            "class Plain(BaseModel):\n"
+            "    a: int = 0\n"
+            "@router.post('/in')\n"
+            "def take(item: Hooked) -> str:\n"
+            "    return ''\n"
+            "@router.get('/heir')\n"
+            "def heir() -> Heir:\n"
+            "    return Heir()\n"
+            "@router.get('/plain')\n"
+            "def plain() -> Plain:\n"
+            "    return Plain()\n"
+        },
+    )
+
+    assert {shape: _open(workspace, shape) for shape in ("Hooked", "Heir", "Plain")} == {
+        "Hooked": True,
+        "Heir": True,
+        "Plain": False,
+    }
+
+
+def test_a_root_model_shape_stays_open(tmp_path: Path, libraries):
+    """Probe §5: a `RootModel`'s wire value is its root, not an object holding `root`. Ruled
+    2026-11-09: it stays open, with no key. `RootModel[list[str]]` binds the type variable its
+    `root` field is declared with, which the expansion does not substitute through a base, so
+    the field holds an undescribed value and the shape is open."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        _program(
+            "from pydantic import RootModel\n"
+            "class Tags(RootModel[list[str]]):\n"
+            "    pass\n"
+            "class Item(BaseModel):\n"
+            "    tags: Tags\n"
+        ),
+    )
+
+    assert _open(workspace, "Tags") is True
+
+
+def test_a_field_serializer_leaves_the_field_set(tmp_path: Path, libraries):
+    """Probe §8: `@field_serializer` changes what a field's value is written as, not which
+    fields there are, so the shape is closed with the field it names. (Its output TYPE is the
+    serializer's return; that is logged, not built, ruling 2026-11-09.)"""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        _program(
+            "from pydantic import field_serializer\n"
+            "class Item(BaseModel):\n"
+            "    a: int = 0\n"
+            "    @field_serializer('a')\n"
+            "    def as_text(self, value: int) -> str:\n"
+            "        return str(value)\n"
+        ),
+    )
+
+    assert list(_fields(workspace)) == ["a"]
+    assert _open(workspace) is False
+
+
+def test_a_field_read_under_another_name_opens_a_shape_requests_reach(tmp_path: Path, libraries):
+    """N13 B keeps one shape per model, under its output names. A field a request is read under
+    another name (`serialization_alias` alone, polar's `MetadataInputMixin`) or under names not
+    read (`AliasChoices`) leaves the shape's input field set described under names a request
+    does not send, so a shape requests reach is open; one only responses reach is closed."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _HEAD + "class In(BaseModel):\n"
+            "    metadata: dict = Field(default_factory=dict, serialization_alias='user_metadata')\n"
+            "class Out(BaseModel):\n"
+            "    metadata: dict = Field(validation_alias=AliasChoices('user_metadata', 'metadata'))\n"
+            "class Choices(BaseModel):\n"
+            "    metadata: dict = Field(validation_alias=AliasChoices('user_metadata', 'metadata'))\n"
+            "@router.post('/in')\n"
+            "def take(item: In, other: Choices) -> Out:\n"
+            "    return Out(metadata={})\n"
+        },
+    )
+
+    assert {shape: _open(workspace, shape) for shape in ("In", "Out", "Choices")} == {
+        "In": True,
+        "Out": False,
+        "Choices": True,
+    }

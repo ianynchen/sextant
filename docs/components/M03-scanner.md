@@ -654,6 +654,18 @@ arm's return, never both. The module's own files are read whole, every branch.
   whole writes (`test_type_headers_from_class_statements_equal_a_whole_module_read`; polar
   and Sextant's own fact trees). On polar the pass went from 596 whole-module reads (45 s)
   to 8 (3 s), then 3 once version tests were decided, and a cold run from 69 s to 51 s.
+- **A header carries its class body** (fact schema 12, plan 2026-11-08 task 9c;
+  `structure.class_members`). The same class statement gives each name its body declares
+  (typed, `static`, the value written and the call that made it, the calls in an `Annotated`
+  annotation's metadata) and each function it defines (its return type and decorators), read
+  against the names the class body sees, through the blocks `file_facts` reads. A value is read
+  as `file_facts` reads a literal or a name, with no call-site fact to point at; a call is
+  named as its call-site row would be once read as a construction where it calls a class
+  (the library tells a class from a function, `Libraries._is_class`). A header answered by the
+  whole-module read carries no body (not read), so the class-statement and whole-module
+  headers are equal apart from it. **A class body's dict display with text keys** is written
+  as the `dict(key=...)` call it builds, in the module's facts and in a header, so a
+  configuration written `model_config = {...}` is read as one written `ConfigDict(...)` is.
 - **An opted-in library's bodies** (`extract_libraries`, D04 §2a) are read whole, as a
   jar is: the detector reports the environment's `site-packages` as the library root of
   each named distribution the module declares and has installed, and the library's own

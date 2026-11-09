@@ -1200,6 +1200,9 @@ _SERIALIZATION_KEYS = frozenset(
         "defaults",
         "private_prefix",
         "excluded_when",
+        "open_when",
+        "output_fields",
+        "output_open_when",
     }
 )
 _GENERATOR_STRATEGIES = frozenset({"camel", "pascal"})
@@ -1247,18 +1250,26 @@ def _check_shape_model(raw: dict[str, Any], path: Path) -> None:
     generator = serialization.get("name_generator")
     if generator is not None:
         functions = generator.get("functions") if isinstance(generator, dict) else None
+        config_calls = generator.get("config_call") if isinstance(generator, dict) else None
         if not (
             isinstance(generator, dict)
             and set(generator) <= {"config_field", "config_call", "arg", "by_name", "functions"}
             and isinstance(generator.get("config_field"), str)
-            and dotted(generator.get("config_call"))
+            and (
+                dotted(config_calls)
+                or (
+                    isinstance(config_calls, list)
+                    and bool(config_calls)
+                    and all(dotted(call) for call in config_calls)
+                )
+            )
             and _is_argument_reference(generator.get("arg"))
             and all(_is_argument_reference(one) for one in generator.get("by_name") or [])
             and isinstance(functions, list)
         ):
             raise CatalogError(
-                f"{where}: `name_generator` is `{{config_field, config_call, arg, by_name?, "
-                f"functions}}`, got {generator!r}"
+                f"{where}: `name_generator` is `{{config_field, config_call (one or a list), "
+                f"arg, by_name?, functions}}`, got {generator!r}"
             )
         for entry in functions:
             if not (
@@ -1310,6 +1321,49 @@ def _check_shape_model(raw: dict[str, Any], path: Path) -> None:
         raise CatalogError(
             f"{where}: `excluded_when` is `{{keyword: <name>, value: <literal>}}`, got {excluded!r}"
         )
+    opened = serialization.get("open_when")
+    if "open_when" in serialization and not (
+        isinstance(opened, dict)
+        and set(opened) == {"arg", "values"}
+        and _is_argument_reference(opened["arg"])
+        and isinstance(opened["values"], list)
+        and opened["values"]
+        and all(isinstance(value, str) for value in opened["values"])
+    ):
+        raise CatalogError(
+            f"{where}: `open_when` is `{{arg: <argument>, values: [<literal>, ...]}}`, got "
+            f"{opened!r}"
+        )
+    for entry in serialization.get("output_fields") or []:
+        if not (
+            isinstance(entry, dict)
+            and set(entry) <= {"decorator", "name_from", "absent_when"}
+            and dotted(entry.get("decorator"))
+            and all(
+                _is_argument_reference(entry[key])
+                for key in ("name_from", "absent_when")
+                if key in entry
+            )
+        ):
+            raise CatalogError(
+                f"{where}: `output_fields` entry is `{{decorator, name_from?, absent_when?}}`, "
+                f"got {entry!r}"
+            )
+    for entry in serialization.get("output_open_when") or []:
+        decorator = isinstance(entry, dict) and set(entry) == {"decorator"}
+        method = (
+            isinstance(entry, dict)
+            and set(entry) <= {"method", "also_input", "except_declared_by"}
+            and isinstance(entry.get("method"), str)
+            and entry["method"].isidentifier()
+            and isinstance(entry.get("also_input", False), bool)
+            and ("except_declared_by" not in entry or dotted(entry["except_declared_by"]))
+        )
+        if not ((decorator and dotted(entry["decorator"])) or method):
+            raise CatalogError(
+                f"{where}: `output_open_when` entry is `{{decorator}}` or `{{method, also_input?, "
+                f"except_declared_by?}}`, got {entry!r}"
+            )
     prefix = serialization.get("private_prefix")
     if "private_prefix" in serialization and not (isinstance(prefix, str) and prefix):
         raise CatalogError(f"{where}: `private_prefix` is a non-empty string, got {prefix!r}")

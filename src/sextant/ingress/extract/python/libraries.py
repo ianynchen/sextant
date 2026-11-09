@@ -67,6 +67,8 @@ from sextant.domain.facts import (
     CallSiteFact,
     Fact,
     FieldWriteFact,
+    HeaderField,
+    HeaderMethod,
     MethodReturnFact,
     ParentsUnread,
     SymbolFact,
@@ -94,7 +96,12 @@ from sextant.ingress.extract.python.imports import (
     version_test,
     version_tests,
 )
-from sextant.ingress.extract.python.structure import class_header, file_facts, single_classes
+from sextant.ingress.extract.python.structure import (
+    class_header,
+    class_members,
+    file_facts,
+    single_classes,
+)
 from sextant.ingress.extract.python.typing_rules import (
     ANY,
     BUILTINS,
@@ -208,6 +215,9 @@ class _Declared:
     superclass: str | None
     interfaces: list[str]
     parents_unread: ParentsUnread | None
+    # The class body (`structure.class_members`, fact schema 12); None where it is not read.
+    fields: list[HeaderField] | None = None
+    methods: list[HeaderMethod] | None = None
 
 
 class _WholeModule:
@@ -1041,6 +1051,8 @@ class Libraries:
                     interfaces=declared.interfaces,
                     origin=provider.origin,
                     version=provider.version,
+                    fields=declared.fields,
+                    methods=declared.methods,
                 )
             )
             for parent in [declared.superclass, *declared.interfaces]:
@@ -1105,6 +1117,15 @@ class Libraries:
             kind, written, parents_unread = class_header(
                 chain, source.module, self._scope(table), is_package=source.is_package
             )
+            fields, methods = class_members(
+                chain,
+                source.module,
+                self._scope(table),
+                is_package=source.is_package,
+                is_class=lambda target: (
+                    target.member is not None and self._is_class(target.module, target.member)
+                ),
+            )
         finally:
             self._recording = recording
             self._inside = inside
@@ -1114,6 +1135,8 @@ class Libraries:
             prefix + written[0] if written else None,
             [prefix + parent for parent in written[1:]],
             parents_unread,
+            fields,
+            methods,
         )
 
     def _module_symbols(self, table: _Table) -> dict[str, SymbolFact]:

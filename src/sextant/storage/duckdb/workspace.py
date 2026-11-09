@@ -520,6 +520,17 @@ _NAMED_QUERIES = {
            )
         ORDER BY s.symbol
     """,
+    # A Python header's class body (D00 §5 `type_header`, fact schema 12): the names it
+    # declares and the functions it defines, for the headers that read them. Read by shape
+    # expansion, which takes a library base's fields as a scanned class's (plan 2026-11-08
+    # task 9c); no endpoint engine reads it, for the reason `superclasses` above gives.
+    "type_header_bodies": """
+        SELECT payload ->> 'symbol' AS symbol, payload -> 'fields' AS fields,
+               payload -> 'methods' AS methods
+        FROM raw_facts
+        WHERE kind = 'type_header' AND (payload -> 'fields') IS NOT NULL
+        ORDER BY symbol
+    """,
     "type_header_annotations": """
         SELECT payload ->> 'symbol'          AS target,
                use ->> 'annotation'          AS annotation,
@@ -1799,6 +1810,7 @@ _FACT_ONLY = frozenset(
         # `type_header`): a read over `raw_facts` alone, so cached per load like every
         # other fact query — the cache rule test is what said so.
         "type_header_annotations",
+        "type_header_bodies",
         "type_headers",
         # The module's own types and its siblings' (`symbols` and `documents`, both facts).
         "own_types",

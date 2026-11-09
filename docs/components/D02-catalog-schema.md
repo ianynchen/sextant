@@ -6046,6 +6046,38 @@ serialization:
   its request and writes its response, an outbound row the reverse, a `both` row each both
   ways), through the column's `item` chain and every field of a body assembled from several
   parameters (`fields`), and every payload a parse binds (`parse_calls`, read on input).
+- **`open_when: {arg: <argument>, values: [<literal>, ...]}`** (task 9c, approved 2026-11-09):
+  the configuration argument (read off `name_generator`'s `config_call`s, merged as the
+  generator is, the last class writing it winning) whose listed literal lets a model take keys
+  no field declares (pydantic's `extra='allow'`). Such a shape is open. So is one whose argument
+  is written as no literal, or whose configuration is not read: it may be the listed one.
+  `config_call` may list several constructions; a class body's dict display with text keys is
+  read as the `dict(...)` it builds (the scanner writes it so), so `builtins.dict.<init>` names
+  a plain dict.
+- **`output_fields: [{decorator, name_from?, absent_when?}]`** (task 9c): a method carrying the
+  decorator is a field written on OUTPUT and never read (pydantic's `@computed_field`), typed
+  by what the method returns. Its name is `name_from` written as a literal, else the
+  generator's name for the method's, else the method's; it is required unless `absent_when`
+  is written. It is no field of a shape only input reaches, a field of one only output
+  reaches, and `partial` in one both reach or whose direction is not known (N13 B). The
+  decorator is read off the value the class body writes the method's name (D00 §5a), or off
+  the header's `methods` for a library class.
+- **`output_open_when: [{decorator} | {method, also_input?, except_declared_by?}]`** (task 9c):
+  what builds a model's output from something other than its fields. A method on the model's
+  way up carrying the decorator (`@model_serializer`) opens a shape output reaches. For a
+  `method` entry, the nearest declaration of that method on the way up opens it, unless it is
+  the one `except_declared_by` declares (the base's default, which the framework does not
+  call); `also_input` opens a shape input reaches too. What the method does is not read.
+- **A library base's fields** (task 9c): a superclass read from a type header whose class body
+  was read (D00 §5 `type_header` `fields`) contributes its fields as a scanned class does, and
+  no longer opens the shape (`reaches_an_unscanned_SUPERCLASS`). Its configuration, its
+  decorated methods and its fields' values are read off the header the same way. A base with no
+  header, or a header whose body was not read, keeps the shape open.
+- **A field read under another name** (task 9c): a field whose input name differs from its
+  published (output) name, or whose input name is not read (`AliasChoices`), leaves the shape's
+  input field set described under names a request does not send, so a shape input reaches (or
+  whose direction is not known) is open; one only output reaches is not. The field itself stays
+  `partial`, as below.
 - **Resolution (N13 option B).** One shape per type, under the output names. A field whose
   accepted input names differ from its output name is `partial`: a `validation_alias`, a
   `serialization_alias` beside another input name, `by_name` on a renamed field. So is one whose

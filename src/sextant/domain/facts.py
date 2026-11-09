@@ -849,6 +849,48 @@ class OperationRecord(BaseModel):
     server_streaming: bool
 
 
+class HeaderCall(BaseModel):
+    """A call a library class body writes, named as its call-site row would name it (D00 §5
+    `type_header`, fact schema 12): `owner` and `name` (a class's construction `<init>` on
+    the class), and the arguments in the call-argument grammar, a value no literal or name
+    reading answers `unresolved`."""
+
+    model_config = {"frozen": True}
+    owner: str
+    name: str
+    arguments: list[CallArgument] = Field(default_factory=list)
+
+
+class HeaderField(BaseModel):
+    """One name a library class body declares (D00 §5 `type_header`, fact schema 12), as the
+    scanner writes a module class's field: its projected type where it is annotated, `static`
+    where it belongs to the class (a `ClassVar`, or a name written with no annotation), and
+    `not_required` for a `TypedDict` key the typing specification lets be left out. `value` is
+    what the class body writes it, None where it writes nothing; `call` the call that made the
+    value, where a call did; `annotation_calls` the calls an `Annotated` annotation's metadata
+    writes, in written order."""
+
+    model_config = {"frozen": True}
+    name: str
+    returns: TypeRef | None = None
+    static: bool = False
+    not_required: bool = False
+    value: CallArgument | None = None
+    call: HeaderCall | None = None
+    annotation_calls: list[HeaderCall] = Field(default_factory=list)
+
+
+class HeaderMethod(BaseModel):
+    """One function a library class body defines (D00 §5 `type_header`, fact schema 12): its
+    name, its projected return type, and each decorator as the call it names (a decorator
+    written as a call with that call's arguments), outermost first."""
+
+    model_config = {"frozen": True}
+    name: str
+    returns: TypeRef | None = None
+    decorators: list[HeaderCall] = Field(default_factory=list)
+
+
 class TypeHeaderFact(BaseModel):
     """D00 §5's `type_header`: the class-file HEADER of a type a module depends on
     but did not build — superclass, interfaces and class-level annotations, never a
@@ -879,6 +921,12 @@ class TypeHeaderFact(BaseModel):
     # because one document holds headers from every jar.
     origin: str
     version: str
+    # A Python header's class body (fact schema 12, plan 2026-11-08 task 9c): every name it
+    # declares and every function it defines, read from the class statement. None where they
+    # were not read — every JVM header, and a Python class only a whole-module read answers —
+    # so a reader can tell "declares nothing" from "not read". Written back only where set.
+    fields: list[HeaderField] | None = Field(default=None, exclude_if=lambda held: held is None)
+    methods: list[HeaderMethod] | None = Field(default=None, exclude_if=lambda held: held is None)
 
 
 class DeclaredShapeFact(BaseModel):

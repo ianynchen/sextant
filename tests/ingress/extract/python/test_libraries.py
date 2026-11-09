@@ -736,7 +736,9 @@ def _header_output(tmp_path: Path, names: str):
 def test_type_headers_from_class_statements_equal_a_whole_module_read(tmp_path: Path, monkeypatch):
     """The header pass reads only the class statements a header needs (ruling R20), and
     what it writes is what a read of every whole library module writes: every header, the
-    document record, and every line the scan reports."""
+    document record, and every line the scan reports. A header's class body (`fields`,
+    `methods`, fact schema 12, task 9c) is read from the class statement alone: a whole-module
+    read leaves it unread (None), so the two are compared without it."""
     from sextant.ingress.extract.python import libraries
 
     names = f"{_SINGLE}, {_AMBIGUOUS}"
@@ -748,7 +750,27 @@ def test_type_headers_from_class_statements_equal_a_whole_module_read(tmp_path: 
     )
     whole = _header_output(tmp_path / "whole", names)
 
-    assert statements == whole
+    def without_body(output):
+        document, facts, uncovered = output
+        return (
+            document,
+            [
+                fact.model_copy(update={"fields": None, "methods": None})
+                if isinstance(fact, TypeHeaderFact)
+                else fact
+                for fact in facts
+            ],
+            uncovered,
+        )
+
+    assert without_body(statements) == without_body(whole)
+    assert all(fact.fields is None for fact in whole[1] if isinstance(fact, TypeHeaderFact))
+    bodies = {
+        bare_descriptor(fact.symbol): fact.fields
+        for fact in statements[1]
+        if isinstance(fact, TypeHeaderFact)
+    }
+    assert bodies["kinds/shapes/Box#"] is not None
     symbols = {bare_descriptor(fact.symbol) for fact in statements[1]}
     assert {
         "kinds/shapes/Box#",

@@ -20,6 +20,7 @@ from sextant.application.resolve.shapes.model_fields import (
     FieldName,
     ModelNames,
     Naming,
+    library_bodies,
     naming_of,
     weaker,
 )
@@ -79,6 +80,10 @@ def derive_shapes(
     # ordinal -> True, or None where the option is written as no literal.
     edges: dict[str, list[str]] = {}
     dropped: dict[str, dict[int, bool | None]] = {}
+    # Per shape, its fields written on output only (`output_fields`, task 9c), and whether its
+    # output and its input are built by something other than its fields (`output_open_when`).
+    output_only: dict[str, set[int]] = {}
+    hooked: dict[str, tuple[bool, bool]] = {}
 
     while pending:
         shape_id = pending.pop(0)
@@ -117,6 +122,8 @@ def derive_shapes(
         # closed too. Making the accessor half report open would leave the two halves
         # disagreeing about one question.
         from_accessors = False
+        # The ordinals of fields read on input under a name other than the one published.
+        renamed: set[int] = set()
         if descriptor is not None:
             rows = _declared_rows_of(descriptor, referenced)
         else:
@@ -129,6 +136,8 @@ def derive_shapes(
                 referenced,
                 (base, names),
                 dropped.setdefault(shape_id, {}),
+                output_only.setdefault(shape_id, set()),
+                renamed,
             )
             if not rows:
                 from_accessors = bool(accessors.of(base))
@@ -153,6 +162,19 @@ def derive_shapes(
         expandable = descriptor is not None or bool(declared.of(base)) or from_accessors
         if not expandable:
             unexpanded.append(shape_id)
+        # Task 9c: a model whose configuration lets it take keys no field declares
+        # (`open_when`), and one whose output or input something other than its fields builds
+        # (`output_open_when`, decided per direction below).
+        takes_more = False
+        if names is not None and descriptor is None:
+            takes_more = names.opened(base)
+            output_opens, input_opens = names.output_opens(base)
+            # A field read under another name than the published one, or one not read, leaves
+            # the shape's INPUT field set described under names a request does not use (N13 B
+            # keeps one shape, under output names): a shape input reaches is open.
+            input_opens = input_opens or bool(renamed)
+            if output_opens or input_opens:
+                hooked[shape_id] = (output_opens, input_opens)
         shapes.append(
             {
                 "shape_id": shape_id,
@@ -198,15 +220,18 @@ def derive_shapes(
                 or any(_holds_an_undescribed_object(row) for row in rows)
                 # N12: a field whose wire name a generator no entry names would give is not
                 # guessed at (§2g), so the description is not complete.
-                or any(row["wire_name"] is None for row in rows),
+                or any(row["wire_name"] is None for row in rows)
+                or takes_more,
             }
         )
         fields.extend(
             {"shape_id": shape_id, "ordinal": ordinal, **row} for ordinal, row in enumerate(rows)
         )
 
-    if any(dropped.values()):
-        shapes, fields = _without_excluded(shapes, fields, dropped, edges, directions)
+    if any(dropped.values()) or any(output_only.values()) or hooked:
+        shapes, fields = _without_excluded(
+            shapes, fields, (dropped, output_only, hooked), edges, directions
+        )
     # Fields first: the shape row is what marks a shape settled for a later
     # catalog, so it is written once its fields are in (D02 §5).
     workspace.derive("shape_fields", fields=fields)
@@ -230,7 +255,9 @@ def _reached(starts: AbstractSet[str], edges: dict[str, list[str]]) -> set[str]:
 def _without_excluded(
     shapes: list[dict[str, object]],
     fields: list[dict[str, object]],
-    dropped: dict[str, dict[int, bool | None]],
+    marked: tuple[
+        dict[str, dict[int, bool | None]], dict[str, set[int]], dict[str, tuple[bool, bool]]
+    ],
     edges: dict[str, list[str]],
     directions: tuple[AbstractSet[str], AbstractSet[str]] | None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
@@ -238,7 +265,13 @@ def _without_excluded(
     of a shape only responses reach, kept in one only requests reach, and kept at `partial`
     anywhere else: one shape holds both directions (N13 B), so a field present in one and
     absent in the other is described there only in part. A field whose option is written as
-    no literal is `partial` wherever it stays."""
+    no literal is `partial` wherever it stays.
+
+    A field written on output only (`output_fields`, task 9c) is the mirror: left out of a
+    shape only requests reach, kept in one only responses reach, `partial` anywhere else. A
+    shape whose output something other than its fields builds (`output_open_when`) is open
+    unless only requests reach it; one whose input is built so, unless only responses do."""
+    dropped, written_only, hooked = marked
     inputs = _reached(directions[0], edges) if directions is not None else set()
     outputs = _reached(directions[1], edges) if directions is not None else set()
     by_shape: dict[str, list[dict[str, object]]] = {}
@@ -249,13 +282,22 @@ def _without_excluded(
     for shape in shapes:
         shape_id = str(shape["shape_id"])
         marks = dropped.get(shape_id) or {}
+        outputs_only = written_only.get(shape_id) or set()
         rows = by_shape.get(shape_id, [])
-        if marks:
-            output_only = shape_id in outputs and shape_id not in inputs
-            input_only = shape_id in inputs and shape_id not in outputs
+        output_only = shape_id in outputs and shape_id not in inputs
+        input_only = shape_id in inputs and shape_id not in outputs
+        output_opens, input_opens = hooked.get(shape_id, (False, False))
+        if (output_opens and not input_only) or (input_opens and not output_only):
+            shape = {**shape, "open": True}
+        if marks or outputs_only:
             rewritten: list[dict[str, object]] = []
             for row in rows:
                 ordinal = int(str(row["ordinal"]))
+                if ordinal in outputs_only:
+                    if input_only:
+                        continue
+                    if not output_only:
+                        row = {**row, "resolution": weaker(str(row["resolution"]), "partial")}
                 if ordinal in marks:
                     excluded = marks[ordinal]
                     if excluded is True and output_only:
@@ -626,11 +668,13 @@ class _Fields:
         cases" from being buried. Those four are `mall-admin`'s newly-open shapes, which
         are open because they hold an unscanned DATE type — nothing to do with this rule.)*
         """
-        _own, ancestry = self._declared()
+        own, ancestry = self._declared()
+        # A library class whose header read its body (task 9c) is described by it: `own` holds
+        # its fields, even where it declares none, as a scanned class's would.
         return any(
-            kind == "extends" and not is_scanned
+            kind == "extends" and not is_scanned and parent not in own
             for holder in _closure_of(base, ancestry)
-            for _parent, kind, is_scanned in ancestry.get(holder, [])
+            for parent, kind, is_scanned in ancestry.get(holder, [])
         )
 
     def _declared(
@@ -641,7 +685,10 @@ class _Fields:
         if self._read is not None:
             return self._read
         ancestry, _scanned = ancestry_of(self.workspace)
-        self._read = (_declared_fields(self.workspace), ancestry)
+        declared = _declared_fields(self.workspace)
+        for symbol, body in self.workspace.once(library_bodies).items():
+            declared.setdefault(symbol, _header_fields(symbol, body))
+        self._read = (declared, ancestry)
         return self._read
 
 
@@ -678,6 +725,39 @@ def _declared_fields(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:
             }
         )
     return owners
+
+
+def _header_fields(symbol: str, body: Any) -> list[dict[str, Any]]:
+    """A library class's fields as `_declared_fields` gives a scanned class's, read off its
+    header (task 9c): each name its body declares, then each decorated function, whose name
+    holds its decorators' result and so belongs to the class, as the scanner writes a module
+    class's (D00 §5a)."""
+    rows = [
+        {
+            "symbol": f"{symbol}{name}.",
+            "name": name,
+            "returns": entry.get("returns") or {},
+            "static": bool(entry.get("static")),
+            "transient": False,
+            "annotation_value": None,
+            "not_required": bool(entry.get("not_required")),
+        }
+        for name, entry in body.fields.items()
+    ]
+    rows += [
+        {
+            "symbol": f"{symbol}{name}.",
+            "name": name,
+            "returns": {},
+            "static": True,
+            "transient": False,
+            "annotation_value": None,
+            "not_required": False,
+        }
+        for name, method in body.methods.items()
+        if method.get("decorators") and name not in body.fields
+    ]
+    return rows
 
 
 def _json_object(value: object) -> dict[str, Any]:
@@ -925,15 +1005,33 @@ def _rows_of(
     referenced: list[str],
     model: tuple[str, ModelNames | None] = ("", None),
     dropped: dict[int, bool | None] | None = None,
+    output_only: set[int] | None = None,
+    renamed: set[int] | None = None,
 ) -> list[dict[str, object]]:
     """One projected row per field that reaches the wire, appending every shape
     the fields reference to `referenced`. `model` is the type the fields describe and the
     shape model's call-read naming (N12), None where it has none. `dropped` receives the
     ordinal of each row an output option drops (`excluded_when`): True, or None where the
-    option is written as no literal."""
+    option is written as no literal. `output_only` receives the ordinal of each row written on
+    output only (`output_fields`, task 9c), and `renamed` each row read on input under another
+    name than its published one, or under one not read."""
     rows: list[dict[str, object]] = []
     shape, names = model
     for field in declared:
+        written_only = None
+        if field["static"] and not field["transient"] and names is not None:
+            holder = owner_of(bare_descriptor(str(field["symbol"])))
+            written_only = names.output_field(shape, holder or shape, field["name"])
+        if written_only is not None and not names.is_private(field["name"]):  # type: ignore[union-attr]
+            output, returns = written_only
+            rows.append(
+                _output_row(
+                    workspace, rules, scope_prefixes, enums, referenced, field, output, returns
+                )
+            )
+            if output_only is not None:
+                output_only.add(len(rows) - 1)
+            continue
         # On no payload, whoever wrote it: a value bound to the type rather than
         # to an instance, or one the language declares as not serialized. Both
         # are ordinary declarations — the facts keep them — and only the
@@ -959,6 +1057,8 @@ def _rows_of(
             holder = owner_of(bare_descriptor(str(field["symbol"])))
             named = names.of(shape, holder or shape, field["name"], field.get("annotation_value"))
             wire_name = named.output
+            if renamed is not None and named.input != named.output:
+                renamed.add(len(rows))
         # Rooted first: a field inside a declared envelope is described by what
         # the envelope holds, not by the envelope (D02 §2a).
         rooted = root_type(field["returns"], rules.wrappers)
@@ -1004,6 +1104,46 @@ def _rows_of(
             }
         )
     return rows
+
+
+def _output_row(
+    workspace: Workspace,
+    rules: _Rules,
+    scope_prefixes: list[tuple[str, bool]],
+    enums: set[str],
+    referenced: list[str],
+    field: dict[str, Any],
+    named: FieldName,
+    returns: Any,
+) -> dict[str, object]:
+    """One row for a field written on output only (`output_fields`, task 9c): typed by what
+    its method returns, named and required as the shape model reads its decorator."""
+    reference = returns if isinstance(returns, dict) and returns else None
+    if reference is None:
+        described: dict[str, Any] = {"wire_type": None, "wire_format": None, "nullable": None}
+        nullable, resolution = None, "unresolved"
+    else:
+        rooted = root_type(reference, rules.wrappers)
+        described = _described(rules, rooted.reference, enums, referenced)
+        nullable, resolution = _nullability_of(
+            rules,
+            rooted.reference,
+            described["nullable"],
+            [],
+            scope_prefixes,
+            field["symbol"],
+        )
+    return {
+        "wire_name": named.output,
+        "field_number": None,
+        "wire_type": described["wire_type"],
+        "wire_format": described["wire_format"],
+        "required": named.required,
+        "nullable": nullable,
+        "resolution": weaker(resolution, named.resolution),
+        "evidence": "declared",
+        "item": _item_of(described),
+    }
 
 
 def _declared_rows_of(shape: dict[str, Any], referenced: list[str]) -> list[dict[str, object]]:

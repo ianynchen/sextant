@@ -349,6 +349,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-343 | [SEXTANT-337](https://app.plane.so/portolan/browse/SEXTANT-337/) | The second binding round costs 5 s on polar after constructions answer instances |
 | OI-344 | [SEXTANT-338](https://app.plane.so/portolan/browse/SEXTANT-338/) | Type-variable rule limits: Enum members, constrained TypeVars, overload type arguments, __new__, imported class subscripts |
 | OI-345 | [SEXTANT-339](https://app.plane.so/portolan/browse/SEXTANT-339/) | Python type gaps left after OI-324: union receivers per member, body-first in the scanner, star imports in headers |
+| OI-346 | [SEXTANT-340](https://app.plane.so/portolan/browse/SEXTANT-340/) | A pydantic @field_serializer changes a field's output type, which the shape does not read |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

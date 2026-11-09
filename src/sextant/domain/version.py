@@ -123,6 +123,12 @@ SEXTANT_VERSION = version("sextant")
 #             M1, M6). A fact set of the older vintage holds neither, so a reader would take an
 #             `Annotated` field for one with no metadata and every `TypedDict` key for a
 #             required one; it is refused and re-extracted.
+#     12      a Python `type_header` gains its class body: `fields` (every name it declares,
+#             with its type, `static`, its value and the calls that made it) and `methods` (every
+#             function, with its return type and decorators), None where not read (plan
+#             2026-11-08 task 9c). A fact set of the older vintage reads every library class as
+#             one whose fields nobody can see, so every model extending one stays open; it is
+#             refused and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -261,6 +267,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 11
+FACT_SCHEMA_VERSION = 12
 GRAPH_SCHEMA_VERSION = 17
 BOUNDARY_VOCABULARY_VERSION = 5
