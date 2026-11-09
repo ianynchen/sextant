@@ -248,7 +248,11 @@ names a class; where it names a type variable and the constructor takes a callab
 wrapping a function: pydantic's `deprecated_instance_property` on `model_fields`), what the
 wrapped function is written to return, found through the call that made the value; else, or
 where that is a descriptor in turn, nothing read. Never the descriptor class. A module's
-attributes are not read through a descriptor.
+attributes are not read through a descriptor, and neither is an object an instance holds
+(`self.tool = Tool()`): only one every write of which its own class body makes, as Python runs
+`__get__` only for an object found on the class (review R2-2). A `__get__` declared more than once
+with different returns (overloads by class or instance access) gives nothing read (R2-1); one
+written to return `Self` gives the descriptor object itself.
 
 **Each parameter's and binding's paths upward are worked out once** (ruling R39, round 2;
 `walkbug-report.md`). A parameter's answer, and a binding read plainly (not on an object, not

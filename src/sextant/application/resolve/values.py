@@ -229,6 +229,8 @@ _NONE = "builtins/None#"
 _SELF = "Self"
 # A descriptor's method (`_Walk._plain_attribute`).
 _GET = "__get__"
+# A class body's own method (D00 §5a): a write it makes puts the value on the class.
+CLASS_BODY = "<clinit>("
 # How many decorators deep `_Walk._wrapped_return` looks for the function a decorator wraps.
 _WRAPPING_DEPTH = 4
 # The name the facts give a call of a value (`f(x)` on a value `f`, D00 §5).
@@ -1646,6 +1648,7 @@ def _descriptor_tables(workspace: Workspace) -> dict[str, Any]:
     """`ValueIndex.descriptors`, `module_types` and `function_returns` (task 9c re-review N1),
     from the module's method facts and the library classes whose header read their body."""
     gets: dict[str, Mapping[str, Any] | None] = {}
+    conflicting: set[str] = set()
     callables: set[str] = set()
     returns: dict[tuple[str, str], Mapping[str, Any]] = {}
 
@@ -1653,8 +1656,17 @@ def _descriptor_tables(workspace: Workspace) -> dict[str, Any]:
         written = json.loads(written) if isinstance(written, str) else written
         if isinstance(written, dict) and (owner, name) not in returns:
             returns[(owner, name)] = written
-        if name == _GET and owner not in gets:
-            gets[owner] = written if isinstance(written, dict) else None
+        if name == _GET:
+            # Declared more than once with different returns (overloads that differ by
+            # access, review R2-1): which one a read runs is not read here, so none is taken.
+            # An implementation written with no return beside its overloads says nothing.
+            given = written if isinstance(written, dict) else None
+            if owner not in gets:
+                gets[owner] = given
+            elif given is not None and gets[owner] is not None and gets[owner] != given:
+                conflicting.add(owner)
+            elif gets[owner] is None:
+                gets[owner] = given
         if name == _INIT and any(
             isinstance(one, dict) and one.get("symbol") in _CALLABLES for one in parameters
         ):
@@ -1694,7 +1706,10 @@ def _descriptor_tables(workspace: Workspace) -> dict[str, Any]:
         for entry in listed:
             method(owner, str(entry["name"]), entry.get("returns"), entry.get("parameters") or [])
     return {
-        "descriptors": {owner: (written, owner in callables) for owner, written in gets.items()},
+        "descriptors": {
+            owner: (None if owner in conflicting else written, owner in callables)
+            for owner, written in gets.items()
+        },
         "module_types": frozenset(
             bare_descriptor(str(row["symbol"])) for row in workspace.query("module_types")
         ),
@@ -6123,8 +6138,10 @@ class _Walk:
             reached.extend(self._attribute(one, trail, frames, unseen, read_on))
         if beyond:
             reached.append((trail, _unresolved(EXTERNAL)))
-        if self._index.descriptors and owner_of(bare_descriptor(symbol)) not in (
-            self._index.module_types
+        if (
+            self._index.descriptors
+            and owner_of(bare_descriptor(symbol)) not in self._index.module_types
+            and self._class_body_only(written_ones)
         ):
             reached = self._through_descriptors(written_ones, reached)
         if declared:
@@ -6241,6 +6258,10 @@ class _Walk:
                 found.append((path, answer))
                 continue
             written, takes_callable = descriptor
+            if written is not None and written.get("symbol") == _SELF:
+                # `__get__` hands back the descriptor object itself.
+                found.append((path, answer))
+                continue
             classes = () if written is None else declared_classes_of(self._index, written)
             if not classes and takes_callable and written is not None:
                 wrapped = self._wrapped_return(written_ones)
@@ -6257,6 +6278,23 @@ class _Walk:
             else:
                 found.append((path, _unresolved(NOT_READABLE)))
         return found
+
+    def _class_body_only(self, written_ones: list[str]) -> bool:
+        """Whether every write of the attribute is made by its own class's body, so the object
+        is found on the class, where Python runs `__get__` (review R2-2); an object an instance
+        holds (`self.tool = Tool()`) is read as itself."""
+        for one in written_ones:
+            body = f"{owner_of(one)}{CLASS_BODY}"
+            writers = [
+                *(method for method, _ in self._index.writers.get(one, ())),
+                *(method for method, _ in self._index.produced.get(one, ())),
+                *(method for method, _ in self._index.constants.get(one, ())),
+            ]
+            if any(
+                writer is None or not bare_descriptor(writer).startswith(body) for writer in writers
+            ):
+                return False
+        return True
 
     def _descriptor_of(self, held: str) -> tuple[Mapping[str, Any] | None, bool] | None:
         """The `__get__` of `held`'s nearest ancestor declaring one (`held` first), None where

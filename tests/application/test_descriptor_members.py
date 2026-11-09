@@ -158,3 +158,78 @@ def test_a_never_running_block_keeps_its_symbols_out_of_the_field_set_only(
     assert "app/main/Item#hinted." in declared
     assert "app/main/Svc#go(sig_dd69782a)." in _targets(workspace, "call")
     assert set(_fields(workspace)) == {"a", "both"}
+
+
+def test_a_descriptor_applies_only_to_an_object_found_on_the_class(tmp_path: Path, libraries):
+    """Review R2-2: Python runs `__get__` only for an object found in the class's namespace. An
+    object an instance holds (`self.tool = Tool()` in `__init__`) is read as itself, so
+    `self.tool.run()` calls `Tool.run`; the same descriptor written in the class body is read
+    through `__get__`."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _HEAD + "class Box:\n"
+            "    def open(self) -> int:\n"
+            "        return 1\n"
+            "class Tool:\n"
+            "    def __get__(self, obj, owner) -> Box:\n"
+            "        return Box()\n"
+            "    def run(self) -> int:\n"
+            "        return 1\n"
+            "class Holder:\n"
+            "    def __init__(self) -> None:\n"
+            "        self.tool = Tool()\n"
+            "    def use(self) -> int:\n"
+            "        return self.tool.run()\n"
+            "class Owner:\n"
+            "    tool = Tool()\n"
+            "    def use(self) -> int:\n"
+            "        return self.tool.open()\n"
+        },
+    )
+
+    assert [t for t in _targets(workspace, "use") if "run" in t] == [
+        "app/main/Tool#run(sig_dd69782a)."
+    ]
+    assert "app/main/Box#open(sig_dd69782a)." in _targets(workspace, "use")
+
+
+def test_an_overloaded_get_is_unknown_and_a_get_returning_self_is_the_descriptor(
+    tmp_path: Path, libraries
+):
+    """Review R2-1: a `__get__` overloaded by access (the class gets one type, an instance
+    another) is not read by its first overload: nothing is read. A `__get__` written to return
+    `Self` gives the descriptor object itself, as Python does."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _HEAD + "from typing import Any, Self, overload\n"
+            "class Expr:\n"
+            "    def desc(self) -> 'Expr':\n"
+            "        return self\n"
+            "class Col:\n"
+            "    @overload\n"
+            "    def __get__(self, instance: None, owner: Any) -> Expr: ...\n"
+            "    @overload\n"
+            "    def __get__(self, instance: object, owner: Any) -> int: ...\n"
+            "    def __get__(self, instance, owner):\n"
+            "        return 1\n"
+            "class SelfDesc:\n"
+            "    def __get__(self, instance, owner) -> Self:\n"
+            "        return self\n"
+            "    def ping(self) -> int:\n"
+            "        return 1\n"
+            "class M:\n"
+            "    c = Col()\n"
+            "    s = SelfDesc()\n"
+            "    def overloaded(self) -> int:\n"
+            "        return self.c.bit_length()\n"
+            "    def itself(self) -> int:\n"
+            "        return self.s.ping()\n"
+        },
+    )
+
+    assert not [t for t in _targets(workspace, "overloaded") if "Expr#" in t or "Col#" in t]
+    assert _targets(workspace, "itself") == ["app/main/SelfDesc#ping(sig_dd69782a)."]
