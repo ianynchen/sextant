@@ -348,7 +348,8 @@ each; machine load about 2.2.
 
 ## End of FastAPI plan 2 (after the final review fixes, 2026-11-09)
 
-Same machine and command; one cold and one warm run each, machine load about 2.0. The first
+Same machine and command; one cold and one warm run each, machine load about 2.5. The final
+rows include `app.host` read as a mount (polar 881 rows). The first
 row of each service is the branch after Task 10b (4c6cea65), measured the same day; the second
 is the branch after the final review fixes. Test code is no longer read (final review M1,
 `scripts/probes/pytest_collection.md`): polar reads 1,405 of its 2,053 files, mealie 496 of 705.
@@ -356,9 +357,9 @@ is the branch after the final review fixes. Test code is no longer read (final r
 | Tree | Cold | Scan | Resolve | Warm | Cold target 60 s / ceiling 300 s | Warm target 10 s / ceiling 30 s |
 |---|---|---|---|---|---|---|
 | polar `server/`, after Task 10b | 54.1 s | 27.9 s (249,987 facts) | 24.7 s | 2.0 s | met | met |
-| polar `server/`, final | 36.7 s | 18.8 s (146,781 facts) | 16.4 s | 1.5 s | met | met |
+| polar `server/`, final | 36.9 s | 18.7 s (146,781 facts) | 16.6 s | 1.5 s | met | met |
 | mealie, after Task 10b | 15.4 s | 8.1 s (67,782 facts) | 5.2 s | 1.3 s | met | met |
-| mealie, final | 12.4 s | 5.8 s (41,210 facts) | 4.5 s | 1.2 s | met | met |
+| mealie, final | 12.6 s | 5.9 s (41,210 facts) | 4.6 s | 1.2 s | met | met |
 | `fixtures/orders-fastapi`, final | 2.3 s | 0.6 s (2,179 facts) | 0.7 s | | met | |
 
 - **Why it is faster.** The 648 polar test files held 41 % of its facts and most of the

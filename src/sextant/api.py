@@ -2031,7 +2031,16 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
             None,
         )
         participants = _with_registered_names(participants, config, key)
-        links, unmatched = _match_links(participants, endpoints)
+        hosted = frozenset(
+            (
+                str(row["participant"]),
+                str(row["protocol"]),
+                None if row["method"] is None else str(row["method"]),
+                str(row["path"]),
+            )
+            for row in workspace.query("system_endpoint_hosts")
+        )
+        links, unmatched = _match_links(participants, endpoints, hosted)
         # **A gateway route's prefix, joined to the paths the service it names serves.** It
         # runs after the matcher and adds to it rather than replacing anything: the
         # participant-level link the `lb://` row already produced stays, because the

@@ -179,3 +179,24 @@ def test_an_uncalled_any_method_row_carries_its_marker_and_a_plain_one_does_not(
         ("/p", False),
         ("/q", True),
     ]
+
+
+def test_a_host_scoped_row_is_never_linked_by_path():
+    """A route served only on one host (`app.host(...)`, a Vert.x `virtualHost`: an
+    `endpoint_metadata` entry of kind `host`) is not a route of the main host. A call that
+    names no host reaches the main host's routes, so the row is not linked by its path (plan
+    2 final review, OI-368); a route of the same participant on no host still is."""
+    links, unmatched = match(
+        _people("a", "b"),
+        [
+            _inbound("b", "GET", "/users"),
+            _inbound("b", "GET", "/{secret}"),
+            _outbound("a", "GET", "/users"),
+            _outbound("a", "GET", "/abc"),
+        ],
+        hosted=frozenset({("b", "http", "GET", "/users"), ("b", "http", "GET", "/{secret}")}),
+    )
+    assert links == ()
+    assert [u.reason for u in unmatched] == [
+        "no participant in this system serves this address"
+    ] * 2

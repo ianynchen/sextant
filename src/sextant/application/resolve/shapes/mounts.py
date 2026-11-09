@@ -154,6 +154,10 @@ class MountRule:
     # The argument holding the dependencies the mount adds to every route below it (plan
     # 2026-11-08 N6), read by the request-requirements reader; None where none is declared.
     dependencies_arg: Any = None
+    # The argument holding the host the mounted router is served on (`host_arg`, OI-368,
+    # approved 2026-11-09: Starlette's `Host`); None for a mount served on every host. A mount
+    # with a host and no `prefix_arg` serves the router's routes at their own paths.
+    host_arg: Any = None
 
     def matches(self, site: Mapping[str, Any]) -> bool:
         return (
@@ -161,6 +165,12 @@ class MountRule:
             and site["name"] == self.method
             and (self.descriptor is None or site.get("descriptor") == self.descriptor)
         )
+
+    @property
+    def by_call(self) -> bool:
+        """A mount made by a call of its own (`prefix_arg` or `host_arg`), found in one pass
+        over the sites, not a chain end whose route path is the prefix (`prefix_from`)."""
+        return self.prefix_arg is not None or self.host_arg is not None
 
 
 @dataclass(frozen=True)
@@ -205,6 +215,8 @@ class MountPath:
     within: Path | None = None
     # A mount path the walk captured without a position to read it at: not read.
     unread: bool = False
+    # `(site, slot)` the mount's host is read at (`host_arg`); None for a mount with no host.
+    host: tuple[Mapping[str, Any], int] | None = None
     # The order the mount route was given, as the engine reads a route's order, or None for
     # its registration order: where the mount stands among the parent's own routes.
     order: Any = None
@@ -275,6 +287,10 @@ class Prefix:
     # calls a row's registration ran through (OI-368, task 10b re-review R1-1); empty where no
     # value was walked. Not part of what the prefix is.
     chosen_on: frozenset[Path] = field(default=frozenset(), compare=False)
+    # The host the routes are served on (`host_arg`, OI-368): `(text, resolution)`, the text
+    # None where the walk read no string whole (never guessed); None for every host. Part of
+    # what the prefix is: one router served on two hosts serves twice.
+    host: tuple[str | None, str] | None = None
 
 
 ROOT = Prefix(None, str(Resolution.RESOLVED))
@@ -389,12 +405,21 @@ def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> M
             f"`{{keyword: name}}`, `{{arg: N, keyword: name}}` or `{CHAIN_RESULT}`"
         )
     prefix_arg, prefix_from = entry.get("prefix_arg"), entry.get("prefix_from")
-    if (prefix_arg is None) == (prefix_from is None) or (
-        prefix_arg is not None and argument_reference(prefix_arg, spelled=False) is None
+    host_arg = entry.get("host_arg")
+    if host_arg is not None and (
+        argument_reference(host_arg, spelled=False) is None or prefix_from is not None
     ):
         raise CatalogError(
+            f"{where} `{entry['method']}` `host_arg` must be a position, `{{keyword: name}}` "
+            f"or `{{arg: N, keyword: name}}`, on a mount made by a call (no `prefix_from`)"
+        )
+    # A mount with a host may name no prefix: the router serves at its own paths on the host.
+    if (
+        (prefix_arg is None) == (prefix_from is None) and not (host_arg and prefix_arg is None)
+    ) or (prefix_arg is not None and argument_reference(prefix_arg, spelled=False) is None):
+        raise CatalogError(
             f"{where} `{entry['method']}` must name exactly one of `prefix_arg: N` and "
-            f"`prefix_from: {RECEIVER_PATH}`"
+            f"`prefix_from: {RECEIVER_PATH}`, or only a `host_arg`"
         )
     if router_arg == CHAIN_RESULT and (
         prefix_from != RECEIVER_PATH or entry["method"] not in roots
@@ -444,6 +469,7 @@ def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> M
         refuses=frozenset(refuses),
         strip_trailing=strip,
         dependencies_arg=_dependencies_arg(entry, where),
+        host_arg=host_arg,
     )
 
 
@@ -979,6 +1005,8 @@ class MountReader:
                     found.append(replace(prefix, chosen_on=frozenset({on})))
             if not read:
                 found.append(self._hole(mount, at, "nothing on this path"))
+        if at.host is not None:
+            found = [hosted for prefix in found for hosted in self._hosted(prefix, at.host, path)]
         # One prefix per text, with every path it was read on.
         merged: dict[Prefix, Prefix] = {}
         for prefix in found:
@@ -990,6 +1018,38 @@ class MountReader:
             )
         self._read[key] = tuple(merged.values())
         return self._read[key]
+
+    def _hosted(
+        self, prefix: Prefix, host: tuple[Mapping[str, Any], int], path: Path
+    ) -> list[Prefix]:
+        """`prefix` served on the host the mount's `host_arg` names, one per host read within
+        `path`: a string read whole is the host (`narrowed` where it is one of several), a
+        template its text with the holes unfilled at `partial`, anything else no text at
+        `unresolved`. Each keeps the path its host was read on beside its own (M-1)."""
+        found: list[Prefix] = []
+        if host[1] < 0:
+            return [replace(prefix, host=(None, str(Resolution.UNRESOLVED)))]
+        for on, answers in resolve_positions_on_paths(
+            self._workspace, {"host": host}, self._index, within=path
+        ):
+            answer = answers["host"]
+            text = _text_of(answer)
+            if text is None:
+                read: tuple[str | None, str] = (None, str(Resolution.UNRESOLVED))
+            elif not text[1]:
+                read = (text[0], str(Resolution.PARTIAL))
+            else:
+                read = (
+                    text[0],
+                    str(Resolution.NARROWED if answer.narrowed else Resolution.RESOLVED),
+                )
+            chosen = frozenset(
+                joined
+                for mine in prefix.chosen_on or frozenset({on})
+                if (joined := mine.joined(on)) is not None
+            )
+            found.append(replace(prefix, host=read, chosen_on=chosen))
+        return found or [replace(prefix, host=(None, str(Resolution.UNRESOLVED)))]
 
     def _hole(self, mount: Mount, at: MountPath, read: str) -> Prefix:
         """The named hole for `mount`'s prefix, saying where it was read and what it read."""
@@ -1093,6 +1153,8 @@ class MountReader:
             places,
             parent.empty_after,
             chosen_on=chosen,
+            # The innermost host is the one a request must match to reach the router.
+            host=own.host if own.host is not None else parent.host,
         )
 
     def _outermost(self, parent: Prefix, word: str, made: Router | None) -> tuple[str, str]:

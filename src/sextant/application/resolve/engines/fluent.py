@@ -589,7 +589,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # here, under no verb, as the route the framework builds for it names none.
     if mounts is not None:
         for mount in mounted.values():
-            if mount.rule.prefix_arg is None:
+            if not mount.rule.by_call:
                 continue
             for _, path, reason in mounts.refusals(mount):
                 file_refusal(
@@ -1563,6 +1563,7 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                 for name, value in query
             ),
             *parameter_entries,
+            *_host_entries(prefix, context, direction, verb, path, handler),
         ]
         kept: _Kept | None = None
         if path is not None and (verb is not None or verbless) and not ranked:
@@ -1992,7 +1993,7 @@ def _mounts(
             (
                 rule
                 for rule in rules.mounts
-                if rule.prefix_arg is None
+                if not rule.by_call
                 and terminal is not None
                 and rule.matches(end.root if rule.router_arg == CHAIN_RESULT else terminal)
             ),
@@ -2027,15 +2028,36 @@ def _mounts(
         ways[id(end)] = paths.index(way)
     for site in index.sites.values():
         for rule in rules.mounts:
-            if rule.prefix_arg is not None and rule.matches(site):
-                slot = argument_slot(site["arguments"] or [], rule.prefix_arg)
+            if rule.by_call and rule.matches(site):
+                slot = (
+                    None
+                    if rule.prefix_arg is None
+                    else argument_slot(site["arguments"] or [], rule.prefix_arg)
+                )
                 read_at = None if slot is None or slot == UNPACKED_SLOT else (site, slot)
+                # The host a `host_arg` mount serves on, read as the prefix is (OI-368); an
+                # argument not written, or one that may be in an unpacked value, is no host
+                # read: `_hosted` answers it `unresolved`.
+                host_slot = (
+                    None
+                    if rule.host_arg is None
+                    else argument_slot(site["arguments"] or [], rule.host_arg)
+                )
+                host_at = (
+                    (site, host_slot)
+                    if host_slot is not None and host_slot != UNPACKED_SLOT
+                    else ((site, -1) if rule.host_arg is not None else None)
+                )
                 # A prefix argument the call does not write is the parameter's default, the
                 # empty prefix: the router mounts at the parent's root. One that may be in an
                 # unpacked value is not read.
                 found.setdefault(
                     _site_key(site),
-                    (rule, site, [MountPath(site, read_at, unread=slot == UNPACKED_SLOT)]),
+                    (
+                        rule,
+                        site,
+                        [MountPath(site, read_at, unread=slot == UNPACKED_SLOT, host=host_at)],
+                    ),
                 )
     # A catalog whose routers hold a prefix of their own (`router_holds`) reads it even where
     # the module mounts nothing.
@@ -2393,6 +2415,35 @@ def _metadata_row(
         # per-value retry route (`workspace.derive`), which the pipeline test forbids.
         "requirement": None,
     }
+
+
+def _host_entries(
+    prefix: Prefix,
+    context: "_DeriveContext",
+    direction: str,
+    verb: str | None,
+    path: str | None,
+    handler: str | None,
+) -> list[dict[str, Any]]:
+    """The `host` entry of a row served through a mount with a host (`host_arg`, OI-368): kind
+    `host`, named for the header it matches, as vertx-web's `virtualHost` writes one, valued
+    with the host the walk read and that read's own word. Its `caller` is the row's handler,
+    as on every inbound entry, so the entry is bound to its row."""
+    if prefix.host is None:
+        return []
+    text, resolution = prefix.host
+    row = _metadata_row(
+        {
+            "kind": "host",
+            "name": {"kind": "string", "value": "Host"},
+            "value": None if text is None else {"kind": "string", "value": text},
+        },
+        context,
+        direction,
+        verb,
+        path,
+    )
+    return [{**row, "caller": handler, "resolution": resolution}]
 
 
 def _row_parameters(

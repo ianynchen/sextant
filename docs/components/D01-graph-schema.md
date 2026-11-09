@@ -1022,7 +1022,7 @@ materialisation where measurement demands it, not presumed everywhere.
 |---|---|---|
 | `participants` | Service or external, name, aliases, **bundle location**, commit | Natively |
 | `links` | Outbound endpoint, inbound endpoint, trust fields, candidates | Natively |
-| `symbols`, `edges`, `endpoints`, `shapes`, `shape_fields`, `traces`, `endpoint_conditions`, `bean_presence` | Each participant's own graph — `endpoint_conditions` as `system_endpoint_conditions` and `bean_presence` as `system_bean_presence`, the conditions each end of a link carries and where its bean exists, which a link states beside itself (spec `2026-10-21-conditional-controllers-design.md`, ruling 2; `2026-10-22-conditional-beans-design.md`) | **Views over the bundles** |
+| `symbols`, `edges`, `endpoints`, `shapes`, `shape_fields`, `traces`, `endpoint_conditions`, `bean_presence`, `endpoint_metadata` | Each participant's own graph — `endpoint_conditions` as `system_endpoint_conditions` and `bean_presence` as `system_bean_presence`, the conditions each end of a link carries and where its bean exists, which a link states beside itself (spec `2026-10-21-conditional-controllers-design.md`, ruling 2; `2026-10-22-conditional-beans-design.md`); `endpoint_metadata` as `system_endpoint_metadata`, whose `host` entries name the inbound rows served on one host only, which the linker never links by path (OI-368) | **Views over the bundles** |
 
 The system workspace does **not** copy the estate's graphs. Bundles are Parquet, and one
 query reads Parquet across many paths, so a view is enough.

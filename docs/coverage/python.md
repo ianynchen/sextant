@@ -160,10 +160,10 @@ environment: it imports the app and asks FastAPI. Sextant never runs the code it
 | | `fixtures/orders-fastapi` | polar `server/` | mealie |
 |---|---|---|---|
 | FastAPI routes (method, path pairs) | 13 (14) | 625 (671) | 289 (289) |
-| Sextant FastAPI rows | 14 | 689 | 293 |
+| Sextant FastAPI rows | 14 | 881 | 293 |
 | Pairs FastAPI serves that Sextant finds | 14 of 14 | 668 of 671 | 289 of 289 |
-| Rows `resolved` / `partial` / `unresolved` | 14 / 0 / 0 | 583 / 61 / 45 | 245 / 47 / 1 |
-| Cold analysis (target 60 s, ceiling 300 s) | 2.3 s | 36.7 s | 12.4 s |
+| Rows `resolved` / `partial` / `unresolved` | 14 / 0 / 0 | 717 / 119 / 45 | 245 / 47 / 1 |
+| Cold analysis (target 60 s, ceiling 300 s) | 2.3 s | 36.9 s | 12.6 s |
 | Warm analysis, no file changed (target 10 s) | | 1.5 s | 1.2 s |
 
 - **The fixture equals FastAPI.** `tests/e2e/test_orders_fastapi.py` compares each route's
@@ -175,11 +175,11 @@ environment: it imports the app and asks FastAPI. Sextant never runs the code it
 - **polar.** The 3 pairs not found are the versioned `GET /2026-04/openapi.json`,
   `/2026-10/openapi.json` and `/2027-01/openapi.json`, which Sextant gives as one `partial` row,
   `/{}/openapi.json`. The 31 rows of apps written inside `tests/` are gone since test code
-  is not read. 1 row is the checkout-link app that polar serves only through
-  `app.host(...)`, published at `/{client_secret}` with no host and as existing wherever the
-  module runs: `app.host` is not read as a mount yet, so the test it is under
-  (`if settings.CHECKOUT_LINK_HOST is not None:`) does not reach the route (OI-368's second
-  half).
+  is not read. 193 rows are served only through `app.host(...)`, which FastAPI's table
+  for `polar.app` (run with no host set) does not hold: the checkout-link route
+  `/{client_secret}` and a second row of each of the 192 backoffice routes, at its own path.
+  Each carries a `host` entry (the settings field is not read, so the host is `unresolved`)
+  and exists "not evaluated" under the tests its `app.host` call is under.
 - **mealie.** The 3 rows FastAPI does not serve are the single-page-app routes, registered only
   when `settings.PRODUCTION and not settings.TESTING` and the static-files directory exists
   (`mealie/app.py`, `routes/spa/__init__.py`). The oracle ran with `PRODUCTION=true` and no
@@ -280,7 +280,6 @@ The comparison with a type checker, which solves the first four exactly, is
 
 | Shape | What happens | Record |
 |---|---|---|
-| `app.host(host, app)` | not read as a mount: the app's routes are published with no host, and a test the host call is under does not reach them | OI-368 (second half) |
 | a type written as text (`"Annotated[int, Field(alias='S')]"`, a quoted alias) | not read: the name, the body or the marker is lost | OI-348 |
 | a dependency's own body parameters | no request body | OI-378 |
 | a `@dataclass` or library class as a recipe; a bound method or staticmethod recipe | no parameters and no root; `not_readable` | OI-379, OI-380 |

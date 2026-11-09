@@ -2107,7 +2107,8 @@ def _returns_argument(entry: Any, path: Path) -> dict[str, Any]:
 # The styles whose engines read an argument written in a keyword form (`{keyword: name}`,
 # `{arg: N, keyword: name}`, design 2026-11-06-reading-decorators §3a), and the keys whose
 # every reader there takes such a reference (`values.argument_slot`, `_arg_at`): `single_call`'s
-# own `methods` positions, a `mount`'s three (`router_arg`, `prefix_arg`, `dependencies_arg`),
+# own `methods` positions, a `mount`'s four (`router_arg`, `prefix_arg`, `dependencies_arg`,
+# `host_arg`),
 # a `router_holds` entry's two, a call-naming `request_params` entry's, and `request_body`'s
 # `embed_arg` (plan 2026-11-08 Task 7, on a `fluent` catalog). Every
 # other `*_arg` key is read as an integer somewhere (`client_arg`, `class_arg`, `value_arg`,
@@ -2128,6 +2129,7 @@ _REFERENCE_ARGUMENT_KEYS = frozenset(
         "router_arg",
         "prefix_arg",
         "dependencies_arg",
+        "host_arg",
         "name_arg",
         "required_arg",
         "default_arg",

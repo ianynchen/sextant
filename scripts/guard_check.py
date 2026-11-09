@@ -1969,7 +1969,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="            if rule.prefix_arg is not None and rule.matches(site):\n",
+                find="            if rule.by_call and rule.matches(site):\n",
                 replace="            if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),

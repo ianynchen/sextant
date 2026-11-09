@@ -2470,7 +2470,7 @@ names its first. A malformed entry, or `framework_handlers`/`handler_methods` wi
 
 **`matches.router_type: [<type>, …]` and `matches.mount: [{owner, method, descriptor?,
 router_arg, prefix_arg | prefix_from: receiver_path, wildcard?, strip_trailing?, refuses?,
-dependencies_arg?}, …]`** (Vert.x spec
+dependencies_arg?, host_arg?}, …]`** (Vert.x spec
 §3c) declare sub-router mounts: a route registered on a router serves under the prefix of every
 mount that received that same router — the object one producer made, reached along one call
 path. The producers are derived from the facts by type: every call returning a `router_type`
@@ -2508,8 +2508,16 @@ holding the dependencies a mount adds to every route below it, read by the reque
 element of the list written there one recipe call, `injection: names_recipe`, §1c). **A mount
 declaring none hands no dependency on, its own or any router's above it**: it serves the router
 as an application of its own (Starlette's `mount`), where an include registers each route on
-the router it includes it in, behind that router's own dependencies. A malformed entry, either key without the other, or a `prefix_from` mount that is not a
-terminal, is refused at load.
+the router it includes it in, behind that router's own dependencies. **`host_arg`** (OI-368,
+approved by the user 2026-11-09) names the argument holding the host the mounted router is
+served on (Starlette's `Host`): every route below it carries an `endpoint_metadata` entry of
+kind `host`, name `Host`, valued with the host the value walk reads at that argument within the
+route's path (`resolved`, `narrowed` among several, a template at `partial`, else no value at
+`unresolved`: never guessed), the innermost host where hosts nest. A mount with a `host_arg`
+may name no prefix (`prefix_arg` left out): the router serves at its own paths on that host.
+Rows served on one host are never linked by path (M06). A malformed entry, either key without
+the other, a `host_arg` beside `prefix_from`, or a `prefix_from` mount that is not a terminal,
+is refused at load.
 
 **`matches.router_holds: [{owner, method, prefix_arg?, dependencies_arg?, refuses?}, …]`** (plan
 2026-11-08 N7, approved) declares a prefix a router HOLDS from its construction

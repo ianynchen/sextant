@@ -59,7 +59,7 @@ here would restate those documents rather than add anything.
   parameters, recipes and wire names with what FastAPI and pydantic print for the same code
   (`tests/e2e/fastapi_oracle.py`); every row Sextant writes for the fixture is pinned. Measured
   against FastAPI's own route table: polar 668 of 671 (method, path) pairs, mealie 289 of 289.
-  Polar cold 36.7 s (target 60 s), warm 1.5 s; mealie 12.4 s and 1.2 s (test code not read). By
+  Polar cold 36.9 s (target 60 s), warm 1.5 s; mealie 12.6 s and 1.2 s (test code not read). By
   task:
   - **Facts** (tasks 2, 3, 4b, 8, 9, 9c, 10b; fact schema 7 → 13). A parameter's default and its
     annotation's value are facts (`Parameter.default`, `annotation_value`), and a subscripted
@@ -129,9 +129,20 @@ here would restate those documents rather than add anything.
     helper's other callers'; one it cannot tie to a call is "not evaluated". On polar
     the 192 `/backoffice` rows are "not evaluated"; on mealie, the 3 single-page-app routes
     (registered only when `settings.PRODUCTION and not settings.TESTING` and the static-files
-    directory exists) and one unread dynamic route. No other row moved. `app.host` is not a
-    mount yet, so polar's checkout-link host app is not covered; that and the host itself
-    stay in OI-368's second half.
+    directory exists) and one unread dynamic route. No other row moved.
+  - **`app.host` is a mount with a host** (final review, OI-368 second half; key
+    `mount[].host_arg` approved by the user 2026-11-09). As Starlette 1.6.0's `Host` serves
+    it, the mounted app's routes are served at their own paths, on the named host only, and
+    the outer app's `dependencies=` do not run for them. Each such row carries an
+    `endpoint_metadata` entry of kind `host`, name `Host` (as vertx-web's `virtualHost`
+    writes one), valued with the host the value walk reads, or none at `unresolved`, never a
+    guess; and the registering call's tests. The system tier never links a call to a row
+    served on one host only by its path (`system_endpoint_metadata`, M06). On polar the
+    checkout-link row gains its host entry and is "not evaluated" under
+    `settings.CHECKOUT_LINK_HOST is not None`, and the 192 backoffice routes gain a second
+    row each at their own paths on `settings.BACKOFFICE_HOST`, "not evaluated" under
+    `settings.BACKOFFICE_ENABLED` and the `else` arm of `settings.BACKOFFICE_HOST is None`:
+    881 rows. Mealie and the fixture have no host: no row moved.
   - **Test code is not read** (final review M1, user ruling 2026-11-09: only code that goes
     to production counts). The Python scanner tells test code apart by pytest's own
     collection rules, from the settings file pytest would choose (`pytest.toml`, `pytest.ini`,

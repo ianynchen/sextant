@@ -1363,6 +1363,12 @@ _NAMED_QUERIES = {
     "system_bean_presence": (
         "SELECT * FROM system_bean_presence ORDER BY participant, bean, environment"
     ),
+    # Every inbound row served on one host only (an `endpoint_metadata` entry of kind `host`,
+    # OI-368), by its identity: the rows the linker leaves out of its path index.
+    "system_endpoint_hosts": (
+        "SELECT DISTINCT participant, protocol, method, path FROM system_endpoint_metadata "
+        "WHERE direction = 'inbound' AND kind = 'host' ORDER BY participant, protocol, method, path"
+    ),
 }
 
 # What the export PROJECTION masks (2K design §1), each named where its own
@@ -2365,6 +2371,9 @@ _FEDERATED_VIEWS: tuple[tuple[str, str, str], ...] = (
     # Where each conditional bean exists, per environment: the verdict a link states for
     # either end, read beside the rows above (spec 2026-10-22-conditional-beans §3).
     ("system_bean_presence", "bean_presence", "*"),
+    # Each participant's `endpoint_metadata`, for the routes served on one host only (a `host`
+    # entry, OI-368): the linker never takes one for a route of the main host.
+    ("system_endpoint_metadata", "endpoint_metadata", "*"),
 )
 
 # Names `schema.sql` once declared as a TABLE and now declares as a VIEW (spec

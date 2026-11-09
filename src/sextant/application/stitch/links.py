@@ -117,6 +117,7 @@ class Unmatched:
 def match(
     participants: "tuple[Participant, ...]",
     endpoints: "list[dict[str, object]]",
+    hosted: "frozenset[tuple[str, str, str | None, str]]" = frozenset(),
 ) -> "tuple[tuple[Link, ...], tuple[Unmatched, ...]]":
     """Every link the participants' endpoints support, and every outbound endpoint that
     produced none with the reason it did not.
@@ -146,6 +147,12 @@ def match(
     regular expression rather than an address: neither enters the index, so nothing is
     linked to them by path. And a row marked `method_kind = any` serves every verb, so a
     call of any verb finds it — where a plain NULL method still links to no verb (`_verb`).
+
+    **And one for a route served on one host only** (plan 2 final review, OI-368): `hosted`
+    holds `(participant, protocol, method, path)` of every inbound row with an
+    `endpoint_metadata` entry of kind `host` (`app.host(...)`, a Vert.x `virtualHost`). A call
+    reaches such a route only by naming that host, which no outbound row's path says, so it
+    does not enter the index: it is never taken for a route of the main host.
     """
     # Every name a client could state, to the participant it names. A participant answers to
     # its artifactId AND to the name it registers in discovery, because those differ — the
@@ -167,6 +174,8 @@ def match(
         if path is None:
             continue
         if row.get("path_kind") == PATH_KIND_PATTERN or _NAMED_HOLE.search(str(path)):
+            continue
+        if (str(row["participant"]), str(row["protocol"]), row["method"], str(path)) in hosted:
             continue
         # An any-method row is indexed under the marker in the verb's place, which no real
         # verb can equal (verbs are upper case): the lookup asks for the call's own verb and

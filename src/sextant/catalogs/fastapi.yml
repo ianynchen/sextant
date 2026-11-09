@@ -147,6 +147,12 @@ matches:
         refuses: [unrooted, trailing_slash, empty_path] }
     - { owner: fastapi.applications.FastAPI, method: mount, router_arg: { arg: 1, keyword: app },
         prefix_arg: { arg: 0, keyword: path }, strip_trailing: "/", refuses: [unrooted] }
+    # A HOST (`app.host(host, app)`, Starlette's `Host`; OI-368, key approved 2026-11-09)
+    # serves the app's routes at their own paths, on a request whose `Host` header, port
+    # removed, matches the host; the outer app's dependencies do not run for them (Starlette
+    # 1.6.0 probe, plan 2 final fixes report). No prefix: the host is the row's `host` entry.
+    - { owner: fastapi.applications.FastAPI, method: host, router_arg: { arg: 1, keyword: app },
+        host_arg: { arg: 0, keyword: host } }
   path_join: concatenate
 
   # REQUEST PARAMETERS (probe §4; plan N3). FastAPI reads a parameter's meaning off the marker
