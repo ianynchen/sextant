@@ -722,6 +722,10 @@ def cell(c: Counter | None, blocked: int = 0) -> str:
     return f"◐ ({', '.join(missing)}){tail}"
 
 
+# The languages whose scanner is built, and what it reads (§3). Every other language reads "none".
+_SCANNERS = {"Java / Kotlin": "✅ ASM", "Python": "✅ `ast`"}
+
+
 def render(counts, numbers, columns, first_col=None) -> str:
     head = ["Language"] + ([first_col] if first_col else [])
     head += [f"[{label}]({anchor(h, numbers[h])})" for h, label in columns]
@@ -729,7 +733,7 @@ def render(counts, numbers, columns, first_col=None) -> str:
     for lang in LANGUAGES:
         row = [f"**{lang}**"]
         if first_col:
-            row.append("✅ ASM" if lang == "Java / Kotlin" else "none")
+            row.append(_SCANNERS.get(lang, "none"))
         blocked = open_blockers() if lang == "Java / Kotlin" else {}
         row += [cell(counts.get((lang, h)), blocked.get(label, 0)) for h, label in columns]
         out.append("| " + " | ".join(row) + " |")

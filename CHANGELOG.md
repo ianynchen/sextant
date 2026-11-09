@@ -52,6 +52,65 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **FastAPI inbound is read, and checked against FastAPI itself** (OI-208 plan 2, plan
+  `2026-11-08-python-fastapi-inbound.md`, spec `2026-11-06-python-reader-design.md` §3c as
+  amended by N1). `tests/e2e/test_orders_fastapi.py` analyses `fixtures/orders-fastapi` (FastAPI
+  0.162.0, pydantic 2.14.3, its own locked environment) and compares Sextant's routes,
+  parameters, recipes and wire names with what FastAPI and pydantic print for the same code
+  (`tests/e2e/fastapi_oracle.py`); every row Sextant writes for the fixture is pinned. Measured
+  against FastAPI's own route table: polar 668 of 671 (method, path) pairs, mealie 289 of 289.
+  Polar cold 53.5 s (target 60 s), warm 2.2 s; mealie 15.2 s and 1.3 s. By task:
+  - **Facts** (tasks 2, 3, 4b, 8, 9c; fact schema 7 → 12). A parameter's default and its
+    annotation's value are facts (`Parameter.default`, `annotation_value`), and a subscripted
+    class is the `__class_getitem__` call it is. `type X = v` writes `v` as `X`'s value
+    (ruling R6). A class-body annotation is an instance field with its class-body value
+    (PEP 526). A construction is typed by the scanner (calling a class gives an instance of it;
+    a metaclass `__call__` decides), so `app = FastAPI(); @app.get` has an owner on the facts.
+    A generator's yields are facts (N10). Library class headers carry their fields, read by the
+    same reader as module classes. Old fact sets are read again once.
+  - **Speed** (tasks 4c, 4d, 4e, 8, 9b). The library type headers are kept when nothing they
+    depend on changed (polar warm 28.3 s → 1.95 s), and the header pass reads only the class
+    declarations it needs (45.5 s → 3.3 s). A `sys.version_info` test in a library is decided
+    by the environment's full Python version, by binding (`import sys as _sys` included), so a
+    library header is read from the arm that runs (`IntEnum`, `IntFlag`, 7 `TypedDict`s and
+    `ValidationInfo` on polar were wrong). Each per-walk cache records and replays the reads it
+    made (`values.Kept`), so a value kept across binding rounds is walked again when what it
+    read changes. The garbage collector's thresholds are raised while a module is analysed and
+    given back after (user ruling 2026-11-09), and statement walks skip expressions: polar cold
+    65.8 s → 53 s.
+  - **Parameter markers** (task 4). `parameter_markers(index)` reads each handler parameter's
+    marker calls from its default and its `Annotated` metadata, through helpers and module
+    names. An argument the caller leaves unfilled takes the parameter's default.
+  - **Routes** (task 5; N8, N9, rulings R1, R4). `catalogs/fastapi.yml` (style `fluent`):
+    the verb decorators, `api_route` and `add_api_route` on `APIRouter` and `FastAPI`; one row
+    per verb, the path as written, the handler, and the response from `response_model=` or the
+    return annotation. `methods=[]` (`no_methods`) and `-> X | Response`
+    (`invalid_response_type`) are refused, as FastAPI refuses them (user ruling 2026-11-08).
+  - **Prefixes** (task 6; ruling R23). Router `prefix`, `include_router` prefixes and
+    sub-application `mount` paths are joined by plain concatenation (`path_join: concatenate`),
+    as FastAPI joins them; a router subclass and an app subclass are read through their
+    parents. A factory-built router takes each caller's own prefix, verbs, path and handler.
+  - **Request parameters and bodies** (task 7; N3, N4, R26). `Query`, `Header` and `Cookie`
+    give `endpoint_metadata` rows with their wire names and requirements; a pydantic model
+    parameter is the body, embedded as FastAPI embeds it (`embed_arg`, `embed_markers`, user
+    ruling 2026-11-08). Refusals `path_variable_default`, `marked_twice` and
+    `path_variable_marked` (user ruling); no more are added.
+  - **Dependencies** (task 8; N5, N11). `Depends` and `Security` are read through the bean
+    model `injection: names_recipe`: a parameter takes the recipe's return beside its in-module
+    callers, the recipe's own parameters join the route's, `dependencies=` lists join from the
+    route, router, include and app, and each recipe is a `roots` row at the route's address.
+  - **pydantic shapes** (tasks 9, 9c; N12, N13, R24, R25). `catalogs/shape-models/pydantic.yml`:
+    wire names from `Field` aliases and the alias generator, configuration merged over the
+    written bases (class keywords included), `required` as pydantic decides it (NULL where the
+    default is not readable), JSON types and formats (`known_types`, checked against pydantic's
+    own JSON schema), a generic `response_model` read as the type it names, and query models.
+    User-approved keys: `excluded_when`, `open_when`, `output_fields`, `output_open_when` (with
+    `also_input` and `except_declared_by`), and the shape model's `wrappers`. A shape is closed
+    where every field is read. `boundary diff` gives no verdict on a field whose requirement is
+    unknown.
+  - **Open issues** OI-347 to OI-409 (Plane SEXTANT-341 to SEXTANT-403) record what is not
+    read; the Python essay (`docs/coverage/python.md`) lists them by shape.
+
 - **The value walk works out each parameter's paths upward once** (ruling R39; M04). A
   parameter's (and a plainly read binding's) set of paths upward is computed once per
   `(position, frames)` and joined onto every path that reaches it, shared by every receiver

@@ -318,3 +318,30 @@ command, one run each. Cold is a new folder. Warm is the same command again, no 
 
 The run reads the same 2,053 files as before. The cold figure is within the 36.5 s to 43.7 s
 range of the earlier rounds. Every later task of plan 2 compares with these two numbers.
+
+## End of FastAPI plan 2 (Task 10, 2026-11-09)
+
+Branch `cov/python-fastapi` at 311fa0cc plus Task 10's tests and documents (no reader code
+changed). Same machine and command as the Task 0 baseline above, each service with its own
+environment synced (`.venv`), so the library type headers are read. One cold and one warm run
+each; machine load about 2.2.
+
+| Tree | Cold | Scan | Resolve | Warm | Cold target 60 s / ceiling 300 s | Warm target 10 s / ceiling 30 s |
+|---|---|---|---|---|---|---|
+| polar `server/` | 53.5 s | 26.8 s (249,987 facts) | 25.2 s | 2.2 s | met | met |
+| mealie | 15.2 s | 8.0 s (67,782 facts) | 5.1 s | 1.3 s | met | met |
+| `fixtures/orders-fastapi` | 2.4 s | 0.6 s (2,158 facts) | 0.6 s | | met | |
+
+- **From the baseline to here.** polar cold went 42.5 s → 53.5 s and its fact count 229,689 →
+  249,987. Most of the difference is the synced environment: with FastAPI, starlette and
+  pydantic installed, their type headers and the library class bodies pydantic's fields need
+  are read (task 9c), which the baseline, run without them, did not do. The highest cold time on
+  the way was about 69.5 s (task 4b, before the header pass was cut down in tasks 4c and 4d) and
+  about 65 s (task 9c); task 9b brought it back under the 60 s target. The progress ledger has
+  each step.
+- **One edited file** still pays the whole resolve: 40.4 s on polar at 311fa0cc (task 9b). That
+  needs an incremental resolve (OI-360).
+- **The largest single resolve costs left** are binding round 2 (3.4 s) and the two
+  `value_index` builds (about 4.5 s together), OI-387.
+- **dispatch** (`examples/py-dispatch`) is not measured: it has no installed environment, and
+  nothing was installed for this run.

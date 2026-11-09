@@ -350,6 +350,69 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-344 | [SEXTANT-338](https://app.plane.so/portolan/browse/SEXTANT-338/) | Type-variable rule limits: Enum members, constrained TypeVars, overload type arguments, __new__, imported class subscripts |
 | OI-345 | [SEXTANT-339](https://app.plane.so/portolan/browse/SEXTANT-339/) | Python type gaps left after OI-324: union receivers per member, body-first in the scanner, star imports in headers |
 | OI-346 | [SEXTANT-340](https://app.plane.so/portolan/browse/SEXTANT-340/) | A pydantic @field_serializer changes a field's output type, which the shape does not read |
+| OI-347 | [SEXTANT-341](https://app.plane.so/portolan/browse/SEXTANT-341/) | A construction of a subscripted class (Box[int]()) answers not_readable where external is meant |
+| OI-348 | [SEXTANT-342](https://app.plane.so/portolan/browse/SEXTANT-342/) | A type written as text (a quoted annotation or string alias) is not read |
+| OI-349 | [SEXTANT-343](https://app.plane.so/portolan/browse/SEXTANT-343/) | A generic type alias (Alias = list[T]; x: Alias[int]) is not substituted |
+| OI-350 | [SEXTANT-344](https://app.plane.so/portolan/browse/SEXTANT-344/) | A class-body `x: Final = value` is written as an instance field |
+| OI-351 | [SEXTANT-345](https://app.plane.so/portolan/browse/SEXTANT-345/) | Dispatch registration keys are read from static fields only, so an annotated class constant is skipped |
+| OI-352 | [SEXTANT-346](https://app.plane.so/portolan/browse/SEXTANT-346/) | A conditional expression choosing between two marker calls gives no parameter marker |
+| OI-353 | [SEXTANT-347](https://app.plane.so/portolan/browse/SEXTANT-347/) | A stated hand-off into a defaulted parameter does not read the default (entered_position) |
+| OI-354 | [SEXTANT-348](https://app.plane.so/portolan/browse/SEXTANT-348/) | A function named `static` or `new` beside its body gives no parameter default |
+| OI-355 | [SEXTANT-349](https://app.plane.so/portolan/browse/SEXTANT-349/) | A parameter default naming a module name rebound after the def takes every write of that name |
+| OI-356 | [SEXTANT-350](https://app.plane.so/portolan/browse/SEXTANT-350/) | A local written on two branches with one class but different type arguments loses its owner |
+| OI-357 | [SEXTANT-351](https://app.plane.so/portolan/browse/SEXTANT-351/) | class_object does not follow a re-export, so a class re-exported by a package is not taken for a class |
+| OI-358 | [SEXTANT-352](https://app.plane.so/portolan/browse/SEXTANT-352/) | Construction typing gaps: a library class factory, and `x: type[X] = <not a call>` |
+| OI-359 | [SEXTANT-353](https://app.plane.so/portolan/browse/SEXTANT-353/) | A library IntEnum header has kind class, because enum detection reads only written bases |
+| OI-360 | [SEXTANT-354](https://app.plane.so/portolan/browse/SEXTANT-354/) | The resolve has no partial reuse: any changed fact re-runs it whole |
+| OI-361 | [SEXTANT-355](https://app.plane.so/portolan/browse/SEXTANT-355/) | A non-generator handler returning Iterator[X] gets no response, where FastAPI keeps the annotation |
+| OI-362 | [SEXTANT-356](https://app.plane.so/portolan/browse/SEXTANT-356/) | response_model=Out describes Out as nullable with an empty format, unlike the annotation -> Out |
+| OI-363 | [SEXTANT-357](https://app.plane.so/portolan/browse/SEXTANT-357/) | A route with several handler alternatives reads the fallback response of the first only |
+| OI-364 | [SEXTANT-358](https://app.plane.so/portolan/browse/SEXTANT-358/) | A route decorator reached through an alias on two paths is not read on both |
+| OI-365 | [SEXTANT-359](https://app.plane.so/portolan/browse/SEXTANT-359/) | A bound-method handler is looked up by def name only, missing a subclass's class-level reassignment |
+| OI-366 | [SEXTANT-360](https://app.plane.so/portolan/browse/SEXTANT-360/) | An unchanged container constant (methods=VERBS) cannot be read element by element without facts for subscript stores and the literal's kind |
+| OI-367 | [SEXTANT-361](https://app.plane.so/portolan/browse/SEXTANT-361/) | The empty_path refusal checks every route on a router, where FastAPI checks those present at the include |
+| OI-368 | [SEXTANT-362](https://app.plane.so/portolan/browse/SEXTANT-362/) | A mount or app.host behind a settings condition is taken as made; app.host's host is not read |
+| OI-369 | [SEXTANT-363](https://app.plane.so/portolan/browse/SEXTANT-363/) | APIRouter.mount (Starlette Router.mount) is not declared as a mount |
+| OI-370 | [SEXTANT-364](https://app.plane.so/portolan/browse/SEXTANT-364/) | Parameter shapes FastAPI refuses or accepts at start-up are not all mirrored |
+| OI-371 | [SEXTANT-365](https://app.plane.so/portolan/browse/SEXTANT-365/) | request_body excludes match a type exactly, so a subclass of Request or Response is read as a body |
+| OI-372 | [SEXTANT-366](https://app.plane.so/portolan/browse/SEXTANT-366/) | A body parameter of unknown kind is not counted, so embedding counts one body too few |
+| OI-373 | [SEXTANT-367](https://app.plane.so/portolan/browse/SEXTANT-367/) | A conditional parameter default (two paths) gives two request readings |
+| OI-374 | [SEXTANT-368](https://app.plane.so/portolan/browse/SEXTANT-368/) | A subclass of fastapi.params.Query (or Header, Cookie) is not a parameter marker |
+| OI-375 | [SEXTANT-369](https://app.plane.so/portolan/browse/SEXTANT-369/) | A parameter typed `object` is read as a body; FastAPI calls it a scalar |
+| OI-376 | [SEXTANT-370](https://app.plane.so/portolan/browse/SEXTANT-370/) | The scanner types pydantic's UUID4 (an Annotated alias) as object |
+| OI-377 | [SEXTANT-371](https://app.plane.so/portolan/browse/SEXTANT-371/) | Recipe paths count toward PATH_CAP, so 10 polar sites lost an owner to non_enumerable |
+| OI-378 | [SEXTANT-372](https://app.plane.so/portolan/browse/SEXTANT-372/) | A dependency's own body parameters are not read, so they give no request column |
+| OI-379 | [SEXTANT-373](https://app.plane.so/portolan/browse/SEXTANT-373/) | A dataclass or library class used as a recipe has no __init__ body read: no parameters, no root |
+| OI-380 | [SEXTANT-374](https://app.plane.so/portolan/browse/SEXTANT-374/) | A recipe that is a bound method or a staticmethod read through its class ends not_readable |
+| OI-381 | [SEXTANT-375](https://app.plane.so/portolan/browse/SEXTANT-375/) | The named-function rule takes a @property getter as the function, and a def written twice as both bodies |
+| OI-382 | [SEXTANT-376](https://app.plane.so/portolan/browse/SEXTANT-376/) | The marker reader loses the call at a list element (dependencies=[Depends(f)]) |
+| OI-383 | [SEXTANT-377](https://app.plane.so/portolan/browse/SEXTANT-377/) | Recipe reading edge cases FastAPI does not run: sequential yields, last marker of any kind, a non-route function with a Depends default |
+| OI-384 | [SEXTANT-378](https://app.plane.so/portolan/browse/SEXTANT-378/) | A cycle answer kept by values.Kept can reach the shared suffixes above it |
+| OI-385 | [SEXTANT-379](https://app.plane.so/portolan/browse/SEXTANT-379/) | An index.objects entry can be worked out while parameter_markers is still being built |
+| OI-386 | [SEXTANT-380](https://app.plane.so/portolan/browse/SEXTANT-380/) | Whole-binding reference mode leaves call_edges a round behind its bound_receivers |
+| OI-387 | [SEXTANT-381](https://app.plane.so/portolan/browse/SEXTANT-381/) | Resolve speed levers left: shared paths keyed on the whole frame stack, and value_index built twice |
+| OI-388 | [SEXTANT-382](https://app.plane.so/portolan/browse/SEXTANT-382/) | pydantic 1-style `class Config:` naming configuration is not read |
+| OI-389 | [SEXTANT-383](https://app.plane.so/portolan/browse/SEXTANT-383/) | validate_by_alias=False and response_model_by_alias=False are not read |
+| OI-390 | [SEXTANT-384](https://app.plane.so/portolan/browse/SEXTANT-384/) | Generic models in shapes: a nested type argument is lost, and a directly bound type variable has no nullability |
+| OI-391 | [SEXTANT-385](https://app.plane.so/portolan/browse/SEXTANT-385/) | pydantic configuration merge differs from pydantic in two contrived forms (breadth-first generator, unset vs False) |
+| OI-392 | [SEXTANT-386](https://app.plane.so/portolan/browse/SEXTANT-386/) | The known_types mirror test chooses entries by their by: suffix, so a duplicate type entry is not caught |
+| OI-393 | [SEXTANT-387](https://app.plane.so/portolan/browse/SEXTANT-387/) | model_fields imports parameter_markers._site, a private name, and the mirror test imports the scanner module |
+| OI-394 | [SEXTANT-388](https://app.plane.so/portolan/browse/SEXTANT-388/) | required differs from pydantic where a default is given twice (Annotated metadata and value) or by a constant holding `...` |
+| OI-395 | [SEXTANT-389](https://app.plane.so/portolan/browse/SEXTANT-389/) | response_model=List[X] (typing.List, Dict) is unresolved |
+| OI-396 | [SEXTANT-390](https://app.plane.so/portolan/browse/SEXTANT-390/) | 16 pydantic fields keep required NULL: Field arguments through *args (UpdatedAtField), a computed default |
+| OI-397 | [SEXTANT-391](https://app.plane.so/portolan/browse/SEXTANT-391/) | FastAPI 0.115.12 names query-model parameters differently from 0.162.0, and the catalog states 0.162's rule |
+| OI-398 | [SEXTANT-392](https://app.plane.so/portolan/browse/SEXTANT-392/) | A NULL wire_name renders as "None" in the shapes table |
+| OI-399 | [SEXTANT-393](https://app.plane.so/portolan/browse/SEXTANT-393/) | Raised GC thresholds can leak when two analyses overlap on threads |
+| OI-400 | [SEXTANT-394](https://app.plane.so/portolan/browse/SEXTANT-394/) | The statement-walk equivalence test does not cover a decided version test |
+| OI-401 | [SEXTANT-395](https://app.plane.so/portolan/browse/SEXTANT-395/) | A subclass of a create_model(...) result is a closed shape missing the dynamic fields |
+| OI-402 | [SEXTANT-396](https://app.plane.so/portolan/browse/SEXTANT-396/) | A pydantic dataclass given extra='allow' through config= stays closed |
+| OI-403 | [SEXTANT-397](https://app.plane.so/portolan/browse/SEXTANT-397/) | A plain Field(exclude_if=...) field is not read as possibly absent on output |
+| OI-404 | [SEXTANT-398](https://app.plane.so/portolan/browse/SEXTANT-398/) | dict_construction rewrites every class-body dict display, not only configuration |
+| OI-405 | [SEXTANT-399](https://app.plane.so/portolan/browse/SEXTANT-399/) | A descriptor whose __get__ has no annotation and returns self is unknown |
+| OI-406 | [SEXTANT-400](https://app.plane.so/portolan/browse/SEXTANT-400/) | A RootModel subclass that redeclares root is published closed with a field `root` |
+| OI-407 | [SEXTANT-401](https://app.plane.so/portolan/browse/SEXTANT-401/) | UploadFile's header attributes appear as fields of a shape; on the wire it is a file part |
+| OI-408 | [SEXTANT-402](https://app.plane.so/portolan/browse/SEXTANT-402/) | A library function body is not read, so a field default made by a library helper is partial with required NULL |
+| OI-409 | [SEXTANT-403](https://app.plane.so/portolan/browse/SEXTANT-403/) | Library class-body call sites and symbols appear in the export index |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
