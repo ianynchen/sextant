@@ -350,6 +350,7 @@ class ModelFields:
             for field in self.fields.of(model)
             if not field["static"]
             and not field["transient"]
+            and not field.get("never_runs")
             and not self.names.is_private(field["name"])
         ]
         if not declared:
@@ -728,6 +729,8 @@ def _declared_fields(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:
                 # language lets the key be left out (`TypedDict`), Python's (D00 §5a).
                 "annotation_value": _json_object(row["annotation_value"]) or None,
                 "not_required": bool(row["not_required"]),
+                # Declared only where the class body never runs (`if TYPE_CHECKING:`): no field.
+                "never_runs": bool(row["never_runs"]),
             }
         )
     return owners
@@ -1013,7 +1016,7 @@ def _rows_of(
         # every field is excluded stays a type the pass expanded rather than one
         # it reports as a gap. No row at all, for the reason the ignore rule
         # below gives.
-        if field["static"] or field["transient"]:
+        if field["static"] or field["transient"] or field.get("never_runs"):
             continue
         annotations = workspace.query("annotations_of", target=field["symbol"])
         # No row, not a row marked absent: DR-5 would compare a field the

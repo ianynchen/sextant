@@ -229,6 +229,8 @@ _NONE = "builtins/None#"
 _SELF = "Self"
 # A descriptor's method (`_Walk._plain_attribute`).
 _GET = "__get__"
+# How many decorators deep `_Walk._wrapped_return` looks for the function a decorator wraps.
+_WRAPPING_DEPTH = 4
 # The name the facts give a call of a value (`f(x)` on a value `f`, D00 §5).
 _CALL = "__call__"
 # `returns_argument`'s three forms (`Catalog.returns_arguments`).
@@ -860,6 +862,19 @@ class ValueIndex:
     # HttpClient`, or a module-level one), by bare field symbol, as the fact writes it
     # (`signature.returns`). Read only by the type reader (`_Walk._declared_field`).
     declared_fields: Mapping[str, Mapping[str, Any]] = dataclass_field(default_factory=dict)
+    # For a `c3` module (task 9c re-review N1, Python's attribute lookup): each class that
+    # declares `__get__`, a module class's or a header-read library class's, to what its
+    # `__get__` is written to return and whether its constructor takes a callable; the module
+    # types, whose attributes no descriptor reads; and each function's written return by
+    # `(owner, name)`, a library class's off its type header too. Read by
+    # `_Walk._through_descriptors`.
+    descriptors: Mapping[str, tuple[Mapping[str, Any] | None, bool]] = dataclass_field(
+        default_factory=dict
+    )
+    module_types: frozenset[str] = frozenset()
+    function_returns: Mapping[tuple[str, str], Mapping[str, Any]] = dataclass_field(
+        default_factory=dict
+    )
     # Each class's type parameters by name, in order (D00 §5a `type_parameters`), and its
     # written parents with their type arguments (`supertype`, `generic_interfaces`), by bare
     # class symbol, for a `c3` module: what a generic class's parameters are on a subclass
@@ -1618,7 +1633,73 @@ def value_index(
         yielded_values=yielded_values,
         named_functions=_named_functions(dispatch) if by_name else {},
         recipes=recipe_calls(bean_models),
+        **(_descriptor_tables(workspace) if by_name else {}),
     )
+
+
+# The written types that name a callable (D00 §5a), which a descriptor's constructor takes
+# where it wraps a function (task 9c re-review N1).
+_CALLABLES = frozenset({"typing/Callable#", "collections/abc/Callable#"})
+
+
+def _descriptor_tables(workspace: Workspace) -> dict[str, Any]:
+    """`ValueIndex.descriptors`, `module_types` and `function_returns` (task 9c re-review N1),
+    from the module's method facts and the library classes whose header read their body."""
+    gets: dict[str, Mapping[str, Any] | None] = {}
+    callables: set[str] = set()
+    returns: dict[tuple[str, str], Mapping[str, Any]] = {}
+
+    def method(owner: str, name: str, written: Any, parameters: list[Any]) -> None:
+        written = json.loads(written) if isinstance(written, str) else written
+        if isinstance(written, dict) and (owner, name) not in returns:
+            returns[(owner, name)] = written
+        if name == _GET and owner not in gets:
+            gets[owner] = written if isinstance(written, dict) else None
+        if name == _INIT and any(
+            isinstance(one, dict) and one.get("symbol") in _CALLABLES for one in parameters
+        ):
+            callables.add(owner)
+
+    for row in workspace.query("method_declarations"):
+        bare = bare_descriptor(str(row["symbol"]))
+        owner = owner_of(bare)
+        signature = row["signature"]
+        signature = json.loads(signature) if isinstance(signature, str) else signature or {}
+        if owner is None or not isinstance(signature, dict):
+            continue
+        method(
+            owner,
+            method_name(bare),
+            signature.get("returns"),
+            [one.get("type") for one in signature.get("parameters") or []],
+        )
+    for row in workspace.query("constructor_declarations"):
+        bare = bare_descriptor(str(row["symbol"]))
+        owner = owner_of(bare)
+        signature = row["signature"]
+        signature = json.loads(signature) if isinstance(signature, str) else signature or {}
+        if owner is not None and isinstance(signature, dict):
+            method(
+                owner,
+                _INIT,
+                None,
+                [one.get("type") for one in signature.get("parameters") or []],
+            )
+    for row in workspace.query("type_header_bodies"):
+        owner = bare_descriptor(str(row["symbol"]))
+        raw = row["methods"]
+        listed = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(listed, list):
+            continue
+        for entry in listed:
+            method(owner, str(entry["name"]), entry.get("returns"), entry.get("parameters") or [])
+    return {
+        "descriptors": {owner: (written, owner in callables) for owner, written in gets.items()},
+        "module_types": frozenset(
+            bare_descriptor(str(row["symbol"])) for row in workspace.query("module_types")
+        ),
+        "function_returns": returns,
+    }
 
 
 def _named(bare: str) -> tuple[str, str]:
@@ -6042,6 +6123,10 @@ class _Walk:
             reached.extend(self._attribute(one, trail, frames, unseen, read_on))
         if beyond:
             reached.append((trail, _unresolved(EXTERNAL)))
+        if self._index.descriptors and owner_of(bare_descriptor(symbol)) not in (
+            self._index.module_types
+        ):
+            reached = self._through_descriptors(written_ones, reached)
         if declared:
             reached = [
                 typed
@@ -6130,6 +6215,114 @@ class _Walk:
         if not declared:
             return reached
         return (*reached, *((trail, one) for one in declared))
+
+    def _through_descriptors(
+        self, written_ones: list[str], reached: list[_Reached]
+    ) -> list[_Reached]:
+        """A class attribute's answers read as Python's attribute lookup reads them (task 9c
+        re-review N1): an object whose class (by its ancestors, nearest first) declares
+        `__get__` gives what `__get__` is written to return where that names a class; where
+        it names a type variable and the class's constructor takes a callable (a decorator
+        wrapping a function, pydantic's `deprecated_instance_property`), what the wrapped
+        function is written to return; else, or where that is a descriptor in turn, nothing
+        read. Never a descriptor class."""
+        found: list[_Reached] = []
+        for path, answer in reached:
+            held = (
+                answer.value
+                if answer.kind == LITERAL
+                and answer.literal_kind == SYMBOL
+                and not answer.class_object
+                and isinstance(answer.value, str)
+                else None
+            )
+            descriptor = None if held is None else self._descriptor_of(held)
+            if descriptor is None:
+                found.append((path, answer))
+                continue
+            written, takes_callable = descriptor
+            classes = () if written is None else declared_classes_of(self._index, written)
+            if not classes and takes_callable and written is not None:
+                wrapped = self._wrapped_return(written_ones)
+                classes = () if wrapped is None else declared_classes_of(self._index, wrapped)
+            if any(self._descriptor_of(one) is not None for one in classes):
+                # What `__get__` gives is a descriptor in turn, whose own read is another
+                # lookup's: not this value.
+                classes = ()
+            if classes:
+                found.extend(
+                    (path, Answer(kind=LITERAL, value=one, literal_kind=SYMBOL, declared=True))
+                    for one in classes
+                )
+            else:
+                found.append((path, _unresolved(NOT_READABLE)))
+        return found
+
+    def _descriptor_of(self, held: str) -> tuple[Mapping[str, Any] | None, bool] | None:
+        """The `__get__` of `held`'s nearest ancestor declaring one (`held` first), None where
+        none does."""
+        dispatch = self._index.dispatch
+        seen: set[str] = set()
+        pending = [held]
+        while pending:
+            current = pending.pop(0)
+            if current in seen:
+                continue
+            seen.add(current)
+            descriptor = self._index.descriptors.get(current)
+            if descriptor is not None:
+                return descriptor
+            if dispatch is not None:
+                pending.extend(parent for parent, _, _ in dispatch.ancestors.get(current, []))
+        return None
+
+    def _wrapped_return(self, written_ones: list[str]) -> Mapping[str, Any] | None:
+        """What the function a decorator wraps is written to return: through each call-result
+        write of the attribute, the first positional argument of the call that made it, and of
+        any call that made that argument (a decorator below it), to the function itself. None
+        where the writes disagree or reach no function."""
+        found: list[Mapping[str, Any] | None] = []
+        for one in written_ones:
+            for method, entry in self._index.produced.get(one, ()):
+                current: Mapping[str, Any] | None = entry
+                answer: Mapping[str, Any] | None = None
+                for _ in range(_WRAPPING_DEPTH):
+                    if current is None:
+                        break
+                    if current.get("kind") == "lambda" and current.get("symbol") is not None:
+                        answer = self._index.function_returns.get(
+                            _named(bare_descriptor(str(current["symbol"])))
+                        )
+                        break
+                    source = current.get("source")
+                    site = None if source is None else self._made(method, int(source))
+                    if site is None:
+                        break
+                    positional = [
+                        argument
+                        for argument in site.get("arguments") or []
+                        if argument.get("keyword") is None
+                    ]
+                    current = positional[0] if positional else None
+                found.append(answer)
+        if not found or any(one != found[0] for one in found[1:]):
+            return None
+        return found[0]
+
+    def _made(self, method: str, value: int) -> Mapping[str, Any] | None:
+        """The call in `method` that made value `value`: the call whose result it is, or the
+        construction whose object it is (its own receiver)."""
+        for ordinal in (
+            *self._index.producers.get((method, value), ()),
+            *self._index.receivers.get((method, value), ()),
+        ):
+            site = self._index.sites.get((method, ordinal))
+            if site is not None and (
+                site.get("result") == value
+                or (site.get("name") == _INIT and site.get("receiver") == value)
+            ):
+                return site
+        return None
 
     def _plain_attribute(self, declared: str) -> bool:
         """Whether reading an attribute declared `declared` gives a `declared`: its class is

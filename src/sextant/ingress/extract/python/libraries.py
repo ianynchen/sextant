@@ -1210,12 +1210,18 @@ class Libraries:
                     or (holder in owners and fact.construct_kind == ConstructKind.FIELD)
                 ):
                     kept.append(fact)
-                elif holder in owners and fact.construct_kind == ConstructKind.METHOD:
+                elif holder in owners and fact.construct_kind in (
+                    ConstructKind.METHOD,
+                    ConstructKind.CONSTRUCTOR,
+                ):
                     name = bare[len(holder) :].split("(")[0]
                     methods.setdefault(holder, []).append(
                         HeaderMethod(
                             name=name,
                             returns=None if fact.signature is None else fact.signature.returns,
+                            parameters=[]
+                            if fact.signature is None
+                            else [parameter.type for parameter in fact.signature.parameters],
                         )
                     )
                 elif (

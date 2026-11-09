@@ -51,7 +51,8 @@ _NAMED_QUERIES = {
                coalesce((modifiers ->> 'static')::BOOLEAN, false) AS "static",
                coalesce((modifiers ->> 'transient')::BOOLEAN, false) AS "transient",
                signature -> 'annotation_value' AS annotation_value,
-               coalesce((modifiers ->> 'not_required')::BOOLEAN, false) AS not_required
+               coalesce((modifiers ->> 'not_required')::BOOLEAN, false) AS not_required,
+               coalesce((modifiers ->> 'never_runs')::BOOLEAN, false) AS never_runs
         FROM symbols
         WHERE construct_kind = 'field'
         ORDER BY document_id, seq
@@ -531,6 +532,11 @@ _NAMED_QUERIES = {
     """,
     # Each class statement's keyword arguments (fact schema 12, task 9c review C1): a module
     # class's off its `symbol` fact, a library class's off its type header.
+    # The Python module types (`construct_kind: module`, D00 §5a): an attribute read off a
+    # module is not a class attribute's, so no descriptor's `__get__` runs (task 9c re-review N1).
+    "module_types": """
+        SELECT symbol FROM symbols WHERE construct_kind = 'module' ORDER BY symbol
+    """,
     "class_keywords": """
         SELECT payload ->> 'symbol' AS symbol, payload -> 'keywords' AS keywords
         FROM raw_facts
@@ -1823,6 +1829,7 @@ _FACT_ONLY = frozenset(
         "type_header_annotations",
         "type_header_bodies",
         "class_keywords",
+        "module_types",
         "type_headers",
         # The module's own types and its siblings' (`symbols` and `documents`, both facts).
         "own_types",

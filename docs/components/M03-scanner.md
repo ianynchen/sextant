@@ -667,9 +667,11 @@ arm's return, never both. The module's own files are read whole, every branch.
   header in turn. A header only the whole-module read answers carries no body.
 - **A class statement's keywords** (`class A(Base, extra="allow")`, review C1) are written on
   the class's `symbol` fact as `keywords`, in the call-argument grammar, `metaclass` left out.
-- **A class body's `if TYPE_CHECKING:` and `if False:`** never run (review Minor 1): only the
-  arm that runs is read, so the names the other declares are no members. Any other test reads
-  both arms, as before.
+- **A class body's `if TYPE_CHECKING:` and `if False:`** never run (review Minor 1, re-review
+  N2): both arms are read as before, so what they declare stays a symbol (a type checker's
+  stub keeps its callers' callee), and a field only the dead arm declares carries
+  `modifiers.never_runs: true`, which keeps it out of a payload's field set. A name the
+  running arm declares too is a field. Any other test is read as before.
 - **A class body's dict display with text keys** is written as the `dict(key=...)` call it
   builds, so a configuration written `model_config = {...}` is read as one written
   `ConfigDict(...)` is.

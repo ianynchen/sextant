@@ -39,6 +39,7 @@ install: 2.14.3 from the throwaway environment, 2.14.1 from polar's own `.venv`.
 | child `model_config` `ignore` over a parent's keyword: additionalProperties | None | None |
 | `Field(exclude_if=...)`: serialization required | None | None |
 | `TYPE_CHECKING` / `if False` annotations: fields | ['a'] | ['a'] |
+| `BaseModel.model_fields` read gives | dict (a `deprecated_instance_property`) | dict (a `deprecated_instance_property`) |
 
 `pydantic.VERSION` printed 2.14.3 and 2.14.1. Apart from that line, the two runs' whole outputs
 are identical.
@@ -66,6 +67,7 @@ are identical.
 | 13 | configuration as class keywords (`class A(BaseModel, extra='allow')`), inherited, beside `model_config` | `additionalProperties: true`; keyword `alias_generator` names fields | the same | **no**: read as configuration, merged after `model_config` (the keyword wins), a child's `model_config` over an inherited keyword |
 | 14 | a plain `Field(exclude_if=...)` | `b` required | `b` **not required** | output may leave it out (needs a key form; not built) |
 | 15 | names annotated under `if TYPE_CHECKING:` / `if False:` | none | none | the blocks never run: no fields |
+| 16 | `BaseModel.model_fields` (`@deprecated_instance_property @classmethod`) | | | a descriptor: its `__get__` hands back the wrapped classmethod's result, a `dict`, on the class and on an instance; reading it never gives the descriptor |
 
 pydantic decides 7 with `_generate_schema.py`: a type's `__get_pydantic_core_schema__` is called
 unless it is `BaseModel`'s own (`getattr(get_schema, '__func__', None) is not
@@ -244,6 +246,11 @@ pydantic 2.14.3
   validation properties: ['a']  additionalProperties=None
   serialization props:   ['a']  additionalProperties=None
   model_dump keys:       ['a']
+## 16. BaseModel.model_fields through deprecated_instance_property
+  class attribute is a descriptor: deprecated_instance_property
+  defines __get__: True
+  Plain.model_fields read gives: dict
+  Plain().model_fields read gives: dict
 ## Observations column
 | `pydantic.VERSION` | 2.14.3 |
 | `BaseModel` names neither `ClassVar` nor `_`-prefixed | none |
@@ -266,4 +273,5 @@ pydantic 2.14.3
 | child `model_config` `ignore` over a parent's keyword: additionalProperties | None |
 | `Field(exclude_if=...)`: serialization required | None |
 | `TYPE_CHECKING` / `if False` annotations: fields | ['a'] |
+| `BaseModel.model_fields` read gives | dict (a `deprecated_instance_property`) |
 ```

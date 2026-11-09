@@ -382,6 +382,17 @@ class CheckedOnly(BaseModel):
 report("15. annotations under TYPE_CHECKING / if False", CheckedOnly, CheckedOnly())
 
 
+# 16. `BaseModel.model_fields` is a `deprecated_instance_property` wrapping a classmethod: what
+# reading it gives, on the class and on an instance (task 9c re-review N1).
+from pydantic._internal._utils import deprecated_instance_property
+
+print("## 16. BaseModel.model_fields through deprecated_instance_property")
+print(f"  class attribute is a descriptor: {type(BaseModel.__dict__['model_fields']).__name__}")
+print(f"  defines __get__: {'__get__' in vars(deprecated_instance_property)}")
+print(f"  Plain.model_fields read gives: {type(Plain.model_fields).__name__}")
+print(f"  Plain().model_fields read gives: {type(Plain(a=1).__class__.model_fields).__name__}")
+
+
 # The observation table's column: one answer per question, from this run's own models.
 def _serialized(model: type[BaseModel]) -> str:
     keys, _ = schema_keys(model, "serialization")
@@ -446,3 +457,7 @@ print(
     f"{FieldExcludeIf.model_json_schema(mode='serialization').get('required')} |"
 )
 print(f"| `TYPE_CHECKING` / `if False` annotations: fields | {sorted(CheckedOnly.model_fields)} |")
+print(
+    "| `BaseModel.model_fields` read gives | "
+    f"{type(Plain.model_fields).__name__} (a `{type(BaseModel.__dict__['model_fields']).__name__}`) |"
+)

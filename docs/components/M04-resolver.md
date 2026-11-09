@@ -240,7 +240,15 @@ holds on every path into the parameter, so it is one row per class on the parame
 not one per open path (the path cap counts them). An `escapes` path has a value, changed after
 it was made, and gains nothing. An attribute's declaration answers only where its
 class is one of the module whose lookup order is read and defines no `__get__` (a descriptor's
-read runs `__get__`, and a library class's methods are not read here).
+read runs `__get__`, and a library class's methods are not read here). **A class attribute's
+written value is read the same way** (task 9c re-review N1, `_Walk._through_descriptors`): an
+object whose class, nearest ancestor first, declares `__get__` (a module class's method facts,
+or a header-read library class's `methods`) gives what `__get__` is written to return where that
+names a class; where it names a type variable and the constructor takes a callable (a decorator
+wrapping a function: pydantic's `deprecated_instance_property` on `model_fields`), what the
+wrapped function is written to return, found through the call that made the value; else, or
+where that is a descriptor in turn, nothing read. Never the descriptor class. A module's
+attributes are not read through a descriptor.
 
 **Each parameter's and binding's paths upward are worked out once** (ruling R39, round 2;
 `walkbug-report.md`). A parameter's answer, and a binding read plainly (not on an object, not

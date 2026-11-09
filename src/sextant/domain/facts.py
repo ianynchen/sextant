@@ -858,11 +858,13 @@ class OperationRecord(BaseModel):
 
 class HeaderMethod(BaseModel):
     """One function a library class body defines (D00 §5 `type_header`, fact schema 12): its
-    name and its projected return type, as the scanner's `method` symbol fact would say."""
+    name, its projected return type and its parameters' types (the receiver taken), as the
+    scanner's `method` symbol fact would say."""
 
     model_config = {"frozen": True}
     name: str
     returns: TypeRef | None = None
+    parameters: list[TypeRef | None] = Field(default_factory=list)
 
 
 class TypeHeaderFact(BaseModel):

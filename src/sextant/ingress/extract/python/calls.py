@@ -361,6 +361,8 @@ class BodyReader:
 
     _context: FileContext
     facts: list[Fact]
+    # The statements of a class body's arm that never runs (`if TYPE_CHECKING:`), by id.
+    _never_runs: set[int]
     # A nested function's or a lambda's bare descriptor, to its owner and name.
     _methods: dict[str, tuple[str, str]]
     # One counter set per method symbol: a name defined twice is one method with two
@@ -633,9 +635,12 @@ class BodyReader:
                 else None
             )
             if live is None and runs is not None:
-                # A class body's `if TYPE_CHECKING:` and `if False:` never run (task 9c
-                # review Minor 1): what they declare is no member of the class.
-                live = node.body if runs else node.orelse
+                # A class body's `if TYPE_CHECKING:` and `if False:` never run (task 9c review
+                # Minor 1, N2): both arms are read as before, and a name the dead arm declares
+                # is marked so (`never_runs`), which keeps it out of a payload's field set.
+                for dead in ast.walk(ast.Module(body=node.orelse if runs else node.body)):
+                    if isinstance(dead, ast.stmt):
+                        self._never_runs.add(id(dead))
             if live is not None:
                 # A library read for a known Python runs one arm of a version test.
                 self._branches([live], scope)

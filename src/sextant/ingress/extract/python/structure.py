@@ -247,6 +247,10 @@ class _Writer(BodyReader):
         self.consulted = {}
         self._local_classes = {}
         self._hierarchy = Hierarchy(self._shape_or_none)
+        # The statements of a class body's arm that never runs (`if TYPE_CHECKING:`), by id,
+        # and the fields only such a statement declared, to the index of their fact.
+        self._never_runs: set[int] = set()
+        self._dead_fields: dict[str, int] = {}
         self._own_returns = {}
         self._own_fields = {}
 
@@ -430,8 +434,19 @@ class _Writer(BodyReader):
             named = target if isinstance(target, ast.Name) else None
             for name in _names(target):
                 descriptor = f"{scope.owner}{name}."
+                dead = id(node) in self._never_runs
+                if descriptor in self._dead_fields and not dead:
+                    # Declared again where the code runs: a field after all.
+                    at = self._dead_fields.pop(descriptor)
+                    declared = self.facts[at]
+                    assert isinstance(declared, SymbolFact)
+                    kept = dict(declared.modifiers or {})
+                    kept.pop("never_runs", None)
+                    self.facts[at] = declared.model_copy(update={"modifiers": kept})
                 if descriptor not in scope.fields:
                     scope.fields.add(descriptor)
+                    if dead:
+                        self._dead_fields[descriptor] = len(self.facts)
                     self._symbol(
                         descriptor,
                         ConstructKind.FIELD,
@@ -450,7 +465,9 @@ class _Writer(BodyReader):
                         # annotation, or a `ClassVar`, belongs to the class.
                         modifiers={"static": scope.class_path is None or not instance}
                         # A `TypedDict` key the typing specification lets be left out.
-                        | ({"not_required": True} if optional_key else {}),
+                        | ({"not_required": True} if optional_key else {})
+                        # Declared only where the class body never runs (`if TYPE_CHECKING:`).
+                        | ({"never_runs": True} if dead else {}),
                     )
                 if value is None:
                     continue

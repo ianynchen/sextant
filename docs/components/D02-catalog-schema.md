@@ -6079,6 +6079,8 @@ serialization:
   further configuration call, merged after the class's own `config_field` value, which
   pydantic's `ConfigWrapper.for_model` does (`pydantic_field_sets.md` §13): `class A(BaseModel,
   extra='allow')` is open, and its `alias_generator=` names its fields.
+- **A name only a never-running arm declares** (`if TYPE_CHECKING:`, D00 §5a
+  `modifiers.never_runs`) is no field, as a `ClassVar` is none.
 - **A field read under another name** (task 9c): a field whose input name differs from its
   published (output) name, or whose input name is not read (`AliasChoices`), leaves the shape's
   input field set described under names a request does not send, so a shape input reaches (or
