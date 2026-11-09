@@ -266,6 +266,15 @@ _RETURN_OF = "return-of"
 # Which recipe's return a container-filled parameter receives (spec 2026-11-05 di-recipe-hop
 # §2): one context per parameter, because the container fills each parameter on its own.
 _FILLED_BY = "filled-by"
+# The framework's own call of a method whose parameters name their recipes (plan 2026-11-08 N5):
+# a calling context of that method, as a caller's `caller@ordinal` is, so one execution takes
+# every parameter from the framework's fill or every one from one direct caller. Written as a
+# `caller@ordinal` label naming no call of the module; it crosses out to no caller in the module
+# (`Path.crossed_out_of` leaves it out, `Path.filled_in` names it).
+_FRAMEWORK_CALL = "<framework>@-1"
+# What a recipe body hands back, its own position, so it is read once per body however many
+# parameters it fills (`_Walk._recipe_runs`).
+_RECIPE_RUN = "recipe-run"
 # A field read through a getter on one object (ruling 1, `_Walk._object_writes`): WHICH
 # construction the read's receiver is, and WHICH write of the field the read takes. Both are
 # keyed on the receiver as the reading method holds it, never on the field's class: two
@@ -2203,7 +2212,21 @@ class Path:
             dict.fromkeys(
                 str(step.context[1])
                 for step in self.trail
-                if step.context[0] == _CALLER_OF and step not in self.entered
+                if step.context[0] == _CALLER_OF
+                and step not in self.entered
+                and step.label != _FRAMEWORK_CALL
+            )
+        )
+
+    def filled_in(self) -> tuple[str, ...]:
+        """The methods this path read a parameter of as the framework's call fills it (a recipe,
+        plan 2026-11-08 N5), nearest first: it crossed out to no caller in the module, and still
+        depends on the method's callers, which a later round may add beside it."""
+        return tuple(
+            dict.fromkeys(
+                str(step.context[1])
+                for step in self.trail
+                if step.context[0] == _CALLER_OF and step.label == _FRAMEWORK_CALL
             )
         )
 
@@ -3384,7 +3407,9 @@ class _Walk:
         frames through reads it records."""
         if self._base is not None:
             return False
-        return position[0] == _PARAMETER or (position[0] == _BINDING and len(position) == 2)
+        return position[0] in (_PARAMETER, _RECIPE_RUN) or (
+            position[0] == _BINDING and len(position) == 2
+        )
 
     def _joined_upward(
         self, position: _Position, trail: _Trail, frames: "_Frames"
@@ -3431,6 +3456,8 @@ class _Walk:
             return self._value(position[1], position[2], trail, frames)
         if kind == _PARAMETER:
             return self._parameter(position[1], position[2], trail, frames)
+        if kind == _RECIPE_RUN:
+            return self._recipe_returns(position[1], trail, frames)
         # `(_BINDING, symbol)` — the symbol the `field` argument carried, which the sixth
         # edge is keyed on — marked `_UNSEEN`, or carrying the getter site the read was made
         # through (`_Walk._object_site`).
@@ -5696,10 +5723,15 @@ class _Walk:
         )
 
         markers = parameter_markers(self._index).get((method, index), ())
+        sites = recipe_sites(markers, self._index.recipes.calls)
+        # The framework's call of `method` is a calling context of it (`_FRAMEWORK_CALL`).
+        called = _combine(trail, (_Step((_CALLER_OF, method), _FRAMEWORK_CALL),))
+        if not sites or called is None:
+            return ()
         reached: list[_Reached] = []
-        for site in recipe_sites(markers, self._index.recipes.calls):
+        for site in sites:
             for path, answer in recipe_values(self._index, site, (method, index)):
-                merged = _combine(trail, path)
+                merged = _combine(called, path)
                 if merged is not None:
                     reached.extend(self._recipe_runs(answer, method, index, merged, frames))
         return tuple(reached)
@@ -5722,16 +5754,7 @@ class _Walk:
             return _only(trail, answer if answer.kind == UNRESOLVED else _unresolved(NOT_READABLE))
         reached: list[_Reached] = []
         for body in recipe_runs(self._index, answer):
-            entries = self._index.yielded_values.get(body) or self._index.returned_values.get(
-                body, ()
-            )
-            for return_ordinal, entry in entries:
-                step = _Step((_FILLED_BY, method, index), f"{body} returns {return_ordinal}")
-                merged = _combine(trail, (step,))
-                if merged is not None:
-                    reached.extend(
-                        self._entry(entry, body, (_RETURN_OF, body, return_ordinal), merged, frames)
-                    )
+            reached.extend(self._resolve((_RECIPE_RUN, body), trail, frames))
         if reached:
             return tuple(reached)
         dispatch = self._index.dispatch
@@ -5742,6 +5765,23 @@ class _Walk:
         ):
             return _only(trail, _unresolved(EXTERNAL))
         return _only(trail, _unresolved(NOT_READABLE))
+
+    def _recipe_returns(self, body: str, trail: _Trail, frames: "_Frames") -> tuple[_Reached, ...]:
+        """What the recipe `body` hands the framework (`_recipe_runs`): each return, a
+        generator's each yield, a path with a `filled-by` step naming it, read in the body's own
+        frame with no frame pushed. One position per body, so it is read once and joined onto
+        every parameter's path (R39); the framework runs a recipe once per request for every
+        parameter it fills (`use_cache`), so two parameters of one execution agree on it."""
+        entries = self._index.yielded_values.get(body) or self._index.returned_values.get(body, ())
+        reached: list[_Reached] = []
+        for return_ordinal, entry in entries:
+            step = _Step((_FILLED_BY, body), f"{body} returns {return_ordinal}")
+            merged = _combine(trail, (step,))
+            if merged is not None:
+                reached.extend(
+                    self._entry(entry, body, (_RETURN_OF, body, return_ordinal), merged, frames)
+                )
+        return tuple(reached)
 
     def _binding(
         self,

@@ -321,6 +321,7 @@ def _wrapped(index: ValueIndex, site: Mapping[str, Any]) -> _Walked:
         index, site, RECEIVER, frozenset(), which_object=True, functions=True
     ):
         depends_on.update(path.crossed_out_of())
+        depends_on.update(path.filled_in())
         body = None if producer.ended_at is None else called_function(producer.ended_at)
         if body is not None and body not in functions:
             functions.append(body)
@@ -476,6 +477,9 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
         path_id = _JOIN.join(path.labels())
         crossed = path.crossed_out_of()
         depends_on.update(crossed)
+        # A parameter the framework's call filled still has the method's callers beside that
+        # fill (plan 2026-11-08 N5): a round that adds one walks the site again.
+        depends_on.update(path.filled_in())
         if producer.parameter is not None:
             depends_on.add(producer.parameter[0])
         ended = producer.ended_at

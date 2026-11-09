@@ -25,6 +25,7 @@ from test_fastapi_request_params import _params
 from test_fastapi_routes import _bare, _resolved
 
 from sextant.application.ports.catalogs import CatalogError
+from sextant.application.resolve.receiver_binding import bind_until_settled
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 
@@ -479,3 +480,78 @@ def test_a_malformed_recipe_model_is_refused(tmp_path: Path, written, replaced, 
         YamlCatalogSource(catalogs).bean_models()
 
     assert named in str(raised.value)
+
+
+def _bound_whole(workspace) -> None:
+    """Binding run again with every round walking every site over a rebuilt index (the
+    reference the incremental rounds are proved against)."""
+    bind_until_settled(workspace, YamlCatalogSource(catalogs_dir()).load(), incremental=False)
+
+
+def test_a_handler_also_called_directly_keeps_the_callers_path_round_by_round(
+    tmp_path: Path, libraries
+):
+    """Review C1: `h` is a route (the decorator rebinds its name, so the call `h(Other())` gets
+    its edge only in a later round) and is also called directly. The direct caller's value is
+    its own path beside FastAPI's fill, and the rounds give what binding every site whole
+    gives."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _HEAD + "def get_repo():\n"
+            "    return Repo()\n"
+            "@router.get('/x')\n"
+            "def h(repo=Depends(get_repo)) -> str:\n"
+            "    repo.find()\n"
+            "    return ''\n"
+            "def caller() -> None:\n"
+            "    h(Other())\n"
+        },
+    )
+
+    incremental = _owners(workspace, "app/main#h", "find")
+    _bound_whole(workspace)
+
+    assert ("app/main/Other#", None) in incremental
+    assert ("app/main/Repo#", None) in incremental
+    assert incremental == _owners(workspace, "app/main#h", "find")
+
+
+def test_one_handlers_parameters_come_from_one_calling_context(tmp_path: Path, libraries):
+    """Review M1: under FastAPI `h` gets `Repo()` and `A()`, so `A.pick(Repo())` is a `Repo`;
+    called as `h(Other(), B())`, `B.pick` makes an `Other2`. The direct caller's `Other` with
+    FastAPI's `A` is no run of the code, so it is never an owner."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _HEAD + "class Other2(Repo):\n"
+            "    def find(self) -> int:\n"
+            "        return 3\n"
+            "class A:\n"
+            "    def pick(self, r):\n"
+            "        return r\n"
+            "class B:\n"
+            "    def pick(self, r):\n"
+            "        return Other2()\n"
+            "def get_repo():\n"
+            "    return Repo()\n"
+            "def get_o():\n"
+            "    return A()\n"
+            "def h(repo=Depends(get_repo), o=Depends(get_o)) -> str:\n"
+            "    o.pick(repo).find()\n"
+            "    return ''\n"
+            "router.get('/x')(h)\n"
+            "def caller() -> None:\n"
+            "    h(Other(), B())\n"
+        },
+    )
+
+    owners = {owner for owner, _ in _owners(workspace, "app/main#h", "find")}
+    _bound_whole(workspace)
+    whole = {owner for owner, _ in _owners(workspace, "app/main#h", "find")}
+
+    assert "app/main/Other#" not in owners | whole
+    assert {"app/main/Repo#", "app/main/Other2#"} <= owners
+    assert owners == whole

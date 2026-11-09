@@ -313,7 +313,13 @@ parameter per index); a call handed none, or `None`, is the parameter's written 
 class is constructed (R37), a function gives its returns — a generator its yields (D00 §5,
 N10), every yield a first one since the framework runs it as a context manager — and an
 instance its class's `__call__` returns (R29), each return a path step `filled-by` read in the
-recipe's own body with no frame pushed, as a container's recipe is (di-recipe-hop). A recipe
+recipe's own body with no frame pushed, as a container's recipe is (di-recipe-hop), once per body
+and joined onto each parameter's path (the framework runs a recipe once per request, so two
+parameters it fills agree on its return). **The framework's call is a calling context of the
+method** (`caller-of`, labelled for the framework): one execution takes every parameter from the
+framework's fill or every one from one direct caller, never a mix. It crosses out to no caller in
+the module, so it adds no `escapes` row, and the binder still counts the method's callers among
+what the site depends on (`Path.filled_in`), so a caller a later round adds is read. A recipe
 whose body is not read is `external` where its lookup leaves the scanned code. The marker
 pass's own walks see no recipe: they stop at calls, so a recipe is no part of where they end.
 Dagger's and Spring's `injected` recipes are read before callers, as before. A constructor is bound by its `__init__`'s parameters, as any callee. A method called
