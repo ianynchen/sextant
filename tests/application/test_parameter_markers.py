@@ -143,3 +143,18 @@ def test_alternative_element_paths_are_two_paths_not_one_list(tmp_path: Path):
         ("annotation", 0, 0, "fastapi#", "Query", clinit),
         ("annotation", 0, 1, "fastapi#", "Header", clinit),
     ]
+
+
+def test_a_construction_is_a_marker(tmp_path: Path):
+    """`Annotated[str, Marker(1)]` and `= Marker(2)` with `Marker` a class: the construction is
+    the call that made the value (`fastapi.params.Depends(f)` constructs what
+    `fastapi.param_functions.Depends(f)` returns), so it is the marker, the `<init>` call."""
+    files = {
+        "run.py": "from typing import Annotated\n"
+        "class Marker:\n    def __init__(self, n: int) -> None:\n        self.n = n\n"
+        "def h(q: Annotated[str, Marker(1)], r: str = Marker(2)):\n    return q\n"
+    }
+    clinit = "app/run#<clinit>" + _SIG
+    assert _markers(tmp_path, files, "app/run#h", 0) == [
+        ("annotation", 0, 0, "app/run/Marker#", "<init>", clinit)
+    ]

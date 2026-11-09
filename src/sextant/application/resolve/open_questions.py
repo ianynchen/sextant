@@ -136,8 +136,10 @@ QUESTIONS = (
     # handler and the reason (`unrooted_path`; for a mount, Vert.x spec §3c,
     # `exact_mount_path`, `pattern_mount_path` or `wildcard_mount_point`; for a prefix,
     # `unrooted_path`, `trailing_slash` or `empty_path`; for a route, D02 §2's
-    # `fluent` style, `no_methods` or `invalid_response_type`). Identity is the
-    # refused address as written, which no endpoint row carries because none was derived.
+    # `fluent` style, `no_methods` or `invalid_response_type`; for a handler parameter, D02
+    # §2k mechanism 4, `marked_twice`, `path_variable_marked` or `path_variable_default`).
+    # Identity is the refused address as written, which no endpoint row carries because none
+    # was derived.
     #
     # A question rather than a finding of its own, and rather than a silent drop, for
     # `routing_conflict`'s reason one table over: a disagreement between the code and the

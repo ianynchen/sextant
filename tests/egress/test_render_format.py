@@ -947,6 +947,12 @@ def test_a_refused_mount_question_says_why_the_framework_refuses_it(reason: str,
         ),
         ("trailing_slash", "refuses a path prefix that ends in `/`"),
         ("empty_path", "refuses a route whose prefix and path are both empty"),
+        (
+            "marked_twice",
+            "refuses a handler parameter marked both in its annotation and its default",
+        ),
+        ("path_variable_marked", "refuses a path variable marked as another kind of parameter"),
+        ("path_variable_default", "refuses a path variable given a default"),
     ],
 )
 def test_a_route_refused_at_import_says_the_application_does_not_start(reason: str, phrase: str):

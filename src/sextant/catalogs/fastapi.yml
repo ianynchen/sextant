@@ -124,3 +124,80 @@ matches:
     - { owner: fastapi.applications.FastAPI, method: mount, router_arg: { arg: 1, keyword: app },
         prefix_arg: { arg: 0, keyword: path }, strip_trailing: "/", refuses: [unrooted] }
   path_join: concatenate
+
+  # REQUEST PARAMETERS (probe §4; plan N3). FastAPI reads a parameter's meaning off the marker
+  # call that made its default (`q: str = Query(None)`) or one of its `Annotated` metadata
+  # (`Annotated[str, Header()]`), the LAST FastAPI marker in `Annotated` winning
+  # (`fastapi_specific_annotations[-1]`). A marker's name is its `alias`, else the parameter's own
+  # name; `Header` converts `_` to `-` in that name unless `convert_underscores=False`. A marker
+  # that is the default is required where its default is unset (`Query()`) or `...`
+  # (`RequiredParam`), and optional where a default or a default factory is written. A marker in
+  # `Annotated` takes the parameter's own `=` default: optional with one, required without.
+  # `Path` writes no row: the address carries the variable. `Body`, `Form` and `File` are the
+  # body (`request_body` below); `Depends` and `Security` are dependencies (plan 2 Task 8).
+  # FastAPI reads the marker's class (`isinstance(value, params.Param)`), so the classes in
+  # `fastapi.params`, constructed directly (`params.Depends(f)`), are the same markers as the
+  # functions in `fastapi.param_functions` that construct them; both are named.
+  #
+  # A PARAMETER WITH NO MARKER (`analyze_param`'s last branch): a path variable is the path's; a
+  # scalar type is a query parameter, required unless it has a default (so `q: str | None` with
+  # no default is required); any other type is the body. `list[int]` is not a scalar: unmarked,
+  # it is the body.
+  #
+  # FastAPI refuses, raising at import so the app does not start: a marker in `Annotated` beside
+  # a marker default (`marked_twice`), a path variable with a marker in `Annotated` and a default
+  # (`path_variable_default`), and a marker other than `Path` or a dependency on a path variable
+  # (`path_variable_marked`).
+  request_params:
+    - { owner: fastapi.param_functions, method: Query, kind: query, name_arg: { keyword: alias },
+        requirement: required, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+        required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis },
+        annotated_default: parameter }
+    - { owner: fastapi.param_functions, method: Header, kind: header, name_arg: { keyword: alias },
+        requirement: required, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+        required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis },
+        annotated_default: parameter,
+        spelling: { replace: { "_": "-" }, unless: { arg: { keyword: convert_underscores }, equals: false } } }
+    - { owner: fastapi.param_functions, method: Cookie, kind: cookie, name_arg: { keyword: alias },
+        requirement: required, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+        required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis },
+        annotated_default: parameter }
+    - { owner: fastapi.params.Query, method: <init>, kind: query, name_arg: { keyword: alias },
+        requirement: required, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+        required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis },
+        annotated_default: parameter }
+    - { owner: fastapi.params.Header, method: <init>, kind: header, name_arg: { keyword: alias },
+        requirement: required, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+        required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis },
+        annotated_default: parameter,
+        spelling: { replace: { "_": "-" }, unless: { arg: { keyword: convert_underscores }, equals: false } } }
+    - { owner: fastapi.params.Cookie, method: <init>, kind: cookie, name_arg: { keyword: alias },
+        requirement: required, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+        required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis },
+        annotated_default: parameter }
+    - { unmarked: true, kind: query, requirement: required, scalar_only: true }
+  # THE REQUEST BODY (probe §4; plan N4): a parameter marked `Body`, `Form` or `File`, or one no
+  # marker binds whose type is not a scalar and is not a path variable. FastAPI EMBEDS the body
+  # (`_should_embed_body_fields`, 0.162.0) where there are several body parameters, or the one
+  # is marked `embed=True` (`embed_arg`): the body is then an object with one field per body
+  # parameter, named by its marker's `alias` (`name_arg`) else the parameter's name. The six types
+  # FastAPI hands in itself are no parameter at all (`excludes`; `lenient_issubclass`, so a
+  # subclass counts too, which this list names where FastAPI itself declares one).
+  request_body:
+    marker_calls: [fastapi.param_functions.Body, fastapi.param_functions.Form,
+                   fastapi.param_functions.File, fastapi.params.Body.<init>,
+                   fastapi.params.Form.<init>, fastapi.params.File.<init>]
+    fallback: sole_unbound
+    embed_arg: { keyword: embed }
+    name_arg: { keyword: alias }
+    bound_by_calls: [fastapi.param_functions.Query, fastapi.param_functions.Header,
+                     fastapi.param_functions.Cookie, fastapi.param_functions.Path,
+                     fastapi.param_functions.Depends, fastapi.param_functions.Security,
+                     fastapi.params.Query.<init>, fastapi.params.Header.<init>,
+                     fastapi.params.Cookie.<init>, fastapi.params.Path.<init>,
+                     fastapi.params.Depends.<init>, fastapi.params.Security.<init>]
+    implicit_bindings: [path_variable, scalar]
+    excludes: [starlette.requests.Request, starlette.requests.HTTPConnection,
+               starlette.websockets.WebSocket, starlette.responses.Response,
+               starlette.background.BackgroundTasks, fastapi.background.BackgroundTasks,
+               fastapi.security.oauth2.SecurityScopes]

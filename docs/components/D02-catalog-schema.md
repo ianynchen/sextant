@@ -1070,16 +1070,44 @@ matches:
     (or `{name: regex}`, the token before the `:`) in the row's composed path; (3)
     `container` is declared and the parameter's class declares a field or method carrying a
     `bound_by` annotation. **`implicit_bindings: [path_variable, container]`** is a closed
-    vocabulary of those two words, refused otherwise; absent means neither. Only
+    vocabulary of those two words and `scalar` (below), refused otherwise; absent means
+    neither. Only
     `quarkus-rest.yml` declares them, because they are Quarkus REST's own indexer rules
     (`EndpointIndexer.java:1380-1413`); `jakarta-jaxrs.yml` deliberately declares none, since
     under Jersey `byId(String id)` beneath `@Path("/{id}")` IS an entity body. Any other
     annotation on a parameter — `@Valid`, `@NotNull`, Jackson's, Lombok's — is invisible to
     this word, because it is invisible to the framework. Zero or several unbound parameters
     mean no contract, as with `sole_unannotated`.
+  - **A framework that marks with a CALL** (plan 2026-11-08-python-fastapi-inbound N4,
+    approved): an inbound `fluent` catalog declares `request_body` too, read on each row its
+    engine derives, with each parameter's marker call beside its signature (§2k mechanism 4:
+    the call that made its default, or the last of the catalog's markers in its `Annotated`
+    metadata). **`marker_calls: [<owner>.<method>, …]`** make a parameter the body whatever its
+    type (FastAPI's `Body`, `Form`, `File`); **`bound_by_calls`** are the other marker calls
+    (`Query`, `Header`, `Cookie`, `Path`, `Depends`, `Security`), and a parameter carrying one
+    is bound — either list satisfies `sole_unbound`'s non-empty requirement. The implicit
+    binding **`scalar`** binds an unmarked parameter whose type is a scalar (the wire projection
+    is `string`/`integer`/`number`/`boolean`, a shape-model `known_types` entry with such a
+    wire, or an enumeration; a union where every member is; the unknown type), and one whose
+    kind is not read (no wire projection and no `known_types` entry, or an `object` wire on a
+    symbol the module neither declares nor holds a type header for: an alias read as a type,
+    such as pydantic's `UUID4`, is no class) — FastAPI reads a scalar as a query parameter, and
+    a parameter whose kind is unknown is never claimed as the body.
+    `list[int]` is an array, so unmarked it is the body. A receiver, and a parameter whose
+    markers read differently on two paths, are bound. Among the marked and the unbound
+    together, the body is the sole one. **`embed_arg: <reference>`** and **`name_arg:
+    <reference>`** (plan 2026-11-08-python-fastapi-inbound Task 7, ruled) say when the framework
+    EMBEDS the body (FastAPI's `_should_embed_body_fields`): where there are several body
+    parameters, or the one's marker writes `embed_arg` as the literal `True`
+    (`Body(1, embed=True)`), the body is an object with one field per body parameter, in declared
+    order, named by the string its marker writes at `name_arg` (the alias; NULL where written as
+    anything else) else by the parameter's own name — a descriptor with `fields` and no
+    `shape_id` ([D01](D01-graph-schema.md) §3). `fastapi.yml` declares it; no JVM catalog names a
+    call.
   - **The block's key set is closed** — `annotation`, `fallback`, `bound_by`, `excludes`,
-    `implicit_bindings`, and nothing else (`contracts.py::_REQUEST_BODY_KEYS`, added after
-    the final review). An unknown key is refused by name rather than ignored, because a
+    `implicit_bindings`, `marker_calls`, `bound_by_calls`, `embed_arg`, `name_arg`, and nothing
+    else
+    (`contracts.py::_REQUEST_BODY_KEYS`, added after the final review). An unknown key is refused by name rather than ignored, because a
     misspelt `excludes` read as absent would make a context type the body, silently. The
     per-type member fold `container` reads (`conditions.member_annotations_by_type`) is
     built only for a run in which some catalog declares `container`; every other run is
@@ -6382,6 +6410,64 @@ switch that takes no value); `requirement` is the framework's default, `required
 `declared`. A parameter's type has no column. Any other key, a `kind` or `requirement` outside
 its set, a reference in another shape, an `optional_when` that is not exactly `{arg, equals}`
 with a literal, or one call named twice, is refused naming the file.
+
+**On an inbound `fluent` catalog of routes** (plan 2026-11-08-python-fastapi-inbound N3, N4,
+approved), the same entry is matched on a handler PARAMETER's marker calls, by the engine that
+derives each route, once per row (a variable a prefix adds to the path is the path's on that
+row alone):
+
+```yaml
+request_params:
+  - { owner: fastapi.param_functions, method: Header, kind: header, name_arg: { keyword: alias },
+      requirement: required, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+      required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis },
+      annotated_default: parameter,
+      spelling: { replace: { "_": "-" }, unless: { arg: { keyword: convert_underscores }, equals: false } } }
+  - { unmarked: true, kind: query, requirement: required, scalar_only: true }
+```
+
+- **The marker.** A parameter's markers are the calls that produced its default and each of
+  its `Annotated` metadata elements, on every path (`parameter_markers`, through aliases in any
+  file). Of the calls the catalog names — the entries', `request_body.marker_calls` and
+  `.bound_by_calls` — the one that made the default, or the LAST in `Annotated` (FastAPI's
+  `fastapi_specific_annotations[-1]`; a non-marker element changes nothing), is the parameter's
+  marker. Two paths are two readings; each row any reading gives is written once.
+- `kind` is one of `header`, `query`, `cookie` (§3's inbound set); `argument`/`option`/`flag`
+  stay a catalog of commands'. **The name**: the string at `name_arg` where it is written, else
+  the parameter's own name respelled by **`spelling: { replace: { <from>: <to> }, unless?: {
+  arg: <reference>, equals: <literal> } }`** — not respelled where the `unless` argument is
+  written with that value, not read (NULL, `unresolved`) where it is written as anything but a
+  literal (`Header`'s `convert_underscores`).
+- **The requirement.** `default_arg` may be a LIST of references, any written being a default.
+  **`required_when: { arg: <reference>, equals_field: <owner>.<name> }`** answers `required`
+  where that argument is written as that static field (`...` is `builtins.Ellipsis`), before
+  `default_arg`. **`annotated_default: parameter`** (the one word): a marker in `Annotated`
+  takes the parameter's own `=` default, `optional` where it `declares_default`, the marker's
+  own arguments deciding otherwise.
+- **The `unmarked` entry**, `{ unmarked: true, kind, requirement, scalar_only? }`, at most one:
+  a parameter carrying none of the catalog's markers that names no path variable is one row
+  of that `kind`, named as written, `optional` where it `declares_default` and the entry's
+  `requirement` otherwise — with `scalar_only: true`, only where its type is a scalar (the
+  `scalar` binding of §2's `request_body`); any other type is the body rule's.
+- **A marked parameter of a class's type** (an `object` the module knows as a class) names no
+  one value: the framework reads the class's fields as the parameters (FastAPI's query, header
+  and cookie models). One row of the entry's kind with `name` and `requirement` NULL at
+  `unresolved`, never the parameter's own name.
+- **No row** for a parameter whose marker is no entry's (the path's `Path`, a body marker, a
+  dependency), for a path variable, for a receiver, or for a handler whose parameters are not
+  read.
+- **The marker classes.** A marker made by constructing its class (`fastapi.params.Depends(f)`)
+  is the construction's `<init>` call, named `<owner>.<init>` in `marker_calls` /
+  `bound_by_calls` and `method: <init>` on an entry: `parameter_markers` stops at every
+  construction, as at a call. **Refused** (DR-6, no row, a `refused_registration` question, the application not
+  starting): a marker in `Annotated` beside a marker default (`marked_twice`), a path variable
+  with a marker in `Annotated` and a default (`path_variable_default`), and a path variable
+  carrying an entry's call or a `marker_calls` call (`path_variable_marked`), checked in that
+  order. A parameter refused on one path and not on another is read on the paths that are not.
+- `caller` is the handler, `value` NULL, `evidence` `declared`, as for a command. Each entry is
+  bound to its row and follows it (Ruling 7). An `unmarked` entry, an `equals_field` not
+  dotted, an `annotated_default` other than `parameter`, a `spelling` of another shape, or any
+  of the three keys on a catalog of commands, is refused naming the file.
 
 ## 2l. What an annotation says ABOUT an inbound endpoint — `metadata_from`
 

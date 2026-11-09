@@ -1835,7 +1835,8 @@ def _returns_argument(entry: Any, path: Path) -> dict[str, Any]:
 # `{arg: N, keyword: name}`, design 2026-11-06-reading-decorators §3a), and the keys whose
 # every reader there takes such a reference (`values.argument_slot`, `_arg_at`): `single_call`'s
 # own `methods` positions, a `mount`'s three (`router_arg`, `prefix_arg`, `dependencies_arg`),
-# a `router_holds` entry's two, and a call-naming `request_params` entry's. Every
+# a `router_holds` entry's two, a call-naming `request_params` entry's, and `request_body`'s
+# `embed_arg` (plan 2026-11-08 Task 7, on a `fluent` catalog). Every
 # other `*_arg` key is read as an integer somewhere (`client_arg`, `class_arg`, `value_arg`,
 # `block_arg`, `options_arg`, `handler_arg`, `payload_arg`, `receiver_arg`, …), and so is
 # `channel_arg` on a catalog that declares `dispatch` (`dispatch_hops`), so a mapping there
@@ -1858,6 +1859,7 @@ _REFERENCE_ARGUMENT_KEYS = frozenset(
         "required_arg",
         "default_arg",
         "flag_arg",
+        "embed_arg",
     }
 )
 # `annotation_arg` names an annotation attribute's condition (`protocol_hint`, `wrappers`), a

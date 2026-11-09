@@ -1255,6 +1255,9 @@ _REFUSAL_PHRASES = {
     "invalid_response_type": "refuses a response type that unites a response class with others",
     "trailing_slash": "refuses a path prefix that ends in `/`",
     "empty_path": "refuses a route whose prefix and path are both empty",
+    "marked_twice": "refuses a handler parameter marked both in its annotation and its default",
+    "path_variable_marked": "refuses a path variable marked as another kind of parameter",
+    "path_variable_default": "refuses a path variable given a default",
 }
 # What the refusal does to the application, per reason word where it is not the route's own
 # loss: a framework that raises when the route is registered (at import) stops the application
@@ -1267,6 +1270,9 @@ _REFUSAL_CONSEQUENCES = {
     "invalid_response_type": _RAISES_AT_IMPORT,
     "trailing_slash": _RAISES_AT_IMPORT,
     "empty_path": _RAISES_AT_IMPORT,
+    "marked_twice": _RAISES_AT_IMPORT,
+    "path_variable_marked": _RAISES_AT_IMPORT,
+    "path_variable_default": _RAISES_AT_IMPORT,
 }
 _SERVES_NOTHING = "so it serves nothing for it"
 

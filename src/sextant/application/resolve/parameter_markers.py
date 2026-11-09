@@ -12,15 +12,17 @@ alias is followed wherever it is (a module field, another file's field, an alias
 as is a helper that returns the call and each branch of a conditional. No other walk exists.
 
 - The default's producing call: the path's end, where the walk ends at a call (a library call
-  whose body was not read).
+  whose body was not read, or a construction: `fastapi.params.Depends(f)` makes its value as
+  `fastapi.param_functions.Depends(f)` does, and the walk stops at every construction a site
+  makes, `_constructions`).
 - An annotation is `Annotated[T, m1, m2]` where its value is the static call
   `<form>#__class_getitem__` of `typing/Annotated#` or `typing_extensions/Annotated#` (ruling
   R8): the paths to that call, then each metadata argument's producing call, in written order.
   A first argument that is itself an `Annotated` form is flattened into it, as Python does:
   its metadata come first.
 
-A path that ends anywhere else — a literal, a value the walk cannot read, a construction —
-gives no marker, and its reason stays the walk's (`values._REASONS`).
+A path that ends anywhere else — a literal, a value the walk cannot read — gives no marker, and
+its reason stays the walk's (`values._REASONS`).
 
 **Built once per `ValueIndex` (R14)**, and kept on it, as `suffixes` is: `producer_paths`
 reads `call_edges` and `value_edges`, which are derived, so `Workspace.once` cannot hold it,
@@ -74,12 +76,13 @@ def parameter_markers(index: ValueIndex) -> Mapping[tuple[str, int], tuple[Marke
     if index.markers:
         return cast(Mapping[tuple[str, int], tuple[Marker, ...]], index.markers[0])
     found: dict[tuple[str, int], tuple[Marker, ...]] = {}
+    stops = _constructions(index)
     for key, values in index.parameter_values.items():
         if values.body is None:
             continue
         markers: list[Marker] = []
         if values.default is not None:
-            ends = _ends(index, values.body, values.default, frozenset(), _DEFAULT_READER)
+            ends = _ends(index, values.body, values.default, stops, _DEFAULT_READER)
             for path, producer in enumerate(ends):
                 site = _site(index, producer)
                 if site is not None:
@@ -87,7 +90,7 @@ def parameter_markers(index: ValueIndex) -> Mapping[tuple[str, int], tuple[Marke
         if values.annotation is not None:
             forms = _ends(index, values.body, values.annotation, _ANNOTATED, _FORM_READER)
             for path, elements in enumerate(
-                one for form in forms for one in _metadata(index, form)
+                one for form in forms for one in _metadata(index, form, stops)
             ):
                 markers.extend(
                     Marker(site=site, where="annotation", order=order, path=path)
@@ -113,7 +116,9 @@ def _ends(
     return [producer for producer, _ in producer_paths(index, holder, 0, declared, shared=reader)]
 
 
-def _metadata(index: ValueIndex, form: Producer) -> list[list[Mapping[str, Any] | None]]:
+def _metadata(
+    index: ValueIndex, form: Producer, stops: frozenset[tuple[str, str]]
+) -> list[list[Mapping[str, Any] | None]]:
     """For one path to an `Annotated` form, each path through its metadata: one entry per
     written element, in written order, the element's producing call or None where that path
     ends at no call. One list per combination of the elements' paths, so two paths are two
@@ -129,17 +134,26 @@ def _metadata(index: ValueIndex, form: Producer) -> list[list[Mapping[str, Any] 
     combined: list[list[Mapping[str, Any] | None]] = [
         nested
         for producer, _ in producer_paths(index, site, 0, _ANNOTATED, shared=_FORM_READER)
-        for nested in (_metadata(index, producer) or [[]])
+        for nested in (_metadata(index, producer, stops) or [[]])
     ]
     for slot in range(1, len(arguments)):
         made = [
             _site(index, producer)
-            for producer, _ in producer_paths(
-                index, site, slot, frozenset(), shared=_DEFAULT_READER
-            )
+            for producer, _ in producer_paths(index, site, slot, stops, shared=_DEFAULT_READER)
         ]
         combined = [chosen + [one] for chosen in combined for one in made]
     return combined
+
+
+def _constructions(index: ValueIndex) -> frozenset[tuple[str, str]]:
+    """Every construction a site makes, as the walk's stops: a value an object's construction
+    made ends its path at that call, which is the marker, as a call of a function is. The same
+    set on every walk, so the readers' shared upward paths hold one answer."""
+    return frozenset((owner, _INIT) for owner in index.constructed)
+
+
+# A construction's name at a call site (D00 §5).
+_INIT = "<init>"
 
 
 def _site(index: ValueIndex, producer: Producer) -> Mapping[str, Any] | None:

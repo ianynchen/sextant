@@ -555,7 +555,10 @@ descriptor** (`{wire_type, wire_format, nullable, shape_id?, item?}`) rather tha
 shape id — the grammar `shape_fields.item` uses above, reused rather than duplicated. A
 `List<OrderView>` response is
 `{"wire_type":"array","item":{"wire_type":"object","shape_id":…}}`; a scalar response is
-recorded rather than dropped (`{"wire_type":"string"}`); and `NULL` means exactly *no
+recorded rather than dropped (`{"wire_type":"string"}`); a body a framework assembles from
+several handler parameters (D02 §2's `request_body.embed_arg`, FastAPI's embedded body) is an
+`object` with no `shape_id` and a `fields` list, one `{name, type}` per parameter in declared
+order, `type` the field's own descriptor (`NULL` for none); and `NULL` means exactly *no
 payload* — a `void` return, or no body parameter — the one meaning it has always had. On a
 row whose own `resolution` is `unresolved` ([D02](D02-catalog-schema.md) §2's `single_call`:
 any declared capture — url, body or response — that failed to resolve drops the row's
@@ -1126,7 +1129,10 @@ a mount point given the wildcard the framework adds; for a prefix, `mount[].refu
 leading `/`, `trailing_slash`: a prefix ending in `/`, `empty_path`: an empty include prefix
 over a route whose path below it is empty too; for a route, D02 §2's `fluent` style,
 `no_methods`: a verb list written empty, `invalid_response_type`: a response type uniting a
-`response_fallback.none_types` type with others) — on ONE row per refused
+`response_fallback.none_types` type with others; for a handler parameter, D02 §2k mechanism 4,
+plan 2026-11-08 N3/N4, `marked_twice`: a marker both in `Annotated` and as the default,
+`path_variable_marked`: a path variable carrying a marker that claims it for something else,
+`path_variable_default`: a path variable with a marker in `Annotated` and a default) — on ONE row per refused
 `(protocol, method, path)`, the path as written, since no endpoint row carries it; a
 `handler_pass_through` candidate holds `handler`, `caller` and `unread` — an inbound row whose
 handler is not readable here (Vert.x spec §3b: it hands the request's context to a method

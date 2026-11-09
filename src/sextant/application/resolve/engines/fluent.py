@@ -24,7 +24,12 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.open_questions import record_open_questions
+from sextant.application.resolve.parameter_markers import parameter_markers
 from sextant.application.resolve.request_requirements import (
+    ParameterReading,
+    ParameterRules,
+    parameter_rules,
+    read_parameters,
     request_param_calls,
     request_param_rows,
 )
@@ -85,7 +90,12 @@ from sextant.application.resolve.shapes.client_base import (
     client_defaults,
     options_parts,
 )
-from sextant.application.resolve.shapes.contracts import payload_descriptor
+from sextant.application.resolve.shapes.contracts import (
+    _body_type,
+    _path_variables,
+    is_scalar,
+    payload_descriptor,
+)
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.inbound_routes import (
     CONCATENATE,
@@ -396,6 +406,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             f"loading catalog {catalog.source}: `path_fallback` names a chain's word from its "
             f"handler, which only a `root_kind: entry_point` catalog reads"
         )
+    # Checked here, at the run's start, so a broken entry is refused whether or not a row reads it.
+    parameters = parameter_rules(catalog) if catalog.direction == "inbound" else None
     rows: list[dict[str, Any]] = []
     # Spec 2026-09-21 §3b: the `fed_by` edges the chains wrote, one per chain
     # that captured a readable `channel_link` — accumulated across every
@@ -492,6 +504,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 routers=routers,
                 unread_prefixes=unread_prefixes,
                 response_fallback=response_fallback,
+                parameter_rules=parameters,
             )
         # A mount's chain (spec §3c) is not a route: what Vert.x refuses of it is recorded,
         # and it derives a row only where it was given a handler as well.
@@ -943,6 +956,10 @@ class _DeriveContext:
     response_fallback: "_ResponseFallback | None" = None
     # The prefixes the end being derived serves under, read once (`_derive`); None until then.
     prefixes: tuple[Prefix, ...] | None = None
+    # `matches.request_params` on an inbound catalog whose entries name the marker calls a
+    # handler's parameters carry (plan 2026-11-08-python-fastapi-inbound N3, N4), read on each
+    # row with the request body (`_row_parameters`). None for every other catalog.
+    parameter_rules: ParameterRules | None = None
 
 
 def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
@@ -1362,6 +1379,26 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
         # I1's rule is untouched and is the other half of the condition: every declared
         # capture must still have read, so `partial` is a statement about the ADDRESS and
         # never a licence for an unread body.
+        # What the handler's parameters demand of a request on THIS row's path (N3, N4), and the
+        # body among them: read per row, since a path variable a prefix adds is the path's.
+        row_request_shape = request_shape
+        parameter_entries: list[dict[str, Any]] = []
+        if context.parameter_rules is not None and direction == "inbound" and handler is not None:
+            refused_by, row_request_shape, parameter_entries = _row_parameters(
+                handler, verb, path, context.parameter_rules, context
+            )
+            if refused_by is not None and context.refusals is not None:
+                file_refusal(
+                    context.refusals,
+                    protocol=context.catalog.protocol,
+                    method=verb,
+                    method_kind=method_kind,
+                    path=path,
+                    reason=refused_by,
+                    caller=context.caller,
+                    handler=handler,
+                )
+                continue
         captures_read = (
             (verb is not None or verbless)
             # What the captures PRODUCED, the `single_call` change one engine along
@@ -1420,6 +1457,7 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                 )
                 for name, value in query
             ),
+            *parameter_entries,
         ]
         kept: _Kept | None = None
         if path is not None and (verb is not None or verbless) and not ranked:
@@ -1469,7 +1507,7 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
             # and no surer than `partial`.
             published = (
                 handler,
-                request_shape,
+                row_request_shape,
                 response_shape,
                 consumes,
                 produces,
@@ -1509,7 +1547,7 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
             )
             published = (
                 handler,
-                request_shape,
+                row_request_shape,
                 response_shape,
                 consumes,
                 produces,
@@ -1584,7 +1622,7 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
             "resolution": resolution,
             "evidence": "compiler",
             "catalog_id": context.catalog.id,
-            "request_shape": request_shape,
+            "request_shape": row_request_shape,
             "response_shape": response_shape,
             "consumes": consumes,
             "produces": produces,
@@ -2186,6 +2224,144 @@ def _metadata_row(
         # per-value retry route (`workspace.derive`), which the pipeline test forbids.
         "requirement": None,
     }
+
+
+def _row_parameters(
+    handler: str,
+    verb: str | None,
+    path: str | None,
+    rules: ParameterRules,
+    context: "_DeriveContext",
+) -> tuple[str | None, str | None, list[dict[str, Any]]]:
+    """What the handler's parameters demand of a request on one row (plan
+    2026-11-08-python-fastapi-inbound N3, N4): the reason the framework refuses the registration
+    (None where it does not), the request body's descriptor, and one `endpoint_metadata` entry
+    per request parameter (`request_requirements.read_parameters`), `caller` the handler as on
+    every inbound entry. The body is the parameter the catalog's `request_body` rule picks with
+    each parameter's marker call and kind beside its signature (`contracts._body_parameter`).
+    A handler whose parameters were not read demands nothing that can be said."""
+    workspace, index = context.workspace, context.values
+    if workspace is None or index is None:
+        return None, None, []
+    parameters = workspace.once(declared_parameters_of).get(handler)
+    if parameters is None:
+        return None, None, []
+    markers = parameter_markers(index)
+    carrier = context.carrier_rules
+    dispatch = workspace.once(dispatch_of)
+
+    def kind_of(reference: Mapping[str, Any]) -> bool | None:
+        return is_scalar(
+            reference,
+            carrier.rules.known_types,
+            carrier.enums,
+            lambda symbol: symbol in dispatch.scanned or symbol in dispatch.headers,
+        )
+
+    variables = _path_variables(frozenset() if path is None else frozenset({path}))
+    reading = read_parameters(
+        rules,
+        parameters,
+        lambda position: markers.get((handler, position), ()),
+        variables,
+        kind_of,
+    )
+    if reading.refused is not None:
+        return reading.refused, None, []
+    every: list[tuple[int, dict[str, Any]]] = []
+    body = _body_type(
+        {"parameters": list(parameters)},
+        context.catalog,
+        owner=handler,
+        paths=frozenset() if path is None else frozenset({path}),
+        index={},
+        members={},
+        calls=reading.calls,
+        scalars={
+            position: kind_of(parameter["type"]) for position, parameter in enumerate(parameters)
+        },
+        every=every,
+    )
+    declared_body = context.catalog.matches.get("request_body") or {}
+    shape: str | None
+    if len(every) > 1 or (
+        len(every) == 1 and _embedded_by_marker(every[0][0], reading, declared_body)
+    ):
+        shape = _embedded_body(every, reading, declared_body, context)
+    else:
+        shape = payload_descriptor(
+            body, carrier.rules, carrier.enums, context.facts.referenced, carrier.rules.wrappers
+        )
+    entries = [
+        {
+            "protocol": context.catalog.protocol,
+            "direction": "inbound",
+            "method": verb,
+            "path": path,
+            "caller": handler,
+            "kind": kind,
+            "name": name,
+            "value": None,
+            "resolution": resolution,
+            "evidence": str(Evidence.DECLARED),
+            "requirement": requirement,
+        }
+        for kind, name, requirement, resolution in reading.rows
+    ]
+    return None, shape, entries
+
+
+def _embedded_by_marker(
+    position: int, reading: ParameterReading, declared: Mapping[str, Any]
+) -> bool:
+    """Whether the one body parameter's marker call writes `request_body.embed_arg` as the
+    literal `True` (FastAPI's `Body(embed=True)`): the body is then an object holding it."""
+    reference = declared.get("embed_arg")
+    marker = reading.marked.get(position)
+    if reference is None or marker is None:
+        return False
+    written = _arg_at(list(marker.site.get("arguments") or []), reference)
+    return written is not None and written.get("kind") == "boolean" and written.get("value") is True
+
+
+def _embedded_body(
+    every: list[tuple[int, dict[str, Any]]],
+    reading: ParameterReading,
+    declared: Mapping[str, Any],
+    context: "_DeriveContext",
+) -> str:
+    """The body a framework assembles from its body parameters (FastAPI's
+    `_should_embed_body_fields`: several, or one marked `embed=True`): an object with one field
+    per parameter, in declared order, named by the string its marker writes at
+    `request_body.name_arg` (the alias; NULL where written as anything but a string) else by the
+    parameter's own name, typed by the descriptor its type roots at (NULL for none)."""
+    carrier = context.carrier_rules
+    fields: list[dict[str, Any]] = []
+    for position, parameter in every:
+        marker = reading.marked.get(position)
+        written = (
+            None
+            if marker is None or declared.get("name_arg") is None
+            else _arg_at(list(marker.site.get("arguments") or []), declared["name_arg"])
+        )
+        name = (
+            str(parameter["name"])
+            if written is None
+            else (written.get("value") if written.get("kind") == "string" else None)
+        )
+        described = payload_descriptor(
+            parameter["type"],
+            carrier.rules,
+            carrier.enums,
+            context.facts.referenced,
+            carrier.rules.wrappers,
+        )
+        fields.append({"name": name, "type": None if described is None else json.loads(described)})
+    return json.dumps(
+        {"wire_type": "object", "wire_format": None, "nullable": False, "fields": fields},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _declares_a_hop(matches: dict[str, Any]) -> bool:

@@ -198,6 +198,14 @@ NO_METHODS = "no_methods"
 # A route whose response type the framework cannot build a response from: a union naming a
 # type the catalog says is no response model (`response_fallback.none_types`) beside others.
 INVALID_RESPONSE_TYPE = "invalid_response_type"
+# A handler parameter the framework refuses (`request_requirements.read_parameters`; plan
+# 2026-11-08 N3, N4): a marker both in `Annotated` and as the default (FastAPI: "Cannot specify
+# `Depends` in `Annotated` and default value together", and the two like it), a marker other
+# than the path's on a path variable ("Cannot use `Query` for path param"), and a path variable
+# with a marker in `Annotated` and a default ("Path parameters cannot have default values").
+MARKED_TWICE = "marked_twice"
+PATH_VARIABLE_MARKED = "path_variable_marked"
+PATH_VARIABLE_DEFAULT = "path_variable_default"
 
 
 # What an unread piece of a partly read path starts with, each spelled by the layer that

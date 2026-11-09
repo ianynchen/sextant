@@ -360,7 +360,9 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # **`fastapi` joined with FastAPI routes** (plan 2026-11-08-python-fastapi-inbound Task 5): the
 # `__call__` step's handler, one slot; its keyword captures are not `argN` positions. **+4 on
 # 2026-11-08** (Task 6): its mounts' router and prefix positions, one slot each (both
-# includes' router, the sub-application mount's app and path).
+# includes' router, the sub-application mount's app and path). **+12 on 2026-11-08** (Task 7):
+# its six request-parameter entries' `default` position, written twice in each (`default_arg`'s
+# `{arg: 0, keyword: default}` and `required_when`'s `arg`).
 _ASKS_PER_CATALOG = {
     "akka-actor-handlers": (69, 94),
     "akka-cluster-sharding": (6, 8),
@@ -374,7 +376,7 @@ _ASKS_PER_CATALOG = {
     "cdi-async-events": (4, 4),
     "cdi-events": (2, 2),
     "click": (3, 3),
-    "fastapi": (5, 5),
+    "fastapi": (17, 17),
     "google-pubsub-client": (1, 1),
     "google-pubsub-publisher": (2, 2),
     "google-pubsub-subscriber": (2, 3),
@@ -501,7 +503,8 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # **+3 on 2026-11-06**: the new `click` catalog, same comment.
     # **+1 on 2026-11-08**: the new `fastapi` catalog, same comment.
     # **+4 on 2026-11-08** (Task 6): its mounts' positions, same comment.
-    assert sum(asks for asks, _ in counted.values()) == 1495
+    # **+12 on 2026-11-08** (Task 7): its request-parameter entries' positions, same comment.
+    assert sum(asks for asks, _ in counted.values()) == 1507
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole
