@@ -81,8 +81,9 @@ matches:
   # "/orders")` puts `/orders` in front of every route registered on that router and of every
   # include made on it. A router class a factory builds (`class Router(APIRouter)`) is
   # constructed as `APIRouter` is; a subclass is read through its heirs and, where it declares
-  # `__init__`, at the `super().__init__(prefix=...)` that body makes (D02 `router_holds`). `APIRouter.__init__` asserts the prefix as `include_router`
-  # does (R 2611-2612): it starts with `/` and does not end with one, where one is written.
+  # `__init__`, at the `super().__init__(prefix=...)` that body makes (D02 `router_holds`).
+  # `APIRouter.__init__` asserts the prefix as `include_router` does (R 2611-2612): it starts
+  # with `/` and does not end with one, where one is written.
   #
   # AN INCLUDE (`include_router`) puts its `prefix=` in front of the included router's paths,
   # behind the prefixes of the router it is made on; one router included twice serves under
