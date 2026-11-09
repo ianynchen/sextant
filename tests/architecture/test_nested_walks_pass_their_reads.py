@@ -14,10 +14,15 @@ it was worked out. Two things can lose one, and each rule below guards one of th
   without the reads it was worked out with. Every cache in the walk's modules is a
   `values.Kept`, which keeps each answer with its reads and replays them on a hit. A container
   written any other way is either no cache (a stack or a guard, named below with why), or a
-  cache whose computing reads nothing a binding round changes, which is checked.
+  cache whose computing reads nothing a binding round changes, which is checked. A container
+  held by a module-level or enclosing-function name is no exception (re-review round 4).
+- **A read never recorded** (task 8 re-review M4-1): a walk that reads a part of the call
+  index a round changes (`callers`, `callees`, `called_at`, `reached`) records that read
+  (`_Walk._depends`) in the same function, so a round walks again what read it.
 """
 
 import ast
+from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -62,6 +67,24 @@ _READS_NOTHING_A_ROUND_CHANGES = frozenset(
 
 # What a binding round changes, as the index names it, and the walk's way of recording a read.
 _ROUND_CHANGES = frozenset({"callers", "callees", "called_at", "reached", "_depends", "_depended"})
+
+# Each part of the call index a binding round changes, and the read kind a walk records for it
+# (`values.READ_*`).
+_RECORDED_AS = {
+    "callers": "READ_CALLERS",
+    "callees": "READ_CALLEES",
+    "called_at": "READ_CALLED_AT",
+    "reached": "READ_REACHED",
+}
+
+# Containers held by a module-level name in these modules that are written, and why each is
+# no cache of what a walk works out.
+_MODULE_STATE = {
+    "_INDEX_BY_WORKSPACE": (
+        "the index each workspace's readers share, built from fact queries; "
+        "`reset_value_index` drops it after binding"
+    ),
+}
 
 
 def _trees() -> dict[str, ast.Module]:
@@ -328,5 +351,152 @@ def test_a_cache_kept_without_its_reads_reads_nothing_a_round_changes():
                     if callee in functions and callee not in seen:
                         seen.add(callee)
                         pending.append((*callee, functions[callee]))
+
+    assert found == []
+
+
+def _index_reads(function: ast.FunctionDef) -> Iterator[tuple[str, int]]:
+    """Each read of a part of the call index a round changes, on `self._index`, `index`, or a
+    local naming either, as `(field, line)`."""
+    names = {"index"} | {
+        target.id
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign) and _is_the_index(node.value, set())
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    for node in ast.walk(function):
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr in _RECORDED_AS
+            and isinstance(node.ctx, ast.Load)
+            and _is_the_index(node.value, names)
+        ):
+            yield node.attr, node.lineno
+
+
+def _is_the_index(node: ast.expr, names: set[str]) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in names
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "_index"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "self"
+    )
+
+
+def _recorded(function: ast.FunctionDef) -> Counter[str]:
+    """How many reads of each kind `function` records: `self._depends((READ_X, ...))`."""
+    found: Counter[str] = Counter()
+    for node in ast.walk(function):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_depends"
+            and node.args
+            and isinstance(node.args[0], ast.Tuple)
+            and node.args[0].elts
+            and isinstance(node.args[0].elts[0], ast.Name)
+        ):
+            found[node.args[0].elts[0].id] += 1
+    return found
+
+
+def test_every_read_of_the_call_index_in_a_walk_is_recorded():
+    """Inside `_Walk`, and in every function it reaches, a function reading `callers`,
+    `callees`, `called_at` or `reached` records that kind of read itself, once for each read
+    (M4-1): a round that changes it then walks again every position and site that read it.
+    Counted per read, so a function reading one part in two places cannot lose one record
+    behind the other."""
+    trees = _trees()
+    functions = _functions(trees)
+    missing = []
+    for key in sorted(_reached_from_the_walk(trees, functions)):
+        function = functions[key]
+        reads = Counter(field for field, _ in _index_reads(function))
+        recorded = _recorded(function)
+        for field, count in sorted(reads.items()):
+            if recorded[_RECORDED_AS[field]] < count:
+                missing.append(
+                    f"{key[0]}.{key[1]} reads {field} {count} times, records "
+                    f"{recorded[_RECORDED_AS[field]]}"
+                )
+
+    assert missing == []
+
+
+def _bound_in(function: ast.FunctionDef | ast.Lambda) -> set[str]:
+    """The names `function` binds itself: its parameters, and every name it assigns."""
+    arguments = function.args
+    found = {
+        argument.arg
+        for argument in (*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs)
+    }
+    found |= {one.arg for one in (arguments.vararg, arguments.kwarg) if one is not None}
+    for node in ast.walk(function):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            found.add(node.id)
+    return found
+
+
+def _changed_names(function: ast.FunctionDef) -> Iterator[tuple[str, int]]:
+    """Each name whose container `function` writes: an item stored, or a call that changes
+    it, as `(name, line)`."""
+    changing = {"add", "update", "append", "extend", "setdefault", "discard", "pop", "clear"}
+    for node in ast.walk(function):
+        held = None
+        if isinstance(node, ast.Assign | ast.AugAssign):
+            for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                while isinstance(target, ast.Subscript):
+                    target = target.value
+                    if isinstance(target, ast.Name):
+                        held = target
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in changing
+            and isinstance(node.func.value, ast.Name)
+        ):
+            held = node.func.value
+        if held is not None:
+            yield held.id, node.lineno
+
+
+def _module_names(tree: ast.Module) -> set[str]:
+    """The names `tree` binds at module level."""
+    found = set()
+    for node in tree.body:
+        targets = (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else [node.target]
+            if isinstance(node, ast.AnnAssign | ast.AugAssign)
+            else []
+        )
+        found |= {target.id for target in targets if isinstance(target, ast.Name)}
+    return found
+
+
+def test_no_module_level_container_is_written_by_walk_code():
+    """A container held by a module-level name is no `self` attribute, so the cache rule above
+    cannot see one used as a cache (re-review round 4: a module dict keyed on the index
+    replaced `_setter_calls`, and every check passed). No function in the walk's modules writes
+    a container a module-level name holds, and none declares a name `global` or `nonlocal`,
+    unless it is named below with why it is no cache. A container a function binds for itself
+    lives for that one call (an accumulator a nested function fills), and is not one."""
+    found = []
+    for module, tree in _trees().items():
+        module_names = _module_names(tree)
+        for owner in ast.walk(tree):
+            if not isinstance(owner, ast.FunctionDef):
+                continue
+            local = _bound_in(owner)
+            for node in ast.walk(owner):
+                if isinstance(node, ast.Global | ast.Nonlocal):
+                    found.append(f"{module}.{owner.name} declares {node.names}")
+            for name, line in _changed_names(owner):
+                if name in module_names and name not in local and name not in _MODULE_STATE:
+                    found.append(f"{module}.{owner.name} writes {name} at line {line}")
 
     assert found == []

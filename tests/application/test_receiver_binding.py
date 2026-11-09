@@ -28,7 +28,9 @@ from sextant.application.resolve.values import (
 )
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import Document, ModuleFact
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.extract.python.scanner import PythonScanner
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 _PREFIX = "sextant-python pypi shop 1 "
@@ -94,18 +96,21 @@ def _facts(tmp_path: Path, files: dict[str, str]) -> Path:
     return facts
 
 
-def _resolved(tmp_path: Path, files: dict[str, str]) -> DuckDbWorkspace:
+def _resolved(
+    tmp_path: Path, files: dict[str, str], catalogs: CatalogSource | None = None
+) -> DuckDbWorkspace:
     """`files` resolved, with every input checked: the rounds bind what walking every site
     whole each round binds (`bind_until_settled(..., incremental=False)`, the R25 reference),
-    from the start."""
+    from the start. No catalogs unless `catalogs` is given."""
+    source = catalogs or _NoCatalogs()
     facts = _facts(tmp_path, files)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
-    resolve(workspace, facts, _NoCatalogs(), set())
+    resolve(workspace, facts, source, set())
     whole = DuckDbWorkspace(tmp_path / "whole.duckdb")
     with patch.object(
         pipeline, "bind_until_settled", partial(bind_until_settled, incremental=False)
     ):
-        resolve(whole, facts, _NoCatalogs(), set())
+        resolve(whole, facts, source, set())
     assert _table(workspace) == _table(whole)
     whole.close()
     return workspace
@@ -1480,9 +1485,9 @@ _OTHER = (
 )
 
 
-def _helper_owners(tmp_path: Path, text: str) -> list[tuple[object, ...]]:
+def _helper_owners(tmp_path: Path, text: str, name: str = "go") -> list[tuple[object, ...]]:
     workspace = _resolved(tmp_path, {"m.py": text})
-    site = _site(workspace, "app/m#helper(sig_dd69782a).", "go")
+    site = _site(workspace, "app/m#helper(sig_dd69782a).", name)
     found = sorted({(row["owner"], row["resolution"]) for row in _bound(workspace, site)}, key=repr)
     workspace.close()
     return found
@@ -1552,3 +1557,105 @@ def test_a_getter_value_from_a_later_rounds_caller_is_walked_again(tmp_path: Pat
     )
 
     assert found == [("app/m/Cfg#", "resolved")]
+
+
+# Task 8 re-review M4-1: each part of the call index a binding round changes, read by a walk,
+# is recorded (`_Walk._depends`), so a round walks again what read it. One input per part a
+# realistic program reaches; `_resolved` checks each against whole binding.
+
+
+def test_a_setter_with_no_argument_called_on_an_object_a_round_binds_is_walked_again(
+    tmp_path: Path,
+):
+    """`use_fast` takes no argument, so the call `box(h2).use_fast()` that round 1 binds adds
+    no caller of a parameter: it changes only which calls `use_fast` has (`called_at`). Round
+    1 counts its write as one on an unplaced object; round 2 places it on `h2`, never `h`. So
+    `c.go()` is `Cfg` alone, resolved, not `Cfg` and `Cfg3`."""
+    found = _helper_owners(
+        tmp_path,
+        "class Cfg:\n"
+        "    def go(self) -> None:\n"
+        "        pass\n"
+        "class Cfg3(Cfg):\n"
+        "    def go(self) -> None:\n"
+        "        pass\n"
+        "class Holder:\n"
+        "    def __init__(self) -> None:\n"
+        "        self.cfg = Cfg()\n"
+        "    def use_fast(self) -> None:\n"
+        "        self.cfg = Cfg3()\n"
+        "    def get_cfg(self):\n"
+        "        return self.cfg\n"
+        "def box(x):\n"
+        "    return x\n"
+        "def helper(c):\n"
+        "    c.go()\n"
+        "def use(h: Holder) -> None:\n"
+        "    v = h.get_cfg()\n"
+        "    helper(v)\n"
+        "def main() -> None:\n"
+        "    h = Holder()\n"
+        "    h2 = Holder()\n"
+        "    box(h2).use_fast()\n"
+        "    use(h)\n",
+    )
+
+    assert found == [("app/m/Cfg#", "resolved")]
+
+
+def test_a_call_of_a_function_value_a_round_binds_returns_what_its_body_returns(
+    tmp_path: Path,
+):
+    """`f()` calls the function `pick()` returns; round 1 binds the call to `get_repo`'s body
+    (`callees`), and only then is its result what that body returns. `helper` read that
+    call's callees in round 1, so round 2 walks it again: `Repo`, resolved."""
+    found = _helper_owners(
+        tmp_path,
+        "class Repo:\n"
+        "    def find(self) -> None:\n"
+        "        pass\n"
+        "def get_repo():\n"
+        "    return Repo()\n"
+        "def pick():\n"
+        "    return get_repo\n"
+        "def helper(c):\n"
+        "    c.find()\n"
+        "def main():\n"
+        "    f = pick()\n"
+        "    helper(f())\n",
+        "find",
+    )
+
+    assert found == [("app/m/Repo#", "resolved")]
+
+
+def test_a_value_from_a_cached_function_is_read_once_a_round_reaches_its_body(tmp_path: Path):
+    """`get_p()` calls the `functools.cache` wrapper, a library `__call__`; the value models
+    state it runs the function it wraps, so round 1 binds the call to `get_p`'s body (the
+    call now `reached` one). Before, the value was from code not scanned (`external`); after,
+    a body here was reached whose return the wrapper hands back, which the facts do not read
+    (`not_readable`). `helper` read whether the call reached a body, so round 2 walks it
+    again."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "m.py": "import functools\n"
+            "class P:\n"
+            "    def go(self) -> None:\n"
+            "        pass\n"
+            "@functools.cache\n"
+            "def get_p():\n"
+            "    return P()\n"
+            "def helper(c):\n"
+            "    c.go()\n"
+            "def main() -> None:\n"
+            "    helper(get_p())\n"
+        },
+        YamlCatalogSource(catalogs_dir()),
+    )
+    site = _site(workspace, "app/m#helper(sig_dd69782a).", "go")
+
+    assert [(row["owner"], row["reason"]) for row in _bound(workspace, site)] == [
+        (None, "not_readable")
+    ]
+    workspace.close()
