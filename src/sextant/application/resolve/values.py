@@ -1904,7 +1904,7 @@ def resolve_site(
     is not a row here.
     """
     fold = index if index is not None else value_index(workspace)
-    walk = _Walk(fold, identities, branches=branches)
+    walk = _Walk(fold, identities, branches=branches, deps=[])
     site = fold.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     combined: list[tuple[_Trail, dict[int | str, Answer]]] = [((), {})]
     for slot in _slots_of(site):
@@ -1982,7 +1982,7 @@ def resolve_positions_on_paths(
     another value later on that same path (`resolve_positions(..., within=)`): a router's
     held prefix and a route's verb list one factory call gives (plan 2026-11-08 Task 6)."""
     fold = index if index is not None else value_index(workspace)
-    walk = _Walk(fold, identities, branches=branches)
+    walk = _Walk(fold, identities, branches=branches, deps=[])
     combined: list[tuple[_Trail, dict[str, Answer]]] = [
         (within.trail if within is not None else (), {})
     ]
@@ -2088,6 +2088,7 @@ def producers_of(
         parameters_apart=True,
         counting=counting,
         read_sites=read_sites,
+        deps=[],
     )
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[Producer] = []
@@ -2329,6 +2330,7 @@ def producer_paths(
     declared_types: bool = False,
     shared: Any = None,
     reads: set[Any] | None = None,
+    deps: list[set[Any]] | None = None,
 ) -> tuple[tuple[Producer, Path], ...]:
     """`producers_of`, with the PATH each producer was reached by, one pair per distinct
     path — for a reader that goes on to read other positions on that same path.
@@ -2372,7 +2374,9 @@ def producer_paths(
     returns (`Answer.declared`). Off, the default, a declaration is never read as a value.
 
     `reads`, where handed a set, receives every part of the index the walk read that a binding
-    round can change (`_Walk._depends`), for a reader that keeps what it built on the answer."""
+    round can change (`_Walk._depends`), for a reader that keeps what it built on the answer.
+    `deps` is the stack of a walk this one is started inside (`_Walk._deps`): what this walk
+    reads, that walk's position read."""
     walk = _Walk(
         index,
         declared=declared,
@@ -2388,9 +2392,8 @@ def producer_paths(
         declared_sites=declared_sites,
         declared_types=declared_types,
         shared=shared,
+        deps=deps if deps is not None else ([] if reads is None else [reads]),
     )
-    if reads is not None:
-        walk._deps.append(reads)
     site = index.sites.get((str(site["caller"]), int(str(site["ordinal"]))), site)
     found: list[tuple[Producer, Path]] = []
     for trail, answer in walk.at(site, slot):
@@ -2971,8 +2974,7 @@ def _recipe_values(
         found.extend(_parameter_type(index, parameter))
     reads: set[Any] = set()
     if slot is not None and slot != UNPACKED_SLOT:
-        walk = _Walk(index, functions=True, shared=_RECIPE_READER)
-        walk._deps.append(reads)
+        walk = _Walk(index, functions=True, shared=_RECIPE_READER, deps=[reads])
         for path, answer in walk.at(site, slot):
             if answer.kind == ABSENT and answer.null:
                 found.extend((path, one) for _, one in _parameter_type(index, parameter))
@@ -3325,7 +3327,7 @@ class HandOffs:
             return []
         if self._walk is None:
             self._walk = _Walk(
-                self._index, configuring=self._configuring(), counting=self._counting
+                self._index, configuring=self._configuring(), counting=self._counting, deps=[]
             )
         events = self._walk._handed_events(method, (_VALUE, value), lambda ordinal: ordinal > after)
         return [(ordinal, outcomes) for ordinal, outcomes, _ in sorted(events, key=lambda e: e[0])]
@@ -3354,6 +3356,8 @@ class _Walk:
         declared_sites: AbstractSet[tuple[str, int]] = frozenset(),
         declared_types: bool = False,
         shared: Any = None,
+        *,
+        deps: list[set[Any]],
     ) -> None:
         self._index = index
         # The reader's key in the index's shared upward paths (`ValueIndex.suffixes`, R39):
@@ -3366,8 +3370,10 @@ class _Walk:
             index.suffix_deps if shared is not None else {}
         )
         # What the positions being worked out read that a binding round can change, innermost
-        # last (`_depends`): each finished position hands its reads to the one that asked.
-        self._deps: list[set[Any]] = []
+        # last (`_depends`): each finished position hands its reads to the one that asked. A
+        # walk started inside another walk is handed that walk's own stack, so whatever it reads
+        # is read by the position that started it: required, so no walk can lose its reads.
+        self._deps: list[set[Any]] = deps
         self._memo_deps: dict[Any, frozenset[Any]] = {}
         # The type reader (`producer_paths(..., declared_types=True)`): where a body gives a
         # call's result no type, the callee's declared return does. False for every other
@@ -6357,7 +6363,12 @@ class _Walk:
         ends = [
             end
             for end, _ in producer_paths(
-                self._index, site, RECEIVER, self._index.unscanned, which_object=True
+                self._index,
+                site,
+                RECEIVER,
+                self._index.unscanned,
+                which_object=True,
+                deps=self._deps,
             )
         ]
         return bool(ends) and all(end.caller is None and end.reason == EXTERNAL for end in ends)
@@ -6576,8 +6587,9 @@ class _Walk:
         owner = owner_of(symbol)
         key = (owner, site, asking)
         cached: tuple[_End, ...]
-        for held, reads, cached in self._index.objects.get(key, ()):
+        for held, reads, cached, read in self._index.objects.get(key, ()):
             if _reads_alike(frames, held, reads):
+                self._read(read)
                 return cached
         declared = (str(owner), "<init>")
         # A construction of a subtype built here ends the walk too, so that end is told from
@@ -6585,15 +6597,20 @@ class _Walk:
         subtypes = frozenset(
             (below, "<init>") for below in self._index.constructed_below.get(str(owner), ())
         )
+        self._deps.append(set())
         walk = _Walk(
             self._index,
             declared=frozenset({declared}) | subtypes,
             which_object=True,
             asking=asking,
+            deps=self._deps,
         )
         walk._base = len(frames)
         ends: list[_End] = []
-        for crossed, answer in walk._of_site(self._index.sites[site], RECEIVER, (), frames):
+        walked = walk._of_site(self._index.sites[site], RECEIVER, (), frames)
+        read = frozenset(self._deps.pop())
+        self._read(read)
+        for crossed, answer in walked:
             entered = _entered(crossed, self._index)
             built: tuple[str, int] | None = None
             subtype = False
@@ -6609,7 +6626,7 @@ class _Walk:
             ends.append((built, crossed, crossed if entered is None else entered, subtype))
         found = tuple(dict.fromkeys(ends))
         self._index.objects.setdefault(key, []).append(
-            (frames, tuple(dict.fromkeys(walk._reads)), found)
+            (frames, tuple(dict.fromkeys(walk._reads)), found, read)
         )
         return found
 

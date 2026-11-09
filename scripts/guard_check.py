@@ -4653,9 +4653,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="                self._index, site, RECEIVER, self._index.unscanned, which_object=True\n",
-                replace="                self._index, site, RECEIVER, frozenset(), which_object=True"
-                "  # guard disabled\n",
+                find="                self._index.unscanned,\n                which_object=True,\n",
+                replace="                frozenset(),  # guard disabled\n                which_object=True,\n",
             ),
         ),
     ),

@@ -1334,3 +1334,81 @@ def test_a_round_walks_again_the_upward_paths_its_new_edges_can_change(tmp_path:
 
     assert index.suffixes
     assert not any(key[1][1] == _PREFIX + "app/m#f(sig_dd69782a)." for key in kept)
+
+
+_CHAIN = (
+    "class A:\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "def k(x):\n"
+    "    x.go()\n"
+    "def f(x):\n"
+    "    k(x)\n"
+    "def g():\n"
+    "    f(A())\n"
+)
+
+
+def test_a_round_walks_again_a_path_built_on_one_its_new_edges_change(tmp_path: Path):
+    """`k`'s parameter is read through `f`'s, two positions down: a round that adds a caller of
+    `f` changes what `k`'s parameter holds, so `k`'s paths upward are dropped too, not only
+    `f`'s. Each path carries the reads of every path it was built on."""
+    workspace = _resolved(tmp_path, {"m.py": _CHAIN})
+    index = value_index(workspace)
+    site = index.sites[_site(workspace, "app/m#k(sig_dd69782a).", "go")]
+    producer_paths(index, site, RECEIVER, frozenset(), shared="rounds")
+    kept, _ = suffixes_kept(index, frozenset({(READ_CALLERS, _PREFIX + "app/m#f(sig_dd69782a).")}))
+
+    assert any(key[1][1] == _PREFIX + "app/m#k(sig_dd69782a)." for key in index.suffixes)
+    assert not any(key[1][1] == _PREFIX + "app/m#k(sig_dd69782a)." for key in kept)
+
+
+_GETTER = (
+    "class Cfg:\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "class Cfg2(Cfg):\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "class Cfg3(Cfg):\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "class Holder:\n"
+    "    def __init__(self, cfg) -> None:\n"
+    "        self.cfg = cfg\n"
+    "    def get_cfg(self):\n"
+    "        return self.cfg\n"
+    "def helper(c):\n"
+    "    c.go()\n"
+    "def mid(x):\n"
+    "    helper(x)\n"
+    "class Svc:\n"
+    "    def use(self, h: Holder) -> None:\n"
+    "        mid(h.get_cfg())\n"
+    "class Svc2:\n"
+    "    def other(self, d) -> None:\n"
+    "        helper(d)\n"
+    "def make():\n"
+    "    return Svc()\n"
+    "def make2():\n"
+    "    return Svc2()\n"
+    "def main() -> None:\n"
+    "    Svc().use(Holder(Cfg()))\n"
+    "    make().use(Holder(Cfg3()))\n"
+    "    make2().other(Cfg2())\n"
+)
+
+
+def test_a_kept_path_records_what_a_walk_inside_it_read(tmp_path: Path):
+    """Task 8 re-review C1: whether the getter's object arrives from code not scanned is asked
+    by a walk inside the walk, and what it read (the callers of `use`, which round 1 gives
+    `make().use(...)`) is part of `mid`'s kept paths. So `helper`'s `c.go()` is every `Cfg`
+    the code passes, round by round as when every site is walked whole."""
+    workspace = _resolved(tmp_path, {"m.py": _GETTER})
+    site = _site(workspace, "app/m#helper(sig_dd69782a).", "go")
+    rounds = sorted({str(row["owner"]) for row in _bound(workspace, site)})
+    bind_until_settled(workspace, (), incremental=False)
+    whole = sorted({str(row["owner"]) for row in _bound(workspace, site)})
+
+    assert rounds == ["app/m/Cfg#", "app/m/Cfg2#", "app/m/Cfg3#"]
+    assert rounds == whole
