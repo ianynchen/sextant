@@ -330,3 +330,173 @@ def test_a_factory_router_pairs_each_callers_verb_with_its_own_prefix(tmp_path: 
     )
 
     assert _paths(workspace) == [("GET", "/github/callback"), ("POST", "/apple/callback")]
+
+
+def test_a_router_subclass_passing_its_prefix_to_super_holds_it(tmp_path: Path, libraries):
+    """mealie's `AdminAPIRouter(APIRouter)`, whose `__init__` hands `prefix` to
+    `super().__init__`: the prefix is read where the base constructor is called, on the path
+    entering that `__init__` from each construction, so `AdminAPIRouter(prefix="/admin")` holds
+    `/admin`, and a router it includes is served below it."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "routers.py": (
+                "from fastapi import APIRouter\n"
+                "class AdminAPIRouter(APIRouter):\n"
+                "    def __init__(self, tags=None, prefix: str = '', **kwargs):\n"
+                "        super().__init__(tags=tags, prefix=prefix, **kwargs)\n"
+            ),
+            "about.py": (
+                "from fastapi import APIRouter\nrouter = APIRouter(prefix='/about')\n"
+                "@router.get('/version')\ndef v() -> str:\n    return ''\n"
+            ),
+            "admin.py": (
+                "from app.routers import AdminAPIRouter\nfrom app import about\n"
+                "router = AdminAPIRouter(prefix='/admin')\n"
+                "@router.get('/ping')\ndef p() -> str:\n    return ''\n"
+                "router.include_router(about.router, tags=['x'])\n"
+            ),
+            "main.py": (
+                "from fastapi import APIRouter, FastAPI\nfrom app import admin\n"
+                "api = APIRouter(prefix='/api')\napi.include_router(admin.router)\n"
+                "app = FastAPI()\napp.include_router(api)\n"
+            ),
+        },
+    )
+
+    assert _paths(workspace) == [("GET", "/api/admin/about/version"), ("GET", "/api/admin/ping")]
+
+
+def test_a_router_subclass_inheriting_the_constructor_holds_its_prefix(tmp_path: Path, libraries):
+    """`class S(APIRouter): pass` runs `APIRouter.__init__`: `S(prefix="/s")` holds `/s`, and
+    an include made on it goes below it."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + "class S(APIRouter):\n    pass\n"
+            + "inner = APIRouter(prefix='/r')\n@inner.get('/x')\ndef x() -> str:\n    return ''\n"
+            + "s = S(prefix='/s')\n@s.get('/y')\ndef y() -> str:\n    return ''\n"
+            + "s.include_router(inner, prefix='/inc')\n"
+            + "app.include_router(s)\n"
+        },
+    )
+
+    assert _paths(workspace) == [("GET", "/s/inc/r/x"), ("GET", "/s/y")]
+
+
+def test_an_app_subclass_includes_its_routers(tmp_path: Path, libraries):
+    """`class App(FastAPI)` inherits `include_router`: the include on it is a mount."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": (
+                "from fastapi import APIRouter, FastAPI\n"
+                "class App(FastAPI):\n    pass\n"
+                "app = App()\n"
+                "r = APIRouter(prefix='/r')\n@r.get('/x')\ndef x() -> str:\n    return ''\n"
+                "@app.get('/own')\ndef own() -> str:\n    return ''\n"
+                "app.include_router(r, prefix='/v1')\n"
+            )
+        },
+    )
+
+    assert _paths(workspace) == [("GET", "/own"), ("GET", "/v1/r/x")]
+
+
+def test_a_router_subclass_whose_prefix_cannot_be_read_is_the_hole(tmp_path: Path, libraries):
+    """A subclass whose `__init__` hands the base constructor only an unpacked mapping: the
+    prefix may be in it, so it is the named hole at `partial`, never the empty prefix."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + "class R(APIRouter):\n"
+            + "    def __init__(self, **kwargs) -> None:\n"
+            + "        super().__init__(**kwargs)\n"
+            + "r = R(prefix='/r')\n@r.get('/x')\ndef x() -> str:\n    return ''\n"
+            + "app.include_router(r)\n"
+        },
+    )
+
+    assert [(row[1], row[3]) for row in _rows(workspace)] == [("<prefix>/x", "partial")]
+
+
+def test_each_callers_verb_goes_with_its_own_include_prefix(tmp_path: Path, libraries):
+    """A factory's router included per call with its own prefix: each call's verb is read on
+    that call's include (M-1)."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + "def make(method: str) -> APIRouter:\n"
+            + "    router = APIRouter()\n"
+            + "    @router.api_route('/cb', methods=[method])\n"
+            + "    def cb() -> str:\n        return ''\n"
+            + "    return router\n"
+            + "app.include_router(make('POST'), prefix='/a')\n"
+            + "app.include_router(make('GET'), prefix='/b')\n"
+        },
+    )
+
+    assert _paths(workspace) == [("GET", "/b/cb"), ("POST", "/a/cb")]
+
+
+@pytest.mark.parametrize(
+    ("router", "include_a", "include_b"),
+    [
+        ("APIRouter(prefix=f'/{name}')", "make('a', '/x')", "make('b', '/y')"),
+        ("APIRouter()", "make('a', '/x'), prefix='/a'", "make('b', '/y'), prefix='/b'"),
+    ],
+)
+def test_each_callers_route_path_goes_with_its_own_prefix(
+    tmp_path: Path, libraries, router: str, include_a: str, include_b: str
+):
+    """A route path a factory takes from its caller is read on that caller's call, whether the
+    prefix is the router's own or the include's: `/a/x` and `/b/y`, never `/a/y`."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + "def make(name: str, leaf: str) -> APIRouter:\n"
+            + f"    router = {router}\n"
+            + "    @router.get(leaf)\n"
+            + "    def cb() -> str:\n        return ''\n"
+            + "    return router\n"
+            + f"app.include_router({include_a})\n"
+            + f"app.include_router({include_b})\n"
+        },
+    )
+
+    assert _paths(workspace) == [("GET", "/a/x"), ("GET", "/b/y")]
+
+
+def test_a_crud_factory_serves_each_callers_handler_at_its_own_prefix(tmp_path: Path, libraries):
+    """`make(prefix, handler)` with `add_api_route("/x", handler)`: `/a/x` is `ha` and `/b/x`
+    is `hb`, each `resolved`, never both handlers on both paths."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + "def ha() -> str:\n    return ''\n"
+            + "def hb() -> int:\n    return 1\n"
+            + "def make(name: str, handler) -> APIRouter:\n"
+            + "    router = APIRouter(prefix=f'/{name}')\n"
+            + "    router.add_api_route('/x', handler)\n"
+            + "    return router\n"
+            + "app.include_router(make('a', ha))\n"
+            + "app.include_router(make('b', hb))\n"
+        },
+    )
+
+    assert _rows(workspace) == [
+        ("GET", "/a/x", _handler("ha"), "resolved", "string"),
+        ("GET", "/b/x", _handler("hb"), "resolved", "integer"),
+    ]

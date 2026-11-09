@@ -2421,7 +2421,8 @@ call gives each caller's routes that caller's prefix. The prefix is the mount pa
 of the route the mount call is made on (`prefix_from: receiver_path`, which must name a
 declared `terminal`), or the string argument `prefix_arg` — less a trailing `wildcard` and the
 `/` before it (every trailing copy of the one character **`strip_trailing`** names, where it
-names one: Starlette's `Mount` strips `path.rstrip("/")`, so `/api//` mounts at `/api`), joined
+names one — part of plan 2026-11-08 N7: Starlette's `Mount` strips `path.rstrip("/")`, so
+`/api//` mounts at `/api`), joined
 by **`matches.path_join`** (`leading_slash` or absent, as `combinator`'s; or, on a `fluent`
 catalog, **`concatenate`**, plan 2026-11-08 ruling R23: plain string concatenation with the
 served path published as written — never passed to `canonical_http_path`, so FastAPI's
@@ -2457,10 +2458,24 @@ served under: `include(prefix) + held + route path`, nested includes composing. 
 is no prefix; not read whole, the named hole `<prefix>`, `partial`, with a `mount_prefix`
 question naming the construction. `refuses` takes `unrooted` and `trailing_slash`, as a mount's
 do: a refused construction raises, so nothing on that router is served, and it is filed as a
-`refused_registration` question under no verb. The held prefix keeps the path it was read on,
-and a verb list read through the value walk (N8) is read again on that path, so a factory that
-builds a router per call pairs each call's prefix with that call's verbs alone (polar's
-`get_oauth_login_router("apple", callback_method="POST")` serves POST under `/apple` only).
+`refused_registration` question under no verb.
+
+A **subclass** is read by the general rules (task 6 review): a mount's and a hold's owners are
+widened by `Dispatch.heirs`, as a root's are, so `class App(FastAPI)`'s `include_router` and
+`class S(APIRouter): pass`'s constructor match; and a construction of a subclass of a hold owner
+whose own `__init__` runs is read at each hold-matching construction of a supertype that body
+makes (`super().__init__(prefix=prefix)`), on the path entering that body from the
+construction, so the parameter is that construction's argument (mealie's
+`AdminAPIRouter(prefix="/admin")`). Where neither can be read — the body hands on no readable
+prefix — the held prefix is the `<prefix>` hole at `partial`, never the empty prefix.
+
+**Each call is read on its own** (M-1): the held prefix keeps the path it was read on and a
+mount the path it agreed on, both folded into the router's place (`Prefix.places`). Where a
+route's prefixes were reached on several such paths — a factory building a router per call,
+included per call — the route is derived once per path, its captures (path, verb list,
+handler) read on that path with that path's prefixes alone: polar's
+`get_oauth_login_router("apple", callback_method="POST")` serves POST under `/apple` only, and a
+CRUD factory `make(prefix, handler)` serves each caller's handler at that caller's prefix.
 `dependencies_arg` is the mount entry's. The key
 needs `router_type`; anything malformed is refused at load. Cost: one cached read per router
 construction a route or mount reaches, per path.

@@ -127,6 +127,7 @@ from sextant.application.resolve.shapes.mounts import (
     same_router,
     unread_prefix_rows,
     weaker,
+    with_heirs,
 )
 from sextant.application.resolve.shapes.pass_through import (
     ANSWERS,
@@ -337,6 +338,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     _validate_route_captures([*roots, *bean_roots, *steps], catalog)
     pass_through = pass_through_of(matches, catalog.source)
     mount_rules = mount_rules_of(matches, catalog.source, words=catalog.root_kind is not None)
+    # A subclass that inherits a mount or a router constructor is called through its own name
+    # and runs the declared owner's, as a root's heirs do (`chains._with_heirs`).
+    if mount_rules is not None and catalog.root_kind is None:
+        mount_rules = with_heirs(mount_rules, workspace.once(dispatch_of))
     carrier_rules = CarrierRules(
         rules=_rules_of(catalog),
         enums=_enum_symbols(workspace),
@@ -733,13 +738,20 @@ def _run_entry_points(
 
 
 def _entry_handlers(
-    index: ValueIndex, site: Mapping[str, Any], slot: int, method_symbols: Mapping[str, str]
+    index: ValueIndex,
+    site: Mapping[str, Any],
+    slot: int,
+    method_symbols: Mapping[str, str],
+    within: Path | None = None,
 ) -> tuple[str, ...]:
     """The function each path of the handler argument at `site`'s `slot` reaches, as a call of
     it would (`producer_paths(..., functions=True)`), joined to its full method symbol; in
-    path order, each once."""
+    path order, each once. Only the paths agreeing with `within`, where one is given: the
+    handler one call hands a factory, read on that call (M-1)."""
     found: list[str] = []
-    for producer, _ in producer_paths(index, site, slot, frozenset(), functions=True):
+    for producer, path in producer_paths(index, site, slot, frozenset(), functions=True):
+        if within is not None and path.joined(within) is None:
+            continue
         body = None if producer.ended_at is None else called_function(producer.ended_at)
         symbol = None if body is None else method_symbols.get(body)
         if symbol is not None and symbol not in found:
@@ -929,6 +941,8 @@ class _DeriveContext:
     # argument, the response is read from the handler. None for every catalog not declaring
     # it, whose unwritten response capture reads as unread, as it always has.
     response_fallback: "_ResponseFallback | None" = None
+    # The prefixes the end being derived serves under, read once (`_derive`); None until then.
+    prefixes: tuple[Prefix, ...] | None = None
 
 
 def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
@@ -946,7 +960,22 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
     known wire whose consumer is unread is a resolved row with `handler`
     NULL — not an unresolved row, which would say the WIRE was unread.
     `evidence` is a closed set, so the reason stays in the walk, not the
-    row."""
+    row.
+
+    **Each prefix is read on its own call** (M-1): where the route's prefixes were reached on
+    several paths — a factory building a router per call, included per call — the route is
+    derived once per path, its captures (path, verbs, handler) read on that path alone and
+    with that path's prefixes, so one call's prefix never pairs with another call's capture."""
+    if (
+        context.prefixes is None
+        and context.routers is not None
+        and end.root
+        and end.captures.get(_DIRECTION, context.catalog.direction) == "inbound"
+    ):
+        prefixes = context.routers.of_route(end.root, end.path)
+        for path, served in _per_call(prefixes, context.path):
+            _derive(end, replace(context, path=path, prefixes=served))
+        return
     captures = dict(end.captures)
     if _COMPOSE in captures:
         composed_field, halves, join = captures[_COMPOSE]
@@ -1022,9 +1051,8 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
     # root's default.
     declared_verb = captures.get("http_method")
     # A verb list the call does not write as literals (N8): read through the value walk.
-    walked_verbs = declared_verb if _unread_verbs(declared_verb) else None
-    if walked_verbs is not None:
-        declared_verb = _walked_verbs(walked_verbs, context)
+    if _unread_verbs(declared_verb):
+        declared_verb = _walked_verbs(declared_verb, context)
     # Several verbs accumulated on one chain (`repeats`) are one row each (Vert.x spec §3f:
     # `method(GET).method(DELETE)` serves both), in call order, a repeated verb once. One
     # nobody could read is a row of its own, `unresolved` with `method` NULL, so the list
@@ -1212,23 +1240,13 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
     # where no mount received it. Read by the router reader of a module that mounts nothing
     # too, for the router each prefix places the route on (`_settle`).
     prefixes: tuple[Prefix, ...] = (ROOT,)
-    if context.routers is not None and direction == "inbound" and end.root:
+    if context.prefixes is not None and direction == "inbound":
+        prefixes = context.prefixes
+    elif context.routers is not None and direction == "inbound" and end.root:
         prefixes = context.routers.of_route(end.root, end.path)
-    # A verb list read through the value walk is read again on the path each prefix's router
-    # was reached on, so a verb and a prefix one factory call gives are paired on that call's
-    # path alone, never crossed with another caller's (M-1; the mount prefix's own `within=`
-    # rule).
-    prefix_verbs = (
-        {prefix: _verbs_within(walked_verbs, prefix, context) for prefix in prefixes}
-        if walked_verbs is not None and len(prefixes) > 1
-        else {}
-    )
     for verb, (peer, path, url_resolution), prefix in product(verbs, destinations, prefixes):
         # An address nobody read takes no prefix: one row for it, not one per prefix.
         if path is None and prefix is not prefixes[0]:
-            continue
-        within = prefix_verbs.get(prefix)
-        if within is not None and verb not in within:
             continue
         # 2O design §8, folded in from single_call: identity is the URL the
         # framework serves, canonicalized before the dedup key below is built
@@ -1840,11 +1858,18 @@ def _router_reader(
 ) -> MountReader:
     """The reader of which router a route is made on and what serves it, over `mounts`."""
     configuring = configuring_calls(catalog, index.sites.values())
-    declared = router_producers(
-        index, rules.router_types, workspace.once(dispatch_of).ancestors, configuring
-    )
+    dispatch = workspace.once(dispatch_of)
+    declared = router_producers(index, rules.router_types, dispatch.ancestors, configuring)
     return MountReader(
-        workspace, index, rules, declared, mounts, refuses_unrooted, configuring, programs
+        workspace,
+        index,
+        rules,
+        declared,
+        mounts,
+        refuses_unrooted,
+        configuring,
+        programs,
+        dispatch if rules.holds else None,
     )
 
 
@@ -3019,9 +3044,9 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
     if site is None or at is None:
         return None
     slot = int(at[2])
-    handlers = _entry_handlers(context.values, site, slot, context.method_symbols) or (
-        _bound_methods(argument, context)
-    )
+    handlers = _entry_handlers(
+        context.values, site, slot, context.method_symbols, context.path
+    ) or (_bound_methods(argument, context))
     if handlers:
         alternatives = tuple(_Judged(symbol, ANSWERS) for symbol in handlers)
         return _Judged(handlers[0], ANSWERS, (), alternatives if len(handlers) > 1 else ())
@@ -3153,20 +3178,27 @@ def _walked_verbs(declared: Any, context: "_DeriveContext") -> Any:
     return tuple(dict.fromkeys(verbs))
 
 
-def _verbs_within(
-    declared: Any, prefix: Prefix, context: "_DeriveContext"
-) -> frozenset[str | None] | None:
-    """The verbs a walked verb list reads on the paths `prefix`'s router was reached on (its
-    `places`), or None where it names no router path (every verb read stands)."""
-    paths = {router[1] for place in prefix.places if (router := place[-1][0]) is not None}
-    if not paths:
-        return None
-    found: set[str | None] = set()
-    for path in paths:
-        read = _walked_verbs(declared, replace(context, path=path))
-        for each in read if isinstance(read, tuple) else (read,):
-            found.add(_verb_of(each, context))
-    return frozenset(found)
+def _per_call(
+    prefixes: tuple[Prefix, ...], within: Path | None
+) -> list[tuple[Path | None, tuple[Prefix, ...]]]:
+    """The paths a route is derived on, each with the prefixes served on it (`_derive`): one
+    per distinct path the prefixes' routers were reached on (`Prefix.places`), where there are
+    several; otherwise the one path the end was walked on, with every prefix. A prefix whose
+    router was reached on no path of its own is served on every one."""
+    paths: dict[Path, list[Prefix]] = {}
+    anywhere: list[Prefix] = []
+    for prefix in prefixes:
+        reached = {router[1] for place in prefix.places if (router := place[-1][0]) is not None}
+        if not reached:
+            anywhere.append(prefix)
+        for path in reached:
+            paths.setdefault(path, []).append(prefix)
+    if len(paths) < 2:
+        return [(within, prefixes)]
+    return [
+        (path, (*served, *anywhere))
+        for path, served in sorted(paths.items(), key=lambda item: repr(item[0]))
+    ]
 
 
 def _validate_url_channel_exclusivity(
