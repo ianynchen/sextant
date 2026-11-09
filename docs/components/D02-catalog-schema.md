@@ -2296,9 +2296,12 @@ refused at load.
 `http_method: { keyword: methods, absent: GET, case: upper }` — an argument reference (`{keyword:
 name}` or `{arg: N, keyword: name}`) beside either or both of two keys — reads the argument as a
 list of verbs. A list or set the code writes gives one row per element, a repeated verb once (an
-enumerable set is exact). A list that is not all string literals — a module constant
-(`methods=VERBS`), an element that is a parameter — is read through the value walk: one row per
-verb it reads, and one row with `method` NULL at `unresolved` for what stays unread. **`absent`** is the verb where the argument is not written or the
+enumerable set is exact). A list that is not all string literals (an element that is a
+parameter) is read through the value walk: one row per verb it reads, and one row with `method`
+NULL at `unresolved` for what stays unread. A container a module name holds (`methods=VERBS`) is
+not read element by element: the code may change it after the write, and the facts cannot show
+that it does not (they state no index store, `del` or change in another file, and write a tuple
+and a list alike), so it is one row with `method` NULL at `unresolved`. **`absent`** is the verb where the argument is not written or the
 code writes `None` (the framework's default). **`case: upper`** respells each verb as the
 framework does before it serves it (the only case word). An EMPTY list derives no row and is
 filed as a `refused_registration` open question (reason `no_methods`): FastAPI asserts a route

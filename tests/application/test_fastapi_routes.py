@@ -485,16 +485,16 @@ def test_a_bound_method_is_read_through_its_class(tmp_path: Path, libraries):
     assert unread["reason"] == "not_readable"
 
 
-def test_a_verb_list_held_elsewhere_is_read_through_the_walk(tmp_path: Path, libraries):
-    """`methods=VERBS` (a module constant) and an element that is a parameter are traced to
-    their values: one row per verb read."""
+def test_a_verb_list_element_that_is_a_parameter_is_traced_to_its_arguments(
+    tmp_path: Path, libraries
+):
+    """`methods=[method]` with `method` a parameter is traced to what each caller passes: one
+    row per verb read."""
     workspace = _resolved(
         tmp_path,
         libraries,
         {
             "main.py": _ROUTER
-            + "VERBS = ['get', 'post']\n"
-            + "@router.api_route('/c', methods=VERBS)\ndef c() -> str:\n    return ''\n"
             + "def make(method):\n"
             + "    @router.api_route('/p', methods=[method])\n"
             + "    def p() -> str:\n        return ''\n"
@@ -502,8 +502,61 @@ def test_a_verb_list_held_elsewhere_is_read_through_the_walk(tmp_path: Path, lib
         },
     )
 
-    rows = [row[:2] for row in _rows(workspace)]
-    assert rows == [("DELETE", "/p"), ("GET", "/c"), ("POST", "/c"), ("PUT", "/p")]
+    assert [row[:2] for row in _rows(workspace)] == [("DELETE", "/p"), ("PUT", "/p")]
+
+
+@pytest.mark.parametrize(
+    "held",
+    [
+        # Changed after the write, each a way the code can: never its first value at `resolved`.
+        "VERBS = ['get']\nVERBS.append('post')\n",
+        "VERBS = ['get']\nVERBS.extend(['post'])\n",
+        "VERBS = ['get']\nVERBS[0] = 'delete'\n",
+        "VERBS = ['get']\nVERBS += ['post']\n",
+        "VERBS = ['get']\ndel VERBS[0]\n",
+        "VERBS = ['get']\ndef add():\n    VERBS.append('post')\n",
+        "VERBS = ['get']\ndef keep(v):\n    v.append('post')\nkeep(VERBS)\n",
+        # Not changed here, but the facts cannot show it: they state no index store, `del` or
+        # change made in another file, and they write a tuple and a list alike.
+        "VERBS = ['get']\n",
+        "VERBS = ('get', 'post')\n",
+    ],
+)
+def test_a_verb_list_held_in_a_module_name_is_never_read_as_its_first_value(
+    tmp_path: Path, libraries, held: str
+):
+    """A container a module name is written with may be changed after the write, and the facts
+    cannot show that it is not: its verbs are not read, one row with no verb at `unresolved`,
+    never a `resolved` GET."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "verbs.py": held,
+            "main.py": _ROUTER
+            + "from app.verbs import VERBS\n"
+            + "@router.api_route('/c', methods=VERBS)\ndef c() -> str:\n    return ''\n",
+        },
+    )
+
+    assert _rows(workspace) == [(None, "/c", _handler("c"), "unresolved", "string")]
+
+
+def test_a_verb_list_changed_in_another_file_is_not_read(tmp_path: Path, libraries):
+    """A module name changed by another file's code is the same object: still not read."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "verbs.py": "VERBS = ['get']\n",
+            "more.py": "from app.verbs import VERBS\nVERBS.append('post')\n",
+            "main.py": _ROUTER
+            + "from app.verbs import VERBS\n"
+            + "@router.api_route('/c', methods=VERBS)\ndef c() -> str:\n    return ''\n",
+        },
+    )
+
+    assert _rows(workspace) == [(None, "/c", _handler("c"), "unresolved", "string")]
 
 
 def test_a_refused_route_with_an_unread_path_is_still_filed(tmp_path: Path, libraries):

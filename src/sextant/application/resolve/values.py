@@ -5835,7 +5835,7 @@ class _Walk:
         """The answers `_binding`'s writes give: each constant as its literal, each parameter
         write through the writer's callers, each call-result write in the writer's frame."""
         reached: list[_Reached] = []
-        for writer, entry in constants:
+        for _, entry in constants:
             # **A CONSTANT write needs no crossing** (`OI-138` cause 2): the value is in the
             # fact, so the answer is that literal on the path already travelled.
             #
@@ -5869,14 +5869,12 @@ class _Walk:
                         Answer(kind=LITERAL, value=named, literal_kind=SYMBOL, class_object=True),
                     )
                 )
-            elif entry.get("kind") == "array":
-                # A list the write states element by element (`VERBS = ["GET", "POST"]`): each
-                # element its own path, as an array argument is read (§1c).
-                reached.extend(
-                    self._elements(
-                        entry, str(writer or ""), (_BINDING, symbol, writer), trail, frames
-                    )
-                )
+            # A container a binding is written with (`VERBS = ["GET"]`) is NOT read element by
+            # element: the code may change it after the write (`VERBS.append(...)`, `VERBS[0] =
+            # ...`, `del`, `+=`, a callee it is handed to, another file), and the facts state
+            # neither an index store nor whether the literal was a tuple, so they cannot show
+            # it unchanged. Its first value read at `resolved` would be a lie (task 5
+            # re-review).
             else:
                 reached.append((trail, _unresolved(NOT_READABLE)))
         for method, index in written:
