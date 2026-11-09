@@ -16,6 +16,13 @@ from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.pipeline import resolve
 from sextant.application.resolve.receiver_binding import bind_until_settled
 from sextant.application.resolve.return_flow import record_return_flows
+from sextant.application.resolve.values import (
+    READ_CALLERS,
+    RECEIVER,
+    producer_paths,
+    suffixes_kept,
+    value_index,
+)
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import Document, ModuleFact
 from sextant.ingress.extract.python.scanner import PythonScanner
@@ -1285,3 +1292,45 @@ def test_what_a_class_object_call_made_is_an_instance(tmp_path: Path):
         ("app/shapes/Repo#", "resolved")
     ]
     workspace.close()
+
+
+_ROUNDS = (
+    "class A:\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "def f(a):\n"
+    "    a.go()\n"
+    "def g():\n"
+    "    f(A())\n"
+    "def h(b):\n"
+    "    return b\n"
+)
+
+
+def _walked_parameter(tmp_path: Path):
+    """The index of `_ROUNDS`, with `f`'s receiver walked once by the binder's reader, so
+    `f`'s parameter has its upward paths shared on the index."""
+    workspace = _resolved(tmp_path, {"m.py": _ROUNDS})
+    index = value_index(workspace)
+    site = index.sites[_site(workspace, "app/m#f(sig_dd69782a).", "go")]
+    producer_paths(index, site, RECEIVER, frozenset(), shared="rounds")
+    return index
+
+
+def test_a_round_keeps_the_upward_paths_its_new_edges_cannot_change(tmp_path: Path):
+    """A round that adds callers only to `h` cannot change what `f`'s parameter holds, so its
+    paths upward are kept for the next round, not walked again."""
+    index = _walked_parameter(tmp_path)
+    kept, _ = suffixes_kept(index, frozenset({(READ_CALLERS, _PREFIX + "app/m#h(sig_dd69782a).")}))
+
+    assert any(key[1][1] == _PREFIX + "app/m#f(sig_dd69782a)." for key in kept)
+
+
+def test_a_round_walks_again_the_upward_paths_its_new_edges_can_change(tmp_path: Path):
+    """A round that adds a caller of `f` changes what `f`'s parameter holds: its paths upward,
+    and every path built on them, are dropped and walked again."""
+    index = _walked_parameter(tmp_path)
+    kept, _ = suffixes_kept(index, frozenset({(READ_CALLERS, _PREFIX + "app/m#f(sig_dd69782a).")}))
+
+    assert index.suffixes
+    assert not any(key[1][1] == _PREFIX + "app/m#f(sig_dd69782a)." for key in kept)

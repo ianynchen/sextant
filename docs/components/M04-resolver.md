@@ -335,7 +335,11 @@ binds nothing new, at most eight; a receiver still unbound when the eighth round
 something is `not_readable "receiver of <name> not followed after 8 rounds"`. After the first
 round only a site whose walk read the callers of a method a newly bound call reaches is walked
 again (R25), over the walk's index with those callers added from the same dispatch answer;
-`call_edges` is drawn once more after the last round. The table is the one a whole re-walk
+`call_edges` is drawn once more after the last round. **A round keeps every shared upward path
+its new edges cannot change** (`values.suffixes_kept`): each path records what it read that a
+round changes — a method's callers, a site's callees, whether a site reached a body, a writer's
+calls — the reads of every path it was built on included, and a round drops only the paths that
+read one of the parts its edges changed. The table is the one a whole re-walk
 over `call_edges` redrawn each round leaves (`bind_until_settled(incremental=False)`, measured
 equal on polar).
 

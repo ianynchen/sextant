@@ -53,6 +53,10 @@ from sextant.application.resolve.values import (
     ESCAPES,
     EXTERNAL,
     NOT_READABLE,
+    READ_CALLED_AT,
+    READ_CALLEES,
+    READ_CALLERS,
+    READ_REACHED,
     RECEIVER,
     Producer,
     ValueIndex,
@@ -61,6 +65,7 @@ from sextant.application.resolve.values import (
     called_function,
     producer_paths,
     reset_value_index,
+    suffixes_kept,
     value_index,
 )
 from sextant.domain.closed_sets import Evidence, Resolution
@@ -403,16 +408,42 @@ def _with_new_callers(
             called_at.setdefault(str(edge["callee"]), []).append(
                 (str(edge["caller"]), int(str(edge["ordinal"])))
             )
+    new_callers = {key: tuple(value) for key, value in callers.items()}
+    new_callees = {key: tuple(value) for key, value in callees.items()}
+    new_called_at = {key: tuple(value) for key, value in called_at.items()}
+    reached = index.reached | {(str(e["caller"]), int(str(e["ordinal"]))) for e in edges}
+    # What the round changed, as a walk records reading it (`values.suffixes_kept`): an upward
+    # path that read none of it is what it was, and is kept rather than walked again.
+    changed = frozenset(
+        {
+            (READ_CALLERS, key[0])
+            for key, value in new_callers.items()
+            if index.callers.get(key) != value
+        }
+        | {
+            (READ_CALLEES, key)
+            for key, value in new_callees.items()
+            if index.callees.get(key) != value
+        }
+        | {
+            (READ_CALLED_AT, writer)
+            for writer, value in new_called_at.items()
+            if index.called_at.get(writer) != value
+        }
+        | {(READ_REACHED, site) for site in reached - index.reached}
+    )
+    suffixes, suffix_deps = suffixes_kept(index, changed)
     patched = replace(
         index,
-        callers={key: tuple(value) for key, value in callers.items()},
-        callees={key: tuple(value) for key, value in callees.items()},
-        called_at={key: tuple(value) for key, value in called_at.items()},
-        reached=index.reached | {(str(e["caller"]), int(str(e["ordinal"]))) for e in edges},
+        callers=new_callers,
+        callees=new_callees,
+        called_at=new_called_at,
+        reached=reached,
         objects={},
-        slots_memo={},
-        suffixes={},
+        suffixes=suffixes,
+        suffix_deps=suffix_deps,
         markers=[],
+        marker_reads={},
         recipes_read={},
     )
     return patched, frozenset(str(edge["callee"]) for edge in edges)

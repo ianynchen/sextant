@@ -87,16 +87,19 @@ def parameter_markers(index: ValueIndex) -> Mapping[tuple[str, int], tuple[Marke
         if values.body is None:
             continue
         markers: list[Marker] = []
+        # What this parameter's markers are read through that a binding round can change
+        # (`ValueIndex.marker_reads`): a walk that names its recipe depends on them too.
+        reads: set[Any] = set()
         if values.default is not None:
-            ends = _ends(index, values.body, values.default, stops, _DEFAULT_READER)
+            ends = _ends(index, values.body, values.default, stops, _DEFAULT_READER, reads)
             for path, producer in enumerate(ends):
                 site = _site(index, producer)
                 if site is not None:
                     markers.append(Marker(site=site, where="default", order=0, path=path))
         if values.annotation is not None:
-            forms = _ends(index, values.body, values.annotation, _ANNOTATED, _FORM_READER)
+            forms = _ends(index, values.body, values.annotation, _ANNOTATED, _FORM_READER, reads)
             for path, elements in enumerate(
-                one for form in forms for one in _metadata(index, form, stops)
+                one for form in forms for one in _metadata(index, form, stops, reads)
             ):
                 markers.extend(
                     Marker(site=site, where="annotation", order=order, path=path)
@@ -105,6 +108,8 @@ def parameter_markers(index: ValueIndex) -> Mapping[tuple[str, int], tuple[Marke
                 )
         if markers:
             found[key] = tuple(markers)
+        if reads:
+            index.marker_reads[key] = frozenset(reads)
     index.markers[0] = found
     return found
 
@@ -161,15 +166,22 @@ def _ends(
     entry: Mapping[str, Any],
     declared: frozenset[tuple[str, str]],
     reader: str,
+    reads: set[Any] | None = None,
 ) -> list[Producer]:
     """Where each path of `entry`, a value of `body`'s frame, ends: `producer_paths` over the
     one-argument row that holds it (`held_at_end`)."""
     holder = held_at_end(body, entry)
-    return [producer for producer, _ in producer_paths(index, holder, 0, declared, shared=reader)]
+    return [
+        producer
+        for producer, _ in producer_paths(index, holder, 0, declared, shared=reader, reads=reads)
+    ]
 
 
 def _metadata(
-    index: ValueIndex, form: Producer, stops: frozenset[tuple[str, str]]
+    index: ValueIndex,
+    form: Producer,
+    stops: frozenset[tuple[str, str]],
+    reads: set[Any] | None = None,
 ) -> list[list[Mapping[str, Any] | None]]:
     """For one path to an `Annotated` form, each path through its metadata: one entry per
     written element, in written order, the element's producing call or None where that path
@@ -185,13 +197,17 @@ def _metadata(
     # it, and its metadata come first. A path to anything else adds no element.
     combined: list[list[Mapping[str, Any] | None]] = [
         nested
-        for producer, _ in producer_paths(index, site, 0, _ANNOTATED, shared=_FORM_READER)
-        for nested in (_metadata(index, producer, stops) or [[]])
+        for producer, _ in producer_paths(
+            index, site, 0, _ANNOTATED, shared=_FORM_READER, reads=reads
+        )
+        for nested in (_metadata(index, producer, stops, reads) or [[]])
     ]
     for slot in range(1, len(arguments)):
         made = [
             _site(index, producer)
-            for producer, _ in producer_paths(index, site, slot, stops, shared=_DEFAULT_READER)
+            for producer, _ in producer_paths(
+                index, site, slot, stops, shared=_DEFAULT_READER, reads=reads
+            )
         ]
         combined = [chosen + [one] for chosen in combined for one in made]
     return combined
