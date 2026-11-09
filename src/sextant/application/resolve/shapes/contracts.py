@@ -57,6 +57,7 @@ def derive_endpoint_shapes(
     ordered = sorted(
         catalogs, key=lambda catalog: (catalog.direction != "inbound", str(catalog.source))
     )
+    parsed = _parse_request_roots(workspace, catalogs)
     for catalog in ordered:
         # Gated exactly as derive_endpoints gates it: a catalog skipped there
         # produced no endpoints and must contribute no shapes either. The skip
@@ -72,9 +73,10 @@ def derive_endpoint_shapes(
         # picked out of the two columns by hand: strictly more complete than
         # the 2A roots, which only a bare `object` payload ever reached.
         referenced: list[str] = []
-        # The roots a request carries and the roots a response carries, for a shape model that
-        # drops a field from output alone (`excluded_when`, task 9 review M4).
-        directions: tuple[set[str], set[str]] = (set(), set())
+        # The roots read on input and the roots written on output, for a shape model that
+        # drops a field from output alone (`excluded_when`, task 9 review M4): every endpoint
+        # column, by the row's direction, and every payload a parse binds (re-review R2-5).
+        directions: tuple[set[str], set[str]] = (set(parsed), set())
         found = _contracts_of(
             workspace, endpoints, catalog, settled, rules, enums, referenced, directions
         )
@@ -233,7 +235,7 @@ def _contracts_of(
             for column in (_REQUEST, _RESPONSE):
                 referenced.extend(_shape_roots_of(endpoint.get(column)))
                 if directions is not None:
-                    directions[column == _RESPONSE].update(_shape_roots_of(endpoint.get(column)))
+                    _directed(directions, endpoint, column, endpoint.get(column))
             continue
         if not owner or owner in found:
             continue
@@ -258,7 +260,7 @@ def _contracts_of(
         }
         if directions is not None:
             for column, descriptor in columns.items():
-                directions[column == _RESPONSE].update(_shape_roots_of(descriptor))
+                _directed(directions, endpoint, column, descriptor)
         kept = {
             column: descriptor
             for column, descriptor in columns.items()
@@ -267,6 +269,39 @@ def _contracts_of(
         if kept:
             found[owner] = kept
     return found
+
+
+def _directed(
+    directions: tuple[set[str], set[str]],
+    endpoint: Mapping[str, object],
+    column: str,
+    descriptor: object,
+) -> None:
+    """Adds one column's roots to the shapes read on input (`directions[0]`) or written on
+    output (`directions[1]`): an inbound row reads its request and writes its response, an
+    outbound one the reverse, a `both` row each column both ways."""
+    roots = _shape_roots_of(descriptor)
+    direction = endpoint.get("direction")
+    if direction == "both":
+        directions[0].update(roots)
+        directions[1].update(roots)
+        return
+    written = (column == _RESPONSE) == (direction != "outbound")
+    directions[written].update(roots)
+
+
+def _parse_request_roots(workspace: Workspace, catalogs: list[Catalog]) -> set[str]:
+    """`parse_binding.parse_request_roots`, read only where a catalog's shape model drops a
+    field from output alone (`excluded_when`): no other rule reads a shape's direction. Imported
+    here, as parse binding reads this module."""
+    if not any(
+        (naming := _rules_of(catalog).naming) is not None and naming.excluded_when is not None
+        for catalog in catalogs
+    ):
+        return set()
+    from sextant.application.resolve.shapes.parse_binding import parse_request_roots
+
+    return parse_request_roots(workspace, catalogs)
 
 
 def _shape_roots_of(descriptor_json: object) -> list[str]:
@@ -281,12 +316,21 @@ def _shape_roots_of(descriptor_json: object) -> list[str]:
     C1)."""
     if descriptor_json is None:
         return []
-    node = json.loads(str(descriptor_json))
+    return _roots_in(json.loads(str(descriptor_json)))
+
+
+def _roots_in(node: object) -> list[str]:
+    """`_shape_roots_of` over a parsed descriptor: its `shape_id`, its `item` chain, and each
+    field type of a body assembled from several parameters (`fields`, D01 §3; task 9
+    re-review R2-1), in written order."""
     roots: list[str] = []
     while isinstance(node, dict):
         shape_id = node.get("shape_id")
         if shape_id is not None:
             roots.append(str(shape_id))
+        for field in node.get("fields") or []:
+            if isinstance(field, dict):
+                roots.extend(_roots_in(field.get("type")))
         node = node.get("item")
     return roots
 

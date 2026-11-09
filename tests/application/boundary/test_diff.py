@@ -298,6 +298,49 @@ def test_an_optional_request_field_added_is_compatible(
     assert entry.compatibility == "compatible"
 
 
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ([("id", True)], [("id", True), ("tz", None)]),  # gains a field, requirement unknown
+        ([("id", True), ("tz", False)], [("id", True), ("tz", None)]),  # becomes unknown
+        ([("id", True), ("tz", None)], [("id", True), ("tz", True)]),  # unknown becomes required
+    ],
+)
+def test_a_request_field_whose_requirement_is_unknown_is_unlabelled(
+    tmp_path: Path,
+    sources: Callable[[Path], BoundarySource],
+    before: _Fields,
+    after: _Fields,
+):
+    """Task 9 re-review R2-2: a NULL `required` is unknown (ruled 2026-11-09), so a request
+    that gains or changes a field whose requirement is not read is neither `compatible` nor
+    `breaking`: the change is unlabelled (`None`)."""
+    entry = _changed_owner(tmp_path, sources, before, after, "request")
+    assert entry.compatibility is None
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ((), (("q", None),)),  # gains a parameter whose requirement is not read
+        ((("q", "optional"),), (("q", None),)),  # one becomes unknown
+        ((("q", None),), (("q", "required"),)),  # unknown becomes required
+    ],
+)
+def test_a_request_parameter_whose_requirement_is_unknown_is_unlabelled(
+    tmp_path: Path,
+    sources: Callable[[Path], BoundarySource],
+    before: tuple[tuple[str, str | None], ...],
+    after: tuple[tuple[str, str | None], ...],
+):
+    """The same rule on an endpoint's request parameters (R2-2's "every other reader"): a
+    parameter row whose `requirement` is NULL may be required or not."""
+    a = sources(_built(tmp_path / "a", _requiring(*before)))
+    b = sources(_built(tmp_path / "b", _requiring(*after)))
+    (entry,) = diff_sources(a, b, REDACTOR, REDACTOR).entries
+    assert entry.compatibility is None
+
+
 def test_a_response_field_removed_is_breaking(
     tmp_path: Path, sources: Callable[[Path], BoundarySource]
 ):

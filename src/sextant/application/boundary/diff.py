@@ -542,32 +542,48 @@ def _body_verdict(body: str, old: object, new: object) -> Compatibility | None:
         return "breaking"
     if body == "request":
         # A new required field, or an existing one that became required: an old client
-        # never sent it.
-        newly_required = any(
-            _required(fields) and not _required(old_by.get(name, []))
-            for name, fields in new_by.items()
-        )
-        return "breaking" if newly_required else "compatible"
+        # never sent it. A field whose requirement is unknown (NULL, ruled 2026-11-09), gained
+        # or changed, may be either, so the change is unlabelled (task 9 re-review R2-2).
+        verdict: Compatibility | None = "compatible"
+        for name, fields in new_by.items():
+            now = _required(fields)
+            before = _required(old_by[name]) if name in old_by else False
+            if now is True and before is False:
+                return "breaking"
+            if (now is None or before is None) and (name not in old_by or now != before):
+                verdict = None
+        return verdict
     return "breaking" if old_by.keys() - new_by.keys() else "compatible"
 
 
-def _requirement_verdict(old: object, new: object) -> Compatibility:
+def _requirement_verdict(old: object, new: object) -> Compatibility | None:
     """M06 step 3 counts a `requirement: required` metadata row as part of what the server
     REQUIRES, beside a body's required fields: an entry, by `(kind, name)`, that is
     `required` on the new side and was not on the old is one an old client never sent, so
     `breaking`; an entry lost, added optional or relaxed from required is `compatible`. An
     entry carrying no `requirement` (every outbound header — a call SENDS it, it enforces
-    nothing) is never required."""
+    nothing) is never required. A request PARAMETER whose `requirement` is NULL is one the
+    code does not let be read (task 9 re-review R2-2): gained or changed, it may be required or
+    not, so the change is unlabelled (`None`)."""
 
-    def required(entries: object) -> set[tuple[object, object]]:
-        return {
-            (entry.get("kind"), entry.get("name"))
-            for entry in cast(list[dict[str, object]], entries)
-            if entry.get("requirement") == "required"
-        }
+    def stated(entries: object) -> dict[tuple[object, object], object]:
+        found: dict[tuple[object, object], object] = {}
+        for entry in cast(list[dict[str, object]], entries):
+            requirement = entry.get("requirement")
+            if requirement is None and entry.get("kind") not in _REQUEST_PARAMETER_KINDS:
+                requirement = "not_required"
+            found.setdefault((entry.get("kind"), entry.get("name")), requirement)
+        return found
 
-    gained = required(new) - required(old)
-    return "breaking" if gained else "compatible"
+    before, after = stated(old), stated(new)
+    verdict: Compatibility | None = "compatible"
+    for key, now in after.items():
+        was = before.get(key, "not_required")
+        if now == "required" and was not in ("required", None):
+            return "breaking"
+        if (now is None or was is None) and (key not in before or now != was):
+            verdict = None
+    return verdict
 
 
 def _structure_verdict(old: object, new: object) -> Compatibility | None:
@@ -591,5 +607,16 @@ def _wire_types(fields: list[dict[str, object]]) -> set[object]:
     return {field["wire_type"] for field in fields}
 
 
-def _required(fields: list[dict[str, object]]) -> bool:
-    return any(field["required"] is True for field in fields)
+def _required(fields: list[dict[str, object]]) -> bool | None:
+    """Whether a request field is required: True where any field of its name is, None where
+    none is and one is unknown (NULL), else False."""
+    if any(field["required"] is True for field in fields):
+        return True
+    return None if any(field["required"] is None for field in fields) else False
+
+
+# The `endpoint_metadata` kinds that name a request parameter (`request_requirements`): a NULL
+# `requirement` on one is unknown. Any other kind demands nothing of a request.
+_REQUEST_PARAMETER_KINDS = frozenset(
+    {"header", "query", "cookie", "param", "argument", "option", "flag"}
+)

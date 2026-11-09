@@ -83,6 +83,12 @@ serialization:
 # class the scanner's projection gives a wire type is mirrored here with exactly the wire (and
 # the null format) it emits, and what a collection holds is read from the form's arguments.
 # `tests/architecture/test_known_types_mirror_the_projection.py` holds them to the projection.
+# `SkipJsonSchema[X]` keeps a field out of the JSON schema pydantic publishes, and writes the `X`
+# it holds (`scripts/probes/pydantic_known_types.md`): an envelope around the payload (D02 §2a),
+# declared with the serialiser, so every catalog naming this model unwraps it.
+wrappers:
+  - { type: pydantic.json_schema.SkipJsonSchema, payload_arg: 0, semantics: envelope }
+
 # D02 §2e. A Python type states its own nullability (`Optional[X]`, `X | None`), which the
 # projection already writes (D00 §5b); pydantic reads no annotation for it, so none is listed.
 nullability:

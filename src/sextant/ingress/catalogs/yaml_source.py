@@ -545,7 +545,13 @@ class YamlCatalogSource:
                     # defines it, so `wrappers` stays on the catalog while the
                     # three payload-TYPE blocks below come from the shared
                     # model (D02 §1b).
-                    wrappers=raw.get("wrappers", []),
+                    # A shape model's own envelopes (a serialiser's type that writes the payload it
+                    # holds, `SkipJsonSchema[X]`) follow the catalog's: every catalog naming the
+                    # model unwraps them (task 9 re-review R2-9).
+                    wrappers=[
+                        *raw.get("wrappers", []),
+                        *(shape.get("wrappers", []) if shape is not raw else []),
+                    ],
                     # D02 §2e, §2f, §2g — the shape model's, resolved above. A
                     # catalog naming no `shape_model` and declaring none of the
                     # three still loads and contributes none, which is the
@@ -1178,7 +1184,9 @@ _CONDITION_KINDS = ("profile", "property", "other")
 
 # D02 §1b, §2f, §2g: the keys a shape model may hold, the keys its `serialization` block may
 # hold, and N12's generator strategy words and `required` rule (`shapes.model_fields`).
-_SHAPE_MODEL_KEYS = frozenset({"id", "displayName", "serialization", "nullability", "known_types"})
+_SHAPE_MODEL_KEYS = frozenset(
+    {"id", "displayName", "serialization", "nullability", "known_types", "wrappers"}
+)
 _SERIALIZATION_KEYS = frozenset(
     {
         "name_from",

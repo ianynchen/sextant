@@ -480,6 +480,9 @@ class ModelNames:
                     elif site is not None or producer.reason == EXTERNAL:
                         # A call not read may hand back field information of its own.
                         ends.append(_VALUE_NOT_READ)
+                    elif self._writes_none(producer, value):
+                        # `x: int = ...`: the value that writes no default (re-review R2-3).
+                        ends.append(_NO_VALUE)
                     else:
                         # Any other value the class body writes is the field's default (a
                         # literal, a display such as `{}`, a name).
@@ -488,6 +491,15 @@ class ModelNames:
             ends = ends or [_VALUE_NOT_READ]
         self._values[symbol] = ends
         return ends or [_NO_VALUE]
+
+    def _writes_none(self, producer: Any, value: Mapping[str, Any]) -> bool:
+        """Whether a class-body value is the one a `defaults` entry's `required_when` names as
+        writing no default (`...`), written directly or reached by the walk."""
+        nothing = {ellipsis for *_, ellipsis in self.naming.defaults if ellipsis is not None}
+        if value.get("kind") == "field" and value.get("symbol") in nothing:
+            return True
+        answer = producer.ended_at
+        return answer is not None and answer.value in nothing
 
     def _class_bodies(self) -> dict[str, str]:
         """Each class's body method (`<clinit>`), by bare class symbol."""

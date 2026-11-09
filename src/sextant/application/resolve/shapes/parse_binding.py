@@ -39,6 +39,7 @@ data (2G design §7). None appears below.
 """
 
 import json
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -119,6 +120,56 @@ def bind_parse_calls(workspace: Workspace, catalogs: list[Catalog]) -> ParseBind
     # records as a known gap.
     roots: dict[str, list[str]] = {}
     unexpanded: list[str] = []
+    for endpoint, catalog, found in _reached(workspace, catalogs, vocabulary, facts):
+        bindable = [candidate for candidate in found if candidate.hops <= _BINDS_UPTO]
+        types = {candidate.payload_type for candidate in bindable}
+        if len(types) == 1:
+            descriptor = _descriptor_of(
+                types.pop(), _rules_of(catalog), enums, roots.setdefault(catalog.id, [])
+            )
+            if descriptor is not None:
+                rows.append(_binding(endpoint, descriptor))
+            continue
+        if len(types) > 1:
+            questions.append(_question(endpoint, bindable, _AMBIGUOUS))
+            continue
+        beyond = [candidate for candidate in found if candidate.hops > _BINDS_UPTO]
+        if beyond:
+            questions.append(_question(endpoint, beyond, _BEYOND_HORIZON))
+    for catalog_id, rooted in roots.items():
+        # A bound payload is a request (task 9 re-review R2-5).
+        expanded = derive_shapes(
+            workspace, by_id[catalog_id], list(dict.fromkeys(rooted)), (set(rooted), set())
+        )
+        unexpanded.extend(expanded.unexpanded_types)
+    workspace.derive("bind_request_shape", rows=rows)
+    record_open_questions(workspace, questions)
+    return ParseBindings(unexpanded_types=tuple(dict.fromkeys(unexpanded)))
+
+
+def parse_request_roots(workspace: Workspace, catalogs: list[Catalog]) -> set[str]:
+    """The shapes `bind_parse_calls` will bind as requests, known before the shape pass
+    expands anything (task 9 re-review R2-5): a shape model that drops a field from output
+    alone (`excluded_when`) must know every request that carries a shape when it is expanded,
+    and expansion is insert-if-absent. The same reading `bind_parse_calls` makes."""
+    vocabulary = _vocabulary(catalogs)
+    if not vocabulary.calls:
+        return set()
+    enums = _enum_symbols(workspace)
+    roots: list[str] = []
+    for _endpoint, catalog, found in _reached(workspace, catalogs, vocabulary, _facts(workspace)):
+        types = {candidate.payload_type for candidate in found if candidate.hops <= _BINDS_UPTO}
+        if len(types) == 1:
+            _descriptor_of(types.pop(), _rules_of(catalog), enums, roots)
+    return set(roots)
+
+
+def _reached(
+    workspace: Workspace, catalogs: list[Catalog], vocabulary: "_Vocabulary", facts: "_Facts"
+) -> Iterator[tuple[dict[str, Any], Catalog, list["_Candidate"]]]:
+    """Each endpoint whose payload parameter carries bytes, with its catalog and every parse
+    that parameter reaches (`_parses_reached`)."""
+    by_id = {catalog.id: catalog for catalog in catalogs}
     # The body rule's context, the same one `_contracts_of` hands it — the two
     # annotation folds once per load, an owner's composed paths once per
     # catalog that owns a row (GUIDELINES §8.7) — so the parameter this pass
@@ -142,29 +193,11 @@ def bind_parse_calls(workspace: Workspace, catalogs: list[Catalog]) -> ParseBind
         )
         if parameter is None:
             continue
-        handler = str(endpoint["handler"])
-        found = _parses_reached(handler, parameter, vocabulary, facts)
-        bindable = [candidate for candidate in found if candidate.hops <= _BINDS_UPTO]
-        types = {candidate.payload_type for candidate in bindable}
-        if len(types) == 1:
-            descriptor = _descriptor_of(
-                types.pop(), _rules_of(catalog), enums, roots.setdefault(catalog.id, [])
-            )
-            if descriptor is not None:
-                rows.append(_binding(endpoint, descriptor))
-            continue
-        if len(types) > 1:
-            questions.append(_question(endpoint, bindable, _AMBIGUOUS))
-            continue
-        beyond = [candidate for candidate in found if candidate.hops > _BINDS_UPTO]
-        if beyond:
-            questions.append(_question(endpoint, beyond, _BEYOND_HORIZON))
-    for catalog_id, rooted in roots.items():
-        expanded = derive_shapes(workspace, by_id[catalog_id], list(dict.fromkeys(rooted)))
-        unexpanded.extend(expanded.unexpanded_types)
-    workspace.derive("bind_request_shape", rows=rows)
-    record_open_questions(workspace, questions)
-    return ParseBindings(unexpanded_types=tuple(dict.fromkeys(unexpanded)))
+        yield (
+            endpoint,
+            catalog,
+            _parses_reached(str(endpoint["handler"]), parameter, vocabulary, facts),
+        )
 
 
 # --- the rungs ------------------------------------------------------------

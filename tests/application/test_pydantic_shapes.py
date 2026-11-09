@@ -23,6 +23,7 @@ from test_fastapi_routes import _resolved
 
 from sextant.application.ports.catalogs import CatalogError
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 
 # The FastAPI environment the route tests read, shared rather than restated.
 libraries = test_fastapi_routes.libraries
@@ -717,3 +718,63 @@ def test_an_excluded_field_leaves_the_response_shape_and_stays_in_the_request(
     assert {name: row[3] for name, row in _fields(workspace, "Both").items()} == {
         "token": "partial"
     }
+
+
+def test_every_request_source_counts_toward_a_shapes_direction(tmp_path: Path, libraries):
+    """Task 9 re-review R2-1: a body FastAPI assembles from several parameters, and one marked
+    `Body(embed=True)`, carry their models as requests (their descriptor's `fields`), so a model
+    such a body and a response both carry keeps its `exclude=True` field at `partial`: FastAPI
+    0.162 publishes `Body2-Input` and `Exb-Input` with `sec`, their `-Output` without."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _HEAD + "from fastapi import Body\n"
+            "class Body1(BaseModel):\n"
+            "    x: int = 0\n"
+            "class Body2(BaseModel):\n"
+            "    y: int = 0\n"
+            "    sec: str = Field('', exclude=True)\n"
+            "class Exb(BaseModel):\n"
+            "    sec: str = Field('', exclude=True)\n"
+            "@router.post('/two')\n"
+            "def two(a: Body1, b: Body2) -> Body2:\n"
+            "    return b\n"
+            "@router.post('/emb')\n"
+            "def emb(e: Annotated[Exb, Body(embed=True)]) -> Exb:\n"
+            "    return e\n"
+        },
+    )
+
+    assert {name: row[3] for name, row in _fields(workspace, "Body2").items()} == {
+        "y": "resolved",
+        "sec": "partial",
+    }
+    assert {name: row[3] for name, row in _fields(workspace, "Exb").items()} == {"sec": "partial"}
+
+
+def test_a_bare_ellipsis_value_is_required(tmp_path: Path, libraries):
+    """Task 9 re-review R2-3: `x: int = ...` is a required field in pydantic (`...` is no
+    default), as `Field(...)` is."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        _program("class Item(BaseModel):\n    x: int = ...\n    y: int = 1\n"),
+    )
+
+    assert {name: (row[2], row[3]) for name, row in _fields(workspace).items()} == {
+        "x": (True, "resolved"),
+        "y": (False, "resolved"),
+    }
+
+
+def test_skip_json_schema_is_the_shape_models_envelope(tmp_path: Path):
+    """Task 9 re-review R2-9: `SkipJsonSchema[X]` is unwrapped by the pydantic shape model, so
+    every catalog naming that model unwraps it, not the FastAPI catalog alone."""
+    [catalog] = [one for one in YamlCatalogSource(catalogs_dir()).load() if one.id == "fastapi"]
+    document = (catalogs_dir() / "fastapi.yml").read_text(encoding="utf-8")
+
+    assert "SkipJsonSchema" not in document
+    assert any(
+        wrapper["type"] == "pydantic.json_schema.SkipJsonSchema" for wrapper in catalog.wrappers
+    )

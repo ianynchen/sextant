@@ -428,6 +428,10 @@ carry pydantic's JSON mode and mirror the Python projection's collections (§2g)
 checks every shape model's keys (`yaml_source._check_shape_model`): an unknown key, or a key of
 §2f/§2g in another form, is refused naming the file.
 
+**A shape model may also declare `wrappers`** (§2a): a serialiser's envelope (pydantic's
+`SkipJsonSchema[X]`, which writes the `X` it holds) is the serialiser's knowledge, so every
+catalog naming the model unwraps it, after the catalog's own envelopes (task 9 re-review R2-9).
+
 **This is what makes a Jackson 2 / Jackson 3 split tractable** (Stage 6). `@JsonProperty`
 kept its exact FQN across the split, so the two cannot be told apart by annotation
 spelling — but `tools.jackson.core:jackson-databind` and
@@ -6021,7 +6025,8 @@ serialization:
   `humps.main.camelize` is `camel` on the probe's evidence. **A generator no entry names is not
   guessed at**: the fields it names get `wire_name` NULL at `unresolved`, and the shape is open
   (§2g's rule). A `by_name` argument written `True` makes a renamed field accept its own name too.
-- **`required: no_default`** (the one rule): a field is required where it writes no default,
+- **`required: no_default`** (the one rule): a field is required where it writes no default (a
+  bare `x: int = ...` writes none, as `required_when`'s field says; re-review R2-3),
   read by `defaults` on each naming call in merge order (`required_when` written as the named
   field writes none). **A default not read is not a default** (task 9 review M2): a value made by
   a call that is no naming call (sqlmodel's own `Field`, a helper the walk does not see into), or
@@ -6033,10 +6038,14 @@ serialization:
 - **`private_prefix`**: a name starting with it is no field.
 - **`excluded_when: {keyword: <name>, value: <literal>}`** (task 9 review M4, ruled 2026-11-09):
   the naming-call option that drops a field from OUTPUT (pydantic's `exclude=True`), merged as
-  names are. The field leaves a shape only responses reach (`derive_shapes` is handed the
-  roots a request and a response carry), stays in one only requests reach, and stays at
-  `partial` in one both reach or whose direction is not known, since one shape holds both
-  directions (N13 B). An option written as no literal leaves the field at `partial`.
+  names are. The field leaves a shape only output reaches, stays in one only input reaches,
+  and stays at `partial` in one both reach or whose direction is not known, since one shape
+  holds both directions (N13 B). An option written as no literal leaves the field at
+  `partial`. **Every source of a shape counts** (task 9 re-review R2-1, R2-5), read before
+  any shape is expanded: each endpoint column by the row's direction (an inbound row reads
+  its request and writes its response, an outbound row the reverse, a `both` row each both
+  ways), through the column's `item` chain and every field of a body assembled from several
+  parameters (`fields`), and every payload a parse binds (`parse_calls`, read on input).
 - **Resolution (N13 option B).** One shape per type, under the output names. A field whose
   accepted input names differ from its output name is `partial`: a `validation_alias`, a
   `serialization_alias` beside another input name, `by_name` on a renamed field. So is one whose

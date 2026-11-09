@@ -9653,8 +9653,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_DIFF,
-                find='        return "breaking" if newly_required else "compatible"\n',
-                replace='        return "compatible"  # guard disabled by scripts/guard_check.py\n',
+                find='            if now is True and before is False:\n                return "breaking"\n',
+                replace="            if now is True and before is False:\n"
+                "                pass  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
