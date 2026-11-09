@@ -1253,6 +1253,8 @@ _REFUSAL_PHRASES = {
     "wildcard_mount_point": "refuses a mount point that ends in the wildcard it adds",
     "no_methods": "refuses a route given an empty list of methods",
     "invalid_response_type": "refuses a response type that unites a response class with others",
+    "trailing_slash": "refuses a path prefix that ends in `/`",
+    "empty_path": "refuses a route whose prefix and path are both empty",
 }
 # What the refusal does to the application, per reason word where it is not the route's own
 # loss: a framework that raises when the route is registered (at import) stops the application
@@ -1263,6 +1265,8 @@ _RAISES_AT_IMPORT = (
 _REFUSAL_CONSEQUENCES = {
     "no_methods": _RAISES_AT_IMPORT,
     "invalid_response_type": _RAISES_AT_IMPORT,
+    "trailing_slash": _RAISES_AT_IMPORT,
+    "empty_path": _RAISES_AT_IMPORT,
 }
 _SERVES_NOTHING = "so it serves nothing for it"
 

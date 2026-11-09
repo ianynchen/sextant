@@ -945,6 +945,8 @@ def test_a_refused_mount_question_says_why_the_framework_refuses_it(reason: str,
             "invalid_response_type",
             "refuses a response type that unites a response class with others",
         ),
+        ("trailing_slash", "refuses a path prefix that ends in `/`"),
+        ("empty_path", "refuses a route whose prefix and path are both empty"),
     ],
 )
 def test_a_route_refused_at_import_says_the_application_does_not_start(reason: str, phrase: str):

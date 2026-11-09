@@ -11,8 +11,8 @@ direction: inbound
 # `scripts/probes/fastapi_rules.md` (plan 2026-11-08-python-fastapi-inbound N8, N9, ruling R1).
 #
 # A route's path is kept exactly as written (ruling R4): FastAPI asserts a leading `/` on a
-# prefix, never on a route's own path, so this catalog does not declare
-# `refuses_unrooted_path`. The router's own prefix and the include prefixes are plan 2 Task 6.
+# prefix, never on a route's own path (`refuses_unrooted_path: false` below). A prefix must
+# start with `/`: `unrooted` in each prefix entry's `refuses`.
 
 detect:
   coordinates: [fastapi]
@@ -69,3 +69,56 @@ matches:
   # is no response. Not written, the handler's return annotation is the response, except a
   # `Response` subclass, which is none; with no annotation, the type the handler returns.
   response_fallback: { from: handler_return, none_types: [starlette.responses.Response] }
+  refuses_unrooted_path: false   # FastAPI keeps a route path as written ("x" is served)
+
+  # PREFIXES (probe §1, §2; plan N6, N7; rulings R4, R23). FastAPI joins a prefix and a path by
+  # plain string concatenation and serves the result as it is, nothing cleaned
+  # (`add_api_route`: `self.prefix + path`; `for_include`: `parent_router.prefix + prefix`):
+  # `"/orders" + ""` is `/orders`, `"/orders" + "/"` is `/orders/`, and a route path `x` under
+  # `/r` is `/rx`. So `path_join: concatenate`.
+  #
+  # A ROUTER'S OWN PREFIX is held from its construction (`router_holds`): `APIRouter(prefix=
+  # "/orders")` puts `/orders` in front of every route registered on that router and of every
+  # include made on it. A router class a factory builds (`class Router(APIRouter)`) is
+  # constructed as `APIRouter` is. `APIRouter.__init__` asserts the prefix as `include_router`
+  # does (R 2611-2612): it starts with `/` and does not end with one, where one is written.
+  #
+  # AN INCLUDE (`include_router`) puts its `prefix=` in front of the included router's paths,
+  # behind the prefixes of the router it is made on; one router included twice serves under
+  # both, and a router no include receives serves at its own prefix. Not written, the prefix is
+  # empty (`prefix: str = ""`). FastAPI refuses (R 3382-3399), raising at import so the app does
+  # not start: a prefix not starting with `/` (`unrooted`), one ending in `/` (`trailing_slash`,
+  # a lone `/` included), and, for an include with no prefix, a route of the included router
+  # whose path, its own router prefixes included, is empty (`empty_path`: "Prefix and path
+  # cannot be both empty"). The route so refused has no row; the router's other routes keep
+  # theirs.
+  #
+  # 0.162 INCLUDES LAZILY (0.141+): a route added to a router after it was included is served
+  # under the include, and this catalog mirrors that (every route on the router, in any order).
+  # **0.115.12 differs**: its include copies the routes registered by then, so a route added
+  # later is not served under that include (probe "route added to a router after it was
+  # included"). The empty-path check runs at the include in both, over the routes registered
+  # by then; this catalog checks every route on the router.
+  #
+  # A SUB-APPLICATION MOUNT (`app.mount("/api", app=api)`, Starlette's `Mount`) serves the
+  # mounted app's routes under the mount path less every trailing slash (`Mount.__init__`:
+  # `self.path = path.rstrip("/")`, so `/api/` and `/api//` are `/api` and `/` is the root).
+  # `Mount` asserts `path == "" or path.startswith("/")` (`unrooted`). An app mounted that is no
+  # router (`StaticFiles(...)`) serves no route of this catalog.
+  #
+  # `dependencies=` on a router and on an include (N6) is captured here (`dependencies_arg`);
+  # the dependencies' parameters are read by plan 2 Task 8.
+  router_type: [fastapi.routing.APIRouter, fastapi.applications.FastAPI]
+  router_holds:
+    - { owner: fastapi.routing.APIRouter, method: <init>, prefix_arg: { keyword: prefix },
+        dependencies_arg: { keyword: dependencies }, refuses: [unrooted, trailing_slash] }
+  mount:
+    - { owner: fastapi.routing.APIRouter, method: include_router, router_arg: { arg: 0, keyword: router },
+        prefix_arg: { keyword: prefix }, dependencies_arg: { keyword: dependencies },
+        refuses: [unrooted, trailing_slash, empty_path] }
+    - { owner: fastapi.applications.FastAPI, method: include_router, router_arg: { arg: 0, keyword: router },
+        prefix_arg: { keyword: prefix }, dependencies_arg: { keyword: dependencies },
+        refuses: [unrooted, trailing_slash, empty_path] }
+    - { owner: fastapi.applications.FastAPI, method: mount, router_arg: { arg: 1, keyword: app },
+        prefix_arg: { arg: 0, keyword: path }, strip_trailing: "/", refuses: [unrooted] }
+  path_join: concatenate

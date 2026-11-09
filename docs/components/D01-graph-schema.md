@@ -1121,7 +1121,10 @@ framework raises on rather than repairs (`unrooted_path`: a route path that is e
 leading `/`, where the catalog declares `refuses_unrooted_path`; for a sub-router mount the
 catalog's `mount[].refuses` declares, Vert.x spec §3c, `exact_mount_path`: a mount path with
 no trailing wildcard, `pattern_mount_path`: a regular expression path, `wildcard_mount_point`:
-a mount point given the wildcard the framework adds; for a route, D02 §2's `fluent` style,
+a mount point given the wildcard the framework adds; for a prefix, `mount[].refuses` or
+`router_holds[].refuses`, plan 2026-11-08 N7, `unrooted_path`: a non-empty prefix with no
+leading `/`, `trailing_slash`: a prefix ending in `/`, `empty_path`: an empty include prefix
+over a route whose path below it is empty too; for a route, D02 §2's `fluent` style,
 `no_methods`: a verb list written empty, `invalid_response_type`: a response type uniting a
 `response_fallback.none_types` type with others) — on ONE row per refused
 `(protocol, method, path)`, the path as written, since no endpoint row carries it; a

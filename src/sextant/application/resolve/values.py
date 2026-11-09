@@ -1872,6 +1872,25 @@ def resolve_positions(
 
     `branches` is `resolve_site`'s.
     """
+    return [
+        answers
+        for _, answers in resolve_positions_on_paths(
+            workspace, positions, index, identities, within, branches
+        )
+    ]
+
+
+def resolve_positions_on_paths(
+    workspace: Workspace,
+    positions: Mapping[str, tuple[Mapping[str, Any], int | str]],
+    index: ValueIndex | None = None,
+    identities: "Identities" = (),
+    within: "Path | None" = None,
+    branches: bool = True,
+) -> list[tuple["Path", dict[str, Answer]]]:
+    """`resolve_positions`, each dict with the path it was read on, for a reader that reads
+    another value later on that same path (`resolve_positions(..., within=)`): a router's
+    held prefix and a route's verb list one factory call gives (plan 2026-11-08 Task 6)."""
     fold = index if index is not None else value_index(workspace)
     walk = _Walk(fold, identities, branches=branches)
     combined: list[tuple[_Trail, dict[str, Answer]]] = [
@@ -1889,7 +1908,8 @@ def resolve_positions(
             for path, answer in reached
             if (merged := _combine(trail, path)) is not None
         ]
-    return [answers for _, answers in combined]
+    entered = within.entered if within is not None else frozenset()
+    return [(Path(trail, entered), answers) for trail, answers in combined]
 
 
 def producers_of(

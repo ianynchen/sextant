@@ -2407,7 +2407,8 @@ names its first. A malformed entry, or `framework_handlers`/`handler_methods` wi
 `passes_on`, is refused at load, as is an `order` capture that is neither `argN` nor `last`.
 
 **`matches.router_type: [<type>, …]` and `matches.mount: [{owner, method, descriptor?,
-router_arg, prefix_arg | prefix_from: receiver_path, wildcard?, refuses?}, …]`** (Vert.x spec
+router_arg, prefix_arg | prefix_from: receiver_path, wildcard?, strip_trailing?, refuses?,
+dependencies_arg?}, …]`** (Vert.x spec
 §3c) declare sub-router mounts: a route registered on a router serves under the prefix of every
 mount that received that same router — the object one producer made, reached along one call
 path. The producers are derived from the facts by type: every call returning a `router_type`
@@ -2419,7 +2420,14 @@ mount's path is read WITHIN the joined path, so a helper that builds and mounts 
 call gives each caller's routes that caller's prefix. The prefix is the mount path — the path
 of the route the mount call is made on (`prefix_from: receiver_path`, which must name a
 declared `terminal`), or the string argument `prefix_arg` — less a trailing `wildcard` and the
-`/` before it, joined by **`matches.path_join`** (`leading_slash` or absent, as `combinator`'s).
+`/` before it (every trailing copy of the one character **`strip_trailing`** names, where it
+names one: Starlette's `Mount` strips `path.rstrip("/")`, so `/api//` mounts at `/api`), joined
+by **`matches.path_join`** (`leading_slash` or absent, as `combinator`'s; or, on a `fluent`
+catalog, **`concatenate`**, plan 2026-11-08 ruling R23: plain string concatenation with the
+served path published as written — never passed to `canonical_http_path`, so FastAPI's
+`"/orders" + ""` is `/orders` and a route `x` under `/r` is `/rx`). A `prefix_arg` the call does
+not write is the empty prefix: the router mounts at the parent's root, as a route with no path
+does.
 Nested mounts compose, one router mounted at several prefixes serves under each (`resolved`),
 and a router no mount received serves at its root, as read. A mount path not read whole gives
 the named hole `<prefix>` in front of the route's path, `partial`, which is never linked by
@@ -2427,9 +2435,35 @@ path, with a `mount_prefix` open question (D01) naming the mount call and the ar
 prefix was read at. A route reached only through a refused mount derives no row; a router
 reached on one path through a mount and on another through none serves under both. `refuses` lists what the framework throws on — `exact` (a path with no trailing
 `wildcard`), `pattern` (a pattern path), `wildcard` (a mount point ending in it) — and such a
-mount adds no prefix and is filed as a `refused_registration` open question (D01). A malformed
-entry, either key without the other, or a `prefix_from` mount that is not a terminal, is
-refused at load.
+mount adds no prefix and is filed as a `refused_registration` open question (D01). For a
+prefix (plan 2026-11-08 N7, ruling R4) `refuses` also lists `unrooted` (a non-empty prefix not
+starting with `/`; reason `unrooted_path`), `trailing_slash` (a non-empty prefix ending in `/`,
+a lone `/` included) and `empty_path` (a mount whose own prefix is empty, of a route whose path
+below the mount — every prefix inside it included — is empty too: decided per route, which has
+no row; the router's other routes keep theirs). `dependencies_arg` (plan N6) names the argument
+holding the dependencies a mount adds to every route below it; it is captured for the request
+reader. A malformed entry, either key without the other, or a `prefix_from` mount that is not a
+terminal, is refused at load.
+
+**`matches.router_holds: [{owner, method, prefix_arg, dependencies_arg?, refuses?}, …]`** (plan
+2026-11-08 N7, approved) declares a prefix a router HOLDS from its construction
+(`APIRouter(prefix="/orders")`), which is not a mount: the framework composes it with the
+prefixes the router is served under, where two mounts are two serving places. Where a route's
+router, or a mount's parent router, was made by a call an entry names — the producer the mount
+join already reaches, a construction through a factory-made subclass included — the prefix
+`prefix_arg` reads there, within the path the producer was reached on, goes in front of every
+route registered on that router and of every mount made on it, behind every prefix the router is
+served under: `include(prefix) + held + route path`, nested includes composing. Not written, it
+is no prefix; not read whole, the named hole `<prefix>`, `partial`, with a `mount_prefix`
+question naming the construction. `refuses` takes `unrooted` and `trailing_slash`, as a mount's
+do: a refused construction raises, so nothing on that router is served, and it is filed as a
+`refused_registration` question under no verb. The held prefix keeps the path it was read on,
+and a verb list read through the value walk (N8) is read again on that path, so a factory that
+builds a router per call pairs each call's prefix with that call's verbs alone (polar's
+`get_oauth_login_router("apple", callback_method="POST")` serves POST under `/apple` only).
+`dependencies_arg` is the mount entry's. The key
+needs `router_type`; anything malformed is refused at load. Cost: one cached read per router
+construction a route or mount reaches, per path.
 
 **An argument capture may name a keyword** (design 2026-11-06-reading-decorators §3a,
 approved). Wherever a capture reads `argN` — `url`, `body`, `response`, `channel`, `host`,

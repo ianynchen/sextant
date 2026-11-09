@@ -2042,13 +2042,14 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "inbound_routes.a-path-join-other-than-leading-slash-is-refused": Guard(
-        what="`path_join` is `leading_slash` or absent, refused otherwise, for every engine "
+        what="`path_join` is `leading_slash`, absent, or (fluent) `concatenate`, refused "
+        "otherwise, for every engine "
         "that reads it (Vert.x plan, Task 11; coordinator ruling 6)",
         why="without it a misspelt rule reads as verbatim and publishes glued addresses",
         edits=(
             Edit(
                 path=_INBOUND_ROUTES,
-                find='    if matches.get("path_join", LEADING_SLASH) != LEADING_SLASH:\n',
+                find='    if matches.get("path_join", LEADING_SLASH) not in allowed:\n',
                 replace="    if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),

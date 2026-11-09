@@ -27,7 +27,18 @@ gives each caller's routes that caller's prefix, never the other's.
 framework throws at the mount call, so a route reached only through it derives no row, and
 one reached through another serving path keeps that row. The refusals are a mount path with
 no trailing wildcard (`exact`), a pattern path (`pattern`), a mount point given the wildcard
-(`wildcard`), and an unrooted mount path where the catalog refuses one.
+(`wildcard`), an unrooted mount path where the catalog refuses one, and for a prefix (plan
+2026-11-08 N7, ruling R4) a non-empty one not starting with `/` (`unrooted`), one ending in `/`
+(`trailing_slash`), and a mount with an empty prefix of a route whose path below it is empty
+too (`empty_path`, decided per route: `Prefix.empty_after`).
+
+**A prefix the router holds** (`router_holds`, plan 2026-11-08 N7): a router whose producer is
+a construction a hold entry names (`APIRouter(prefix="/orders")`) carries that prefix in front
+of every route registered on it and of every mount made on it, behind every prefix it is
+served under — the framework composes its prefixes, where two mounts are two serving places.
+It is read on the producer the route's receiver reached, within the same path, so a factory
+helper's routers each hold their own caller's prefix. A held prefix the framework refuses
+(`refuses`) gives the router no serving place at all.
 
 **Cost** (spec §5): one producer read per route-root receiver and one per mount argument and
 mount receiver, each cached here and run on the resolve's shared index; one `within=` read of
@@ -47,8 +58,10 @@ from typing import Any
 from sextant.application.ports.catalogs import CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.shapes.inbound_routes import (
+    EMPTY_PATH,
     EXACT_MOUNT_PATH,
     PATTERN_MOUNT_PATH,
+    TRAILING_SLASH,
     UNROOTED_PATH,
     WILDCARD_MOUNT_POINT,
     WORDS,
@@ -72,6 +85,7 @@ from sextant.application.resolve.values import (
     argument_slot,
     producer_paths,
     resolve_positions,
+    resolve_positions_on_paths,
 )
 from sextant.domain.closed_sets import Resolution
 from sextant.domain.symbols import returned_type, type_descriptor
@@ -93,7 +107,12 @@ _REFUSES = {
     "exact": EXACT_MOUNT_PATH,
     "pattern": PATTERN_MOUNT_PATH,
     "wildcard": WILDCARD_MOUNT_POINT,
+    "unrooted": UNROOTED_PATH,
+    "trailing_slash": TRAILING_SLASH,
+    "empty_path": EMPTY_PATH,
 }
+# The refusals a held prefix may declare: it is a prefix, read once, with no route below it.
+_HOLD_REFUSES = frozenset({"unrooted", "trailing_slash"})
 # The named hole a prefix nobody read is published as: `stitch/links.py`'s `_NAMED_HOLE`
 # grammar, so a path holding it is never linked by path (the `<host>` refusal applied to a
 # path segment).
@@ -128,6 +147,12 @@ class MountRule:
     # framework's mount path carries none.
     wildcard: str | None
     refuses: frozenset[str]
+    # The one character every trailing copy of which the framework strips from the mount
+    # path (Starlette's `Mount`: `path.rstrip("/")`); None where it removes one `/` at most.
+    strip_trailing: str | None = None
+    # The argument holding the dependencies the mount adds to every route below it (plan
+    # 2026-11-08 N6), read by the request-requirements reader; None where none is declared.
+    dependencies_arg: Any = None
 
     def matches(self, site: Mapping[str, Any]) -> bool:
         return (
@@ -138,12 +163,28 @@ class MountRule:
 
 
 @dataclass(frozen=True)
+class HoldRule:
+    """One `router_holds` entry (plan 2026-11-08 N7): the construction that makes a router,
+    the argument holding the prefix it carries, and the dependencies it adds (N6)."""
+
+    owners: tuple[str, ...]
+    method: str
+    prefix_arg: Any
+    dependencies_arg: Any
+    refuses: frozenset[str]
+
+    def matches(self, site: Mapping[str, Any]) -> bool:
+        return str(site.get("owner")) in self.owners and site["name"] == self.method
+
+
+@dataclass(frozen=True)
 class MountRules:
-    """`router_type`, `mount` and the `path_join` a prefix is joined by."""
+    """`router_type`, `mount`, `router_holds` and the `path_join` a prefix is joined by."""
 
     router_types: frozenset[str]
     mounts: tuple[MountRule, ...]
     path_join: str | None
+    holds: tuple[HoldRule, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -221,6 +262,13 @@ class Prefix:
     resolution: str
     unread: tuple[UnreadPrefix, ...] = ()
     places: frozenset[Place] = field(default=frozenset(), compare=False)
+    # Where in `text` a mount refusing `empty_path` ended with an empty prefix of its own: a
+    # route whose served path is empty from there on is refused (`EMPTY_PATH`).
+    empty_after: tuple[int, ...] = ()
+    # The paths a held prefix was read on (`router_holds`), each a choice of the calls that
+    # built the router: folded into the router's `places` path, so whatever else is read on
+    # the route is read on the same call (M-1). Not part of what the prefix is.
+    read_on: frozenset[Path] = field(default=frozenset(), compare=False)
 
 
 ROOT = Prefix(None, str(Resolution.RESOLVED))
@@ -234,6 +282,8 @@ def mount_rules_of(
     space (design 2026-11-06-reading-decorators §4): it declares no `path_join`."""
     declared, types = matches.get("mount"), matches.get("router_type")
     if declared is None and types is None:
+        if "router_holds" in matches:
+            raise CatalogError(f"loading catalog {source}: `router_holds` without `router_type`")
         return None
     if types is None:
         raise CatalogError(f"loading catalog {source}: `mount` without `router_type`")
@@ -253,11 +303,47 @@ def mount_rules_of(
             f"with one space and declares no `path_join`"
         )
     path_join = WORDS if words else validated_path_join(matches, source, "fluent")
+    holds = matches.get("router_holds", [])
+    if not isinstance(holds, list):
+        raise CatalogError(f"loading catalog {source}: `router_holds` must be a list")
     return MountRules(
         router_types,
         tuple(_rule(entry, terminals, roots, source) for entry in declared),
         path_join,
+        tuple(_hold(entry, source) for entry in holds),
     )
+
+
+def _hold(entry: Any, source: object) -> HoldRule:
+    where = f"loading catalog {source}: router_holds[]"
+    if not isinstance(entry, dict) or not isinstance(entry.get("method"), str):
+        raise CatalogError(f"{where} must be a mapping naming `owner` and `method`")
+    if argument_reference(entry.get("prefix_arg"), spelled=False) is None:
+        raise CatalogError(f"{where} `{entry['method']}` must name its `prefix_arg`")
+    dependencies = _dependencies_arg(entry, where)
+    refuses = entry.get("refuses", [])
+    if not isinstance(refuses, list) or any(word not in _HOLD_REFUSES for word in refuses):
+        raise CatalogError(
+            f"{where} `{entry['method']}` `refuses` must list words of {sorted(_HOLD_REFUSES)}"
+        )
+    return HoldRule(
+        owners=catalog_symbols(entry.get("owner"), f"{where} `{entry['method']}` owner"),
+        method=entry["method"],
+        prefix_arg=entry["prefix_arg"],
+        dependencies_arg=dependencies,
+        refuses=frozenset(refuses),
+    )
+
+
+def _dependencies_arg(entry: Mapping[str, Any], where: str) -> Any:
+    """An entry's `dependencies_arg` (plan 2026-11-08 N6): absent, or an argument reference."""
+    declared = entry.get("dependencies_arg")
+    if declared is not None and argument_reference(declared, spelled=False) is None:
+        raise CatalogError(
+            f"{where} `{entry['method']}` `dependencies_arg` must be a position, "
+            f"`{{keyword: name}}` or `{{arg: N, keyword: name}}`"
+        )
+    return declared
 
 
 def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> MountRule:
@@ -310,6 +396,12 @@ def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> M
     descriptor = entry.get("descriptor")
     if descriptor is not None and not isinstance(descriptor, str):
         raise CatalogError(f"{where} `{entry['method']}` `descriptor` must be a string")
+    strip = entry.get("strip_trailing")
+    if strip is not None and (not isinstance(strip, str) or len(strip) != 1):
+        raise CatalogError(
+            f"{where} `{entry['method']}` `strip_trailing` is the one character the framework "
+            f"strips from the end of a mount path, got {strip!r}"
+        )
     return MountRule(
         owners=catalog_symbols(entry.get("owner"), f"{where} `{entry['method']}` owner"),
         method=entry["method"],
@@ -318,6 +410,8 @@ def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> M
         prefix_arg=prefix_arg,
         wildcard=wildcard,
         refuses=frozenset(refuses),
+        strip_trailing=strip,
+        dependencies_arg=_dependencies_arg(entry, where),
     )
 
 
@@ -409,6 +503,7 @@ class MountReader:
         self._read: dict[tuple[tuple[str, int], int, Path], tuple[Prefix, ...]] = {}
         self._refused: dict[tuple[str, int], tuple[tuple[int, str, str], ...]] = {}
         self._called_by: dict[str, tuple[tuple[str, int], ...]] | None = None
+        self._held: dict[tuple[tuple[str, int], Path], tuple[Prefix, ...] | None] = {}
 
     def of_route(self, root: Mapping[str, Any], within: Path | None) -> tuple[Prefix, ...]:
         """The prefixes a route whose root call is `root` serves under, each once: its
@@ -459,6 +554,101 @@ class MountReader:
         self._refused[mount.key] = tuple(dict.fromkeys(found))
         return self._refused[mount.key]
 
+    def held_refusals(self) -> tuple[tuple[Mapping[str, Any], str, str], ...]:
+        """`(construction, prefix, reason)` for every router construction a `router_holds`
+        entry names whose prefix the framework refuses, read on every path the code gives
+        (the construction raises, so nothing on that router is served)."""
+        found: dict[tuple[str, int, str, str], tuple[Mapping[str, Any], str, str]] = {}
+        for site in self._index.sites.values():
+            rule = self._hold_rule(site)
+            slot = None if rule is None else argument_slot(site["arguments"] or [], rule.prefix_arg)
+            if rule is None or slot is None or slot == UNPACKED_SLOT:
+                continue
+            for answers in resolve_positions(
+                self._workspace, {"prefix": (site, slot)}, self._index
+            ):
+                text = _text_of(answers["prefix"])
+                reason = None if text is None else _prefix_refusal(rule.refuses, *text)
+                if text is not None and reason is not None:
+                    key = (str(site["caller"]), int(str(site["ordinal"])), text[0], reason)
+                    found.setdefault(key, (site, text[0], reason))
+        return tuple(found.values())
+
+    def _hold_rule(self, site: Mapping[str, Any]) -> HoldRule | None:
+        return next((rule for rule in self._rules.holds if rule.matches(site)), None)
+
+    def _holds(self, made: tuple[str, str, int], path: Path) -> tuple[Prefix, ...] | None:
+        """The prefixes the router `made` holds from its construction (`router_holds`), read
+        within `path`, the path its producer was reached on: one per value read, the named
+        hole where it is not read whole, none where the framework refuses it. None where the
+        router holds no prefix: no hold entry names its producer, or the call writes none (the
+        empty prefix, the framework's default)."""
+        if made[0] != "call" or not self._rules.holds:
+            return None
+        key = ((made[1], made[2]), path)
+        if key in self._held:
+            return self._held[key]
+        site = self._index.sites.get((made[1], made[2]))
+        rule = None if site is None else self._hold_rule(site)
+        held: tuple[Prefix, ...] | None = None
+        if site is not None and rule is not None:
+            slot = argument_slot(site["arguments"] or [], rule.prefix_arg)
+            at = MountPath(site, None if slot is None or slot == UNPACKED_SLOT else (site, slot))
+            if slot == UNPACKED_SLOT:
+                held = (self._hole_at(site, at, "a value the walk captured at no position"),)
+            elif slot is not None:
+                read = resolve_positions_on_paths(
+                    self._workspace, {"prefix": (site, slot)}, self._index, within=path
+                )
+                found: dict[Prefix, Prefix] = {}
+                for on, answers in read:
+                    text = _text_of(answers["prefix"])
+                    if text is not None and _prefix_refusal(rule.refuses, *text) is not None:
+                        continue
+                    if text is None or not text[1]:
+                        prefix = self._hole_at(site, at, _read_as(answers["prefix"]))
+                    else:
+                        narrowed = answers["prefix"].narrowed
+                        prefix = Prefix(
+                            text[0], str(Resolution.NARROWED if narrowed else Resolution.RESOLVED)
+                        )
+                    kept = found.get(prefix, prefix)
+                    found[prefix] = replace(kept, read_on=kept.read_on | {on})
+                if not read:
+                    hole = self._hole_at(site, at, "nothing on this path")
+                    found[hole] = hole
+                held = tuple(found.values())
+        self._held[key] = held
+        return held
+
+    def _holding(self, prefix: Prefix, held: Prefix) -> Prefix | None:
+        """`held`, the router's own prefix, behind `prefix`, one it is served under, the
+        router's place narrowed to the paths `held` was read on; None where no such path
+        agrees with the one the router was reached on."""
+        text = (
+            held.text
+            if prefix.text is None
+            else join_prefix(prefix.text, str(held.text), self._rules.path_join)
+        )
+        places = prefix.places
+        if held.read_on:
+            places = frozenset(
+                (*place[:-1], (((router[0], joined) if router is not None else None), mount))
+                for place in prefix.places
+                for router, mount in (place[-1],)
+                for on in held.read_on
+                if (joined := (on if router is None else router[1].joined(on))) is not None
+            )
+            if not places:
+                return None
+        return replace(
+            prefix,
+            text=text,
+            resolution=weaker(prefix.resolution, held.resolution),
+            unread=(*prefix.unread, *held.unread),
+            places=places,
+        )
+
     def _served(self, producer: Producer, path: Path, mounting: frozenset[Any]) -> list[Prefix]:
         """The prefixes of the router `producer` made, as reached on `path`: one per mount
         that received the same router on a path agreeing with it, behind that mount's own
@@ -490,9 +680,23 @@ class MountReader:
                     reached.append(joined)
                     for own in self._prefixes(mount, way, joined):
                         for parent in self._parents(at, joined, mounting | {mount.key}):
-                            found.append(self._behind(parent, own, at, _router(made, path)))
+                            prefix = self._behind(parent, own, at, _router(made, path))
+                            if own.text == "" and "empty_path" in mount.rule.refuses:
+                                prefix = replace(
+                                    prefix,
+                                    empty_after=(*prefix.empty_after, len(prefix.text or "")),
+                                )
+                            found.append(prefix)
         if self._unmounted(path, made[1], reached, frozenset()):
             found.append(replace(ROOT, places=frozenset({((_router(made, path), None),)})))
+        held = self._holds(made, path)
+        if held is not None:
+            found = [
+                holding
+                for prefix in found
+                for own in held
+                if (holding := self._holding(prefix, own)) is not None
+            ]
         return found
 
     def _unmounted(
@@ -577,14 +781,19 @@ class MountReader:
 
     def _hole(self, mount: Mount, at: MountPath, read: str) -> Prefix:
         """The named hole for `mount`'s prefix, saying where it was read and what it read."""
-        site, argument = at.prefix if at.prefix is not None else (mount.site, -1)
+        return self._hole_at(mount.site, at, read)
+
+    def _hole_at(self, call: Mapping[str, Any], at: MountPath, read: str) -> Prefix:
+        """The named hole for the prefix the call `call` gives (a mount, or a construction
+        holding one), read at `at`."""
+        site, argument = at.prefix if at.prefix is not None else (call, -1)
         return Prefix(
             UNREAD_PREFIX,
             str(Resolution.PARTIAL),
             (
                 UnreadPrefix(
-                    mount=str(mount.site["caller"]),
-                    mount_ordinal=int(str(mount.site["ordinal"])),
+                    mount=str(call["caller"]),
+                    mount_ordinal=int(str(call["ordinal"])),
                     at=str(site["caller"]),
                     at_ordinal=int(str(site["ordinal"])),
                     argument=argument,
@@ -604,8 +813,10 @@ class MountReader:
         if wildcard is not None and mounted.endswith(wildcard):
             mounted = mounted[: -len(wildcard)]
         # The `/` before the wildcard, or ending a mount point, is the separator the join
-        # supplies: `/api/*`, `/api*` and `/api/` all mount at `/api`.
-        mounted = mounted.removesuffix("/")
+        # supplies: `/api/*`, `/api*` and `/api/` all mount at `/api`. A framework that strips
+        # every trailing copy says so (`strip_trailing`): `/api//` mounts at `/api` too.
+        strip = mount.rule.strip_trailing
+        mounted = mounted.rstrip(strip) if strip is not None else mounted.removesuffix("/")
         resolution = Resolution.NARROWED if answer.narrowed else Resolution.RESOLVED
         return Prefix(mounted, str(resolution))
 
@@ -619,6 +830,9 @@ class MountReader:
             return PATTERN_MOUNT_PATH if "pattern" in refuses else None
         if self._refuses_unrooted and is_unrooted(text, whole):
             return UNROOTED_PATH
+        refused = _prefix_refusal(refuses, text, whole)
+        if refused is not None:
+            return refused
         wildcard = mount.rule.wildcard
         if wildcard is None or not (whole or not _UNREAD_END.search(text)):
             return None
@@ -652,7 +866,7 @@ class MountReader:
             (*place[:-1], (place[-1][0], mount), (made, None))
             for place in parent.places or (ANY_ROUTER,)
         )
-        return Prefix(text, resolution, (*parent.unread, *own.unread), places)
+        return Prefix(text, resolution, (*parent.unread, *own.unread), places, parent.empty_after)
 
     def _outermost(self, parent: Prefix, word: str, made: Router | None) -> tuple[str, str]:
         """The outermost word of an entry-point prefix and the program word in it (design
@@ -840,6 +1054,21 @@ def unread_prefix_rows(
             }
         )
     return found
+
+
+def _prefix_refusal(refuses: frozenset[str], text: str, whole: bool) -> str | None:
+    """The word a framework's refusal of a PREFIX is filed under (plan 2026-11-08 N7, ruling
+    R4), or None. The empty prefix is no prefix and is never refused here. `unrooted`: one not
+    starting with `/`, decided where its first character was read (`is_unrooted`);
+    `trailing_slash`: one ending in `/`, a lone `/` included (a text whose last piece is unread
+    ends in its hole, never in `/`)."""
+    if not text:
+        return None
+    if "unrooted" in refuses and is_unrooted(text, whole):
+        return UNROOTED_PATH
+    if "trailing_slash" in refuses and text.endswith("/"):
+        return TRAILING_SLASH
+    return None
 
 
 def _text_of(answer: Answer) -> tuple[str, bool] | None:

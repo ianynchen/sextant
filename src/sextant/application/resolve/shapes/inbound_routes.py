@@ -20,6 +20,11 @@ from sextant.domain.paths import EXPRESSION_OPENS
 # The one `path_join` a catalog may declare, beside "absent" (verbatim). Named once so the
 # engine that validates the catalog and the engine that applies it read the same word.
 LEADING_SLASH = "leading_slash"
+# A `fluent` catalog's `path_join` for a framework that joins a prefix and a path by plain
+# string concatenation and serves the result as it is (FastAPI, plan 2026-11-08 ruling R23):
+# the join is verbatim, and the served path is never cleaned (`canonical_http_path`): `""`
+# stays `""`, `x` stays `x`, `//` stays `//`.
+CONCATENATE = "concatenate"
 # How a `root_kind: entry_point` catalog joins its words: one space, as a command is typed
 # (design 2026-11-06-reading-decorators §4, ruled: a rule, not a catalog value).
 WORDS = "words"
@@ -67,11 +72,16 @@ def _media_strings(argument: Any) -> list[str]:
 def validated_path_join(matches: Mapping[str, Any], source: object, style: str) -> str | None:
     """`matches.path_join`, checked at load so a typo is refused rather than read as
     verbatim, which would publish the glued address the word exists to prevent: absent, or
-    `leading_slash`, the one rule. `style` names the D02 style the refusal cites."""
-    if matches.get("path_join", LEADING_SLASH) != LEADING_SLASH:
+    `leading_slash`, the one rule; on a `fluent` catalog also `concatenate`, verbatim with
+    nothing cleaned (`CONCATENATE`), which only `fluent` applies. `style` names the D02 style
+    the refusal cites."""
+    allowed = (LEADING_SLASH, CONCATENATE) if style == "fluent" else (LEADING_SLASH,)
+    if matches.get("path_join", LEADING_SLASH) not in allowed:
         raise CatalogError(
             f"loading catalog {source}: `path_join: "
-            f"{matches.get('path_join')!r}` — the only value is `{LEADING_SLASH}`; "
+            f"{matches.get('path_join')!r}` — the "
+            f"{'only value is' if len(allowed) == 1 else 'values are'} "
+            f"{', '.join(f'`{value}`' for value in allowed)}; "
             f"leave it out for verbatim concatenation (D02 §2's `{style}` style)"
         )
     return matches.get("path_join")
@@ -176,6 +186,12 @@ UNROOTED_PATH = "unrooted_path"
 EXACT_MOUNT_PATH = "exact_mount_path"
 PATTERN_MOUNT_PATH = "pattern_mount_path"
 WILDCARD_MOUNT_POINT = "wildcard_mount_point"
+# A prefix the framework refuses (`mount[].refuses`, `router_holds[].refuses`; plan
+# 2026-11-08 N7): one ending in `/` (FastAPI: "A path prefix must not end with '/'"), and an
+# include with no prefix of a route whose path is empty too ("Prefix and path cannot be both
+# empty").
+TRAILING_SLASH = "trailing_slash"
+EMPTY_PATH = "empty_path"
 # A route given an empty list of verbs (`http_method`'s list form, D02 §2's `fluent` style): the
 # framework refuses a route that serves no verb at all.
 NO_METHODS = "no_methods"

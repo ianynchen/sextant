@@ -88,6 +88,8 @@ from sextant.application.resolve.shapes.client_base import (
 from sextant.application.resolve.shapes.contracts import payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
 from sextant.application.resolve.shapes.inbound_routes import (
+    CONCATENATE,
+    EMPTY_PATH,
     INVALID_RESPONSE_TYPE,
     NO_METHODS,
     UNROOTED_PATH,
@@ -535,6 +537,19 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     caller=str(mount.site["caller"]),
                     handler=None,
                 )
+        # A router construction whose held prefix the framework refuses (`router_holds`):
+        # filed the same way, under no verb.
+        for site, path, reason in mounts.held_refusals():
+            file_refusal(
+                refusals,
+                protocol=catalog.protocol,
+                method=None,
+                method_kind=verbless_serves,
+                path=path,
+                reason=reason,
+                caller=str(site["caller"]),
+                handler=None,
+            )
     workspace.derive("call_endpoints", rows=rows)
     if bindings:
         workspace.derive("channel_bindings_insert", rows=bindings)
@@ -1007,8 +1022,9 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
     # root's default.
     declared_verb = captures.get("http_method")
     # A verb list the call does not write as literals (N8): read through the value walk.
-    if _unread_verbs(declared_verb):
-        declared_verb = _walked_verbs(declared_verb, context)
+    walked_verbs = declared_verb if _unread_verbs(declared_verb) else None
+    if walked_verbs is not None:
+        declared_verb = _walked_verbs(walked_verbs, context)
     # Several verbs accumulated on one chain (`repeats`) are one row each (Vert.x spec §3f:
     # `method(GET).method(DELETE)` serves both), in call order, a repeated verb once. One
     # nobody could read is a row of its own, `unresolved` with `method` NULL, so the list
@@ -1198,9 +1214,21 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
     prefixes: tuple[Prefix, ...] = (ROOT,)
     if context.routers is not None and direction == "inbound" and end.root:
         prefixes = context.routers.of_route(end.root, end.path)
+    # A verb list read through the value walk is read again on the path each prefix's router
+    # was reached on, so a verb and a prefix one factory call gives are paired on that call's
+    # path alone, never crossed with another caller's (M-1; the mount prefix's own `within=`
+    # rule).
+    prefix_verbs = (
+        {prefix: _verbs_within(walked_verbs, prefix, context) for prefix in prefixes}
+        if walked_verbs is not None and len(prefixes) > 1
+        else {}
+    )
     for verb, (peer, path, url_resolution), prefix in product(verbs, destinations, prefixes):
         # An address nobody read takes no prefix: one row for it, not one per prefix.
         if path is None and prefix is not prefixes[0]:
+            continue
+        within = prefix_verbs.get(prefix)
+        if within is not None and verb not in within:
             continue
         # 2O design §8, folded in from single_call: identity is the URL the
         # framework serves, canonicalized before the dedup key below is built
@@ -1235,7 +1263,10 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                     handler=handler,
                 )
                 continue
-            path = canonical_http_path(path, path_kind)
+            # A framework joining by plain concatenation serves the path as written
+            # (`path_join: concatenate`, ruling R23): nothing is cleaned.
+            if context.catalog.matches.get("path_join") != CONCATENATE:
+                path = canonical_http_path(path, path_kind)
         # A route the framework does not serve derives nothing — below a refusal, which the
         # framework raises when the route is made, before any `disable()` could run.
         if not serving:
@@ -1255,6 +1286,25 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
         # framework accepted (spec §3c), at the weaker of the two words.
         if context.mounts is not None and path is not None:
             path = context.mounts.joined(prefix, path, path_kind == PATH_KIND_PATTERN)
+            # A mount with an empty prefix of a route whose path below it is empty too is one
+            # the framework refuses (`empty_path`, plan 2026-11-08 N7): no row, the refusal
+            # filed. Decided only on a route path read whole.
+            if (
+                context.refusals is not None
+                and url_resolution == str(Resolution.RESOLVED)
+                and any(not path[offset:] for offset in prefix.empty_after)
+            ):
+                file_refusal(
+                    context.refusals,
+                    protocol=context.catalog.protocol,
+                    method=verb,
+                    method_kind=method_kind,
+                    path=path,
+                    reason=EMPTY_PATH,
+                    caller=context.caller,
+                    handler=handler,
+                )
+                continue
             url_resolution = weaker(url_resolution, prefix.resolution)
             # A prefix not read whole says where it was not read (`mount_prefix`), filed for
             # the rows the run keeps.
@@ -1755,11 +1805,16 @@ def _mounts(
             if rule.prefix_arg is not None and rule.matches(site):
                 slot = argument_slot(site["arguments"] or [], rule.prefix_arg)
                 read_at = None if slot is None or slot == UNPACKED_SLOT else (site, slot)
+                # A prefix argument the call does not write is the parameter's default, the
+                # empty prefix: the router mounts at the parent's root. One that may be in an
+                # unpacked value is not read.
                 found.setdefault(
                     _site_key(site),
-                    (rule, site, [MountPath(site, read_at, unread=read_at is None)]),
+                    (rule, site, [MountPath(site, read_at, unread=slot == UNPACKED_SLOT)]),
                 )
-    if not found:
+    # A catalog whose routers hold a prefix of their own (`router_holds`) reads it even where
+    # the module mounts nothing.
+    if not found and not rules.holds:
         return None, {}, {}
     mounts = {key: Mount(rule, site, tuple(paths)) for key, (rule, site, paths) in found.items()}
     reader = _router_reader(
@@ -3096,6 +3151,22 @@ def _walked_verbs(declared: Any, context: "_DeriveContext") -> Any:
         else:
             verbs.append(None)
     return tuple(dict.fromkeys(verbs))
+
+
+def _verbs_within(
+    declared: Any, prefix: Prefix, context: "_DeriveContext"
+) -> frozenset[str | None] | None:
+    """The verbs a walked verb list reads on the paths `prefix`'s router was reached on (its
+    `places`), or None where it names no router path (every verb read stands)."""
+    paths = {router[1] for place in prefix.places if (router := place[-1][0]) is not None}
+    if not paths:
+        return None
+    found: set[str | None] = set()
+    for path in paths:
+        read = _walked_verbs(declared, replace(context, path=path))
+        for each in read if isinstance(read, tuple) else (read,):
+            found.add(_verb_of(each, context))
+    return frozenset(found)
 
 
 def _validate_url_channel_exclusivity(
