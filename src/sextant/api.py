@@ -114,14 +114,15 @@ still turns it into a `click.ClickException`.
 """
 
 import asyncio
+import gc
 import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
@@ -880,6 +881,29 @@ def _enrich_defaults_for(path: Path) -> EnrichDefaults:
 # --------------------------------------------------------------------------
 
 
+# The garbage collector's thresholds while a module is analysed (plan 2 task 9b): a young
+# collection every 10,000 net allocations rather than 2,000, and a full one at most every 100
+# middle collections rather than 10. The scan and the resolve each build a heap of millions of
+# objects that live to the end of the stage (library syntax trees, facts, the value index), so
+# at the defaults the collector walked that heap again and again and found almost nothing to
+# free: on polar 31 full collections took about 12 s of a 65 s run, and those in the resolve
+# freed nothing. Measured there: 65.1 s to 56.0 s, the peak memory the same (4.1 GB). When the
+# collector runs never changes what it frees, so no output moves.
+_ANALYZE_GC_THRESHOLDS = (10_000, 10, 100)
+
+
+@contextmanager
+def _fewer_collections() -> Iterator[None]:
+    """The analysis's collector thresholds (`_ANALYZE_GC_THRESHOLDS`), and the caller's back
+    after it, however it ends."""
+    before = gc.get_threshold()
+    gc.set_threshold(*_ANALYZE_GC_THRESHOLDS)
+    try:
+        yield
+    finally:
+        gc.set_threshold(*before)
+
+
 def _run_analyze(
     path: Path,
     module: ModuleModel,
@@ -907,7 +931,7 @@ def _run_analyze(
     factory = progress_factory or (lambda: nullcontext(NullProgress()))
     workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
     try:
-        with factory() as progress:
+        with factory() as progress, _fewer_collections():
             result = _analyzed(
                 path,
                 workspace,
