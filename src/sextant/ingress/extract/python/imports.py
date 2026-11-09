@@ -278,7 +278,7 @@ def version_tests(
     modules: set[str] = set()
     values: set[str] = set()
     other: set[str] = set()
-    for node in every_statement(tree):
+    for node in every_statement(tree.body):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name == "sys":
@@ -298,14 +298,14 @@ def version_tests(
 
 
 def every_statement(
-    tree: ast.Module, index: "ModuleIndex | None" = None, here: str = ""
+    body: list[ast.stmt], index: "ModuleIndex | None" = None, here: str = ""
 ) -> Iterator[ast.AST]:
-    """Every statement of `tree` at every depth, as `ast.walk` meets them, with the handlers
+    """Every statement of `body` at every depth, as `ast.walk` meets them, with the handlers
     and `case`s that hold some; with `index`, not those of an arm of a version test the read
     does not run (`live_arm`). No expression holds a statement, so the walk never goes into
-    one (plan 2 task 9b: walking every node was most of what `version_tests` and
-    `structure._rebound_names` cost)."""
-    pending: list[ast.AST] = list(tree.body)
+    one (plan 2 task 9b: walking every node was most of what `version_tests`,
+    `structure._rebound_names` and `calls._rebound_nonlocal` cost)."""
+    pending: list[ast.AST] = list(body)
     while pending:
         node = pending.pop()
         yield node

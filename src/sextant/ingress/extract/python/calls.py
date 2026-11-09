@@ -98,6 +98,7 @@ from sextant.ingress.extract.python.imports import (
     ModuleIndex,
     Target,
     bind_names,
+    every_statement,
     is_typing,
     live_arm,
     makes_a_class,
@@ -2711,7 +2712,7 @@ def _rebound_nonlocal(body: list[ast.stmt]) -> set[str]:
     those writes against its own reads. A name of a deeper function bound again between
     is counted too, which can only leave a value unknown."""
     found: set[str] = set()
-    for node in (each for statement in body for each in ast.walk(statement)):
+    for node in every_statement(body):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             own = list(_own_nodes(node.body))
             declared = {n for each in own if isinstance(each, ast.Nonlocal) for n in each.names}

@@ -177,7 +177,7 @@ def _rebound_names(tree: ast.Module, index: ModuleIndex, here: str) -> set[str]:
     writes are not all known, so it has no class. A library file's version tests are
     decided: the arm its Python does not run binds nothing."""
     rebound: set[str] = set()
-    for node in every_statement(tree, index, here):
+    for node in every_statement(tree.body, index, here):
         if isinstance(node, ast.Global):
             rebound.update(node.names)
     for node in _module_level(tree.body, index, here):
@@ -704,7 +704,7 @@ def single_classes(
     none holds is no class of the file's facts. An arm of a version test the read does not
     run (`imports.live_arm`) holds no class statement."""
     counts: dict[str, int] = {}
-    for every in every_statement(tree, index, here):
+    for every in every_statement(tree.body, index, here):
         if isinstance(every, ast.ClassDef):
             counts[every.name] = counts.get(every.name, 0) + 1
     found: dict[str, list[ast.ClassDef]] = {}

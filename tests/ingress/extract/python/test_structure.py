@@ -705,6 +705,6 @@ def test_the_statement_walk_meets_every_statement_ast_walk_meets() -> None:
         "            pass\n"
     )
     walked = [node for node in ast.walk(tree) if isinstance(node, ast.stmt)]
-    read = [node for node in every_statement(tree) if isinstance(node, ast.stmt)]
+    read = [node for node in every_statement(tree.body) if isinstance(node, ast.stmt)]
     assert len(read) == len(walked)
     assert {id(node) for node in read} == {id(node) for node in walked}
