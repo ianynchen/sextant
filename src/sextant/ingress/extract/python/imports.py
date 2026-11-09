@@ -17,7 +17,7 @@ json` binds `json` to `ujson` and to `json`, and never to the first one silently
 
 import ast
 import builtins
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, Protocol
 
@@ -41,6 +41,8 @@ _TYPE_VARIABLE_FACTORIES = frozenset({"TypeVar", "ParamSpec", "TypeVarTuple"})
 # The typing specification's functional forms that make a new class (ruling R17 review).
 _CLASS_FACTORIES = frozenset({"NamedTuple", "TypedDict"})
 _TYPING_MODULES = frozenset({"typing", "typing_extensions"})
+# What a statement can be inside: another statement's block, a handler's or a `case`'s.
+_BLOCKS = (ast.stmt, ast.excepthandler, ast.match_case)
 
 
 @dataclass(frozen=True)
@@ -276,7 +278,7 @@ def version_tests(
     modules: set[str] = set()
     values: set[str] = set()
     other: set[str] = set()
-    for node in ast.walk(tree):
+    for node in every_statement(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name == "sys":
@@ -293,6 +295,29 @@ def version_tests(
                 else:
                     other.add(bound)
     return VersionTests(python, frozenset(modules - other), frozenset(values - other), release)
+
+
+def every_statement(
+    tree: ast.Module, index: "ModuleIndex | None" = None, here: str = ""
+) -> Iterator[ast.AST]:
+    """Every statement of `tree` at every depth, as `ast.walk` meets them, with the handlers
+    and `case`s that hold some; with `index`, not those of an arm of a version test the read
+    does not run (`live_arm`). No expression holds a statement, so the walk never goes into
+    one (plan 2 task 9b: walking every node was most of what `version_tests` and
+    `structure._rebound_names` cost)."""
+    pending: list[ast.AST] = list(tree.body)
+    while pending:
+        node = pending.pop()
+        yield node
+        live = (
+            live_arm(node, index, here) if index is not None and isinstance(node, ast.If) else None
+        )
+        if live is not None:
+            pending.extend(live)
+        else:
+            pending.extend(
+                child for child in ast.iter_child_nodes(node) if isinstance(child, _BLOCKS)
+            )
 
 
 def live_arm(node: ast.If, index: ModuleIndex, here: str) -> list[ast.stmt] | None:

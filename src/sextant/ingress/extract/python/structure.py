@@ -57,6 +57,7 @@ from sextant.ingress.extract.python.imports import (
     ProjectNames,
     Target,
     bind_names,
+    every_statement,
     holds_decorated_value,
     is_typing,
     live_arm,
@@ -176,7 +177,7 @@ def _rebound_names(tree: ast.Module, index: ModuleIndex, here: str) -> set[str]:
     writes are not all known, so it has no class. A library file's version tests are
     decided: the arm its Python does not run binds nothing."""
     rebound: set[str] = set()
-    for node in _live_nodes(tree, index, here):
+    for node in every_statement(tree, index, here):
         if isinstance(node, ast.Global):
             rebound.update(node.names)
     for node in _module_level(tree.body, index, here):
@@ -703,7 +704,7 @@ def single_classes(
     none holds is no class of the file's facts. An arm of a version test the read does not
     run (`imports.live_arm`) holds no class statement."""
     counts: dict[str, int] = {}
-    for every in _live_nodes(tree, index, here):
+    for every in every_statement(tree, index, here):
         if isinstance(every, ast.ClassDef):
             counts[every.name] = counts.get(every.name, 0) + 1
     found: dict[str, list[ast.ClassDef]] = {}
@@ -717,20 +718,6 @@ def single_classes(
                     found[".".join(part.name for part in chain)] = chain
                 pending.append((chain, statement.body))
     return found, frozenset(counts)
-
-
-def _live_nodes(tree: ast.AST, index: ModuleIndex, here: str) -> Iterator[ast.AST]:
-    """Every node of `tree`, as `ast.walk` gives them, but not those of an arm of a version
-    test the read does not run."""
-    pending: list[ast.AST] = [tree]
-    while pending:
-        node = pending.pop()
-        yield node
-        live = live_arm(node, index, here) if isinstance(node, ast.If) else None
-        if isinstance(node, ast.If) and live is not None:
-            pending.extend([node.test, *live])
-        else:
-            pending.extend(ast.iter_child_nodes(node))
 
 
 def _scope_statements(body: list[ast.stmt], index: ModuleIndex, here: str) -> Iterator[ast.stmt]:

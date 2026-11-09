@@ -3,6 +3,7 @@ existing facts — modules and classes as types, a body as `<clinit>`, module-le
 static fields, decorators as the calls they are. Every tree is built in `tmp_path`; nothing
 is imported or run."""
 
+import ast
 import sys
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from sextant.domain.facts import (
 )
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.symbols import PY_SIGNATURE, bare_descriptor, disambiguator_of, names_a_type
+from sextant.ingress.extract.python.imports import every_statement
 from sextant.ingress.extract.python.scanner import PythonScanner
 
 DIS = disambiguator_of(PY_SIGNATURE)
@@ -672,3 +674,37 @@ def test_types_that_do_not_settle_are_dropped_with_a_note(tmp_path: Path, monkey
     (call,) = [c for c in _facts(tree, CallSiteFact) if c.target.name == "open"]
     assert call.target.owner is None
     assert any(n.startswith("app/m.py: ") and "did not settle" in n for n in report.uncovered)
+
+
+def test_the_statement_walk_meets_every_statement_ast_walk_meets() -> None:
+    """`every_statement` (plan 2 task 9b) walks statement blocks only, never into an
+    expression, since no expression holds a statement: every statement `ast.walk` meets, a
+    `global` in a nested function, a handler's, a `case`'s and a class's in a `with` among
+    them, and nothing else."""
+    tree = ast.parse(
+        "import sys\n"
+        "def f(x=lambda: 1):\n"
+        "    def g():\n"
+        "        global A\n"
+        "        try:\n"
+        "            pass\n"
+        "        except E as e:\n"
+        "            global B\n"
+        "        finally:\n"
+        "            del e\n"
+        "    return [y for y in x if (z := y)]\n"
+        "match v:\n"
+        "    case [a, *rest]:\n"
+        "        with open() as h:\n"
+        "            class C:\n"
+        "                global D\n"
+        "    case _:\n"
+        "        while True:\n"
+        "            async def k(): pass\n"
+        "        else:\n"
+        "            pass\n"
+    )
+    walked = [node for node in ast.walk(tree) if isinstance(node, ast.stmt)]
+    read = [node for node in every_statement(tree) if isinstance(node, ast.stmt)]
+    assert len(read) == len(walked)
+    assert {id(node) for node in read} == {id(node) for node in walked}
