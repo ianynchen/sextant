@@ -95,9 +95,28 @@ def _camel(name: str) -> str:
     return re.sub("(^_*[A-Z])", lambda m: m.group(1).lower(), _pascal(name))
 
 
-# N12's two strategy words, each a generator function exactly. A `functions` entry naming
+_HUMPS_UNDERSCORE = re.compile(r"(?<=[^\-_])[\-_]+[^\-_]")
+
+
+def _humps_camelize(name: str) -> str:
+    """pyhumps 3.8's `humps.main.camelize` on a string, verbatim (`humps_camelize.md`): it
+    differs from `to_camel` on a digit after an underscore, an upper-case word and a doubled
+    underscore (plan 2 final review M2)."""
+    text = re.sub(r"\s+", "", name)
+    if text.isupper() or text.isnumeric():
+        return name
+    if len(text) != 0 and not text[:2].isupper():
+        text = text[0].lower() + text[1:]
+    return _HUMPS_UNDERSCORE.sub(lambda m: m.group(0)[-1].upper(), text)
+
+
+# N12's strategy words, each a generator function exactly. A `functions` entry naming
 # another is refused by the loader.
-STRATEGIES: dict[str, Callable[[str], str]] = {"camel": _camel, "pascal": _pascal}
+STRATEGIES: dict[str, Callable[[str], str]] = {
+    "camel": _camel,
+    "pascal": _pascal,
+    "humps_camelize": _humps_camelize,
+}
 
 
 @dataclass(frozen=True)

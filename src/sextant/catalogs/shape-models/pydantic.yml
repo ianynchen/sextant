@@ -55,11 +55,10 @@ serialization:
           by: scripts/probes/pydantic_naming.md }
       - { function: pydantic.alias_generators.to_pascal, strategy: pascal,
           by: scripts/probes/pydantic_naming.md }
-      # mealie's: agrees with `to_camel` on all 465 of mealie's field names (probe §1). Measured
-      # on mealie's names, not proved for every string (`HTTP_code` gives `httpCode` and
-      # `HTTPCode`); no mealie field has such a name.
-      - { function: humps.main.camelize, strategy: camel,
-          by: scripts/probes/pydantic_naming.md }
+      # mealie's: pyhumps' own function, copied exactly. It is not `to_camel`: the two differ on
+      # `is_2fa_enabled`, `HTTP_code`, `ID` and `field__double` (plan 2 final review M2).
+      - { function: humps.main.camelize, strategy: humps_camelize,
+          by: scripts/probes/humps_camelize.md }
   default_strategy: as_declared
   # REQUIRED (probe §4): a field is required when it writes no default (`Optional[X]` with none
   # is required). `Field(...)` and `Field()` write none; `Field(3)`, `Field(default=...)` and

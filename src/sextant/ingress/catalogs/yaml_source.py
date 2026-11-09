@@ -1205,7 +1205,7 @@ _SERIALIZATION_KEYS = frozenset(
         "output_open_when",
     }
 )
-_GENERATOR_STRATEGIES = frozenset({"camel", "pascal"})
+_GENERATOR_STRATEGIES = frozenset({"camel", "pascal", "humps_camelize"})
 _REQUIRED_RULES = frozenset({"no_default"})
 _KNOWN_TYPE_KEYS = frozenset({"type", "wire", "format", "nullable", "by"})
 

@@ -6022,7 +6022,9 @@ serialization:
   set on its way from the model to the class declaring it (an inherited field keeps the alias a
   parent's generator gave it where the model sets `None`). `functions` maps a function to a
   strategy word: `camel` and `pascal` are pydantic's `to_camel` and `to_pascal` exactly, and
-  `humps.main.camelize` is `camel` on the probe's evidence. **A generator no entry names is not
+  `humps_camelize` is pyhumps 3.8's `humps.main.camelize` exactly (`humps_camelize.md`; user
+  approval 2026-11-09, plan 2 final review M2: it differs from `to_camel` on `is_2fa_enabled`,
+  `HTTP_code` and `ID`). **A generator no entry names is not
   guessed at**: the fields it names get `wire_name` NULL at `unresolved`, and the shape is open
   (§2g's rule). A `by_name` argument written `True` makes a renamed field accept its own name too.
 - **`required: no_default`** (the one rule): a field is required where it writes no default (a

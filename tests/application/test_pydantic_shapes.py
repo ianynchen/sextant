@@ -201,11 +201,12 @@ def test_explicit_alias_wins_over_the_generator(tmp_path: Path, libraries):
     }
 
 
-def test_humps_camelize_is_read_as_the_probe_said(tmp_path: Path, libraries):
-    """mealie's generator, `humps.main.camelize`, is the `camel` strategy: it agrees with
-    `to_camel` on all 465 of mealie's field names (`pydantic_naming.md` §1). With
-    `populate_by_name` a field is read under its name too, which is not its output name, so a
-    renamed field is `partial` (N13 B) and an unrenamed one is not."""
+def test_humps_camelize_is_read_as_humps_writes_it(tmp_path: Path, libraries):
+    """mealie's generator, `humps.main.camelize`, is its own strategy, `humps_camelize`: pyhumps
+    3.8's function exactly (`humps_camelize.md`), not pydantic's `to_camel`, which differs on a
+    digit after an underscore, an upper-case word and a doubled underscore (final review M2).
+    With `populate_by_name` a field is read under its name too, which is not its output name,
+    so a renamed field is `partial` (N13 B) and an unrenamed one is not."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -215,12 +216,20 @@ def test_humps_camelize_is_read_as_the_probe_said(tmp_path: Path, libraries):
             "    model_config = ConfigDict(alias_generator=camelize, populate_by_name=True)\n"
             "    created_at: int = 0\n"
             "    name: str = ''\n"
+            "    is_2fa_enabled: bool = False\n"
+            "    HTTP_code: int = 0\n"
+            "    ID: int = 0\n"
+            "    field__double: int = 0\n"
         ),
     )
 
     assert _fields(workspace) == {
         "createdAt": ("integer", None, False, "partial"),
         "name": ("string", None, False, "resolved"),
+        "is2faEnabled": ("boolean", None, False, "partial"),
+        "HTTPCode": ("integer", None, False, "partial"),
+        "ID": ("integer", None, False, "resolved"),
+        "fieldDouble": ("integer", None, False, "partial"),
     }
 
 

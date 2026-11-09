@@ -105,7 +105,11 @@ here would restate those documents rather than add anything.
     default is not readable), JSON types and formats (`known_types`, checked against pydantic's
     own JSON schema), a generic `response_model` read as the type it names, and query models.
     User-approved keys: `excluded_when`, `open_when`, `output_fields`, `output_open_when` (with
-    `also_input` and `except_declared_by`), and the shape model's `wrappers`. A shape is closed
+    `also_input` and `except_declared_by`), and the shape model's `wrappers`. The alias
+    generator `humps.main.camelize` is its own strategy word, `humps_camelize` (user approval
+    2026-11-09, final review M2), copied from pyhumps 3.8 and equal to it on 38,050 names: it
+    was read as `to_camel`, which gives `is2FaEnabled` where pyhumps gives `is2faEnabled`.
+    A shape is closed
     where every field is read. `boundary diff` gives no verdict on a field whose requirement is
     unknown.
   - **Routes registered under an undecided test** (task 10b; OI-368 first half, design

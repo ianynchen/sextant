@@ -44,6 +44,10 @@ every annotated name in the class body that does not start with `_`: **465 disti
 | names that either one changes | 311 (the same 311) |
 | `to_pascal(name) != to_camel(name)` with its first letter raised | **2**: `passwordConfirm` and `versionLatest` (written camel-case in the model). `to_pascal` gives `Passwordconfirm` and `Versionlatest`; `to_camel` leaves them. |
 
+**Superseded** (plan 2 final review M2, 2026-11-09): `humps.main.camelize` is now its own
+strategy, `humps_camelize`, copied exactly and checked in `humps_camelize.md`. The paragraph
+below is the original reading.
+
 So N12's rule holds: `humps.main.camelize` maps to the `camel` strategy, because it agrees with
 `to_camel` on every mealie field name. The agreement is measured on mealie's names, not proved
 for all strings. `humps.camelize` and `to_camel` differ on some inputs (`HTTP_code` gives `httpCode` and
