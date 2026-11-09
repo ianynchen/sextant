@@ -270,7 +270,7 @@ _FILLED_BY = "filled-by"
 # a calling context of that method, as a caller's `caller@ordinal` is, so one execution takes
 # every parameter from the framework's fill or every one from one direct caller. Written as a
 # `caller@ordinal` label naming no call of the module; it crosses out to no caller in the module
-# (`Path.crossed_out_of` leaves it out, `Path.filled_in` names it).
+# (`Path.crossed_out_of` leaves it out).
 _FRAMEWORK_CALL = "<framework>@-1"
 # What a recipe body hands back, its own position, so it is read once per body however many
 # parameters it fills (`_Walk._recipe_runs`).
@@ -585,6 +585,63 @@ class ParameterValues:
     annotation: Mapping[str, Any] | None
 
 
+class Kept[K, V]:
+    """**The one way an answer worked out inside a walk is kept for another asker** (task 8
+    re-review R3-1). Each answer is held beside every read working it out made that a binding
+    round can change (`_Walk._depends`), and every hit hands those reads to the position
+    asking, as a fresh computation would have. So no position takes a kept answer without
+    what it rests on, and a binding round can tell which kept upward paths its new edges
+    change (`suffixes_kept`).
+
+    A walk's own memos, and the index's caches a walk reads, are each one of these.
+    `tests/architecture/test_nested_walks_pass_their_reads.py` fails a cache kept any other
+    way, unless what it computes reads nothing a binding round changes.
+
+    `deps` is the asking walk's read stack (`_Walk._deps`), innermost last: `get` works an
+    answer out on a fresh entry and hands the entry to the one below. `compute(*arguments)`
+    gives the answer and whether to keep it (an answer resting on a position still being
+    worked out is true of one path only). Several answers can be kept under one key, each for
+    the askers `alike` accepts (`_Walk._objects`). `cycle`, a one-tuple, is what a key asked
+    again while it is being worked out answers, unkept."""
+
+    __slots__ = ("held", "pending")
+
+    def __init__(self, held: dict[K, list[tuple[V, frozenset[Any]]]] | None = None) -> None:
+        self.held: dict[K, list[tuple[V, frozenset[Any]]]] = {} if held is None else held
+        self.pending: set[K] = set()
+
+    def get(
+        self,
+        key: K,
+        deps: list[set[Any]],
+        compute: Callable[..., tuple[V, bool]],
+        *arguments: Any,
+        alike: Callable[[V], bool] | None = None,
+        cycle: tuple[V] | None = None,
+    ) -> V:
+        for value, reads in self.held.get(key, ()):
+            if alike is None or alike(value):
+                if deps and reads:
+                    deps[-1].update(reads)
+                return value
+        if cycle is not None:
+            if key in self.pending:
+                return cycle[0]
+            self.pending.add(key)
+        deps.append(set())
+        try:
+            value, keep = compute(*arguments)
+        finally:
+            reads = frozenset(deps.pop())
+            if cycle is not None:
+                self.pending.discard(key)
+        if deps and reads:
+            deps[-1].update(reads)
+        if keep:
+            self.held.setdefault(key, []).append((value, reads))
+        return value
+
+
 @dataclass(frozen=True)
 class ValueIndex:
     """The six reads the walk needs, folded once (GUIDELINES §8.7: cost is a design
@@ -670,8 +727,9 @@ class ValueIndex:
     # reads in progress) and the calling context as far as the walk read it, for as long as
     # this index lives. The answer reads nothing but the index, and every site resolved asks
     # it again: on `apollo-portal` one run asked 1,243 times for 463 distinct walks, each a
-    # full walk (GUIDELINES §8.7).
-    objects: dict[Any, Any] = dataclass_field(default_factory=dict, compare=False, repr=False)
+    # full walk (GUIDELINES §8.7). Each answer is kept with the asker's frames and what the
+    # walk read of them (`Kept`'s `alike`).
+    objects: Kept[Any, Any] = dataclass_field(default_factory=Kept, compare=False, repr=False)
     # Every type some call site here constructs (`owner` of an `<init>` site), read off
     # `sites`. A receiver can be a construction of a type only where one is in this set, so a
     # read of a field whose type nothing here builds is not walked for its objects at all:
@@ -825,10 +883,11 @@ class ValueIndex:
     # `parameter_markers`' answer for this index, once built (ruling R14): its one entry, or
     # none yet. Emptied with the index each binding round.
     markers: list[Any] = dataclass_field(default_factory=list, compare=False, repr=False)
-    # What each parameter's markers were read through that a binding round can change, by
-    # `(method, index)`, built with `markers` and emptied with it.
-    marker_reads: dict[tuple[str, int], frozenset[Any]] = dataclass_field(
-        default_factory=dict, compare=False, repr=False
+    # Each parameter's markers by `(method, index)`, kept with what they were read through
+    # that a binding round can change: a walk takes them from here (`_Walk._recipe_paths`).
+    # Built with `markers` and emptied with it.
+    markers_kept: Kept[tuple[str, int], tuple[Any, ...]] = dataclass_field(
+        default_factory=Kept, compare=False, repr=False
     )
     # What each generator yields (`method_return.yielded`, plan 2026-11-08 N10), by method, in
     # `returned_values`' form: read only where a framework hands a parameter what a recipe
@@ -847,7 +906,9 @@ class ValueIndex:
     recipes: RecipeCalls = dataclass_field(default_factory=RecipeCalls)
     # `recipe_values`' answer per recipe call, for as long as this lives. Emptied with the
     # index each binding round.
-    recipes_read: dict[Any, Any] = dataclass_field(default_factory=dict, compare=False, repr=False)
+    recipes_read: Kept[Any, tuple["_Reached", ...]] = dataclass_field(
+        default_factory=Kept, compare=False, repr=False
+    )
     # `_Walk._mapping`'s answers, per class, for as long as this lives.
     mappings: dict[str, dict[str, dict[str, Mapping[str, Any]]] | None] = dataclass_field(
         default_factory=dict, compare=False, repr=False
@@ -858,15 +919,11 @@ class ValueIndex:
     # round 2): `(reader, position, frames)` -> the paths from that position to where they end,
     # each with its answer, computed on the empty path and joined onto every path that reaches
     # the position (`_Walk._resolve`). Shared by every site a reader walks over this index. A
-    # binding round keeps the ones its new edges cannot change (`suffixes_kept`).
-    suffixes: dict[Any, tuple["_Reached", ...]] = dataclass_field(
-        default_factory=dict, compare=False, repr=False
-    )
-    # What each `suffixes` entry read that a binding round can change (`_Walk._depends`): the
-    # callers of a method, the callees of a site, whether a site reached a body, the calls of a
-    # writer. Kept beside the entry, so a round drops only the entries its edges change.
-    suffix_deps: dict[Any, frozenset[Any]] = dataclass_field(
-        default_factory=dict, compare=False, repr=False
+    # binding round keeps the ones its new edges cannot change (`suffixes_kept`): each is kept
+    # with what it read that a round can change (`Kept`), the callers of a method, the callees
+    # of a site, whether a site reached a body, the calls of a writer.
+    suffixes: Kept[Any, tuple["_Reached", ...]] = dataclass_field(
+        default_factory=Kept, compare=False, repr=False
     )
     # `declared_classes_of`'s answers, by the written reference's identity (the reference kept
     # beside its answer, so an identity is never read for another), for as long as this lives.
@@ -2247,18 +2304,6 @@ class Path:
             )
         )
 
-    def filled_in(self) -> tuple[str, ...]:
-        """The methods this path read a parameter of as the framework's call fills it (a recipe,
-        plan 2026-11-08 N5), nearest first: it crossed out to no caller in the module, and still
-        depends on the method's callers, which a later round may add beside it."""
-        return tuple(
-            dict.fromkeys(
-                str(step.context[1])
-                for step in self.trail
-                if step.context[0] == _CALLER_OF and step.label == _FRAMEWORK_CALL
-            )
-        )
-
     def two_calls_of_one_helper(self, other: "Path") -> bool:
         """Whether the two paths disagree ONLY on which call entered a helper — each value
         handed back by its own call of one helper (`id(job)` beside `id(trigger)`), which one
@@ -2927,15 +2972,18 @@ _ANY_ARGUMENTS = "(*)"
 _RECIPE_READER = "values:recipe"
 
 
-def suffixes_kept(
-    index: ValueIndex, changed: frozenset[Any]
-) -> tuple[dict[Any, tuple["_Reached", ...]], dict[Any, frozenset[Any]]]:
+def suffixes_kept(index: ValueIndex, changed: frozenset[Any]) -> Kept[Any, tuple["_Reached", ...]]:
     """The shared upward paths (`ValueIndex.suffixes`) a binding round keeps, with their reads:
     every entry that read none of `changed`, the round's new edges as reads (`(callers,
     method)`, `(callees, site)`, `(reached, site)`, `(called_at, writer)`). An entry built on
     another records that one's reads too, so a changed caller anywhere beneath drops it."""
-    kept = {key: deps for key, deps in index.suffix_deps.items() if deps.isdisjoint(changed)}
-    return {key: index.suffixes[key] for key in kept}, kept
+    return Kept(
+        {
+            key: held
+            for key, held in index.suffixes.held.items()
+            if all(reads.isdisjoint(changed) for _, reads in held)
+        }
+    )
 
 
 def recipe_values(
@@ -2949,22 +2997,36 @@ def recipe_values(
     parameter writes none, or the call's argument may be in an unpacked one. Read once per
     call and parameter for as long as `index` lives; a recipe whose value is read through
     itself is a `cycle`."""
-    return _recipe_values(index, site, parameter)[0]
+    return _recipe_values(index, site, parameter, [])
 
 
 def _recipe_values(
-    index: ValueIndex, site: Mapping[str, Any], parameter: tuple[str, int] | None
-) -> tuple[tuple["_Reached", ...], frozenset[Any]]:
-    """`recipe_values`, with what the reading read that a binding round can change."""
+    index: ValueIndex,
+    site: Mapping[str, Any],
+    parameter: tuple[str, int] | None,
+    deps: list[set[Any]],
+) -> tuple["_Reached", ...]:
+    """`recipe_values`, read by the walk whose read stack is `deps` (`Kept`)."""
     key = (str(site["caller"]), int(str(site["ordinal"])), parameter)
-    if key in index.recipes_read:
-        held = index.recipes_read[key]
-        return (
-            cast(tuple[tuple[_Reached, ...], frozenset[Any]], held)
-            if held is not None
-            else ((((), _unresolved(CYCLE)),), frozenset())
-        )
-    index.recipes_read[key] = None
+    return index.recipes_read.get(
+        key,
+        deps,
+        _read_recipe,
+        index,
+        site,
+        parameter,
+        deps,
+        cycle=((((), _unresolved(CYCLE)),),),
+    )
+
+
+def _read_recipe(
+    index: ValueIndex,
+    site: Mapping[str, Any],
+    parameter: tuple[str, int] | None,
+    deps: list[set[Any]],
+) -> tuple[tuple["_Reached", ...], bool]:
+    """`_recipe_values`' reading, worked out once per call and parameter."""
     reference = index.recipes.calls.get((str(site.get("owner")), str(site["name"])))
     slot = argument_slot(site["arguments"] or [], reference)
     found: list[_Reached] = []
@@ -2972,17 +3034,14 @@ def _recipe_values(
         found.append(((), _unresolved(NOT_READABLE)))
     elif slot is None:
         found.extend(_parameter_type(index, parameter))
-    reads: set[Any] = set()
     if slot is not None and slot != UNPACKED_SLOT:
-        walk = _Walk(index, functions=True, shared=_RECIPE_READER, deps=[reads])
+        walk = _Walk(index, functions=True, shared=_RECIPE_READER, deps=deps)
         for path, answer in walk.at(site, slot):
             if answer.kind == ABSENT and answer.null:
                 found.extend((path, one) for _, one in _parameter_type(index, parameter))
             else:
                 found.append((path, answer))
-    held = (tuple(found), frozenset(reads))
-    index.recipes_read[key] = held
-    return held
+    return tuple(found), True
 
 
 def _parameter_type(index: ValueIndex, parameter: tuple[str, int] | None) -> tuple["_Reached", ...]:
@@ -3363,18 +3422,15 @@ class _Walk:
         # The reader's key in the index's shared upward paths (`ValueIndex.suffixes`, R39):
         # every walk of one reader over one index shares them. None, they are this walk's own.
         self._shared = shared
-        self._suffixes: dict[Any, tuple[_Reached, ...]] = (
-            index.suffixes if shared is not None else {}
-        )
-        self._suffix_deps: dict[Any, frozenset[Any]] = (
-            index.suffix_deps if shared is not None else {}
+        self._suffixes: Kept[Any, tuple[_Reached, ...]] = (
+            index.suffixes if shared is not None else Kept()
         )
         # What the positions being worked out read that a binding round can change, innermost
         # last (`_depends`): each finished position hands its reads to the one that asked. A
         # walk started inside another walk is handed that walk's own stack, so whatever it reads
-        # is read by the position that started it: required, so no walk can lose its reads.
+        # is read by the position that started it: required, so no walk can lose its reads. An
+        # answer kept for another asker is kept with its reads, and hands them on (`Kept`).
         self._deps: list[set[Any]] = deps
-        self._memo_deps: dict[Any, frozenset[Any]] = {}
         # The type reader (`producer_paths(..., declared_types=True)`): where a body gives a
         # call's result no type, the callee's declared return does. False for every other
         # reader, which never reads a declaration as a value.
@@ -3435,10 +3491,10 @@ class _Walk:
         self._reads: list[tuple[Any, ...]] = []
         # Per field: each call of a method writing it, with the objects that call was made on
         # (`_Walk._setter_calls_of`), per field and reads in progress.
-        self._setter_calls: dict[
+        self._setter_calls: Kept[
             tuple[str, frozenset[tuple[str, tuple[str, int]]]], tuple[_SetterCall, ...]
-        ] = {}
-        self._memo: dict[tuple[_Position, _Trail], tuple[_Reached, ...]] = {}
+        ] = Kept()
+        self._memo: Kept[tuple[_Position, _Trail], tuple[_Reached, ...]] = Kept()
         # The positions the current path is IN THE MIDDLE OF resolving. §1d's `cycle` is
         # exactly a return to one of them.
         self._pending: set[_Position] = set()
@@ -3451,14 +3507,11 @@ class _Walk:
         # the same position by a different route, so it is not memoised.
         self._open: set[_Position] = set()
         # What a body does to the parameter a value was handed to (`_entered_window`), per
-        # `(callee, parameter)`, and the ones being read right now: entering one again is
-        # `cycle`. An answer holding a `cycle` is not kept, for `_open`'s reason above.
-        self._windows: dict[tuple[str, int], tuple[_Window, ...]] = {}
-        self._entering: set[tuple[str, int]] = set()
-        # `_touched_in`'s memo and its guard: the bodies read for what they do to a parameter,
-        # and those being read now.
-        self._touched: dict[tuple[str, int], str | None] = {}
-        self._entering_bodies: set[tuple[str, int]] = set()
+        # `(callee, parameter)`: entering one again while it is read is `cycle`. An answer
+        # holding a `cycle` is not kept, for `_open`'s reason above.
+        self._windows: Kept[tuple[str, int], tuple[_Window, ...]] = Kept()
+        # `_touched_in`'s memo: the bodies read for what they do to a parameter.
+        self._touched: Kept[tuple[str, int], str | None] = Kept()
         # Rule 9's split and proof, shared with the forward chain walk (`Flow`).
         self._flow = Flow(index)
 
@@ -3482,31 +3535,28 @@ class _Walk:
         """
         if self._upward(position):
             return self._joined_upward(position, trail, frames)
-        key = (position, trail)
-        cached = self._memo.get(key)
-        if cached is not None:
-            self._read(self._memo_deps[key])
-            return cached
+        return self._memo.get((position, trail), self._deps, self._guarded, position, trail, frames)
+
+    def _guarded(
+        self, position: _Position, trail: _Trail, frames: "_Frames"
+    ) -> tuple[tuple[_Reached, ...], bool]:
+        """`position` worked out on `trail`, and whether its answer may be kept. A position the
+        current path is in the middle of is `cycle` (§1d); an answer resting on a position
+        still being worked out is true of this path only, and is not kept."""
         if position in self._pending:
             self._open.add(position)
-            return _only(trail, _unresolved(CYCLE))
+            return _only(trail, _unresolved(CYCLE)), False
         self._pending.add(position)
         outer, self._open = self._open, set()
-        self._deps.append(set())
         reached = self._compute(position, trail, frames)
-        deps = frozenset(self._deps.pop())
-        self._read(deps)
         unresolved_back_edges = self._open - {position}
         self._open = outer | unresolved_back_edges
         self._pending.discard(position)
-        if not unresolved_back_edges:
-            self._memo[key] = reached
-            self._memo_deps[key] = deps
-        return reached
+        return reached, not unresolved_back_edges
 
     def _depends(self, read: Any) -> None:
         """Record that the position being worked out read `read`, a part of the index a binding
-        round can change (`ValueIndex.suffix_deps`)."""
+        round can change (`Kept`, `suffixes_kept`)."""
         if self._deps:
             self._deps[-1].add(read)
 
@@ -3514,11 +3564,6 @@ class _Walk:
         """`site`'s callees, the read recorded (`_depends`)."""
         self._depends((READ_CALLEES, site))
         return tuple(self._index.callees.get(site, ()))
-
-    def _read(self, reads: frozenset[Any]) -> None:
-        """Hand a finished position's reads to the position that asked for it."""
-        if self._deps and reads:
-            self._deps[-1].update(reads)
 
     def _upward(self, position: _Position) -> bool:
         """Whether `position`'s answer is the same set of paths upward whatever path reached
@@ -3542,26 +3587,9 @@ class _Walk:
         work is bounded by the positions, not by the paths through them: polar's
         `self.session` was 833,097 paths over 4,655 parameters. An answer resting on a
         position still being worked out (a cycle) is not kept, as before."""
-        key = (self._shared, position, frames)
-        upward = self._suffixes.get(key)
-        if upward is not None:
-            self._read(self._suffix_deps[key])
-        else:
-            if position in self._pending:
-                self._open.add(position)
-                return _only(trail, _unresolved(CYCLE))
-            self._pending.add(position)
-            outer, self._open = self._open, set()
-            self._deps.append(set())
-            upward = self._compute(position, (), frames)
-            deps = frozenset(self._deps.pop())
-            self._read(deps)
-            unresolved_back_edges = self._open - {position}
-            self._open = outer | unresolved_back_edges
-            self._pending.discard(position)
-            if not unresolved_back_edges:
-                self._suffixes[key] = upward
-                self._suffix_deps[key] = deps
+        upward = self._suffixes.get(
+            (self._shared, position, frames), self._deps, self._guarded, position, (), frames
+        )
         found: list[_Reached] = []
         for path, answer in upward:
             merged = _combine(trail, path)
@@ -4649,19 +4677,14 @@ class _Walk:
         where it does, and `cycle` where the walk is already reading that body for that
         parameter (review 2, M2: a listener that schedules the job it is handed is handed it
         again). Read once per walk, as `_entered_window` is, and guarded the same way."""
-        key = (body, parameter)
-        if key in self._touched:
-            return self._touched[key]
-        if key in self._entering_bodies:
-            return CYCLE
-        self._entering_bodies.add(key)
-        try:
-            events = self._events(body, (_PARAMETER, parameter), -1, None, True)
-        finally:
-            self._entering_bodies.discard(key)
-        found = ESCAPES if events else None
-        self._touched[key] = found
-        return found
+        return self._touched.get(
+            (body, parameter), self._deps, self._touching, body, parameter, cycle=(CYCLE,)
+        )
+
+    def _touching(self, body: str, parameter: int) -> tuple[str | None, bool]:
+        """`_touched_in`'s reading of `body`."""
+        events = self._events(body, (_PARAMETER, parameter), -1, None, True)
+        return (ESCAPES if events else None), True
 
     def _type_of(self, method: str, held: tuple[str, int]) -> str | None:
         """`held`'s own type, in a descriptor's spelling, where the facts state it: what its
@@ -4678,20 +4701,19 @@ class _Walk:
         """What `callee` does to its `parameter` over its whole body — the window of a value
         handed to it, since the body runs to its end before the caller's next call. Entering
         one already being read on this path is `cycle`."""
-        key = (callee, parameter)
-        cached = self._windows.get(key)
-        if cached is not None:
-            return cached
-        if key in self._entering:
-            return (((), CYCLE),)
-        self._entering.add(key)
-        try:
-            found = self._window(callee, (_PARAMETER, parameter), -1, None, in_body=True)
-        finally:
-            self._entering.discard(key)
-        if all(outcome != CYCLE for _, outcome in found):
-            self._windows[key] = found
-        return found
+        return self._windows.get(
+            (callee, parameter),
+            self._deps,
+            self._window_entered,
+            callee,
+            parameter,
+            cycle=((((), CYCLE),),),
+        )
+
+    def _window_entered(self, callee: str, parameter: int) -> tuple[tuple[_Window, ...], bool]:
+        """`_entered_window`'s reading of `callee`, kept where it holds no `cycle`."""
+        found = self._window(callee, (_PARAMETER, parameter), -1, None, in_body=True)
+        return found, all(outcome != CYCLE for _, outcome in found)
 
     def _accessor(self, site_key: tuple[str, int]) -> bool:
         """Whether a call made ON a value is an accessor: it takes no argument and hands back
@@ -5852,22 +5874,25 @@ class _Walk:
         reads."""
         # Imported here: `parameter_markers` reads every value through this module's walk.
         from sextant.application.resolve.parameter_markers import (
+            building,
             parameter_markers,
             recipe_sites,
         )
 
-        markers = parameter_markers(self._index).get((method, index), ())
+        parameter_markers(self._index)
+        markers = (
+            ()
+            if building(self._index)
+            else self._index.markers_kept.get((method, index), self._deps, _none_kept)
+        )
         sites = recipe_sites(markers, self._index.recipes.calls)
         # The framework's call of `method` is a calling context of it (`_FRAMEWORK_CALL`).
         called = _combine(trail, (_Step((_CALLER_OF, method), _FRAMEWORK_CALL),))
         if not sites or called is None:
             return ()
-        self._read(self._index.marker_reads.get((method, index), frozenset()))
         reached: list[_Reached] = []
         for site in sites:
-            found, reads = _recipe_values(self._index, site, (method, index))
-            self._read(reads)
-            for path, answer in found:
+            for path, answer in _recipe_values(self._index, site, (method, index), self._deps):
                 merged = _combine(called, path)
                 if merged is not None:
                     reached.extend(self._recipe_runs(answer, method, index, merged, frames))
@@ -6585,19 +6610,32 @@ class _Walk:
         answer is reused for any frames that read the same, which is most of them: a receiver
         that never reaches a parameter of a framed method reads none."""
         owner = owner_of(symbol)
-        key = (owner, site, asking)
-        cached: tuple[_End, ...]
-        for held, reads, cached, read in self._index.objects.get(key, ()):
-            if _reads_alike(frames, held, reads):
-                self._read(read)
-                return cached
+        held = self._index.objects.get(
+            (owner, site, asking),
+            self._deps,
+            self._objects_walked,
+            owner,
+            site,
+            frames,
+            asking,
+            alike=lambda held: _reads_alike(frames, held[0], held[1]),
+        )
+        return cast(tuple[_End, ...], held[2])
+
+    def _objects_walked(
+        self,
+        owner: str | None,
+        site: tuple[str, int],
+        frames: "_Frames",
+        asking: frozenset[tuple[str, tuple[str, int]]],
+    ) -> tuple[tuple["_Frames", tuple[tuple[Any, ...], ...], tuple["_End", ...]], bool]:
+        """`_objects`' walk, kept with `frames` and what it read of them."""
         declared = (str(owner), "<init>")
         # A construction of a subtype built here ends the walk too, so that end is told from
         # one the walk cannot read (final review, Minor 5).
         subtypes = frozenset(
             (below, "<init>") for below in self._index.constructed_below.get(str(owner), ())
         )
-        self._deps.append(set())
         walk = _Walk(
             self._index,
             declared=frozenset({declared}) | subtypes,
@@ -6608,8 +6646,6 @@ class _Walk:
         walk._base = len(frames)
         ends: list[_End] = []
         walked = walk._of_site(self._index.sites[site], RECEIVER, (), frames)
-        read = frozenset(self._deps.pop())
-        self._read(read)
         for crossed, answer in walked:
             entered = _entered(crossed, self._index)
             built: tuple[str, int] | None = None
@@ -6624,11 +6660,7 @@ class _Walk:
                     built = (producer.caller, producer.ordinal)
                 subtype = producer.identity in subtypes
             ends.append((built, crossed, crossed if entered is None else entered, subtype))
-        found = tuple(dict.fromkeys(ends))
-        self._index.objects.setdefault(key, []).append(
-            (frames, tuple(dict.fromkeys(walk._reads)), found, read)
-        )
-        return found
+        return (frames, tuple(dict.fromkeys(walk._reads)), tuple(dict.fromkeys(ends))), True
 
     def _frame_in(self, frames: "_Frames", method: str) -> tuple[str, int] | None:
         """`_frame_of`, recording on an object walk which of the asker's frames it read."""
@@ -6664,10 +6696,14 @@ class _Walk:
         read of the field under the same reads in progress shares them. Keyed on `asking`
         too, because what a call's object walk answers depends on which reads it may not
         ask again."""
-        key = (symbol, asking)
-        cached = self._setter_calls.get(key)
-        if cached is not None:
-            return cached
+        return self._setter_calls.get(
+            (symbol, asking), self._deps, self._setter_calls_read, symbol, asking
+        )
+
+    def _setter_calls_read(
+        self, symbol: str, asking: frozenset[tuple[str, tuple[str, int]]]
+    ) -> tuple[tuple["_SetterCall", ...], bool]:
+        """`_setter_calls_of`' reading of `symbol`'s writers."""
         writing = sorted(
             writer
             for writer in self._writes_by(symbol)
@@ -6679,9 +6715,7 @@ class _Walk:
             for call in self._index.called_at.get(writer, ()):
                 if call in self._index.sites:
                     calls.append((writer, call, self._objects(symbol, call, (), asking)))
-        found = tuple(calls)
-        self._setter_calls[key] = found
-        return found
+        return tuple(calls), True
 
 
 def _constructs(writer: str | None, field: str) -> bool:
@@ -6721,6 +6755,12 @@ _Writes = tuple[
 _FRAME = "frame"
 _LAST = "last"
 _WHOLE = "whole"
+
+
+def _none_kept() -> tuple[tuple[Any, ...], bool]:
+    """What `parameter_markers` kept nothing for answers: a parameter with no markers, which
+    read nothing."""
+    return (), False
 
 
 def _reads_alike(frames: _Frames, held: _Frames, reads: tuple[tuple[Any, ...], ...]) -> bool:

@@ -32,10 +32,12 @@ through the index's upward paths (R39), so each alias is read once."""
 
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Literal, cast
 
 from sextant.application.resolve.values import (
     EXTERNAL,
+    ParameterValues,
     Path,
     Producer,
     ValueIndex,
@@ -79,39 +81,62 @@ def parameter_markers(index: ValueIndex) -> Mapping[tuple[str, int], tuple[Marke
         return cast(Mapping[tuple[str, int], tuple[Marker, ...]], index.markers[0])
     found: dict[tuple[str, int], tuple[Marker, ...]] = {}
     # Held while the pass runs: its own walks reach parameters, and a parameter reads its
-    # recipe from here (`values._Walk._recipe_paths`). Those walks stop at a call, so what a
-    # recipe hands a parameter is no part of where they end; they read none.
-    index.markers.append({})
+    # recipe from here (`values._Walk._recipe_paths`, `building`). Those walks stop at a call,
+    # so what a recipe hands a parameter is no part of where they end; they read none.
+    index.markers.append(_BUILDING)
     stops = _constructions(index)
     for key, values in index.parameter_values.items():
         if values.body is None:
             continue
-        markers: list[Marker] = []
-        # What this parameter's markers are read through that a binding round can change
-        # (`ValueIndex.marker_reads`): a walk that names its recipe depends on them too.
-        reads: set[Any] = set()
-        if values.default is not None:
-            ends = _ends(index, values.body, values.default, stops, _DEFAULT_READER, reads)
-            for path, producer in enumerate(ends):
-                site = _site(index, producer)
-                if site is not None:
-                    markers.append(Marker(site=site, where="default", order=0, path=path))
-        if values.annotation is not None:
-            forms = _ends(index, values.body, values.annotation, _ANNOTATED, _FORM_READER, reads)
-            for path, elements in enumerate(
-                one for form in forms for one in _metadata(index, form, stops, reads)
-            ):
-                markers.extend(
-                    Marker(site=site, where="annotation", order=order, path=path)
-                    for order, site in enumerate(elements)
-                    if site is not None
-                )
+        # Kept with what they were read through that a binding round can change
+        # (`ValueIndex.markers_kept`): a walk that names its recipe depends on them too.
+        stack: list[set[Any]] = []
+        markers = index.markers_kept.get(
+            key, stack, _read, index, values.body, values, stops, stack
+        )
         if markers:
-            found[key] = tuple(markers)
-        if reads:
-            index.marker_reads[key] = frozenset(reads)
+            found[key] = markers
     index.markers[0] = found
     return found
+
+
+def _read(
+    index: ValueIndex,
+    body: str,
+    values: ParameterValues,
+    stops: frozenset[tuple[str, str]],
+    deps: list[set[Any]],
+) -> tuple[tuple[Marker, ...], bool]:
+    """One parameter's markers, `values` of `body`'s frame, read by walks on the read stack
+    `deps`."""
+    markers: list[Marker] = []
+    if values.default is not None:
+        ends = _ends(index, body, values.default, stops, _DEFAULT_READER, deps)
+        for path, producer in enumerate(ends):
+            site = _site(index, producer)
+            if site is not None:
+                markers.append(Marker(site=site, where="default", order=0, path=path))
+    if values.annotation is not None:
+        forms = _ends(index, body, values.annotation, _ANNOTATED, _FORM_READER, deps)
+        for path, elements in enumerate(
+            one for form in forms for one in _metadata(index, form, stops, deps)
+        ):
+            markers.extend(
+                Marker(site=site, where="annotation", order=order, path=path)
+                for order, site in enumerate(elements)
+                if site is not None
+            )
+    return tuple(markers), True
+
+
+def building(index: ValueIndex) -> bool:
+    """Whether `parameter_markers` is building `index`'s markers now: a walk it makes reads no
+    parameter's recipe."""
+    return bool(index.markers) and index.markers[0] is _BUILDING
+
+
+# `ValueIndex.markers` while `parameter_markers` builds them.
+_BUILDING: Mapping[tuple[str, int], tuple[Marker, ...]] = MappingProxyType({})
 
 
 def recipe_sites(
@@ -166,14 +191,14 @@ def _ends(
     entry: Mapping[str, Any],
     declared: frozenset[tuple[str, str]],
     reader: str,
-    reads: set[Any] | None = None,
+    deps: list[set[Any]],
 ) -> list[Producer]:
     """Where each path of `entry`, a value of `body`'s frame, ends: `producer_paths` over the
     one-argument row that holds it (`held_at_end`)."""
     holder = held_at_end(body, entry)
     return [
         producer
-        for producer, _ in producer_paths(index, holder, 0, declared, shared=reader, reads=reads)
+        for producer, _ in producer_paths(index, holder, 0, declared, shared=reader, deps=deps)
     ]
 
 
@@ -181,7 +206,7 @@ def _metadata(
     index: ValueIndex,
     form: Producer,
     stops: frozenset[tuple[str, str]],
-    reads: set[Any] | None = None,
+    deps: list[set[Any]],
 ) -> list[list[Mapping[str, Any] | None]]:
     """For one path to an `Annotated` form, each path through its metadata: one entry per
     written element, in written order, the element's producing call or None where that path
@@ -198,15 +223,15 @@ def _metadata(
     combined: list[list[Mapping[str, Any] | None]] = [
         nested
         for producer, _ in producer_paths(
-            index, site, 0, _ANNOTATED, shared=_FORM_READER, reads=reads
+            index, site, 0, _ANNOTATED, shared=_FORM_READER, deps=deps
         )
-        for nested in (_metadata(index, producer, stops, reads) or [[]])
+        for nested in (_metadata(index, producer, stops, deps) or [[]])
     ]
     for slot in range(1, len(arguments)):
         made = [
             _site(index, producer)
             for producer, _ in producer_paths(
-                index, site, slot, stops, shared=_DEFAULT_READER, reads=reads
+                index, site, slot, stops, shared=_DEFAULT_READER, deps=deps
             )
         ]
         combined = [chosen + [one] for chosen in combined for one in made]

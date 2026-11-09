@@ -6,12 +6,15 @@ and runs the real pipeline with no catalogs, then reads `bound_receivers` (one r
 path the walk reached the receiver by) and `call_edges` (one edge per bound owner).
 """
 
+from functools import partial
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogSource
 from sextant.application.ports.scanner import ScanRequest
+from sextant.application.resolve import pipeline
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.pipeline import resolve
 from sextant.application.resolve.receiver_binding import bind_until_settled
@@ -92,9 +95,24 @@ def _facts(tmp_path: Path, files: dict[str, str]) -> Path:
 
 
 def _resolved(tmp_path: Path, files: dict[str, str]) -> DuckDbWorkspace:
+    """`files` resolved, with every input checked: the rounds bind what walking every site
+    whole each round binds (`bind_until_settled(..., incremental=False)`, the R25 reference),
+    from the start."""
+    facts = _facts(tmp_path, files)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
-    resolve(workspace, _facts(tmp_path, files), _NoCatalogs(), set())
+    resolve(workspace, facts, _NoCatalogs(), set())
+    whole = DuckDbWorkspace(tmp_path / "whole.duckdb")
+    with patch.object(
+        pipeline, "bind_until_settled", partial(bind_until_settled, incremental=False)
+    ):
+        resolve(whole, facts, _NoCatalogs(), set())
+    assert _table(workspace) == _table(whole)
+    whole.close()
     return workspace
+
+
+def _table(workspace: DuckDbWorkspace) -> list[str]:
+    return sorted(repr(sorted(row.items())) for row in workspace.query("bound_receivers"))
 
 
 def _site(workspace: DuckDbWorkspace, method: str, name: str) -> tuple[str, int]:
@@ -1321,7 +1339,9 @@ def test_a_round_keeps_the_upward_paths_its_new_edges_cannot_change(tmp_path: Pa
     """A round that adds callers only to `h` cannot change what `f`'s parameter holds, so its
     paths upward are kept for the next round, not walked again."""
     index = _walked_parameter(tmp_path)
-    kept, _ = suffixes_kept(index, frozenset({(READ_CALLERS, _PREFIX + "app/m#h(sig_dd69782a).")}))
+    kept = suffixes_kept(
+        index, frozenset({(READ_CALLERS, _PREFIX + "app/m#h(sig_dd69782a).")})
+    ).held
 
     assert any(key[1][1] == _PREFIX + "app/m#f(sig_dd69782a)." for key in kept)
 
@@ -1330,9 +1350,11 @@ def test_a_round_walks_again_the_upward_paths_its_new_edges_can_change(tmp_path:
     """A round that adds a caller of `f` changes what `f`'s parameter holds: its paths upward,
     and every path built on them, are dropped and walked again."""
     index = _walked_parameter(tmp_path)
-    kept, _ = suffixes_kept(index, frozenset({(READ_CALLERS, _PREFIX + "app/m#f(sig_dd69782a).")}))
+    kept = suffixes_kept(
+        index, frozenset({(READ_CALLERS, _PREFIX + "app/m#f(sig_dd69782a).")})
+    ).held
 
-    assert index.suffixes
+    assert index.suffixes.held
     assert not any(key[1][1] == _PREFIX + "app/m#f(sig_dd69782a)." for key in kept)
 
 
@@ -1357,9 +1379,11 @@ def test_a_round_walks_again_a_path_built_on_one_its_new_edges_change(tmp_path: 
     index = value_index(workspace)
     site = index.sites[_site(workspace, "app/m#k(sig_dd69782a).", "go")]
     producer_paths(index, site, RECEIVER, frozenset(), shared="rounds")
-    kept, _ = suffixes_kept(index, frozenset({(READ_CALLERS, _PREFIX + "app/m#f(sig_dd69782a).")}))
+    kept = suffixes_kept(
+        index, frozenset({(READ_CALLERS, _PREFIX + "app/m#f(sig_dd69782a).")})
+    ).held
 
-    assert any(key[1][1] == _PREFIX + "app/m#k(sig_dd69782a)." for key in index.suffixes)
+    assert any(key[1][1] == _PREFIX + "app/m#k(sig_dd69782a)." for key in index.suffixes.held)
     assert not any(key[1][1] == _PREFIX + "app/m#k(sig_dd69782a)." for key in kept)
 
 
@@ -1412,3 +1436,119 @@ def test_a_kept_path_records_what_a_walk_inside_it_read(tmp_path: Path):
 
     assert rounds == ["app/m/Cfg#", "app/m/Cfg2#", "app/m/Cfg3#"]
     assert rounds == whole
+
+
+_SETTER = (
+    "class Cfg:\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "class Cfg2(Cfg):\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "class Cfg3(Cfg):\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "class Holder:\n"
+    "    def __init__(self) -> None:\n"
+    "        self.cfg = Cfg()\n"
+    "    def set_cfg(self, c) -> None:\n"
+    "        self.cfg = c\n"
+    "    def get_cfg(self):\n"
+    "        return self.cfg\n"
+    "def helper(c):\n"
+    "    c.go()\n"
+    "def mid1(x):\n"
+    "    helper(x)\n"
+    "def mid2(y):\n"
+    "    helper(y)\n"
+    "def use(h: Holder) -> None:\n"
+    "    v = h.get_cfg()\n"
+    "    mid1(v)\n"
+    "    mid2(v)\n"
+    "class Conf:\n"
+    "    def conf(self, h: Holder) -> None:\n"
+    "        h.set_cfg(Cfg3())\n"
+    "def make():\n"
+    "    return Conf()\n"
+)
+_OTHER = (
+    "class Svc2:\n"
+    "    def other(self, d) -> None:\n"
+    "        helper(d)\n"
+    "def make2():\n"
+    "    return Svc2()\n"
+)
+
+
+def _helper_owners(tmp_path: Path, text: str) -> list[tuple[object, ...]]:
+    workspace = _resolved(tmp_path, {"m.py": text})
+    site = _site(workspace, "app/m#helper(sig_dd69782a).", "go")
+    found = sorted({(row["owner"], row["resolution"]) for row in _bound(workspace, site)}, key=repr)
+    workspace.close()
+    return found
+
+
+def test_a_second_position_asking_a_kept_answer_takes_its_reads_too(tmp_path: Path):
+    """Task 8 re-review R3-1: `mid1` and `mid2` both read `h.get_cfg()`, and only the first to
+    ask works out which setter calls were made on `h`. The second takes that answer kept for
+    the walk, and must take what working it out read as well (`conf`'s calls, which round 1
+    gives), or its upward paths are kept across round 2 and `Cfg3`, set only on `h2`, stays.
+    `_resolved` checks the rounds against whole binding."""
+    found = _helper_owners(
+        tmp_path,
+        _SETTER + _OTHER + "def main() -> None:\n"
+        "    h = Holder()\n"
+        "    h2 = Holder()\n"
+        "    make().conf(h2)\n"
+        "    use(h)\n"
+        "    make2().other(Cfg2())\n",
+    )
+
+    assert [owner for owner, _ in found] == ["app/m/Cfg#", "app/m/Cfg2#"]
+
+
+def test_a_site_whose_value_crossed_a_method_only_inside_an_object_walk_is_walked_again(
+    tmp_path: Path,
+):
+    """Task 8 re-review round 3 (older than task 8): which setter calls were made on `h` is
+    read by a walk inside the walk, through `conf`'s callers, which round 1 gives. The site
+    depends on what that walk read, so round 2 walks it again: `Cfg` alone, resolved, as when
+    every site is walked whole (`_resolved`), not round 1's `Cfg` and `Cfg3`."""
+    found = _helper_owners(
+        tmp_path,
+        _SETTER + "def main() -> None:\n"
+        "    h = Holder()\n"
+        "    h2 = Holder()\n"
+        "    make().conf(h2)\n"
+        "    use(h)\n",
+    )
+
+    assert found == [("app/m/Cfg#", "resolved")]
+
+
+def test_a_getter_value_from_a_later_rounds_caller_is_walked_again(tmp_path: Path):
+    """Task 8 re-review Minor 1 (older than task 8): `use`'s only caller is bound in round 1,
+    and the getter's object is read through it only inside an object walk. The site depends
+    on that read, so it is walked again and gives `Cfg`, not `external`."""
+    found = _helper_owners(
+        tmp_path,
+        "class Cfg:\n"
+        "    def go(self) -> None:\n"
+        "        pass\n"
+        "class Holder:\n"
+        "    def __init__(self, cfg) -> None:\n"
+        "        self.cfg = cfg\n"
+        "    def get_cfg(self):\n"
+        "        return self.cfg\n"
+        "def helper(c):\n"
+        "    c.go()\n"
+        "class Svc:\n"
+        "    def use(self, h: Holder) -> None:\n"
+        "        helper(h.get_cfg())\n"
+        "def make():\n"
+        "    return Svc()\n"
+        "def main() -> None:\n"
+        "    make().use(Holder(Cfg()))\n",
+    )
+
+    assert found == [("app/m/Cfg#", "resolved")]

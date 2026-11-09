@@ -11704,9 +11704,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        if key in self._entering:\n            return (((), CYCLE),)\n",
-                replace="        if key in self._entering:\n"
-                "            return (((), ()),)  # guard disabled by scripts/guard_check.py\n",
+                find="            cycle=((((), CYCLE),),),\n",
+                replace="            cycle=((((), ()),),),  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -12107,9 +12106,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        if key in self._entering_bodies:\n            return CYCLE\n",
-                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
-                "            return CYCLE\n",
+                find="self._touching, body, parameter, cycle=(CYCLE,)\n",
+                replace="self._touching, body, parameter, cycle=None  # guard disabled by "
+                "scripts/guard_check.py\n",
             ),
         ),
     ),
