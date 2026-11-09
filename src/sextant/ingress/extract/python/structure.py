@@ -21,7 +21,8 @@ control-flow fields are read by a later part of this scanner.
 """
 
 import ast
-from collections.abc import Callable, Iterator
+import copy
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 
 from sextant.domain.closed_sets import ConstructKind
@@ -29,9 +30,6 @@ from sextant.domain.facts import (
     CallArgument,
     Fact,
     FieldWriteFact,
-    HeaderCall,
-    HeaderField,
-    HeaderMethod,
     Parameter,
     ParameterKind,
     ParentsUnread,
@@ -50,8 +48,6 @@ from sextant.ingress.extract.python.calls import (
     ParameterValues,
     Scope,
     dict_construction,
-    header_call,
-    header_value,
     is_stub_body,
     own_return_type,
 )
@@ -341,8 +337,11 @@ class _Writer(BodyReader):
         # The bases and the class keywords are read where the class is defined.
         for written_base in node.bases:
             self._type_form(written_base, scope)
+        keywords: list[CallArgument] = []
         for keyword in node.keywords:
-            self._value(keyword.value, scope)
+            value = self._value(keyword.value, scope)
+            if keyword.arg != "metaclass":
+                keywords.append(value.model_copy(update={"keyword": keyword.arg or "**"}))
         self.facts.append(
             SymbolFact(
                 document_id=self._context.document_id,
@@ -362,6 +361,8 @@ class _Writer(BodyReader):
                 generic_interfaces=[
                     wire_projected(base, generic) for base in generic_bases[1:] if base is not None
                 ],
+                # What the metaclass is handed beside the namespace (task 9c review C1).
+                keywords=keywords or None,
             )
         )
         class_names = bind_names(
@@ -757,112 +758,166 @@ def class_header(
     return _class_kind(node, types), written, parents_unread
 
 
-def class_members(
-    chain: list[ast.ClassDef],
-    here: str,
-    types: TypeScope,
-    *,
-    is_package: bool,
-    is_class: Callable[[Target], bool],
-) -> tuple[list[HeaderField], list[HeaderMethod]]:
-    """What a type header says of the body of the last class of `chain` (`single_classes`,
-    fact schema 12): each name it declares, as `file_facts` writes a field (the first
-    statement naming it gives its type and whether it is the class's own), with the value the
-    body writes it, and each function it defines, with its return type and its decorators.
-    Read against the names the class body sees (`_Writer._class`'s scope), through the blocks
-    `file_facts` reads (`_scope_statements`). A name written more than once has a value not
-    read. `is_class` tells a call of a class, a construction, from a call of a function."""
-    path: str | None = None
-    for outer in chain:
-        path = f"{path}.{outer.name}" if path else outer.name
-        generic = types.with_type_parameters(outer.type_params)
-        class_names = bind_names(
-            outer.body, here, is_package=is_package, index=types.index, owner=path
-        )
-        types = replace(generic, class_names=class_names, self_type=type_symbol(Target(here, path)))
-    node = chain[-1]
-    total = not any(
-        keyword.arg == "total"
-        and isinstance(keyword.value, ast.Constant)
-        and keyword.value.value is False
-        for keyword in node.keywords
-    )
-    fields: dict[str, HeaderField] = {}
-    writes: dict[str, int] = {}
-    methods: dict[str, HeaderMethod] = {}
-    for statement in _scope_statements(node.body, types.index, here):
-        if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
-            if statement.name not in methods:
-                generic = types.with_type_parameters(statement.type_params)
-                methods[statement.name] = HeaderMethod(
-                    name=statement.name,
-                    returns=None
-                    if statement.returns is None
-                    else wire_projected(written_type(statement.returns, generic), generic),
-                    decorators=[
-                        found
-                        for decorator in statement.decorator_list
-                        if (found := header_call(decorator, types, is_class)) is not None
-                    ],
-                )
-            continue
-        if not isinstance(statement, ast.Assign | ast.AnnAssign):
-            continue
-        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
-        for target in targets:
-            if not isinstance(target, ast.Name):
-                continue
-            name = target.id
-            if statement.value is not None:
-                writes[name] = writes.get(name, 0) + 1
-            if name not in fields:
-                returns = None
-                static = True
-                optional_key = False
-                annotation_calls: list[HeaderCall] = []
-                if isinstance(statement, ast.AnnAssign):
-                    returns = wire_projected(written_type(statement.annotation, types), types)
-                    static = is_class_variable(statement.annotation, types)
-                    optional_key = not static and is_not_required(
-                        statement.annotation, types, total=total
-                    )
-                    annotation_calls = _metadata_calls(statement.annotation, types, is_class)
-                fields[name] = HeaderField(
-                    name=name,
-                    returns=returns,
-                    static=static,
-                    not_required=optional_key,
-                    annotation_calls=annotation_calls,
-                )
-            if statement.value is not None:
-                value, call = (
-                    (CallArgument(kind="unresolved"), None)
-                    if writes[name] > 1
-                    else header_value(statement.value, types, is_class)
-                )
-                fields[name] = fields[name].model_copy(update={"value": value, "call": call})
-    return list(fields.values()), list(methods.values())
-
-
-def _metadata_calls(
-    annotation: ast.expr, types: TypeScope, is_class: Callable[[Target], bool]
-) -> list[HeaderCall]:
-    """The calls an `Annotated[T, ...]` annotation's metadata writes, in written order; none
-    for any other annotation."""
-    if not isinstance(annotation, ast.Subscript) or not isinstance(
-        annotation.value, ast.Name | ast.Attribute
-    ):
-        return []
-    targets = types.lookup(annotation.value)
-    if len(targets) != 1 or not is_typing(targets[0], "Annotated"):
-        return []
-    elements = annotation.slice.elts if isinstance(annotation.slice, ast.Tuple) else []
-    return [
-        found
-        for element in elements[1:]
-        if isinstance(element, ast.Call)
-        and (found := header_call(element, types, is_class)) is not None
+def header_body_tree(
+    tree: ast.Module, paths: list[str], index: ModuleIndex, here: str
+) -> tuple[ast.Module, frozenset[str]]:
+    """The library module `tree` as a type header reads its classes at `paths` (task 9c
+    review C2): with `file_facts`, the reader of a module's own classes, over a copy that
+    keeps what binds a name (imports, every class and function statement, each function's
+    body left out and a module-level function's decorators and defaults with it), the
+    classes' bodies, and of the module's other statements only the assignments to the names
+    those classes use, followed through the names those assignments use in turn. Also those
+    module-level names. A version test's arm the read does not run is left out, as
+    `file_facts` leaves it. Nothing of `tree` itself is changed."""
+    tops = {path.partition(".")[0] for path in paths}
+    used: set[str] = set()
+    for node in _scope_statements(tree.body, index, here):
+        if isinstance(node, ast.ClassDef) and node.name in tops:
+            used |= _names_used(node)
+    assignments = [
+        node
+        for node in _scope_statements(tree.body, index, here)
+        if isinstance(node, ast.Assign | ast.AnnAssign | ast.TypeAlias)
     ]
+    while True:
+        grown = set(used)
+        for node in assignments:
+            if _assigned(node) & used:
+                grown |= _names_used(node)
+        if grown == used:
+            break
+        used = grown
+    body = _kept_statements(tree.body, used, index, here, tops)
+    return ast.Module(body=body or [ast.Pass()], type_ignores=[]), frozenset(used)
+
+
+def _names_used(node: ast.AST) -> set[str]:
+    """Every name `node` reads, a function's own body left out."""
+    found: set[str] = set()
+    pending: list[ast.AST] = [node]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, ast.Name):
+            found.add(current.id)
+        if isinstance(current, ast.FunctionDef | ast.AsyncFunctionDef):
+            pending.extend([*current.decorator_list, current.args])
+            if current.returns is not None:
+                pending.append(current.returns)
+            continue
+        pending.extend(ast.iter_child_nodes(current))
+    return found
+
+
+def _assigned(node: ast.Assign | ast.AnnAssign | ast.TypeAlias) -> set[str]:
+    targets = (
+        node.targets
+        if isinstance(node, ast.Assign)
+        else [node.name if isinstance(node, ast.TypeAlias) else node.target]
+    )
+    return {name for target in targets for name in _names(target)}
+
+
+def _kept_statements(
+    body: list[ast.stmt], used: set[str], index: ModuleIndex, here: str, tops: set[str]
+) -> list[ast.stmt]:
+    kept: list[ast.stmt] = []
+    for node in body:
+        if isinstance(node, ast.Import | ast.ImportFrom):
+            kept.append(node)
+        elif isinstance(node, ast.ClassDef) and node.name in tops:
+            kept.append(_without_function_bodies(node))
+        elif isinstance(node, ast.ClassDef):
+            # Another class binds its name and nothing a header class's body reads.
+            kept.append(
+                ast.copy_location(
+                    ast.ClassDef(
+                        name=node.name,
+                        bases=[],
+                        keywords=[],
+                        body=[ast.Pass()],
+                        decorator_list=[],
+                        type_params=[],
+                    ),
+                    node,
+                )
+            )
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            stub = _without_function_bodies(node)
+            stub.decorator_list = []
+            stub.args = copy.copy(node.args)
+            stub.args.defaults = []
+            stub.args.kw_defaults = [None] * len(node.args.kwonlyargs)
+            kept.append(stub)
+        elif isinstance(node, ast.Assign | ast.AnnAssign | ast.TypeAlias):
+            if _assigned(node) & used:
+                kept.append(node)
+        elif isinstance(node, ast.If):
+            live = live_arm(node, index, here)
+            if live is not None:
+                kept.extend(_kept_statements(live, used, index, here, tops))
+                continue
+            inner = _kept_statements(node.body, used, index, here, tops)
+            other = _kept_statements(node.orelse, used, index, here, tops)
+            if inner or other:
+                kept.append(
+                    ast.copy_location(
+                        ast.If(test=node.test, body=inner or [ast.Pass()], orelse=other), node
+                    )
+                )
+        elif isinstance(node, ast.Try | ast.TryStar):
+            inner = _kept_statements(node.body, used, index, here, tops)
+            handlers = [
+                ast.copy_location(
+                    ast.ExceptHandler(
+                        type=handler.type,
+                        name=handler.name,
+                        body=_kept_statements(handler.body, used, index, here, tops)
+                        or [ast.Pass()],
+                    ),
+                    handler,
+                )
+                for handler in node.handlers
+            ]
+            if inner or any(not isinstance(h.body[0], ast.Pass) for h in handlers):
+                kept.append(
+                    ast.copy_location(
+                        type(node)(
+                            body=inner or [ast.Pass()],
+                            handlers=handlers,
+                            orelse=_kept_statements(node.orelse, used, index, here, tops),
+                            finalbody=_kept_statements(node.finalbody, used, index, here, tops),
+                        ),
+                        node,
+                    )
+                )
+    return kept
+
+
+def _without_function_bodies[N: ast.stmt](node: N) -> N:
+    """A shallow copy of `node` with every function's body, at any depth, written `...`. The
+    statements it keeps are `node`'s own, unchanged."""
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+        stub = copy.copy(node)
+        stub.body = [ast.copy_location(ast.Expr(value=ast.Constant(value=...)), node)]
+        return stub
+    copied = None
+    for name, value in ast.iter_fields(node):
+        if isinstance(value, list) and value and isinstance(value[0], ast.stmt):
+            copied = copied or copy.copy(node)
+            setattr(copied, name, [_without_function_bodies(item) for item in value])
+        elif (
+            isinstance(value, list)
+            and value
+            and isinstance(value[0], ast.ExceptHandler | ast.match_case)
+        ):
+            copied = copied or copy.copy(node)
+            parts = []
+            for part in value:
+                held = copy.copy(part)
+                held.body = [_without_function_bodies(item) for item in part.body]
+                parts.append(held)
+            setattr(copied, name, parts)
+    return copied or node
 
 
 def factory_calls(tree: ast.Module, types: TypeScope) -> dict[str, tuple[Target, ...]]:

@@ -27,6 +27,7 @@ import pydantic
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     GetCoreSchemaHandler,
     RootModel,
     computed_field,
@@ -314,6 +315,73 @@ class ChildIgnores(Allows):
 report("12. child extra='ignore' over a parent's 'allow'", ChildIgnores, ChildIgnores(a=1, z=2))
 
 
+# 13. Configuration written as class keywords (`ConfigWrapper.for_model`): alone, inherited,
+# beside `model_config` (which one wins), and a generator given that way.
+class KeywordAllow(BaseModel, extra="allow"):
+    a: int = 1
+
+
+class KeywordHeir(KeywordAllow):
+    b: int = 1
+
+
+class KeywordOverConfig(BaseModel, extra="allow"):
+    model_config = ConfigDict(extra="forbid")
+    a: int = 1
+
+
+class KeywordGenerator(BaseModel, alias_generator=pydantic.alias_generators.to_camel):
+    a_b: int = 1
+
+
+class KeywordUnderChildConfig(KeywordAllow):
+    model_config = ConfigDict(extra="ignore")
+
+
+report("13a. class keyword extra='allow'", KeywordAllow, KeywordAllow(z=1))
+report("13b. inherited class keyword extra='allow'", KeywordHeir, KeywordHeir())
+report(
+    "13c. keyword extra='allow' beside model_config extra='forbid'",
+    KeywordOverConfig,
+    KeywordOverConfig(),
+)
+report("13d. class keyword alias_generator", KeywordGenerator, KeywordGenerator())
+report(
+    "13e. child model_config extra='ignore' over a parent's keyword",
+    KeywordUnderChildConfig,
+    KeywordUnderChildConfig(),
+)
+
+
+# 14. A plain field's `Field(exclude_if=...)`: it may be left out of output.
+class FieldExcludeIf(BaseModel):
+    a: int = 1
+    b: int = Field(exclude_if=lambda value: value == 0)
+
+
+report("14. Field(exclude_if=...)", FieldExcludeIf, FieldExcludeIf(b=1))
+print(
+    "  serialization required: "
+    f"{FieldExcludeIf.model_json_schema(mode='serialization').get('required')}; "
+    f"validation required: {FieldExcludeIf.model_json_schema(mode='validation').get('required')}"
+)
+
+
+# 15. A name annotated only under `if TYPE_CHECKING:` or `if False:` is no field.
+from typing import TYPE_CHECKING
+
+
+class CheckedOnly(BaseModel):
+    a: int = 1
+    if TYPE_CHECKING:
+        hinted: int
+    if False:
+        never: int
+
+
+report("15. annotations under TYPE_CHECKING / if False", CheckedOnly, CheckedOnly())
+
+
 # The observation table's column: one answer per question, from this run's own models.
 def _serialized(model: type[BaseModel]) -> str:
     keys, _ = schema_keys(model, "serialization")
@@ -360,3 +428,21 @@ print(
 print(
     f"| `@field_serializer` field type (serialization) | {FieldSerialized.model_json_schema(mode='serialization')['properties']['a']['type']} |"
 )
+print(
+    "| keyword `extra='allow'`: additionalProperties | "
+    f"{KeywordAllow.model_json_schema().get('additionalProperties')} |"
+)
+print(
+    "| keyword `extra='allow'` beside `model_config` `forbid`: additionalProperties | "
+    f"{KeywordOverConfig.model_json_schema().get('additionalProperties')} |"
+)
+print(f"| keyword `alias_generator`: serialization | {_serialized(KeywordGenerator)} |")
+print(
+    "| child `model_config` `ignore` over a parent's keyword: additionalProperties | "
+    f"{KeywordUnderChildConfig.model_json_schema().get('additionalProperties')} |"
+)
+print(
+    "| `Field(exclude_if=...)`: serialization required | "
+    f"{FieldExcludeIf.model_json_schema(mode='serialization').get('required')} |"
+)
+print(f"| `TYPE_CHECKING` / `if False` annotations: fields | {sorted(CheckedOnly.model_fields)} |")

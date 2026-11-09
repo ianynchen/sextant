@@ -6068,11 +6068,17 @@ serialization:
   `method` entry, the nearest declaration of that method on the way up opens it, unless it is
   the one `except_declared_by` declares (the base's default, which the framework does not
   call); `also_input` opens a shape input reaches too. What the method does is not read.
-- **A library base's fields** (task 9c): a superclass read from a type header whose class body
-  was read (D00 §5 `type_header` `fields`) contributes its fields as a scanned class does, and
-  no longer opens the shape (`reaches_an_unscanned_SUPERCLASS`). Its configuration, its
-  decorated methods and its fields' values are read off the header the same way. A base with no
-  header, or a header whose body was not read, keeps the shape open.
+- **A library base's fields** (task 9c): a base read from a type header whose class body was
+  read (D00 §5 `type_header`) contributes its fields as a scanned class does, read by the same
+  reader off the same kind of facts, and no longer opens the shape
+  (`reaches_an_unscanned_SUPERCLASS`). A base with no header, or a header whose body was not
+  read, keeps the shape open: under the `c3` lookup (D00 §5 `module.lookup`) EVERY written
+  base at any depth counts, since each one's fields are the subclass's (review M1); under the
+  JVM's, only the superclass chain.
+- **Class-statement keywords** (review C1): a class's `keywords` (D00 §5a) are read as a
+  further configuration call, merged after the class's own `config_field` value, which
+  pydantic's `ConfigWrapper.for_model` does (`pydantic_field_sets.md` §13): `class A(BaseModel,
+  extra='allow')` is open, and its `alias_generator=` names its fields.
 - **A field read under another name** (task 9c): a field whose input name differs from its
   published (output) name, or whose input name is not read (`AliasChoices`), leaves the shape's
   input field set described under names a request does not send, so a shape input reaches (or

@@ -540,7 +540,9 @@ def library_reads(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
 def _header_symbols(workspace: Path) -> list[str]:
     lines = (workspace / "facts" / _HEADERS).read_text().splitlines()[1:]
-    return [json.loads(line)["symbol"] for line in lines]
+    return [
+        json.loads(line)["symbol"] for line in lines if json.loads(line)["kind"] == "type_header"
+    ]
 
 
 def test_a_warm_run_reads_no_library_file(typed: Path, tmp_path: Path, library_reads: list[str]):

@@ -520,15 +520,26 @@ _NAMED_QUERIES = {
            )
         ORDER BY s.symbol
     """,
-    # A Python header's class body (D00 §5 `type_header`, fact schema 12): the names it
-    # declares and the functions it defines, for the headers that read them. Read by shape
-    # expansion, which takes a library base's fields as a scanned class's (plan 2026-11-08
-    # task 9c); no endpoint engine reads it, for the reason `superclasses` above gives.
+    # The Python headers whose class body was read (D00 §5 `type_header`, fact schema 12), each
+    # with the functions it defines; the body's names are the header document's own `symbol`
+    # facts. Read by shape expansion (plan 2026-11-08 task 9c); no endpoint engine reads it.
     "type_header_bodies": """
-        SELECT payload ->> 'symbol' AS symbol, payload -> 'fields' AS fields,
-               payload -> 'methods' AS methods
+        SELECT payload ->> 'symbol' AS symbol, payload -> 'methods' AS methods
         FROM raw_facts
-        WHERE kind = 'type_header' AND (payload -> 'fields') IS NOT NULL
+        WHERE kind = 'type_header' AND (payload -> 'methods') IS NOT NULL
+        ORDER BY symbol
+    """,
+    # Each class statement's keyword arguments (fact schema 12, task 9c review C1): a module
+    # class's off its `symbol` fact, a library class's off its type header.
+    "class_keywords": """
+        SELECT payload ->> 'symbol' AS symbol, payload -> 'keywords' AS keywords
+        FROM raw_facts
+        WHERE kind = 'symbol' AND (payload -> 'keywords') IS NOT NULL
+          AND document_id IN (SELECT document_id FROM selected_documents)
+        UNION ALL
+        SELECT payload ->> 'symbol' AS symbol, payload -> 'keywords' AS keywords
+        FROM raw_facts
+        WHERE kind = 'type_header' AND (payload -> 'keywords') IS NOT NULL
         ORDER BY symbol
     """,
     "type_header_annotations": """
@@ -1811,6 +1822,7 @@ _FACT_ONLY = frozenset(
         # other fact query — the cache rule test is what said so.
         "type_header_annotations",
         "type_header_bodies",
+        "class_keywords",
         "type_headers",
         # The module's own types and its siblings' (`symbols` and `documents`, both facts).
         "own_types",

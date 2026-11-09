@@ -123,12 +123,13 @@ SEXTANT_VERSION = version("sextant")
 #             M1, M6). A fact set of the older vintage holds neither, so a reader would take an
 #             `Annotated` field for one with no metadata and every `TypedDict` key for a
 #             required one; it is refused and re-extracted.
-#     12      a Python `type_header` gains its class body: `fields` (every name it declares,
-#             with its type, `static`, its value and the calls that made it) and `methods` (every
-#             function, with its return type and decorators), None where not read (plan
-#             2026-11-08 task 9c). A fact set of the older vintage reads every library class as
-#             one whose fields nobody can see, so every model extending one stays open; it is
-#             refused and re-extracted.
+#     12      a Python `type_header` whose class body was read carries `methods` (each function
+#             and its return type) and `keywords`, and the body itself is written as the header
+#             document's own field, `<clinit>`, field-write and call-site facts, by the module's
+#             reader; a class `symbol` carries its class-statement `keywords`; a class body's
+#             `if TYPE_CHECKING:` declares nothing (plan 2026-11-08 task 9c and its review). A
+#             fact set of the older vintage reads every library class as one whose fields nobody
+#             can see, so every model extending one stays open; it is refused and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and

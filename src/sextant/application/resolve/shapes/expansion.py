@@ -668,14 +668,23 @@ class _Fields:
         cases" from being buried. Those four are `mall-admin`'s newly-open shapes, which
         are open because they hold an unscanned DATE type — nothing to do with this rule.)*
         """
-        own, ancestry = self._declared()
-        # A library class whose header read its body (task 9c) is described by it: `own` holds
-        # its fields, even where it declares none, as a scanned class's would.
+        _own, ancestry = self._declared()
+        described, every_base = self._described()
+        # A library class whose header read its body (task 9c) is described by it, as a
+        # scanned class is. Under the `c3` lookup every written parent is a base whose
+        # fields a subclass takes, so any of them, at any depth, may open the shape (task 9c
+        # review M1); under the JVM's, only the superclass chain can.
         return any(
-            kind == "extends" and not is_scanned and parent not in own
+            (kind == "extends" or every_base) and not is_scanned and parent not in described
             for holder in _closure_of(base, ancestry)
             for parent, kind, is_scanned in ancestry.get(holder, [])
         )
+
+    def _described(self) -> tuple[set[str], bool]:
+        """The library classes whose header read their body, and whether every written parent
+        is a base (the module fact's `c3` lookup, as `dispatch_of` reads it)."""
+        rules = {str(row["lookup"]) for row in self.workspace.query("lookup_rules")}
+        return set(self.workspace.once(library_bodies)), rules == {"c3"}
 
     def _declared(
         self,
@@ -685,10 +694,7 @@ class _Fields:
         if self._read is not None:
             return self._read
         ancestry, _scanned = ancestry_of(self.workspace)
-        declared = _declared_fields(self.workspace)
-        for symbol, body in self.workspace.once(library_bodies).items():
-            declared.setdefault(symbol, _header_fields(symbol, body))
-        self._read = (declared, ancestry)
+        self._read = (_declared_fields(self.workspace), ancestry)
         return self._read
 
 
@@ -725,39 +731,6 @@ def _declared_fields(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:
             }
         )
     return owners
-
-
-def _header_fields(symbol: str, body: Any) -> list[dict[str, Any]]:
-    """A library class's fields as `_declared_fields` gives a scanned class's, read off its
-    header (task 9c): each name its body declares, then each decorated function, whose name
-    holds its decorators' result and so belongs to the class, as the scanner writes a module
-    class's (D00 §5a)."""
-    rows = [
-        {
-            "symbol": f"{symbol}{name}.",
-            "name": name,
-            "returns": entry.get("returns") or {},
-            "static": bool(entry.get("static")),
-            "transient": False,
-            "annotation_value": None,
-            "not_required": bool(entry.get("not_required")),
-        }
-        for name, entry in body.fields.items()
-    ]
-    rows += [
-        {
-            "symbol": f"{symbol}{name}.",
-            "name": name,
-            "returns": {},
-            "static": True,
-            "transient": False,
-            "annotation_value": None,
-            "not_required": False,
-        }
-        for name, method in body.methods.items()
-        if method.get("decorators") and name not in body.fields
-    ]
-    return rows
 
 
 def _json_object(value: object) -> dict[str, Any]:

@@ -654,18 +654,25 @@ arm's return, never both. The module's own files are read whole, every branch.
   whole writes (`test_type_headers_from_class_statements_equal_a_whole_module_read`; polar
   and Sextant's own fact trees). On polar the pass went from 596 whole-module reads (45 s)
   to 8 (3 s), then 3 once version tests were decided, and a cold run from 69 s to 51 s.
-- **A header carries its class body** (fact schema 12, plan 2026-11-08 task 9c;
-  `structure.class_members`). The same class statement gives each name its body declares
-  (typed, `static`, the value written and the call that made it, the calls in an `Annotated`
-  annotation's metadata) and each function it defines (its return type and decorators), read
-  against the names the class body sees, through the blocks `file_facts` reads. A value is read
-  as `file_facts` reads a literal or a name, with no call-site fact to point at; a call is
-  named as its call-site row would be once read as a construction where it calls a class
-  (the library tells a class from a function, `Libraries._is_class`). A header answered by the
-  whole-module read carries no body (not read), so the class-statement and whole-module
-  headers are equal apart from it. **A class body's dict display with text keys** is written
-  as the `dict(key=...)` call it builds, in the module's facts and in a header, so a
-  configuration written `model_config = {...}` is read as one written `ConfigDict(...)` is.
+- **A header's class body is read by the same reader as a module class's** (fact schema 12,
+  plan 2026-11-08 task 9c and its review C2; `structure.header_body_tree`,
+  `Libraries._class_bodies`). The library module is read by `file_facts` over a copy that
+  keeps what binds a name (imports, class and function statements), every function body left
+  out (and a module-level function's decorators and defaults), the classes' bodies, and of the
+  other module-level statements only the assignments to the names those classes use, followed
+  transitively. Kept from that read: each header class's field symbols, its `<clinit>`, its
+  writes and calls, and the module-level names it uses with their writes and the module
+  body's calls; each class's functions (name and return type) and class-statement keywords go
+  on its `type_header`. No class or method symbol is kept. A class a kept call names gets a
+  header in turn. A header only the whole-module read answers carries no body.
+- **A class statement's keywords** (`class A(Base, extra="allow")`, review C1) are written on
+  the class's `symbol` fact as `keywords`, in the call-argument grammar, `metaclass` left out.
+- **A class body's `if TYPE_CHECKING:` and `if False:`** never run (review Minor 1): only the
+  arm that runs is read, so the names the other declares are no members. Any other test reads
+  both arms, as before.
+- **A class body's dict display with text keys** is written as the `dict(key=...)` call it
+  builds, so a configuration written `model_config = {...}` is read as one written
+  `ConfigDict(...)` is.
 - **An opted-in library's bodies** (`extract_libraries`, D04 §2a) are read whole, as a
   jar is: the detector reports the environment's `site-packages` as the library root of
   each named distribution the module declares and has installed, and the library's own

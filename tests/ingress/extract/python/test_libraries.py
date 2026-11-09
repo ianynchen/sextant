@@ -621,12 +621,17 @@ def test_library_types_are_headers_up_their_bases_and_nothing_else(tmp_path: Pat
     assert "builtins/object#" not in headers
     assert not any(bare_descriptor(s).startswith("shapes/child/Child#area") for s in headers)
     assert not any(document.origin is not None for _, document, _ in tree)
+    # Beside the headers, the header document holds only the bodies a header read (fact schema
+    # 12, task 9c review C2): field and `<clinit>` symbols, their writes and the body's calls.
+    # Never a class or any other method: the type stays a header, its methods unread.
     assert not [
         fact
         for _, document, facts in tree
         if document.header_only
         for fact in facts
-        if not isinstance(fact, TypeHeaderFact)
+        if isinstance(fact, SymbolFact)
+        and fact.construct_kind != "field"
+        and "#<clinit>(" not in fact.symbol
     ]
     assert _header_document(tree).type_headers_unlocated >= 1
     assert report.documents == 1
@@ -755,23 +760,33 @@ def test_type_headers_from_class_statements_equal_a_whole_module_read(tmp_path: 
         return (
             document,
             [
-                fact.model_copy(update={"fields": None, "methods": None})
-                if isinstance(fact, TypeHeaderFact)
-                else fact
+                fact.model_copy(update={"methods": None, "keywords": None})
                 for fact in facts
+                if isinstance(fact, TypeHeaderFact)
             ],
             uncovered,
         )
 
-    assert without_body(statements) == without_body(whole)
-    assert all(fact.fields is None for fact in whole[1] if isinstance(fact, TypeHeaderFact))
+    # A class a read body calls gets a header too (`T = TypeVar("T")`, used by `Typed`), which
+    # a whole-module read, reading no body, does not reach.
+    whole_symbols = {bare_descriptor(fact.symbol) for fact in without_body(whole)[1]}
+    document, kept, uncovered = without_body(statements)
+    assert (
+        document,
+        [fact for fact in kept if bare_descriptor(fact.symbol) in whole_symbols],
+        uncovered,
+    ) == without_body(whole)
+    assert {bare_descriptor(fact.symbol) for fact in kept} - whole_symbols == {"typing/TypeVar#"}
+    assert all(fact.methods is None for fact in whole[1] if isinstance(fact, TypeHeaderFact))
     bodies = {
-        bare_descriptor(fact.symbol): fact.fields
+        bare_descriptor(fact.symbol): fact.methods
         for fact in statements[1]
         if isinstance(fact, TypeHeaderFact)
     }
     assert bodies["kinds/shapes/Box#"] is not None
-    symbols = {bare_descriptor(fact.symbol) for fact in statements[1]}
+    symbols = {
+        bare_descriptor(fact.symbol) for fact in statements[1] if isinstance(fact, TypeHeaderFact)
+    }
     assert {
         "kinds/shapes/Box#",
         "kinds/shapes/Box$Lid#",
@@ -794,7 +809,11 @@ def test_type_headers_from_class_statements_equal_a_whole_module_read(tmp_path: 
     assert not {"kinds/shapes/FromCall#", "kinds/shapes/ViaStar#", "kinds/shapes/ViaHidden#"} & (
         symbols
     )
-    headers = {bare_descriptor(fact.symbol): fact for fact in statements[1]}
+    headers = {
+        bare_descriptor(fact.symbol): fact
+        for fact in statements[1]
+        if isinstance(fact, TypeHeaderFact)
+    }
     # The live arm of the version test (ruling R22): never the dead one's class or bases.
     assert "kinds/shapes/Future#" not in symbols
     branchy = headers["kinds/shapes/Branchy#"]
@@ -817,13 +836,14 @@ def test_a_type_header_runs_no_whole_module_read_for_a_class_named_once(
     from sextant.ingress.extract.python import libraries
 
     read: list[str] = []
-    real = libraries.file_facts
+    real = libraries.Libraries._module_symbols
 
-    def counted(tree, context, lines):
-        read.append(context.here)
-        return real(tree, context, lines)
+    def counted(self, table):
+        if table.source.module not in self._symbols:
+            read.append(table.source.module)
+        return real(self, table)
 
-    monkeypatch.setattr(libraries, "file_facts", counted)
+    monkeypatch.setattr(libraries.Libraries, "_module_symbols", counted)
 
     _header_output(tmp_path / "single", _SINGLE)
     assert [module for module in read if module.startswith("kinds")] == []
@@ -979,8 +999,10 @@ def test_a_call_into_a_library_method_is_external_and_coverage_counts_module_fil
     tmp_path: Path,
 ):
     """The module's own documents are what `coverage.documents` counts, the header
-    document aside; the `symbols` view holds no library entry; and a call into a library
-    method answers `external` in `method_resolution`, as for an unscanned jar type."""
+    document aside; the `symbols` view holds no library type or method, only the names and
+    `<clinit>` of a class body a header read (fact schema 12, task 9c review C2); and a call
+    into a library method answers `external` in `method_resolution`, as for an unscanned jar
+    type."""
     from sextant.application.resolve.call_edges import record_call_edges
     from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -1001,7 +1023,10 @@ def test_a_call_into_a_library_method_is_external_and_coverage_counts_module_fil
 
     assert coverage["documents"] == 1
     assert coverage["type_headers"] == len(headers) > 0
-    assert all(symbol.startswith("app/") for symbol in symbols)
+    assert all(
+        symbol.startswith("app/") or symbol.endswith(".") or "#<clinit>(" in symbol
+        for symbol in symbols
+    )
     (get,) = resolutions
     assert get["reason"] == "external"
 

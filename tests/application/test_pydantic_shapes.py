@@ -793,7 +793,7 @@ def _with_library(tmp_path: Path, libraries, source: str):
 
     real = libraries[0].archive
     site = tmp_path / "site"
-    site.mkdir()
+    site.mkdir(parents=True)
     for entry in real.iterdir():
         (site / entry.name).symlink_to(entry)
     (site / "basekit").mkdir()
@@ -1200,3 +1200,199 @@ def test_a_field_read_under_another_name_opens_a_shape_requests_reach(tmp_path: 
         "Out": False,
         "Choices": True,
     }
+
+
+# -- Task 9c fix round 1 ---------------------------------------------------------------------
+
+_SHARED_BASE = (
+    "from typing import Annotated, Optional\n"
+    "from pydantic import BaseModel, ConfigDict, Field, computed_field\n"
+    "from pydantic.alias_generators import to_camel\n"
+    "ID_FIELD = Field(alias='Id')\n"
+    "IdType = Annotated[int, Field(alias='Ident')]\n"
+    "OptText = Annotated[Optional[str], Field(default=None, alias='note')]\n"
+    "class Base(BaseModel):\n"
+    "    id: int = ID_FIELD\n"
+    "    ident: IdType\n"
+    "    note_text: OptText\n"
+    "    req: int = Field(...)\n"
+    "    plain: str = 'x'\n"
+    "    @computed_field\n"
+    "    @property\n"
+    "    def shown_total(self) -> int:\n"
+    "        return 1\n"
+    "class Keyed(BaseModel, alias_generator=to_camel):\n"
+    "    some_name: int = 0\n"
+)
+
+
+def test_a_class_read_from_its_header_reads_as_the_same_class_in_the_module(
+    tmp_path: Path, libraries
+):
+    """Review C2, Minor 7: one field reader. The same class body, read from a library's type
+    header or written in the module, gives the same fields, names, required flags and
+    resolutions: an `Annotated` alias's `Field`, a name holding `Field(...)`, a computed
+    field and class-keyword configuration are read the same way for both (pydantic: `Id`,
+    `Ident`, `note` not required, `req`, `plain`, `shown_total`; `someName`)."""
+    app = (
+        "class A(Base):\n"
+        "    a: int\n"
+        "class K(Keyed):\n"
+        "    other_name: int = 0\n"
+        "@router.get('/a')\n"
+        "def get_a() -> A:\n"
+        "    return A()\n"
+        "@router.get('/k')\n"
+        "def get_k() -> K:\n"
+        "    return K()\n"
+    )
+    library = _with_library(tmp_path / "lib", libraries, _SHARED_BASE)
+    from_header = _resolved(
+        tmp_path / "lib", library, {"main.py": _HEAD + "from basekit import Base, Keyed\n" + app}
+    )
+    in_module = _resolved(tmp_path / "mod", libraries, {"main.py": _HEAD + _SHARED_BASE + app})
+
+    expected = {
+        "a": ("integer", None, True, "resolved"),
+        "Id": ("integer", None, True, "resolved"),
+        "Ident": ("integer", None, True, "resolved"),
+        "note": ("string", None, False, "resolved"),
+        "req": ("integer", None, True, "resolved"),
+        "plain": ("string", None, False, "resolved"),
+        "shown_total": ("integer", None, True, "resolved"),
+    }
+    assert _fields(in_module, "A") == expected
+    assert _fields(from_header, "A") == expected
+    assert _fields(from_header, "K") == _fields(in_module, "K")
+    assert set(_fields(in_module, "K")) == {"otherName", "someName"}
+    assert _open(from_header, "A") is _open(in_module, "A") is False
+
+
+def test_class_keyword_configuration_is_read_as_model_config_is(tmp_path: Path, libraries):
+    """Review C1 (`pydantic_field_sets.md` §13): pydantic merges a class statement's keywords
+    into its configuration after `model_config`, so a keyword wins over it; a child's
+    `model_config` wins over an inherited keyword. `extra='allow'` given so opens the shape,
+    from the module or a library base, and `alias_generator=` names the fields."""
+    library = _with_library(
+        tmp_path,
+        libraries,
+        "from pydantic import BaseModel\nclass Loose(BaseModel, extra='allow'):\n    pass\n",
+    )
+    workspace = _resolved(
+        tmp_path,
+        library,
+        _program(
+            "from basekit import Loose\n"
+            "class KeywordAllow(BaseModel, extra='allow'):\n"
+            "    a: int = 0\n"
+            "class KeywordHeir(KeywordAllow):\n"
+            "    b: int = 0\n"
+            "class KeywordOverConfig(BaseModel, extra='allow'):\n"
+            "    model_config = ConfigDict(extra='forbid')\n"
+            "    a: int = 0\n"
+            "class ChildIgnores(KeywordAllow):\n"
+            "    model_config = ConfigDict(extra='ignore')\n"
+            "class Generated(BaseModel, alias_generator=to_camel, frozen=True):\n"
+            "    a_b: int = 0\n"
+            "class FromLibrary(Loose):\n"
+            "    a: int = 0\n"
+            "class Item(BaseModel):\n"
+            "    one: KeywordAllow\n"
+            "    two: KeywordHeir\n"
+            "    three: KeywordOverConfig\n"
+            "    four: ChildIgnores\n"
+            "    five: Generated\n"
+            "    six: FromLibrary\n"
+        ),
+    )
+
+    assert {
+        shape: _open(workspace, shape)
+        for shape in (
+            "KeywordAllow",
+            "KeywordHeir",
+            "KeywordOverConfig",
+            "ChildIgnores",
+            "Generated",
+            "FromLibrary",
+        )
+    } == {
+        "KeywordAllow": True,
+        "KeywordHeir": True,
+        "KeywordOverConfig": True,
+        "ChildIgnores": False,
+        "Generated": False,
+        "FromLibrary": True,
+    }
+    assert _fields(workspace, "Generated") == {"aB": ("integer", None, False, "resolved")}
+
+
+def test_any_base_that_cannot_be_read_keeps_the_shape_open(tmp_path: Path, libraries):
+    """Review M1: pydantic collects fields from every base, mixins included, so a second base
+    whose body is not read (no library holds it, or only a whole-module read answers it: a
+    class defined on two branches) may add fields: the shape is open. A readable second base
+    contributes its fields."""
+    library = _with_library(
+        tmp_path,
+        libraries,
+        "import os\n"
+        "if os.environ.get('X'):\n"
+        "    class Twice:\n"
+        "        created: int\n"
+        "else:\n"
+        "    class Twice:\n"
+        "        created: int\n"
+        "        label: str = 'x'\n"
+        "class Stamp:\n"
+        "    created: int\n",
+    )
+    workspace = _resolved(
+        tmp_path,
+        library,
+        _program(
+            "from basekit import Stamp, Twice\n"
+            "from notinstalled import Missing\n"
+            "class Unread(BaseModel, Twice):\n"
+            "    a: int\n"
+            "class Absent(BaseModel, Missing):\n"
+            "    a: int\n"
+            "class Readable(BaseModel, Stamp):\n"
+            "    a: int\n"
+            "class Item(BaseModel):\n"
+            "    one: Unread\n"
+            "    two: Absent\n"
+            "    three: Readable\n"
+        ),
+    )
+
+    assert {shape: _open(workspace, shape) for shape in ("Unread", "Absent", "Readable")} == {
+        "Unread": True,
+        "Absent": True,
+        "Readable": False,
+    }
+    assert set(_fields(workspace, "Readable")) == {"a", "created"}
+
+
+def test_a_name_declared_only_where_the_class_body_never_runs_is_no_field(
+    tmp_path: Path, libraries
+):
+    """Review Minor 1 (`pydantic_field_sets.md` §15): a class body's `if TYPE_CHECKING:` and
+    `if False:` blocks never run, so the names they annotate are no fields; `if not
+    TYPE_CHECKING:` runs."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        _program(
+            "from typing import TYPE_CHECKING\n"
+            "class Item(BaseModel):\n"
+            "    a: int\n"
+            "    if TYPE_CHECKING:\n"
+            "        hinted: int\n"
+            "    if False:\n"
+            "        never: int\n"
+            "    if not TYPE_CHECKING:\n"
+            "        runs: int = 0\n"
+        ),
+    )
+
+    assert set(_fields(workspace)) == {"a", "runs"}

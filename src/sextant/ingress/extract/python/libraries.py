@@ -67,7 +67,6 @@ from sextant.domain.facts import (
     CallSiteFact,
     Fact,
     FieldWriteFact,
-    HeaderField,
     HeaderMethod,
     MethodReturnFact,
     ParentsUnread,
@@ -77,14 +76,17 @@ from sextant.domain.facts import (
 )
 from sextant.domain.symbols import (
     NOT_APPLICABLE,
+    PY_SIGNATURE,
     PYTHON_SCHEME,
     bare_descriptor,
     is_type_descriptor,
     member_type,
+    method_descriptor,
     names_a_type,
+    owner_of,
     without_type_marker,
 )
-from sextant.ingress.extract.python.calls import FileContext
+from sextant.ingress.extract.python.calls import CLINIT, FileContext
 from sextant.ingress.extract.python.imports import (
     Binding,
     CallableType,
@@ -98,8 +100,8 @@ from sextant.ingress.extract.python.imports import (
 )
 from sextant.ingress.extract.python.structure import (
     class_header,
-    class_members,
     file_facts,
+    header_body_tree,
     single_classes,
 )
 from sextant.ingress.extract.python.typing_rules import (
@@ -215,9 +217,21 @@ class _Declared:
     superclass: str | None
     interfaces: list[str]
     parents_unread: ParentsUnread | None
-    # The class body (`structure.class_members`, fact schema 12); None where it is not read.
-    fields: list[HeaderField] | None = None
-    methods: list[HeaderMethod] | None = None
+    # The class's path in its module where one class statement holds it, so its body can be
+    # read (fact schema 12); None where only a whole-module read answers.
+    body: tuple[str, str] | None = None
+
+
+@dataclass(frozen=True)
+class _Bodies:
+    """One library module's class bodies, read for their type headers (`Libraries.
+    _class_bodies`): the facts, each class's functions and class-statement keywords by class
+    symbol, and the classes the bodies call (each may get a header)."""
+
+    facts: list[Fact]
+    methods: dict[str, list[HeaderMethod]]
+    keywords: dict[str, list[CallArgument] | None]
+    called: list[str]
 
 
 class _WholeModule:
@@ -1003,7 +1017,7 @@ class Libraries:
         own: set[str],
         document_id: str,
         called: Iterable[str] = (),
-    ) -> tuple[list[TypeHeaderFact], int, list[str]]:
+    ) -> tuple[list[Fact], int, list[str]]:
         """A `type_header` (D00 §5) for every library type the module refers to, then
         transitively up each one's written bases, as the JVM scanner reads a classpath:
         the symbol, construct kind, `superclass` and `interfaces` mapped from the bases as
@@ -1016,7 +1030,7 @@ class Libraries:
         `called` are the classes a static call may name (`called_types`): each gets a header
         where a library declares that class, and is no unlocated type where none does, since
         the call may name a function."""
-        facts: list[TypeHeaderFact] = []
+        declared_types: list[tuple[_Declared, _Provider]] = []
         unlocated = 0
         not_read: list[str] = []
         seen = set(own) | {_C3_ROOT}
@@ -1028,20 +1042,47 @@ class Libraries:
         seen.update(maybe)
         queue += maybe
         maybe_types = set(maybe)
+        # Each library module's class bodies, read once (task 9c review C2): the facts, and
+        # per class its functions and its class-statement keywords.
+        bodies: dict[str, _Bodies] = {}
         while queue:
-            symbol = queue.pop(0)
-            found = self._declaration(symbol)
-            if found is None:
-                if symbol not in maybe_types:
-                    unlocated += 1
-                continue
-            declared, provider = found
-            if declared.parents_unread is not None:
-                not_read.append(
-                    f"{without_type_marker(symbol).replace('/', '.').replace('$', '.')}: "
-                    f"{declared.parents_unread.detail}; no type header is written for it"
-                )
-                continue
+            while queue:
+                symbol = queue.pop(0)
+                found = self._declaration(symbol)
+                if found is None:
+                    if symbol not in maybe_types:
+                        unlocated += 1
+                    continue
+                declared, provider = found
+                if declared.parents_unread is not None:
+                    not_read.append(
+                        f"{without_type_marker(symbol).replace('/', '.').replace('$', '.')}: "
+                        f"{declared.parents_unread.detail}; no type header is written for it"
+                    )
+                    continue
+                declared_types.append((declared, provider))
+                for parent in [declared.superclass, *declared.interfaces]:
+                    bare = bare_descriptor(parent) if parent is not None else None
+                    if bare is not None and bare not in seen:
+                        seen.add(bare)
+                        queue.append(bare)
+            # A class a read body calls gets a header, as one a module's call names does.
+            wanted: dict[str, list[str]] = {}
+            for declared, _provider in declared_types:
+                if declared.body is not None and declared.body[0] not in bodies:
+                    wanted.setdefault(declared.body[0], []).append(declared.body[1])
+            for module, paths in wanted.items():
+                read = self._class_bodies(module, paths, document_id)
+                bodies[module] = read
+                for symbol in read.called:
+                    if symbol not in seen and self._names_a_class(symbol):
+                        seen.add(symbol)
+                        maybe_types.add(symbol)
+                        queue.append(symbol)
+        facts: list[Fact] = []
+        for declared, provider in declared_types:
+            body = None if declared.body is None else bodies.get(declared.body[0])
+            owner = None if declared.body is None else type_symbol(Target(*declared.body))
             facts.append(
                 TypeHeaderFact(
                     document_id=document_id,
@@ -1051,15 +1092,12 @@ class Libraries:
                     interfaces=declared.interfaces,
                     origin=provider.origin,
                     version=provider.version,
-                    fields=declared.fields,
-                    methods=declared.methods,
+                    methods=None if body is None or owner is None else body.methods.get(owner, []),
+                    keywords=None if body is None or owner is None else body.keywords.get(owner),
                 )
             )
-            for parent in [declared.superclass, *declared.interfaces]:
-                bare = bare_descriptor(parent) if parent is not None else None
-                if bare is not None and bare not in seen:
-                    seen.add(bare)
-                    queue.append(bare)
+        for module_bodies in bodies.values():
+            facts.extend(module_bodies.facts)
         return facts, unlocated, not_read
 
     def _declaration(self, symbol: str) -> tuple[_Declared, _Provider] | None:
@@ -1117,15 +1155,6 @@ class Libraries:
             kind, written, parents_unread = class_header(
                 chain, source.module, self._scope(table), is_package=source.is_package
             )
-            fields, methods = class_members(
-                chain,
-                source.module,
-                self._scope(table),
-                is_package=source.is_package,
-                is_class=lambda target: (
-                    target.member is not None and self._is_class(target.module, target.member)
-                ),
-            )
         finally:
             self._recording = recording
             self._inside = inside
@@ -1135,9 +1164,83 @@ class Libraries:
             prefix + written[0] if written else None,
             [prefix + parent for parent in written[1:]],
             parents_unread,
-            fields,
-            methods,
+            (source.module, target.member),
         )
+
+    def _class_bodies(self, module: str, paths: list[str], document_id: str) -> "_Bodies":
+        """The bodies of `module`'s classes at `paths`, read by the scanner's own reader
+        (`file_facts`) over the module with every function body left out and only the
+        module-level names those classes use (`structure.header_body_tree`), as the type
+        header's own facts (fact schema 12, task 9c review C2): each class's names, their
+        writes and the calls its body makes, the module-level names it uses with theirs; each
+        class's functions with their return types, and its class-statement keywords. No
+        method, no class symbol: a header-read type stays a header, its methods unread."""
+        table = self._table(module)
+        assert table is not None
+        source = table.source
+        here = source.module
+        owners = {type_symbol(Target(here, path)) for path in paths}
+        module_type = type_symbol(Target(here))
+        tree, names = header_body_tree(table.tree, paths, self._index, here)
+        context = FileContext(
+            here, source.is_package, self._index, _prefix(source.provider), document_id
+        )
+        recording, self._recording = self._recording, False
+        inside, self._inside = self._inside, True
+        try:
+            read = file_facts(tree, context, 1)
+        finally:
+            self._recording = recording
+            self._inside = inside
+        bodies = {method_descriptor(owner, CLINIT, PY_SIGNATURE) for owner in owners}
+        module_body = method_descriptor(module_type, CLINIT, PY_SIGNATURE)
+        kept: list[Fact] = []
+        methods: dict[str, list[HeaderMethod]] = {}
+        keywords: dict[str, list[CallArgument] | None] = {}
+        called: list[str] = []
+        for fact in read.facts:
+            if isinstance(fact, SymbolFact):
+                bare = bare_descriptor(fact.symbol)
+                holder = owner_of(bare)
+                if bare in owners:
+                    keywords[bare] = fact.keywords
+                elif (
+                    bare in bodies
+                    or bare == module_body
+                    or (holder in owners and fact.construct_kind == ConstructKind.FIELD)
+                ):
+                    kept.append(fact)
+                elif holder in owners and fact.construct_kind == ConstructKind.METHOD:
+                    name = bare[len(holder) :].split("(")[0]
+                    methods.setdefault(holder, []).append(
+                        HeaderMethod(
+                            name=name,
+                            returns=None if fact.signature is None else fact.signature.returns,
+                        )
+                    )
+                elif (
+                    holder == module_type
+                    and fact.construct_kind == ConstructKind.FIELD
+                    and bare[len(holder) :].removesuffix(".") in names
+                ):
+                    kept.append(fact)
+            elif isinstance(fact, FieldWriteFact):
+                writer = bare_descriptor(fact.written_by or "")
+                if writer in bodies or (
+                    writer == module_body
+                    and bare_descriptor(fact.field)[len(module_type) :].removesuffix(".") in names
+                ):
+                    kept.append(fact)
+            elif isinstance(fact, CallSiteFact):
+                caller = bare_descriptor(fact.caller)
+                if caller in bodies or caller == module_body:
+                    kept.append(fact)
+                    target = fact.target
+                    if fact.invoke_kind == "static" and target.owner and target.name:
+                        candidate = member_type(target.owner, target.name)
+                        if candidate is not None:
+                            called.append(candidate)
+        return _Bodies(kept, methods, keywords, list(dict.fromkeys(called)))
 
     def _module_symbols(self, table: _Table) -> dict[str, SymbolFact]:
         module = table.source.module

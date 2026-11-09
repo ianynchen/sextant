@@ -294,6 +294,7 @@ class ModelNames:
     _values: dict[str, list[Mapping[str, Any] | None] | None] = field(default_factory=dict)
     _bodies: dict[str, str] | None = None
     _headers: "dict[str, LibraryBody] | None" = None
+    _keyword_args: dict[str, list[Any]] | None = None
     _methods: dict[str, dict[str, Any]] | None = None
     _decorations: dict[
         tuple[str, str, frozenset[tuple[str, str]]],
@@ -474,18 +475,7 @@ class ModelNames:
     ) -> list[list[Mapping[str, Any]]]:
         """Each path through the field's `Annotated` metadata: the naming calls among its
         elements, in written order (a nested `Annotated` first, as Python flattens it).
-        `[[]]` where the field's annotation carries none. A library class's are its header's
-        (task 9c)."""
-        library = self._library().get(holder)
-        if library is not None:
-            entry = library.fields.get(name) or {}
-            return [
-                [
-                    call
-                    for call in entry.get("annotation_calls") or []
-                    if _call_of(call) in self.naming.calls
-                ]
-            ]
+        `[[]]` where the field's annotation carries none."""
         body = self._class_bodies().get(holder) if annotation is not None else None
         if body is None or annotation is None:
             return [[]]
@@ -532,14 +522,6 @@ class ModelNames:
         writes no value. Read once per field."""
         if symbol in self._values:
             return self._values[symbol] or [_NO_VALUE]
-        holder = owner_of(symbol)
-        library = None if holder is None else self._library().get(holder)
-        if library is not None:
-            read = [
-                self._header_end(library.fields.get(symbol[len(str(holder)) :].removesuffix(".")))
-            ]
-            self._values[symbol] = read
-            return read
         written = self._class_body_writes().get(symbol)
         ends: list[Mapping[str, Any] | None] | None = None
         if written:
@@ -567,24 +549,6 @@ class ModelNames:
         self._values[symbol] = ends
         return ends or [_NO_VALUE]
 
-    def _header_end(self, entry: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
-        """`_paths`' answer for a library class's field, read off its header (task 9c): the
-        naming call that made its value; `_VALUE_NOT_READ` for another call or a value not
-        read; `_NO_VALUE` where none is written or the value writes none (`...`); None for
-        any other value, a default."""
-        value = None if entry is None else entry.get("value")
-        if entry is None or value is None:
-            return _NO_VALUE
-        call = entry.get("call")
-        if call is not None:
-            return call if _call_of(call) in self.naming.calls else _VALUE_NOT_READ
-        if value.get("kind") == "unresolved":
-            return _VALUE_NOT_READ
-        nothing = {ellipsis for *_, ellipsis in self.naming.defaults if ellipsis is not None}
-        if value.get("kind") == "field" and value.get("symbol") in nothing:
-            return _NO_VALUE
-        return None
-
     def _writes_none(self, producer: Any, value: Mapping[str, Any]) -> bool:
         """Whether a class-body value is the one a `defaults` entry's `required_when` names as
         writing no default (`...`), written directly or reached by the walk."""
@@ -601,10 +565,17 @@ class ModelNames:
         return self._bodies
 
     def _library(self) -> "dict[str, LibraryBody]":
-        """Each library class whose header read its body, by bare class symbol (task 9c)."""
+        """Each library class whose header read its body, by bare class symbol (task 9c): its
+        functions; its names are facts as a module class's are."""
         if self._headers is None:
             self._headers = self.workspace.once(library_bodies)
         return self._headers
+
+    def _keywords(self) -> dict[str, list[Any]]:
+        """Each class's class-statement keywords, by bare class symbol (task 9c review C1)."""
+        if self._keyword_args is None:
+            self._keyword_args = self.workspace.once(_class_keywords)
+        return self._keyword_args
 
     def _class_body_writes(self) -> dict[str, list[tuple[str, Mapping[str, Any]]]]:
         """Each field's writes made by its own class's body, by bare field symbol."""
@@ -640,8 +611,15 @@ class ModelNames:
             by_name = inherited.by_name if inherited.by_name is not False else by_name
             if inherited.opened is not None:
                 opened = inherited.opened
-        own = self._own_config(symbol)
-        if own is not None:
+        # The class's own `model_config`, then its class-statement keywords, which pydantic
+        # merges last (`pydantic_field_sets.md` §13, task 9c review C1).
+        keywords = self._keywords().get(symbol)
+        for own in (
+            self._own_config(symbol),
+            None if keywords is None else self._config_call(keywords),
+        ):
+            if own is None:
+                continue
             if own.generator is not None:
                 generator = own.generator
             if own.by_name is not False:
@@ -658,15 +636,6 @@ class ModelNames:
         name = self.naming.config_field
         if name is None:
             return None
-        library = self._library().get(symbol)
-        if library is not None:
-            entry = library.fields.get(name)
-            if entry is None or entry.get("value") is None:
-                return None
-            call = entry.get("call")
-            if call is None or _call_of(call) not in self.naming.config_calls:
-                return _Config(_NOT_READ, None, _UNREAD)
-            return self._config_call(list(call.get("arguments") or []))
         written = self._class_body_writes().get(f"{symbol}{name}.")
         if not written:
             return None
@@ -795,11 +764,7 @@ class ModelNames:
 
     def _decorated_names(self, holder: str) -> list[str]:
         """The functions `holder` defines whose name holds their decorators' result (D00
-        §5a): a library class's decorated methods, a module class's methods its body also
-        writes as a name."""
-        library = self._library().get(holder)
-        if library is not None:
-            return [name for name, method in library.methods.items() if method.get("decorators")]
+        §5a): those its body also writes as a name, a library class's as a module class's."""
         writes = self._class_body_writes()
         return [name for name in self._members(holder) if f"{holder}{name}." in writes]
 
@@ -807,30 +772,19 @@ class ModelNames:
         self, holder: str, name: str, stops: frozenset[tuple[str, str]], reader: str
     ) -> tuple[Mapping[str, Any], Mapping[str, Any] | None] | None:
         """The decorator call among `stops` that made `holder`'s name `name`, and what the
-        decorated method returns; None where none did. A library class's is read off its
-        header; a module class's through the walk from the value its body writes the name: the
-        decorator call itself, or the call of the value a decorator call returned
-        (`@decorator(...)`)."""
+        decorated method returns; None where none did. Read through the walk from the value
+        the class body writes the name, a library class's as a module class's: the decorator
+        call itself, or the call of the value a decorator call returned (`@decorator(...)`)."""
         key = (holder, name, stops)
         if key in self._decorations:
             return self._decorations[key]
         found: tuple[Mapping[str, Any], Mapping[str, Any] | None] | None = None
-        library = self._library().get(holder)
-        if library is not None:
-            method = library.methods.get(name) or {}
-            site = next(
-                (call for call in method.get("decorators") or [] if _call_of(call) in stops),
-                None,
-            )
+        returns = self._members(holder).get(name)
+        for writer, value in self._class_body_writes().get(f"{holder}{name}.", []):
+            site = self._decorator_site(writer, value, stops, reader)
             if site is not None:
-                found = (site, method.get("returns"))
-        else:
-            returns = self._members(holder).get(name)
-            for writer, value in self._class_body_writes().get(f"{holder}{name}.", []):
-                site = self._decorator_site(writer, value, stops, reader)
-                if site is not None:
-                    found = (site, returns)
-                    break
+                found = (site, returns)
+                break
         self._decorations[key] = found
         return found
 
@@ -889,25 +843,31 @@ def _class_bodies(workspace: Workspace) -> dict[str, str]:
 
 @dataclass(frozen=True)
 class LibraryBody:
-    """A library class's body, read off its type header (fact schema 12, task 9c): each name
-    it declares and each function it defines, by name."""
+    """A library class whose type header read its body (fact schema 12, task 9c): the
+    functions it defines, by name. Its names, their values and the calls that made them are
+    the header document's own facts, read as a module class's are."""
 
-    fields: Mapping[str, Mapping[str, Any]]
     methods: Mapping[str, Mapping[str, Any]]
 
 
 def library_bodies(workspace: Workspace) -> dict[str, LibraryBody]:
     """Each library class whose header read its body, by bare class symbol. Read through
     `Workspace.once`: facts only."""
-    found: dict[str, LibraryBody] = {}
-    for row in workspace.query("type_header_bodies"):
-        fields = _json(row["fields"]) or []
-        methods = _json(row["methods"]) or []
-        found[bare_descriptor(str(row["symbol"]))] = LibraryBody(
-            fields={str(entry["name"]): entry for entry in fields},
-            methods={str(entry["name"]): entry for entry in methods},
+    return {
+        bare_descriptor(str(row["symbol"])): LibraryBody(
+            methods={str(entry["name"]): entry for entry in _json(row["methods"]) or []}
         )
-    return found
+        for row in workspace.query("type_header_bodies")
+    }
+
+
+def _class_keywords(workspace: Workspace) -> dict[str, list[Any]]:
+    """Each class's class-statement keywords, a module class's and a library class's alike, by
+    bare class symbol. Read through `Workspace.once`: facts only."""
+    return {
+        bare_descriptor(str(row["symbol"])): list(_json(row["keywords"]) or [])
+        for row in workspace.query("class_keywords")
+    }
 
 
 def _json(value: Any) -> Any:

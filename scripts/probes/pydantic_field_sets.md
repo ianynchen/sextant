@@ -33,6 +33,12 @@ install: 2.14.3 from the throwaway environment, 2.14.1 from polar's own `.venv`.
 | `@model_serializer`: serialization | <no properties: type='object'> | <no properties: type='object'> |
 | `__get_pydantic_core_schema__` keeping `handler(source)`: serialization | a | a |
 | `@field_serializer` field type (serialization) | string | string |
+| keyword `extra='allow'`: additionalProperties | True | True |
+| keyword `extra='allow'` beside `model_config` `forbid`: additionalProperties | True | True |
+| keyword `alias_generator`: serialization | aB | aB |
+| child `model_config` `ignore` over a parent's keyword: additionalProperties | None | None |
+| `Field(exclude_if=...)`: serialization required | None | None |
+| `TYPE_CHECKING` / `if False` annotations: fields | ['a'] | ['a'] |
 
 `pydantic.VERSION` printed 2.14.3 and 2.14.1. Apart from that line, the two runs' whole outputs
 are identical.
@@ -57,6 +63,9 @@ are identical.
 | 7a | `__get_pydantic_core_schema__` returning `handler(source)` (polar's form) | a | a | yes, but only by what the method returns |
 | 7b | `__get_pydantic_core_schema__` returning another schema | not the fields: an `int` is read | | **no**, either direction |
 | 8 | `@field_serializer("a")` returning `str` | a (integer) | a (**string**) | the field set yes; the output TYPE differs (logged, not built) |
+| 13 | configuration as class keywords (`class A(BaseModel, extra='allow')`), inherited, beside `model_config` | `additionalProperties: true`; keyword `alias_generator` names fields | the same | **no**: read as configuration, merged after `model_config` (the keyword wins), a child's `model_config` over an inherited keyword |
+| 14 | a plain `Field(exclude_if=...)` | `b` required | `b` **not required** | output may leave it out (needs a key form; not built) |
+| 15 | names annotated under `if TYPE_CHECKING:` / `if False:` | none | none | the blocks never run: no fields |
 
 pydantic decides 7 with `_generate_schema.py`: a type's `__get_pydantic_core_schema__` is called
 unless it is `BaseModel`'s own (`getattr(get_schema, '__func__', None) is not
@@ -199,6 +208,42 @@ pydantic 2.14.3
   validation properties: ['a']  additionalProperties=None
   serialization props:   ['a']  additionalProperties=None
   model_dump keys:       ['a']
+## 13a. class keyword extra='allow'
+  model_fields:          ['a']
+  validation properties: ['a']  additionalProperties=True
+  serialization props:   ['a']  additionalProperties=True
+  model_dump keys:       ['a', 'z']
+## 13b. inherited class keyword extra='allow'
+  model_fields:          ['a', 'b']
+  validation properties: ['a', 'b']  additionalProperties=True
+  serialization props:   ['a', 'b']  additionalProperties=True
+  model_dump keys:       ['a', 'b']
+## 13c. keyword extra='allow' beside model_config extra='forbid'
+  model_fields:          ['a']
+  validation properties: ['a']  additionalProperties=True
+  serialization props:   ['a']  additionalProperties=True
+  model_dump keys:       ['a']
+## 13d. class keyword alias_generator
+  model_fields:          ['a_b']
+  validation properties: ['aB']  additionalProperties=None
+  serialization props:   ['aB']  additionalProperties=None
+  model_dump keys:       ['a_b']
+## 13e. child model_config extra='ignore' over a parent's keyword
+  model_fields:          ['a']
+  validation properties: ['a']  additionalProperties=None
+  serialization props:   ['a']  additionalProperties=None
+  model_dump keys:       ['a']
+## 14. Field(exclude_if=...)
+  model_fields:          ['a', 'b']
+  validation properties: ['a', 'b']  additionalProperties=None
+  serialization props:   ['a', 'b']  additionalProperties=None
+  model_dump keys:       ['a', 'b']
+  serialization required: None; validation required: ['b']
+## 15. annotations under TYPE_CHECKING / if False
+  model_fields:          ['a']
+  validation properties: ['a']  additionalProperties=None
+  serialization props:   ['a']  additionalProperties=None
+  model_dump keys:       ['a']
 ## Observations column
 | `pydantic.VERSION` | 2.14.3 |
 | `BaseModel` names neither `ClassVar` nor `_`-prefixed | none |
@@ -215,4 +260,10 @@ pydantic 2.14.3
 | `@model_serializer`: serialization | <no properties: type='object'> |
 | `__get_pydantic_core_schema__` keeping `handler(source)`: serialization | a |
 | `@field_serializer` field type (serialization) | string |
+| keyword `extra='allow'`: additionalProperties | True |
+| keyword `extra='allow'` beside `model_config` `forbid`: additionalProperties | True |
+| keyword `alias_generator`: serialization | aB |
+| child `model_config` `ignore` over a parent's keyword: additionalProperties | None |
+| `Field(exclude_if=...)`: serialization required | None |
+| `TYPE_CHECKING` / `if False` annotations: fields | ['a'] |
 ```

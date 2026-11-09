@@ -639,7 +639,7 @@ def test_the_languages_own_descriptors_keep_the_method_model(tmp_path: Path):
         },
     )
 
-    fields = {w.field for w in _facts(tree, FieldWriteFact)}
+    fields = {w.field for w in _facts(tree, FieldWriteFact) if w.field.startswith("app/")}
     assert fields == {"app/k/K#h.", "app/k/K#i."}
 
 
