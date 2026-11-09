@@ -102,10 +102,12 @@ def _nullability_of(
     catalog data too; so it resolves the same way as every later layer."""
     known = rules.known_types.get(reference["symbol"])
     nullable = described_nullable
+    # A reference that states no nullability (a type variable nothing binds) is not read.
+    stated = reference.get("nullable_resolution")
     resolution = (
         "resolved"
         if known is not None and "nullable" in known
-        else str(reference["nullable_resolution"])
+        else ("unresolved" if stated is None else str(stated))
     )
 
     scoped = _scope_nullable(scope_prefixes, field_symbol)

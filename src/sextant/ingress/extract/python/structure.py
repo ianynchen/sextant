@@ -70,6 +70,7 @@ from sextant.ingress.extract.python.typing_rules import (
     TypeScope,
     class_shape,
     is_class_variable,
+    is_not_required,
     type_parameter_name,
     type_ref,
     type_symbol,
@@ -372,6 +373,13 @@ class _Writer(BodyReader):
             self._body(clinit),
             path,
             protocol=kind == ConstructKind.PROTOCOL,
+            # `class C(TypedDict, total=False)`: the keys it declares may be left out.
+            total=not any(
+                keyword.arg == "total"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is False
+                for keyword in node.keywords
+            ),
             # `super()` starts at the first written parent; with none written it is
             # `object`, and where the parents were not read it is not known.
             super_owner=written[0]
@@ -392,9 +400,17 @@ class _Writer(BodyReader):
         value = None if node.value is None else self._value(node.value, scope)
         written = None
         instance = False
+        annotated = None
+        optional_key = False
         if isinstance(node, ast.AnnAssign):
             written = written_type(node.annotation, scope.types)
             instance = not is_class_variable(node.annotation, scope.types)
+            if scope.class_path is not None and scope.frame is None and instance:
+                # A class body evaluates a field's annotation after its value (PEP 526), so
+                # an `Annotated[T, Field(...)]`'s calls are the class body's; the field keeps
+                # the annotation's value where it is not a plain type, as a parameter does.
+                annotated = self._annotation_value(node.annotation, scope)
+                optional_key = is_not_required(node.annotation, scope.types, total=scope.total)
         for target in targets:
             if value is not None and isinstance(target, ast.Attribute | ast.Subscript):
                 self._store(target, value, scope)
@@ -410,14 +426,19 @@ class _Writer(BodyReader):
                         scope.owner,
                         node.lineno,
                         node.end_lineno or node.lineno,
-                        signature=Signature(returns=wire_projected(written, scope.types))
+                        signature=Signature(
+                            returns=wire_projected(written, scope.types),
+                            annotation_value=annotated,
+                        )
                         if written is not None
                         else None,
                         # A module-level name belongs to the module. In a class body an
                         # annotated name not written `ClassVar` declares an instance
                         # variable, whatever its value (PEP 526); a name assigned with no
                         # annotation, or a `ClassVar`, belongs to the class.
-                        modifiers={"static": scope.class_path is None or not instance},
+                        modifiers={"static": scope.class_path is None or not instance}
+                        # A `TypedDict` key the typing specification lets be left out.
+                        | ({"not_required": True} if optional_key else {}),
                     )
                 if value is None:
                     continue

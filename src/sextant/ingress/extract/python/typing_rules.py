@@ -248,6 +248,33 @@ def is_class_variable(annotation: ast.expr, scope: TypeScope, depth: int = _DEPT
     return False
 
 
+def is_not_required(
+    annotation: ast.expr, scope: TypeScope, *, total: bool, depth: int = _DEPTH
+) -> bool:
+    """Whether a class-body annotation lets its key be left out (the typing specification's
+    `TypedDict` rule): `NotRequired[...]`, or any key of a class written `total=False` not
+    written `Required[...]`; either may sit as `Annotated`'s first argument or in a string."""
+    if depth == 0:
+        return not total
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            annotation = ast.parse(annotation.value.strip(), mode="eval").body
+        except SyntaxError:
+            return not total
+    head = annotation.value if isinstance(annotation, ast.Subscript) else annotation
+    targets = scope.lookup(head) if isinstance(head, ast.Name | ast.Attribute) else []
+    if len(targets) == 1 and isinstance(annotation, ast.Subscript):
+        if is_typing(targets[0], "NotRequired"):
+            return True
+        if is_typing(targets[0], "Required"):
+            return False
+        if is_typing(targets[0], "Annotated"):
+            written = annotation.slice
+            first = written.elts[0] if isinstance(written, ast.Tuple) else written
+            return is_not_required(first, scope, total=total, depth=depth - 1)
+    return not total
+
+
 def type_symbol(target: Target) -> str:
     """The SCIP type descriptor of a target: `app/m#` for a module, `app/m/C#` for a
     class, `app/m/Outer$Inner#` for a nested class (D00 §1)."""

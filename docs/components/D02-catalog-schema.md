@@ -2384,7 +2384,13 @@ file: a `field`-kind argument) is the class that name holds, read through the va
 chain's own path, where every path answers the same type. **A response written as a type form**
 (`response_model=ListResource[Order]`, `list[Order]`: the value of a `<form>#__class_getitem__`
 call, D00 §5a) is the type the form names, with its arguments, each a class, a name holding one,
-or a form in turn (plan 2026-11-08-python-fastapi-inbound R24, `arguments.type_form_reference`):
+or a form in turn (plan 2026-11-08-python-fastapi-inbound R24, `arguments.type_form_reference`),
+**where the form's owner is a class**: one the module declares, or one the shape model's
+`known_types` gives a wire type (`list`). `Optional[X]` and `Union[...]` are the language's
+special forms, no class, so a value naming one, or holding one anywhere (`list[Optional[X]]`, an
+alias of a union), is not read here (task 9 review M3). A subscript of a class imported from
+another file, which the scanner writes `__getitem__`, is the same form where the walk reads its
+receiver as a class:
 `ListResource[Order]` is the shape `ListResource#<Order#>`, whose field typed by the class's
 parameter is bound to `Order`, and `list[Order]` an `array` of `Order` (the shape model's
 `known_types` names `list` an array, §2g). Read where every path names the same type. Any other
@@ -6000,7 +6006,11 @@ serialization:
 
 - **`name_from` with `call`** (beside the `annotation` form): the output name is the first entry
   written on the call the value ended at, else the generator's name for the field, else the
-  name. **`input_name_from`**: the input name, likewise. A literal `alias_priority` equal to
+  name. **`input_name_from`**: the input name, likewise. **The naming calls in the field's
+  `Annotated` metadata** (its `annotation_value`, D00 §5a) are read too, as pydantic merges them
+  (`FieldInfo.from_annotated_attribute`, task 9 review M1): the metadata's calls in written
+  order, then the value's, each overriding only what it writes (`alias` writing both names); a
+  plain value is the default. A literal `alias_priority` equal to
   `generator_wins` lets the generator replace both.
 - **`name_generator`**: the class's `config_field`, made by `config_call`, merged over its
   written bases in written order, the last base winning, then the class's own (ruling R2,
@@ -6012,8 +6022,13 @@ serialization:
   guessed at**: the fields it names get `wire_name` NULL at `unresolved`, and the shape is open
   (§2g's rule). A `by_name` argument written `True` makes a renamed field accept its own name too.
 - **`required: no_default`** (the one rule): a field is required where it writes no default,
-  read by `defaults` where its value is a call (`required_when` written as the named field writes
-  none). Without the key, `required` keeps the wrapper rule (`optional` wrapper).
+  read by `defaults` on each naming call in merge order (`required_when` written as the named
+  field writes none). **A default not read is not a default** (task 9 review M2): a value made by
+  a call that is no naming call (sqlmodel's own `Field`, a helper the walk does not see into), or
+  a default argument in an unpacked `*args`/`**kwargs`, leaves `required` unread, so the
+  language's answer (the wrapper rule) stands at `partial`, never `false`. A `TypedDict` key the
+  language marks not required (`modifiers.not_required`, D00 §5a) is not required whatever the
+  model says. Without the key, `required` keeps the wrapper rule (`optional` wrapper).
 - **`private_prefix`**: a name starting with it is no field.
 - **Resolution (N13 option B).** One shape per type, under the output names. A field whose
   accepted input names differ from its output name is `partial`: a `validation_alias`, a
@@ -6062,6 +6077,9 @@ collection does: the Python projection's collections are mirrored in `pydantic.y
 form read as a bare symbol (`response_model=list[Order]`, §2's response rule), and
 `tests/architecture/test_known_types_mirror_the_projection.py` holds the mirror to
 `typing_rules._WIRE_TYPES`.
+
+**A sequence holding several types by position** (`tuple[int, str]`) has no one item type: no
+`item` is published and its owner is open. A `map`'s item is its last argument, as before.
 
 **A third-party type with no entry here is not guessed at.** Expansion stops, the shape is
 marked open, the type reference is kept, and [M04](M04-resolver.md) reports the type that

@@ -49,7 +49,9 @@ _NAMED_QUERIES = {
     "fields": """
         SELECT symbol, document_id, seq, signature -> 'returns' AS returns,
                coalesce((modifiers ->> 'static')::BOOLEAN, false) AS "static",
-               coalesce((modifiers ->> 'transient')::BOOLEAN, false) AS "transient"
+               coalesce((modifiers ->> 'transient')::BOOLEAN, false) AS "transient",
+               signature -> 'annotation_value' AS annotation_value,
+               coalesce((modifiers ->> 'not_required')::BOOLEAN, false) AS not_required
         FROM symbols
         WHERE construct_kind = 'field'
         ORDER BY document_id, seq

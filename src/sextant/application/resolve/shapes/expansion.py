@@ -237,7 +237,10 @@ class ModelFields:
             (
                 field["name"],
                 self.names.of(
-                    model, owner_of(bare_descriptor(str(field["symbol"]))) or model, field["name"]
+                    model,
+                    owner_of(bare_descriptor(str(field["symbol"]))) or model,
+                    field["name"],
+                    field.get("annotation_value"),
                 ),
             )
             for field in declared
@@ -589,6 +592,10 @@ def _declared_fields(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:
                 "returns": _json_object(row["returns"]),
                 "static": bool(row["static"]),
                 "transient": bool(row["transient"]),
+                # The annotation's value where it is not a plain type, and whether the
+                # language lets the key be left out (`TypedDict`), Python's (D00 §5a).
+                "annotation_value": _json_object(row["annotation_value"]) or None,
+                "not_required": bool(row["not_required"]),
             }
         )
     return owners
@@ -868,7 +875,7 @@ def _rows_of(
             if names.is_private(field["name"]):
                 continue
             holder = owner_of(bare_descriptor(str(field["symbol"])))
-            named = names.of(shape, holder or shape, field["name"])
+            named = names.of(shape, holder or shape, field["name"], field.get("annotation_value"))
             wire_name = named.output
         # Rooted first: a field inside a declared envelope is described by what
         # the envelope holds, not by the envelope (D02 §2a).
@@ -895,9 +902,15 @@ def _rows_of(
                 # already recorded — an `optional` wrapper is what makes a
                 # field omittable. A shape model with a `required` rule says it
                 # instead (N12: `no_default`).
-                "required": "optional" not in rooted.chain
-                if named is None or named.required is None
-                else named.required,
+                # A key the language lets be left out (a `TypedDict`'s `NotRequired`) is not
+                # required, whatever else is said.
+                "required": False
+                if field.get("not_required")
+                else (
+                    "optional" not in rooted.chain
+                    if named is None or named.required is None
+                    else named.required
+                ),
                 "nullable": nullable,
                 "resolution": resolution if named is None else weaker(resolution, named.resolution),
                 "evidence": evidence,
@@ -1057,7 +1070,11 @@ def _described(
         # What a collection holds is its last type argument: a keyed
         # collection's keys are strings on the wire, so only its value
         # argument describes the payload, and a sequence has just the one.
-        if reference["arguments"]:
+        # A sequence holding SEVERAL types by position (`tuple[int, str]`) has no one item
+        # type, so none is published and its owner is open (`_holds_an_undescribed_object`).
+        if reference["arguments"] and (
+            described["wire_type"] == "map" or len(reference["arguments"]) == 1
+        ):
             described["item"] = _described(rules, reference["arguments"][-1], enums, referenced)
     elif described["wire_type"] == "object":
         # F4 §5.2 (W25). The id carries the BOUND ARGUMENTS where the reference has

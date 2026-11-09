@@ -116,6 +116,13 @@ SEXTANT_VERSION = version("sextant")
 #             before the generator object's own `unresolved` return. A fact set of the older
 #             vintage has no yields, so a reader would take a generator for one that yields
 #             nothing it can read; it is refused and re-extracted.
+#     11      a Python class-body field gains the value of its annotation where that is not a
+#             plain type (`signature.annotation_value`, a parameter's word since 8: pydantic's
+#             `Annotated[T, Field(...)]`), and `modifiers.not_required` where the typing
+#             specification lets a `TypedDict` key be left out (plan 2026-11-08 task 9 review
+#             M1, M6). A fact set of the older vintage holds neither, so a reader would take an
+#             `Annotated` field for one with no metadata and every `TypedDict` key for a
+#             required one; it is refused and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -254,6 +261,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 10
+FACT_SCHEMA_VERSION = 11
 GRAPH_SCHEMA_VERSION = 17
 BOUNDARY_VOCABULARY_VERSION = 5

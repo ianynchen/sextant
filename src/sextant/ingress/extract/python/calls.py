@@ -350,6 +350,9 @@ class Scope:
     super_owner: str | None = None
     # This reading of the body's control flow (one per body, D00 §5 rule 9).
     flow: Flow = field(default_factory=Flow)
+    # False in the body of a class written `total=False` (a `TypedDict`'s keys may be left out
+    # unless written `Required[...]`, the typing specification).
+    total: bool = True
 
 
 class BodyReader:

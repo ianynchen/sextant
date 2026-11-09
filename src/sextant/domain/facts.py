@@ -137,6 +137,14 @@ class Signature(BaseModel):
     # order. Part of the signature because it is part of what a caller must handle
     # to call it. Empty for the great majority, which declare none.
     throws: list[str] = Field(default_factory=list)
+    # A Python class-body FIELD's annotation value, in the call-argument grammar, written only
+    # where it is not a plain type: `Parameter.annotation_value`'s rule, applied to the other
+    # annotated declaration (task 9 review M1). The class body evaluates it after the value,
+    # so its calls are the class body's. `returns` keeps the type it gives. Absent everywhere
+    # else, every JVM signature included.
+    annotation_value: "CallArgument | None" = Field(
+        default=None, exclude_if=lambda held: held is None
+    )
 
 
 class ClasspathEntry(BaseModel):

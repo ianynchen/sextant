@@ -65,13 +65,11 @@ serialization:
   # A name starting with `_` is a private attribute, never a field (probe §4).
   private_prefix: "_"
 
-# pydantic 2's JSON mode (`pydantic_known_types.md`): each of these is written as a string.
-# Each entry is the value `model_dump(mode="json")` writes and the `format` its serialization
-# schema states, where this vocabulary has the word (D00 §5b): `bytes` is `binary` and `UUID4`
-# `uuid4` in pydantic's schema, which this vocabulary does not distinguish from a string and a
-# `uuid` respectively. An entry with no format writes `format: null`, as the Python projection
-# writes no format (D00 §5b), so a field of one of these types reads as every other Python
-# field does.
+# pydantic 2's JSON mode (`pydantic_known_types.md`): each of these is written as a string, with
+# the `format` pydantic's own JSON schema states for it, the same in serialization and
+# validation mode (ruling: formats follow the probe). `Decimal` states none (`format: null`, as
+# the Python projection writes no format, D00 §5b), so a field of it reads as every other
+# Python field does.
 #
 # Then the language's own projection (D00 §5b), declared here for the bare-symbol case
 # json.yml's comment describes: a type FORM written as a value (`response_model=list[Order]`,
@@ -90,8 +88,16 @@ known_types:
   - { type: datetime.date,        wire: string, format: date,      by: scripts/probes/pydantic_known_types.md }
   - { type: uuid.UUID,            wire: string, format: uuid,      by: scripts/probes/pydantic_known_types.md }
   - { type: decimal.Decimal,      wire: string, format: null,      by: scripts/probes/pydantic_known_types.md }
-  - { type: builtins.bytes,       wire: string, format: null,      by: scripts/probes/pydantic_known_types.md }
-  - { type: pydantic.types.UUID4, wire: string, format: uuid,      by: scripts/probes/pydantic_known_types.md }
+  - { type: builtins.bytes,       wire: string, format: binary,    by: scripts/probes/pydantic_known_types.md }
+  - { type: pydantic.types.UUID4,           wire: string, format: uuid4,          by: scripts/probes/pydantic_known_types.md }
+  - { type: pydantic.networks.EmailStr,     wire: string, format: email,          by: scripts/probes/pydantic_known_types.md }
+  - { type: pydantic.networks.HttpUrl,      wire: string, format: uri,            by: scripts/probes/pydantic_known_types.md }
+  - { type: pydantic.networks.AnyUrl,       wire: string, format: uri,            by: scripts/probes/pydantic_known_types.md }
+  - { type: pydantic.networks.IPvAnyAddress, wire: string, format: ipvanyaddress,  by: scripts/probes/pydantic_known_types.md }
+  - { type: pydantic.networks.PostgresDsn,  wire: string, format: multi-host-uri, by: scripts/probes/pydantic_known_types.md }
+  - { type: pydantic.types.AwareDatetime,   wire: string, format: date-time,      by: scripts/probes/pydantic_known_types.md }
+  - { type: pydantic.types.FutureDatetime,  wire: string, format: date-time,      by: scripts/probes/pydantic_known_types.md }
+  - { type: pydantic.types.DirectoryPath,   wire: string, format: directory-path, by: scripts/probes/pydantic_known_types.md }
   - { type: builtins.str,                      wire: string,  format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
   - { type: builtins.int,                      wire: integer, format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
   - { type: builtins.float,                    wire: number,  format: null, by: src/sextant/ingress/extract/python/typing_rules.py }

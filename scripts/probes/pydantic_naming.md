@@ -170,3 +170,24 @@ Probe (`Misc`, generator `to_camel`):
 
 This matches N12's `required: no_default` (a field is required when it writes no default) and
 `private_prefix: "_"`.
+
+## 5. `Field` in `Annotated` metadata (task 9 review M1)
+
+Part 3 of `pydantic_naming.py` (`AnnotatedFields`), pydantic 2.14.3 as the process reported it.
+Source: `pydantic/fields.py:FieldInfo.from_annotated_attribute` merges every `FieldInfo` in the
+metadata in written order, then the assigned value's last (`merge_field_infos`), each
+overriding only the attributes it sets; `Field(alias=...)` sets `alias`,
+`serialization_alias` and `validation_alias` alike. A plain assigned value is the default.
+
+| Written | alias / serialization / validation | required |
+|---|---|---|
+| `Annotated[str, Field(alias="PlainAlias")]` | PlainAlias / PlainAlias / PlainAlias | True |
+| `Annotated[int, Field(default=3)]` | none | False |
+| `Annotated[list[int], Field(default_factory=list)]` | none | False |
+| `Annotated[int, Field(alias="A1")] = Field(alias="A2")` | A2 / A2 / A2 | True |
+| `Annotated[int, Field(alias="B1")] = Field(default=3)` | B1 / B1 / B1 | False |
+| `Annotated[int, Field(alias="C1")] = 4` | C1 / C1 / C1 | False |
+| `Annotated[int, Field(alias="D1"), Field(alias="D2")]` | D2 / D2 / D2 | True |
+| `Annotated[int, Field(default=1)] = Field(alias="E")` | E / E / E | False |
+| `Annotated[int, Field(serialization_alias="G1")] = Field(alias="G2")` | G2 / G2 / G2 | True |
+| `Annotated[int, Field(validation_alias="V")] = 0` | none / none / V | False |

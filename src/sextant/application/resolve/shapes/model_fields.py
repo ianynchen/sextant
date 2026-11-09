@@ -34,9 +34,10 @@ from typing import Any
 
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import ancestry_of
-from sextant.application.resolve.parameter_markers import _site
+from sextant.application.resolve.parameter_markers import _ANNOTATED, _site
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.application.resolve.values import (
+    EXTERNAL,
     UNPACKED_SLOT,
     ValueIndex,
     argument_slot,
@@ -46,8 +47,15 @@ from sextant.application.resolve.values import (
 from sextant.domain.closed_sets import Resolution
 from sextant.domain.symbols import bare_descriptor, owner_of
 
-# The readers' key in the index's shared upward paths (`producer_paths(..., shared=)`).
-_READER = "model_fields"
+# The readers' keys in the index's shared upward paths (`producer_paths(..., shared=)`): one per
+# stop set, since a path's end depends on it.
+_VALUE_READER = "model_fields:value"
+_CONFIG_READER = "model_fields:config"
+_FORM_READER = "model_fields:form"
+# A default's state while the naming calls are merged (`ModelNames._required`).
+_NONE_WRITTEN = "none_written"
+_WRITTEN = "written"
+_NOT_READ_DEFAULT = "not_read"
 # A class body's own method (D00 §5a): the value a class-body annotation writes is made there.
 _CLASS_BODY = "<clinit>("
 # An argument written as something no literal reading answers.
@@ -223,17 +231,38 @@ class ModelNames:
     _ancestry: dict[str, list[tuple[str, str, bool]]] | None = None
     _configs: dict[str, _Config] = field(default_factory=dict)
     _values: dict[str, list[Mapping[str, Any] | None] | None] = field(default_factory=dict)
+    _bodies: dict[str, str] | None = None
 
     def is_private(self, name: str) -> bool:
         """Whether a declared name is no field at all (`private_prefix`)."""
         prefix = self.naming.private_prefix
         return bool(prefix) and name.startswith(str(prefix))
 
-    def of(self, model: str, holder: str, name: str) -> FieldName:
-        """Field `name`, declared by `holder`, as model `model` presents it."""
+    def of(
+        self, model: str, holder: str, name: str, annotation: Mapping[str, Any] | None = None
+    ) -> FieldName:
+        """Field `name`, declared by `holder`, as model `model` presents it. `annotation` is
+        the field's annotation value where it is not a plain type (D00 §5a): the naming calls
+        in its `Annotated` metadata are read before the class-body value's, as pydantic merges
+        them (`FieldInfo.from_annotated_attribute`, `pydantic_naming.md` §5)."""
         generator = self._generator(model, holder)
         readings = [
-            self._reading(name, site, generator, model) for site in self._paths(f"{holder}{name}.")
+            self._reading(
+                name,
+                [
+                    *calls,
+                    *(
+                        [value]
+                        if value is not None and _call_of(value) in self.naming.calls
+                        else []
+                    ),
+                ],
+                value,
+                generator,
+                model,
+            )
+            for calls in self._annotated(holder, name, annotation)
+            for value in self._paths(f"{holder}{name}.")
         ]
         first = readings[0]
         if any(reading != first for reading in readings[1:]):
@@ -243,21 +272,29 @@ class ModelNames:
     def _reading(
         self,
         name: str,
-        site: Mapping[str, Any] | None,
+        calls: list[Mapping[str, Any]],
+        value: Mapping[str, Any] | None,
         generator: tuple[str, ...] | None,
         model: str,
     ) -> FieldName:
-        """One path's reading: `site` the naming call the field's value ended at, None where it
-        ended anywhere else or no value is written (`_paths`)."""
-        resolution = _PARTIAL if site is _VALUE_NOT_READ else _RESOLVED
-        arguments = list(site.get("arguments") or []) if site is not None else []
-        if any(entry.get("keyword") in ("*", "**") for entry in arguments):
-            # Names in an unpacked value (`Field(**kwargs)`) are not written here (R3).
-            resolution = _PARTIAL
-        call = _call_of(site)
-        output = _first(arguments, call, self.naming.name_from)
-        given = _first(arguments, call, self.naming.input_name_from)
-        priority = self.naming.alias_priority
+        """One path's reading: `calls` the naming calls that made the field's information in
+        pydantic's merge order, each overriding what it writes; `value` where the class-body
+        value ended (`_paths`)."""
+        resolution = _PARTIAL if value is _VALUE_NOT_READ else _RESOLVED
+        output: Any = None
+        given: Any = None
+        level: Any = None
+        for site in calls:
+            arguments = list(site.get("arguments") or [])
+            if any(entry.get("keyword") in ("*", "**") for entry in arguments):
+                # Names in an unpacked value (`Field(**kwargs)`) are not written here (R3).
+                resolution = _PARTIAL
+            call = _call_of(site)
+            output = _merged(output, _first(arguments, call, self.naming.name_from))
+            given = _merged(given, _first(arguments, call, self.naming.input_name_from))
+            priority = self.naming.alias_priority
+            if priority is not None and call == priority[0]:
+                level = _merged(level, _literal(_argument(arguments, priority[1])))
         generated: str | None = name
         if generator is not None and generator != _NONE:
             if generator[0] in STRATEGIES:
@@ -266,12 +303,11 @@ class ModelNames:
                 resolution = weaker(resolution, _PARTIAL)
             else:
                 generated = None
-            if priority is not None and call == priority[0]:
-                level = _literal(_argument(arguments, priority[1]))
-                if level is _UNREAD:
-                    resolution = weaker(resolution, _PARTIAL)
-                elif level == priority[2]:
-                    output = given = None
+            priority = self.naming.alias_priority
+            if level is _UNREAD:
+                resolution = weaker(resolution, _PARTIAL)
+            elif priority is not None and level == priority[2]:
+                output = given = None
         output_name = _named(output, generated)
         input_name = None if given is _UNREAD else _named(given, generated)
         # What is read of each name alone: written as no literal, partial; not read at all (a
@@ -291,6 +327,10 @@ class ModelNames:
                 accepted.add(name)
         if len(accepted) > 1:
             read_in = weaker(read_in, _PARTIAL)
+        required = self._required(calls, value)
+        if required is None and self.naming.required == NO_DEFAULT:
+            # Whether a default is written is not read (review M2): never `False`.
+            resolution = weaker(resolution, _PARTIAL)
         # N13 B: a field read under names other than its output name is not wholly described
         # by that name.
         whole = weaker(resolution, weaker(read_out, read_in))
@@ -299,37 +339,101 @@ class ModelNames:
         return FieldName(
             output=output_name,
             input=input_name,
-            required=self._required(site, call, arguments),
+            required=required,
             resolution=whole,
             input_resolution=weaker(resolution, read_in),
         )
 
     def _required(
-        self, site: Mapping[str, Any] | None, call: tuple[str, str] | None, arguments: list[Any]
+        self, calls: list[Mapping[str, Any]], value: Mapping[str, Any] | None
     ) -> bool | None:
-        """`required: no_default`: required where the field writes no default (`_paths` gives
-        None where no value is written), or the call making its value writes none."""
+        """`required: no_default`: required where no default is written. Each naming call in
+        merge order writes one (a `default_arg`), writes none (`required_when`'s field, `...`)
+        or leaves the earlier answer; a plain class-body value is one. None where it is not
+        read: a default argument in an unpacked value, a value made by a call not read
+        (review M2)."""
         if self.naming.required != NO_DEFAULT:
             return None
-        if site is _NO_VALUE:
-            return True
-        for declared, references, when, ellipsis in self.naming.defaults:
-            if call != declared:
-                continue
-            if when is not None and ellipsis is not None:
-                written = _argument(arguments, when)
-                if (
-                    isinstance(written, dict)
-                    and written.get("kind") == "field"
-                    and written.get("symbol") == ellipsis
+        state: str = _NONE_WRITTEN
+        for site in calls:
+            arguments = list(site.get("arguments") or [])
+            call = _call_of(site)
+            for declared, references, when, ellipsis in self.naming.defaults:
+                if call != declared:
+                    continue
+                written = [_argument(arguments, one) for one in references]
+                guarded = _argument(arguments, when) if when is not None else None
+                if any(
+                    one is not None and one.get("kind") == "unresolved" and "source" not in one
+                    for one in [*written, guarded]
                 ):
-                    return True
-            return not any(_argument(arguments, one) is not None for one in references)
-        return False
+                    state = _NOT_READ_DEFAULT
+                elif (
+                    isinstance(guarded, dict)
+                    and guarded.get("kind") == "field"
+                    and guarded.get("symbol") == ellipsis
+                ):
+                    state = _NONE_WRITTEN
+                elif any(one is not None for one in written):
+                    state = _WRITTEN
+        if value is _VALUE_NOT_READ:
+            state = _NOT_READ_DEFAULT
+        elif value is None:
+            state = _WRITTEN
+        if state == _NOT_READ_DEFAULT:
+            return None
+        return state == _NONE_WRITTEN
+
+    def _annotated(
+        self, holder: str, name: str, annotation: Mapping[str, Any] | None
+    ) -> list[list[Mapping[str, Any]]]:
+        """Each path through the field's `Annotated` metadata: the naming calls among its
+        elements, in written order (a nested `Annotated` first, as Python flattens it).
+        `[[]]` where the field's annotation carries none."""
+        body = self._class_bodies().get(holder) if annotation is not None else None
+        if body is None or annotation is None:
+            return [[]]
+        found: list[list[Mapping[str, Any]]] = []
+        for producer, _ in producer_paths(
+            self.index, held_at_end(body, annotation), 0, _ANNOTATED, shared=_FORM_READER
+        ):
+            form = _site(self.index, producer)
+            found.extend(self._metadata(form) if _call_of(form) in _ANNOTATED else [[]])
+        return found or [[]]
+
+    def _metadata(self, form: Mapping[str, Any] | None) -> list[list[Mapping[str, Any]]]:
+        """For one `Annotated` form, each path through its metadata, keeping the naming calls."""
+        if form is None:
+            return [[]]
+        arguments = form.get("arguments") or []
+        combined: list[list[Mapping[str, Any]]] = [
+            nested
+            for producer, _ in producer_paths(self.index, form, 0, _ANNOTATED, shared=_FORM_READER)
+            for nested in (
+                self._metadata(_site(self.index, producer))
+                if _call_of(_site(self.index, producer)) in _ANNOTATED
+                else [[]]
+            )
+        ] or [[]]
+        stops = self.naming.calls
+        for slot in range(1, len(arguments)):
+            made = [
+                _site(self.index, producer)
+                for producer, _ in producer_paths(
+                    self.index, form, slot, stops, shared=_VALUE_READER
+                )
+            ]
+            kept: list[list[Mapping[str, Any]]] = [
+                [one] if one is not None and _call_of(one) in stops else [] for one in made
+            ] or [[]]
+            combined = [chosen + one for chosen in combined for one in kept]
+        return combined
 
     def _paths(self, symbol: str) -> list[Mapping[str, Any] | None]:
-        """Each path of the field's class-body value: the naming call it ended at, else None;
-        `[_NO_VALUE]` where the class body writes no value. Read once per field."""
+        """Each path of the field's class-body value: the naming call it ended at;
+        `_VALUE_NOT_READ` where it ended at another call, read or not (it may hand back field
+        information of its own); None where it ended at any other value (a default); `[_NO_VALUE]` where the class body
+        writes no value. Read once per field."""
         if symbol in self._values:
             return self._values[symbol] or [_NO_VALUE]
         written = self._class_body_writes().get(symbol)
@@ -339,14 +443,28 @@ class ModelNames:
             stops = self.naming.calls
             for writer, value in written:
                 for producer, _ in producer_paths(
-                    self.index, held_at_end(writer, value), 0, stops, shared=_READER
+                    self.index, held_at_end(writer, value), 0, stops, shared=_VALUE_READER
                 ):
                     site = _site(self.index, producer)
-                    ends.append(site if _call_of(site) in stops else None)
+                    if _call_of(site) in stops:
+                        ends.append(site)
+                    elif site is not None or producer.reason == EXTERNAL:
+                        # A call not read may hand back field information of its own.
+                        ends.append(_VALUE_NOT_READ)
+                    else:
+                        # Any other value the class body writes is the field's default (a
+                        # literal, a display such as `{}`, a name).
+                        ends.append(None)
             # A value whose every path the walk left out is a value not read.
             ends = ends or [_VALUE_NOT_READ]
         self._values[symbol] = ends
         return ends or [_NO_VALUE]
+
+    def _class_bodies(self) -> dict[str, str]:
+        """Each class's body method (`<clinit>`), by bare class symbol."""
+        if self._bodies is None:
+            self._bodies = self.workspace.once(_class_bodies)
+        return self._bodies
 
     def _class_body_writes(self) -> dict[str, list[tuple[str, Mapping[str, Any]]]]:
         """Each field's writes made by its own class's body, by bare field symbol."""
@@ -401,7 +519,11 @@ class ModelNames:
         readings: list[_Config] = []
         for writer, value in written:
             for producer, _ in producer_paths(
-                self.index, held_at_end(writer, value), 0, self.naming.config_calls, shared=_READER
+                self.index,
+                held_at_end(writer, value),
+                0,
+                self.naming.config_calls,
+                shared=_CONFIG_READER,
             ):
                 site = _site(self.index, producer)
                 if _call_of(site) not in self.naming.config_calls or site is None:
@@ -445,6 +567,19 @@ class ModelNames:
 # which the walk gives.
 _NO_VALUE: Mapping[str, Any] = {}
 _VALUE_NOT_READ: Mapping[str, Any] = {"arguments": []}
+
+
+def _class_bodies(workspace: Workspace) -> dict[str, str]:
+    """Each class's body method, `<clinit>`, by bare class symbol (D00 §5a). Read through
+    `Workspace.once`: facts only."""
+    found: dict[str, str] = {}
+    for row in workspace.query("declared_symbols"):
+        symbol = str(row["symbol"])
+        bare = bare_descriptor(symbol)
+        owner = owner_of(bare)
+        if owner is not None and bare.startswith(owner + _CLASS_BODY):
+            found[owner] = symbol
+    return found
 
 
 def _class_body_writes(workspace: Workspace) -> dict[str, list[tuple[str, Mapping[str, Any]]]]:
@@ -519,6 +654,11 @@ def _first(
             continue
         return value if isinstance(value, str) else _UNREAD
     return None
+
+
+def _merged(earlier: Any, later: Any) -> Any:
+    """One attribute merged over two calls: the later call's where it writes one."""
+    return earlier if later is None else later
 
 
 def _named(written: Any, generated: str | None) -> str | None:

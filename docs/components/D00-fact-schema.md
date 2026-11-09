@@ -758,6 +758,16 @@ two values `inspect.signature` gives a framework:
 - **`...` is the builtin constant it is**: `{kind: field, symbol: builtins#Ellipsis.}`
   (`Query(...)`, which means required), never `unresolved`.
 
+**A Python class-body field carries its annotation's value the same way** (fact schema 11, plan
+2026-11-08 task 9 review M1): `signature.annotation_value`, beside `signature.returns`, written
+only where the annotation is not a plain type, by the rule above (`plain_name: Annotated[str,
+Field(alias="P")]` is the `__class_getitem__` call's result). A class body evaluates a field's
+value, then its annotation (PEP 526), so the calls are the class body's (`<clinit>`), after
+the value's. Absent on every JVM signature and on every other Python symbol. **A `TypedDict` key
+the typing specification lets be left out carries `modifiers.not_required: true`**: one written
+`NotRequired[...]`, or any key of a class written `total=False` not written `Required[...]`
+(either may be `Annotated`'s first argument). Absent everywhere else.
+
 Absent on every JVM parameter: a Kotlin default's expression lives in the `$default` bridge's
 body. Both fields are written back only where set. They moved the fact schema version to 8.
 

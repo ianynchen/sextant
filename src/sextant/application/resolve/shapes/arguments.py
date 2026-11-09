@@ -1661,7 +1661,11 @@ _GETITEM = "__getitem__"
 
 
 def type_form_reference(
-    index: ValueIndex, site: Mapping[str, Any], slot: int, within: Path | None = None
+    index: ValueIndex,
+    site: Mapping[str, Any],
+    slot: int,
+    is_class: Callable[[str], bool],
+    within: Path | None = None,
 ) -> dict[str, Any] | None:
     """The type a value in a type slot names where it is a type form (plan
     2026-11-08-python-fastapi-inbound R24): `ListResource[Order]` and `list[Order]` are the
@@ -1671,12 +1675,15 @@ def type_form_reference(
     another file) is the same form: Python runs `__class_getitem__` for it. Every path of the
     value is read (`values.producer_paths`; `within`, a path the reader already took, keeps only
     the paths agreeing with it), and only one type every path names is the answer: None where a
-    path ends at anything else, or two paths name two types."""
+    path ends at anything else, or two paths name two types. **A form is a type only where its
+    owner is a class** (`is_class`: a class the module declares, or one the shape model gives a
+    wire type, such as `list`): `Optional[X]` and `Union[...]` are the language's special
+    forms, no class, so a value naming one, or holding one anywhere, is None."""
     found: dict[str, dict[str, Any]] = {}
     for made, answer in _type_ends(index, site, slot, within):
         reference: dict[str, Any] | None
         if made is not None and made.get("name") in (_CLASS_GETITEM, _GETITEM):
-            reference = _form_reference(index, made)
+            reference = _form_reference(index, made, is_class)
         elif (
             made is None
             and answer is not None
@@ -1719,7 +1726,9 @@ def _type_ends(
     return ends
 
 
-def _form_reference(index: ValueIndex, form: Mapping[str, Any]) -> dict[str, Any] | None:
+def _form_reference(
+    index: ValueIndex, form: Mapping[str, Any], is_class: Callable[[str], bool]
+) -> dict[str, Any] | None:
     """One subscript of a class as the reference it names: the subscripted class (the static
     call's owner, or the class a `__getitem__` call's receiver holds on every path), with each
     written argument, a class or a type form, as its type argument."""
@@ -1735,6 +1744,8 @@ def _form_reference(index: ValueIndex, form: Mapping[str, Any]) -> dict[str, Any
         if len(held) != 1:
             return None
         (owner,) = held
+    if not is_class(owner):
+        return None
     arguments: list[dict[str, Any]] = []
     for slot, argument in enumerate(form.get("arguments") or []):
         if argument.get("keyword") is not None:
@@ -1742,7 +1753,7 @@ def _form_reference(index: ValueIndex, form: Mapping[str, Any]) -> dict[str, Any
         if argument.get("kind") == "class" and argument.get("symbol") is not None:
             arguments.append(_bare_reference(str(argument["symbol"])))
             continue
-        nested = type_form_reference(index, form, slot)
+        nested = type_form_reference(index, form, slot, is_class)
         if nested is None:
             return None
         arguments.append(nested)

@@ -3391,7 +3391,15 @@ def _class_named(argument: Any, context: "_DeriveContext") -> Any:
         site = context.values.sites.get((str(at[0]), int(str(at[1])))) if at is not None else None
         if site is None or at is None:
             return argument
-        reference = type_form_reference(context.values, site, int(at[2]), within=context.path)
+        dispatch = context.workspace.once(dispatch_of) if context.workspace is not None else None
+        known = context.carrier_rules.rules.known_types
+
+        def is_class(symbol: str) -> bool:
+            return (dispatch is not None and symbol in dispatch.scanned) or symbol in known
+
+        reference = type_form_reference(
+            context.values, site, int(at[2]), is_class, within=context.path
+        )
         return (
             argument
             if reference is None

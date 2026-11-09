@@ -10,21 +10,31 @@ that version and for no other.
 
 Verbatim from the output of `scripts/probes/pydantic_known_types.py`: for each type, the Python
 type of the value `model_dump(mode="json")` writes, then the `type` and `format` of the field in
-`model_json_schema(mode="serialization")`. The column header is the version the run's own process
-reported (`pydantic.VERSION`), not the version the environment was asked to install.
+`model_json_schema(mode="serialization")` and `(mode="validation")`. The column header is the
+version the run's own process reported (`pydantic.VERSION`), not the version the environment
+was asked to install. `email-validator` 2.3.0 was put on the path for `EmailStr` (pydantic
+imports it to build that schema).
 
 | Type | 2.14.3 |
 |---|---|
-| `datetime.datetime` | str; string, date-time |
-| `datetime.date` | str; string, date |
-| `uuid.UUID` | str; string, uuid |
-| `decimal.Decimal` | str; string, no format |
-| `bytes` | str; string, binary |
-| `pydantic.types.UUID4` | str; string, uuid4 |
+| `datetime.datetime` | str; string, date-time (both modes) |
+| `datetime.date` | str; string, date (both modes) |
+| `uuid.UUID` | str; string, uuid (both modes) |
+| `decimal.Decimal` | str; string, no format (serialization); a number or a string (validation) |
+| `bytes` | str; string, binary (both modes) |
+| `pydantic.types.UUID4` | str; string, uuid4 (both modes) |
+| `pydantic.networks.EmailStr` | str; string, email (both modes) |
+| `pydantic.networks.HttpUrl` | str; string, uri (both modes) |
+| `pydantic.networks.AnyUrl` | str; string, uri (both modes) |
+| `pydantic.networks.IPvAnyAddress` | str; string, ipvanyaddress (both modes) |
+| `pydantic.networks.PostgresDsn` | str; string, multi-host-uri (both modes) |
+| `pydantic.types.AwareDatetime` | str; string, date-time (both modes) |
+| `pydantic.types.FutureDatetime` | str; string, date-time (both modes) |
+| `pydantic.types.DirectoryPath` | str; string, directory-path (both modes) |
+| `pydantic.json_schema.SkipJsonSchema[int]` | int (kept out of the schema) |
 
 ## What the shape model declares
 
-Each type is a `string` on the wire. The `format` is the schema's where D00 §5b's vocabulary has
-the word: `date-time`, `date` and `uuid`. `binary` (bytes) and `uuid4` are pydantic's schema
-words, not this vocabulary's, so `bytes` is a string with no format and `UUID4` a `uuid`, as the
-plan's N12 states them. A JSON Schema reader distinguishes them; DR-5's comparison does not.
+Each type is a `string` on the wire with the format pydantic's schema states (ruling: formats
+follow the probe), the same in both modes; `Decimal` states none. `SkipJsonSchema[X]` writes the
+`X` it holds, so `fastapi.yml` declares it a `wrappers` envelope (D02 §2a), not a known type.

@@ -268,6 +268,9 @@ def test_a_wrapper_of_field_with_unpacked_kwargs_is_not_readable(tmp_path: Path,
         "updated_at": "partial",
         "other": "resolved",
     }
+    # Review M2: the default `UpdatedAtField` hands `Field` sits in `*args`, so whether one is
+    # written is not read: never `False`. The flag falls back to the language's (required).
+    assert _fields(workspace)["updated_at"][2] is True
 
 
 def test_private_attributes_are_not_fields(tmp_path: Path, libraries):
@@ -308,7 +311,8 @@ def test_validation_alias_makes_the_field_partial(tmp_path: Path, libraries):
 
 def test_decimal_is_a_string(tmp_path: Path, libraries):
     """`known_types` (§2g, pydantic 2 JSON mode, `scripts/probes/pydantic_known_types.md`):
-    `Decimal` is a string, as are the date types, `UUID`, pydantic's `UUID4` and `bytes`."""
+    `Decimal` is a string, as are the date types, `UUID`, pydantic's `UUID4` and `bytes`, each
+    with the format the probe read (ruling: formats follow the probe)."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -328,8 +332,8 @@ def test_decimal_is_a_string(tmp_path: Path, libraries):
         "at": ("string", "date-time"),
         "on": ("string", "date"),
         "key": ("string", "uuid"),
-        "key4": ("string", "uuid"),
-        "raw": ("string", None),
+        "key4": ("string", "uuid4"),
+        "raw": ("string", "binary"),
     }
 
 
@@ -474,3 +478,193 @@ def test_a_malformed_shape_model_is_refused_by_file(tmp_path: Path, serializatio
 
     assert says in str(raised.value)
     assert "tiny.yml" in str(raised.value)
+
+
+def test_a_field_in_annotated_metadata_names_and_defaults_the_field(tmp_path: Path, libraries):
+    """Review M1. pydantic reads a `Field(...)` in `Annotated` metadata as it reads one written
+    as the value (`FieldInfo.from_annotated_attribute`): its alias, `default` and
+    `default_factory`. Several merge in written order, the class-body value last, each call
+    overriding what it writes (an `alias` writes both names). Probe, pydantic 2.14.3:
+    `pydantic_naming.md` §5."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        _program(
+            "class Item(BaseModel):\n"
+            "    plain_name: Annotated[str, Field(alias='PlainAlias')]\n"
+            "    with_default: Annotated[int, Field(default=3)]\n"
+            "    with_factory: Annotated[list[int], Field(default_factory=list)]\n"
+            "    a: Annotated[int, Field(alias='A1')] = Field(alias='A2')\n"
+            "    b: Annotated[int, Field(alias='B1')] = Field(default=3)\n"
+            "    c: Annotated[int, Field(alias='C1')] = 4\n"
+            "    d: Annotated[int, Field(alias='D1'), Field(alias='D2')]\n"
+            "    e: Annotated[int, Field(default=1)] = Field(alias='E')\n"
+            "    g: Annotated[int, Field(serialization_alias='G1')] = Field(alias='G2')\n"
+            "    v: Annotated[int, Field(validation_alias='V')] = 0\n"
+        ),
+    )
+
+    assert {name: (row[2], row[3]) for name, row in _fields(workspace).items()} == {
+        "PlainAlias": (True, "resolved"),
+        "with_default": (False, "resolved"),
+        "with_factory": (False, "resolved"),
+        "A2": (True, "resolved"),
+        "B1": (False, "resolved"),
+        "C1": (False, "resolved"),
+        "D2": (True, "resolved"),
+        "E": (False, "resolved"),
+        "G2": (True, "resolved"),
+        "v": (False, "partial"),
+    }
+
+
+def test_a_default_made_by_a_call_not_read_is_not_a_default(tmp_path: Path, libraries):
+    """Review M2: a value made by a call the walk does not see into (sqlmodel's own `Field`,
+    a library helper) may or may not write a default, so `required` is not read from it: the
+    language's answer stands (required), at `partial`. Any other value, a literal or a display
+    such as `{}`, is a default."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        _program(
+            "from sqlmodel import Field as SqlField\n"
+            "class Item(BaseModel):\n"
+            "    email: str = SqlField(max_length=255)\n"
+            "    plain: int = 3\n"
+            "    headers: dict[str, str] = {}\n"
+        ),
+    )
+
+    assert {name: (row[2], row[3]) for name, row in _fields(workspace).items()} == {
+        "email": (True, "partial"),
+        "plain": (False, "resolved"),
+        "headers": (False, "resolved"),
+    }
+
+
+def test_a_typing_union_or_optional_form_is_no_class(tmp_path: Path, libraries):
+    """Review M3: R24 reads a form as a type only where its owner is a class: a scanned one or
+    a collection the shape model names. `Optional[X]` and `Union[...]`, alone, inside
+    `list[...]` or behind an alias, stay unread, as before R24."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _HEAD + "from typing import Union\n"
+            "class Cat(BaseModel):\n"
+            "    name: str\n"
+            "class Dog(BaseModel):\n"
+            "    name: str\n"
+            "Pet = Union[Cat, Dog]\n"
+            "@router.get('/optional', response_model=Optional[Cat])\n"
+            "def optional():\n"
+            "    return None\n"
+            "@router.get('/union', response_model=Union[Cat, Dog])\n"
+            "def union():\n"
+            "    return None\n"
+            "@router.get('/listed', response_model=list[Optional[Cat]])\n"
+            "def listed():\n"
+            "    return None\n"
+            "@router.get('/alias', response_model=list[Pet])\n"
+            "def alias():\n"
+            "    return None\n"
+        },
+    )
+
+    assert {
+        row["path"]: (row["resolution"], row["response_shape"])
+        for row in workspace.query("endpoints")
+    } == {
+        "/optional": ("unresolved", None),
+        "/union": ("unresolved", None),
+        "/listed": ("unresolved", None),
+        "/alias": ("unresolved", None),
+    }
+
+
+def test_pydantic_string_types_are_strings(tmp_path: Path, libraries):
+    """Review M5 (`pydantic_known_types.md`): pydantic's network and date types are strings
+    with the format its schema states, and `SkipJsonSchema[X]` writes an `X`."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        _program(
+            "from pydantic import AnyUrl, AwareDatetime, EmailStr, HttpUrl, IPvAnyAddress\n"
+            "from pydantic.json_schema import SkipJsonSchema\n"
+            "class Item(BaseModel):\n"
+            "    email: EmailStr\n"
+            "    site: HttpUrl\n"
+            "    any_url: AnyUrl\n"
+            "    address: IPvAnyAddress\n"
+            "    at: AwareDatetime\n"
+            "    hidden: SkipJsonSchema[int]\n"
+        ),
+    )
+
+    assert {name: row[:2] for name, row in _fields(workspace).items()} == {
+        "email": ("string", "email"),
+        "site": ("string", "uri"),
+        "any_url": ("string", "uri"),
+        "address": ("string", "ipvanyaddress"),
+        "at": ("string", "date-time"),
+        "hidden": ("integer", None),
+    }
+    assert _open(workspace) is not None
+
+
+def test_a_typed_dict_key_typing_marks_not_required_is_not_required(tmp_path: Path, libraries):
+    """Review M6: in a `TypedDict` a key written `NotRequired[...]`, and every key of a
+    `total=False` one not written `Required[...]`, may be left out (the typing
+    specification; pydantic's `TypeAdapter` agrees)."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        _program(
+            "from typing import NotRequired, Required, TypedDict\n"
+            "class Settings(TypedDict):\n"
+            "    must: int\n"
+            "    may: NotRequired[bool]\n"
+            "class Partial(TypedDict, total=False):\n"
+            "    loose: int\n"
+            "    tight: Required[int]\n"
+            "class Item(BaseModel):\n"
+            "    settings: Settings\n"
+            "    partial: Partial\n"
+        ),
+    )
+
+    assert {name: row[2] for name, row in _fields(workspace, "Settings").items()} == {
+        "must": True,
+        "may": False,
+    }
+    assert {name: row[2] for name, row in _fields(workspace, "Partial").items()} == {
+        "loose": False,
+        "tight": True,
+    }
+
+
+def test_a_tuple_of_two_types_and_a_bare_type_variable_are_not_misread(tmp_path: Path, libraries):
+    """Review Minors 5 and 10: `tuple[int, str]` is no array of one item type, so no item is
+    published and the shape is open; a field typed by a type variable nothing binds is
+    `unresolved`, never the text `None`."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        _program(
+            "T = TypeVar('T')\n"
+            "class Env(BaseModel, Generic[T]):\n"
+            "    data: T\n"
+            "class Item(BaseModel):\n"
+            "    pair: tuple[int, str]\n"
+            "    env: Env\n"
+        ),
+    )
+
+    (pair,) = [
+        row
+        for row in workspace.query("shape_fields")
+        if row["shape_id"] == "app/main/Item#" and row["wire_name"] == "pair"
+    ]
+    assert (pair["wire_type"], pair["item"]) == ("array", None)
+    assert _open(workspace) is True
+    assert _fields(workspace, "Env")["data"][3] == "unresolved"

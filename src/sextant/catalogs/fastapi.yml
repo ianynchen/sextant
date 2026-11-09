@@ -30,6 +30,11 @@ measured:
 # pydantic shape model's (`shape-models/pydantic.yml`, plan 2 Task 9).
 shape_model: pydantic
 
+# `SkipJsonSchema[X]` keeps a field out of the JSON schema pydantic publishes, and writes the `X`
+# it holds (`scripts/probes/pydantic_known_types.md`): an envelope around the payload (D02 §2a).
+wrappers:
+  - { type: pydantic.json_schema.SkipJsonSchema, payload_arg: 0, semantics: envelope }
+
 matches:
   # THE REGISTRATIONS (probe §3, §6). `APIRouter` and `FastAPI` (which hands each of these to
   # its own router unchanged) both define them. Each verb method's path is its first

@@ -284,7 +284,10 @@ file that did not change.
   body an annotated name not written `ClassVar` (bare, dotted, in a string, or as
   `Annotated`'s first argument) declares an instance variable, `static: false`, whatever its
   value (PEP 526); a name assigned with no annotation, or a `ClassVar`, is the class's own,
-  `static: true`. The instance variable's value is still its class-body `field_write`, which a
+  `static: true`. An instance variable's annotation that is not a plain type is evaluated in the
+  class body after the value and written as `signature.annotation_value`, and a `TypedDict` key
+  the typing specification lets be left out carries `modifiers.not_required` (D00 §5a). The
+  instance variable's value is still its class-body `field_write`, which a
   `self.x` read takes with every class's writes (ruling R33);
 - typed signatures from the written annotations (rule 1); `self` and `cls` are receivers,
   not parameters. Every type a fact carries (a signature's parameters and return, a field's

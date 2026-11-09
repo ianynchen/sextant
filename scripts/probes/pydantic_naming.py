@@ -20,7 +20,7 @@ import importlib.metadata
 import json
 import sys
 from pathlib import Path
-from typing import ClassVar, Optional
+from typing import Annotated, ClassVar, Optional
 
 import pydantic
 from humps.main import camelize
@@ -228,6 +228,30 @@ class Misc(BaseModel):
     factory: list[int] = Field(default_factory=list)
 
 
+class AnnotatedFields(BaseModel):
+    """Task 9 review M1: `Field` in `Annotated` metadata, alone and merged with the value."""
+
+    plain_name: Annotated[str, Field(alias="PlainAlias")]
+    with_default: Annotated[int, Field(default=3)]
+    with_factory: Annotated[list[int], Field(default_factory=list)]
+    a: Annotated[int, Field(alias="A1")] = Field(alias="A2")
+    b: Annotated[int, Field(alias="B1")] = Field(default=3)
+    c: Annotated[int, Field(alias="C1")] = 4
+    d: Annotated[int, Field(alias="D1"), Field(alias="D2")]
+    e: Annotated[int, Field(default=1)] = Field(alias="E")
+    g: Annotated[int, Field(serialization_alias="G1")] = Field(alias="G2")
+    v: Annotated[int, Field(validation_alias="V")] = 0
+
+
+def part_three() -> None:
+    print("\n## Part 3: `Field` in `Annotated` metadata", f"(pydantic {pydantic.VERSION})")
+    for name, info in AnnotatedFields.model_fields.items():
+        print(
+            f"  {name}: alias={info.alias} serialization_alias={info.serialization_alias} "
+            f"validation_alias={info.validation_alias} required={info.is_required()}"
+        )
+
+
 def part_two() -> None:
     print("\n## Part 2: aliases pydantic gives a field", f"(pydantic {pydantic.VERSION})")
     show("plain", Plain)
@@ -297,6 +321,7 @@ def main(argv: list[str]) -> int:
         return 2
     rows = part_one(Path(argv[0]).resolve())
     part_two()
+    part_three()
     rows += [
         (
             "`Both(Left, Right)` takes the generator of",
