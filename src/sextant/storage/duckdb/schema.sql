@@ -681,6 +681,39 @@ CREATE TABLE IF NOT EXISTS interface_beans (
     type TEXT
 );
 
+-- Where an endpoint row EXISTS when the calls that register it run only under tests this
+-- analysis does not decide (OI-368, plan 2026-11-08-python-fastapi-inbound Task 10b, approved
+-- by the user 2026-11-09; the ruling of 2026-10-23, "deployment decides what it can set"): one
+-- row per (endpoint row, alternative, test, environment the module resolves). Keyed by the ROW,
+-- not by a bean as `bean_conditions` is: a route, include or mount is made by a call, and one
+-- handler served through a conditional include and an unconditional one exists differently at
+-- each address. `row_id` is bound when the entry is written and followed as
+-- `endpoint_metadata`'s is (`follow_endpoint_rows.sql`); the identity columns beside it are
+-- what a reader outside the run joins on. `route` numbers the alternatives: the row exists
+-- where every test of one alternative goes its way (AND within, OR across). `via` is the
+-- method whose body holds the test. `kind` is `test`; `expression` is JSON `{test, holds,
+-- reads}` — the test as the code writes it, the arm the registration is in, the names it
+-- reads (`call_site.guards`, D00 §5). `holds` is `unresolved` and `resolution` `unresolved`:
+-- no test is evaluated. `evidence` says so, quoting the test. A row registered under no test
+-- has no entry here. Replaced whole per resolve.
+CREATE TABLE IF NOT EXISTS endpoint_existence (
+    row_id      BIGINT,
+    protocol    TEXT,
+    direction   TEXT,
+    method      TEXT,
+    path        TEXT,
+    handler     TEXT,
+    caller      TEXT,
+    route       INTEGER,
+    via         TEXT,
+    kind        TEXT,
+    expression  TEXT,
+    environment TEXT,
+    holds       TEXT,
+    resolution  TEXT,
+    evidence    TEXT
+);
+
 CREATE TABLE IF NOT EXISTS endpoint_metadata (
     -- The `endpoints` row this entry belongs to, for this resolve (follow-the-object,
     -- Ruling 7). Bound when the entry is WRITTEN, by joining `endpoints` on the identity
@@ -1404,7 +1437,10 @@ SELECT document_id,
        (payload ->> 'on_every_exit')::BOOLEAN  AS on_every_exit,
        (payload ->> 'post_dominator')::INTEGER AS post_dominator,
        (payload ->> 'reaches_return')::BOOLEAN AS reaches_return,
-       (payload ->> 'loop_group')::INTEGER     AS loop_group
+       (payload ->> 'loop_group')::INTEGER     AS loop_group,
+       -- D00 §5 (OI-368): the undecided tests the call runs under within its own body, a
+       -- JSON list of `{test, holds, reads}`; NULL where it runs under none and on the JVM.
+       payload ->> 'guards'                    AS guards
 FROM raw_facts WHERE kind = 'call_site'
   AND document_id IN (SELECT document_id FROM selected_documents);
 

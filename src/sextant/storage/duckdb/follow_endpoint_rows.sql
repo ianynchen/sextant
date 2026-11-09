@@ -38,3 +38,23 @@ WHERE m.row_id = e.row_id
 DELETE FROM endpoint_metadata m
 WHERE m.row_id IS NOT NULL
   AND NOT EXISTS (SELECT 1 FROM endpoints e WHERE e.row_id = m.row_id);
+
+-- The same for `endpoint_existence` (OI-368): an entry states where its row exists, so it
+-- carries the row's identity as the row now stands, and goes with a row that is gone. Its
+-- `handler` and `caller` are not copied, for the reason given above.
+UPDATE endpoint_existence x
+SET protocol  = e.protocol,
+    direction = e.direction,
+    method    = e.method,
+    path      = e.path
+FROM endpoints e
+WHERE x.row_id = e.row_id
+  AND (
+      x.protocol  IS DISTINCT FROM e.protocol
+      OR x.direction IS DISTINCT FROM e.direction
+      OR x.method    IS DISTINCT FROM e.method
+      OR x.path      IS DISTINCT FROM e.path
+  );
+
+DELETE FROM endpoint_existence x
+WHERE NOT EXISTS (SELECT 1 FROM endpoints e WHERE e.row_id = x.row_id);

@@ -108,6 +108,21 @@ here would restate those documents rather than add anything.
     `also_input` and `except_declared_by`), and the shape model's `wrappers`. A shape is closed
     where every field is read. `boundary diff` gives no verdict on a field whose requirement is
     unknown.
+  - **Routes registered under an undecided test** (task 10b; OI-368 first half, design
+    approved by the user 2026-11-09; ruling of 2026-10-23, "deployment decides what it can
+    set"). A Python call site carries the tests it runs under within its body
+    (`call_site.guards`, fact schema 13). A route, include or mount whose calls run only under
+    such tests (its own body's, and its function's callers' where every caller is under one)
+    is published with its address and resolution unchanged and a new table,
+    `endpoint_existence` (graph schema 18), saying it exists "not evaluated": one row per row,
+    alternative, test and environment, kind `test`. The module document states the tests
+    under the route. A constant test and `TYPE_CHECKING` are decided and write nothing; an arm
+    that always raises guards nothing (it decides only whether the program starts). On polar
+    the 192 `/backoffice` rows are "not evaluated"; on mealie, the 3 single-page-app routes
+    (registered only when `settings.PRODUCTION and not settings.TESTING` and the static-files
+    directory exists) and one unread dynamic route. No other row moved. `app.host` is not a
+    mount yet, so polar's checkout-link host app is not covered; that and the host itself
+    stay in OI-368's second half.
   - **Open issues** OI-347 to OI-409 (Plane SEXTANT-341 to SEXTANT-403) record what is not
     read; the Python essay (`docs/coverage/python.md`) lists them by shape.
 

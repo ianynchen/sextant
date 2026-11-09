@@ -93,6 +93,9 @@ class ResolveReport:
     # Which candidates of each narrowed call site exist in each environment (spec §3), which a
     # trace block states under the site.
     candidate_presence: list[dict[str, object]] = field(default_factory=list)
+    # Where each registered row exists when the calls registering it run only under tests the
+    # analysis does not decide (OI-368), keyed by the row's `row_id`.
+    endpoint_existence: list[dict[str, object]] = field(default_factory=list)
     # The types the expansion reached and could not open: no field facts and
     # no catalog entry describing them. Carried rather than counted, because a
     # count cannot be acted on and a catalog only grows from observation
@@ -230,6 +233,9 @@ def resolve(
     # resolve whose calls carry no metadata leaves an empty table rather than the previous
     # run's rows.
     workspace.derive("endpoint_metadata_reset")
+    # OI-368: where each registered row exists, written by the engine that mints the row and
+    # replaced whole per resolve, the same discipline.
+    workspace.derive("endpoint_existence_reset")
     # Spec 2026-10-22-conditional-beans (the general rule spec 2026-10-21-conditional-
     # controllers was a case of): replaced whole per resolve, the same discipline.
     workspace.derive("bean_conditions_reset")
@@ -463,5 +469,6 @@ def report_of(
         bean_presence=workspace.query("bean_presence"),
         symbol_beans=workspace.query("symbol_beans"),
         candidate_presence=workspace.query("candidate_presence"),
+        endpoint_existence=workspace.query("endpoint_existence"),
         unexpanded_types=unexpanded_types,
     )

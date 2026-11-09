@@ -130,6 +130,11 @@ SEXTANT_VERSION = version("sextant")
 #             `if TYPE_CHECKING:` declares nothing (plan 2026-11-08 task 9c and its review). A
 #             fact set of the older vintage reads every library class as one whose fields nobody
 #             can see, so every model extending one stays open; it is refused and re-extracted.
+#     13      a Python `call_site` gains `guards`: the tests the call runs under within its own
+#             body that the scanner does not decide (`{test, holds, reads}`, OI-368, approved by
+#             the user 2026-11-09). A fact set of the older vintage has none, so a reader would
+#             take every registration for one made wherever the module runs; it is refused and
+#             re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -242,6 +247,12 @@ SEXTANT_VERSION = version("sextant")
 #             `unresolved` where nothing was bound. A workspace of the older vintage has no
 #             such table and draws such a call to a target named after no owner, so it is
 #             refused and re-analysed.
+#     18      `endpoint_existence`, a new derived table: where each registered row exists when
+#             the calls registering it run only under tests the analysis does not decide, one
+#             row per (endpoint row, alternative, test, environment), kind `test`, `holds`
+#             `unresolved` (OI-368, approved by the user 2026-11-09). A workspace of the older
+#             vintage has no such table, so a reader would take every such row for one served
+#             wherever the module runs; it is refused and re-analysed.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -268,6 +279,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 12
-GRAPH_SCHEMA_VERSION = 17
+FACT_SCHEMA_VERSION = 13
+GRAPH_SCHEMA_VERSION = 18
 BOUNDARY_VOCABULARY_VERSION = 5

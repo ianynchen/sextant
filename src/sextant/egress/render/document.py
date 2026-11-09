@@ -876,6 +876,45 @@ def _condition_entries(
     return [first, DetailEntry(_text("Of this module's environments"), _runs(verdict), None)]
 
 
+def _existence_entries(
+    rows: Sequence[Mapping[str, object]], redactor: Redactor
+) -> list[DetailEntry]:
+    """Where a registered row exists when the calls registering it run only under tests the
+    analysis does not decide (`endpoint_existence`, OI-368): the two lines a conditional bean's
+    row gets — the tests, then the verdict among the module's environments, every one of them
+    "not evaluated". Each alternative is its tests joined by "and"; several are joined by
+    "or". Empty for a row registered under no test, which is almost every row."""
+    if not rows:
+        return []
+    routes: dict[object, dict[tuple[str, bool], None]] = {}
+    for row in rows:
+        expression = json.loads(str(row["expression"]))
+        test = redactor.redact_text(str(expression["test"]))
+        routes.setdefault(row["route"], {})[(test, bool(expression["holds"]))] = None
+    spelled = [
+        " and ".join(
+            f"the code's test `{test}` is {'true' if holds else 'false'}"
+            for test, holds in sorted(tests)
+        )
+        for _, tests in sorted(routes.items(), key=lambda item: str(item[0]))
+    ]
+    words = spelled[0] if len(spelled) == 1 else " or ".join(f"({one})" for one in spelled)
+    per_environment: dict[str, set[str]] = {}
+    for row in rows:
+        evidence = redact_condition_evidence(redactor, str(row["evidence"]))
+        per_environment.setdefault(str(row["environment"]), set()).add(evidence)
+    verdict = _presence_verdict(
+        [
+            {"environment": environment, "holds": "unresolved", "evidence": "; ".join(sorted(why))}
+            for environment, why in sorted(per_environment.items())
+        ]
+    )
+    return [
+        DetailEntry(_text("Exists only when"), _runs(f"{words}, not evaluated"), None),
+        DetailEntry(_text("Of this module's environments"), _runs(verdict), None),
+    ]
+
+
 def _route_label(via: str | None, bean: str) -> str:
     """A registration route as a reader names it: the factory method, or the scanned class —
     the bean's own, or, for an inherited body, the heir class whose route it runs on."""
@@ -1641,6 +1680,10 @@ def assemble_module_document(
 
     # Read once, by every section below that states where a derived row exists.
     beans = _bean_conditions(report, redactor)
+    # Where each registered row exists, by the row (OI-368), read once.
+    existence: dict[object, list[Mapping[str, object]]] = {}
+    for row in report.endpoint_existence:
+        existence.setdefault(row["row_id"], []).append(row)
     sections.append(MachineHeading(2, "Inbound endpoints"))
     inbound = [e for e in report.endpoints if str(e["direction"]) in ("inbound", "both")]
     if inbound:
@@ -1686,9 +1729,10 @@ def assemble_module_document(
             streaming = _streaming_entry(endpoint.get("response_shape"))
             via = _via_entry(endpoint, origin_by_symbol)
             fails_with = _fails_with_entry(endpoint, throws_by_root)
-            conditions = _condition_entries(
-                endpoint.get("handler"), beans, endpoint.get("served_by")
-            )
+            conditions = [
+                *_condition_entries(endpoint.get("handler"), beans, endpoint.get("served_by")),
+                *_existence_entries(existence.get(endpoint.get("row_id"), []), redactor),
+            ]
             entries = [
                 entry
                 for entry in (via, request, response, streaming, fails_with, *conditions)

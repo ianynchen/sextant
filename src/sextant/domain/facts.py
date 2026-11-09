@@ -532,6 +532,20 @@ class CallTarget(BaseModel):
     descriptor: str | None = None
 
 
+class CallGuard(BaseModel):
+    """One test a call runs under within its own body (D00 §5 `call_site.guards`, OI-368,
+    approved by the user 2026-11-09): an `if` test, or a conditional expression's, that the
+    scanner does not decide. `test` is the test as the code writes it (`ast.unparse`); `holds`
+    is the arm the call is in — true in the `if` arm, false in the `else` arm and after an arm
+    that always leaves (`return`, `raise`); `reads` are the names and dotted names the test
+    reads, in the order it reads them. Python only."""
+
+    model_config = {"frozen": True}
+    test: str
+    holds: bool
+    reads: list[str] = Field(default_factory=list)
+
+
 class CallSiteFact(BaseModel):
     """D00 §5's load-bearing fact kind: caller, target, dispatch form, the v1
     control-flow position, and the resolved argument slots."""
@@ -592,6 +606,12 @@ class CallSiteFact(BaseModel):
     # to code that does not exist.
     implementation: str | None = None
     arguments: list[CallArgument] = Field(default_factory=list)
+    # OI-368 (approved by the user 2026-11-09): the tests this call runs under within its own
+    # body, outermost first (`CallGuard`); absent where it runs under none, and on every JVM
+    # site. A test the language decides (a constant, `typing.TYPE_CHECKING`, a library's
+    # version test read for a known Python) writes nothing. A body's callers' tests are not
+    # here: the resolver follows them over the call graph.
+    guards: list[CallGuard] | None = None
 
     @model_validator(mode="after")
     def _only_a_throw_names_no_method(self) -> "CallSiteFact":

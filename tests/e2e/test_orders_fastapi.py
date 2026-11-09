@@ -32,6 +32,9 @@ EXPECTED: dict[
     tuple[tuple[str, ...], str], tuple[str, str | None, set[tuple[str, str, bool]], list[str]]
 ] = {
     (("GET",), "/health"): ("health", "dict[str, str]", {REQUEST_ID}, []),
+    # Included only under `if flags.SUPPORT_ROUTES:`; the repository's value is True, so FastAPI
+    # run with it serves the route. Sextant publishes it "not evaluated" (OI-368).
+    (("GET",), "/support/ping"): ("ping", "dict[str, str]", {REQUEST_ID}, []),
     (("GET",), "/api/v1/orders/{order_id}"): (
         "get",
         "OrderOut",
@@ -309,6 +312,22 @@ ORDER_OUT_BY_KEYWORD = (
 )
 
 PINNED: dict[str, list[tuple[object, ...]]] = {
+    # The one route included under a test (`if flags.SUPPORT_ROUTES:`): FastAPI run with the
+    # repository's value serves it, and Sextant says it exists "not evaluated" (OI-368).
+    "endpoint_existence": [
+        (
+            "GET",
+            "/support/ping",
+            0,
+            "app/main#<clinit>",
+            "test",
+            '{"holds": true, "reads": ["flags.SUPPORT_ROUTES"], "test": "flags.SUPPORT_ROUTES"}',
+            "default",
+            "unresolved",
+            "unresolved",
+            "a condition this analysis does not evaluate: `flags.SUPPORT_ROUTES`",
+        ),
+    ],
     "endpoints": [
         ("DELETE", "/api/v1/admin/orders/{order_id}", "app/admin#purge", "resolved", None, None),
         ("GET", "/api/v1/admin/users", "app/admin#users", "resolved", None, ARRAY_OF_STRING),
@@ -327,6 +346,7 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             ORDER_OUT_BY_KEYWORD,
         ),
         ("GET", "/health", "app/main#health", "resolved", None, MAP_OF_STRING),
+        ("GET", "/support/ping", "app/support#ping", "resolved", None, MAP_OF_STRING),
         ("POST", "/api/v1/orders", "app/orders#create", "resolved", ORDER_IN, ORDER_OUT),
         (
             "POST",
@@ -443,6 +463,7 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             "declared",
         ),
         ("GET", "/health", "header", "x-request-id", "required", "resolved", "declared"),
+        ("GET", "/support/ping", "header", "x-request-id", "required", "resolved", "declared"),
         ("POST", "/api/v1/orders", "header", "x-audit-user", "required", "resolved", "declared"),
         (
             "POST",
@@ -487,6 +508,8 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
         ("GET", "/api/v1/orders/{order_id}", "app/orders#get", "inbound_endpoint"),
         ("GET", "/health", "app/deps#request_id", "inbound_endpoint"),
         ("GET", "/health", "app/main#health", "inbound_endpoint"),
+        ("GET", "/support/ping", "app/deps#request_id", "inbound_endpoint"),
+        ("GET", "/support/ping", "app/support#ping", "inbound_endpoint"),
         ("POST", "/api/v1/orders", "app/deps#audit", "inbound_endpoint"),
         ("POST", "/api/v1/orders", "app/orders#create", "inbound_endpoint"),
         ("POST", "/api/v1/orders", "app/services#get_service", "inbound_endpoint"),
@@ -513,6 +536,18 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
 def _pinned_rows(workspace) -> dict[str, list[tuple[object, ...]]]:
     """Each table's rows as `PINNED` states them, sorted."""
     columns = {
+        "endpoint_existence": lambda r: (
+            r["method"],
+            r["path"],
+            r["route"],
+            _bare(r["via"]),
+            r["kind"],
+            r["expression"],
+            r["environment"],
+            r["holds"],
+            r["resolution"],
+            r["evidence"],
+        ),
         "endpoints": lambda r: (
             r["method"],
             r["path"],
@@ -552,3 +587,21 @@ def test_every_fixture_row_is_pinned(workspace):
     assert _pinned_rows(workspace) == {
         table: sorted(rows, key=repr) for table, rows in PINNED.items()
     }
+
+
+def test_the_document_says_the_conditional_route_is_not_evaluated(
+    orders_fastapi_env: Path, tmp_path: Path
+):
+    """`module render` reads the route's `endpoint_existence` rows back off the workspace and
+    states the test under the route (OI-368). Its own analysis, so no other test holds the
+    workspace open."""
+    out = tmp_path / "ws"
+    for command in ("analyze", "render"):
+        result = CliRunner().invoke(cli, ["module", command, str(ROOT), "--workspace", str(out)])
+        assert result.exit_code == 0, result.output
+    document = (out / "render" / "architecture.md").read_text(encoding="utf-8")
+    block = document[document.index("- `GET /support/ping`") :].split("\n- ", 1)[0]
+    assert (
+        "Exists only when: the code's test `flags.SUPPORT_ROUTES` is true, not evaluated" in block
+    )
+    assert "not evaluated by this analysis in any of the 1 environments" in block

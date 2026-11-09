@@ -74,6 +74,7 @@ from pydantic import PrivateAttr
 from sextant.domain.closed_sets import ConstructKind
 from sextant.domain.facts import (
     CallArgument,
+    CallGuard,
     CallSiteFact,
     CallTarget,
     Fact,
@@ -354,6 +355,9 @@ class Scope:
     # False in the body of a class written `total=False` (a `TypedDict`'s keys may be left out
     # unless written `Required[...]`, the typing specification).
     total: bool = True
+    # The undecided tests the statement being read runs under within this body, outermost
+    # first (D00 §5 `call_site.guards`, OI-368): written on every call read here.
+    guards: tuple[CallGuard, ...] = ()
 
 
 class BodyReader:
@@ -578,8 +582,45 @@ class BodyReader:
         return None
 
     def _statements(self, body: Iterable[ast.stmt], scope: Scope) -> None:
+        held = scope.guards
         for node in body:
             self._statement(node, scope)
+            after = self._guard_after(node, scope)
+            if after is not None:
+                # What follows an arm that always leaves runs only where its test went the
+                # other way (an early `return` or `raise`): guarded to the end of this block.
+                scope.guards = (*scope.guards, after)
+        scope.guards = held
+
+    def _guard(self, test: ast.expr, holds: bool, scope: Scope) -> CallGuard | None:
+        """The guard an undecided test puts on the calls of its arm `holds` (D00 §5
+        `call_site.guards`); None where the language decides the test (`_runs`)."""
+        if self._runs(test, scope) is not None:
+            return None
+        return CallGuard(test=ast.unparse(test), holds=holds, reads=_reads(test))
+
+    def _guard_after(self, node: ast.stmt, scope: Scope) -> CallGuard | None:
+        """The guard an `if` puts on the statements after it, where exactly one of its arms
+        always leaves by `return` and the test is undecided; None otherwise. An arm that always
+        RAISES guards nothing: the test only decides whether the program goes on at all
+        (`if bad: raise ValueError(...)`), and code that does not run is not Sextant's to
+        describe (ruled 2026-11-07)."""
+        if not isinstance(node, ast.If):
+            return None
+        body, orelse = _falls_through(node.body), _falls_through(node.orelse)
+        if body == orelse or live_arm(node, self._context.index, self._context.here) is not None:
+            return None
+        if _always_raises(node.orelse if body else node.body):
+            return None
+        return self._guard(node.test, body, scope)
+
+    def _arm_guards(self, node: ast.If, scope: Scope) -> list[CallGuard | None]:
+        """The guard each arm of an undecided `if` puts on its calls: none on an arm whose
+        other arm always raises, for the reason `_guard_after` gives."""
+        return [
+            None if _always_raises(node.orelse) else self._guard(node.test, True, scope),
+            None if _always_raises(node.body) else self._guard(node.test, False, scope),
+        ]
 
     def _statement(self, node: ast.stmt, scope: Scope) -> None:
         frame = scope.frame
@@ -647,7 +688,10 @@ class BodyReader:
                 self._branches([live], scope)
             else:
                 self._branches(
-                    [node.body, node.orelse], scope, narrows=self._narrowing(node.test, scope)
+                    [node.body, node.orelse],
+                    scope,
+                    narrows=self._narrowing(node.test, scope),
+                    guards=self._arm_guards(node, scope),
                 )
         elif isinstance(node, ast.For | ast.AsyncFor):
             asynchronous = isinstance(node, ast.AsyncFor)
@@ -786,6 +830,7 @@ class BodyReader:
         starts: list[int | None] | None = None,
         captures: list[list[tuple[str, CallArgument]]] | None = None,
         narrows: list[dict[str, TypeRef]] | None = None,
+        guards: list[CallGuard | None] | None = None,
     ) -> None:
         """Each body runs from the same names, and from `starts` in the control flow (by
         default, from where the branch is); after them, a name keeps a value only where
@@ -794,20 +839,31 @@ class BodyReader:
         `match` case's pattern). `narrows` are the types an `isinstance` test gives a name
         in each body (`_narrowing`): the name holds its value with that type there, and past
         the branch only where that body is the one that reaches its end (the other returned
-        or raised) and did not write the name."""
+        or raised) and did not write the name. `guards` is the test each body runs under, None
+        for one under none (`call_site.guards`)."""
         frame = scope.frame
         flow = scope.flow
+        outside = scope.guards
+
+        def enter(position: int) -> None:
+            guard = guards[position] if guards else None
+            scope.guards = outside if guard is None else (*outside, guard)
+
         if starts is None:
             starts = [flow.here()] * len(bodies)
         if captures is None:
             captures = [[] for _ in bodies]
         points: list[int | None] = []
         if frame is None:
-            for body, start, captured in zip(bodies, starts, captures, strict=True):
+            for position, (body, start, captured) in enumerate(
+                zip(bodies, starts, captures, strict=True)
+            ):
                 flow.at(start)
+                enter(position)
                 self._capture(captured, scope)
                 self._statements(body, scope)
                 points.append(flow.here())
+            scope.guards = outside
             flow.join(points)
             return
         before = frame.values
@@ -817,6 +873,7 @@ class BodyReader:
             zip(bodies, starts, captures, strict=True)
         ):
             flow.at(start)
+            enter(position)
             frame.values = dict(before)
             for name, typed in (narrows[position] if narrows else {}).items():
                 held = frame.values.get(name)
@@ -828,6 +885,7 @@ class BodyReader:
             points.append(flow.here())
             if flow.here() is not None:
                 ends.append(frame.values)
+        scope.guards = outside
         flow.join(points)
         if len(ends) > 1:
             # A narrowed type holds only on its own body's paths: where another body reaches
@@ -1185,6 +1243,7 @@ class BodyReader:
                 receiver_field_kind=callee.receiver_field_kind,
                 result=result,
                 arguments=arguments,
+                guards=list(scope.guards) or None,
             )
         )
         scope.body.ordinal += 1
@@ -1794,10 +1853,15 @@ class BodyReader:
         if isinstance(node, ast.IfExp):
             self._value(node.test, scope)
             tested = scope.flow.here()
+            outside = scope.guards
+            arms = [self._guard(node.test, holds, scope) for holds in (True, False)]
+            scope.guards = outside if arms[0] is None else (*outside, arms[0])
             chosen = self._value(node.body, scope)
             ends = [scope.flow.here()]
             scope.flow.at(tested)
+            scope.guards = outside if arms[1] is None else (*outside, arms[1])
             other = self._value(node.orelse, scope)
+            scope.guards = outside
             scope.flow.join([*ends, scope.flow.here()])
             return _merge([chosen, other])
         if isinstance(node, ast.BoolOp):
@@ -2648,6 +2712,35 @@ def _is_builtin_class(target: Target) -> bool:
         and target.member is not None
         and isinstance(_builtin(target.member), type)
     )
+
+
+def _always_raises(body: list[ast.stmt]) -> bool:
+    """Whether every way through `body` ends in a `raise`: one is reached before anything
+    that ends it otherwise, or an `if` whose two arms each always raise."""
+    for node in body:
+        if isinstance(node, ast.Raise):
+            return True
+        if isinstance(node, ast.If) and _always_raises(node.body) and _always_raises(node.orelse):
+            return True
+        if isinstance(node, ast.Return | ast.Break | ast.Continue):
+            return False
+    return False
+
+
+def _reads(test: ast.expr) -> list[str]:
+    """The names and dotted names `test` reads, as written, in the order it reads them, each
+    once (`CallGuard.reads`): a dotted name is read whole, never its parts."""
+    found: list[str] = []
+
+    def visit(node: ast.AST) -> None:
+        if isinstance(node, ast.expr) and _is_dotted(node):
+            found.append(ast.unparse(node))
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    visit(test)
+    return list(dict.fromkeys(found))
 
 
 def _is_dotted(node: ast.expr) -> bool:

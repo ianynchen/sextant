@@ -77,6 +77,15 @@ after the facts is the existing one, extended where Python needs it.
   - Shapes FastAPI refuses at start-up (`methods=[]`, an empty prefix and path, a prefix that
     does not start with `/` or ends with `/`) give no row and say why. No more such shapes are
     detected: code that does not start is not Sextant's concern (ruled 2026-11-08).
+  - A route, include or mount registered only under a test Sextant does not decide
+    (`if settings.DEBUG:`, `if not os.path.exists(...): return`, in its own body or in every
+    caller of the function that makes it) keeps its row, and `endpoint_existence` says it
+    exists "not evaluated", naming each test as the code writes it (OI-368, ruling of
+    2026-10-23: a deployment decides such a test). A constant test and `TYPE_CHECKING` are
+    decided. A `sys.version_info` test in the module's own code is not: the deployment picks
+    the interpreter. An arm that always raises guards nothing (`if bad: raise ...` decides only
+    whether the app starts). Measured: polar's 192 `/backoffice` rows, mealie's 3
+    single-page-app routes and one unread dynamic route; no other row moved.
 - **Request parameters and bodies.** `Query`, `Header`, `Cookie` (the functions and the
   `fastapi.params` classes), in a default or in `Annotated`, give `endpoint_metadata` rows with
   the wire name (an `alias`, or the header's spelling with `-`), and `required` or `optional`
@@ -142,10 +151,10 @@ environment: it imports the app and asks FastAPI. Sextant never runs the code it
 
 | | `fixtures/orders-fastapi` | polar `server/` | mealie |
 |---|---|---|---|
-| FastAPI routes (method, path pairs) | 12 (13) | 625 (671) | 289 (289) |
-| Sextant FastAPI rows | 13 | 720 | 293 |
-| Pairs FastAPI serves that Sextant finds | 13 of 13 | 668 of 671 | 289 of 289 |
-| Rows `resolved` / `partial` / `unresolved` | 13 / 0 / 0 | 614 / 61 / 45 | 245 / 47 / 1 |
+| FastAPI routes (method, path pairs) | 13 (14) | 625 (671) | 289 (289) |
+| Sextant FastAPI rows | 14 | 720 | 293 |
+| Pairs FastAPI serves that Sextant finds | 14 of 14 | 668 of 671 | 289 of 289 |
+| Rows `resolved` / `partial` / `unresolved` | 14 / 0 / 0 | 614 / 61 / 45 | 245 / 47 / 1 |
 | Cold analysis (target 60 s, ceiling 300 s) | 2.4 s | 53.5 s | 15.2 s |
 | Warm analysis, no file changed (target 10 s) | | 2.2 s | 1.3 s |
 
@@ -159,10 +168,15 @@ environment: it imports the app and asks FastAPI. Sextant never runs the code it
   `/2026-10/openapi.json` and `/2027-01/openapi.json`, which Sextant gives as one `partial` row,
   `/{}/openapi.json`. 30 rows are apps written inside `tests/`, which FastAPI's table for
   `polar.app` does not hold. 1 row is the checkout-link app that polar serves only through
-  `app.host(...)`, published at `/{client_secret}` with no host (OI-368).
-- **mealie.** The 3 rows FastAPI does not serve are the single-page-app routes that
-  `mealie/app.py` mounts only outside production (the oracle ran with `PRODUCTION=true`,
-  OI-368).
+  `app.host(...)`, published at `/{client_secret}` with no host and as existing wherever the
+  module runs: `app.host` is not read as a mount yet, so the test it is under
+  (`if settings.CHECKOUT_LINK_HOST is not None:`) does not reach the route (OI-368's second
+  half).
+- **mealie.** The 3 rows FastAPI does not serve are the single-page-app routes, registered only
+  when `settings.PRODUCTION and not settings.TESTING` and the static-files directory exists
+  (`mealie/app.py`, `routes/spa/__init__.py`). The oracle ran with `PRODUCTION=true` and no
+  static files, so FastAPI returned before registering them. Sextant publishes all three as
+  existing "not evaluated" under both tests.
 - **dispatch** (`examples/py-dispatch`) was not measured: it has no installed environment.
 
 ## What is not read, and why
@@ -258,7 +272,7 @@ The comparison with a type checker, which solves the first four exactly, is
 
 | Shape | What happens | Record |
 |---|---|---|
-| a mount or `app.host` under a settings condition | taken as made; the host is not read | OI-368 |
+| `app.host(host, app)` | not read as a mount: the app's routes are published with no host, and a test the host call is under does not reach them | OI-368 (second half) |
 | a type written as text (`"Annotated[int, Field(alias='S')]"`, a quoted alias) | not read: the name, the body or the marker is lost | OI-348 |
 | a dependency's own body parameters | no request body | OI-378 |
 | a `@dataclass` or library class as a recipe; a bound method or staticmethod recipe | no parameters and no root; `not_readable` | OI-379, OI-380 |

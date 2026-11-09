@@ -29,6 +29,13 @@ from sextant.application.resolve.parameter_markers import (
     producing_calls,
     recipe_sites,
 )
+from sextant.application.resolve.registration_conditions import (
+    Alternatives,
+    Conditions,
+    conditions_of,
+    environments_of,
+    existence_rows,
+)
 from sextant.application.resolve.request_requirements import (
     ParameterReading,
     ParameterRules,
@@ -487,6 +494,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         routers = _router_reader(walk_index, workspace, mount_rules, [], refuses_unrooted, catalog)
     # A model marked as a set of request parameters is read by the shape model (R25), once.
     models = None if parameters is None else model_fields(workspace, catalog)
+    # OI-368: the tests the module's calls run under, read once per resolve; an inbound row
+    # whose registering calls all run under one exists "not evaluated".
+    conditions: Conditions | None = None
+    registrations: list[tuple[dict[str, Any], Alternatives]] = []
+    if catalog.direction == "inbound":
+        conditions = conditions_of(workspace)
+        if not conditions.guards:
+            conditions = None
     context: _DeriveContext | None = None
     for end in ends:
         # Ends arrive caller by caller, so the caller's own facts are built once per
@@ -534,6 +549,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 recipe_roots=recipe_roots,
                 dependency_calls=dependency_calls,
                 model_fields=models,
+                conditions=conditions,
+                registrations=registrations,
             )
         # A mount's chain (spec §3c) is not a route: what Vert.x refuses of it is recorded,
         # and it derives a row only where it was given a handler as well.
@@ -598,6 +615,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 handler=None,
             )
     workspace.derive("call_endpoints", rows=rows)
+    if registrations:
+        # After the rows, never before: each entry is bound to its row's `row_id` as it is
+        # written (`insert_endpoint_existence.sql`), the `endpoint_metadata` discipline.
+        existence = existence_rows(registrations, environments_of(workspace))
+        if existence:
+            workspace.derive("endpoint_existence_insert", rows=existence)
     if recipe_roots:
         # Written beside the endpoint rows, and kept by `record_roots` as the entry points are.
         workspace.derive(
@@ -1020,6 +1043,11 @@ class _DeriveContext:
     # parameters (R25, `expansion.ModelFields`). None where the catalog reads no parameters or
     # its shape model reads no names off calls.
     model_fields: "ModelFields | None" = None
+    # OI-368: where the calls that register a row run (`registration_conditions`), and each
+    # inbound row with the alternatives of the calls that made it, written to
+    # `endpoint_existence` once the rows are. None where no call of the module is under a test.
+    conditions: Conditions | None = None
+    registrations: list[tuple[dict[str, Any], Alternatives]] | None = None
 
 
 def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
@@ -1321,10 +1349,16 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
         prefixes = context.prefixes
     elif context.routers is not None and direction == "inbound" and end.root:
         prefixes = context.routers.of_route(end.root, end.path)
+    # OI-368: where the calls making the row run, per prefix (the includes and mounts it is
+    # served through), read once per prefix.
+    existing: dict[int, Alternatives | None] = {}
     for verb, (peer, path, url_resolution), prefix in product(verbs, destinations, prefixes):
         # An address nobody read takes no prefix: one row for it, not one per prefix.
         if path is None and prefix is not prefixes[0]:
             continue
+        if id(prefix) not in existing:
+            existing[id(prefix)] = _existence(end, prefix, direction, context)
+        alternatives = existing[id(prefix)]
         # 2O design §8, folded in from single_call: identity is the URL the
         # framework serves, canonicalized before the dedup key below is built
         # from it (`domain/paths.py`). Inert for every fluent catalog shipped
@@ -1589,6 +1623,7 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
             _recipe_roots(context, recipes, verb, path, method_kind, path_kind)
             if seen is not None:
                 seen.merged(published, resolution)
+                _registered(context, seen.rows, alternatives)
                 continue
             kept = _Kept(published)
             context.seen[key] = kept
@@ -1630,6 +1665,7 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
             _recipe_roots(context, recipes, verb, path, method_kind, path_kind)
             if seen is not None:
                 seen.merged(published, resolution)
+                _registered(context, seen.rows, alternatives)
                 continue
             kept = _Kept(published)
             context.exact[one_call] = kept
@@ -1714,6 +1750,7 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                     variant_resolution = str(Resolution.PARTIAL)
                 variant_row = {**row, "handler": variant.symbol, "resolution": variant_resolution}
             variant_unread = variant.unread if variant.outcome == UNREADABLE else None
+            _registered(context, [variant_row], alternatives)
             if ranked and context.candidates is not None:
                 context.candidates.append(
                     _Candidate(
@@ -1734,6 +1771,32 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                 kept.rows.append(variant_row)
             if variant_unread is not None and context.unread is not None:
                 file_unread(context.unread, variant_row, variant_unread)
+
+
+def _existence(
+    end: ChainEnd, prefix: Prefix, direction: str, context: "_DeriveContext"
+) -> Alternatives | None:
+    """Where the calls making an inbound row run (OI-368, `registration_conditions`): its root
+    and terminal calls, and every include or mount on one serving place of `prefix` — OR-ed
+    across the places. None for an outbound row, and where no call of the module is under a
+    test."""
+    if context.conditions is None or direction != "inbound":
+        return None
+    own = [_site_key(site) for site in (end.root, end.terminal) if site]
+    found: set[frozenset[Any]] = set()
+    for place in prefix.places or (ANY_ROUTER,):
+        mounts = [at[0] for _, at in place if at is not None]
+        found |= context.conditions.of_sites([*own, *mounts])
+    return frozenset(found)
+
+
+def _registered(
+    context: "_DeriveContext", rows: Iterable[dict[str, Any]], alternatives: Alternatives | None
+) -> None:
+    """Each of `rows` made by calls that run where `alternatives` say (`_existence`)."""
+    if alternatives is None or context.registrations is None:
+        return
+    context.registrations.extend((row, alternatives) for row in rows)
 
 
 def _root_verb(end: ChainEnd, context: "_DeriveContext") -> str | None:

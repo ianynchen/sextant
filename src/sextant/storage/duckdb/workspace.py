@@ -1068,6 +1068,23 @@ _NAMED_QUERIES = {
         ORDER BY protocol, direction, method, path, caller, kind, name, value,
                  resolution, evidence, requirement
     """,
+    # OI-368: where each registered row exists, by the row; the identity columns and every
+    # condition column complete the order (NFR-1). `row_id` is kept here (the documents key on
+    # it, as on `endpoints`) and left out of the export.
+    "endpoint_existence": """
+        SELECT * FROM endpoint_existence
+        ORDER BY row_id, route, via, kind, expression, environment
+    """,
+    # OI-368: the call sites that run under a test of their own body (D00 §5 `guards`), and
+    # the calls that run each method, read once per resolve (`registration_conditions`).
+    "call_site_guards": """
+        SELECT caller, ordinal, guards FROM call_sites WHERE guards IS NOT NULL
+        ORDER BY caller, ordinal
+    """,
+    "calls_running": """
+        SELECT DISTINCT callee, caller, ordinal FROM call_edges WHERE callee IS NOT NULL
+        ORDER BY callee, caller, ordinal
+    """,
     # Spec 2026-09-19 §4d/§5a. The combinator's stash of per-route requirements, read once
     # per resolve by the requirements pass. Ordered on the whole row for the reason the
     # query above is: two selectors under one route are two rows that tie on every
@@ -1545,9 +1562,11 @@ _EXPORT_QUERIES = {
     # services on (2K Task 1 review, ruled). Joined on the column's own
     # canonical JSON text, which is what `_stage_redactions` staged.
     "call_sites": f"""
-        SELECT c.* REPLACE (coalesce(j.masked::JSON, c.arguments) AS arguments)
+        SELECT c.* REPLACE (coalesce(j.masked::JSON, c.arguments) AS arguments,
+                            coalesce(g.masked, c.guards) AS guards)
         FROM call_sites c
         LEFT JOIN {_REDACTED_JSON} j ON j.original = c.arguments::VARCHAR
+        LEFT JOIN {_REDACTED_JSON} g ON g.original = c.guards
         ORDER BY c.caller, c.ordinal
     """,
     "symbols": "SELECT * FROM symbols ORDER BY symbol",
@@ -1710,6 +1729,21 @@ _EXPORT_QUERIES = {
         ORDER BY c.protocol, c.direction, c.method, c.path, c.handler, c.kind, c.expression,
                  c.environment, c.caller, c.via, c.bean_kind, c.bean
     """,
+    # OI-368: where each registered row exists. `path` is the row's own, so it masks by the
+    # address map; `expression` and `evidence` quote the code's test, masked as a condition's
+    # are (`redact_json`, `redact_condition_evidence`). `row_id` names nothing outside the run.
+    "endpoint_existence": f"""
+        SELECT x.* EXCLUDE (row_id)
+                   REPLACE (coalesce(a.masked, x.path) AS path,
+                            coalesce(j.masked, x.expression) AS expression,
+                            coalesce(t.masked, x.evidence) AS evidence)
+        FROM endpoint_existence x
+        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = x.path
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = x.expression
+        LEFT JOIN {_REDACTED_EVIDENCE} t ON t.original = x.evidence
+        ORDER BY x.protocol, x.direction, x.method, x.path, x.handler, x.caller, x.route,
+                 x.via, x.expression, x.environment
+    """,
     "bean_conditions": f"""
         SELECT b.* REPLACE (coalesce(j.masked, b.expression) AS expression,
                             coalesce(t.masked, b.evidence) AS evidence)
@@ -1823,6 +1857,8 @@ _EXPORTED_TABLES = tuple(sorted(_EXPORT_QUERIES))
 _FACT_ONLY = frozenset(
     {
         "documents",
+        # The call sites under a test of their own body (OI-368): `call_sites` alone.
+        "call_site_guards",
         # The class-level annotations of header-read dependency types (D00 §5
         # `type_header`): a read over `raw_facts` alone, so cached per load like every
         # other fact query — the cache rule test is what said so.
@@ -1991,6 +2027,8 @@ _NAMED_DERIVATIONS = {
     "method_resolution_insert": "insert_method_resolution.sql",
     "endpoint_metadata_reset": "reset_endpoint_metadata.sql",
     "endpoint_metadata_insert": "insert_endpoint_metadata.sql",
+    "endpoint_existence_reset": "reset_endpoint_existence.sql",
+    "endpoint_existence_insert": "insert_endpoint_existence.sql",
     "bean_conditions_reset": "reset_bean_conditions.sql",
     "bean_conditions_insert": "insert_bean_conditions.sql",
     "interface_beans_insert": "insert_interface_beans.sql",
@@ -2753,6 +2791,7 @@ class DuckDbWorkspace:
             "SELECT DISTINCT path AS address FROM endpoints WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT peer FROM endpoints WHERE peer IS NOT NULL "
             "UNION SELECT DISTINCT path FROM endpoint_metadata WHERE path IS NOT NULL "
+            "UNION SELECT DISTINCT path FROM endpoint_existence WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM endpoint_conditions WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM open_questions WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM roots WHERE path IS NOT NULL "
@@ -2824,7 +2863,10 @@ class DuckDbWorkspace:
             "UNION SELECT DISTINCT value::VARCHAR FROM method_returns WHERE value IS NOT NULL "
             "UNION SELECT DISTINCT value::VARCHAR FROM constants WHERE value IS NOT NULL "
             "UNION SELECT DISTINCT value::VARCHAR FROM field_writes WHERE value IS NOT NULL "
-            "UNION SELECT DISTINCT expression FROM bean_conditions WHERE expression IS NOT NULL"
+            "UNION SELECT DISTINCT expression FROM bean_conditions WHERE expression IS NOT NULL "
+            # OI-368: a code test's text, quoted in a guard and in a row's existence entry.
+            "UNION SELECT DISTINCT guards FROM call_sites WHERE guards IS NOT NULL "
+            "UNION SELECT DISTINCT expression FROM endpoint_existence WHERE expression IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_JSON,
@@ -2845,7 +2887,8 @@ class DuckDbWorkspace:
         # property condition quotes is masked by its KEY, which `redact_text` cannot see.
         evidence_rows = self._connection.execute(
             "SELECT DISTINCT evidence FROM bean_conditions WHERE evidence IS NOT NULL "
-            "UNION SELECT DISTINCT evidence FROM bean_presence WHERE evidence IS NOT NULL"
+            "UNION SELECT DISTINCT evidence FROM bean_presence WHERE evidence IS NOT NULL "
+            "UNION SELECT DISTINCT evidence FROM endpoint_existence WHERE evidence IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_EVIDENCE,

@@ -371,7 +371,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-365 | [SEXTANT-359](https://app.plane.so/portolan/browse/SEXTANT-359/) | A bound-method handler is looked up by def name only, missing a subclass's class-level reassignment |
 | OI-366 | [SEXTANT-360](https://app.plane.so/portolan/browse/SEXTANT-360/) | An unchanged container constant (methods=VERBS) cannot be read element by element without facts for subscript stores and the literal's kind |
 | OI-367 | [SEXTANT-361](https://app.plane.so/portolan/browse/SEXTANT-361/) | The empty_path refusal checks every route on a router, where FastAPI checks those present at the include |
-| OI-368 | [SEXTANT-362](https://app.plane.so/portolan/browse/SEXTANT-362/) | A mount or app.host behind a settings condition is taken as made; app.host's host is not read |
+| OI-368 | [SEXTANT-362](https://app.plane.so/portolan/browse/SEXTANT-362/) | A mount or app.host behind a settings condition is taken as made; app.host's host is not read — **first half closed 2026-11-09** (plan 2 task 10b: a registration under an undecided test is "not evaluated", `endpoint_existence`); open for `app.host`, which is not read as a mount and whose host is not read |
 | OI-369 | [SEXTANT-363](https://app.plane.so/portolan/browse/SEXTANT-363/) | APIRouter.mount (Starlette Router.mount) is not declared as a mount |
 | OI-370 | [SEXTANT-364](https://app.plane.so/portolan/browse/SEXTANT-364/) | Parameter shapes FastAPI refuses or accepts at start-up are not all mirrored |
 | OI-371 | [SEXTANT-365](https://app.plane.so/portolan/browse/SEXTANT-365/) | request_body excludes match a type exactly, so a subclass of Request or Response is read as a body |
@@ -413,6 +413,8 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-407 | [SEXTANT-401](https://app.plane.so/portolan/browse/SEXTANT-401/) | UploadFile's header attributes appear as fields of a shape; on the wire it is a file part |
 | OI-408 | [SEXTANT-402](https://app.plane.so/portolan/browse/SEXTANT-402/) | A library function body is not read, so a field default made by a library helper is partial with required NULL |
 | OI-409 | [SEXTANT-403](https://app.plane.so/portolan/browse/SEXTANT-403/) | Library class-body call sites and symbols appear in the export index |
+| OI-410 | [SEXTANT-404](https://app.plane.so/portolan/browse/SEXTANT-404/) | The system tier does not read endpoint_existence, so a link into a "not evaluated" Python route states no condition |
+| OI-411 | [SEXTANT-405](https://app.plane.so/portolan/browse/SEXTANT-405/) | call_site.guards covers if, conditional expressions and early returns only |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
