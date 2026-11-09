@@ -5,6 +5,7 @@ FastAPI itself. Sextant's answers are later compared against this one, so nothin
 come from Sextant. Published OpenAPI is not the oracle (it filters routes); the route table is.
 
     <fixture>/.venv/bin/python fastapi_oracle.py <fixture root> [module:attribute]
+    <fixture>/.venv/bin/python fastapi_oracle.py <fixture root> --models module:Name,Name
 """
 
 import json
@@ -30,6 +31,27 @@ def _flatten(dependant: Any) -> dict[str, list[Any]]:
     return out
 
 
+def _recipes(dependant: Any) -> list[str]:
+    """Each callable FastAPI calls to fill a route's dependencies, nested ones included, by its
+    dotted name: a function by its own name, a class by its `__init__`, an instance by its
+    class's `__call__`."""
+    names: list[str] = []
+
+    def walk(node: Any) -> None:
+        for sub in node.dependencies:
+            call = sub.call
+            if isinstance(call, type):
+                names.append(f"{call.__module__}.{call.__qualname__}.__init__")
+            elif hasattr(call, "__qualname__"):
+                names.append(f"{call.__module__}.{call.__qualname__}")
+            else:
+                names.append(f"{type(call).__module__}.{type(call).__qualname__}.__call__")
+            walk(sub)
+
+    walk(dependant)
+    return names
+
+
 def _fields(fields: list[Any]) -> list[dict[str, Any]]:
     return [{"alias": f.alias, "required": bool(f.field_info.is_required())} for f in fields]
 
@@ -52,12 +74,14 @@ def _row(route: Any, context: Any, prefix: str) -> dict[str, Any]:
         "methods": sorted(source.methods),
         "path": prefix + source.path,
         "endpoint": source.endpoint.__qualname__,
+        "endpoint_module": source.endpoint.__module__,
         "response_model": _model_name(source.response_model),
         "query": _fields(flat["query"]),
         "header": _fields(flat["header"]),
         "cookie": _fields(flat["cookie"]),
         "path_params": _fields(flat["path"]),
         "body": [f.name for f in flat["body"]],
+        "recipes": _recipes(source.dependant),
     }
 
 
@@ -75,9 +99,31 @@ def routes_of(routes: Any, prefix: str = "") -> list[dict[str, Any]]:
     return rows
 
 
+def models_of(module: str, names: str) -> dict[str, dict[str, Any]]:
+    """Each model's wire names as pydantic's own JSON schema states them: `input` as a request
+    body is read (validation), `output` as a response is written (serialization). Each lists
+    the property names and the required ones."""
+    imported = __import__(module, fromlist=["_"])
+    out: dict[str, dict[str, Any]] = {}
+    for name in names.split(","):
+        model = getattr(imported, name)
+        out[name] = {}
+        for direction, mode in (("input", "validation"), ("output", "serialization")):
+            schema = model.model_json_schema(mode=mode)
+            out[name][direction] = {
+                "properties": sorted(schema["properties"]),
+                "required": sorted(schema.get("required", [])),
+            }
+    return out
+
+
 def main(argv: list[str]) -> None:
     root = Path(argv[1]).resolve()
     sys.path.insert(0, str(root))
+    if len(argv) > 3 and argv[2] == "--models":
+        module, _, names = argv[3].partition(":")
+        print(json.dumps(models_of(module, names), indent=2))
+        return
     module, _, attribute = (argv[2] if len(argv) > 2 else "app.main:app").partition(":")
     app = getattr(__import__(module, fromlist=[attribute]), attribute)
     print(json.dumps(routes_of(app.router.routes), indent=2))

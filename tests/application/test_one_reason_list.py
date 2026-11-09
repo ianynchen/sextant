@@ -6,8 +6,9 @@ fails on any other word. A found answer has no reason (NULL), and a NULL reason 
 only there. The pass-through `unread[]` entries are read by the Vert.x e2e run
 (`tests/e2e/test_rest_inbound_delivered.py`) and the `values` answers by the shadow run
 (`tests/application/test_shadow_mode.py`), which hold that data already cached; all use the
-functions of `tests/reason_guard.py`. The tables are read on `orders-service` only. The other
-fixtures are covered by the per-task sweep of every fixture, not by this test.
+functions of `tests/reason_guard.py`. `tests/e2e/test_orders_fastapi.py` reads the same tables,
+and `bound_receivers`, on the FastAPI fixture. Here the tables are read on `orders-service`
+only. The other fixtures are covered by the per-task sweep of every fixture, not by this test.
 """
 
 import json
