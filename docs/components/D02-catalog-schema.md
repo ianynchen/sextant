@@ -1088,7 +1088,8 @@ matches:
     is bound — either list satisfies `sole_unbound`'s non-empty requirement. The implicit
     binding **`scalar`** binds an unmarked parameter whose type is a scalar (the wire projection
     is `string`/`integer`/`number`/`boolean`, a shape-model `known_types` entry with such a
-    wire, or an enumeration; a union where every member is; the unknown type), and one whose
+    wire, or an enumeration; a `Literal` form; a union where every member is; the unknown
+    type), and one whose
     kind is not read (no wire projection and no `known_types` entry, or an `object` wire on a
     symbol the module neither declares nor holds a type header for: an alias read as a type,
     such as pydantic's `UUID4`, is no class) — FastAPI reads a scalar as a query parameter, and
@@ -1099,14 +1100,22 @@ matches:
     <reference>`** (plan 2026-11-08-python-fastapi-inbound Task 7, ruled) say when the framework
     EMBEDS the body (FastAPI's `_should_embed_body_fields`): where there are several body
     parameters, or the one's marker writes `embed_arg` as the literal `True`
-    (`Body(1, embed=True)`), the body is an object with one field per body parameter, in declared
-    order, named by the string its marker writes at `name_arg` (the alias; NULL where written as
-    anything else) else by the parameter's own name — a descriptor with `fields` and no
-    `shape_id` ([D01](D01-graph-schema.md) §3). `fastapi.yml` declares it; no JVM catalog names a
+    (`Body(1, embed=True)`), or (ruling R26) the one's marker is one of **`embed_markers: {
+    calls: [<owner>.<method>, …], unless_subtype_of: [<type>, …] }`** and its type is no
+    subtype of those types by the module's type hierarchy (FastAPI's `Form`/`File`: a field of
+    the form unless it is a pydantic `BaseModel`), the body is an object with one field per body
+    parameter, in declared order, named by the string its marker writes at `name_arg` (the
+    alias; NULL where written as anything else) else by the parameter's own name — a descriptor
+    with `fields` and no `shape_id` ([D01](D01-graph-schema.md) §3). Each field is `required` or
+    `optional` by the request-parameter entry's own keys, written on the block:
+    `required_when`, `default_arg` and `annotated_default` (§2k mechanism 4); an unmarked field
+    is `optional` where it declares a default. The loader refuses `marker_calls`,
+    `bound_by_calls`, `embed_arg`, `name_arg` and `embed_markers` on any style but `fluent`, and
+    `bound_by_calls` beside `fallback: sole_unannotated`. `fastapi.yml` declares it; no JVM catalog names a
     call.
   - **The block's key set is closed** — `annotation`, `fallback`, `bound_by`, `excludes`,
-    `implicit_bindings`, `marker_calls`, `bound_by_calls`, `embed_arg`, `name_arg`, and nothing
-    else
+    `implicit_bindings`, `marker_calls`, `bound_by_calls`, `embed_arg`, `name_arg`,
+    `embed_markers`, `required_when`, `default_arg`, `annotated_default`, and nothing else
     (`contracts.py::_REQUEST_BODY_KEYS`, added after the final review). An unknown key is refused by name rather than ignored, because a
     misspelt `excludes` read as absent would make a context type the body, silently. The
     per-type member fold `container` reads (`conditions.member_annotations_by_type`) is
@@ -6463,7 +6472,10 @@ request_params:
   starting): a marker in `Annotated` beside a marker default (`marked_twice`), a path variable
   with a marker in `Annotated` and a default (`path_variable_default`), and a path variable
   carrying an entry's call or a `marker_calls` call (`path_variable_marked`), checked in that
-  order. A parameter refused on one path and not on another is read on the paths that are not.
+  order. A refused route is never published.
+- **A path not read whole.** An `unmarked` row on a route whose address is `partial` or
+  `unresolved` takes that resolution, never `resolved`: the parameter may name one of the
+  path's unread variables. A parameter refused on one path and not on another is read on the paths that are not.
 - `caller` is the handler, `value` NULL, `evidence` `declared`, as for a command. Each entry is
   bound to its row and follows it (Ruling 7). An `unmarked` entry, an `equals_field` not
   dotted, an `annotated_default` other than `parameter`, a `spelling` of another shape, or any

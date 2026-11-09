@@ -508,6 +508,7 @@ class YamlCatalogSource:
             shape = _shape_model_of(raw, shape_models, path)
             _check_made_by(raw, path)
             _check_argument_references(raw, raw.get("style"), path)
+            _check_request_body(raw, path)
             catalogs.append(
                 Catalog(
                     id=_required(raw, "id", path),
@@ -1866,6 +1867,31 @@ _REFERENCE_ARGUMENT_KEYS = frozenset(
 # mapping by design and no argument of a call.
 _NOT_AN_ARGUMENT = frozenset({"annotation_arg"})
 _REFERENCE_KEYS = frozenset({"arg", "keyword"})
+
+
+# `request_body`'s keys that name the CALLS a framework marks a parameter with, and how it
+# embeds a body (plan 2026-11-08 N4, Task 7): read only by the `fluent` engine, which matches
+# a handler's parameters against its markers; an `annotation_driven` catalog reads annotations.
+_BODY_CALL_KEYS = ("marker_calls", "bound_by_calls", "embed_arg", "name_arg", "embed_markers")
+
+
+def _check_request_body(raw: dict[str, Any], path: Path) -> None:
+    """`request_body`'s call keys only on a `fluent` catalog, and `bound_by_calls` never beside
+    `fallback: sole_unannotated` (which reads no binding): either would be read as nothing."""
+    body = (raw.get("matches") or {}).get("request_body")
+    if not isinstance(body, dict):
+        return
+    misplaced = [key for key in _BODY_CALL_KEYS if key in body]
+    if misplaced and raw.get("style") != "fluent":
+        raise CatalogError(
+            f"loading catalog {path}: `request_body` keys {misplaced} name the calls a `fluent` "
+            f"catalog's handlers carry; a `{raw.get('style')}` catalog reads annotations"
+        )
+    if "bound_by_calls" in body and body.get("fallback") == "sole_unannotated":
+        raise CatalogError(
+            f"loading catalog {path}: `request_body.bound_by_calls` belongs to `fallback: "
+            f"sole_unbound`, not `sole_unannotated`"
+        )
 
 
 def _check_argument_references(node: Any, style: Any, path: Path, dispatch: bool = False) -> None:

@@ -3582,13 +3582,22 @@ def _cited_named_shapes(
             descriptor_json = endpoint.get(key)
             if descriptor_json is None:
                 continue
-            shape_id = json.loads(str(descriptor_json)).get("shape_id")
-            if not shape_id:
-                continue
-            shape_id = str(shape_id)
-            rows = fields_by_shape.get(shape_id, [])
-            if rows and shape_id not in cited:
-                cited[shape_id] = rows
+            descriptor = json.loads(str(descriptor_json))
+            # An assembled body (`fields`, D01 §3) has no shape of its own: its fields' shapes
+            # are the ones it cites.
+            for shape_id in [
+                descriptor.get("shape_id"),
+                *(
+                    (field.get("type") or {}).get("shape_id")
+                    for field in descriptor.get("fields") or ()
+                ),
+            ]:
+                if not shape_id:
+                    continue
+                shape_id = str(shape_id)
+                rows = fields_by_shape.get(shape_id, [])
+                if rows and shape_id not in cited:
+                    cited[shape_id] = rows
     return cited
 
 
@@ -3611,6 +3620,10 @@ def _descriptor_entry(
     if descriptor_json is None:
         return None
     descriptor = json.loads(str(descriptor_json))
+    if isinstance(descriptor.get("fields"), list):
+        return DetailEntry(
+            _text(label), None, _assembled_fields_table(descriptor["fields"], shape_names)
+        )
     shape_id = descriptor.get("shape_id")
     if not shape_id:
         return DetailEntry(_text(label), _text(_inline_descriptor(descriptor)), None)
@@ -3618,6 +3631,39 @@ def _descriptor_entry(
     if not fields_by_shape.get(shape_id):
         return DetailEntry(_text(label), _text(_SHAPE_NONE_RECORDED), None)
     return DetailEntry(_text(label), _shape_ref(shape_names[shape_id]), None)
+
+
+def _assembled_fields_table(
+    fields: list[dict[str, object]], shape_names: dict[str, str]
+) -> MachineTable:
+    """A body the framework assembles from the handler's parameters (D01 §3's `fields`): one
+    row per field, the shape table's own columns, a field of a NAMED shape citing that shape's
+    `### Shapes` entry. An unread name or type says so rather than leaving a blank."""
+    rows = []
+    for field in fields:
+        described = field.get("type")
+        if not isinstance(described, dict):
+            field_type: tuple[Run, ...] = _text("not read")
+        else:
+            shape_id = described.get("shape_id")
+            if shape_id and str(shape_id) in shape_names:
+                field_type = (
+                    *_text(f"{described.get('wire_type')} "),
+                    *_shape_ref(shape_names[str(shape_id)]),
+                )
+            else:
+                field_type = _text(_inline_descriptor(described))
+        nullable = isinstance(described, dict) and bool(described.get("nullable"))
+        required = field.get("required")
+        rows.append(
+            (
+                _text(str(field["name"]) if field.get("name") is not None else "not read"),
+                field_type,
+                _text("yes" if required == "required" else "no" if required else "not read"),
+                _text("yes" if nullable else "no"),
+            )
+        )
+    return MachineTable(_SHAPE_FIELD_HEADERS, tuple(rows))
 
 
 def _streaming_entry(descriptor_json: object) -> DetailEntry | None:

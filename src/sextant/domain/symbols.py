@@ -20,6 +20,9 @@ PY_SIGNATURE = "(*)"
 # resolver that binds a receiver to a union's members.
 UNION_TYPE = "typing/Union#"
 ANY_TYPE = "typing/Any#"
+# The typing form of a value from a closed set of literals (`Literal["a", "b"]`), in both
+# spellings: its values are scalars the language writes.
+LITERAL_TYPES = frozenset({"typing/Literal#", "typing_extensions/Literal#"})
 
 # D00 §5a's type marker: the character a TYPE descriptor ends at, and the one a
 # member descriptor carries its owner's name up to. Named here because this

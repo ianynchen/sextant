@@ -24,6 +24,7 @@ import test_fastapi_routes
 from test_fastapi_routes import _bare, _handler, _questions, _resolved, _rows
 
 from sextant.application.ports.catalogs import CatalogError
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 
 # The FastAPI environment the route tests read, shared rather than restated.
@@ -225,6 +226,7 @@ def test_one_body_marked_embed_is_an_object_holding_it(tmp_path: Path, libraries
         "fields": [
             {
                 "name": "recipe_scale",
+                "required": "optional",
                 "type": {"wire_type": "number", "wire_format": None, "nullable": False},
             }
         ],
@@ -243,10 +245,104 @@ def test_several_body_parameters_are_one_object_named_by_alias(tmp_path: Path, l
     (row,) = [r for r in workspace.query("endpoints") if r["catalog_id"] == "fastapi"]
     described = json.loads(row["request_shape"])
     assert described["wire_type"] == "object" and "shape_id" not in described
-    assert [field["name"] for field in described["fields"]] == ["item", "Note"]
+    assert [(field["name"], field["required"]) for field in described["fields"]] == [
+        ("item", "required"),
+        ("Note", "required"),
+    ]
     assert described["fields"][0]["type"]["shape_id"].endswith("Item#")
     assert described["fields"][1]["type"]["wire_type"] == "string"
     assert _params(workspace) == [("POST", "/x", "query", "q", "optional", "resolved")]
+
+
+def test_a_single_form_field_is_embedded_unless_it_is_a_model(tmp_path: Path, libraries):
+    """Polar's `confirm: bool = Form(False)` and `token: str = Form()`: a single `Form` or `File`
+    parameter that is no model is a field of the form (`_should_embed_body_fields`), so the
+    body is `{confirm: bool}` (optional) and `{token: str}` (required). A model marked `Form`
+    is the body itself; `Body(None)` beside another body is an optional field."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _HEAD
+            + "from fastapi import File, Form, UploadFile\n"
+            + "@router.post('/a')\ndef a(confirm: bool = Form(False)) -> str:\n    return ''\n"
+            + "@router.post('/b')\ndef b(token: str = Form()) -> str:\n    return ''\n"
+            + "@router.post('/c')\ndef c(item: Annotated[Item, Form()]) -> str:\n    return ''\n"
+            + "@router.post('/d')\ndef d(upload: UploadFile = File()) -> str:\n    return ''\n"
+            + "@router.post('/e')\n"
+            + "def e(item: Item, note: str | None = Body(None)) -> str:\n    return ''\n"
+        },
+    )
+
+    shapes = {
+        (r["path"]): json.loads(r["request_shape"])
+        for r in workspace.query("endpoints")
+        if r["catalog_id"] == "fastapi"
+    }
+
+    def fields(path: str) -> list[tuple[str, str, str | None]]:
+        return [
+            (f["name"], f["required"], (f["type"] or {}).get("wire_type"))
+            for f in shapes[path]["fields"]
+        ]
+
+    assert fields("/a") == [("confirm", "optional", "boolean")]
+    assert fields("/b") == [("token", "required", "string")]
+    assert "fields" not in shapes["/c"] and shapes["/c"]["shape_id"].endswith("Item#")
+    assert fields("/d") == [("upload", "required", "object")]
+    assert fields("/e") == [("item", "required", "object"), ("note", "optional", "string")]
+
+
+def test_a_literal_is_a_scalar_query(tmp_path: Path, libraries):
+    """`Literal[...]` is a scalar (`field_annotation_is_scalar`), so unmarked it is a query
+    parameter, never the body; `Optional[Literal[...]] = None` likewise, and optional."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _HEAD
+            + "from typing import Literal\n"
+            + "@router.get('/x')\n"
+            + "def handler(mode: Literal['a', 'b'] = 'a', "
+            + "kind: Optional[Literal['a']] = None) -> str:\n    return ''\n"
+        },
+    )
+
+    assert _params(workspace) == [
+        ("GET", "/x", "query", "kind", "optional", "resolved"),
+        ("GET", "/x", "query", "mode", "optional", "resolved"),
+    ]
+    assert _bodies(workspace) == {("GET", "/x"): None}
+
+
+def test_an_unmarked_scalar_on_a_path_not_read_whole_is_no_surer_than_the_path(
+    tmp_path: Path, libraries
+):
+    """Where the address is not read whole (a prefix or a path from the environment), an
+    unmarked scalar may name one of its variables: its row takes the address's resolution,
+    never `resolved`. A marked query is the query it says."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _HEAD
+            + "import os\nfrom fastapi import FastAPI\napp = FastAPI()\n"
+            + "P = os.environ['P']\n"
+            + "@router.get('/x')\ndef a(org: str, q: int = Query()) -> str:\n    return ''\n"
+            + "app.include_router(router, prefix=os.environ['R'])\n"
+            + "other = APIRouter()\n"
+            + "@other.get(P)\ndef b(org: str) -> str:\n    return ''\n"
+            + "app.include_router(other)\n"
+        },
+    )
+
+    found = {(row[3], row[5]) for row in _params(workspace)}
+    assert ("q", "resolved") in found
+    assert {resolution for name, resolution in found if name == "org"} <= {
+        "partial",
+        "unresolved",
+    }
+    assert sum(1 for name, _ in found if name == "org") == 2
 
 
 def test_an_unmarked_list_is_the_body(tmp_path: Path, libraries):
@@ -479,6 +575,7 @@ def test_rows_on_two_include_paths_each_read_their_own_path_variables(tmp_path: 
         ("method: Cookie, kind: cookie,", "method: Cookie, kind: option,", "`kind`"),
         ("fastapi.param_functions.Form,", "Form,", "marker_calls"),
         ("implicit_bindings: [path_variable, scalar]", "implicit_bindings: [scalars]", "implicit"),
+        ("unless_subtype_of: [pydantic.main.BaseModel]", "unless: BaseModel", "embed_markers"),
     ],
 )
 def test_a_malformed_parameter_entry_is_refused(
@@ -493,5 +590,37 @@ def test_a_malformed_parameter_entry_is_refused(
 
     with pytest.raises(CatalogError) as raised:
         _resolved(tmp_path, libraries, _route("q: int = Query()"), catalogs)
+
+    assert named in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("catalog", "written", "replaced", "named"),
+    [
+        (
+            "spring-mvc.yml",
+            "request_body: { annotation: org.springframework.web.bind.annotation.RequestBody,",
+            (
+                "request_body: { marker_calls: [a.b.C], "
+                "annotation: org.springframework.web.bind.annotation.RequestBody,"
+            ),
+            "marker_calls",
+        ),
+        ("fastapi.yml", "fallback: sole_unbound", "fallback: sole_unannotated", "bound_by_calls"),
+    ],
+)
+def test_the_loader_refuses_call_keys_where_nothing_reads_them(
+    tmp_path: Path, catalog: str, written: str, replaced: str, named: str
+):
+    """`request_body`'s call keys are read only on a `fluent` catalog, and `bound_by_calls`
+    only beside `sole_unbound`: anywhere else they would be read as nothing."""
+    catalogs = tmp_path / "catalogs"
+    shutil.copytree(catalogs_dir(), catalogs)
+    text = (catalogs / catalog).read_text(encoding="utf-8")
+    assert written in text
+    (catalogs / catalog).write_text(text.replace(written, replaced), encoding="utf-8")
+
+    with pytest.raises(CatalogError) as raised:
+        YamlCatalogSource(catalogs).load()
 
     assert named in str(raised.value)

@@ -28,6 +28,7 @@ from sextant.application.resolve.parameter_markers import parameter_markers
 from sextant.application.resolve.request_requirements import (
     ParameterReading,
     ParameterRules,
+    body_field_requirement,
     parameter_rules,
     read_parameters,
     request_param_calls,
@@ -93,6 +94,7 @@ from sextant.application.resolve.shapes.client_base import (
 from sextant.application.resolve.shapes.contracts import (
     _body_type,
     _path_variables,
+    body_calls_of,
     is_scalar,
     payload_descriptor,
 )
@@ -1385,19 +1387,21 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
         parameter_entries: list[dict[str, Any]] = []
         if context.parameter_rules is not None and direction == "inbound" and handler is not None:
             refused_by, row_request_shape, parameter_entries = _row_parameters(
-                handler, verb, path, context.parameter_rules, context
+                handler, verb, path, url_resolution, context.parameter_rules, context
             )
-            if refused_by is not None and context.refusals is not None:
-                file_refusal(
-                    context.refusals,
-                    protocol=context.catalog.protocol,
-                    method=verb,
-                    method_kind=method_kind,
-                    path=path,
-                    reason=refused_by,
-                    caller=context.caller,
-                    handler=handler,
-                )
+            # A refused route is never published, whether or not this run files questions.
+            if refused_by is not None:
+                if context.refusals is not None:
+                    file_refusal(
+                        context.refusals,
+                        protocol=context.catalog.protocol,
+                        method=verb,
+                        method_kind=method_kind,
+                        path=path,
+                        reason=refused_by,
+                        caller=context.caller,
+                        handler=handler,
+                    )
                 continue
         captures_read = (
             (verb is not None or verbless)
@@ -2230,6 +2234,7 @@ def _row_parameters(
     handler: str,
     verb: str | None,
     path: str | None,
+    address: str,
     rules: ParameterRules,
     context: "_DeriveContext",
 ) -> tuple[str | None, str | None, list[dict[str, Any]]]:
@@ -2265,6 +2270,7 @@ def _row_parameters(
         lambda position: markers.get((handler, position), ()),
         variables,
         kind_of,
+        weaker(str(Resolution.RESOLVED), address),
     )
     if reading.refused is not None:
         return reading.refused, None, []
@@ -2285,7 +2291,7 @@ def _row_parameters(
     declared_body = context.catalog.matches.get("request_body") or {}
     shape: str | None
     if len(every) > 1 or (
-        len(every) == 1 and _embedded_by_marker(every[0][0], reading, declared_body)
+        len(every) == 1 and _embeds_one(every[0][0], every[0][1], reading, declared_body, context)
     ):
         shape = _embedded_body(every, reading, declared_body, context)
     else:
@@ -2311,17 +2317,36 @@ def _row_parameters(
     return None, shape, entries
 
 
-def _embedded_by_marker(
-    position: int, reading: ParameterReading, declared: Mapping[str, Any]
+def _embeds_one(
+    position: int,
+    parameter: Mapping[str, Any],
+    reading: ParameterReading,
+    declared: Mapping[str, Any],
+    context: "_DeriveContext",
 ) -> bool:
-    """Whether the one body parameter's marker call writes `request_body.embed_arg` as the
-    literal `True` (FastAPI's `Body(embed=True)`): the body is then an object holding it."""
-    reference = declared.get("embed_arg")
+    """Whether the framework embeds its ONE body parameter in an object (FastAPI's
+    `_should_embed_body_fields`): its marker writes `request_body.embed_arg` as the literal
+    `True` (`Body(embed=True)`), or its marker is one of `embed_markers.calls` (`Form`, `File`)
+    and its type is no subtype of an `embed_markers.unless_subtype_of` type (a model is read
+    whole; a form field is a key of the form) by the module's type hierarchy."""
     marker = reading.marked.get(position)
-    if reference is None or marker is None:
+    if marker is None:
         return False
-    written = _arg_at(list(marker.site.get("arguments") or []), reference)
-    return written is not None and written.get("kind") == "boolean" and written.get("value") is True
+    arguments = list(marker.site.get("arguments") or [])
+    reference = declared.get("embed_arg")
+    written = None if reference is None else _arg_at(arguments, reference)
+    if written is not None and written.get("kind") == "boolean" and written.get("value") is True:
+        return True
+    markers = declared.get("embed_markers")
+    if markers is None or (str(marker.site.get("owner")), str(marker.site["name"])) not in (
+        body_calls_of(markers["calls"])
+    ):
+        return False
+    if context.workspace is None:
+        return False
+    ancestors = context.workspace.once(dispatch_of).ancestors
+    models = frozenset(_catalog_symbol(name) for name in markers["unless_subtype_of"])
+    return not _subtype_of(str(parameter["type"].get("symbol")), models, ancestors)
 
 
 def _embedded_body(
@@ -2331,10 +2356,11 @@ def _embedded_body(
     context: "_DeriveContext",
 ) -> str:
     """The body a framework assembles from its body parameters (FastAPI's
-    `_should_embed_body_fields`: several, or one marked `embed=True`): an object with one field
-    per parameter, in declared order, named by the string its marker writes at
+    `_should_embed_body_fields`: several, or one it embeds, `_embeds_one`): an object with one
+    field per parameter, in declared order, named by the string its marker writes at
     `request_body.name_arg` (the alias; NULL where written as anything but a string) else by the
-    parameter's own name, typed by the descriptor its type roots at (NULL for none)."""
+    parameter's own name, typed by the descriptor its type roots at (NULL for none), and
+    required as `body_field_requirement` reads it."""
     carrier = context.carrier_rules
     fields: list[dict[str, Any]] = []
     for position, parameter in every:
@@ -2356,12 +2382,36 @@ def _embedded_body(
             context.facts.referenced,
             carrier.rules.wrappers,
         )
-        fields.append({"name": name, "type": None if described is None else json.loads(described)})
+        fields.append(
+            {
+                "name": name,
+                "required": body_field_requirement(declared, marker, parameter),
+                "type": None if described is None else json.loads(described),
+            }
+        )
     return json.dumps(
         {"wire_type": "object", "wire_format": None, "nullable": False, "fields": fields},
         sort_keys=True,
         separators=(",", ":"),
     )
+
+
+def _subtype_of(
+    symbol: str, types: frozenset[str], ancestors: Mapping[str, Sequence[tuple[str, str, bool]]]
+) -> bool:
+    """Whether `symbol` is one of `types` or a subtype of one, by the module's type hierarchy
+    (a type whose supertypes were not read is neither)."""
+    seen: set[str] = set()
+    pending = [symbol]
+    while pending:
+        current = pending.pop()
+        if current in types:
+            return True
+        if current in seen:
+            continue
+        seen.add(current)
+        pending.extend(ancestor for ancestor, _, _ in ancestors.get(current, ()))
+    return False
 
 
 def _declares_a_hop(matches: dict[str, Any]) -> bool:
@@ -3161,17 +3211,7 @@ def _constructed(
 def _is_none_type(symbol: str, fallback: _ResponseFallback) -> bool:
     """Whether `symbol` is one of the `none_types` or a subtype of one, by the module's type
     hierarchy (a type whose supertypes were not read is neither)."""
-    seen: set[str] = set()
-    pending = [symbol]
-    while pending:
-        current = pending.pop()
-        if current in fallback.none_types:
-            return True
-        if current in seen:
-            continue
-        seen.add(current)
-        pending.extend(ancestor for ancestor, _, _ in fallback.ancestors.get(current, ()))
-    return False
+    return _subtype_of(symbol, fallback.none_types, fallback.ancestors)
 
 
 def _class_named(argument: Any, context: "_DeriveContext") -> Any:

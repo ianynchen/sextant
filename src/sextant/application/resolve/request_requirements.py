@@ -836,6 +836,30 @@ def unmarked_request_param(catalog: Catalog) -> Mapping[str, Any] | None:
     return found[0] if found else None
 
 
+def body_field_requirement(
+    declared: Mapping[str, Any], marker: Marker | None, parameter: Mapping[str, Any]
+) -> str:
+    """Whether one field of an embedded body is required (FastAPI's `analyze_param`, as for a
+    request parameter): unmarked, `optional` where the parameter declares a default; marked in
+    `Annotated` (`request_body.annotated_default: parameter`), the same; otherwise the marker's
+    own arguments by `request_body.required_when` and `.default_arg` (`Body(None)` is
+    optional, `Body()` and `Body(...)` required)."""
+    defaulted = "optional" if parameter.get("declares_default") is True else "required"
+    if marker is None:
+        return defaulted
+    if (
+        marker.where == "annotation"
+        and declared.get("annotated_default") == _PARAMETER_DEFAULT
+        and parameter.get("declares_default") is True
+    ):
+        return "optional"
+    entry = {
+        "requirement": "required",
+        **{key: declared[key] for key in ("required_when", "default_arg") if key in declared},
+    }
+    return str(_requirement_of_call(entry, list(marker.site.get("arguments") or [])))
+
+
 # A parameter the body rule must take as bound for a reason of its own (`read_parameters`): a
 # receiver, or one whose markers read differently on two paths.
 BOUND = ("", "")
@@ -862,12 +886,42 @@ def parameter_rules(catalog: Catalog) -> ParameterRules | None:
         return None
     entries = request_param_calls(catalog)
     body = body_calls(catalog, "marker_calls")
+    _check_body_embedding(catalog)
     return ParameterRules(
         entries=entries,
         unmarked=unmarked_request_param(catalog),
         markers=frozenset(entries) | body | body_calls(catalog, "bound_by_calls"),
         claims=frozenset(entries) | body,
     )
+
+
+def _check_body_embedding(catalog: Catalog) -> None:
+    """`request_body`'s embedding keys on a catalog of routes, checked at the run's start:
+    `embed_markers: {calls: [<owner>.<method>, ...], unless_subtype_of: [<type>, ...]}`, and
+    the requirement keys a field reads, in a request-parameter entry's forms (`_check_marker_keys`)."""
+    declared = catalog.matches.get("request_body") or {}
+    where = f"loading catalog {catalog.source}: `request_body`"
+    markers = declared.get("embed_markers")
+    if markers is not None and not (
+        isinstance(markers, dict)
+        and set(markers) == {"calls", "unless_subtype_of"}
+        and all(
+            isinstance(markers[key], list)
+            and markers[key]
+            and all(isinstance(name, str) and "." in name for name in markers[key])
+            for key in ("calls", "unless_subtype_of")
+        )
+    ):
+        raise CatalogError(
+            f"{where} `embed_markers` is `{{calls: [<owner>.<method>, ...], unless_subtype_of: "
+            f"[<type>, ...]}}`, got {markers!r}"
+        )
+    _check_marker_keys(declared, where)
+    if "default_arg" in declared and any(
+        argument_reference(each, spelled=False) is None
+        for each in _references(declared["default_arg"])
+    ):
+        raise CatalogError(f"{where} `default_arg` is a reference or a list of them")
 
 
 @dataclass(frozen=True)
@@ -890,6 +944,7 @@ def read_parameters(
     markers: Callable[[int], Sequence[Marker]],
     variables: frozenset[str],
     scalar: Callable[[Mapping[str, Any]], bool | None],
+    address: str = "resolved",
 ) -> ParameterReading:
     """Each handler parameter as the framework reads it on one row (N3, N4; FastAPI's
     `analyze_param`, quoted in `scripts/probes/fastapi_rules.md` §4):
@@ -908,8 +963,9 @@ def read_parameters(
       class's fields are the parameters; with another marker, none (the path's `Path`, the
       body's, a dependency);
     - **unmarked**: a path variable is the address's; else the `unmarked` entry where its type
-      is a scalar (`scalar_only`), optional where it declares a default; else nothing here (the
-      body rule reads it).
+      is a scalar (`scalar_only`), optional where it declares a default, at the row's `address`
+      resolution: on a path not read whole, the parameter may name one of its variables, so the
+      row is no surer than the path; else nothing here (the body rule reads it).
 
     A receiver is no request parameter."""
     rows: dict[tuple[str, str | None, str | None, str], None] = {}
@@ -935,7 +991,7 @@ def read_parameters(
         annotation_paths: list[Marker | None] = [*annotated.values()] or [None]
         pairs = list(product(default_paths, annotation_paths))
         readings = [
-            _reading(rules, parameter, default, annotation, variables, scalar)
+            _reading(rules, parameter, default, annotation, variables, scalar, address)
             for default, annotation in pairs
         ]
         kept = [reading for reading in readings if reading[0] is None]
@@ -969,6 +1025,7 @@ def _reading(
     annotation: Marker | None,
     variables: frozenset[str],
     scalar: Callable[[Mapping[str, Any]], bool | None],
+    address: str,
 ) -> tuple[str | None, tuple[str, str] | None, list[tuple[str, str | None, str | None, str]]]:
     """One reading of one parameter (`read_parameters`): the refusal, else None; its marker
     call, None where it has none; its rows."""
@@ -994,7 +1051,7 @@ def _reading(
         return (
             None,
             None,
-            [(str(unmarked["kind"]), str(parameter["name"]), requirement, "resolved")],
+            [(str(unmarked["kind"]), str(parameter["name"]), requirement, address)],
         )
     call = _call_of(marker)
     if variable and call in rules.claims:

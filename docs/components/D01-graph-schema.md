@@ -557,8 +557,10 @@ shape id — the grammar `shape_fields.item` uses above, reused rather than dupl
 `{"wire_type":"array","item":{"wire_type":"object","shape_id":…}}`; a scalar response is
 recorded rather than dropped (`{"wire_type":"string"}`); a body a framework assembles from
 several handler parameters (D02 §2's `request_body.embed_arg`, FastAPI's embedded body) is an
-`object` with no `shape_id` and a `fields` list, one `{name, type}` per parameter in declared
-order, `type` the field's own descriptor (`NULL` for none); and `NULL` means exactly *no
+`object` with no `shape_id` and a `fields` list, one `{name, required, type}` per parameter in
+declared order, `required` the word `required` or `optional`, `type` the field's own descriptor
+(`NULL` for none) — the document renders it as a field table, a field of a named shape citing
+that shape; and `NULL` means exactly *no
 payload* — a `void` return, or no body parameter — the one meaning it has always had. On a
 row whose own `resolution` is `unresolved` ([D02](D02-catalog-schema.md) §2's `single_call`:
 any declared capture — url, body or response — that failed to resolve drops the row's

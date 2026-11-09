@@ -190,6 +190,17 @@ matches:
     fallback: sole_unbound
     embed_arg: { keyword: embed }
     name_arg: { keyword: alias }
+    # A single `Form` or `File` parameter is embedded unless it is a model (`_should_embed_body_
+    # fields`: a Form field "has to be a BaseModel ... to be top level"), so `confirm: bool =
+    # Form(False)` is the form `{confirm: bool}`. An embedded field is required as a request
+    # parameter is: `Body(None)` optional, `Body()`/`Body(...)` required, a marker in
+    # `Annotated` taking the parameter's own default.
+    embed_markers: { calls: [fastapi.param_functions.Form, fastapi.param_functions.File,
+                             fastapi.params.Form.<init>, fastapi.params.File.<init>],
+                     unless_subtype_of: [pydantic.main.BaseModel] }
+    default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }]
+    required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis }
+    annotated_default: parameter
     bound_by_calls: [fastapi.param_functions.Query, fastapi.param_functions.Header,
                      fastapi.param_functions.Cookie, fastapi.param_functions.Path,
                      fastapi.param_functions.Depends, fastapi.param_functions.Security,

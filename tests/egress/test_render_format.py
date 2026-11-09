@@ -585,6 +585,71 @@ def test_a_declared_field_number_shows_beside_the_field_name():
     assert "| total_amount (1) | string | yes | no |" in text
 
 
+def test_an_assembled_body_renders_one_row_per_field_citing_nested_shapes():
+    """A body the framework assembles from several handler parameters (D01 §3's `fields`,
+    FastAPI's embedded body) has no shape of its own: one name/type row per field, its
+    requirement (`Body(None)` is optional), a field of a named shape citing that shape's own
+    `### Shapes` entry, which is then listed."""
+    report = ResolveReport(
+        facts_loaded=1,
+        endpoints=[
+            _endpoint(
+                method="POST",
+                request_shape=json.dumps(
+                    {
+                        "wire_type": "object",
+                        "wire_format": None,
+                        "nullable": False,
+                        "fields": [
+                            {
+                                "name": "item",
+                                "required": "required",
+                                "type": {
+                                    "wire_type": "object",
+                                    "wire_format": None,
+                                    "nullable": False,
+                                    "shape_id": "app/schemas/Item#",
+                                },
+                            },
+                            {
+                                "name": "note",
+                                "required": "optional",
+                                "type": {
+                                    "wire_type": "string",
+                                    "wire_format": None,
+                                    "nullable": True,
+                                },
+                            },
+                        ],
+                    }
+                ),
+            )
+        ],
+        coverage={"documents": 1, "partial_documents": 0},
+        shapes=[{"shape_id": "app/schemas/Item#", "content_hash": "md5:1", "open": False}],
+    )
+    shape_fields = [
+        {
+            "shape_id": "app/schemas/Item#",
+            "ordinal": 0,
+            "wire_name": "name",
+            "field_number": None,
+            "wire_type": "string",
+            "wire_format": "",
+            "required": True,
+            "nullable": False,
+            "resolution": "resolved",
+            "evidence": "compiler",
+            "tags": "[]",
+            "item": None,
+        },
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", shape_fields=shape_fields)
+    assert "| item | object Item | yes | no |" in text
+    assert "| note | string | no | yes |" in text
+    assert "| name | string | yes | no |" in text
+
+
 def test_an_annotation_derived_field_with_no_number_renders_unchanged():
     """The other half of the same rule: a bytecode-derived field never
     carries a `field_number` (schema.sql's own NULL comment), so it must

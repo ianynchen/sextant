@@ -20,7 +20,7 @@ from sextant.application.resolve.shapes.expansion import (
     derive_shapes,
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, _matching_wrapper, root_type
-from sextant.domain.symbols import ANY_TYPE, UNION_TYPE, names_a_type
+from sextant.domain.symbols import ANY_TYPE, LITERAL_TYPES, UNION_TYPE, names_a_type
 
 
 def derive_endpoint_shapes(
@@ -471,6 +471,11 @@ def body_calls(catalog: Catalog, key: str) -> frozenset[tuple[str, str]]:
             f"loading catalog {catalog.source}: `request_body.{key}` is a list of dotted "
             f"`<owner>.<method>` names, got {declared!r}"
         )
+    return body_calls_of(declared)
+
+
+def body_calls_of(declared: list[str]) -> frozenset[tuple[str, str]]:
+    """Dotted `<owner>.<method>` names, checked by the caller, as `(owner, method)` pairs."""
     return frozenset(
         (_catalog_symbol(owner), method)
         for owner, _, method in (name.rpartition(".") for name in declared)
@@ -491,6 +496,10 @@ _REQUEST_BODY_KEYS = frozenset(
         "bound_by_calls",
         "embed_arg",
         "name_arg",
+        "embed_markers",
+        "required_when",
+        "default_arg",
+        "annotated_default",
     }
 )
 
@@ -526,7 +535,8 @@ def is_scalar(
     """Whether a parameter's type is a scalar on the wire (plan 2026-11-08-python-fastapi-inbound
     N4, the `scalar` implicit binding and `request_params`' `scalar_only`): its wire projection
     is a scalar, it is a shape-model `known_types` entry whose wire is one, or it is an
-    enumeration (written as its value). An object, an array or a map is not. A union is a
+    enumeration (written as its value), or a `Literal` form. An object, an array or a map is
+    not. A union is a
     scalar where every member is and not where any member is not; the unknown type is one,
     since nothing makes it compound (FastAPI's `field_annotation_is_scalar`: complex only for a
     model, a mapping, a sequence, a dataclass or an upload). None where the kind is not read:
@@ -541,7 +551,7 @@ def is_scalar(
         if False in members:
             return False
         return True if members and all(members) else None
-    if symbol == ANY_TYPE:
+    if symbol == ANY_TYPE or symbol in LITERAL_TYPES:
         return True
     known = known_types.get(symbol)
     if known is not None:
