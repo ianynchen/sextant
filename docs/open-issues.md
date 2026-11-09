@@ -420,6 +420,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-414 | [SEXTANT-408](https://app.plane.so/portolan/browse/SEXTANT-408/) | A test that chooses WHAT is registered (a loop's hasattr filter) marks the row "not evaluated" |
 | OI-415 | [SEXTANT-409](https://app.plane.so/portolan/browse/SEXTANT-409/) | _simplest keeps the lexicographically first order of a guard set reached in two orders, not the outermost-first one |
 | OI-416 | [SEXTANT-410](https://app.plane.so/portolan/browse/SEXTANT-410/) | An include_router of a router a library builds loses its routes with no trace |
+| OI-417 | [SEXTANT-411](https://app.plane.so/portolan/browse/SEXTANT-411/) | Vert.x virtualHost metadata is attached to no row |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
