@@ -3421,7 +3421,8 @@ def _shape_fields_table(rows: Sequence[dict[str, object]]) -> MachineTable:
         )
         wire_format = row.get("wire_format")
         field_type = f"{row['wire_type']} ({wire_format})" if wire_format else str(row["wire_type"])
-        required = "yes" if row["required"] else "no"
+        # NULL where the code does not let it be read (a default made by a call not read).
+        required = "not read" if row["required"] is None else ("yes" if row["required"] else "no")
         nullable = "yes" if row["nullable"] else "no"
         table_rows.append((_text(wire_name), _text(field_type), _text(required), _text(nullable)))
     return MachineTable(_SHAPE_FIELD_HEADERS, tuple(table_rows))

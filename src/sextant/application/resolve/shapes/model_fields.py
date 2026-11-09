@@ -113,6 +113,9 @@ class Naming:
     functions: Mapping[str, str]
     required: str | None
     private_prefix: str | None
+    # `excluded_when` (task 9 review M4, ruled 2026-11-09): the argument of a naming call, and
+    # the literal it is written as, that drops the field from output. None where not declared.
+    excluded_when: tuple[Any, Any] | None = None
 
     @property
     def calls(self) -> frozenset[tuple[str, str]]:
@@ -147,9 +150,11 @@ def naming_of(serialization: Mapping[str, Any]) -> Naming | None:
         or "required" in serialization
         or "private_prefix" in serialization
         or "input_name_from" in serialization
+        or "excluded_when" in serialization
     ):
         return None
     priority = serialization.get("alias_priority")
+    excluded = serialization.get("excluded_when")
     return Naming(
         name_from=tuple((_call(entry["call"]), entry["arg"]) for entry in calls),
         input_name_from=tuple(
@@ -172,6 +177,9 @@ def naming_of(serialization: Mapping[str, Any]) -> Naming | None:
         },
         required=serialization.get("required"),
         private_prefix=serialization.get("private_prefix"),
+        excluded_when=None
+        if excluded is None
+        else ({"keyword": excluded["keyword"]}, excluded["value"]),
     )
 
 
@@ -200,6 +208,9 @@ class FieldName:
     required: bool | None
     resolution: str
     input_resolution: str
+    # Whether an output option drops the field (`excluded_when`): None where that option is
+    # written as no literal.
+    excluded: bool | None = False
 
 
 # A model's generator, as its configuration states it: none set, a known strategy word, a
@@ -266,7 +277,15 @@ class ModelNames:
         ]
         first = readings[0]
         if any(reading != first for reading in readings[1:]):
-            return FieldName(first.output, first.input, first.required, _PARTIAL, _PARTIAL)
+            agreed = all(one.excluded == first.excluded for one in readings)
+            return FieldName(
+                first.output,
+                first.input,
+                first.required,
+                _PARTIAL,
+                _PARTIAL,
+                first.excluded if agreed else None,
+            )
         return first
 
     def _reading(
@@ -284,6 +303,7 @@ class ModelNames:
         output: Any = None
         given: Any = None
         level: Any = None
+        excluded: Any = None
         for site in calls:
             arguments = list(site.get("arguments") or [])
             if any(entry.get("keyword") in ("*", "**") for entry in arguments):
@@ -295,6 +315,10 @@ class ModelNames:
             priority = self.naming.alias_priority
             if priority is not None and call == priority[0]:
                 level = _merged(level, _literal(_argument(arguments, priority[1])))
+            if self.naming.excluded_when is not None:
+                excluded = _merged(
+                    excluded, _literal(_argument(arguments, self.naming.excluded_when[0]))
+                )
         generated: str | None = name
         if generator is not None and generator != _NONE:
             if generator[0] in STRATEGIES:
@@ -329,7 +353,7 @@ class ModelNames:
             read_in = weaker(read_in, _PARTIAL)
         required = self._required(calls, value)
         if required is None and self.naming.required == NO_DEFAULT:
-            # Whether a default is written is not read (review M2): never `False`.
+            # Whether a default is written is not read (review M2): `required` is unknown.
             resolution = weaker(resolution, _PARTIAL)
         # N13 B: a field read under names other than its output name is not wholly described
         # by that name.
@@ -342,6 +366,11 @@ class ModelNames:
             required=required,
             resolution=whole,
             input_resolution=weaker(resolution, read_in),
+            excluded=None
+            if excluded is _UNREAD
+            else (
+                self.naming.excluded_when is not None and excluded == self.naming.excluded_when[1]
+            ),
         )
 
     def _required(

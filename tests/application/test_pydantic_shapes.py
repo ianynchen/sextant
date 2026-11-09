@@ -268,9 +268,9 @@ def test_a_wrapper_of_field_with_unpacked_kwargs_is_not_readable(tmp_path: Path,
         "updated_at": "partial",
         "other": "resolved",
     }
-    # Review M2: the default `UpdatedAtField` hands `Field` sits in `*args`, so whether one is
-    # written is not read: never `False`. The flag falls back to the language's (required).
-    assert _fields(workspace)["updated_at"][2] is True
+    # Review M2, ruled 2026-11-09: the default `UpdatedAtField` hands `Field` sits in `*args`, so
+    # whether one is written is not read: `required` is unknown (NULL), never a guess.
+    assert _fields(workspace)["updated_at"][2] is None
 
 
 def test_private_attributes_are_not_fields(tmp_path: Path, libraries):
@@ -463,6 +463,7 @@ def test_a_query_model_expands_to_one_param_per_field(tmp_path: Path, libraries)
         ("{private_prefix: ''}", "private_prefix"),
         ("{defaults: [{call: a.f, default_arg: 0}]}", "defaults"),
         ("{naming: camel}", "serialization.naming"),
+        ("{excluded_when: {keyword: exclude}}", "excluded_when"),
     ],
 )
 def test_a_malformed_shape_model_is_refused_by_file(tmp_path: Path, serialization: str, says: str):
@@ -519,10 +520,10 @@ def test_a_field_in_annotated_metadata_names_and_defaults_the_field(tmp_path: Pa
 
 
 def test_a_default_made_by_a_call_not_read_is_not_a_default(tmp_path: Path, libraries):
-    """Review M2: a value made by a call the walk does not see into (sqlmodel's own `Field`,
-    a library helper) may or may not write a default, so `required` is not read from it: the
-    language's answer stands (required), at `partial`. Any other value, a literal or a display
-    such as `{}`, is a default."""
+    """Review M2, ruled 2026-11-09: a value made by a call no naming rule reads (sqlmodel's own
+    `Field`, a library helper, `" ".join(...)`) may or may not write a default, so `required` is
+    unknown (NULL) at `partial`. Any other value, a literal or a display such as `{}`, is a
+    default; no value at all is required."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -532,13 +533,17 @@ def test_a_default_made_by_a_call_not_read_is_not_a_default(tmp_path: Path, libr
             "    email: str = SqlField(max_length=255)\n"
             "    plain: int = 3\n"
             "    headers: dict[str, str] = {}\n"
+            "    scope: str = ' '.join(['a', 'b'])\n"
+            "    bare: str\n"
         ),
     )
 
     assert {name: (row[2], row[3]) for name, row in _fields(workspace).items()} == {
-        "email": (True, "partial"),
+        "email": (None, "partial"),
         "plain": (False, "resolved"),
         "headers": (False, "resolved"),
+        "scope": (None, "partial"),
+        "bare": (True, "resolved"),
     }
 
 
@@ -668,3 +673,47 @@ def test_a_tuple_of_two_types_and_a_bare_type_variable_are_not_misread(tmp_path:
     assert (pair["wire_type"], pair["item"]) == ("array", None)
     assert _open(workspace) is True
     assert _fields(workspace, "Env")["data"][3] == "unresolved"
+
+
+def test_an_excluded_field_leaves_the_response_shape_and_stays_in_the_request(
+    tmp_path: Path, libraries
+):
+    """Review M4 (`excluded_when`, ruled 2026-11-09; `pydantic_naming.md` §6): pydantic never
+    writes a field whose `Field` says `exclude=True`, and still reads it. A model only a
+    response carries drops it; one only a request carries keeps it; one both carry keeps it at
+    `partial`, since one shape holds both directions (N13 B). The `Annotated` merge applies:
+    a later `exclude=False` keeps the field."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _HEAD + "class Out(BaseModel):\n"
+            "    name: str = ''\n"
+            "    token: str = Field('', exclude=True)\n"
+            "    ann: Annotated[str, Field(exclude=True)] = ''\n"
+            "    undone: Annotated[str, Field(exclude=True)] = Field('', exclude=False)\n"
+            "class In(BaseModel):\n"
+            "    name: str = ''\n"
+            "    token: str = Field('', exclude=True)\n"
+            "class Both(BaseModel):\n"
+            "    token: str = Field('', exclude=True)\n"
+            "@router.get('/out')\n"
+            "def out() -> Out:\n"
+            "    return Out()\n"
+            "@router.post('/in')\n"
+            "def take(item: In) -> str:\n"
+            "    return ''\n"
+            "@router.post('/both')\n"
+            "def both(item: Both) -> Both:\n"
+            "    return item\n"
+        },
+    )
+
+    assert list(_fields(workspace, "Out")) == ["name", "undone"]
+    assert {name: row[3] for name, row in _fields(workspace, "In").items()} == {
+        "name": "resolved",
+        "token": "resolved",
+    }
+    assert {name: row[3] for name, row in _fields(workspace, "Both").items()} == {
+        "token": "partial"
+    }

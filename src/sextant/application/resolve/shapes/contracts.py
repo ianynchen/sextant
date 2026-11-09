@@ -72,11 +72,16 @@ def derive_endpoint_shapes(
         # picked out of the two columns by hand: strictly more complete than
         # the 2A roots, which only a bare `object` payload ever reached.
         referenced: list[str] = []
-        found = _contracts_of(workspace, endpoints, catalog, settled, rules, enums, referenced)
+        # The roots a request carries and the roots a response carries, for a shape model that
+        # drops a field from output alone (`excluded_when`, task 9 review M4).
+        directions: tuple[set[str], set[str]] = (set(), set())
+        found = _contracts_of(
+            workspace, endpoints, catalog, settled, rules, enums, referenced, directions
+        )
         # Deduped in the order the endpoints reached them, which is the order
         # the shape rows are written and the report names gaps (NFR-1).
         roots = list(dict.fromkeys(referenced))
-        unexpanded.extend(derive_shapes(workspace, catalog, roots).unexpanded_types)
+        unexpanded.extend(derive_shapes(workspace, catalog, roots, directions).unexpanded_types)
         for owner, columns in found.items():
             settled.setdefault(owner, {}).update(columns)
 
@@ -163,6 +168,7 @@ def _contracts_of(
     rules: "_Rules",
     enums: set[str],
     referenced: list[str],
+    directions: tuple[set[str], set[str]] | None = None,
 ) -> dict[str, dict[str, str]]:
     """The descriptors one catalog can name for each endpoint's owner, leaving
     out every column an earlier catalog already answered — restricted, first,
@@ -226,6 +232,8 @@ def _contracts_of(
             # single caller can each carry a genuinely different payload.
             for column in (_REQUEST, _RESPONSE):
                 referenced.extend(_shape_roots_of(endpoint.get(column)))
+                if directions is not None:
+                    directions[column == _RESPONSE].update(_shape_roots_of(endpoint.get(column)))
             continue
         if not owner or owner in found:
             continue
@@ -248,6 +256,9 @@ def _contracts_of(
                 signature.get("returns"), rules, enums, referenced, wrappers
             ),
         }
+        if directions is not None:
+            for column, descriptor in columns.items():
+                directions[column == _RESPONSE].update(_shape_roots_of(descriptor))
         kept = {
             column: descriptor
             for column, descriptor in columns.items()

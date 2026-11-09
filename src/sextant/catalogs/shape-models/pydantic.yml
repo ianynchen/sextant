@@ -64,6 +64,12 @@ serialization:
         required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis } }
   # A name starting with `_` is a private attribute, never a field (probe §4).
   private_prefix: "_"
+  # OUTPUT ONLY (probe §6; task 9 review M4, ruled 2026-11-09): `Field(exclude=True)` is never
+  # written (absent from `model_dump` and the serialization schema) and is still read. The field
+  # leaves a shape only responses reach and stays in one only requests reach; in one both reach
+  # it stays at `partial` (one shape holds both directions, N13 B). Merged as names are: a later
+  # `exclude=False` keeps it.
+  excluded_when: { keyword: exclude, value: true }
 
 # pydantic 2's JSON mode (`pydantic_known_types.md`): each of these is written as a string, with
 # the `format` pydantic's own JSON schema states for it, the same in serialization and

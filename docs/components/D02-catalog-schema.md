@@ -6025,11 +6025,18 @@ serialization:
   read by `defaults` on each naming call in merge order (`required_when` written as the named
   field writes none). **A default not read is not a default** (task 9 review M2): a value made by
   a call that is no naming call (sqlmodel's own `Field`, a helper the walk does not see into), or
-  a default argument in an unpacked `*args`/`**kwargs`, leaves `required` unread, so the
-  language's answer (the wrapper rule) stands at `partial`, never `false`. A `TypedDict` key the
+  a default argument in an unpacked `*args`/`**kwargs`, leaves `required` unread: the row
+  publishes `required` NULL (unknown) at `partial`, never a guess (ruled 2026-11-09). A field
+  with no value at all is required. A `TypedDict` key the
   language marks not required (`modifiers.not_required`, D00 §5a) is not required whatever the
   model says. Without the key, `required` keeps the wrapper rule (`optional` wrapper).
 - **`private_prefix`**: a name starting with it is no field.
+- **`excluded_when: {keyword: <name>, value: <literal>}`** (task 9 review M4, ruled 2026-11-09):
+  the naming-call option that drops a field from OUTPUT (pydantic's `exclude=True`), merged as
+  names are. The field leaves a shape only responses reach (`derive_shapes` is handed the
+  roots a request and a response carry), stays in one only requests reach, and stays at
+  `partial` in one both reach or whose direction is not known, since one shape holds both
+  directions (N13 B). An option written as no literal leaves the field at `partial`.
 - **Resolution (N13 option B).** One shape per type, under the output names. A field whose
   accepted input names differ from its output name is `partial`: a `validation_alias`, a
   `serialization_alias` beside another input name, `by_name` on a renamed field. So is one whose

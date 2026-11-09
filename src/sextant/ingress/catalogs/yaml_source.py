@@ -1191,6 +1191,7 @@ _SERIALIZATION_KEYS = frozenset(
         "required",
         "defaults",
         "private_prefix",
+        "excluded_when",
     }
 )
 _GENERATOR_STRATEGIES = frozenset({"camel", "pascal"})
@@ -1290,6 +1291,17 @@ def _check_shape_model(raw: dict[str, Any], path: Path) -> None:
                 f"{where}: `defaults` entry is `{{call, default_arg: [<reference>], "
                 f"required_when?: {{arg, equals_field}}}}`, got {entry!r}"
             )
+    excluded = serialization.get("excluded_when")
+    if "excluded_when" in serialization and not (
+        isinstance(excluded, dict)
+        and set(excluded) == {"keyword", "value"}
+        and isinstance(excluded["keyword"], str)
+        and excluded["keyword"].isidentifier()
+        and isinstance(excluded["value"], str | int | float | bool)
+    ):
+        raise CatalogError(
+            f"{where}: `excluded_when` is `{{keyword: <name>, value: <literal>}}`, got {excluded!r}"
+        )
     prefix = serialization.get("private_prefix")
     if "private_prefix" in serialization and not (isinstance(prefix, str) and prefix):
         raise CatalogError(f"{where}: `private_prefix` is a non-empty string, got {prefix!r}")

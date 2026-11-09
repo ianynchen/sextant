@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,9 +39,19 @@ class ExpandedShapes:
     unexpanded_types: tuple[str, ...]
 
 
-def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) -> ExpandedShapes:
+def derive_shapes(
+    workspace: Workspace,
+    catalog: Catalog,
+    roots: Sequence[str],
+    directions: tuple[AbstractSet[str], AbstractSet[str]] | None = None,
+) -> ExpandedShapes:
     """Expands each root into a `shapes` row and its `shape_fields`, following
     every reference it finds.
+
+    `directions` is the roots a request carries and the roots a response carries, for a shape
+    model that names a field option dropping a field from output (`excluded_when`, task 9
+    review M4): such a field leaves a shape only responses reach, stays in one only requests
+    reach, and stays at `partial` in one both reach or whose direction is not known (None).
 
     Cycles terminate by construction: an `object` field holds a *reference* to
     another shape, never an inlining, so `Node { Node parent; }` needs no depth
@@ -64,6 +75,10 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
     # are written and the order the report names gaps (NFR-1).
     pending = list(dict.fromkeys(roots))
     expanded: set[str] = set()
+    # Per shape, the shapes it references and its fields an output option drops (`excluded_when`):
+    # ordinal -> True, or None where the option is written as no literal.
+    edges: dict[str, list[str]] = {}
+    dropped: dict[str, dict[int, bool | None]] = {}
 
     while pending:
         shape_id = pending.pop(0)
@@ -113,6 +128,7 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
                 enums,
                 referenced,
                 (base, names),
+                dropped.setdefault(shape_id, {}),
             )
             if not rows:
                 from_accessors = bool(accessors.of(base))
@@ -125,6 +141,7 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
                     referenced,
                 )
         pending.extend(referenced)
+        edges[shape_id] = list(referenced)
         # Expansion needs field facts, and only scanned types have them, so a
         # type without them stops here whoever wrote it (ruling F4). Its
         # reference is still kept: an open, zero-field shape row (D2).
@@ -188,11 +205,73 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
             {"shape_id": shape_id, "ordinal": ordinal, **row} for ordinal, row in enumerate(rows)
         )
 
+    if any(dropped.values()):
+        shapes, fields = _without_excluded(shapes, fields, dropped, edges, directions)
     # Fields first: the shape row is what marks a shape settled for a later
     # catalog, so it is written once its fields are in (D02 §5).
     workspace.derive("shape_fields", fields=fields)
     workspace.derive("shapes", shapes=shapes)
     return ExpandedShapes(unexpanded_types=tuple(unexpanded))
+
+
+def _reached(starts: AbstractSet[str], edges: dict[str, list[str]]) -> set[str]:
+    """Every shape `starts` reach through the fields' references."""
+    seen: set[str] = set()
+    pending = list(starts)
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        pending.extend(edges.get(current, ()))
+    return seen
+
+
+def _without_excluded(
+    shapes: list[dict[str, object]],
+    fields: list[dict[str, object]],
+    dropped: dict[str, dict[int, bool | None]],
+    edges: dict[str, list[str]],
+    directions: tuple[AbstractSet[str], AbstractSet[str]] | None,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """The shapes and fields with each field an output option drops (`excluded_when`) left out
+    of a shape only responses reach, kept in one only requests reach, and kept at `partial`
+    anywhere else: one shape holds both directions (N13 B), so a field present in one and
+    absent in the other is described there only in part. A field whose option is written as
+    no literal is `partial` wherever it stays."""
+    inputs = _reached(directions[0], edges) if directions is not None else set()
+    outputs = _reached(directions[1], edges) if directions is not None else set()
+    by_shape: dict[str, list[dict[str, object]]] = {}
+    for row in fields:
+        by_shape.setdefault(str(row["shape_id"]), []).append(row)
+    kept_fields: list[dict[str, object]] = []
+    kept_shapes: list[dict[str, object]] = []
+    for shape in shapes:
+        shape_id = str(shape["shape_id"])
+        marks = dropped.get(shape_id) or {}
+        rows = by_shape.get(shape_id, [])
+        if marks:
+            output_only = shape_id in outputs and shape_id not in inputs
+            input_only = shape_id in inputs and shape_id not in outputs
+            rewritten: list[dict[str, object]] = []
+            for row in rows:
+                ordinal = int(str(row["ordinal"]))
+                if ordinal in marks:
+                    excluded = marks[ordinal]
+                    if excluded is True and output_only:
+                        continue
+                    if excluded is None or not input_only:
+                        row = {**row, "resolution": weaker(str(row["resolution"]), "partial")}
+                rewritten.append(row)
+            rows = [{**row, "ordinal": ordinal} for ordinal, row in enumerate(rewritten)]
+            payload = [
+                {key: value for key, value in row.items() if key not in ("shape_id", "ordinal")}
+                for row in rows
+            ]
+            shape = {**shape, "content_hash": _content_hash(payload)}
+        kept_shapes.append(shape)
+        kept_fields.extend(rows)
+    return kept_shapes, kept_fields
 
 
 def _model_names(workspace: Workspace, catalog: Catalog, rules: "_Rules") -> ModelNames | None:
@@ -845,10 +924,13 @@ def _rows_of(
     enums: set[str],
     referenced: list[str],
     model: tuple[str, ModelNames | None] = ("", None),
+    dropped: dict[int, bool | None] | None = None,
 ) -> list[dict[str, object]]:
     """One projected row per field that reaches the wire, appending every shape
     the fields reference to `referenced`. `model` is the type the fields describe and the
-    shape model's call-read naming (N12), None where it has none."""
+    shape model's call-read naming (N12), None where it has none. `dropped` receives the
+    ordinal of each row an output option drops (`excluded_when`): True, or None where the
+    option is written as no literal."""
     rows: list[dict[str, object]] = []
     shape, names = model
     for field in declared:
@@ -889,6 +971,8 @@ def _rows_of(
             scope_prefixes,
             field["symbol"],
         )
+        if named is not None and named.excluded is not False and dropped is not None:
+            dropped[len(rows)] = named.excluded
         rows.append(
             {
                 "wire_name": wire_name,
@@ -904,11 +988,13 @@ def _rows_of(
                 # instead (N12: `no_default`).
                 # A key the language lets be left out (a `TypedDict`'s `NotRequired`) is not
                 # required, whatever else is said.
+                # A shape model with a `required` rule that could not read whether a default
+                # is written publishes NULL: unknown, never a guess (ruled 2026-11-09).
                 "required": False
                 if field.get("not_required")
                 else (
                     "optional" not in rooted.chain
-                    if named is None or named.required is None
+                    if named is None or names is None or names.naming.required is None
                     else named.required
                 ),
                 "nullable": nullable,

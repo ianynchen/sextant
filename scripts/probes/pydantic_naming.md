@@ -191,3 +191,21 @@ overriding only the attributes it sets; `Field(alias=...)` sets `alias`,
 | `Annotated[int, Field(default=1)] = Field(alias="E")` | E / E / E | False |
 | `Annotated[int, Field(serialization_alias="G1")] = Field(alias="G2")` | G2 / G2 / G2 | True |
 | `Annotated[int, Field(validation_alias="V")] = 0` | none / none / V | False |
+
+## 6. `exclude=True` (task 9 review M4)
+
+Part 4 of `pydantic_naming.py` (`Excluded`), pydantic 2.14.3 as the process reported it. The
+model is `name: str = ""`, `token: str = Field("", exclude=True)`,
+`ann: Annotated[str, Field(exclude=True)] = ""` and
+`undone: Annotated[str, Field(exclude=True)] = Field("", exclude=False)`.
+
+| Question | Answer |
+|---|---|
+| serialization schema | `name`, `undone` |
+| validation schema | `name`, `token`, `ann`, `undone` |
+| `model_dump` keys | `name`, `undone` |
+| `token` read on input | yes (`"x"`) |
+
+A field whose merged `exclude` is `True` is never written and is still read; the `Annotated`
+merge applies (a later `exclude=False` keeps the field). This backs `excluded_when` in
+`shape-models/pydantic.yml`.

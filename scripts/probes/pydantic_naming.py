@@ -252,6 +252,23 @@ def part_three() -> None:
         )
 
 
+class Excluded(BaseModel):
+    """Task 9 review M4: `Field(exclude=True)` in both schema modes, alone and merged."""
+
+    name: str = ""
+    token: str = Field("", exclude=True)
+    ann: Annotated[str, Field(exclude=True)] = ""
+    undone: Annotated[str, Field(exclude=True)] = Field("", exclude=False)
+
+
+def part_four() -> None:
+    print("\n## Part 4: `exclude=True`", f"(pydantic {pydantic.VERSION})")
+    for mode in ("serialization", "validation"):
+        print(f"  {mode} schema:", list(Excluded.model_json_schema(mode=mode)["properties"]))
+    print("  model_dump:", list(Excluded(token="t").model_dump()))
+    print("  read on input, token:", Excluded.model_validate({"token": "x"}).token)
+
+
 def part_two() -> None:
     print("\n## Part 2: aliases pydantic gives a field", f"(pydantic {pydantic.VERSION})")
     show("plain", Plain)
@@ -322,6 +339,7 @@ def main(argv: list[str]) -> int:
     rows = part_one(Path(argv[0]).resolve())
     part_two()
     part_three()
+    part_four()
     rows += [
         (
             "`Both(Left, Right)` takes the generator of",

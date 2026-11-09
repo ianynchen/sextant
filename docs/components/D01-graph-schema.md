@@ -518,7 +518,8 @@ questions — so `wire_type` and `wire_format` are separate columns rather than 
 consumer would have to re-split (decision D1 of the shapes-and-nullability plan). `nullable`
 sits beside `required` because [D00](D00-fact-schema.md) §5a makes them independent
 two-valued flags: a field may be required-and-nullable or optional-and-not-null, and one
-column cannot hold two answers. `resolution` and `evidence` accompany it per decision D3 of
+column cannot hold two answers. `required` is NULL where the code does not let it be read (a Python field
+whose default is made by a call nothing reads, ruled 2026-11-09): unknown, never a guess. `resolution` and `evidence` accompany it per decision D3 of
 that plan and the general trust-field rule ([D00](D00-fact-schema.md) §3) — a `nullable` read
 off a language default and one confirmed by an explicit annotation are different claims, and
 DR-5's comparison must be able to tell them apart rather than trusting both equally. `tags` is
