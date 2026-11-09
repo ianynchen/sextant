@@ -244,7 +244,13 @@ to `<relative path>.jsonl`. Folders on the detector's skip list are not entered,
 `.sextantignore` or its built-in layer excludes is not read (`ScanRequest.ignore`, matched
 as `resource_files.list_files` matches). A git-ignored file IS read: generated code such as
 `*_pb2.py` is often git-ignored and is part of the module. A file that cannot be opened (a
-broken link) goes on the uncovered list with its reason.
+broken link) goes on the uncovered list with its reason. **Test code is not read** (plan 2
+final review M1, user ruling 2026-11-09: only code that goes to production counts), as the JVM
+scanner never sees `src/test`: told apart by pytest's own collection rules
+(`pytest_collection.py`, probe `scripts/probes/pytest_collection.md`). The settings file is
+the one pytest chooses, from the import root up to the analysed root; a file is test code when
+it is at or below one of its `testpaths`, its name matches its `python_files` (else
+`test_*.py` and `*_test.py`), it is a `conftest.py`, or it is in a `tests` or `test` folder.
 
 **One file at a time, with the headers of the files it imports** (round 1, user choice A,
 2026-11-07; `project.py`). An import binds a name by path, `from app.models import Order` the

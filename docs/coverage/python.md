@@ -40,7 +40,12 @@ after the facts is the existing one, extended where Python needs it.
   including the implicit `return None`, are `method_return` facts. Module-level names and
   `self.x = …` are `field_write` facts. A decorated `def` holds its decorators' result, and a
   decorator is the call it is (`@router.get("/x")` is `router.get("/x")(f)`), never an
-  annotation.
+  annotation. **Test code is not read**: code that runs only in a test process is not part of
+  what the module serves. It is told apart by pytest's own collection rules, read from the
+  settings file pytest itself would choose: the `testpaths`, the `python_files` patterns (else
+  `test_*.py` and `*_test.py`), every `conftest.py`, and every `tests` or `test` folder
+  (`scripts/probes/pytest_collection.md`). On polar this leaves 648 of 2,053 files unread, on
+  mealie 209 of 705.
 - **Types written in the code:** annotations, `Optional`, unions, `type[X]`, `@overload` chosen
   by argument types (a closed list where they cannot be told apart), PEP 695 type parameters,
   and the library signatures of the installed environment (`.venv`, `venv`, or the one uv or
@@ -169,8 +174,8 @@ environment: it imports the app and asks FastAPI. Sextant never runs the code it
   fails.
 - **polar.** The 3 pairs not found are the versioned `GET /2026-04/openapi.json`,
   `/2026-10/openapi.json` and `/2027-01/openapi.json`, which Sextant gives as one `partial` row,
-  `/{}/openapi.json`. 30 rows are apps written inside `tests/`, which FastAPI's table for
-  `polar.app` does not hold. 1 row is the checkout-link app that polar serves only through
+  `/{}/openapi.json`. The 31 rows of apps written inside `tests/` are gone since test code
+  is not read. 1 row is the checkout-link app that polar serves only through
   `app.host(...)`, published at `/{client_secret}` with no host and as existing wherever the
   module runs: `app.host` is not read as a mount yet, so the test it is under
   (`if settings.CHECKOUT_LINK_HOST is not None:`) does not reach the route (OI-368's second

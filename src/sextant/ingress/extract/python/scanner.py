@@ -30,6 +30,7 @@ from sextant.ingress.extract.python.libraries import (
     referenced_types,
 )
 from sextant.ingress.extract.python.project import ProjectHeaders, header_digest
+from sextant.ingress.extract.python.pytest_collection import PytestCollection
 from sextant.ingress.extract.python.structure import file_facts, header_types
 from sextant.resources import code_identity, typeshed_dir
 
@@ -459,10 +460,16 @@ def _header_document(
 
 
 def _python_files(root: Path, ignore: IgnoreRules | None) -> list[str]:
-    """Every `.py` file under `root` that `ignore` does not exclude, relative and
-    `/`-separated, in sorted order. Folders are skipped by the detector's own rule. A
-    git-ignored file is read: generated code (`*_pb2.py`) is often git-ignored and is
-    part of the module."""
+    """Every `.py` file under `root` that `ignore` does not exclude and that is not test
+    code, relative and `/`-separated, in sorted order. Folders are skipped by the
+    detector's own rule. A git-ignored file is read: generated code (`*_pb2.py`) is often
+    git-ignored and is part of the module. Test code is told apart by pytest's own
+    collection rules (`pytest_collection.py`): it runs only in a test process, never where
+    the module is deployed."""
+    tests = PytestCollection.of(
+        Path(os.path.abspath(root)),
+        Path(os.path.abspath(ignore.repo_root if ignore is not None else root)),
+    )
     found: list[str] = []
     for current, folders, files in os.walk(root):
         folders[:] = sorted(
@@ -470,12 +477,15 @@ def _python_files(root: Path, ignore: IgnoreRules | None) -> list[str]:
             for folder in folders
             if not is_skipped_folder(current, folder)
             and not _ignored(Path(current) / folder, root, ignore)
+            and not tests.holds_folder(tests.root / Path(current).relative_to(root) / folder)
         )
         base = Path(current).relative_to(root)
         found.extend(
             (base / name).as_posix()
             for name in sorted(files)
-            if name.endswith(_SUFFIX) and not _ignored(Path(current) / name, root, ignore)
+            if name.endswith(_SUFFIX)
+            and not _ignored(Path(current) / name, root, ignore)
+            and not tests.holds(tests.root / base / name)
         )
     return sorted(found)
 

@@ -171,6 +171,27 @@ def test_app_get_is_a_row_on_the_app(tmp_path: Path, libraries):
     assert _rows(workspace) == [("GET", "/health", _handler("health"), "resolved", "map")]
 
 
+def test_an_app_written_in_test_code_is_not_read(tmp_path: Path, libraries):
+    """Test code, by pytest's collection rules, is not scanned (plan 2, final review M1): an app
+    a test builds exists only in the test process, never where the module is deployed."""
+    route = "from fastapi import FastAPI\napp = FastAPI()\n@app.get('{}')\ndef h() -> str:\n    "
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": route.format("/served") + "return ''\n",
+            "tests/test_app.py": "def test_routes():\n    "
+            + route.format("/in-a-test").replace("\n", "\n    ")
+            + "    return ''\n",
+            "tests/helpers.py": route.format("/helper") + "return ''\n",
+            "test_inline.py": route.format("/inline") + "return ''\n",
+            "conftest.py": route.format("/fixture") + "return ''\n",
+        },
+    )
+
+    assert [(row[0], row[1]) for row in _rows(workspace)] == [("GET", "/served")]
+
+
 def test_api_route_methods_are_one_row_each_upper_cased(tmp_path: Path, libraries):
     """`methods` is read as written, each upper-cased (`{method.upper() for method in
     methods}`): a list gives one row per verb, a repeated verb once."""

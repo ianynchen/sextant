@@ -126,6 +126,13 @@ here would restate those documents rather than add anything.
     directory exists) and one unread dynamic route. No other row moved. `app.host` is not a
     mount yet, so polar's checkout-link host app is not covered; that and the host itself
     stay in OI-368's second half.
+  - **Test code is not read** (final review M1, user ruling 2026-11-09: only code that goes
+    to production counts). The Python scanner tells test code apart by pytest's own
+    collection rules, from the settings file pytest would choose (`pytest.toml`, `pytest.ini`,
+    `pyproject.toml`, `tox.ini`, `setup.cfg`): its `testpaths`, its `python_files` patterns
+    (else `test_*.py` and `*_test.py`), every `conftest.py`, and every `tests` or `test`
+    folder. Polar loses the 31 rows of apps that its tests build, and 648 of 2,053 files are
+    not read; mealie loses no row, and 209 of 705 files are not read.
   - **Open issues** OI-347 to OI-409 (Plane SEXTANT-341 to SEXTANT-403) record what is not
     read; the Python essay (`docs/coverage/python.md`) lists them by shape.
 
