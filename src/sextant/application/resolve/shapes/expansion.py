@@ -15,8 +15,16 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.conditions import AnnotationArg, parse_condition
 from sextant.application.resolve.dispatch import ancestry_of
+from sextant.application.resolve.shapes.model_fields import (
+    FieldName,
+    ModelNames,
+    Naming,
+    naming_of,
+    weaker,
+)
 from sextant.application.resolve.shapes.nullability import _nullability_of, _scope_prefixes
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, root_type
+from sextant.application.resolve.values import cached_value_index
 from sextant.domain.symbols import bare_descriptor, names_a_type, owner_of
 
 
@@ -40,6 +48,7 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
     """
     rules = _rules_of(catalog)
     scope_prefixes = _scope_prefixes(workspace, rules)
+    names = _model_names(workspace, catalog, rules)
     declared = _Fields(workspace=workspace)
     accessors = _Accessors(workspace=workspace, rules=rules)
     descriptors = _declared_shapes(workspace)
@@ -103,6 +112,7 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
                 _bound(declared.of(base), substitution),
                 enums,
                 referenced,
+                (base, names),
             )
             if not rows:
                 from_accessors = bool(accessors.of(base))
@@ -168,7 +178,10 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
                 # and a shape with an undescribed field is OPEN. Without this the raw
                 # envelope reported `open: false` while saying nothing about its own
                 # payload, which is a stronger claim than the evidence supports.
-                or any(_holds_an_undescribed_object(row) for row in rows),
+                or any(_holds_an_undescribed_object(row) for row in rows)
+                # N12: a field whose wire name a generator no entry names would give is not
+                # guessed at (§2g), so the description is not complete.
+                or any(row["wire_name"] is None for row in rows),
             }
         )
         fields.extend(
@@ -180,6 +193,61 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
     workspace.derive("shape_fields", fields=fields)
     workspace.derive("shapes", shapes=shapes)
     return ExpandedShapes(unexpanded_types=tuple(unexpanded))
+
+
+def _model_names(workspace: Workspace, catalog: Catalog, rules: "_Rules") -> ModelNames | None:
+    """The catalog's shape model's call-read naming (N12), None where it has none: each field's
+    value is read through the walk's index, the one the engines built
+    (`values.cached_value_index`)."""
+    if rules.naming is None:
+        return None
+    index = cached_value_index(
+        workspace,
+        catalog.not_hand_offs,
+        catalog.hand_off_effects,
+        catalog.bean_models,
+        catalog.value_annotations,
+        returns_arguments=catalog.returns_arguments,
+    )
+    return ModelNames(workspace, rules.naming, index)
+
+
+@dataclass
+class ModelFields:
+    """Each model's fields as its shape model names them (N12), for a reader of a model as a set
+    of request parameters (plan 2026-11-08-python-fastapi-inbound R25): the fields expansion
+    publishes, its own and its scanned ancestors', each with its `FieldName`."""
+
+    names: ModelNames
+    fields: "_Fields"
+
+    def of(self, model: str) -> list[tuple[str, FieldName]] | None:
+        """`model`'s fields in declaration order, `(declared name, FieldName)`; None where it has
+        none to read."""
+        declared = [
+            field
+            for field in self.fields.of(model)
+            if not field["static"]
+            and not field["transient"]
+            and not self.names.is_private(field["name"])
+        ]
+        if not declared:
+            return None
+        return [
+            (
+                field["name"],
+                self.names.of(
+                    model, owner_of(bare_descriptor(str(field["symbol"]))) or model, field["name"]
+                ),
+            )
+            for field in declared
+        ]
+
+
+def model_fields(workspace: Workspace, catalog: Catalog) -> ModelFields | None:
+    """`ModelFields` for the catalog's shape model, None where it reads no names off calls."""
+    names = _model_names(workspace, catalog, _rules_of(catalog))
+    return None if names is None else ModelFields(names, _Fields(workspace=workspace))
 
 
 @dataclass(frozen=True)
@@ -202,6 +270,9 @@ class _Rules:
     conditional_wrappers: tuple[tuple[AnnotationArg, dict[str, Any]], ...]
     known_types: dict[str, dict[str, Any]]
     name_from: list[dict[str, str]]
+    # N12: the naming a shape model reads off the calls that make a field's value, None for a
+    # model naming fields by annotation alone (`model_fields.naming_of`).
+    naming: Naming | None
     ignore: tuple[str, ...]
     default_strategy: str
     # D02 §2f's accessor prefixes (W26), each with the `wire_type` its return must
@@ -344,7 +415,9 @@ def _rules_of(catalog: Catalog) -> _Rules:
         name_from=[
             {"annotation": _catalog_symbol(source["annotation"]), "arg": source["arg"]}
             for source in serialization.get("name_from", [])
+            if "annotation" in source
         ],
+        naming=naming_of(serialization),
         ignore=tuple(_catalog_symbol(name) for name in serialization.get("ignore", [])),
         # A catalog that declares no strategy renames nothing. Absence is not a
         # licence to invent one.
@@ -764,10 +837,13 @@ def _rows_of(
     declared: list[dict[str, Any]],
     enums: set[str],
     referenced: list[str],
+    model: tuple[str, ModelNames | None] = ("", None),
 ) -> list[dict[str, object]]:
     """One projected row per field that reaches the wire, appending every shape
-    the fields reference to `referenced`."""
+    the fields reference to `referenced`. `model` is the type the fields describe and the
+    shape model's call-read naming (N12), None where it has none."""
     rows: list[dict[str, object]] = []
+    shape, names = model
     for field in declared:
         # On no payload, whoever wrote it: a value bound to the type rather than
         # to an instance, or one the language declares as not serialized. Both
@@ -784,7 +860,16 @@ def _rows_of(
         # catalog says is off the wire against a peer that correctly omits it.
         if any(use["annotation"] in rules.ignore for use in annotations):
             continue
-        wire_name, evidence = _wire_name(rules, field["name"], annotations)
+        declared_name, evidence = _wire_name(rules, field["name"], annotations)
+        wire_name: str | None = declared_name
+        named = None
+        if names is not None:
+            # A name the serialiser keeps as a private attribute is no field (N12).
+            if names.is_private(field["name"]):
+                continue
+            holder = owner_of(bare_descriptor(str(field["symbol"])))
+            named = names.of(shape, holder or shape, field["name"])
+            wire_name = named.output
         # Rooted first: a field inside a declared envelope is described by what
         # the envelope holds, not by the envelope (D02 §2a).
         rooted = root_type(field["returns"], rules.wrappers)
@@ -808,10 +893,13 @@ def _rows_of(
                 # Presence machinery only, never nullability (D00 §5b): the
                 # one source this phase has is the wrapper chain rooting
                 # already recorded — an `optional` wrapper is what makes a
-                # field omittable.
-                "required": "optional" not in rooted.chain,
+                # field omittable. A shape model with a `required` rule says it
+                # instead (N12: `no_default`).
+                "required": "optional" not in rooted.chain
+                if named is None or named.required is None
+                else named.required,
                 "nullable": nullable,
-                "resolution": resolution,
+                "resolution": resolution if named is None else weaker(resolution, named.resolution),
                 "evidence": evidence,
                 "item": _item_of(described),
             }
@@ -933,7 +1021,12 @@ def _described(
     """The recursive `{wire_type, wire_format, nullable, shape_id?, item?}`
     descriptor for one type reference (D01 §5)."""
     known = rules.known_types.get(reference["symbol"])
-    if known is not None:
+    if known is not None and known["wire"] in _COLLECTIONS:
+        # A collection a shape model names (a bare `list` reaching rooting as a symbol, as a
+        # type form's own does, R24): its wire type is the entry's, and what it holds is read
+        # from its arguments as a scanned collection's is, below.
+        reference = {**reference, "wire_type": known["wire"], "wire_format": known.get("format")}
+    elif known is not None:
         # Mapped and never expanded: a type the serialiser turns into a scalar
         # has no field list on the wire, and expanding it would invent one
         # (D02 §2g). A known type may also declare its own `nullable` (D02

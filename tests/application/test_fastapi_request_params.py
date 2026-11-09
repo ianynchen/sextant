@@ -508,8 +508,8 @@ def test_a_marker_constructed_from_its_class_is_the_same_marker(tmp_path: Path, 
 
 def test_a_query_model_names_no_parameter_it_does_not_carry(tmp_path: Path, libraries):
     """`Annotated[Filters, Query()]` makes the model's FIELDS the query parameters
-    (`_get_flat_fields_from_params`), never one named `filters`: one row of its kind naming
-    nothing, at `unresolved`."""
+    (`_get_flat_fields_from_params`), never one named `filters`: one row per field, named and
+    required as the shape model reads the field (R25, `test_pydantic_shapes`)."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -517,8 +517,8 @@ def test_a_query_model_names_no_parameter_it_does_not_carry(tmp_path: Path, libr
     )
 
     assert _params(workspace) == [
-        ("GET", "/x", "query", None, None, "unresolved"),
         ("GET", "/x", "query", "limit", "optional", "resolved"),
+        ("GET", "/x", "query", "name", "required", "resolved"),
     ]
     assert _bodies(workspace) == {("GET", "/x"): None}
 
@@ -547,11 +547,11 @@ def test_a_marked_parameter_of_a_type_named_by_no_symbol_names_nothing(tmp_path:
     assert _params(workspace) == [("GET", "/x", "query", None, None, "unresolved")]
 
 
-def test_an_alias_read_as_a_type_is_neither_a_query_nor_the_body(tmp_path: Path, libraries):
+def test_an_alias_read_as_a_type_is_read_by_its_known_type(tmp_path: Path, libraries):
     """pydantic's `UUID4 = Annotated[UUID, UuidVersion(4)]` is no class, so the `object` wire a
-    type reference carries for it says nothing about its kind: the parameter is not claimed as
-    a query parameter or as the body. (FastAPI reads a UUID as a query parameter; pydantic's
-    `known_types`, plan 2 Task 9, says so.)"""
+    type reference carries for it says nothing about its kind; pydantic's `known_types` (plan 2
+    Task 9) says it is a string, so it is a scalar, which FastAPI reads as a query parameter,
+    never the body."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -562,7 +562,7 @@ def test_an_alias_read_as_a_type_is_neither_a_query_nor_the_body(tmp_path: Path,
         },
     )
 
-    assert _params(workspace) == []
+    assert _params(workspace) == [("GET", "/x", "query", "organization_id", "required", "resolved")]
     assert _bodies(workspace) == {("GET", "/x"): None}
 
 

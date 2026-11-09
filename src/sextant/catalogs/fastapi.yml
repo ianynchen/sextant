@@ -20,12 +20,15 @@ detect:
 measured:
   - { artifact: fastapi, versions: ["0.115.12", "0.162.0"], identity: reported,
       by: scripts/probes/fastapi_rules.md }
+  - { artifact: fastapi, versions: ["0.115.12", "0.162.0"], identity: reported,
+      by: scripts/probes/fastapi_param_models.md }
 
 # NO `requires`, the click catalog's reason: the engine reads call sites, which every scanner
 # writes, and a module whose build holds no FastAPI has no call it matches.
 
-# Pydantic's naming is plan 2 Task 9; until then a model's fields are named as written.
-shape_model: json
+# A payload is a pydantic model: its fields, their names on the wire and its JSON types are the
+# pydantic shape model's (`shape-models/pydantic.yml`, plan 2 Task 9).
+shape_model: pydantic
 
 matches:
   # THE REGISTRATIONS (probe §3, §6). `APIRouter` and `FastAPI` (which hands each of these to

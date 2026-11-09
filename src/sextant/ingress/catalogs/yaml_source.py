@@ -66,6 +66,8 @@ class YamlCatalogSource:
             models[str(_required(raw, "id", path))] = raw
             if subdirectory == "bean-models":
                 _check_bean_model(raw, path)
+            if subdirectory == "shape-models":
+                _check_shape_model(raw, path)
         return models
 
     def bean_models(self) -> dict[str, dict[str, Any]]:
@@ -1172,6 +1174,144 @@ def _bean_model_of(
 
 
 _CONDITION_KINDS = ("profile", "property", "other")
+
+
+# D02 §1b, §2f, §2g: the keys a shape model may hold, the keys its `serialization` block may
+# hold, and N12's generator strategy words and `required` rule (`shapes.model_fields`).
+_SHAPE_MODEL_KEYS = frozenset({"id", "displayName", "serialization", "nullability", "known_types"})
+_SERIALIZATION_KEYS = frozenset(
+    {
+        "name_from",
+        "ignore",
+        "default_strategy",
+        "accessors",
+        "input_name_from",
+        "alias_priority",
+        "name_generator",
+        "required",
+        "defaults",
+        "private_prefix",
+    }
+)
+_GENERATOR_STRATEGIES = frozenset({"camel", "pascal"})
+_REQUIRED_RULES = frozenset({"no_default"})
+_KNOWN_TYPE_KEYS = frozenset({"type", "wire", "format", "nullable", "by"})
+
+
+def _check_shape_model(raw: dict[str, Any], path: Path) -> None:
+    """Refuses a malformed shape model, naming the file (D02 §1b, §2f, §2g; plan
+    2026-11-08-python-fastapi-inbound N12, N13): an unknown key, a `name_from` or
+    `input_name_from` entry naming neither an `annotation` nor a `call` with its argument, a
+    malformed `alias_priority`, `name_generator`, `defaults` or `known_types` entry, a strategy
+    or `required` rule outside N12's words, a generator function naming no probe (`by:`). A
+    typo here would silently strip every payload of the naming it believes it has."""
+    where = f"loading model {path}"
+    unknown = sorted(set(raw) - _SHAPE_MODEL_KEYS)
+    serialization = raw.get("serialization") or {}
+    unknown += sorted(f"serialization.{key}" for key in set(serialization) - _SERIALIZATION_KEYS)
+    if unknown:
+        raise CatalogError(f"{where}: unknown keys {unknown}")
+
+    def dotted(value: Any) -> bool:
+        return isinstance(value, str) and "." in value
+
+    def call_entry(entry: Any, name: str, extra: frozenset[str] = frozenset()) -> None:
+        if not (
+            isinstance(entry, dict)
+            and dotted(entry.get("call"))
+            and _is_argument_reference(entry.get("arg"))
+            and set(entry) <= {"call", "arg"} | extra
+        ):
+            raise CatalogError(f"{where}: `{name}` entry is `{{call, arg}}`, got {entry!r}")
+
+    for entry in serialization.get("name_from") or []:
+        if isinstance(entry, dict) and "annotation" in entry:
+            continue
+        call_entry(entry, "serialization.name_from")
+    for entry in serialization.get("input_name_from") or []:
+        call_entry(entry, "serialization.input_name_from")
+    if "alias_priority" in serialization:
+        priority = serialization["alias_priority"]
+        call_entry(priority, "serialization.alias_priority", frozenset({"generator_wins"}))
+        if not isinstance(priority.get("generator_wins"), int):
+            raise CatalogError(f"{where}: `alias_priority.generator_wins` is an integer")
+    generator = serialization.get("name_generator")
+    if generator is not None:
+        functions = generator.get("functions") if isinstance(generator, dict) else None
+        if not (
+            isinstance(generator, dict)
+            and set(generator) <= {"config_field", "config_call", "arg", "by_name", "functions"}
+            and isinstance(generator.get("config_field"), str)
+            and dotted(generator.get("config_call"))
+            and _is_argument_reference(generator.get("arg"))
+            and all(_is_argument_reference(one) for one in generator.get("by_name") or [])
+            and isinstance(functions, list)
+        ):
+            raise CatalogError(
+                f"{where}: `name_generator` is `{{config_field, config_call, arg, by_name?, "
+                f"functions}}`, got {generator!r}"
+            )
+        for entry in functions:
+            if not (
+                isinstance(entry, dict)
+                and set(entry) == {"function", "strategy", "by"}
+                and dotted(entry["function"])
+                and entry["strategy"] in _GENERATOR_STRATEGIES
+            ):
+                raise CatalogError(
+                    f"{where}: `name_generator.functions` entry is `{{function, strategy, by}}` "
+                    f"with a strategy in {sorted(_GENERATOR_STRATEGIES)}, got {entry!r}"
+                )
+            _check_probe(entry["by"], where)
+    if "required" in serialization and serialization["required"] not in _REQUIRED_RULES:
+        raise CatalogError(
+            f"{where}: `required` is one of {sorted(_REQUIRED_RULES)}, got "
+            f"{serialization['required']!r}"
+        )
+    for entry in serialization.get("defaults") or []:
+        when = entry.get("required_when") if isinstance(entry, dict) else None
+        if not (
+            isinstance(entry, dict)
+            and set(entry) <= {"call", "default_arg", "required_when"}
+            and dotted(entry.get("call"))
+            and isinstance(entry.get("default_arg"), list)
+            and all(_is_argument_reference(one) for one in entry["default_arg"])
+            and (
+                when is None
+                or (
+                    isinstance(when, dict)
+                    and set(when) == {"arg", "equals_field"}
+                    and _is_argument_reference(when["arg"])
+                    and dotted(when["equals_field"])
+                )
+            )
+        ):
+            raise CatalogError(
+                f"{where}: `defaults` entry is `{{call, default_arg: [<reference>], "
+                f"required_when?: {{arg, equals_field}}}}`, got {entry!r}"
+            )
+    prefix = serialization.get("private_prefix")
+    if "private_prefix" in serialization and not (isinstance(prefix, str) and prefix):
+        raise CatalogError(f"{where}: `private_prefix` is a non-empty string, got {prefix!r}")
+    for entry in raw.get("known_types") or []:
+        if not (
+            isinstance(entry, dict)
+            and set(entry) <= _KNOWN_TYPE_KEYS
+            and isinstance(entry.get("type"), str)
+            and isinstance(entry.get("wire"), str)
+        ):
+            raise CatalogError(
+                f"{where}: `known_types` entry is `{{type, wire, format?, nullable?, by?}}`, "
+                f"got {entry!r}"
+            )
+        if "by" in entry:
+            _check_probe(entry["by"], where)
+
+
+def _check_probe(by: Any, where: str) -> None:
+    """A `by:` is the path of the probe that read the rule."""
+    if not isinstance(by, str) or not by:
+        raise CatalogError(f"{where}: `by` names the probe that read the rule, got {by!r}")
 
 
 def _check_bean_model(raw: dict[str, Any], path: Path) -> None:

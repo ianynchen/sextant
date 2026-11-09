@@ -46,6 +46,7 @@ from sextant.application.resolve.shapes.inbound_routes import (
     PATH_VARIABLE_DEFAULT,
     PATH_VARIABLE_MARKED,
 )
+from sextant.application.resolve.shapes.model_fields import FieldName
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.application.resolve.values import argument_reference
 from sextant.domain.redaction import REDACTED, Redactor
@@ -946,6 +947,7 @@ def read_parameters(
     variables: frozenset[str],
     scalar: Callable[[Mapping[str, Any]], bool | None],
     address: str = "resolved",
+    models: Callable[[str], Sequence[tuple[str, FieldName]] | None] | None = None,
 ) -> ParameterReading:
     """Each handler parameter as the framework reads it on one row (N3, N4; FastAPI's
     `analyze_param`, quoted in `scripts/probes/fastapi_rules.md` §4):
@@ -960,9 +962,10 @@ def read_parameters(
       in the order FastAPI asserts them. A parameter refused on one path and not another is
       read on the paths that are not;
     - **marked** with an entry's call: one row, `parameter_request_row`; where its type is a
-      class (an `object`), one row of the entry's kind naming nothing at `unresolved`, since the
-      class's fields are the parameters; with another marker, none (the path's `Path`, the
-      body's, a dependency);
+      class (an `object`), the class's fields are the parameters (FastAPI's query, header and
+      cookie models, R25): one row each, `model_parameter_row`, where `models` reads the class's
+      fields, else one row of the entry's kind naming nothing at `unresolved`; with another
+      marker, none (the path's `Path`, the body's, a dependency);
     - **unmarked**: a path variable is the address's; else the `unmarked` entry where its type
       is a scalar (`scalar_only`), optional where it declares a default, at the row's `address`
       resolution: on a path not read whole, the parameter may name one of its variables, so the
@@ -992,7 +995,7 @@ def read_parameters(
         annotation_paths: list[Marker | None] = [*annotated.values()] or [None]
         pairs = list(product(default_paths, annotation_paths))
         readings = [
-            _reading(rules, parameter, default, annotation, variables, scalar, address)
+            _reading(rules, parameter, default, annotation, variables, scalar, address, models)
             for default, annotation in pairs
         ]
         kept = [reading for reading in readings if reading[0] is None]
@@ -1034,6 +1037,7 @@ def read_dependant(
     variables: frozenset[str],
     scalar: Callable[[Mapping[str, Any]], bool | None],
     address: str,
+    models: Callable[[str], Sequence[tuple[str, FieldName]] | None] | None = None,
 ) -> Dependant:
     """The route's dependant flattened, as FastAPI flattens it (`get_flat_dependant`): each
     recipe call in `calls` (a handler parameter's marker, with that parameter, or a
@@ -1060,6 +1064,7 @@ def read_dependant(
                 variables,
                 scalar,
                 address,
+                models,
             )
             rows.update(dict.fromkeys(reading.rows))
             for position in range(len(declared)):
@@ -1082,6 +1087,7 @@ def _reading(
     variables: frozenset[str],
     scalar: Callable[[Mapping[str, Any]], bool | None],
     address: str,
+    models: Callable[[str], Sequence[tuple[str, FieldName]] | None] | None = None,
 ) -> tuple[str | None, tuple[str, str] | None, list[tuple[str, str | None, str | None, str]]]:
     """One reading of one parameter (`read_parameters`): the refusal, else None; its marker
     call, None where it has none; its rows."""
@@ -1117,14 +1123,21 @@ def _reading(
         return None, call, []
     # A parameter of a class's type names no one value: the framework reads the class's fields
     # as the parameters (FastAPI's query, header and cookie models, `_get_flat_fields_from_
-    # params`), which are not read here. One row of the entry's kind, its name and requirement
-    # not read, so the row never names a parameter the request does not carry. So too for a
-    # type written as text naming no type (a class defined in a function, polar's
-    # `SortingGetter`): it may be such a class.
+    # params`, R25), one row each, where the shape model reads them (`models`). Where it does
+    # not, one row of the entry's kind, its name and requirement not read, so the row never
+    # names a parameter the request does not carry. So too for a type written as text naming
+    # no type (a class defined in a function, polar's `SortingGetter`): it may be such a class.
     kind = scalar(parameter["type"])
     if (kind is False and parameter["type"].get("wire_type") == "object") or (
         kind is None and not names_a_type(str(parameter["type"].get("symbol")))
     ):
+        fields = (
+            models(str(parameter["type"].get("symbol")))
+            if models is not None and kind is False
+            else None
+        )
+        if fields:
+            return None, call, [model_parameter_row(entry, marker, *one) for one in fields]
         return None, call, [(str(entry["kind"]), None, None, "unresolved")]
     return None, call, [parameter_request_row(entry, marker, parameter)]
 
@@ -1158,6 +1171,25 @@ def parameter_request_row(
     else:
         requirement = _requirement_of_call(entry, arguments)
     return (str(entry["kind"]), name, requirement, "resolved" if name is not None else "unresolved")
+
+
+def model_parameter_row(
+    entry: Mapping[str, Any], marker: Marker, declared: str, named: FieldName
+) -> tuple[str, str | None, str | None, str]:
+    """`(kind, name, requirement, resolution)` of one field of a model an entry's marker call
+    marks (R25; FastAPI 0.162.0 `_get_param_aliases`, `scripts/probes/fastapi_param_models.md`):
+
+    - **the name** is the field's input name (`FieldName.input`); where that is the field's own
+      name, the entry's `spelling` respells it, as for a parameter's own name (a `Header`
+      model's `x_trace_id` is `x-trace-id`), and an alias or a generated name is kept as it is;
+    - **the requirement** is the field's own: `required` where it writes no default;
+    - **the resolution** is the input name's (`FieldName.input_resolution`)."""
+    name = named.input
+    if name is not None and name == declared:
+        name = _spelled(declared, entry.get("spelling"), list(marker.site.get("arguments") or []))
+    requirement = None if named.required is None else ("required" if named.required else "optional")
+    resolution = named.input_resolution if name is not None else "unresolved"
+    return (str(entry["kind"]), name, requirement, resolution)
 
 
 def _spelled(

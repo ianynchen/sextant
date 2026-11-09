@@ -421,6 +421,13 @@ routes back to a private copy. A catalog whose payload-type knowledge genuinely 
 adds a SECOND model and names that; a private copy is `A-C3` waiting for a different
 symbol.
 
+**A second model ships for Python: `pydantic.yml`** (plan 2026-11-08-python-fastapi-inbound
+N12, N13), which `fastapi.yml` names. Its naming is read off the CALL that made a field's
+class-body value rather than off an annotation (§2f's call-read keys), and its `known_types`
+carry pydantic's JSON mode and mirror the Python projection's collections (§2g). The loader
+checks every shape model's keys (`yaml_source._check_shape_model`): an unknown key, or a key of
+§2f/§2g in another form, is refused naming the file.
+
 **This is what makes a Jackson 2 / Jackson 3 split tractable** (Stage 6). `@JsonProperty`
 kept its exact FQN across the split, so the two cannot be told apart by annotation
 spelling — but `tools.jackson.core:jackson-databind` and
@@ -1092,8 +1099,9 @@ matches:
     wire, or an enumeration; a `Literal` form; a union where every member is; the unknown
     type), and one whose
     kind is not read (no wire projection and no `known_types` entry, or an `object` wire on a
-    symbol the module neither declares nor holds a type header for: an alias read as a type,
-    such as pydantic's `UUID4`, is no class) — FastAPI reads a scalar as a query parameter, and
+    symbol the module neither declares nor holds a type header for: an alias read as a type is
+    no class, so its kind is its `known_types` entry's, as pydantic's `UUID4` is a string) —
+    FastAPI reads a scalar as a query parameter, and
     a parameter whose kind is unknown is never claimed as the body.
     `list[int]` is an array, so unmarked it is the body. A receiver, and a parameter whose
     markers read differently on two paths, are bound. Among the marked and the unbound
@@ -2373,8 +2381,14 @@ row is no surer than `partial` (where checkpoint ruling I1 drops an unread writt
 
 **A response written as a module name** (`response_model=Out`, `Out` imported from another
 file: a `field`-kind argument) is the class that name holds, read through the value walk on the
-chain's own path, where every path answers the same type. Any other answer leaves the argument
-as written.
+chain's own path, where every path answers the same type. **A response written as a type form**
+(`response_model=ListResource[Order]`, `list[Order]`: the value of a `<form>#__class_getitem__`
+call, D00 §5a) is the type the form names, with its arguments, each a class, a name holding one,
+or a form in turn (plan 2026-11-08-python-fastapi-inbound R24, `arguments.type_form_reference`):
+`ListResource[Order]` is the shape `ListResource#<Order#>`, whose field typed by the class's
+parameter is bound to `Order`, and `list[Order]` an `array` of `Order` (the shape model's
+`known_types` names `list` an array, §2g). Read where every path names the same type. Any other
+answer leaves the argument as written.
 
 **A handler that is not itself a function value** (a decorated function under a second route
 decorator, a function under a decorator) is followed back as a call of it would be (design
@@ -5833,7 +5847,7 @@ every environment.
 ## 2e. Nullability declarations
 
 **Declared in the shape model, not in a catalog (§1b).** The block below is the
-grammar; the one shipped copy of it lives in `catalogs/shape-models/json.yml`, and a
+grammar; the shipped copies live in `catalogs/shape-models/json.yml` and `pydantic.yml`, and a
 catalog reaches it with `shape_model:`. A catalog declaring one of its own is refused.
 
 Which annotation means "may be null" is framework knowledge, so catalogs declare it and
@@ -5883,7 +5897,7 @@ instead. Neither table can be skipped — the scanner reads both.
 ## 2f. Serialisation naming
 
 **Declared in the shape model, not in a catalog (§1b).** The block below is the
-grammar; the one shipped copy of it lives in `catalogs/shape-models/json.yml`, and a
+grammar; the shipped copies live in `catalogs/shape-models/json.yml` and `pydantic.yml`, and a
 catalog reaches it with `shape_model:`. A catalog declaring one of its own is refused.
 
 `shape_fields.wire_name` is the identity ([D01](D01-graph-schema.md) §5), and a source field
@@ -5952,12 +5966,69 @@ name against an observed one is how a matcher reports agreement it has not estab
 wire, and a shape carrying it would fail DR-5's directional comparison against a peer that
 correctly omits it.
 
+### Naming read off calls (plan 2026-11-08-python-fastapi-inbound N12, N13)
+
+A serialiser that names a field by the call that made its class-body value (pydantic's
+`price: Decimal = Field(alias="Price")`) is declared with these keys, all in
+`catalogs/shape-models/pydantic.yml`; `shapes/model_fields.py` reads them and knows no
+serialiser by name. The field's class-body value is read through the value walk
+(`values.producer_paths`), so a helper returning the call is followed; one read per field with
+a value, one configuration fold per class, each kept for the pass.
+
+```yaml
+serialization:
+  name_from:                 # the OUTPUT name: the first written on the call
+    - { call: pydantic.fields.Field, arg: { keyword: serialization_alias } }
+    - { call: pydantic.fields.Field, arg: { keyword: alias } }
+  input_name_from:           # N13: the name a request is read under, the first written
+    - { call: pydantic.fields.Field, arg: { keyword: validation_alias } }
+    - { call: pydantic.fields.Field, arg: { keyword: alias } }
+  alias_priority: { call: pydantic.fields.Field, arg: { keyword: alias_priority }, generator_wins: 1 }
+  name_generator:
+    config_field: model_config                       # the class-body name holding the config
+    config_call: pydantic.config.ConfigDict.<init>    # the call that makes it
+    arg: { keyword: alias_generator }
+    by_name: [{ keyword: populate_by_name }, { keyword: validate_by_name }]
+    functions:                                        # each with the probe that read it
+      - { function: pydantic.alias_generators.to_camel, strategy: camel, by: <probe> }
+  required: no_default
+  defaults:                  # where a call making the value writes a default
+    - { call: pydantic.fields.Field, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+        required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis } }
+  private_prefix: "_"
+```
+
+- **`name_from` with `call`** (beside the `annotation` form): the output name is the first entry
+  written on the call the value ended at, else the generator's name for the field, else the
+  name. **`input_name_from`**: the input name, likewise. A literal `alias_priority` equal to
+  `generator_wins` lets the generator replace both.
+- **`name_generator`**: the class's `config_field`, made by `config_call`, merged over its
+  written bases in written order, the last base winning, then the class's own (ruling R2,
+  pydantic's `ConfigWrapper.for_model`, not the C3 order). A field takes the first generator
+  set on its way from the model to the class declaring it (an inherited field keeps the alias a
+  parent's generator gave it where the model sets `None`). `functions` maps a function to a
+  strategy word: `camel` and `pascal` are pydantic's `to_camel` and `to_pascal` exactly, and
+  `humps.main.camelize` is `camel` on the probe's evidence. **A generator no entry names is not
+  guessed at**: the fields it names get `wire_name` NULL at `unresolved`, and the shape is open
+  (§2g's rule). A `by_name` argument written `True` makes a renamed field accept its own name too.
+- **`required: no_default`** (the one rule): a field is required where it writes no default,
+  read by `defaults` where its value is a call (`required_when` written as the named field writes
+  none). Without the key, `required` keeps the wrapper rule (`optional` wrapper).
+- **`private_prefix`**: a name starting with it is no field.
+- **Resolution (N13 option B).** One shape per type, under the output names. A field whose
+  accepted input names differ from its output name is `partial`: a `validation_alias`, a
+  `serialization_alias` beside another input name, `by_name` on a renamed field. So is one whose
+  names the code does not let us read: an argument written as no literal (an `AliasChoices`,
+  an `alias_priority` from a call), an unpacked `**kwargs` at the call (mealie's
+  `UpdatedAtField`), a configuration not read, two paths that disagree. The field's resolution is
+  the weaker of this and its nullability's.
+
 ---
 
 ## 2g. Types with a known wire form
 
 **Declared in the shape model, not in a catalog (§1b).** The block below is the
-grammar; the one shipped copy of it lives in `catalogs/shape-models/json.yml`, and a
+grammar; the shipped copies live in `catalogs/shape-models/json.yml` and `pydantic.yml`, and a
 catalog reaches it with `shape_model:`. A catalog declaring one of its own is refused.
 
 Some types are objects in code and something else entirely on the wire. `java.time.Instant`
@@ -5983,6 +6054,14 @@ known_types:
 This is the boundary against the extractor's own projection (§D1 of the Phase 2A plan): the
 extractor converts what the **language** leaves no choice about — primitives, their boxes,
 `String`, arrays, collections. A catalog converts what the **serialiser** decides.
+
+**Optional keys on an entry:** `format` (`null` writes no format, the Python projection's
+spelling of none), `nullable`, and `by`, the probe that read the entry. **A collection entry**
+(`wire: array` or `map`) holds what its reference's last argument describes, as a scanned
+collection does: the Python projection's collections are mirrored in `pydantic.yml` for a type
+form read as a bare symbol (`response_model=list[Order]`, §2's response rule), and
+`tests/architecture/test_known_types_mirror_the_projection.py` holds the mirror to
+`typing_rules._WIRE_TYPES`.
 
 **A third-party type with no entry here is not guessed at.** Expansion stops, the shape is
 marked open, the type reference is kept, and [M04](M04-resolver.md) reports the type that
@@ -6467,9 +6546,18 @@ request_params:
   `scalar` binding of §2's `request_body`); any other type is the body rule's.
 - **A marked parameter of a class's type** (an `object` the module knows as a class) names no
   one value: the framework reads the class's fields as the parameters (FastAPI's query, header
-  and cookie models). One row of the entry's kind with `name` and `requirement` NULL at
-  `unresolved`, never the parameter's own name. So too for a type written as text naming no
-  type (a class defined inside a function, polar's `SortingGetter`): it may be such a class.
+  and cookie models; plan 2026-11-08-python-fastapi-inbound R25, FastAPI 0.162.0's
+  `_get_param_aliases`, `scripts/probes/fastapi_param_models.md`). Where the catalog's shape
+  model reads the class's fields (§2f's call-read naming), one row per field, of the entry's
+  kind: named by the field's INPUT name (§2f `input_name_from`, else the generator's, else the
+  field's own name, which the entry's `spelling` respells — a `Header` model's `x_trace_id` is
+  `x-trace-id`, an alias never), `required` where the field writes no default, at the input
+  name's resolution (`partial` where the field is read under more than one name, `unresolved`
+  with `name` NULL where its input name is not read). FastAPI 0.115.12 differs (it reads no
+  field under an alias or a generated name) and is not mirrored. Where the shape model reads no
+  fields, one row of the entry's kind with `name` and `requirement` NULL at `unresolved`, never
+  the parameter's own name. So too for a type written as text naming no type (a class defined
+  inside a function, polar's `SortingGetter`): it may be such a class.
 - **No row** for a parameter whose marker is no entry's (the path's `Path`, a body marker, a
   dependency), for a path variable, for a receiver, or for a handler whose parameters are not
   read.

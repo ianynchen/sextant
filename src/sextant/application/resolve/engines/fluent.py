@@ -44,6 +44,7 @@ from sextant.application.resolve.shapes.arguments import (
     _HOLE,
     _UNREADABLE_HOST,
     QUERY_KIND,
+    TYPE_FORM,
     CallFacts,
     CarrierRules,
     FieldFacts,
@@ -63,6 +64,7 @@ from sextant.application.resolve.shapes.arguments import (
     query_entries,
     split_url,
     supertypes_of,
+    type_form_reference,
     url_of,
     with_authority,
 )
@@ -103,7 +105,12 @@ from sextant.application.resolve.shapes.contracts import (
     is_scalar,
     payload_descriptor,
 )
-from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
+from sextant.application.resolve.shapes.expansion import (
+    ModelFields,
+    _enum_symbols,
+    _rules_of,
+    model_fields,
+)
 from sextant.application.resolve.shapes.inbound_routes import (
     CONCATENATE,
     EMPTY_PATH,
@@ -478,6 +485,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     routers = mounts
     if routers is None and candidates is not None and mount_rules is not None:
         routers = _router_reader(walk_index, workspace, mount_rules, [], refuses_unrooted, catalog)
+    # A model marked as a set of request parameters is read by the shape model (R25), once.
+    models = None if parameters is None else model_fields(workspace, catalog)
     context: _DeriveContext | None = None
     for end in ends:
         # Ends arrive caller by caller, so the caller's own facts are built once per
@@ -524,6 +533,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 parameter_rules=parameters,
                 recipe_roots=recipe_roots,
                 dependency_calls=dependency_calls,
+                model_fields=models,
             )
         # A mount's chain (spec §3c) is not a route: what Vert.x refuses of it is recorded,
         # and it derives a row only where it was given a handler as well.
@@ -1006,6 +1016,10 @@ class _DeriveContext:
         dict[tuple[str, str | None, str | None, str | None, str | None, str | None], None] | None
     ) = None
     dependency_calls: dict[Any, tuple[Mapping[str, Any], ...]] | None = None
+    # A model's fields as its shape model names them, for a model marked as a set of request
+    # parameters (R25, `expansion.ModelFields`). None where the catalog reads no parameters or
+    # its shape model reads no names off calls.
+    model_fields: "ModelFields | None" = None
 
 
 def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
@@ -2327,6 +2341,7 @@ def _row_parameters(
         )
 
     variables = _path_variables(frozenset() if path is None else frozenset({path}))
+    models = None if context.model_fields is None else context.model_fields.of
     reading = read_parameters(
         rules,
         parameters,
@@ -2334,6 +2349,7 @@ def _row_parameters(
         variables,
         kind_of,
         weaker(str(Resolution.RESOLVED), address),
+        models,
     )
     if reading.refused is not None:
         return reading.refused, None, [], ()
@@ -2357,6 +2373,7 @@ def _row_parameters(
             variables,
             kind_of,
             weaker(str(Resolution.RESOLVED), address),
+            models,
         )
         rows.extend(row for row in dependant.rows if row not in reading.rows)
         recipes = dependant.recipes
@@ -3361,7 +3378,25 @@ def _is_none_type(symbol: str, fallback: _ResponseFallback) -> bool:
 def _class_named(argument: Any, context: "_DeriveContext") -> Any:
     """A captured argument that is a module name (`field`) holding a class, as that class
     (`class`): the value walk reads the name on the chain's own path, and only where every
-    path answers the same type is it that type. Every other argument is returned as it is."""
+    path answers the same type is it that type. A value a call made, where it is a type form
+    (`ListResource[Order]`, `list[Order]`), is the type it names, with its arguments (R24,
+    `type_form_reference`). Every other argument is returned as it is."""
+    if (
+        isinstance(argument, dict)
+        and argument.get("kind") == "unresolved"
+        and argument.get("source") is not None
+        and context.values is not None
+    ):
+        at = argument.get(_CAPTURED_AT)
+        site = context.values.sites.get((str(at[0]), int(str(at[1])))) if at is not None else None
+        if site is None or at is None:
+            return argument
+        reference = type_form_reference(context.values, site, int(at[2]), within=context.path)
+        return (
+            argument
+            if reference is None
+            else {**argument, "kind": TYPE_FORM, "reference": reference}
+        )
     if (
         not isinstance(argument, dict)
         or argument.get("kind") != "field"

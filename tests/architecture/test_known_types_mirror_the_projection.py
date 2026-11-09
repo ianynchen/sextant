@@ -162,3 +162,22 @@ def test_the_scan_finds_the_table_that_ships():
         f"the scan no longer reaches the shipped wire-type table (found {sorted(types)}) — "
         "check that it still walks `catalogs/shape-models/`"
     )
+
+
+def test_the_python_projection_mirrors_agree_with_the_scanner():
+    """The same ratchet for Python (plan 2026-11-08-python-fastapi-inbound R24): the pydantic
+    shape model mirrors every class the Python scanner's projection gives a wire type
+    (`typing_rules._WIRE_TYPES`), so a type form read as a bare symbol (`list[Order]`) and a
+    scanned `list[Order]` field reach the same wire. Every projected class is mirrored, with
+    the projection's wire and its null format, and nothing claims to mirror it that it does not
+    project."""
+    from sextant.domain.symbols import type_descriptor
+    from sextant.ingress.extract.python.typing_rules import _WIRE_TYPES
+
+    document = yaml.safe_load((SHAPE_MODELS / "pydantic.yml").read_text(encoding="utf-8"))
+    mirrored = {
+        type_descriptor(str(entry["type"])): (entry["wire"], entry.get("format", ""))
+        for entry in document["known_types"]
+        if str(entry.get("by", "")).endswith("typing_rules.py")
+    }
+    assert mirrored == {symbol: (wire, None) for symbol, wire in _WIRE_TYPES.items()}

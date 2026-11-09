@@ -1,0 +1,121 @@
+id: pydantic
+displayName: The pydantic 2 shape model (a model's fields, their names on the wire, its JSON types)
+
+# WHAT THIS FILE IS: a shape model (D02 §1b), the payload-type knowledge of one serialiser,
+# declared once. `catalogs/fastapi.yml` names it (`shape_model: pydantic`). Every rule below is
+# pydantic's own, read by `scripts/probes/pydantic_naming.py` (naming, configuration, required
+# fields, private attributes; results and source lines in `pydantic_naming.md`) and
+# `scripts/probes/pydantic_known_types.py` (`known_types`), against pydantic 2.14.3 as the
+# running process reported it.
+#
+# A pydantic field is named by the CALL that made its class-body value (`price: Decimal =
+# Field(alias="Price")`), not by an annotation, so the `name_from` entries name a call and the
+# argument of it (D02 §2f, plan 2026-11-08-python-fastapi-inbound N12). The value is read
+# through the value walk, so a helper returning the call is followed.
+
+serialization:
+  # THE OUTPUT NAME (probe §2), the first of these written on the field's `Field(...)`, else
+  # the model's generator's name for the field, else the field's name. `alias_priority=2`, or
+  # unset, keeps that order; a literal `alias_priority=1` lets the generator replace both
+  # aliases (`_apply_alias_generator_to_field_info`, ruling R3), and one not written as a
+  # literal is not read (the field is `partial`). A `Field` handed its arguments in `**kwargs`
+  # (mealie's `UpdatedAtField`) is not read either: `partial`.
+  name_from:
+    - { call: pydantic.fields.Field, arg: { keyword: serialization_alias } }
+    - { call: pydantic.fields.Field, arg: { keyword: alias } }
+  # THE INPUT NAME (probe §2, N13), the name a request is read under: `validation_alias`, else
+  # `alias`, else the generator's, else the name. A field whose accepted input names differ from
+  # its output name is `partial` (N13 option B): `validation_alias` (a string or `AliasChoices`),
+  # `serialization_alias` beside another input name, and `populate_by_name` (`by_name` below)
+  # on a renamed field, which then accepts its own name too.
+  input_name_from:
+    - { call: pydantic.fields.Field, arg: { keyword: validation_alias } }
+    - { call: pydantic.fields.Field, arg: { keyword: alias } }
+  alias_priority: { call: pydantic.fields.Field, arg: { keyword: alias_priority }, generator_wins: 1 }
+  # THE GENERATOR (probe §1, §3). The class's `model_config`, made by `ConfigDict(...)`, merged
+  # over the written bases in written order, the last base winning, then the class's own
+  # (`ConfigWrapper.for_model`, ruling R2; not the C3 order). An inherited field keeps the alias
+  # its parent's generator gave it where the model sets none (`alias_generator=None`). A
+  # generator no `functions` entry names is not guessed at: the fields it would name have no
+  # wire name (`unresolved`) and the shape is open (§2g).
+  name_generator:
+    config_field: model_config
+    config_call: pydantic.config.ConfigDict.<init>   # a construction (ruling R17)
+    arg: { keyword: alias_generator }
+    # `populate_by_name` (and 2.11's `validate_by_name`): a renamed field accepts its own name.
+    by_name: [{ keyword: populate_by_name }, { keyword: validate_by_name }]
+    functions:
+      - { function: pydantic.alias_generators.to_camel, strategy: camel,
+          by: scripts/probes/pydantic_naming.md }
+      - { function: pydantic.alias_generators.to_pascal, strategy: pascal,
+          by: scripts/probes/pydantic_naming.md }
+      # mealie's: agrees with `to_camel` on all 465 of mealie's field names (probe §1). Measured
+      # on mealie's names, not proved for every string (`HTTP_code` gives `httpCode` and
+      # `HTTPCode`); no mealie field has such a name.
+      - { function: humps.main.camelize, strategy: camel,
+          by: scripts/probes/pydantic_naming.md }
+  default_strategy: as_declared
+  # REQUIRED (probe §4): a field is required when it writes no default (`Optional[X]` with none
+  # is required). `Field(...)` and `Field()` write none; `Field(3)`, `Field(default=...)` and
+  # `Field(default_factory=...)` do, as does any other value.
+  required: no_default
+  defaults:
+    - { call: pydantic.fields.Field, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+        required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis } }
+  # A name starting with `_` is a private attribute, never a field (probe §4).
+  private_prefix: "_"
+
+# pydantic 2's JSON mode (`pydantic_known_types.md`): each of these is written as a string.
+# Each entry is the value `model_dump(mode="json")` writes and the `format` its serialization
+# schema states, where this vocabulary has the word (D00 §5b): `bytes` is `binary` and `UUID4`
+# `uuid4` in pydantic's schema, which this vocabulary does not distinguish from a string and a
+# `uuid` respectively. An entry with no format writes `format: null`, as the Python projection
+# writes no format (D00 §5b), so a field of one of these types reads as every other Python
+# field does.
+#
+# Then the language's own projection (D00 §5b), declared here for the bare-symbol case
+# json.yml's comment describes: a type FORM written as a value (`response_model=list[Order]`,
+# R24) reaches rooting as a symbol and its arguments, never as a projected reference, so every
+# class the scanner's projection gives a wire type is mirrored here with exactly the wire (and
+# the null format) it emits, and what a collection holds is read from the form's arguments.
+# `tests/architecture/test_known_types_mirror_the_projection.py` holds them to the projection.
+# D02 §2e. A Python type states its own nullability (`Optional[X]`, `X | None`), which the
+# projection already writes (D00 §5b); pydantic reads no annotation for it, so none is listed.
+nullability:
+  nullable: []
+  not_null: []
+
+known_types:
+  - { type: datetime.datetime,    wire: string, format: date-time, by: scripts/probes/pydantic_known_types.md }
+  - { type: datetime.date,        wire: string, format: date,      by: scripts/probes/pydantic_known_types.md }
+  - { type: uuid.UUID,            wire: string, format: uuid,      by: scripts/probes/pydantic_known_types.md }
+  - { type: decimal.Decimal,      wire: string, format: null,      by: scripts/probes/pydantic_known_types.md }
+  - { type: builtins.bytes,       wire: string, format: null,      by: scripts/probes/pydantic_known_types.md }
+  - { type: pydantic.types.UUID4, wire: string, format: uuid,      by: scripts/probes/pydantic_known_types.md }
+  - { type: builtins.str,                      wire: string,  format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: builtins.int,                      wire: integer, format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: builtins.float,                    wire: number,  format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: builtins.bool,                     wire: boolean, format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: builtins.list,                     wire: array,   format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: builtins.set,                      wire: array,   format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: builtins.frozenset,                wire: array,   format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: builtins.tuple,                    wire: array,   format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: typing.Sequence,                   wire: array,   format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: collections.abc.Sequence,          wire: array,   format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: typing.MutableSequence,            wire: array,   format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: collections.abc.MutableSequence,   wire: array,   format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: typing.Collection,                 wire: array,   format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: collections.abc.Collection,        wire: array,   format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: typing.Iterable,                   wire: array,   format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: collections.abc.Iterable,          wire: array,   format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: typing.MutableSet,                 wire: array,   format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: collections.abc.MutableSet,        wire: array,   format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: collections.deque,                 wire: array,   format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: builtins.dict,                     wire: map,     format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: typing.Mapping,                    wire: map,     format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: collections.abc.Mapping,           wire: map,     format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: typing.MutableMapping,             wire: map,     format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: collections.abc.MutableMapping,    wire: map,     format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: collections.defaultdict,           wire: map,     format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: collections.OrderedDict,           wire: map,     format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
+  - { type: collections.Counter,               wire: map,     format: null, by: src/sextant/ingress/extract/python/typing_rules.py }
