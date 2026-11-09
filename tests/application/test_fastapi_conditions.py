@@ -334,3 +334,73 @@ def test_the_evidence_prefix_is_the_one_the_bean_presence_view_states(tmp_path: 
     root = Path(sextant.__file__).parent
     schema = (root / "storage" / "duckdb" / "schema.sql").read_text(encoding="utf-8")
     assert f"'{NOT_EVALUATED}'" in schema
+
+
+def test_a_helper_called_with_two_prefixes_takes_each_calls_own_test(tmp_path: Path, libraries):
+    """Re-review R1-1: the helper's only differing argument is the prefix. The call that gave
+    the prefix its words is the row's call: `/b/one` is "not evaluated", `/a/one` served."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + _SETTINGS
+            + "r1 = APIRouter()\n@r1.get('/one')\ndef one() -> str:\n    return ''\n"
+            + "def add(prefix: str) -> None:\n"
+            + "    app.include_router(r1, prefix=prefix)\n"
+            + "add('/a')\n"
+            + "if settings.DEBUG:\n"
+            + "    add('/b')\n"
+        },
+    )
+
+    assert [(row[0], row[1]) for row in _rows(workspace)] == [("GET", "/a/one"), ("GET", "/b/one")]
+    assert _existence(workspace) == {("GET", "/b/one"): [_open(0, "settings.DEBUG")]}
+
+
+def test_a_router_factory_called_with_two_prefixes_takes_each_calls_own_test(
+    tmp_path: Path, libraries
+):
+    """Re-review R1-1: a factory builds a router, registers a route and includes it at the
+    prefix it is handed."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + _SETTINGS
+            + "def page() -> str:\n    return ''\n"
+            + "def make(prefix: str) -> None:\n"
+            + "    r = APIRouter()\n"
+            + "    r.get('/x')(page)\n"
+            + "    app.include_router(r, prefix=prefix)\n"
+            + "make('/a')\n"
+            + "if settings.DEBUG:\n"
+            + "    make('/b')\n"
+        },
+    )
+
+    assert [(row[0], row[1]) for row in _rows(workspace)] == [("GET", "/a/x"), ("GET", "/b/x")]
+    assert _existence(workspace) == {("GET", "/b/x"): [_open(0, "settings.DEBUG")]}
+
+
+def test_a_helper_with_no_arguments_called_both_ways_is_served(tmp_path: Path, libraries):
+    """Re-review ruling: the row a no-argument helper registers is the same row from both
+    calls, one of them under no test, so it exists wherever the module runs."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + _SETTINGS
+            + "def page() -> str:\n    return ''\n"
+            + "def add() -> None:\n"
+            + "    app.get('/same')(page)\n"
+            + "add()\n"
+            + "if settings.DEBUG:\n"
+            + "    add()\n"
+        },
+    )
+
+    assert [(row[0], row[1]) for row in _rows(workspace)] == [("GET", "/same")]
+    assert _existence(workspace) == {}

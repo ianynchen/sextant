@@ -270,6 +270,11 @@ class Prefix:
     # built the router: folded into the router's `places` path, so whatever else is read on
     # the route is read on the same call (M-1). Not part of what the prefix is.
     read_on: frozenset[Path] = field(default=frozenset(), compare=False)
+    # The paths each mount's own prefix value was read on, joined across the mounts the prefix
+    # is behind (`_behind`): the calls that gave this prefix its words. Read only to say which
+    # calls a row's registration ran through (OI-368, task 10b re-review R1-1); empty where no
+    # value was walked. Not part of what the prefix is.
+    chosen_on: frozenset[Path] = field(default=frozenset(), compare=False)
 
 
 ROOT = Prefix(None, str(Resolution.RESOLVED))
@@ -965,16 +970,25 @@ class MountReader:
         elif at.prefix is None:
             found.append(Prefix("", str(Resolution.RESOLVED)))
         else:
-            read = resolve_positions(
+            read = resolve_positions_on_paths(
                 self._workspace, {"prefix": at.prefix}, self._index, within=path
             )
-            for answers in read:
+            for on, answers in read:
                 prefix = self._prefix_of(mount, at, answers["prefix"])
                 if prefix is not None:
-                    found.append(prefix)
+                    found.append(replace(prefix, chosen_on=frozenset({on})))
             if not read:
                 found.append(self._hole(mount, at, "nothing on this path"))
-        self._read[key] = tuple(dict.fromkeys(found))
+        # One prefix per text, with every path it was read on.
+        merged: dict[Prefix, Prefix] = {}
+        for prefix in found:
+            kept = merged.get(prefix)
+            merged[prefix] = (
+                prefix
+                if kept is None
+                else replace(kept, chosen_on=kept.chosen_on | prefix.chosen_on)
+            )
+        self._read[key] = tuple(merged.values())
         return self._read[key]
 
     def _hole(self, mount: Mount, at: MountPath, read: str) -> Prefix:
@@ -1064,7 +1078,22 @@ class MountReader:
             (*place[:-1], (place[-1][0], mount), (made, None))
             for place in parent.places or (ANY_ROUTER,)
         )
-        return Prefix(text, resolution, (*parent.unread, *own.unread), places, parent.empty_after)
+        chosen = parent.chosen_on or own.chosen_on
+        if parent.chosen_on and own.chosen_on:
+            chosen = frozenset(
+                joined
+                for outer in parent.chosen_on
+                for inner in own.chosen_on
+                if (joined := outer.joined(inner)) is not None
+            )
+        return Prefix(
+            text,
+            resolution,
+            (*parent.unread, *own.unread),
+            places,
+            parent.empty_after,
+            chosen_on=chosen,
+        )
 
     def _outermost(self, parent: Prefix, word: str, made: Router | None) -> tuple[str, str]:
         """The outermost word of an entry-point prefix and the program word in it (design

@@ -86,7 +86,8 @@ after the facts is the existing one, extended where Python needs it.
     the interpreter. An arm that always raises guards nothing (`if bad: raise ...` decides only
     whether the app starts), and neither does `if __name__ == "__main__":`, an entry point. A
     helper called once under a test and once not gives each row the test of the call it was
-    derived through. Measured: polar's 192 `/backoffice` rows, mealie's 3
+    derived through (the call that gave its router, route, path or prefix); a row it cannot
+    tie to one call is "not evaluated", never served on the strength of another call. Measured: polar's 192 `/backoffice` rows, mealie's 3
     single-page-app routes and one unread dynamic route; no other row moved.
 - **Request parameters and bodies.** `Query`, `Header`, `Cookie` (the functions and the
   `fastapi.params` classes), in a default or in `Annotated`, give `endpoint_metadata` rows with

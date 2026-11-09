@@ -18,7 +18,10 @@ route's root and terminal calls) and every include or mount its router is served
 of which must run, so their alternatives are combined (each choice of one alternative per call,
 joined). Where the row was derived through one call of a helper (its path chose that call,
 `Path.calls_into`), the helper runs by that call alone: a helper called once under a test and
-once not gives each row its own call's tests (task 10b review, Major 1). A guard keeps its place
+once not gives each row its own call's tests (task 10b review, Major 1), the calls that gave
+its prefix value included (re-review R1-1). Where one registration gives several rows and a
+row's paths do not tie it to one call, a call under no test does not make it "served"
+(`Existence.untied`, re-review ruling part 2). A guard keeps its place
 in the alternative, outermost first (`endpoint_existence.position`).
 
 Each guard of each alternative is one `endpoint_existence` row per environment the module
@@ -71,43 +74,54 @@ class Conditions:
 
     guards: dict[tuple[str, int], tuple[Guard, ...]]
     callers: dict[str, tuple[tuple[str, int], ...]]
-    _methods: dict[str, Alternatives] = field(default_factory=dict)
+    _methods: dict[tuple[str, bool], Alternatives] = field(default_factory=dict)
     _entered: set[str] = field(default_factory=set)
 
     def of_sites(
-        self, sites: Iterable[tuple[str, int]], chosen: Chosen | None = None
+        self,
+        sites: Iterable[tuple[str, int]],
+        chosen: Chosen | None = None,
+        untied: bool = False,
     ) -> Alternatives:
         """Where every call of `sites` runs, outermost first: one alternative per choice of
         one alternative of each call, joined. A method `chosen` names a call of is run by
         that call alone (task 10b review, Major 1): a row derived through one call of a helper
-        takes that call's tests, never those of the helper's other callers."""
+        takes that call's tests, never those of the helper's other callers.
+
+        `untied`: the row cannot be tied to one call of a method `chosen` leaves out, though
+        that method's calls register different rows (re-review ruling, part 2). Then a method
+        some calls run under a test and some under none is taken to run under its tests only:
+        the row is "not evaluated", never served on the strength of a call that may have
+        registered another row."""
         found = UNCONDITIONAL
         for site in dict.fromkeys(sites):
             found = _simplest(
                 frozenset(
                     _joined(left, right)
                     for left in found
-                    for right in self._of_site(site, chosen or {}, frozenset())
+                    for right in self._of_site(site, chosen or {}, frozenset(), untied)
                 )
             )
         return found
 
     def _of_site(
-        self, site: tuple[str, int], chosen: Chosen, followed: frozenset[str]
+        self, site: tuple[str, int], chosen: Chosen, followed: frozenset[str], untied: bool
     ) -> Alternatives:
         own = self.guards.get(site, ())
         method = site[0]
         if method in chosen and method not in followed:
-            outer = self._of_site(chosen[method], chosen, followed | {method})
+            outer = self._of_site(chosen[method], chosen, followed | {method}, untied)
         else:
-            outer = self._of_method(method)
+            outer = self._of_method(method, untied)
         return frozenset(_joined(conjunction, own) for conjunction in outer)
 
-    def _of_method(self, method: str) -> Alternatives:
+    def _of_method(self, method: str, untied: bool = False) -> Alternatives:
         """Where `method` runs: wherever any call of it runs; everywhere where nothing in the
-        module calls it, and while it is being followed in a cycle."""
-        if method in self._methods:
-            return self._methods[method]
+        module calls it, and while it is being followed in a cycle. `untied` (`of_sites`): a
+        call under no test does not make it run everywhere where another call is under one."""
+        key = (method, untied)
+        if key in self._methods:
+            return self._methods[key]
         callers = self.callers.get(method, ())
         if not callers or method in self._entered:
             return UNCONDITIONAL
@@ -115,13 +129,15 @@ class Conditions:
         try:
             found: set[Conjunction] = set()
             for site in callers:
-                found |= self._of_site(site, {}, frozenset())
-                if () in found:
+                found |= self._of_site(site, {}, frozenset(), untied)
+                if () in found and not untied:
                     break
         finally:
             self._entered.discard(method)
+        if untied and len(found) > 1:
+            found.discard(())
         answer = _simplest(frozenset(found))
-        self._methods[method] = answer
+        self._methods[key] = answer
         return answer
 
 
@@ -168,14 +184,36 @@ def environments_of(workspace: Workspace) -> tuple[str, ...]:
     return tuple(found) or (DEFAULT_ENVIRONMENT,)
 
 
+@dataclass(frozen=True)
+class Existence:
+    """Where the calls one registration of a row ran, read two ways (`Conditions.of_sites`):
+    `tied`, through the calls its paths chose, and `untied`, taking no call under no test as
+    deciding for a method its paths chose none of. `key` is the registration's own calls (the
+    route's root and terminal): one key giving several rows is several calls of a helper."""
+
+    tied: Alternatives
+    untied: Alternatives
+    key: tuple[tuple[str, int], ...]
+
+
 def existence_rows(
-    registrations: Sequence[tuple[Mapping[str, Any], Alternatives]],
+    registrations: Sequence[tuple[Mapping[str, Any], Existence]],
     environments: Sequence[str],
 ) -> list[dict[str, Any]]:
     """The `endpoint_existence` rows of each registered row: its alternatives OR-ed across
-    every registration that made it, nothing for a row one of them makes unconditionally."""
+    every registration that made it, nothing for a row one of them makes unconditionally.
+
+    Where one registration's calls gave several rows, those rows came from different calls
+    of a helper, and a row its paths do not tie to one of them is read `untied` (re-review
+    ruling, part 2): never "served" because some other call of the helper ran under no
+    test. A helper called with nothing that differs gives one row, which is read `tied`."""
+    rows_of: dict[tuple[tuple[str, int], ...], set[int]] = {}
+    for row, existence in registrations:
+        rows_of.setdefault(existence.key, set()).add(id(row))
     by_row: dict[int, tuple[Mapping[str, Any], set[Conjunction]]] = {}
-    for row, alternatives in registrations:
+    for row, existence in registrations:
+        several = len(rows_of[existence.key]) > 1
+        alternatives = existence.untied if several else existence.tied
         by_row.setdefault(id(row), (row, set()))[1].update(alternatives)
     written: list[dict[str, Any]] = []
     for row, found in by_row.values():

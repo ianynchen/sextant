@@ -119,7 +119,8 @@ here would restate those documents rather than add anything.
     under the route. A constant test and `TYPE_CHECKING` are decided and write nothing; an arm
     that always raises guards nothing (it decides only whether the program starts), nor does
     `if __name__ == "__main__":`, an entry point. A row derived through one call of a helper
-    takes that call's tests, not the helper's other callers'. On polar
+    (the call that gave its router, route, path or prefix) takes that call's tests, not the
+    helper's other callers'; one it cannot tie to a call is "not evaluated". On polar
     the 192 `/backoffice` rows are "not evaluated"; on mealie, the 3 single-page-app routes
     (registered only when `settings.PRODUCTION and not settings.TESTING` and the static-files
     directory exists) and one unread dynamic route. No other row moved. `app.host` is not a

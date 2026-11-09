@@ -18,8 +18,8 @@ SELECT DISTINCT e.row_id, r.protocol, r.direction, r.method, r.path, r.handler, 
 FROM (SELECT UNNEST(
     $rows::STRUCT(
         protocol VARCHAR, direction VARCHAR, method VARCHAR, path VARCHAR, handler VARCHAR,
-        caller VARCHAR, route INTEGER, position INTEGER, via VARCHAR, kind VARCHAR, expression VARCHAR,
-        environment VARCHAR, holds VARCHAR, resolution VARCHAR, evidence VARCHAR
+        caller VARCHAR, route INTEGER, position INTEGER, via VARCHAR, kind VARCHAR,
+        expression VARCHAR, environment VARCHAR, holds VARCHAR, resolution VARCHAR, evidence VARCHAR
     )[]
 ) AS r)
 JOIN endpoints e

@@ -692,8 +692,8 @@ CREATE TABLE IF NOT EXISTS interface_beans (
 -- what a reader outside the run joins on. `route` numbers the alternatives: the row exists
 -- where every test of one alternative goes its way (AND within, OR across). `position` orders
 -- the tests of one alternative, outermost first (a caller's before its callee's, an include's
--- before the routes under it). `via` is the method whose body holds the test. `kind` is `test`; `expression` is JSON `{test, holds,
--- reads}` — the test as the code writes it, the arm the registration is in, the names it
+-- before the routes under it). `via` is the method whose body holds the test. `kind` is
+-- `test`; `expression` is JSON `{test, holds, reads}` — the test as the code writes it, the arm the registration is in, the names it
 -- reads (`call_site.guards`, D00 §5). `holds` is `unresolved` and `resolution` `unresolved`:
 -- no test is evaluated. `evidence` says so, quoting the test. A row registered under no test
 -- has no entry here. Replaced whole per resolve.

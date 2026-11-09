@@ -418,6 +418,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-412 | [SEXTANT-406](https://app.plane.so/portolan/browse/SEXTANT-406/) | A function called only through a variable has no callers, so its registrations run unconditionally |
 | OI-413 | [SEXTANT-407](https://app.plane.so/portolan/browse/SEXTANT-407/) | A call cycle memoises a partial answer, which can invent an alternative or drop a test |
 | OI-414 | [SEXTANT-408](https://app.plane.so/portolan/browse/SEXTANT-408/) | A test that chooses WHAT is registered (a loop's hasattr filter) marks the row "not evaluated" |
+| OI-415 | [SEXTANT-409](https://app.plane.so/portolan/browse/SEXTANT-409/) | _simplest keeps the lexicographically first order of a guard set reached in two orders, not the outermost-first one |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

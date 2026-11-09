@@ -30,9 +30,9 @@ from sextant.application.resolve.parameter_markers import (
     recipe_sites,
 )
 from sextant.application.resolve.registration_conditions import (
-    Alternatives,
     Conditions,
     Conjunction,
+    Existence,
     conditions_of,
     environments_of,
     existence_rows,
@@ -498,7 +498,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # OI-368: the tests the module's calls run under, read once per resolve; an inbound row
     # whose registering calls all run under one exists "not evaluated".
     conditions: Conditions | None = None
-    registrations: list[tuple[dict[str, Any], Alternatives]] = []
+    registrations: list[tuple[dict[str, Any], Existence]] = []
     if catalog.direction == "inbound":
         conditions = conditions_of(workspace)
         if not conditions.guards:
@@ -1048,7 +1048,7 @@ class _DeriveContext:
     # inbound row with the alternatives of the calls that made it, written to
     # `endpoint_existence` once the rows are. None where no call of the module is under a test.
     conditions: Conditions | None = None
-    registrations: list[tuple[dict[str, Any], Alternatives]] | None = None
+    registrations: list[tuple[dict[str, Any], Existence]] | None = None
 
 
 def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
@@ -1352,7 +1352,7 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
         prefixes = context.routers.of_route(end.root, end.path)
     # OI-368: where the calls making the row run, per prefix (the includes and mounts it is
     # served through), read once per prefix.
-    existing: dict[int, Alternatives | None] = {}
+    existing: dict[int, Existence | None] = {}
     for verb, (peer, path, url_resolution), prefix in product(verbs, destinations, prefixes):
         # An address nobody read takes no prefix: one row for it, not one per prefix.
         if path is None and prefix is not prefixes[0]:
@@ -1776,19 +1776,21 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
 
 def _existence(
     end: ChainEnd, prefix: Prefix, direction: str, context: "_DeriveContext"
-) -> Alternatives | None:
+) -> Existence | None:
     """Where the calls making an inbound row run (OI-368, `registration_conditions`): every
     include or mount on one serving place of `prefix`, outermost first, then the route's root
     and terminal calls — OR-ed across the places. Each place is read in the calling context
     the row was derived in: the calls its own path and its routers' paths chose (review Major
-    1). A place whose router was reached on a path that disagrees with the row's is not one
-    the row was served through. None for an outbound row, and where no call of the module is
+    1), and the paths its prefix's words were read on (re-review R1-1). A place whose router
+    was reached on a path that disagrees with the row's is not one the row was served
+    through. None for an outbound row, and where no call of the module is
     under a test."""
     if context.conditions is None or direction != "inbound":
         return None
     own = [_site_key(site) for site in (end.root, end.terminal) if site]
     walked = context.path or end.path
     found: set[Conjunction] = set()
+    untied: set[Conjunction] = set()
     places = prefix.places or (ANY_ROUTER,)
     for place in places:
         paths = [router[1] for router, _ in place if router is not None]
@@ -1800,23 +1802,35 @@ def _existence(
         if paths and joined is None:
             continue
         mounts = [at[0] for _, at in place if at is not None]
-        chosen = joined.calls_into() if joined is not None else {}
-        found |= context.conditions.of_sites([*mounts, *own], chosen)
+        # The calls that gave the prefix its words count too (re-review R1-1): a helper called
+        # with two prefix values is two calls, each its own row's.
+        contexts = [joined]
+        if prefix.chosen_on:
+            contexts = [
+                on if joined is None else joined.joined(on)
+                for on in sorted(prefix.chosen_on, key=repr)
+            ]
+            contexts = [one for one in contexts if one is not None]
+        for context_path in contexts:
+            chosen = context_path.calls_into() if context_path is not None else {}
+            found |= context.conditions.of_sites([*mounts, *own], chosen)
+            untied |= context.conditions.of_sites([*mounts, *own], chosen, untied=True)
     if not found:
         # Every place disagreed with the row's path: read them in no calling context.
         for place in places:
             mounts = [at[0] for _, at in place if at is not None]
             found |= context.conditions.of_sites([*mounts, *own])
-    return frozenset(found)
+            untied |= context.conditions.of_sites([*mounts, *own], untied=True)
+    return Existence(frozenset(found), frozenset(untied), tuple(own))
 
 
 def _registered(
-    context: "_DeriveContext", rows: Iterable[dict[str, Any]], alternatives: Alternatives | None
+    context: "_DeriveContext", rows: Iterable[dict[str, Any]], existence: Existence | None
 ) -> None:
-    """Each of `rows` made by calls that run where `alternatives` say (`_existence`)."""
-    if alternatives is None or context.registrations is None:
+    """Each of `rows` made by calls that run where `existence` says (`_existence`)."""
+    if existence is None or context.registrations is None:
         return
-    context.registrations.extend((row, alternatives) for row in rows)
+    context.registrations.extend((row, existence) for row in rows)
 
 
 def _root_verb(end: ChainEnd, context: "_DeriveContext") -> str | None:
