@@ -1450,7 +1450,10 @@ above:
   returns where the other arm does not, to the end of that block. An arm that always raises
   guards nothing — neither the arm beside it nor what follows: its test decides only whether
   the program goes on (`if bad: raise ValueError(...)`), and code that does not run is not
-  described (ruled 2026-11-07); `reads`
+  described (ruled 2026-11-07); "always raises" reads `with`, `try` and `finally` as
+  `_falls_through` does. The entry-point test `__name__ == "__main__"` (either way round, or
+  `!=`) guards nothing either: it chooses how the module starts, not what exists (ruled
+  2026-11-09); `reads`
   are the names and dotted names the test reads (`settings.ENV`, `os.path.exists`), each once,
   in the order it reads them. A test the language decides writes nothing: a constant,
   `typing.TYPE_CHECKING` (with `not` either way), and a library's version test read for a known

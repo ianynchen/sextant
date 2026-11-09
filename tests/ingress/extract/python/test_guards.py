@@ -143,3 +143,41 @@ def test_a_narrowing_test_guards_both_arms(tmp_path: Path):
         "a": [("isinstance(x, A)", True, ["isinstance", "x", "A"])],
         "b": [("isinstance(x, A)", False, ["isinstance", "x", "A"])],
     }
+
+
+def test_a_raise_inside_with_or_try_finally_always_raises(tmp_path: Path):
+    """Review Minor 8: an arm whose raise sits in a `with` or a `try ... finally` always raises,
+    as `_falls_through` reads it, so it guards nothing either."""
+    facts = _scan(
+        tmp_path,
+        "def f(x, y):\n"
+        "    if not x:\n"
+        "        with g():\n"
+        "            raise ValueError\n"
+        "    a()\n"
+        "    if not y:\n"
+        "        try:\n"
+        "            raise KeyError\n"
+        "        finally:\n"
+        "            h()\n"
+        "    b()\n",
+    )
+
+    sites = _sites(facts)
+    assert _guards({name: sites[name] for name in ("a", "b")}) == {"a": None, "b": None}
+
+
+def test_the_main_block_test_guards_nothing(tmp_path: Path):
+    """Ruled 2026-11-09 (review Major 2): `__name__ == "__main__"` is an entry point."""
+    facts = _scan(
+        tmp_path,
+        "def f():\n"
+        "    if __name__ == '__main__':\n"
+        "        a()\n"
+        "    if '__main__' != __name__:\n"
+        "        return\n"
+        "    b()\n",
+    )
+
+    sites = _sites(facts)
+    assert _guards({name: sites[name] for name in ("a", "b")}) == {"a": None, "b": None}

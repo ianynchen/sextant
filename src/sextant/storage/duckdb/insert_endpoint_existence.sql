@@ -9,15 +9,16 @@
 -- matches, nothing is written: an entry says where a ROW exists. Insert-if-absent on the
 -- whole entry, with `SELECT DISTINCT` for duplicates within the batch.
 INSERT INTO endpoint_existence (
-    row_id, protocol, direction, method, path, handler, caller, route, via, kind, expression,
-    environment, holds, resolution, evidence
+    row_id, protocol, direction, method, path, handler, caller, route, position, via, kind,
+    expression, environment, holds, resolution, evidence
 )
 SELECT DISTINCT e.row_id, r.protocol, r.direction, r.method, r.path, r.handler, r.caller,
-       r.route, r.via, r.kind, r.expression, r.environment, r.holds, r.resolution, r.evidence
+       r.route, r.position, r.via, r.kind, r.expression, r.environment, r.holds, r.resolution,
+       r.evidence
 FROM (SELECT UNNEST(
     $rows::STRUCT(
         protocol VARCHAR, direction VARCHAR, method VARCHAR, path VARCHAR, handler VARCHAR,
-        caller VARCHAR, route INTEGER, via VARCHAR, kind VARCHAR, expression VARCHAR,
+        caller VARCHAR, route INTEGER, position INTEGER, via VARCHAR, kind VARCHAR, expression VARCHAR,
         environment VARCHAR, holds VARCHAR, resolution VARCHAR, evidence VARCHAR
     )[]
 ) AS r)
@@ -32,6 +33,7 @@ WHERE NOT EXISTS (
     SELECT 1 FROM endpoint_existence x
     WHERE x.row_id = e.row_id
       AND x.route IS NOT DISTINCT FROM r.route
+      AND x.position IS NOT DISTINCT FROM r.position
       AND x.via IS NOT DISTINCT FROM r.via
       AND x.kind IS NOT DISTINCT FROM r.kind
       AND x.expression IS NOT DISTINCT FROM r.expression

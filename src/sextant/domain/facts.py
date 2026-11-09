@@ -537,8 +537,9 @@ class CallGuard(BaseModel):
     approved by the user 2026-11-09): an `if` test, or a conditional expression's, that the
     scanner does not decide. `test` is the test as the code writes it (`ast.unparse`); `holds`
     is the arm the call is in — true in the `if` arm, false in the `else` arm and after an arm
-    that always leaves (`return`, `raise`); `reads` are the names and dotted names the test
-    reads, in the order it reads them. Python only."""
+    that always returns. An arm that always raises guards nothing, nor does the entry-point
+    test `__name__ == "__main__"` (ruled 2026-11-09). `reads` are the names and dotted names
+    the test reads, in the order it reads them. Python only."""
 
     model_config = {"frozen": True}
     test: str

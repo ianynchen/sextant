@@ -2279,6 +2279,19 @@ class Path:
         merged = _combine(self.trail, (step,))
         return None if merged is None else Path(merged, self.entered | {step})
 
+    def calls_into(self) -> dict[str, tuple[str, int]]:
+        """The call this path chose for each method it crossed into or out of, `{method:
+        (caller, ordinal)}`: the calling context it was read in (task 10b review, Major 1). A
+        method it chose no call of is absent, as is a call the framework makes."""
+        chosen: dict[str, tuple[str, int]] = {}
+        for step in self.trail:
+            if step.context[0] != _CALLER_OF or "@" not in step.label:
+                continue
+            caller, _, ordinal = step.label.rpartition("@")
+            if ordinal.isdigit():
+                chosen[str(step.context[1])] = (caller, int(ordinal))
+        return chosen
+
     def stated_by_frame(
         self,
     ) -> tuple[tuple[tuple[str, int, int, tuple[tuple[str, int], ...]], ...], ...]:

@@ -1073,7 +1073,7 @@ _NAMED_QUERIES = {
     # it, as on `endpoints`) and left out of the export.
     "endpoint_existence": """
         SELECT * FROM endpoint_existence
-        ORDER BY row_id, route, via, kind, expression, environment
+        ORDER BY row_id, route, position, via, kind, expression, environment
     """,
     # OI-368: the call sites that run under a test of their own body (D00 §5 `guards`), and
     # the calls that run each method, read once per resolve (`registration_conditions`).
@@ -1742,7 +1742,7 @@ _EXPORT_QUERIES = {
         LEFT JOIN {_REDACTED_JSON} j ON j.original = x.expression
         LEFT JOIN {_REDACTED_EVIDENCE} t ON t.original = x.evidence
         ORDER BY x.protocol, x.direction, x.method, x.path, x.handler, x.caller, x.route,
-                 x.via, x.expression, x.environment
+                 x.position, x.via, x.expression, x.environment
     """,
     "bean_conditions": f"""
         SELECT b.* REPLACE (coalesce(j.masked, b.expression) AS expression,

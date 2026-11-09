@@ -1226,11 +1226,12 @@ def test_a_conditional_placeholder_job_states_its_configured_value_first_then_it
     )
 
 
-def _existence(route: int, test: str, holds: bool) -> dict[str, object]:
+def _existence(route: int, test: str, holds: bool, position: int = 0) -> dict[str, object]:
     """One `endpoint_existence` row of the row numbered 7 (OI-368)."""
     return {
         "row_id": 7,
         "route": route,
+        "position": position,
         "via": "app/main#<clinit>",
         "kind": "test",
         "expression": json.dumps({"holds": holds, "reads": [], "test": test}, sort_keys=True),
@@ -1248,14 +1249,15 @@ def test_a_row_registered_under_an_undecided_test_is_not_evaluated():
     document = _document(
         endpoints=[{**_inbound(USERS + "status()."), "row_id": 7}],
         endpoint_existence=[
-            _existence(0, "settings.DEBUG", True),
-            _existence(0, "not os.path.exists('/static')", False),
+            _existence(0, "settings.DEBUG", True, 0),
+            _existence(0, "not os.path.exists('/static')", False, 1),
         ],
     )
     block = _block(document, "Users#status")
+    # Outermost first (review Minor 10): the caller's test, then the helper's early return.
     assert (
-        "  - Exists only when: the code's test `not os.path.exists('/static')` is false and the "
-        "code's test `settings.DEBUG` is true, not evaluated"
+        "  - Exists only when: the code's test `settings.DEBUG` is true and the code's test "
+        "`not os.path.exists('/static')` is false, not evaluated"
     ) in block
     assert (
         "  - Of this module's environments: not evaluated by this analysis in any of the 1 "
@@ -1283,3 +1285,14 @@ def test_a_row_with_no_existence_rows_has_no_condition_lines():
         endpoint_existence=[{**_existence(0, "a", True), "row_id": 8}],
     )
     assert "Exists only when" not in _block(document, "Users#status")
+
+
+def test_alternatives_are_in_their_numbered_order():
+    """Review Minor 10: alternative 2 before alternative 10."""
+    document = _document(
+        endpoints=[{**_inbound(USERS + "status()."), "row_id": 7}],
+        endpoint_existence=[_existence(10, "ten", True), _existence(2, "two", True)],
+    )
+    assert "(the code's test `two` is true) or (the code's test `ten` is true)" in _block(
+        document, "Users#status"
+    )

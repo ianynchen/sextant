@@ -16,7 +16,10 @@ two nested tests is one alternative of two guards. An alternative with no guard 
 exists unconditionally, and then nothing is written. A row's calls are its registration (the
 route's root and terminal calls) and every include or mount its router is served through, all
 of which must run, so their alternatives are combined (each choice of one alternative per call,
-joined).
+joined). Where the row was derived through one call of a helper (its path chose that call,
+`Path.calls_into`), the helper runs by that call alone: a helper called once under a test and
+once not gives each row its own call's tests (task 10b review, Major 1). A guard keeps its place
+in the alternative, outermost first (`endpoint_existence.position`).
 
 Each guard of each alternative is one `endpoint_existence` row per environment the module
 resolves (D01): kind `test`, its expression the test as the code writes it with the arm it is
@@ -44,13 +47,21 @@ from sextant.application.ports.workspace import Workspace
 TEST = "test"
 # The environment of a module that resolves none of its own (`resolved_config` holds none).
 DEFAULT_ENVIRONMENT = "default"
+# The one spelling of a condition left open, which `bean_presence` in `schema.sql` spells too
+# (SQL cannot import it; `test_the_evidence_prefix_is_the_one_the_bean_presence_view_states`
+# holds the two equal).
 NOT_EVALUATED = "a condition this analysis does not evaluate: "
 
 # One guard: the method whose body holds the test, the test as written, the arm, its reads.
 Guard = tuple[str, str, bool, tuple[str, ...]]
-Conjunction = frozenset[Guard]
+# The guards of one alternative, outermost first (a caller's before its callee's, an include's
+# before the routes under it), each once.
+Conjunction = tuple[Guard, ...]
 Alternatives = frozenset[Conjunction]
-UNCONDITIONAL: Alternatives = frozenset({frozenset()})
+UNCONDITIONAL: Alternatives = frozenset({()})
+# The call a row's own path chose for a method (`Path.calls_into`): the calling context it was
+# derived in.
+Chosen = Mapping[str, tuple[str, int]]
 
 
 @dataclass
@@ -63,19 +74,34 @@ class Conditions:
     _methods: dict[str, Alternatives] = field(default_factory=dict)
     _entered: set[str] = field(default_factory=set)
 
-    def of_sites(self, sites: Iterable[tuple[str, int]]) -> Alternatives:
-        """Where every call of `sites` runs: one alternative per choice of one alternative of
-        each call, joined."""
+    def of_sites(
+        self, sites: Iterable[tuple[str, int]], chosen: Chosen | None = None
+    ) -> Alternatives:
+        """Where every call of `sites` runs, outermost first: one alternative per choice of
+        one alternative of each call, joined. A method `chosen` names a call of is run by
+        that call alone (task 10b review, Major 1): a row derived through one call of a helper
+        takes that call's tests, never those of the helper's other callers."""
         found = UNCONDITIONAL
         for site in dict.fromkeys(sites):
             found = _simplest(
-                frozenset(left | right for left in found for right in self._of_site(site))
+                frozenset(
+                    _joined(left, right)
+                    for left in found
+                    for right in self._of_site(site, chosen or {}, frozenset())
+                )
             )
         return found
 
-    def _of_site(self, site: tuple[str, int]) -> Alternatives:
-        own = frozenset(self.guards.get(site, ()))
-        return frozenset(own | conjunction for conjunction in self._of_method(site[0]))
+    def _of_site(
+        self, site: tuple[str, int], chosen: Chosen, followed: frozenset[str]
+    ) -> Alternatives:
+        own = self.guards.get(site, ())
+        method = site[0]
+        if method in chosen and method not in followed:
+            outer = self._of_site(chosen[method], chosen, followed | {method})
+        else:
+            outer = self._of_method(method)
+        return frozenset(_joined(conjunction, own) for conjunction in outer)
 
     def _of_method(self, method: str) -> Alternatives:
         """Where `method` runs: wherever any call of it runs; everywhere where nothing in the
@@ -89,8 +115,8 @@ class Conditions:
         try:
             found: set[Conjunction] = set()
             for site in callers:
-                found |= self._of_site(site)
-                if frozenset() in found:
+                found |= self._of_site(site, {}, frozenset())
+                if () in found:
                     break
         finally:
             self._entered.discard(method)
@@ -99,12 +125,22 @@ class Conditions:
         return answer
 
 
+def _joined(outer: Conjunction, inner: Iterable[Guard]) -> Conjunction:
+    """`outer`'s guards, then each of `inner`'s it does not hold, in order."""
+    return (*outer, *(guard for guard in inner if guard not in outer))
+
+
 def _simplest(alternatives: Alternatives) -> Alternatives:
     """`alternatives` without one that another implies (a superset of another's guards): the
-    row exists wherever the smaller does."""
-    if frozenset() in alternatives:
+    row exists wherever the smaller does. Two of the same guards in another order are one."""
+    if () in alternatives:
         return UNCONDITIONAL
-    return frozenset(one for one in alternatives if not any(other < one for other in alternatives))
+    by_guards: dict[frozenset[Guard], Conjunction] = {}
+    for one in sorted(alternatives):
+        by_guards.setdefault(frozenset(one), one)
+    return frozenset(
+        one for guards, one in by_guards.items() if not any(other < guards for other in by_guards)
+    )
 
 
 def conditions_of(workspace: Workspace) -> Conditions:
@@ -146,8 +182,8 @@ def existence_rows(
         alternatives = _simplest(frozenset(found))
         if alternatives == UNCONDITIONAL:
             continue
-        for route, conjunction in enumerate(sorted(alternatives, key=lambda c: sorted(c))):
-            for method, test, holds, reads in sorted(conjunction):
+        for route, conjunction in enumerate(sorted(alternatives)):
+            for position, (method, test, holds, reads) in enumerate(conjunction):
                 expression = json.dumps(
                     {"holds": holds, "reads": list(reads), "test": test}, sort_keys=True
                 )
@@ -161,6 +197,7 @@ def existence_rows(
                             "handler": row["handler"],
                             "caller": row["caller"],
                             "route": route,
+                            "position": position,
                             "via": method,
                             "kind": TEST,
                             "expression": expression,

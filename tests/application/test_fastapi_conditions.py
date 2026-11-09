@@ -196,6 +196,12 @@ def test_a_registration_in_a_helper_run_only_under_a_test_inherits_it(tmp_path: 
             _open(0, "settings.DEBUG and settings.ENV == 'dev'"),
         ],
     }
+    # Outermost first (review Minor 10): the caller's test, then the helper's early return.
+    ordered = sorted(workspace.query("endpoint_existence"), key=lambda row: row["position"])
+    assert [json.loads(str(row["expression"]))["test"] for row in ordered] == [
+        "settings.DEBUG and settings.ENV == 'dev'",
+        "not os.path.exists('/static')",
+    ]
 
 
 def test_an_unconditional_route_is_unchanged(tmp_path: Path, libraries):
@@ -222,3 +228,109 @@ def test_an_unconditional_route_is_unchanged(tmp_path: Path, libraries):
         ("GET", "/page", "resolved"),
     ]
     assert _existence(workspace) == {}
+
+
+def test_a_helper_including_two_routers_takes_each_calls_own_test(tmp_path: Path, libraries):
+    """Review Major 1: one helper includes each router it is handed, called once under no test
+    and once under one. Each row takes the test of the call that produced it, not of the helper
+    as a whole: `/debug/two` is "not evaluated", `/orders/one` is served."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + _SETTINGS
+            + "r1 = APIRouter()\n@r1.get('/one')\ndef one() -> str:\n    return ''\n"
+            + "r2 = APIRouter()\n@r2.get('/two')\ndef two() -> str:\n    return ''\n"
+            + "def add(a: FastAPI, r: APIRouter, prefix: str) -> None:\n"
+            + "    a.include_router(r, prefix=prefix)\n"
+            + "add(app, r1, '/orders')\n"
+            + "if settings.DEBUG:\n"
+            + "    add(app, r2, '/debug')\n"
+        },
+    )
+
+    assert [(row[0], row[1]) for row in _rows(workspace)] == [
+        ("GET", "/debug/two"),
+        ("GET", "/orders/one"),
+    ]
+    assert _existence(workspace) == {("GET", "/debug/two"): [_open(0, "settings.DEBUG")]}
+
+
+def test_a_route_helper_called_twice_takes_each_calls_own_test(tmp_path: Path, libraries):
+    """The same with a helper that registers the route itself."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + _SETTINGS
+            + "def page() -> str:\n    return ''\n"
+            + "def add(a: FastAPI, path: str) -> None:\n"
+            + "    a.get(path)(page)\n"
+            + "add(app, '/orders')\n"
+            + "if settings.DEBUG:\n"
+            + "    add(app, '/debug')\n"
+        },
+    )
+
+    assert [(row[0], row[1]) for row in _rows(workspace)] == [("GET", "/debug"), ("GET", "/orders")]
+    assert _existence(workspace) == {("GET", "/debug"): [_open(0, "settings.DEBUG")]}
+
+
+_FACTORY = (
+    "def page() -> str:\n    return ''\n"
+    "def create_app() -> FastAPI:\n"
+    "    made = FastAPI()\n"
+    "    made.get('/f')(page)\n"
+    "    return made\n"
+)
+
+
+def test_a_factory_run_from_the_main_block_is_served(tmp_path: Path, libraries):
+    """Ruled 2026-11-09 (review Major 2): `if __name__ == "__main__":` is an entry point, not a
+    condition on what exists; its calls run the module as a program. A factory called only
+    from it serves its routes wherever the module runs."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": "import uvicorn\nfrom fastapi import FastAPI\n"
+            + _FACTORY
+            + "if __name__ == '__main__':\n"
+            + "    uvicorn.run(create_app())\n"
+        },
+    )
+
+    assert [(row[0], row[1]) for row in _rows(workspace)] == [("GET", "/f")]
+    assert _existence(workspace) == {}
+
+
+def test_a_plain_app_made_in_the_main_block_is_served(tmp_path: Path, libraries):
+    """`app = create_app()` written in the module's `__main__` block (the test spelled either
+    way round), then run: served."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": "import uvicorn\nfrom fastapi import FastAPI\n"
+            + _FACTORY
+            + "if '__main__' == __name__:\n"
+            + "    app = create_app()\n"
+            + "    uvicorn.run(app)\n"
+        },
+    )
+
+    assert [(row[0], row[1]) for row in _rows(workspace)] == [("GET", "/f")]
+    assert _existence(workspace) == {}
+
+
+def test_the_evidence_prefix_is_the_one_the_bean_presence_view_states(tmp_path: Path):
+    """Review Minor 11: the text a not-evaluated condition's evidence starts with is one
+    constant, and `bean_presence`'s reason in `schema.sql` spells the same words."""
+    import sextant
+    from sextant.application.resolve.registration_conditions import NOT_EVALUATED
+
+    root = Path(sextant.__file__).parent
+    schema = (root / "storage" / "duckdb" / "schema.sql").read_text(encoding="utf-8")
+    assert f"'{NOT_EVALUATED}'" in schema

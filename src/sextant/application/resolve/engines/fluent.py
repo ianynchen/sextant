@@ -32,6 +32,7 @@ from sextant.application.resolve.parameter_markers import (
 from sextant.application.resolve.registration_conditions import (
     Alternatives,
     Conditions,
+    Conjunction,
     conditions_of,
     environments_of,
     existence_rows,
@@ -1776,17 +1777,36 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
 def _existence(
     end: ChainEnd, prefix: Prefix, direction: str, context: "_DeriveContext"
 ) -> Alternatives | None:
-    """Where the calls making an inbound row run (OI-368, `registration_conditions`): its root
-    and terminal calls, and every include or mount on one serving place of `prefix` — OR-ed
-    across the places. None for an outbound row, and where no call of the module is under a
-    test."""
+    """Where the calls making an inbound row run (OI-368, `registration_conditions`): every
+    include or mount on one serving place of `prefix`, outermost first, then the route's root
+    and terminal calls — OR-ed across the places. Each place is read in the calling context
+    the row was derived in: the calls its own path and its routers' paths chose (review Major
+    1). A place whose router was reached on a path that disagrees with the row's is not one
+    the row was served through. None for an outbound row, and where no call of the module is
+    under a test."""
     if context.conditions is None or direction != "inbound":
         return None
     own = [_site_key(site) for site in (end.root, end.terminal) if site]
-    found: set[frozenset[Any]] = set()
-    for place in prefix.places or (ANY_ROUTER,):
+    walked = context.path or end.path
+    found: set[Conjunction] = set()
+    places = prefix.places or (ANY_ROUTER,)
+    for place in places:
+        paths = [router[1] for router, _ in place if router is not None]
+        joined = walked
+        for path in paths:
+            joined = path if joined is None else joined.joined(path)
+            if joined is None:
+                break
+        if paths and joined is None:
+            continue
         mounts = [at[0] for _, at in place if at is not None]
-        found |= context.conditions.of_sites([*own, *mounts])
+        chosen = joined.calls_into() if joined is not None else {}
+        found |= context.conditions.of_sites([*mounts, *own], chosen)
+    if not found:
+        # Every place disagreed with the row's path: read them in no calling context.
+        for place in places:
+            mounts = [at[0] for _, at in place if at is not None]
+            found |= context.conditions.of_sites([*mounts, *own])
     return frozenset(found)
 
 

@@ -414,7 +414,10 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-408 | [SEXTANT-402](https://app.plane.so/portolan/browse/SEXTANT-402/) | A library function body is not read, so a field default made by a library helper is partial with required NULL |
 | OI-409 | [SEXTANT-403](https://app.plane.so/portolan/browse/SEXTANT-403/) | Library class-body call sites and symbols appear in the export index |
 | OI-410 | [SEXTANT-404](https://app.plane.so/portolan/browse/SEXTANT-404/) | The system tier does not read endpoint_existence, so a link into a "not evaluated" Python route states no condition |
-| OI-411 | [SEXTANT-405](https://app.plane.so/portolan/browse/SEXTANT-405/) | call_site.guards covers if, conditional expressions and early returns only |
+| OI-411 | [SEXTANT-405](https://app.plane.so/portolan/browse/SEXTANT-405/) | call_site.guards covers if, conditional expressions and early returns only (with the task 10b review's Minors 1-3: an early return inside `with`/`try`, `continue`, a value chosen by a conditional expression) |
+| OI-412 | [SEXTANT-406](https://app.plane.so/portolan/browse/SEXTANT-406/) | A function called only through a variable has no callers, so its registrations run unconditionally |
+| OI-413 | [SEXTANT-407](https://app.plane.so/portolan/browse/SEXTANT-407/) | A call cycle memoises a partial answer, which can invent an alternative or drop a test |
+| OI-414 | [SEXTANT-408](https://app.plane.so/portolan/browse/SEXTANT-408/) | A test that chooses WHAT is registered (a loop's hasattr filter) marks the row "not evaluated" |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

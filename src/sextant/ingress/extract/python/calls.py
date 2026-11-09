@@ -595,7 +595,7 @@ class BodyReader:
     def _guard(self, test: ast.expr, holds: bool, scope: Scope) -> CallGuard | None:
         """The guard an undecided test puts on the calls of its arm `holds` (D00 §5
         `call_site.guards`); None where the language decides the test (`_runs`)."""
-        if self._runs(test, scope) is not None:
+        if self._runs(test, scope) is not None or _entry_point_test(test):
             return None
         return CallGuard(test=ast.unparse(test), holds=holds, reads=_reads(test))
 
@@ -2714,17 +2714,41 @@ def _is_builtin_class(target: Target) -> bool:
     )
 
 
+def _entry_point_test(test: ast.expr) -> bool:
+    """`__name__ == "__main__"` (either way round, or `!=`): whether the module runs as the
+    program. Ruled 2026-11-09 (task 10b review, Major 2): an entry point, not a condition on what
+    exists, so it guards nothing and its calls run wherever the module does."""
+    if not (
+        isinstance(test, ast.Compare)
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq | ast.NotEq)
+    ):
+        return False
+    sides = (test.left, test.comparators[0])
+    return any(isinstance(side, ast.Name) and side.id == "__name__" for side in sides) and any(
+        isinstance(side, ast.Constant) and side.value == "__main__" for side in sides
+    )
+
+
 def _always_raises(body: list[ast.stmt]) -> bool:
-    """Whether every way through `body` ends in a `raise`: one is reached before anything
-    that ends it otherwise, or an `if` whose two arms each always raise."""
-    for node in body:
-        if isinstance(node, ast.Raise):
-            return True
-        if isinstance(node, ast.If) and _always_raises(node.body) and _always_raises(node.orelse):
-            return True
-        if isinstance(node, ast.Return | ast.Break | ast.Continue):
-            return False
-    return False
+    """Whether every way through `body` ends in a raise: its end is not reached
+    (`_falls_through`, which reads `with`, `try`, `finally` and `match` as the flow does), and
+    nothing in it leaves otherwise (a `return`, or a `break` or `continue` of an enclosing
+    loop). Review Minor 8: one reading of the statements, not a second."""
+    return not _falls_through(body) and not any(_leaves_otherwise(node) for node in body)
+
+
+def _leaves_otherwise(node: ast.AST, in_loop: bool = False) -> bool:
+    """Whether `node` holds a `return`, or a `break`/`continue` not of a loop inside it; a
+    nested function or class is its own body."""
+    if isinstance(node, ast.Return):
+        return True
+    if isinstance(node, ast.Break | ast.Continue):
+        return not in_loop
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Lambda):
+        return False
+    inner = in_loop or isinstance(node, ast.For | ast.AsyncFor | ast.While)
+    return any(_leaves_otherwise(child, inner) for child in ast.iter_child_nodes(node))
 
 
 def _reads(test: ast.expr) -> list[str]:
