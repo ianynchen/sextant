@@ -680,7 +680,8 @@ class BodyReader:
                 # A class body's `if TYPE_CHECKING:` and `if False:` never run (task 9c review
                 # Minor 1, N2): both arms are read as before, and a name the dead arm declares
                 # is marked so (`never_runs`), which keeps it out of a payload's field set.
-                for dead in ast.walk(ast.Module(body=node.orelse if runs else node.body)):
+                dead_arm = node.orelse if runs else node.body
+                for dead in ast.walk(ast.Module(body=dead_arm, type_ignores=[])):
                     if isinstance(dead, ast.stmt):
                         self._never_runs.add(id(dead))
             if live is not None:

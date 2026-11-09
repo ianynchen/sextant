@@ -519,7 +519,7 @@ def _skip_reason(module: ModuleModel) -> str | None:
 def _scanners() -> list[Scanner]:
     """The one scanner registry: what the scan stage chooses from, and what `_skip_reason`
     asks before a module is analysed, so the two can never disagree."""
-    return [AsmScanner(extractor_jar()), PythonScanner()]
+    return [AsmScanner(extractor_jar), PythonScanner()]
 
 
 def _module_json_row(outcome: ModuleOutcome) -> dict[str, object]:
