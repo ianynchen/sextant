@@ -1419,11 +1419,15 @@ CREATE OR REPLACE VIEW method_returns AS
 -- of that shape is that a void return's SQL NULL (`->` on an explicit JSON
 -- null, which DuckDB gives as the JSON scalar 'null', is distinguished by the
 -- reader) says something a `{"kind":"unresolved"}` does not.
+-- A generator's `yield` (`yielded`, plan 2026-11-08 N10) is no return: a call of the
+-- method hands back the generator object, the method's own return beside it. Its value is
+-- read by the one reader that asks what a generator yields (`method_yields`).
 SELECT document_id,
        payload ->> 'method'                    AS method,
        (payload ->> 'ordinal')::INTEGER        AS ordinal,
        payload ->  'value'                     AS value
 FROM raw_facts WHERE kind = 'method_return'
+  AND NOT coalesce((payload ->> 'yielded')::BOOLEAN, false)
   AND document_id IN (SELECT document_id FROM selected_documents);
 
 -- D00 §5's `constant` (W4): a compile-time constant field and its value, from

@@ -32,7 +32,10 @@ rule 9) is read by `flow.py`, which the statements below drive.
 
 Every `return` is a `method_return`, plus the implicit `return None` where the end of the
 body is reachable. A generator returns a generator object, so its one `method_return` is
-`unresolved`. An `@overload` stub, and an abstract or `Protocol` method whose body is only
+`unresolved`; each `yield` it makes is a `method_return` of its own marked `yielded`, the value
+yielded (a bare `yield` yields `None`), numbered among the body's returns before the generator
+object's (plan 2026-11-08 N10). `yield from` hands on another iterator's values one by one and
+is no value here. An `@overload` stub, and an abstract or `Protocol` method whose body is only
 `...`, `pass` or a docstring, has no body and no `method_return` (spec §3b).
 
 `self.x = …` and `C.x = …` are `field_write`s. A write to an attribute of another object is
@@ -539,13 +542,14 @@ class BodyReader:
     def _method_known(self, descriptor: str, owner: str, name: str) -> None:
         self._methods[descriptor] = (owner, name)
 
-    def _return(self, value: CallArgument, scope: Scope) -> None:
+    def _return(self, value: CallArgument, scope: Scope, yielded: bool = False) -> None:
         self.facts.append(
             MethodReturnFact(
                 document_id=self._context.document_id,
                 method=scope.body.caller,
                 ordinal=scope.body.returns,
                 value=value,
+                yielded=yielded,
             )
         )
         scope.body.returns += 1
@@ -1773,6 +1777,15 @@ class BodyReader:
             return _merge(values)
         if isinstance(node, ast.Await):
             return self._value(node.value, scope)
+        if isinstance(node, ast.Yield):
+            # What the generator hands out (N10); the expression's own value is what the
+            # caller sends back in, which no fact names.
+            yielded = (
+                CallArgument(kind="null") if node.value is None else self._value(node.value, scope)
+            )
+            if scope.frame is not None and scope.frame.generator:
+                self._return(yielded, scope, yielded=True)
+            return _UNKNOWN
         if isinstance(node, ast.NamedExpr):
             value = self._value(node.value, scope)
             self._store(node.target, value, scope)

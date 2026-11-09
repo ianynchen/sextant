@@ -111,6 +111,11 @@ SEXTANT_VERSION = version("sextant")
 #             header. A fact set of the older vintage leaves those owners to the resolver,
 #             which reads none of them on a library class it has no header for; it is refused
 #             and re-extracted.
+#     10      `method_return.yielded` (plan 2026-11-08-python-fastapi-inbound N10): a Python
+#             generator writes one `method_return` per `yield`, marked `yielded`, numbered
+#             before the generator object's own `unresolved` return. A fact set of the older
+#             vintage has no yields, so a reader would take a generator for one that yields
+#             nothing it can read; it is refused and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -249,6 +254,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 9
+FACT_SCHEMA_VERSION = 10
 GRAPH_SCHEMA_VERSION = 17
 BOUNDARY_VOCABULARY_VERSION = 5

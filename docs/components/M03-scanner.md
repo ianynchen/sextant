@@ -503,7 +503,8 @@ followed. A list held in a local is read once as written, and
 `unresolved` after that, because the code it was handed to can change it.
 
 Every `return` is a `method_return`, plus `return None` where the end of the body is
-reachable. A generator has one `unresolved` return. An `@overload` stub, and an abstract or
+reachable. A generator has one `unresolved` return, and each `yield` is a `method_return`
+marked `yielded`, numbered before it (D00 §5, N10). An `@overload` stub, and an abstract or
 `Protocol` method whose body is only `...`, `pass` or a docstring, has no body and no
 `method_return`. `self.x = …` and `C.x = …` are `field_write`s; a write to an attribute of
 another object is not written. A module-level name that branches bind to several imports is

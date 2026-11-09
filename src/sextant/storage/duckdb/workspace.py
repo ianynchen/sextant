@@ -119,6 +119,15 @@ _NAMED_QUERIES = {
     # instruction order, twice (NFR-1) — the same total ordering
     # `call_sites` takes for the same reason.
     "method_returns": "SELECT method, ordinal, value FROM method_returns ORDER BY method, ordinal",
+    # What each generator yields (`method_return.yielded`, plan 2026-11-08 N10), which the
+    # `method_returns` view leaves out: one row per `yield`, in the same order and grammar.
+    "method_yields": (
+        "SELECT payload ->> 'method' AS method, (payload ->> 'ordinal')::INTEGER AS ordinal, "
+        "payload -> 'value' AS value FROM raw_facts WHERE kind = 'method_return' "
+        "AND coalesce((payload ->> 'yielded')::BOOLEAN, false) "
+        "AND document_id IN (SELECT document_id FROM selected_documents) "
+        "ORDER BY method, ordinal"
+    ),
     # 2Q `G3`'s own derived table. Ordered so a site's candidate callees and
     # each callee's several returns read in one fixed order (NFR-1); `caller,
     # ordinal` alone is not total, since a site whose dispatch narrowed to
@@ -1807,6 +1816,7 @@ _FACT_ONLY = frozenset(
         "call_sites",
         "field_writes",
         "method_returns",
+        "method_yields",
         "supertypes",
         "implementations",
         "superclasses",

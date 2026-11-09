@@ -1476,7 +1476,15 @@ carries it as `OI-15`.
 **Python:** every `return` is a `method_return`, and so is the implicit `return None`
 where the end of the body is reachable, as `{"kind": "null"}` — a Python function hands
 `None` back, so it is a value, not a void return. A generator hands back a generator object,
-so it has one `unresolved` return. An `@overload` stub, and an abstract or `Protocol` method
+so it has one `unresolved` return. **Each `yield` is a `method_return` of its own with
+`"yielded": true`** (plan 2026-11-08-python-fastapi-inbound N10): `value` is what it hands out
+(a bare `yield` hands out `None`), and the yields are numbered in written order before the
+generator object's own return, so `(method, ordinal)` stays one fact. A yield is no return: a
+call of the method still hands back the generator object, and the `method_returns` view leaves
+yields out; the one reader asking what a generator yields reads them apart (`method_yields`),
+as FastAPI hands a yield dependency's first yield to the parameter it fills. `yield from` hands
+on another iterator's values and is no value here. `yielded` is false on every other return and
+absent from every JVM fact. An `@overload` stub, and an abstract or `Protocol` method
 whose body is only `...`, `pass` or a docstring, has no `method_return`: it has no body.
 
 **`field_write` is a fact of its own, ANY method, direct traces only** — a method assigns a
