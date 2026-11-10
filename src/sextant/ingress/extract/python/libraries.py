@@ -67,29 +67,43 @@ from sextant.domain.facts import (
     CallSiteFact,
     Fact,
     FieldWriteFact,
+    HeaderMethod,
     MethodReturnFact,
+    ParentsUnread,
     SymbolFact,
     TypeHeaderFact,
     TypeRef,
 )
 from sextant.domain.symbols import (
     NOT_APPLICABLE,
+    PY_SIGNATURE,
     PYTHON_SCHEME,
     bare_descriptor,
     is_type_descriptor,
+    member_type,
+    method_descriptor,
     names_a_type,
+    owner_of,
     without_type_marker,
 )
-from sextant.ingress.extract.python.calls import FileContext
+from sextant.ingress.extract.python.calls import CLINIT, FileContext
 from sextant.ingress.extract.python.imports import (
     Binding,
     CallableType,
     ModuleIndex,
     Returned,
     Target,
+    VersionTests,
     bind_names,
+    version_test,
+    version_tests,
 )
-from sextant.ingress.extract.python.structure import file_facts
+from sextant.ingress.extract.python.structure import (
+    class_header,
+    file_facts,
+    header_body_tree,
+    single_classes,
+)
 from sextant.ingress.extract.python.typing_rules import (
     ANY,
     BUILTINS,
@@ -104,6 +118,7 @@ from sextant.ingress.extract.python.typing_rules import (
     parameter_mapping,
     substitute,
     type_ref,
+    type_symbol,
     written_type,
 )
 
@@ -185,6 +200,46 @@ class _Table:
     values: dict[str, list[ast.expr]] = field(default_factory=dict)
     # Read on first use: the names as the scanner binds them, for a written type.
     scope: TypeScope | None = None
+    # Read on first use: the classes a header reads by their statement alone
+    # (`structure.single_classes`), and the name of every class statement of the file.
+    classes: tuple[dict[str, list[ast.ClassDef]], frozenset[str]] | None = None
+    # How its version tests are decided (ruling R22), read with the tree.
+    versions: VersionTests | None = None
+
+
+@dataclass(frozen=True)
+class _Declared:
+    """What a type header says of a library type: its symbol, construct kind, written
+    parents, and whether they stop early."""
+
+    symbol: str
+    construct_kind: ConstructKind
+    superclass: str | None
+    interfaces: list[str]
+    parents_unread: ParentsUnread | None
+    # The class's path in its module where one class statement holds it, so its body can be
+    # read (fact schema 12); None where only a whole-module read answers.
+    body: tuple[str, str] | None = None
+
+
+@dataclass(frozen=True)
+class _Bodies:
+    """One library module's class bodies, read for their type headers (`Libraries.
+    _class_bodies`): the facts, each class's functions and class-statement keywords by class
+    symbol, and the classes the bodies call (each may get a header)."""
+
+    facts: list[Fact]
+    methods: dict[str, list[HeaderMethod]]
+    keywords: dict[str, list[CallArgument] | None]
+    called: list[str]
+
+
+class _WholeModule:
+    """`Libraries._class_declaration`'s answer where only a read of the whole module says
+    what its facts hold for the symbol."""
+
+
+WHOLE_MODULE = _WholeModule()
 
 
 type _Function = tuple[_Table, Target, list[ast.FunctionDef | ast.AsyncFunctionDef]]
@@ -203,6 +258,8 @@ class Libraries:
         self._commit = (typeshed / "COMMIT").read_text(encoding="utf-8").strip()
         self._site = _site_packages(environment) or (archives[0].archive if archives else None)
         self._python = _python_version(environment, self._site)
+        # Its whole `sys.version_info` where the environment states it (task 4e review).
+        self._release = _python_release(environment, self._site)
         self._stdlib = _stdlib_versions(typeshed / "stdlib" / "VERSIONS")
         self._stubs = {
             _normalize(folder.name): folder
@@ -227,7 +284,8 @@ class Libraries:
         self._tables: dict[str, _Table | None] = {}
         # The file names in each folder a module was looked for in, read once.
         self._listings: dict[Path, frozenset[str]] = {}
-        self._index = ModuleIndex(frozenset(), self)
+        # A library's own files are read for the environment's Python (ruling R22).
+        self._index = ModuleIndex(frozenset(), self, versions=self._version_tests)
         # Each library module's own `symbol` facts, read once: where a header's construct
         # kind and written bases come from. They are not written.
         self._symbols: dict[str, dict[str, SymbolFact]] = {}
@@ -263,6 +321,7 @@ class Libraries:
         them, not only the declared ones: a re-export leads into any installed distribution
         (`_other_distributions`)."""
         digest = hashlib.sha256(self.identity.encode())
+        digest.update(f"\npython release {self._release}".encode())
         for library in sorted(set(self._installed.values()), key=lambda one: one.coordinate):
             digest.update(f"\n{library.coordinate} {library.archive}".encode())
         for info in sorted(self._site.glob("*.dist-info")) if self._site else []:
@@ -272,6 +331,12 @@ class Libraries:
             except OSError:
                 digest.update(b"no RECORD")
         return "sha256:" + digest.hexdigest()
+
+    def _version_tests(self, module: str) -> VersionTests | None:
+        """How the library module `module`'s version tests are decided: read with its tree
+        (`_table`), which every read of the module starts from."""
+        table = self._tables.get(module)
+        return None if table is None else table.versions
 
     # -- the scanner's questions (`imports.LibraryNames`) ------------------------------
 
@@ -359,6 +424,61 @@ class Libraries:
             return None
         return found
 
+    def metaclass_call(
+        self,
+        metaclass: str,
+        arguments: Sequence[CallArgument],
+        argument_types: Sequence[TypeRef | None],
+        *,
+        unpacked: bool,
+    ) -> TypeRef | bool:
+        """What calling a class whose metaclass is `metaclass` gives, by the typing
+        specification: the `__call__` the metaclass's lookup order defines decides it. True
+        where that is `type.__call__`, or where every overload the arguments choose returns a
+        type variable or `Self` (the class called: `EnumMeta.__call__`'s member lookup); the
+        one class every chosen overload names otherwise. False where an overload returns a
+        class object (`-> type[Enum]`: a new class), where the overloads disagree, or where
+        none is chosen: what the call makes is not one class this rule can name."""
+        defining = self._defining_class(metaclass, _CALL, None, None)
+        if defining is None:
+            return False
+        found_in, _ = defining
+        if found_in == _TYPE_OF:
+            return True
+        known = self._function(found_in, _CALL)
+        if known is None:
+            return False
+        table, _, defined = known
+        recording, self._recording = self._recording, False
+        inside, self._inside = self._inside, True
+        try:
+            scope = replace(self._scope(table), self_type=SELF)
+            chosen = self._choose(
+                defined,
+                list(arguments),
+                list(argument_types),
+                scope,
+                method=True,
+                unpacked=unpacked or any(a.keyword == _UNPACKED for a in arguments),
+            )
+            answers: set[str] = set()
+            for node, _ in chosen or []:
+                if node.returns is None or is_class_object(node.returns, scope):
+                    return False
+                written = written_type(node.returns, scope)
+                answers.add(
+                    _INSTANCE
+                    if written.symbol == SELF or not names_a_type(written.symbol)
+                    else written.symbol
+                )
+        finally:
+            self._recording = recording
+            self._inside = inside
+        if len(answers) != 1:
+            return False
+        (answer,) = answers
+        return True if answer == _INSTANCE else TypeRef(symbol=answer)
+
     def construct(
         self,
         owner: str,
@@ -441,7 +561,7 @@ class Libraries:
         if table is not None and node is not None:
             inside, self._inside = self._inside, True
             try:
-                body = list(_statements(node.body, self._python))
+                body = list(_statements(node.body, table.versions))
                 self._shapes[symbol] = class_shape(node, self._scope(table), body)
             finally:
                 self._inside = inside
@@ -500,7 +620,7 @@ class Libraries:
             return None
         defined = [
             node
-            for node in _statements(body, self._python)
+            for node in _statements(body, table.versions)
             if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name
         ]
         return (table, target, defined) if defined else None
@@ -892,8 +1012,12 @@ class Libraries:
     # -- the facts -----------------------------------------------------------------------
 
     def headers(
-        self, referenced: Iterable[str], own: set[str], document_id: str
-    ) -> tuple[list[TypeHeaderFact], int, list[str]]:
+        self,
+        referenced: Iterable[str],
+        own: set[str],
+        document_id: str,
+        called: Iterable[str] = (),
+    ) -> tuple[list[Fact], int, list[str]]:
         """A `type_header` (D00 §5) for every library type the module refers to, then
         transitively up each one's written bases, as the JVM scanner reads a classpath:
         the symbol, construct kind, `superclass` and `interfaces` mapped from the bases as
@@ -901,26 +1025,64 @@ class Libraries:
         `object` not written), no annotation (a decorator is a call), and the `origin`.
         Also how many referenced types no library holds (`type_headers_unlocated`), and a
         line for each library class whose bases are not all read: `type_header` has no
-        key to say so, so it gets no header, and a lookup reaching it ends there."""
-        facts: list[TypeHeaderFact] = []
+        key to say so, so it gets no header, and a lookup reaching it ends there.
+
+        `called` are the classes a static call may name (`called_types`): each gets a header
+        where a library declares that class, and is no unlocated type where none does, since
+        the call may name a function."""
+        declared_types: list[tuple[_Declared, _Provider]] = []
         unlocated = 0
         not_read: list[str] = []
         seen = set(own) | {_C3_ROOT}
         queue = [symbol for symbol in sorted(set(referenced)) if symbol not in seen]
         seen.update(queue)
+        # Only a member the library's own file defines as a class: deciding it reads the
+        # class statements of one parsed file, where a declaration reads the whole module.
+        maybe = sorted(symbol for symbol in set(called) - seen if self._names_a_class(symbol))
+        seen.update(maybe)
+        queue += maybe
+        maybe_types = set(maybe)
+        # Each library module's class bodies, read once (task 9c review C2): the facts, and
+        # per class its functions and its class-statement keywords.
+        bodies: dict[str, _Bodies] = {}
         while queue:
-            symbol = queue.pop(0)
-            found = self._declaration(symbol)
-            if found is None:
-                unlocated += 1
-                continue
-            declared, provider = found
-            if declared.parents_unread is not None:
-                not_read.append(
-                    f"{without_type_marker(symbol).replace('/', '.').replace('$', '.')}: "
-                    f"{declared.parents_unread.detail}; no type header is written for it"
-                )
-                continue
+            while queue:
+                symbol = queue.pop(0)
+                found = self._declaration(symbol)
+                if found is None:
+                    if symbol not in maybe_types:
+                        unlocated += 1
+                    continue
+                declared, provider = found
+                if declared.parents_unread is not None:
+                    not_read.append(
+                        f"{without_type_marker(symbol).replace('/', '.').replace('$', '.')}: "
+                        f"{declared.parents_unread.detail}; no type header is written for it"
+                    )
+                    continue
+                declared_types.append((declared, provider))
+                for parent in [declared.superclass, *declared.interfaces]:
+                    bare = bare_descriptor(parent) if parent is not None else None
+                    if bare is not None and bare not in seen:
+                        seen.add(bare)
+                        queue.append(bare)
+            # A class a read body calls gets a header, as one a module's call names does.
+            wanted: dict[str, list[str]] = {}
+            for declared, _provider in declared_types:
+                if declared.body is not None and declared.body[0] not in bodies:
+                    wanted.setdefault(declared.body[0], []).append(declared.body[1])
+            for module, paths in wanted.items():
+                read = self._class_bodies(module, paths, document_id)
+                bodies[module] = read
+                for symbol in read.called:
+                    if symbol not in seen and self._names_a_class(symbol):
+                        seen.add(symbol)
+                        maybe_types.add(symbol)
+                        queue.append(symbol)
+        facts: list[Fact] = []
+        for declared, provider in declared_types:
+            body = None if declared.body is None else bodies.get(declared.body[0])
+            owner = None if declared.body is None else type_symbol(Target(*declared.body))
             facts.append(
                 TypeHeaderFact(
                     document_id=document_id,
@@ -930,37 +1092,169 @@ class Libraries:
                     interfaces=declared.interfaces,
                     origin=provider.origin,
                     version=provider.version,
+                    methods=None if body is None or owner is None else body.methods.get(owner, []),
+                    keywords=None if body is None or owner is None else body.keywords.get(owner),
                 )
             )
-            for parent in [declared.superclass, *declared.interfaces]:
-                bare = bare_descriptor(parent) if parent is not None else None
-                if bare is not None and bare not in seen:
-                    seen.add(bare)
-                    queue.append(bare)
+        for module_bodies in bodies.values():
+            facts.extend(module_bodies.facts)
         return facts, unlocated, not_read
 
-    def _declaration(self, symbol: str) -> tuple[SymbolFact, _Provider] | None:
-        """The library's own `symbol` fact for the type `symbol` (a class or a module),
-        read as the scanner reads a module file, and where it was read from."""
+    def _declaration(self, symbol: str) -> tuple[_Declared, _Provider] | None:
+        """What the library's own `symbol` fact for the type `symbol` (a class or a module)
+        says, as the scanner reads a module file, and where it was read from. Read from the
+        class statement alone where that is what the fact rests on (ruling R20), else from
+        the whole module."""
         target = self._target_of(symbol)
         if target is None:
             return None
         table = self._table(target.module)
         if table is None:
             return None
-        declared = self._module_symbols(table).get(symbol)
+        declared = self._class_declaration(table, target, symbol)
+        if isinstance(declared, _WholeModule):
+            fact = self._module_symbols(table).get(symbol)
+            declared = (
+                None
+                if fact is None
+                else _Declared(
+                    fact.symbol,
+                    fact.construct_kind,
+                    fact.superclass,
+                    list(fact.interfaces),
+                    fact.parents_unread,
+                )
+            )
         if declared is None or declared.construct_kind not in _TYPE_KINDS:
             return None
         return declared, table.source.provider
+
+    def _class_declaration(
+        self, table: _Table, target: Target, symbol: str
+    ) -> _Declared | _WholeModule | None:
+        """The type `symbol` as its module's `symbol` facts would say, read without them:
+        a module is a module; a class one class statement of the file holds is read from
+        that statement, its bases looked up as `file_facts` looks them up (a library's own
+        file, so any installed distribution, recording no note); a name no class statement
+        holds is no type. Anything else is the whole module's question."""
+        source = table.source
+        prefix = _prefix(source.provider)
+        if type_symbol(target) != symbol:
+            return WHOLE_MODULE
+        if target.member is None:
+            return _Declared(prefix + symbol, ConstructKind.MODULE, None, [], None)
+        if table.classes is None:
+            table.classes = single_classes(table.tree, table.source.module, self._index)
+        chains, named = table.classes
+        chain = chains.get(target.member)
+        if chain is None:
+            return WHOLE_MODULE if target.member.rpartition(".")[2] in named else None
+        recording, self._recording = self._recording, False
+        inside, self._inside = self._inside, True
+        try:
+            kind, written, parents_unread = class_header(
+                chain, source.module, self._scope(table), is_package=source.is_package
+            )
+        finally:
+            self._recording = recording
+            self._inside = inside
+        return _Declared(
+            prefix + symbol,
+            kind,
+            prefix + written[0] if written else None,
+            [prefix + parent for parent in written[1:]],
+            parents_unread,
+            (source.module, target.member),
+        )
+
+    def _class_bodies(self, module: str, paths: list[str], document_id: str) -> "_Bodies":
+        """The bodies of `module`'s classes at `paths`, read by the scanner's own reader
+        (`file_facts`) over the module with every function body left out and only the
+        module-level names those classes use (`structure.header_body_tree`), as the type
+        header's own facts (fact schema 12, task 9c review C2): each class's names, their
+        writes and the calls its body makes, the module-level names it uses with theirs; each
+        class's functions with their return types, and its class-statement keywords. No
+        method, no class symbol: a header-read type stays a header, its methods unread."""
+        table = self._table(module)
+        assert table is not None
+        source = table.source
+        here = source.module
+        owners = {type_symbol(Target(here, path)) for path in paths}
+        module_type = type_symbol(Target(here))
+        tree, names = header_body_tree(table.tree, paths, self._index, here)
+        context = FileContext(
+            here, source.is_package, self._index, _prefix(source.provider), document_id
+        )
+        recording, self._recording = self._recording, False
+        inside, self._inside = self._inside, True
+        try:
+            read = file_facts(tree, context, 1)
+        finally:
+            self._recording = recording
+            self._inside = inside
+        bodies = {method_descriptor(owner, CLINIT, PY_SIGNATURE) for owner in owners}
+        module_body = method_descriptor(module_type, CLINIT, PY_SIGNATURE)
+        kept: list[Fact] = []
+        methods: dict[str, list[HeaderMethod]] = {}
+        keywords: dict[str, list[CallArgument] | None] = {}
+        called: list[str] = []
+        for fact in read.facts:
+            if isinstance(fact, SymbolFact):
+                bare = bare_descriptor(fact.symbol)
+                holder = owner_of(bare)
+                if bare in owners:
+                    keywords[bare] = fact.keywords
+                elif (
+                    bare in bodies
+                    or bare == module_body
+                    or (holder in owners and fact.construct_kind == ConstructKind.FIELD)
+                ):
+                    kept.append(fact)
+                elif holder in owners and fact.construct_kind in (
+                    ConstructKind.METHOD,
+                    ConstructKind.CONSTRUCTOR,
+                ):
+                    name = bare[len(holder) :].split("(")[0]
+                    methods.setdefault(holder, []).append(
+                        HeaderMethod(
+                            name=name,
+                            returns=None if fact.signature is None else fact.signature.returns,
+                            parameters=[]
+                            if fact.signature is None
+                            else [parameter.type for parameter in fact.signature.parameters],
+                        )
+                    )
+                elif (
+                    holder == module_type
+                    and fact.construct_kind == ConstructKind.FIELD
+                    and bare[len(holder) :].removesuffix(".") in names
+                ):
+                    kept.append(fact)
+            elif isinstance(fact, FieldWriteFact):
+                writer = bare_descriptor(fact.written_by or "")
+                if writer in bodies or (
+                    writer == module_body
+                    and bare_descriptor(fact.field)[len(module_type) :].removesuffix(".") in names
+                ):
+                    kept.append(fact)
+            elif isinstance(fact, CallSiteFact):
+                caller = bare_descriptor(fact.caller)
+                if caller in bodies or caller == module_body:
+                    kept.append(fact)
+                    target = fact.target
+                    if fact.invoke_kind == "static" and target.owner and target.name:
+                        candidate = member_type(target.owner, target.name)
+                        if candidate is not None:
+                            called.append(candidate)
+        return _Bodies(kept, methods, keywords, list(dict.fromkeys(called)))
 
     def _module_symbols(self, table: _Table) -> dict[str, SymbolFact]:
         module = table.source.module
         if module not in self._symbols:
             source = table.source
-            provider = source.provider
-            manager = NOT_APPLICABLE if provider.package == NOT_APPLICABLE else _PACKAGE_MANAGER
-            prefix = f"{PYTHON_SCHEME} {manager} {provider.package} {provider.version} "
-            context = FileContext(module, source.is_package, self._index, prefix, "")
+            context = FileContext(
+                module, source.is_package, self._index, _prefix(source.provider), ""
+            )
             recording, self._recording = self._recording, False
             inside, self._inside = self._inside, True
             try:
@@ -1044,7 +1338,7 @@ class Libraries:
             found = next(
                 (
                     node
-                    for node in _statements(body, self._python)
+                    for node in _statements(body, table.versions)
                     if isinstance(node, ast.ClassDef) and node.name == part
                 ),
                 None,
@@ -1061,7 +1355,7 @@ class Libraries:
             found = next(
                 (
                     node
-                    for node in _statements(body, self._python)
+                    for node in _statements(body, table.versions)
                     if isinstance(node, ast.ClassDef) and node.name == part
                 ),
                 None,
@@ -1109,9 +1403,11 @@ class Libraries:
             except (OSError, SyntaxError, ValueError, RecursionError):
                 tree = None
             if tree is not None:
-                table = _Table(source, tree)
+                table = _Table(
+                    source, tree, versions=version_tests(tree, self._python, self._release)
+                )
                 package = module if source.is_package else module.rpartition("/")[0]
-                _bind(tree.body, table, package, self._python)
+                _bind(tree.body, table, package)
         self._tables[module] = table
         return table
 
@@ -1248,6 +1544,25 @@ def referenced_types(facts: Iterable[Fact]) -> set[str]:
     return {bare for bare in map(bare_descriptor, found) if is_type_descriptor(bare)}
 
 
+def called_types(facts: Iterable[Fact]) -> set[str]:
+    """The class each static call of the module's own facts may name: `fastapi/applications#`
+    called `FastAPI` names `fastapi/applications/FastAPI#` where that is a class (ruling R17).
+    A file writes the call on the module, as it cannot see what the name is, and calling a
+    class constructs it: the class gets a header so the resolver can read the construction."""
+    found: set[str] = set()
+    for fact in facts:
+        if (
+            isinstance(fact, CallSiteFact)
+            and fact.invoke_kind == "static"
+            and fact.target.owner is not None
+            and fact.target.name is not None
+        ):
+            named = member_type(fact.target.owner, fact.target.name)
+            if named is not None:
+                found.add(bare_descriptor(named))
+    return found
+
+
 def _type_symbols(written: TypeRef, into: set[str]) -> None:
     into.add(written.symbol)
     for argument in written.arguments:
@@ -1264,8 +1579,8 @@ def _argument_symbols(argument: CallArgument, into: set[str]) -> None:
 # -- the top-level names of a library module ----------------------------------------------
 
 
-def _bind(body: list[ast.stmt], table: _Table, package: str, python: tuple[int, int]) -> None:
-    table.names = _bound(body, {}, table, package, python)
+def _bind(body: list[ast.stmt], table: _Table, package: str) -> None:
+    table.names = _bound(body, {}, table, package)
 
 
 def _bound(
@@ -1273,36 +1588,32 @@ def _bound(
     names: dict[str, tuple[_Entry, ...]],
     table: _Table,
     package: str,
-    python: tuple[int, int],
 ) -> dict[str, tuple[_Entry, ...]]:
     """The names after `body` ran, read as `imports.py` reads a module: a later binding
     replaces an earlier one, and branches that bind a name differently add up. An `if` on
-    the Python version is decided."""
+    the Python version is decided (`table.versions`)."""
     names = dict(names)
     for node in body:
         if isinstance(node, ast.If):
-            decided = _version_test(node.test, python)
+            decided = None if table.versions is None else version_test(node.test, table.versions)
             if decided is None:
                 branches = [
-                    _bound(node.body, names, table, package, python),
-                    _bound(node.orelse, names, table, package, python),
+                    _bound(node.body, names, table, package),
+                    _bound(node.orelse, names, table, package),
                 ]
                 names = _either(names, branches)
             else:
                 chosen = node.body if decided else node.orelse
-                names = _bound(chosen, names, table, package, python)
+                names = _bound(chosen, names, table, package)
         elif isinstance(node, ast.Try | ast.TryStar):
             tried = _bound(
                 node.orelse,
-                _bound(node.body, names, table, package, python),
+                _bound(node.body, names, table, package),
                 table,
                 package,
-                python,
             )
-            handled = [_bound(h.body, names, table, package, python) for h in node.handlers]
-            names = _bound(
-                node.finalbody, _either(names, [tried, *handled]), table, package, python
-            )
+            handled = [_bound(h.body, names, table, package) for h in node.handlers]
+            names = _bound(node.finalbody, _either(names, [tried, *handled]), table, package)
         else:
             for name, entry in _bindings(node, table, package):
                 names[name] = (entry,)
@@ -1396,56 +1707,33 @@ def _from_base(node: ast.ImportFrom, package: str) -> str | None:
     return "/".join(part for part in (package, written) if part)
 
 
-def _statements(body: list[ast.stmt], python: tuple[int, int]) -> Iterator[ast.stmt]:
+def _statements(body: list[ast.stmt], versions: VersionTests | None) -> Iterator[ast.stmt]:
     """The statements of a module or class body that run: an `if` on the Python version
-    is decided, any other `if` gives both branches; a `try` gives its every block."""
+    is decided (`versions`, the module's), any other `if` gives both branches; a `try`
+    gives its every block."""
     for node in body:
         if isinstance(node, ast.If):
-            decided = _version_test(node.test, python)
+            decided = None if versions is None else version_test(node.test, versions)
             if decided is None:
-                yield from _statements(node.body, python)
-                yield from _statements(node.orelse, python)
+                yield from _statements(node.body, versions)
+                yield from _statements(node.orelse, versions)
             else:
-                yield from _statements(node.body if decided else node.orelse, python)
+                yield from _statements(node.body if decided else node.orelse, versions)
         elif isinstance(node, ast.Try | ast.TryStar):
             for block in (node.body, *(h.body for h in node.handlers), node.orelse):
-                yield from _statements(block, python)
-            yield from _statements(node.finalbody, python)
+                yield from _statements(block, versions)
+            yield from _statements(node.finalbody, versions)
         else:
             yield node
 
 
-def _version_test(test: ast.expr, python: tuple[int, int]) -> bool | None:
-    """`sys.version_info >= (3, 11)` and its other comparisons, read against `python`;
-    None for any other test."""
-    if not (
-        isinstance(test, ast.Compare)
-        and len(test.ops) == 1
-        and isinstance(test.left, ast.Attribute)
-        and test.left.attr == "version_info"
-        and isinstance(test.left.value, ast.Name)
-        and test.left.value.id == "sys"
-        and isinstance(test.comparators[0], ast.Tuple)
-    ):
-        return None
-    try:
-        written = tuple(int(ast.literal_eval(part)) for part in test.comparators[0].elts)
-    except (ValueError, TypeError):
-        return None
-    running = python[: len(written)]
-    operator = test.ops[0]
-    if isinstance(operator, ast.GtE):
-        return running >= written
-    if isinstance(operator, ast.Gt):
-        return running > written
-    if isinstance(operator, ast.Lt):
-        return running < written
-    if isinstance(operator, ast.LtE):
-        return running <= written
-    return None
-
-
 # -- distributions, typeshed ---------------------------------------------------------------
+
+
+def _prefix(provider: _Provider) -> str:
+    """The symbol prefix of a library module's facts: its distribution and version."""
+    manager = NOT_APPLICABLE if provider.package == NOT_APPLICABLE else _PACKAGE_MANAGER
+    return f"{PYTHON_SCHEME} {manager} {provider.package} {provider.version} "
 
 
 def _normalize(name: str) -> str:
@@ -1476,6 +1764,40 @@ def _python_version(environment: Path | None, site: Path | None) -> tuple[int, i
         if found is not None:
             return int(found.group(1)), int(found.group(2))
     return sys.version_info.major, sys.version_info.minor
+
+
+# `version_info = 3.12.4` (uv) or `version = 3.13.0rc2` (venv), as `pyvenv.cfg` writes it.
+_RELEASE = re.compile(r"\s*(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?\s*$")
+_LEVELS = {"a": "alpha", "b": "beta", "rc": "candidate"}
+
+
+def _python_release(environment: Path | None, site: Path | None) -> tuple[int | str, ...] | None:
+    """The environment's Python as its whole `sys.version_info` (`(3, 12, 4, "final", 0)`),
+    where `_python_version` reads it from a statement of the full version: `pyvenv.cfg`'s,
+    or the running Python's where there is no environment. None where only the minor
+    version is known (a `pyvenv.cfg` without it, or the `site-packages` path)."""
+    config = environment / "pyvenv.cfg" if environment is not None else None
+    if config is not None and config.is_file():
+        for line in config.read_text(encoding="utf-8", errors="replace").splitlines():
+            key, _, value = line.partition("=")
+            if key.strip() not in ("version_info", "version"):
+                continue
+            found = _RELEASE.match(value)
+            if found is None:
+                return None
+            major, minor, micro, level, serial = found.groups()
+            return (
+                int(major),
+                int(minor),
+                int(micro),
+                _LEVELS[level] if level else "final",
+                int(serial) if serial else 0,
+            )
+    if site is not None and re.fullmatch(r"python(\d+)\.(\d+)t?", site.parent.name):
+        return None
+    if config is not None and config.is_file():
+        return None
+    return tuple(sys.version_info)
 
 
 def _stdlib_versions(path: Path) -> dict[str, tuple[tuple[int, int], tuple[int, int] | None]]:
@@ -1644,6 +1966,10 @@ _UNPACKED = "**"
 # Where `_bind_arguments` puts the receiver's written type (`self`), beside the arguments'
 # positions.
 _RECEIVER = -1
+# A metaclass `__call__` answer: an instance of the class called (`metaclass_call`).
+_INSTANCE = "instance"
+# What calling a value runs: `type(value).__call__`.
+_CALL = "__call__"
 
 
 def _makes_type_variable(value: ast.expr) -> bool:

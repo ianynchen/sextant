@@ -40,7 +40,7 @@ _MODULE = {
 }
 _PROVENANCE = {"commit": "630906a7", "sextant_version": "0.1.0", "fact_schema_version": 2}
 _METADATA = {
-    "schema_version": 17,
+    "schema_version": 18,
     "boundary_vocabulary_version": 4,
     "catalog_hash": "sha256:catalogs",
     "module": _MODULE,
@@ -296,6 +296,49 @@ def test_an_optional_request_field_added_is_compatible(
     entry = _changed_owner(tmp_path, sources, [("id", True)], [("id", True), ("tz", False)],
                            "request")  # fmt: skip
     assert entry.compatibility == "compatible"
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ([("id", True)], [("id", True), ("tz", None)]),  # gains a field, requirement unknown
+        ([("id", True), ("tz", False)], [("id", True), ("tz", None)]),  # becomes unknown
+        ([("id", True), ("tz", None)], [("id", True), ("tz", True)]),  # unknown becomes required
+    ],
+)
+def test_a_request_field_whose_requirement_is_unknown_is_unlabelled(
+    tmp_path: Path,
+    sources: Callable[[Path], BoundarySource],
+    before: _Fields,
+    after: _Fields,
+):
+    """Task 9 re-review R2-2: a NULL `required` is unknown (ruled 2026-11-09), so a request
+    that gains or changes a field whose requirement is not read is neither `compatible` nor
+    `breaking`: the change is unlabelled (`None`)."""
+    entry = _changed_owner(tmp_path, sources, before, after, "request")
+    assert entry.compatibility is None
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ((), (("q", None),)),  # gains a parameter whose requirement is not read
+        ((("q", "optional"),), (("q", None),)),  # one becomes unknown
+        ((("q", None),), (("q", "required"),)),  # unknown becomes required
+    ],
+)
+def test_a_request_parameter_whose_requirement_is_unknown_is_unlabelled(
+    tmp_path: Path,
+    sources: Callable[[Path], BoundarySource],
+    before: tuple[tuple[str, str | None], ...],
+    after: tuple[tuple[str, str | None], ...],
+):
+    """The same rule on an endpoint's request parameters (R2-2's "every other reader"): a
+    parameter row whose `requirement` is NULL may be required or not."""
+    a = sources(_built(tmp_path / "a", _requiring(*before)))
+    b = sources(_built(tmp_path / "b", _requiring(*after)))
+    (entry,) = diff_sources(a, b, REDACTOR, REDACTOR).entries
+    assert entry.compatibility is None
 
 
 def test_a_response_field_removed_is_breaking(
@@ -787,7 +830,7 @@ def test_two_analyses_older_than_this_build_refuse_and_allowed_hide_a_split_peer
     a = sources(_built(tmp_path / "a", lambda w: None, schema_version=4))
     b = sources(_built(tmp_path / "b", build, schema_version=4))
     with pytest.raises(
-        DiffRefused, match="both sides are graph_schema_version 4 and this build is 17"
+        DiffRefused, match="both sides are graph_schema_version 4 and this build is 18"
     ):
         diff_sources(a, b, REDACTOR, REDACTOR)
     allowed = diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)
@@ -874,7 +917,7 @@ def _stamped(root: Path, **metadata: object) -> BoundarySource:
 
 def test_different_graph_schema_versions_refuse_by_name(tmp_path: Path):
     a, b = _stamped(tmp_path / "a", schema_version=2), _stamped(tmp_path / "b")
-    with pytest.raises(DiffRefused, match="graph_schema_version 2 vs 17") as refused:
+    with pytest.raises(DiffRefused, match="graph_schema_version 2 vs 18") as refused:
         diff_sources(a, b, REDACTOR, REDACTOR, allow_producer_change=True)  # no flag overrides this
     assert refused.value.stamps == ("graph_schema_version",)
 

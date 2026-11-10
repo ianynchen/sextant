@@ -1,0 +1,30 @@
+id: fastapi
+displayName: FastAPI dependencies (Depends, Security)
+
+# WHAT THIS FILE IS: D02 §1c, the container's vocabulary declared once (see `spring.yml` for
+# why it is not a catalog). No catalog names it: the value walk reads every bean model (plan
+# 2026-11-08-python-fastapi-inbound N5, ruling R14).
+#
+# FastAPI fills a parameter whose default, or whose last `Annotated` marker, is `Depends(recipe)`
+# with what calling the recipe gives (`dependencies/utils.py` `solve_dependencies`, FastAPI
+# 0.162.0, `scripts/probes/fastapi_rules.md`): a function's return, a generator's first yield
+# (FastAPI wraps it in a context manager, which allows one yield per run), a class's instance (a
+# construction), an instance's class `__call__` return. The recipe is a VALUE the marker call is
+# handed, so a parameter names its recipe: there is no key to match and no candidate to choose.
+# The walk reads it as one more path beside the parameter's own callers in the module (N5 option
+# A), so a direct call passing an argument stays that caller's own path.
+injection: names_recipe
+
+# The calls that name the recipe, and the argument holding it: `Depends(dependency=None, *,
+# use_cache=True, scope=None)` and `Security(dependency=None, *, scopes=None, use_cache=True)`,
+# the functions and the `fastapi.params` classes a module may build them from directly.
+recipe_calls:
+  - { owner: fastapi.param_functions, method: Depends,  recipe_arg: { arg: 0, keyword: dependency } }
+  - { owner: fastapi.param_functions, method: Security, recipe_arg: { arg: 0, keyword: dependency } }
+  - { owner: fastapi.params.Depends,  method: <init>,   recipe_arg: { arg: 0, keyword: dependency } }
+  - { owner: fastapi.params.Security, method: <init>,   recipe_arg: { arg: 0, keyword: dependency } }
+
+# `Depends()` handed no recipe (or `None`): the parameter's own type is the recipe
+# (`analyze_param`: `if depends.dependency is None: depends = dataclasses.replace(depends,
+# dependency=type_annotation)`).
+empty_recipe: parameter_type

@@ -436,14 +436,16 @@ def test_the_callers_value_answers_before_the_written_parameter_type(tmp_path: P
 
 
 def test_a_library_value_passed_for_a_written_parameter_type_is_partial(tmp_path: Path):
-    """`Svc(Mock(), Mock())`: the callers' value comes from a library (`external`), and the
-    written type answers beside it: never `resolved` on the declaration alone."""
+    """`Svc(json.loads(a), json.loads(b))`: the callers' value comes from a library call that
+    returns `Any` (`external`), and the written type answers beside it: never `resolved` on
+    the declaration alone. A library class's construction (`Mock()`) is no such value: the
+    code fixes its class (ruling R17)."""
     workspace = _resolved(
         tmp_path,
         {
             "a.py": _INJECTED,
-            "b.py": "from unittest.mock import Mock\nfrom app.a import Svc\n"
-            "def main():\n    Svc(Mock(), Mock()).run()\n",
+            "b.py": "import json\nfrom app.a import Svc\n"
+            "def main():\n    Svc(json.loads('{}'), json.loads('[]')).run()\n",
         },
     )
     run = "app/a/Svc#run(sig_dd69782a)."

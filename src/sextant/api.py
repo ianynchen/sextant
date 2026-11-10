@@ -114,14 +114,15 @@ still turns it into a `click.ClickException`.
 """
 
 import asyncio
+import gc
 import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
@@ -518,7 +519,7 @@ def _skip_reason(module: ModuleModel) -> str | None:
 def _scanners() -> list[Scanner]:
     """The one scanner registry: what the scan stage chooses from, and what `_skip_reason`
     asks before a module is analysed, so the two can never disagree."""
-    return [AsmScanner(extractor_jar()), PythonScanner()]
+    return [AsmScanner(extractor_jar), PythonScanner()]
 
 
 def _module_json_row(outcome: ModuleOutcome) -> dict[str, object]:
@@ -880,6 +881,29 @@ def _enrich_defaults_for(path: Path) -> EnrichDefaults:
 # --------------------------------------------------------------------------
 
 
+# The garbage collector's thresholds while a module is analysed (plan 2 task 9b): a young
+# collection every 10,000 net allocations rather than 2,000, and a full one at most every 100
+# middle collections rather than 10. The scan and the resolve each build a heap of millions of
+# objects that live to the end of the stage (library syntax trees, facts, the value index), so
+# at the defaults the collector walked that heap again and again and found almost nothing to
+# free: on polar 31 full collections took about 12 s of a 65 s run, and those in the resolve
+# freed nothing. Measured there: 65.1 s to 56.0 s, the peak memory the same (4.1 GB). When the
+# collector runs never changes what it frees, so no output moves.
+_ANALYZE_GC_THRESHOLDS = (10_000, 10, 100)
+
+
+@contextmanager
+def _fewer_collections() -> Iterator[None]:
+    """The analysis's collector thresholds (`_ANALYZE_GC_THRESHOLDS`), and the caller's back
+    after it, however it ends."""
+    before = gc.get_threshold()
+    gc.set_threshold(*_ANALYZE_GC_THRESHOLDS)
+    try:
+        yield
+    finally:
+        gc.set_threshold(*before)
+
+
 def _run_analyze(
     path: Path,
     module: ModuleModel,
@@ -907,7 +931,7 @@ def _run_analyze(
     factory = progress_factory or (lambda: nullcontext(NullProgress()))
     workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
     try:
-        with factory() as progress:
+        with factory() as progress, _fewer_collections():
             result = _analyzed(
                 path,
                 workspace,
@@ -1293,6 +1317,7 @@ def _reconstructed_report(
         bean_presence=workspace.query("bean_presence"),
         symbol_beans=workspace.query("symbol_beans"),
         candidate_presence=workspace.query("candidate_presence"),
+        endpoint_existence=workspace.query("endpoint_existence"),
         unexpanded_types=tuple(metadata.get("shapes", {}).get("unexpanded_types", [])),
     )
     return reconstructed, report
@@ -2006,7 +2031,16 @@ def system_analyze(path: Path, *, environment: str = DEFAULT_ENVIRONMENT) -> Sys
             None,
         )
         participants = _with_registered_names(participants, config, key)
-        links, unmatched = _match_links(participants, endpoints)
+        hosted = frozenset(
+            (
+                str(row["participant"]),
+                str(row["protocol"]),
+                None if row["method"] is None else str(row["method"]),
+                str(row["path"]),
+            )
+            for row in workspace.query("system_endpoint_hosts")
+        )
+        links, unmatched = _match_links(participants, endpoints, hosted)
         # **A gateway route's prefix, joined to the paths the service it names serves.** It
         # runs after the matcher and adds to it rather than replacing anything: the
         # participant-level link the `lb://` row already produced stays, because the

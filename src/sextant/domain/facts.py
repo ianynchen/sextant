@@ -88,6 +88,23 @@ class Parameter(BaseModel):
     # `var_keyword` (the extra keyword arguments). Absent where a call fills every parameter
     # by place, which is every JVM declaration.
     kind: ParameterKind | None = None
+    # The parameter declares a default value (D00 §5a, R1). Absent means false, as `receiver`
+    # is: the JVM extractor writes the key only where it is true, so a fact it wrote and this
+    # model writes back keeps its bytes.
+    declares_default: bool = Field(default=False, exclude_if=lambda held: not held)
+    # The default's VALUE, in the call-argument grammar (N1, OI-328): the value
+    # `inspect.signature` gives a framework. A `source` names a call of the body that runs the
+    # `def` (the owner's `<clinit>` for a module function or a method, the enclosing function
+    # for a nested `def`). Set wherever a Python parameter `declares_default`; absent on every
+    # JVM parameter, whose default lives in a bridge's body.
+    default: "CallArgument | None" = Field(default=None, exclude_if=lambda held: held is None)
+    # The annotation's VALUE, in the same grammar, written only where it is not a plain type:
+    # an `Annotated[...]` (the result of the `__class_getitem__` call that makes it, whose
+    # arguments are its parts) or a name bound to a module-level type alias (a `field` naming
+    # the alias). `type` keeps the type either one gives.
+    annotation_value: "CallArgument | None" = Field(
+        default=None, exclude_if=lambda held: held is None
+    )
 
 
 class TypeParameter(BaseModel):
@@ -120,6 +137,14 @@ class Signature(BaseModel):
     # order. Part of the signature because it is part of what a caller must handle
     # to call it. Empty for the great majority, which declare none.
     throws: list[str] = Field(default_factory=list)
+    # A Python class-body FIELD's annotation value, in the call-argument grammar, written only
+    # where it is not a plain type: `Parameter.annotation_value`'s rule, applied to the other
+    # annotated declaration (task 9 review M1). The class body evaluates it after the value,
+    # so its calls are the class body's. `returns` keeps the type it gives. Absent everywhere
+    # else, every JVM signature included.
+    annotation_value: "CallArgument | None" = Field(
+        default=None, exclude_if=lambda held: held is None
+    )
 
 
 class ClasspathEntry(BaseModel):
@@ -386,6 +411,13 @@ class SymbolFact(BaseModel):
     # captured" rule `supertype` and `generic_interfaces` follow, so the key is
     # absent rather than an empty list on every fact.
     type_parameters: list[TypeParameter] = Field(default_factory=list)
+    # A Python class statement's keyword arguments (`class A(Base, extra="allow")`, fact schema
+    # 12, plan 2026-11-08 task 9c review C1), in the call-argument grammar, each with its
+    # `keyword` (`**` for an unpacked mapping), `metaclass` left out: what the metaclass and
+    # `__init_subclass__` are handed. Written back only where the statement writes one.
+    keywords: list["CallArgument"] | None = Field(
+        default=None, exclude_if=lambda held: held is None
+    )
 
 
 class AnnotationFact(BaseModel):
@@ -500,6 +532,21 @@ class CallTarget(BaseModel):
     descriptor: str | None = None
 
 
+class CallGuard(BaseModel):
+    """One test a call runs under within its own body (D00 §5 `call_site.guards`, OI-368,
+    approved by the user 2026-11-09): an `if` test, or a conditional expression's, that the
+    scanner does not decide. `test` is the test as the code writes it (`ast.unparse`); `holds`
+    is the arm the call is in — true in the `if` arm, false in the `else` arm and after an arm
+    that always returns. An arm that always raises guards nothing, nor does the entry-point
+    test `__name__ == "__main__"` (ruled 2026-11-09). `reads` are the names and dotted names
+    the test reads, in the order it reads them. Python only."""
+
+    model_config = {"frozen": True}
+    test: str
+    holds: bool
+    reads: list[str] = Field(default_factory=list)
+
+
 class CallSiteFact(BaseModel):
     """D00 §5's load-bearing fact kind: caller, target, dispatch form, the v1
     control-flow position, and the resolved argument slots."""
@@ -560,6 +607,12 @@ class CallSiteFact(BaseModel):
     # to code that does not exist.
     implementation: str | None = None
     arguments: list[CallArgument] = Field(default_factory=list)
+    # OI-368 (approved by the user 2026-11-09): the tests this call runs under within its own
+    # body, outermost first (`CallGuard`); absent where it runs under none, and on every JVM
+    # site. A test the language decides (a constant, `typing.TYPE_CHECKING`, a library's
+    # version test read for a known Python) writes nothing. A body's callers' tests are not
+    # here: the resolver follows them over the call graph.
+    guards: list[CallGuard] | None = None
 
     @model_validator(mode="after")
     def _only_a_throw_names_no_method(self) -> "CallSiteFact":
@@ -630,6 +683,12 @@ class MethodReturnFact(BaseModel):
     # role `call_site.ordinal` plays.
     ordinal: int
     value: CallArgument | None = None
+    # A generator's `yield` (plan 2026-11-08-python-fastapi-inbound N10): `value` is what it
+    # hands out, not what a call of the method returns, which is the generator object (the
+    # method's own `unresolved` return beside it). False for every return, and then not
+    # written: the JVM extractor never writes it, so a JVM fact file rewritten whole keeps its
+    # bytes (plan 2 final review Minor 1).
+    yielded: bool = Field(default=False, exclude_if=lambda held: not held)
 
 
 class FieldWriteFact(BaseModel):
@@ -819,6 +878,17 @@ class OperationRecord(BaseModel):
     server_streaming: bool
 
 
+class HeaderMethod(BaseModel):
+    """One function a library class body defines (D00 §5 `type_header`, fact schema 12): its
+    name, its projected return type and its parameters' types (the receiver taken), as the
+    scanner's `method` symbol fact would say."""
+
+    model_config = {"frozen": True}
+    name: str
+    returns: TypeRef | None = None
+    parameters: list[TypeRef | None] = Field(default_factory=list)
+
+
 class TypeHeaderFact(BaseModel):
     """D00 §5's `type_header`: the class-file HEADER of a type a module depends on
     but did not build — superclass, interfaces and class-level annotations, never a
@@ -849,6 +919,15 @@ class TypeHeaderFact(BaseModel):
     # because one document holds headers from every jar.
     origin: str
     version: str
+    # A Python header's class body was read (fact schema 12, plan 2026-11-08 task 9c): the
+    # functions it defines, each with its return type. The body's names, their values and the
+    # calls that made them are ordinary `symbol`, `field_write` and `call_site` facts of the
+    # header document, written by the same reader as a module class's. None where the body
+    # was not read — every JVM header, and a Python class only a whole-module read answers —
+    # so a reader can tell "declares nothing" from "not read". Written back only where set.
+    methods: list[HeaderMethod] | None = Field(default=None, exclude_if=lambda held: held is None)
+    # The class statement's keyword arguments, as a module class's `symbol` fact carries them.
+    keywords: list[CallArgument] | None = Field(default=None, exclude_if=lambda held: held is None)
 
 
 class DeclaredShapeFact(BaseModel):

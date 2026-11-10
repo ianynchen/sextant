@@ -1,5 +1,6 @@
 import json
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 from sextant.application.ports.scanner import ScanError, ScanReport, ScanRequest
@@ -27,9 +28,16 @@ class AsmScanner:
     could resolve.
     """
 
-    def __init__(self, jar: Path) -> None:
-        self._jar = jar
+    def __init__(self, jar: Path | Callable[[], Path]) -> None:
+        # The jar may be handed in as a lookup, asked only when a JVM module is read: choosing
+        # a scanner for a Python module must not need the JVM extractor to be built.
+        self._jar_or_lookup = jar
         self._capabilities: frozenset[str] | None = None
+
+    @property
+    def _jar(self) -> Path:
+        jar = self._jar_or_lookup
+        return jar if isinstance(jar, Path) else jar()
 
     def accepts(self, languages: set[str]) -> bool:
         return bool(languages & _LANGUAGES)

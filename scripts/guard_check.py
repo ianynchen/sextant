@@ -1969,7 +1969,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="            if rule.prefix_arg is not None and rule.matches(site):\n",
+                find="            if rule.by_call and rule.matches(site):\n",
                 replace="            if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -2042,13 +2042,14 @@ GUARDS: dict[str, Guard] = {
         ),
     ),
     "inbound_routes.a-path-join-other-than-leading-slash-is-refused": Guard(
-        what="`path_join` is `leading_slash` or absent, refused otherwise, for every engine "
+        what="`path_join` is `leading_slash`, absent, or (fluent) `concatenate`, refused "
+        "otherwise, for every engine "
         "that reads it (Vert.x plan, Task 11; coordinator ruling 6)",
         why="without it a misspelt rule reads as verbatim and publishes glued addresses",
         edits=(
             Edit(
                 path=_INBOUND_ROUTES,
-                find='    if matches.get("path_join", LEADING_SLASH) != LEADING_SLASH:\n',
+                find='    if matches.get("path_join", LEADING_SLASH) not in allowed:\n',
                 replace="    if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -2239,10 +2240,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_CHAINS,
-                find='_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel", "host", '
-                '"port", "options")\n',
-                replace='_ARGUMENT_FIELDS = ("url", "base", "body", "response", "channel")  '
-                "# guard disabled by scripts/guard_check.py\n",
+                find='    "host",\n    "port",\n    "options",\n    "dependencies",\n)\n',
+                replace='    "options",\n    "dependencies",\n)  # guard disabled by scripts/guard_check.py\n',
             ),
         ),
     ),
@@ -4654,9 +4653,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="                self._index, site, RECEIVER, self._index.unscanned, which_object=True\n",
-                replace="                self._index, site, RECEIVER, frozenset(), which_object=True"
-                "  # guard disabled\n",
+                find="                self._index.unscanned,\n                which_object=True,\n",
+                replace="                frozenset(),  # guard disabled\n                which_object=True,\n",
             ),
         ),
     ),
@@ -4868,10 +4866,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="                _only(trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, "
-                "parameter=(method, index))),",
-                replace="                _only(trail, _unresolved(EXTERNAL)),  "
-                "# guard disabled by scripts/guard_check.py",
+                find="                    trail, Answer(kind=UNRESOLVED, reason=EXTERNAL, "
+                "parameter=(method, index))\n",
+                replace="                    trail, _unresolved(EXTERNAL)\n",
             ),
         ),
     ),
@@ -9656,8 +9653,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_DIFF,
-                find='        return "breaking" if newly_required else "compatible"\n',
-                replace='        return "compatible"  # guard disabled by scripts/guard_check.py\n',
+                find='            if now is True and before is False:\n                return "breaking"\n',
+                replace="            if now is True and before is False:\n"
+                "                pass  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -11707,9 +11705,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        if key in self._entering:\n            return (((), CYCLE),)\n",
-                replace="        if key in self._entering:\n"
-                "            return (((), ()),)  # guard disabled by scripts/guard_check.py\n",
+                find="            cycle=((((), CYCLE),),),\n",
+                replace="            cycle=((((), ()),),),  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),
@@ -12110,9 +12107,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        if key in self._entering_bodies:\n            return CYCLE\n",
-                replace="        if False:  # guard disabled by scripts/guard_check.py\n"
-                "            return CYCLE\n",
+                find="self._touching, body, parameter, cycle=(CYCLE,)\n",
+                replace="self._touching, body, parameter, cycle=None  # guard disabled by "
+                "scripts/guard_check.py\n",
             ),
         ),
     ),

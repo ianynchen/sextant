@@ -4,6 +4,7 @@ inbound endpoint got in PR #61, all read from ONE index over `bean_conditions` a
 `bean_presence` — never from per-kind copies, and "holds in N of M" from `bean_presence` alone
 (two mutually exclusive factories would otherwise read as "exists nowhere")."""
 
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -1222,4 +1223,76 @@ def test_a_conditional_placeholder_job_states_its_configured_value_first_then_it
         "not set in `staging` (external: jobs.nightly.cron is not set)\n"
         "  - Exists only when: the configuration key `jobs.enabled` is `true`\n"
         f"{OF_ENVIRONMENTS}\n"
+    )
+
+
+def _existence(route: int, test: str, holds: bool, position: int = 0) -> dict[str, object]:
+    """One `endpoint_existence` row of the row numbered 7 (OI-368)."""
+    return {
+        "row_id": 7,
+        "route": route,
+        "position": position,
+        "via": "app/main#<clinit>",
+        "kind": "test",
+        "expression": json.dumps({"holds": holds, "reads": [], "test": test}, sort_keys=True),
+        "environment": "default",
+        "holds": "unresolved",
+        "resolution": "unresolved",
+        "evidence": f"a condition this analysis does not evaluate: `{test}`",
+    }
+
+
+def test_a_row_registered_under_an_undecided_test_is_not_evaluated():
+    """OI-368: a route whose registering calls run only under tests the analysis does not
+    decide states the tests, each as the code writes it with the arm it is in, and that it is
+    not evaluated in any environment — read off the row's own `endpoint_existence` rows."""
+    document = _document(
+        endpoints=[{**_inbound(USERS + "status()."), "row_id": 7}],
+        endpoint_existence=[
+            _existence(0, "settings.DEBUG", True, 0),
+            _existence(0, "not os.path.exists('/static')", False, 1),
+        ],
+    )
+    block = _block(document, "Users#status")
+    # Outermost first (review Minor 10): the caller's test, then the helper's early return.
+    assert (
+        "  - Exists only when: the code's test `settings.DEBUG` is true and the code's test "
+        "`not os.path.exists('/static')` is false, not evaluated"
+    ) in block
+    assert (
+        "  - Of this module's environments: not evaluated by this analysis in any of the 1 "
+        "environments — a condition this analysis does not evaluate: "
+        "`not os.path.exists('/static')`; a condition this analysis does not evaluate: "
+        "`settings.DEBUG`"
+    ) in block
+
+
+def test_a_row_registered_two_ways_under_two_tests_states_both():
+    document = _document(
+        endpoints=[{**_inbound(USERS + "status()."), "row_id": 7}],
+        endpoint_existence=[_existence(0, "a", True), _existence(1, "b", False)],
+    )
+    block = _block(document, "Users#status")
+    assert (
+        "  - Exists only when: (the code's test `a` is true) or (the code's test `b` is false), "
+        "not evaluated"
+    ) in block
+
+
+def test_a_row_with_no_existence_rows_has_no_condition_lines():
+    document = _document(
+        endpoints=[{**_inbound(USERS + "status()."), "row_id": 7}],
+        endpoint_existence=[{**_existence(0, "a", True), "row_id": 8}],
+    )
+    assert "Exists only when" not in _block(document, "Users#status")
+
+
+def test_alternatives_are_in_their_numbered_order():
+    """Review Minor 10: alternative 2 before alternative 10."""
+    document = _document(
+        endpoints=[{**_inbound(USERS + "status()."), "row_id": 7}],
+        endpoint_existence=[_existence(10, "ten", True), _existence(2, "two", True)],
+    )
+    assert "(the code's test `two` is true) or (the code's test `ten` is true)" in _block(
+        document, "Users#status"
     )

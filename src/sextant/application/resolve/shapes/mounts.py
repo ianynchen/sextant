@@ -27,7 +27,18 @@ gives each caller's routes that caller's prefix, never the other's.
 framework throws at the mount call, so a route reached only through it derives no row, and
 one reached through another serving path keeps that row. The refusals are a mount path with
 no trailing wildcard (`exact`), a pattern path (`pattern`), a mount point given the wildcard
-(`wildcard`), and an unrooted mount path where the catalog refuses one.
+(`wildcard`), an unrooted mount path where the catalog refuses one, and for a prefix (plan
+2026-11-08 N7, ruling R4) a non-empty one not starting with `/` (`unrooted`), one ending in `/`
+(`trailing_slash`), and a mount with an empty prefix of a route whose path below it is empty
+too (`empty_path`, decided per route: `Prefix.empty_after`).
+
+**A prefix the router holds** (`router_holds`, plan 2026-11-08 N7): a router whose producer is
+a construction a hold entry names (`APIRouter(prefix="/orders")`) carries that prefix in front
+of every route registered on it and of every mount made on it, behind every prefix it is
+served under — the framework composes its prefixes, where two mounts are two serving places.
+It is read on the producer the route's receiver reached, within the same path, so a factory
+helper's routers each hold their own caller's prefix. A held prefix the framework refuses
+(`refuses`) gives the router no serving place at all.
 
 **Cost** (spec §5): one producer read per route-root receiver and one per mount argument and
 mount receiver, each cached here and run on the resolve's shared index; one `within=` read of
@@ -46,9 +57,12 @@ from typing import Any
 
 from sextant.application.ports.catalogs import CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.dispatch import Dispatch
 from sextant.application.resolve.shapes.inbound_routes import (
+    EMPTY_PATH,
     EXACT_MOUNT_PATH,
     PATTERN_MOUNT_PATH,
+    TRAILING_SLASH,
     UNROOTED_PATH,
     WILDCARD_MOUNT_POINT,
     WORDS,
@@ -72,6 +86,7 @@ from sextant.application.resolve.values import (
     argument_slot,
     producer_paths,
     resolve_positions,
+    resolve_positions_on_paths,
 )
 from sextant.domain.closed_sets import Resolution
 from sextant.domain.symbols import returned_type, type_descriptor
@@ -93,7 +108,12 @@ _REFUSES = {
     "exact": EXACT_MOUNT_PATH,
     "pattern": PATTERN_MOUNT_PATH,
     "wildcard": WILDCARD_MOUNT_POINT,
+    "unrooted": UNROOTED_PATH,
+    "trailing_slash": TRAILING_SLASH,
+    "empty_path": EMPTY_PATH,
 }
+# The refusals a held prefix may declare: it is a prefix, read once, with no route below it.
+_HOLD_REFUSES = frozenset({"unrooted", "trailing_slash"})
 # The named hole a prefix nobody read is published as: `stitch/links.py`'s `_NAMED_HOLE`
 # grammar, so a path holding it is never linked by path (the `<host>` refusal applied to a
 # path segment).
@@ -128,6 +148,16 @@ class MountRule:
     # framework's mount path carries none.
     wildcard: str | None
     refuses: frozenset[str]
+    # The one character every trailing copy of which the framework strips from the mount
+    # path (Starlette's `Mount`: `path.rstrip("/")`); None where it removes one `/` at most.
+    strip_trailing: str | None = None
+    # The argument holding the dependencies the mount adds to every route below it (plan
+    # 2026-11-08 N6), read by the request-requirements reader; None where none is declared.
+    dependencies_arg: Any = None
+    # The argument holding the host the mounted router is served on (`host_arg`, OI-368,
+    # approved 2026-11-09: Starlette's `Host`); None for a mount served on every host. A mount
+    # with a host and no `prefix_arg` serves the router's routes at their own paths.
+    host_arg: Any = None
 
     def matches(self, site: Mapping[str, Any]) -> bool:
         return (
@@ -136,14 +166,36 @@ class MountRule:
             and (self.descriptor is None or site.get("descriptor") == self.descriptor)
         )
 
+    @property
+    def by_call(self) -> bool:
+        """A mount made by a call of its own (`prefix_arg` or `host_arg`), found in one pass
+        over the sites, not a chain end whose route path is the prefix (`prefix_from`)."""
+        return self.prefix_arg is not None or self.host_arg is not None
+
+
+@dataclass(frozen=True)
+class HoldRule:
+    """One `router_holds` entry (plan 2026-11-08 N7): the construction that makes a router,
+    the argument holding the prefix it carries, and the dependencies it adds (N6)."""
+
+    owners: tuple[str, ...]
+    method: str
+    prefix_arg: Any
+    dependencies_arg: Any
+    refuses: frozenset[str]
+
+    def matches(self, site: Mapping[str, Any]) -> bool:
+        return str(site.get("owner")) in self.owners and site["name"] == self.method
+
 
 @dataclass(frozen=True)
 class MountRules:
-    """`router_type`, `mount` and the `path_join` a prefix is joined by."""
+    """`router_type`, `mount`, `router_holds` and the `path_join` a prefix is joined by."""
 
     router_types: frozenset[str]
     mounts: tuple[MountRule, ...]
     path_join: str | None
+    holds: tuple[HoldRule, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -163,6 +215,8 @@ class MountPath:
     within: Path | None = None
     # A mount path the walk captured without a position to read it at: not read.
     unread: bool = False
+    # `(site, slot)` the mount's host is read at (`host_arg`); None for a mount with no host.
+    host: tuple[Mapping[str, Any], int] | None = None
     # The order the mount route was given, as the engine reads a route's order, or None for
     # its registration order: where the mount stands among the parent's own routes.
     order: Any = None
@@ -221,6 +275,22 @@ class Prefix:
     resolution: str
     unread: tuple[UnreadPrefix, ...] = ()
     places: frozenset[Place] = field(default=frozenset(), compare=False)
+    # Where in `text` a mount refusing `empty_path` ended with an empty prefix of its own: a
+    # route whose served path is empty from there on is refused (`EMPTY_PATH`).
+    empty_after: tuple[int, ...] = ()
+    # The paths a held prefix was read on (`router_holds`), each a choice of the calls that
+    # built the router: folded into the router's `places` path, so whatever else is read on
+    # the route is read on the same call (M-1). Not part of what the prefix is.
+    read_on: frozenset[Path] = field(default=frozenset(), compare=False)
+    # The paths each mount's own prefix value was read on, joined across the mounts the prefix
+    # is behind (`_behind`): the calls that gave this prefix its words. Read only to say which
+    # calls a row's registration ran through (OI-368, task 10b re-review R1-1); empty where no
+    # value was walked. Not part of what the prefix is.
+    chosen_on: frozenset[Path] = field(default=frozenset(), compare=False)
+    # The host the routes are served on (`host_arg`, OI-368): `(text, resolution)`, the text
+    # None where the walk read no string whole (never guessed); None for every host. Part of
+    # what the prefix is: one router served on two hosts serves twice.
+    host: tuple[str | None, str] | None = None
 
 
 ROOT = Prefix(None, str(Resolution.RESOLVED))
@@ -234,6 +304,8 @@ def mount_rules_of(
     space (design 2026-11-06-reading-decorators §4): it declares no `path_join`."""
     declared, types = matches.get("mount"), matches.get("router_type")
     if declared is None and types is None:
+        if "router_holds" in matches:
+            raise CatalogError(f"loading catalog {source}: `router_holds` without `router_type`")
         return None
     if types is None:
         raise CatalogError(f"loading catalog {source}: `mount` without `router_type`")
@@ -253,11 +325,73 @@ def mount_rules_of(
             f"with one space and declares no `path_join`"
         )
     path_join = WORDS if words else validated_path_join(matches, source, "fluent")
+    holds = matches.get("router_holds", [])
+    if not isinstance(holds, list):
+        raise CatalogError(f"loading catalog {source}: `router_holds` must be a list")
     return MountRules(
         router_types,
         tuple(_rule(entry, terminals, roots, source) for entry in declared),
         path_join,
+        tuple(_hold(entry, source) for entry in holds),
     )
+
+
+def with_heirs(rules: MountRules, dispatch: Dispatch) -> MountRules:
+    """`rules` with each mount's and hold's owners widened by `Dispatch.heirs` (declared
+    owners first), as a root's are (`chains._with_heirs`): a subclass that inherits the method
+    — `class App(FastAPI)`'s `include_router`, `class S(APIRouter)`'s constructor — is called
+    through its own name and runs the owner's."""
+
+    def widened(owners: tuple[str, ...], method: str) -> tuple[str, ...]:
+        heirs = [heir for owner in owners for heir in dispatch.heirs(owner, method)]
+        return tuple(dict.fromkeys((*owners, *heirs))) if heirs else owners
+
+    return replace(
+        rules,
+        mounts=tuple(
+            replace(rule, owners=widened(rule.owners, rule.method)) for rule in rules.mounts
+        ),
+        holds=tuple(
+            replace(rule, owners=widened(rule.owners, rule.method)) for rule in rules.holds
+        ),
+    )
+
+
+def _hold(entry: Any, source: object) -> HoldRule:
+    where = f"loading catalog {source}: router_holds[]"
+    if not isinstance(entry, dict) or not isinstance(entry.get("method"), str):
+        raise CatalogError(f"{where} must be a mapping naming `owner` and `method`")
+    dependencies = _dependencies_arg(entry, where)
+    # A construction may hold dependencies and no prefix (N6: `FastAPI(dependencies=...)`).
+    if argument_reference(entry.get("prefix_arg"), spelled=False) is None and not (
+        "prefix_arg" not in entry and dependencies is not None
+    ):
+        raise CatalogError(
+            f"{where} `{entry['method']}` must name its `prefix_arg`, or only a `dependencies_arg`"
+        )
+    refuses = entry.get("refuses", [])
+    if not isinstance(refuses, list) or any(word not in _HOLD_REFUSES for word in refuses):
+        raise CatalogError(
+            f"{where} `{entry['method']}` `refuses` must list words of {sorted(_HOLD_REFUSES)}"
+        )
+    return HoldRule(
+        owners=catalog_symbols(entry.get("owner"), f"{where} `{entry['method']}` owner"),
+        method=entry["method"],
+        prefix_arg=entry.get("prefix_arg"),
+        dependencies_arg=dependencies,
+        refuses=frozenset(refuses),
+    )
+
+
+def _dependencies_arg(entry: Mapping[str, Any], where: str) -> Any:
+    """An entry's `dependencies_arg` (plan 2026-11-08 N6): absent, or an argument reference."""
+    declared = entry.get("dependencies_arg")
+    if declared is not None and argument_reference(declared, spelled=False) is None:
+        raise CatalogError(
+            f"{where} `{entry['method']}` `dependencies_arg` must be a position, "
+            f"`{{keyword: name}}` or `{{arg: N, keyword: name}}`"
+        )
+    return declared
 
 
 def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> MountRule:
@@ -271,12 +405,21 @@ def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> M
             f"`{{keyword: name}}`, `{{arg: N, keyword: name}}` or `{CHAIN_RESULT}`"
         )
     prefix_arg, prefix_from = entry.get("prefix_arg"), entry.get("prefix_from")
-    if (prefix_arg is None) == (prefix_from is None) or (
-        prefix_arg is not None and argument_reference(prefix_arg, spelled=False) is None
+    host_arg = entry.get("host_arg")
+    if host_arg is not None and (
+        argument_reference(host_arg, spelled=False) is None or prefix_from is not None
     ):
         raise CatalogError(
+            f"{where} `{entry['method']}` `host_arg` must be a position, `{{keyword: name}}` "
+            f"or `{{arg: N, keyword: name}}`, on a mount made by a call (no `prefix_from`)"
+        )
+    # A mount with a host may name no prefix: the router serves at its own paths on the host.
+    if (
+        (prefix_arg is None) == (prefix_from is None) and not (host_arg and prefix_arg is None)
+    ) or (prefix_arg is not None and argument_reference(prefix_arg, spelled=False) is None):
+        raise CatalogError(
             f"{where} `{entry['method']}` must name exactly one of `prefix_arg: N` and "
-            f"`prefix_from: {RECEIVER_PATH}`"
+            f"`prefix_from: {RECEIVER_PATH}`, or only a `host_arg`"
         )
     if router_arg == CHAIN_RESULT and (
         prefix_from != RECEIVER_PATH or entry["method"] not in roots
@@ -310,6 +453,12 @@ def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> M
     descriptor = entry.get("descriptor")
     if descriptor is not None and not isinstance(descriptor, str):
         raise CatalogError(f"{where} `{entry['method']}` `descriptor` must be a string")
+    strip = entry.get("strip_trailing")
+    if strip is not None and (not isinstance(strip, str) or len(strip) != 1):
+        raise CatalogError(
+            f"{where} `{entry['method']}` `strip_trailing` is the one character the framework "
+            f"strips from the end of a mount path, got {strip!r}"
+        )
     return MountRule(
         owners=catalog_symbols(entry.get("owner"), f"{where} `{entry['method']}` owner"),
         method=entry["method"],
@@ -318,6 +467,9 @@ def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> M
         prefix_arg=prefix_arg,
         wildcard=wildcard,
         refuses=frozenset(refuses),
+        strip_trailing=strip,
+        dependencies_arg=_dependencies_arg(entry, where),
+        host_arg=host_arg,
     )
 
 
@@ -385,8 +537,13 @@ class MountReader:
         refuses_unrooted: bool,
         configuring: frozenset[tuple[str, str, str]] = frozenset(),
         programs: Mapping[tuple[str, int], str] | None = None,
+        dispatch: Dispatch | None = None,
     ) -> None:
         self._workspace = workspace
+        # The module's dispatch, for the `__init__` a subclass construction runs
+        # (`_held_at`); None where the catalog declares no `router_holds`.
+        self._dispatch = dispatch
+        self._sites_by_caller: dict[str, list[Mapping[str, Any]]] | None = None
         self._index = index
         self._rules = rules
         self._declared = declared
@@ -409,6 +566,7 @@ class MountReader:
         self._read: dict[tuple[tuple[str, int], int, Path], tuple[Prefix, ...]] = {}
         self._refused: dict[tuple[str, int], tuple[tuple[int, str, str], ...]] = {}
         self._called_by: dict[str, tuple[tuple[str, int], ...]] | None = None
+        self._held: dict[tuple[tuple[str, int], Path], tuple[Prefix, ...] | None] = {}
 
     def of_route(self, root: Mapping[str, Any], within: Path | None) -> tuple[Prefix, ...]:
         """The prefixes a route whose root call is `root` serves under, each once: its
@@ -459,6 +617,265 @@ class MountReader:
         self._refused[mount.key] = tuple(dict.fromkeys(found))
         return self._refused[mount.key]
 
+    def held_refusals(self) -> tuple[tuple[Mapping[str, Any], str, str], ...]:
+        """`(construction, prefix, reason)` for every router construction a `router_holds`
+        entry names whose prefix the framework refuses, read on every path the code gives
+        (the construction raises, so nothing on that router is served)."""
+        found: dict[tuple[str, int, str, str], tuple[Mapping[str, Any], str, str]] = {}
+        for site in self._index.sites.values():
+            rule = self._hold_rule(site)
+            slot = (
+                None
+                if rule is None or rule.prefix_arg is None
+                else argument_slot(site["arguments"] or [], rule.prefix_arg)
+            )
+            if rule is None or slot is None or slot == UNPACKED_SLOT:
+                continue
+            for answers in resolve_positions(
+                self._workspace, {"prefix": (site, slot)}, self._index
+            ):
+                text = _text_of(answers["prefix"])
+                reason = None if text is None else _prefix_refusal(rule.refuses, *text)
+                if text is not None and reason is not None:
+                    key = (str(site["caller"]), int(str(site["ordinal"])), text[0], reason)
+                    found.setdefault(key, (site, text[0], reason))
+        return tuple(found.values())
+
+    def dependencies_of(self, prefix: Prefix) -> tuple[tuple[Mapping[str, Any], int, Path], ...]:
+        """Where the dependencies a route served under `prefix` takes are written (plan
+        2026-11-08 N6), as `(call, slot, path)` to read each at, every place once: on each of
+        its places (`Prefix.places`), outermost first, each router's own (`router_holds`'
+        `dependencies_arg`, read where its prefix is, `_held_at`) and each mount's
+        (`mount[].dependencies_arg`). A mount declaring none hands no dependency on, its own
+        or any router's above it: it serves its router as an application of its own (a
+        Starlette `mount`), where an include registers the router's routes on the router it
+        includes them in. A router handed in from outside names no construction, and none."""
+        found: dict[tuple[str, int, int, Path], tuple[Mapping[str, Any], int, Path]] = {}
+        for place in prefix.places:
+            held: list[tuple[Mapping[str, Any], int, Path]] = []
+            for step, (router, mount) in enumerate(place):
+                if router is not None:
+                    held.extend(self._held_dependencies(router))
+                if mount is None:
+                    continue
+                rule_site = self._mount_at(mount[0])
+                if rule_site is None:
+                    continue
+                rule, site = rule_site
+                if rule.dependencies_arg is None:
+                    held = []
+                    continue
+                slot = argument_slot(site["arguments"] or [], rule.dependencies_arg)
+                below = place[step + 1][0] if step + 1 < len(place) else None
+                if slot is not None and slot != UNPACKED_SLOT:
+                    held.append((site, slot, Path() if below is None else below[1]))
+            for site, slot, path in held:
+                key = (str(site["caller"]), int(str(site["ordinal"])), slot, path)
+                found.setdefault(key, (site, slot, path))
+        return tuple(found.values())
+
+    def _held_dependencies(self, router: Router) -> list[tuple[Mapping[str, Any], int, Path]]:
+        """Where the router `router` holds dependencies from its construction (`router_holds`),
+        read where its prefix is read (`_held_at`)."""
+        made, path = router
+        site = self._index.sites.get((made[1], made[2])) if made[0] == "call" else None
+        if site is None or not self._rules.holds:
+            return []
+        found: list[tuple[Mapping[str, Any], int, Path]] = []
+        for rule, at, on in self._held_at(site, path, frozenset(), "dependencies_arg") or []:
+            slot = argument_slot(at["arguments"] or [], rule.dependencies_arg)
+            if slot is not None and slot != UNPACKED_SLOT:
+                found.append((at, slot, on))
+        return found
+
+    def _mount_at(self, key: tuple[str, int]) -> tuple[MountRule, Mapping[str, Any]] | None:
+        """The mount whose call, or one of whose ways' parent call, is `key` (a `Place`'s
+        mount), with its rule."""
+        for mount in self._mounts:
+            if mount.key == key or any(
+                at.parent is not None
+                and (str(at.parent["caller"]), int(str(at.parent["ordinal"]))) == key
+                for at in mount.paths
+            ):
+                return mount.rule, mount.site
+        return None
+
+    def _hold_rule(self, site: Mapping[str, Any], holding: str = "prefix_arg") -> HoldRule | None:
+        return next(
+            (
+                rule
+                for rule in self._rules.holds
+                if rule.matches(site) and getattr(rule, holding) is not None
+            ),
+            None,
+        )
+
+    def _holds(self, made: tuple[str, str, int], path: Path) -> tuple[Prefix, ...] | None:
+        """The prefixes the router `made` holds from its construction (`router_holds`), read
+        within `path`, the path its producer was reached on: one per value read, the named
+        hole where it is not read whole, none where the framework refuses it. None where the
+        router holds no prefix: no hold entry names its producer, or the call writes none (the
+        empty prefix, the framework's default)."""
+        if made[0] != "call" or not self._rules.holds:
+            return None
+        key = ((made[1], made[2]), path)
+        if key in self._held:
+            return self._held[key]
+        site = self._index.sites.get((made[1], made[2]))
+        reads = None if site is None else self._held_at(site, path, frozenset())
+        held: tuple[Prefix, ...] | None = None
+        if site is not None and reads is not None:
+            found: dict[Prefix, Prefix] = {}
+            if not reads:
+                hole = self._hole_at(
+                    site, MountPath(site, None), "a constructor that hands on no prefix it reads"
+                )
+                found[hole] = hole
+            written = [(self._held_read(*read), read[2]) for read in reads]
+            for prefixes, at_path in written:
+                # A construction on one path that writes no prefix holds the empty one there.
+                for prefix in (
+                    prefixes
+                    if prefixes is not None
+                    else [Prefix("", str(Resolution.RESOLVED), read_on=frozenset({at_path}))]
+                ):
+                    kept = found.get(prefix, prefix)
+                    found[prefix] = replace(kept, read_on=kept.read_on | prefix.read_on)
+            # Where no construction writes one at all, the router holds no prefix.
+            held = (
+                None
+                if written and all(prefixes is None for prefixes, _ in written)
+                else tuple(found.values())
+            )
+        self._held[key] = held
+        return held
+
+    def _held_at(
+        self,
+        site: Mapping[str, Any],
+        path: Path,
+        seen: frozenset[tuple[str, int]],
+        holding: str = "prefix_arg",
+    ) -> list[tuple[HoldRule, Mapping[str, Any], Path]] | None:
+        """Where the prefix a router construction holds is written: the construction itself
+        where a hold entry names it (its owners widened to the heirs that inherit the
+        constructor, `with_heirs`); else, for a construction of a subclass of a hold owner
+        whose own `__init__` runs, each hold-matching construction of a supertype that body
+        makes (`super().__init__(prefix=prefix)`), read on the path entering that body from
+        this construction, so its parameters are this call's arguments. None where the
+        construction makes no router that holds a prefix; empty where it does and the body
+        that runs hands none on that can be read (the prefix is then not read). `holding` is
+        the hold entries' key read: `prefix_arg`, or `dependencies_arg` for what a router's
+        construction holds besides (N6); only the entries declaring it are read."""
+        rule = self._hold_rule(site, holding)
+        if rule is not None:
+            return [(rule, site, path)]
+        dispatch = self._dispatch
+        owner = str(site.get("owner"))
+        holders = frozenset(
+            owner
+            for rule in self._rules.holds
+            if getattr(rule, holding) is not None
+            for owner in rule.owners
+        )
+        if site["name"] != "<init>" or dispatch is None or owner in holders:
+            return None
+        if not _is_a(owner, holders, dispatch.ancestors):
+            return None
+        found: list[tuple[HoldRule, Mapping[str, Any], Path]] = []
+        for body in dispatch.candidates(dict(site)):
+            entered = path.entering(body, str(site["caller"]), int(str(site["ordinal"])))
+            if entered is None:
+                continue
+            for inner in self._body_sites(body):
+                key = (str(inner["caller"]), int(str(inner["ordinal"])))
+                inner_owner = str(inner.get("owner"))
+                if (
+                    inner["name"] != "<init>"
+                    or key in seen
+                    or inner_owner == owner
+                    or not _is_a(owner, frozenset({inner_owner}), dispatch.ancestors)
+                ):
+                    continue
+                deeper = self._held_at(inner, entered, seen | {key}, holding)
+                if deeper:
+                    found.extend(deeper)
+        return found
+
+    def _body_sites(self, method: str) -> list[Mapping[str, Any]]:
+        """The calls `method`'s body makes, from the shared index, grouped once per reader."""
+        if self._sites_by_caller is None:
+            grouped: dict[str, list[Mapping[str, Any]]] = {}
+            for site in self._index.sites.values():
+                grouped.setdefault(str(site["caller"]), []).append(site)
+            self._sites_by_caller = grouped
+        return self._sites_by_caller.get(method, [])
+
+    def _held_read(
+        self, rule: HoldRule, site: Mapping[str, Any], path: Path
+    ) -> list[Prefix] | None:
+        """The prefixes one hold-matching construction writes, read within `path`: one per
+        value read, each with the paths it was read on (`read_on`); the named hole where it
+        is not read whole; none where the framework refuses it. None where the call writes
+        none (the framework's default, the empty prefix), or the rule reads none."""
+        if rule.prefix_arg is None:
+            return None
+        slot = argument_slot(site["arguments"] or [], rule.prefix_arg)
+        at = MountPath(site, None if slot is None or slot == UNPACKED_SLOT else (site, slot))
+        if slot == UNPACKED_SLOT:
+            return [self._hole_at(site, at, "a value the walk captured at no position")]
+        if slot is None:
+            return None
+        read = resolve_positions_on_paths(
+            self._workspace, {"prefix": (site, slot)}, self._index, within=path
+        )
+        found: dict[Prefix, Prefix] = {}
+        for on, answers in read:
+            text = _text_of(answers["prefix"])
+            if text is not None and _prefix_refusal(rule.refuses, *text) is not None:
+                continue
+            if text is None or not text[1]:
+                prefix = self._hole_at(site, at, _read_as(answers["prefix"]))
+            else:
+                narrowed = answers["prefix"].narrowed
+                prefix = Prefix(
+                    text[0], str(Resolution.NARROWED if narrowed else Resolution.RESOLVED)
+                )
+            kept = found.get(prefix, prefix)
+            found[prefix] = replace(kept, read_on=kept.read_on | {on})
+        if not read:
+            hole = self._hole_at(site, at, "nothing on this path")
+            found[hole] = hole
+        return list(found.values())
+
+    def _holding(self, prefix: Prefix, held: Prefix) -> Prefix | None:
+        """`held`, the router's own prefix, behind `prefix`, one it is served under, the
+        router's place narrowed to the paths `held` was read on; None where no such path
+        agrees with the one the router was reached on."""
+        text = (
+            held.text
+            if prefix.text is None
+            else join_prefix(prefix.text, str(held.text), self._rules.path_join)
+        )
+        places = prefix.places
+        if held.read_on:
+            places = frozenset(
+                (*place[:-1], (((router[0], joined) if router is not None else None), mount))
+                for place in prefix.places
+                for router, mount in (place[-1],)
+                for on in held.read_on
+                if (joined := (on if router is None else router[1].joined(on))) is not None
+            )
+            if not places:
+                return None
+        return replace(
+            prefix,
+            text=text,
+            resolution=weaker(prefix.resolution, held.resolution),
+            unread=(*prefix.unread, *held.unread),
+            places=places,
+        )
+
     def _served(self, producer: Producer, path: Path, mounting: frozenset[Any]) -> list[Prefix]:
         """The prefixes of the router `producer` made, as reached on `path`: one per mount
         that received the same router on a path agreeing with it, behind that mount's own
@@ -490,9 +907,25 @@ class MountReader:
                     reached.append(joined)
                     for own in self._prefixes(mount, way, joined):
                         for parent in self._parents(at, joined, mounting | {mount.key}):
-                            found.append(self._behind(parent, own, at, _router(made, path)))
+                            # The router's place carries the path the mount agreed on, so
+                            # what else the route reads is read on that same call (M-1).
+                            prefix = self._behind(parent, own, at, _router(made, joined))
+                            if own.text == "" and "empty_path" in mount.rule.refuses:
+                                prefix = replace(
+                                    prefix,
+                                    empty_after=(*prefix.empty_after, len(prefix.text or "")),
+                                )
+                            found.append(prefix)
         if self._unmounted(path, made[1], reached, frozenset()):
             found.append(replace(ROOT, places=frozenset({((_router(made, path), None),)})))
+        held = self._holds(made, path)
+        if held is not None:
+            found = [
+                holding
+                for prefix in found
+                for own in held
+                if (holding := self._holding(prefix, own)) is not None
+            ]
         return found
 
     def _unmounted(
@@ -563,28 +996,76 @@ class MountReader:
         elif at.prefix is None:
             found.append(Prefix("", str(Resolution.RESOLVED)))
         else:
-            read = resolve_positions(
+            read = resolve_positions_on_paths(
                 self._workspace, {"prefix": at.prefix}, self._index, within=path
             )
-            for answers in read:
+            for on, answers in read:
                 prefix = self._prefix_of(mount, at, answers["prefix"])
                 if prefix is not None:
-                    found.append(prefix)
+                    found.append(replace(prefix, chosen_on=frozenset({on})))
             if not read:
                 found.append(self._hole(mount, at, "nothing on this path"))
-        self._read[key] = tuple(dict.fromkeys(found))
+        if at.host is not None:
+            found = [hosted for prefix in found for hosted in self._hosted(prefix, at.host, path)]
+        # One prefix per text, with every path it was read on.
+        merged: dict[Prefix, Prefix] = {}
+        for prefix in found:
+            kept = merged.get(prefix)
+            merged[prefix] = (
+                prefix
+                if kept is None
+                else replace(kept, chosen_on=kept.chosen_on | prefix.chosen_on)
+            )
+        self._read[key] = tuple(merged.values())
         return self._read[key]
+
+    def _hosted(
+        self, prefix: Prefix, host: tuple[Mapping[str, Any], int], path: Path
+    ) -> list[Prefix]:
+        """`prefix` served on the host the mount's `host_arg` names, one per host read within
+        `path`: a string read whole is the host (`narrowed` where it is one of several), a
+        template its text with the holes unfilled at `partial`, anything else no text at
+        `unresolved`. Each keeps the path its host was read on beside its own (M-1)."""
+        found: list[Prefix] = []
+        if host[1] < 0:
+            return [replace(prefix, host=(None, str(Resolution.UNRESOLVED)))]
+        for on, answers in resolve_positions_on_paths(
+            self._workspace, {"host": host}, self._index, within=path
+        ):
+            answer = answers["host"]
+            text = _text_of(answer)
+            if text is None:
+                read: tuple[str | None, str] = (None, str(Resolution.UNRESOLVED))
+            elif not text[1]:
+                read = (text[0], str(Resolution.PARTIAL))
+            else:
+                read = (
+                    text[0],
+                    str(Resolution.NARROWED if answer.narrowed else Resolution.RESOLVED),
+                )
+            chosen = frozenset(
+                joined
+                for mine in prefix.chosen_on or frozenset({on})
+                if (joined := mine.joined(on)) is not None
+            )
+            found.append(replace(prefix, host=read, chosen_on=chosen))
+        return found or [replace(prefix, host=(None, str(Resolution.UNRESOLVED)))]
 
     def _hole(self, mount: Mount, at: MountPath, read: str) -> Prefix:
         """The named hole for `mount`'s prefix, saying where it was read and what it read."""
-        site, argument = at.prefix if at.prefix is not None else (mount.site, -1)
+        return self._hole_at(mount.site, at, read)
+
+    def _hole_at(self, call: Mapping[str, Any], at: MountPath, read: str) -> Prefix:
+        """The named hole for the prefix the call `call` gives (a mount, or a construction
+        holding one), read at `at`."""
+        site, argument = at.prefix if at.prefix is not None else (call, -1)
         return Prefix(
             UNREAD_PREFIX,
             str(Resolution.PARTIAL),
             (
                 UnreadPrefix(
-                    mount=str(mount.site["caller"]),
-                    mount_ordinal=int(str(mount.site["ordinal"])),
+                    mount=str(call["caller"]),
+                    mount_ordinal=int(str(call["ordinal"])),
                     at=str(site["caller"]),
                     at_ordinal=int(str(site["ordinal"])),
                     argument=argument,
@@ -604,8 +1085,10 @@ class MountReader:
         if wildcard is not None and mounted.endswith(wildcard):
             mounted = mounted[: -len(wildcard)]
         # The `/` before the wildcard, or ending a mount point, is the separator the join
-        # supplies: `/api/*`, `/api*` and `/api/` all mount at `/api`.
-        mounted = mounted.removesuffix("/")
+        # supplies: `/api/*`, `/api*` and `/api/` all mount at `/api`. A framework that strips
+        # every trailing copy says so (`strip_trailing`): `/api//` mounts at `/api` too.
+        strip = mount.rule.strip_trailing
+        mounted = mounted.rstrip(strip) if strip is not None else mounted.removesuffix("/")
         resolution = Resolution.NARROWED if answer.narrowed else Resolution.RESOLVED
         return Prefix(mounted, str(resolution))
 
@@ -619,6 +1102,9 @@ class MountReader:
             return PATTERN_MOUNT_PATH if "pattern" in refuses else None
         if self._refuses_unrooted and is_unrooted(text, whole):
             return UNROOTED_PATH
+        refused = _prefix_refusal(refuses, text, whole)
+        if refused is not None:
+            return refused
         wildcard = mount.rule.wildcard
         if wildcard is None or not (whole or not _UNREAD_END.search(text)):
             return None
@@ -652,7 +1138,24 @@ class MountReader:
             (*place[:-1], (place[-1][0], mount), (made, None))
             for place in parent.places or (ANY_ROUTER,)
         )
-        return Prefix(text, resolution, (*parent.unread, *own.unread), places)
+        chosen = parent.chosen_on or own.chosen_on
+        if parent.chosen_on and own.chosen_on:
+            chosen = frozenset(
+                joined
+                for outer in parent.chosen_on
+                for inner in own.chosen_on
+                if (joined := outer.joined(inner)) is not None
+            )
+        return Prefix(
+            text,
+            resolution,
+            (*parent.unread, *own.unread),
+            places,
+            parent.empty_after,
+            chosen_on=chosen,
+            # The innermost host is the one a request must match to reach the router.
+            host=own.host if own.host is not None else parent.host,
+        )
 
     def _outermost(self, parent: Prefix, word: str, made: Router | None) -> tuple[str, str]:
         """The outermost word of an entry-point prefix and the program word in it (design
@@ -840,6 +1343,21 @@ def unread_prefix_rows(
             }
         )
     return found
+
+
+def _prefix_refusal(refuses: frozenset[str], text: str, whole: bool) -> str | None:
+    """The word a framework's refusal of a PREFIX is filed under (plan 2026-11-08 N7, ruling
+    R4), or None. The empty prefix is no prefix and is never refused here. `unrooted`: one not
+    starting with `/`, decided where its first character was read (`is_unrooted`);
+    `trailing_slash`: one ending in `/`, a lone `/` included (a text whose last piece is unread
+    ends in its hole, never in `/`)."""
+    if not text:
+        return None
+    if "unrooted" in refuses and is_unrooted(text, whole):
+        return UNROOTED_PATH
+    if "trailing_slash" in refuses and text.endswith("/"):
+        return TRAILING_SLASH
+    return None
 
 
 def _text_of(answer: Answer) -> tuple[str, bool] | None:

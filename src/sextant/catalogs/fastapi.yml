@@ -1,0 +1,244 @@
+id: fastapi
+displayName: FastAPI (routes on an app or a router)
+style: fluent
+protocol: http
+direction: inbound
+
+# Every decorator is the call it is (design 2026-11-06-reading-decorators §3a, ruled):
+# `@router.get("/x")` over `def f` is a call of `APIRouter.get` whose result is called with the
+# function (`__call__`). `router.add_api_route("/x", f)` is the same registration made in one
+# call. Every rule below is FastAPI's own, quoted from its source with lines in
+# `scripts/probes/fastapi_rules.md` (plan 2026-11-08-python-fastapi-inbound N8, N9, ruling R1).
+#
+# A route's path is kept exactly as written (ruling R4): FastAPI asserts a leading `/` on a
+# prefix, never on a route's own path (`refuses_unrooted_path: false` below). A prefix must
+# start with `/`: `unrooted` in each prefix entry's `refuses`.
+
+detect:
+  coordinates: [fastapi]
+
+measured:
+  - { artifact: fastapi, versions: ["0.115.12", "0.162.0"], identity: reported,
+      by: scripts/probes/fastapi_rules.md }
+  - { artifact: fastapi, versions: ["0.115.12", "0.162.0"], identity: reported,
+      by: scripts/probes/fastapi_param_models.md }
+  # The payload rules are pydantic's (`shape_model: pydantic` below), read at this version.
+  - { artifact: pydantic, versions: ["2.14.3"], identity: reported,
+      by: scripts/probes/pydantic_naming.md }
+
+# NO `requires`, the click catalog's reason: the engine reads call sites, which every scanner
+# writes, and a module whose build holds no FastAPI has no call it matches.
+
+# A payload is a pydantic model: its fields, their names on the wire and its JSON types are the
+# pydantic shape model's (`shape-models/pydantic.yml`, plan 2 Task 9).
+shape_model: pydantic
+
+matches:
+  # THE REGISTRATIONS (probe §3, §6). `APIRouter` and `FastAPI` (which hands each of these to
+  # its own router unchanged) both define them. Each verb method's path is its first
+  # parameter, positional or named (`path`), and its response type is `response_model` where
+  # one is written. `dependencies=` (N6) are recipes FastAPI runs before the handler
+  # (`get_dependant`'s `dependencies`): their own parameters are the route's, and each is a root
+  # at the route's address (N11).
+  roots:
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: get,
+        captures: { http_method: GET, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: post,
+        captures: { http_method: POST, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: put,
+        captures: { http_method: PUT, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: patch,
+        captures: { http_method: PATCH, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: delete,
+        captures: { http_method: DELETE, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: head,
+        captures: { http_method: HEAD, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: options,
+        captures: { http_method: OPTIONS, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: trace,
+        captures: { http_method: TRACE, url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
+    # `methods` (probe §3): `if methods is None: methods = ["GET"]`, then each upper-cased. An
+    # empty list is refused (`generate_unique_id` asserts `route.methods`), never GET.
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: api_route,
+        captures: { http_method: { keyword: methods, absent: GET, case: upper },
+                    url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    dependencies: { keyword: dependencies } } }
+    # The registration in one call: the function is its second parameter (`endpoint`).
+    - { owner: [fastapi.routing.APIRouter, fastapi.applications.FastAPI], method: add_api_route,
+        captures: { http_method: { keyword: methods, absent: GET, case: upper },
+                    url: { arg: 0, keyword: path }, response: { keyword: response_model },
+                    handler: { arg: 1, keyword: endpoint }, dependencies: { keyword: dependencies } } }
+  # The decorator a verb method returns, called with the function it registers: the handler is
+  # that argument, followed back through every decorator below the registration
+  # (`value-models/fastapi.yml`: a route decorator hands the function back).
+  steps:
+    - { method: __call__, captures: { handler: arg0 } }
+  terminal: [__call__, add_api_route]
+  # THE RESPONSE WHERE `response_model` IS NOT WRITTEN (probe §6, N9). `response_model=None`
+  # is no response. Not written, the handler's return annotation is the response, except a
+  # `Response` subclass, which is none; with no annotation, the type the handler returns.
+  response_fallback: { from: handler_return, none_types: [starlette.responses.Response] }
+  refuses_unrooted_path: false   # FastAPI keeps a route path as written ("x" is served)
+
+  # PREFIXES (probe §1, §2; plan N6, N7; rulings R4, R23). FastAPI joins a prefix and a path by
+  # plain string concatenation and serves the result as it is, nothing cleaned
+  # (`add_api_route`: `self.prefix + path`; `for_include`: `parent_router.prefix + prefix`):
+  # `"/orders" + ""` is `/orders`, `"/orders" + "/"` is `/orders/`, and a route path `x` under
+  # `/r` is `/rx`. So `path_join: concatenate`.
+  #
+  # A ROUTER'S OWN PREFIX is held from its construction (`router_holds`): `APIRouter(prefix=
+  # "/orders")` puts `/orders` in front of every route registered on that router and of every
+  # include made on it. A router class a factory builds (`class Router(APIRouter)`) is
+  # constructed as `APIRouter` is; a subclass is read through its heirs and, where it declares
+  # `__init__`, at the `super().__init__(prefix=...)` that body makes (D02 `router_holds`).
+  # `APIRouter.__init__` asserts the prefix as `include_router` does (R 2611-2612): it starts
+  # with `/` and does not end with one, where one is written.
+  #
+  # AN INCLUDE (`include_router`) puts its `prefix=` in front of the included router's paths,
+  # behind the prefixes of the router it is made on; one router included twice serves under
+  # both, and a router no include receives serves at its own prefix. Not written, the prefix is
+  # empty (`prefix: str = ""`). FastAPI refuses (R 3382-3399), raising at import so the app does
+  # not start: a prefix not starting with `/` (`unrooted`), one ending in `/` (`trailing_slash`,
+  # a lone `/` included), and, for an include with no prefix, a route of the included router
+  # whose path, its own router prefixes included, is empty (`empty_path`: "Prefix and path
+  # cannot be both empty"). The route so refused has no row; the router's other routes keep
+  # theirs.
+  #
+  # 0.162 INCLUDES LAZILY (0.141+): a route added to a router after it was included is served
+  # under the include, and this catalog mirrors that (every route on the router, in any order).
+  # **0.115.12 differs**: its include copies the routes registered by then, so a route added
+  # later is not served under that include (probe "route added to a router after it was
+  # included"). The empty-path check runs at the include in both, over the routes registered
+  # by then; this catalog checks every route on the router.
+  #
+  # A SUB-APPLICATION MOUNT (`app.mount("/api", app=api)`, Starlette's `Mount`) serves the
+  # mounted app's routes under the mount path less every trailing slash (`Mount.__init__`:
+  # `self.path = path.rstrip("/")`, so `/api/` and `/api//` are `/api` and `/` is the root).
+  # `Mount` asserts `path == "" or path.startswith("/")` (`unrooted`). An app mounted that is no
+  # router (`StaticFiles(...)`) serves no route of this catalog.
+  #
+  # `dependencies=` (N6) on a router's construction (`router_holds`) and on an include
+  # (`mount`) run before every route below them, as the route's own do: `add_api_route` starts
+  # from `self.dependencies`, and `include_router` registers each included route on the router
+  # it is made on, its own `dependencies` in front of the route's. The app holds its own
+  # (`FastAPI(dependencies=...)` builds `self.router = APIRouter(dependencies=...)`). A
+  # sub-application `mount` declares none, so no dependency crosses it, the parent's included:
+  # Starlette serves the mounted app as an application of its own.
+  router_type: [fastapi.routing.APIRouter, fastapi.applications.FastAPI]
+  router_holds:
+    - { owner: fastapi.routing.APIRouter, method: <init>, prefix_arg: { keyword: prefix },
+        dependencies_arg: { keyword: dependencies }, refuses: [unrooted, trailing_slash] }
+    - { owner: fastapi.applications.FastAPI, method: <init>,
+        dependencies_arg: { keyword: dependencies } }
+  mount:
+    - { owner: fastapi.routing.APIRouter, method: include_router, router_arg: { arg: 0, keyword: router },
+        prefix_arg: { keyword: prefix }, dependencies_arg: { keyword: dependencies },
+        refuses: [unrooted, trailing_slash, empty_path] }
+    - { owner: fastapi.applications.FastAPI, method: include_router, router_arg: { arg: 0, keyword: router },
+        prefix_arg: { keyword: prefix }, dependencies_arg: { keyword: dependencies },
+        refuses: [unrooted, trailing_slash, empty_path] }
+    - { owner: fastapi.applications.FastAPI, method: mount, router_arg: { arg: 1, keyword: app },
+        prefix_arg: { arg: 0, keyword: path }, strip_trailing: "/", refuses: [unrooted] }
+    # A HOST (`app.host(host, app)`, Starlette's `Host`; OI-368, key approved 2026-11-09)
+    # serves the app's routes at their own paths, on a request whose `Host` header, port
+    # removed, matches the host; the outer app's dependencies do not run for them (Starlette
+    # 1.6.0 probe, plan 2 final fixes report). No prefix: the host is the row's `host` entry.
+    - { owner: fastapi.applications.FastAPI, method: host, router_arg: { arg: 1, keyword: app },
+        host_arg: { arg: 0, keyword: host } }
+  path_join: concatenate
+
+  # REQUEST PARAMETERS (probe §4; plan N3). FastAPI reads a parameter's meaning off the marker
+  # call that made its default (`q: str = Query(None)`) or one of its `Annotated` metadata
+  # (`Annotated[str, Header()]`), the LAST FastAPI marker in `Annotated` winning
+  # (`fastapi_specific_annotations[-1]`). A marker's name is its `alias`, else the parameter's own
+  # name; `Header` converts `_` to `-` in that name unless `convert_underscores=False`. A marker
+  # that is the default is required where its default is unset (`Query()`) or `...`
+  # (`RequiredParam`), and optional where a default or a default factory is written. A marker in
+  # `Annotated` takes the parameter's own `=` default: optional with one, required without.
+  # `Path` writes no row: the address carries the variable. `Body`, `Form` and `File` are the
+  # body (`request_body` below); `Depends` and `Security` are dependencies (plan 2 Task 8).
+  # FastAPI reads the marker's class (`isinstance(value, params.Param)`), so the classes in
+  # `fastapi.params`, constructed directly (`params.Depends(f)`), are the same markers as the
+  # functions in `fastapi.param_functions` that construct them; both are named.
+  #
+  # A PARAMETER WITH NO MARKER (`analyze_param`'s last branch): a path variable is the path's; a
+  # scalar type is a query parameter, required unless it has a default (so `q: str | None` with
+  # no default is required); any other type is the body. `list[int]` is not a scalar: unmarked,
+  # it is the body.
+  #
+  # FastAPI refuses, raising at import so the app does not start: a marker in `Annotated` beside
+  # a marker default (`marked_twice`), a path variable with a marker in `Annotated` and a default
+  # (`path_variable_default`), and a marker other than `Path` or a dependency on a path variable
+  # (`path_variable_marked`).
+  request_params:
+    - { owner: fastapi.param_functions, method: Query, kind: query, name_arg: { keyword: alias },
+        requirement: required, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+        required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis },
+        annotated_default: parameter }
+    - { owner: fastapi.param_functions, method: Header, kind: header, name_arg: { keyword: alias },
+        requirement: required, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+        required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis },
+        annotated_default: parameter,
+        spelling: { replace: { "_": "-" }, unless: { arg: { keyword: convert_underscores }, equals: false } } }
+    - { owner: fastapi.param_functions, method: Cookie, kind: cookie, name_arg: { keyword: alias },
+        requirement: required, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+        required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis },
+        annotated_default: parameter }
+    - { owner: fastapi.params.Query, method: <init>, kind: query, name_arg: { keyword: alias },
+        requirement: required, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+        required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis },
+        annotated_default: parameter }
+    - { owner: fastapi.params.Header, method: <init>, kind: header, name_arg: { keyword: alias },
+        requirement: required, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+        required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis },
+        annotated_default: parameter,
+        spelling: { replace: { "_": "-" }, unless: { arg: { keyword: convert_underscores }, equals: false } } }
+    - { owner: fastapi.params.Cookie, method: <init>, kind: cookie, name_arg: { keyword: alias },
+        requirement: required, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+        required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis },
+        annotated_default: parameter }
+    - { unmarked: true, kind: query, requirement: required, scalar_only: true }
+  # THE REQUEST BODY (probe §4; plan N4): a parameter marked `Body`, `Form` or `File`, or one no
+  # marker binds whose type is not a scalar and is not a path variable. FastAPI EMBEDS the body
+  # (`_should_embed_body_fields`, 0.162.0) where there are several body parameters, or the one
+  # is marked `embed=True` (`embed_arg`): the body is then an object with one field per body
+  # parameter, named by its marker's `alias` (`name_arg`) else the parameter's name. The six types
+  # FastAPI hands in itself are no parameter at all (`excludes`; `lenient_issubclass`, so a
+  # subclass counts too, which this list names where FastAPI itself declares one).
+  request_body:
+    marker_calls: [fastapi.param_functions.Body, fastapi.param_functions.Form,
+                   fastapi.param_functions.File, fastapi.params.Body.<init>,
+                   fastapi.params.Form.<init>, fastapi.params.File.<init>]
+    fallback: sole_unbound
+    embed_arg: { keyword: embed }
+    name_arg: { keyword: alias }
+    # A single `Form` or `File` parameter is embedded unless it is a model (`_should_embed_body_
+    # fields`: a Form field "has to be a BaseModel ... to be top level"), so `confirm: bool =
+    # Form(False)` is the form `{confirm: bool}`. An embedded field is required as a request
+    # parameter is: `Body(None)` optional, `Body()`/`Body(...)` required, a marker in
+    # `Annotated` taking the parameter's own default.
+    embed_markers: { calls: [fastapi.param_functions.Form, fastapi.param_functions.File,
+                             fastapi.params.Form.<init>, fastapi.params.File.<init>],
+                     unless_subtype_of: [pydantic.main.BaseModel] }
+    default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }]
+    required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis }
+    annotated_default: parameter
+    bound_by_calls: [fastapi.param_functions.Query, fastapi.param_functions.Header,
+                     fastapi.param_functions.Cookie, fastapi.param_functions.Path,
+                     fastapi.param_functions.Depends, fastapi.param_functions.Security,
+                     fastapi.params.Query.<init>, fastapi.params.Header.<init>,
+                     fastapi.params.Cookie.<init>, fastapi.params.Path.<init>,
+                     fastapi.params.Depends.<init>, fastapi.params.Security.<init>]
+    implicit_bindings: [path_variable, scalar]
+    excludes: [starlette.requests.Request, starlette.requests.HTTPConnection,
+               starlette.websockets.WebSocket, starlette.responses.Response,
+               starlette.background.BackgroundTasks, fastapi.background.BackgroundTasks,
+               fastapi.security.oauth2.SecurityScopes]

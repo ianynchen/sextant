@@ -7,6 +7,8 @@ imported or run."""
 
 from pathlib import Path
 
+import pytest
+
 from sextant.application.ports.detector import LibraryRoot
 from sextant.application.ports.scanner import ScanRequest
 from sextant.domain.factfile import read_fact_tree
@@ -468,6 +470,81 @@ def test_the_environments_python_decides_the_standard_library(tmp_path: Path):
     assert libraries.member(Target("distutils"), "core") == (Target("distutils/core"),)
 
 
+_MICRO_TESTS = [
+    # (test, full version 3.12.4 known, only 3.12 known)
+    ("sys.version_info >= (3, 12, 1)", True, None),
+    ("sys.version_info > (3, 12)", True, True),
+    ("sys.version_info <= (3, 12)", False, False),
+    ("sys.version_info < (3, 12, 1)", False, None),
+    ("sys.version_info >= (3, 12)", True, True),
+    ("sys.version_info < (3, 13)", True, True),
+]
+
+
+@pytest.mark.parametrize(("test", "full", "partial"), _MICRO_TESTS)
+def test_a_version_test_compares_the_full_version_or_reads_both_arms(
+    test: str, full: bool, partial: bool | None
+):
+    """A test is read as CPython reads it, against the whole `sys.version_info` (task 4e
+    review): on 3.12.4 `> (3, 12)` holds, as a longer tuple is the greater. Where only 3.12
+    is known, a test is decided only where every 3.12 release gives one answer; else both
+    arms are read (None), never a guessed one."""
+    import ast
+
+    from sextant.ingress.extract.python.imports import VersionTests, version_test
+
+    written = ast.parse(test, mode="eval").body
+    names = frozenset({"sys"})
+    known = VersionTests((3, 12), names, frozenset(), release=(3, 12, 4, "final", 0))
+    assert version_test(written, known) is full
+    assert version_test(written, VersionTests((3, 12), names, frozenset())) is partial
+
+
+@pytest.mark.parametrize(("stated", "base"), [("3.12.0", "B"), ("3.12.4", "A")])
+def test_the_environments_full_version_decides_a_micro_version_test(
+    tmp_path: Path, stated: str, base: str
+):
+    """`pyvenv.cfg` states the micro version, so `>= (3, 12, 1)` is decided by it."""
+    environment = tmp_path / "env"
+    _write(environment / "pyvenv.cfg", f"home = /usr/bin\nversion_info = {stated}\n")
+    site = environment / "lib" / "python3.12" / "site-packages"
+    vers = _install(
+        site,
+        "vers",
+        "1.0",
+        {
+            "vers/py.typed": "",
+            "vers/__init__.py": (
+                "import sys\n"
+                "class A: ...\n"
+                "class B: ...\n"
+                "if sys.version_info >= (3, 12, 1):\n"
+                "    class X(A): ...\n"
+                "else:\n"
+                "    class X(B): ...\n"
+            ),
+        },
+    )
+
+    libraries = Libraries((vers,), typeshed_dir(), environment)
+    headers, _, _ = libraries.headers({"vers/X#"}, set(), "d")
+
+    (x,) = [fact for fact in headers if bare_descriptor(fact.symbol) == "vers/X#"]
+    assert bare_descriptor(str(x.superclass)) == f"vers/{base}#"
+
+
+def test_the_full_version_is_in_the_libraries_fingerprint(tmp_path: Path):
+    """Two environments on one minor version but two micro versions decide a micro test
+    differently, so a reuse key must tell them apart."""
+    prints = []
+    for stated in ("3.12.0", "3.12.4"):
+        environment = tmp_path / stated
+        _write(environment / "pyvenv.cfg", f"home = /usr/bin\nversion_info = {stated}\n")
+        (environment / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
+        prints.append(Libraries((), typeshed_dir(), environment).fingerprint)
+    assert prints[0] != prints[1]
+
+
 def test_a_star_import_honours_all_and_skips_private_names(tmp_path: Path):
     """`from .impl import *` re-exports what `impl.__all__` lists, or with no `__all__`
     every name not starting with `_`."""
@@ -544,15 +621,355 @@ def test_library_types_are_headers_up_their_bases_and_nothing_else(tmp_path: Pat
     assert "builtins/object#" not in headers
     assert not any(bare_descriptor(s).startswith("shapes/child/Child#area") for s in headers)
     assert not any(document.origin is not None for _, document, _ in tree)
+    # Beside the headers, the header document holds only the bodies a header read (fact schema
+    # 12, task 9c review C2): field and `<clinit>` symbols, their writes and the body's calls.
+    # Never a class or any other method: the type stays a header, its methods unread.
     assert not [
         fact
         for _, document, facts in tree
         if document.header_only
         for fact in facts
-        if not isinstance(fact, TypeHeaderFact)
+        if isinstance(fact, SymbolFact)
+        and fact.construct_kind != "field"
+        and "#<clinit>(" not in fact.symbol
     ]
     assert _header_document(tree).type_headers_unlocated >= 1
     assert report.documents == 1
+
+
+# A library whose classes take every shape a type header reads (ruling R20): bases through
+# a re-export and a module attribute, a nested class, a protocol, an enum, a generic base,
+# PEP 695 parameters, classes inside `if` and `try`, a base that is a value, a name defined
+# twice, a name also defined inside a function, and (ruling R22) a class each arm of a
+# version test defines, a base imported later in the file, a base through an `as` alias, and
+# a base through a star import that `__all__` lists, or does not.
+_KINDS = {
+    "kinds/py.typed": "",
+    "kinds/__init__.py": "from .shapes import Box as Box\n",
+    "kinds/impl.py": "__all__ = ['Exported']\nclass Exported: ...\nclass Hidden: ...\n",
+    "kinds/base.py": (
+        "from typing import Generic, Protocol, TypeVar\n"
+        "T = TypeVar('T')\n"
+        "class Root: ...\n"
+        "class Holder(Generic[T]): ...\n"
+        "class Speaks(Protocol): ...\n"
+    ),
+    "kinds/shapes.py": (
+        "import enum\n"
+        "import typing\n"
+        "from . import base\n"
+        "from .base import Holder, Root, Speaks\n"
+        "class Box(Root, base.Speaks):\n"
+        "    class Lid(Holder[int]):\n"
+        "        class Hinge(Root): ...\n"
+        "class Colour(enum.Enum):\n"
+        "    RED = 1\n"
+        "if typing.TYPE_CHECKING:\n"
+        "    class Typed(Root): ...\n"
+        "try:\n"
+        "    class Tried(Speaks): ...\n"
+        "except ImportError:\n"
+        "    pass\n"
+        "class Twice(Root): ...\n"
+        "class Twice(Holder[str]): ...\n"
+        "def make():\n"
+        "    class Local(Root): ...\n"
+        "    return Local\n"
+        "class Local(Holder[int]): ...\n"
+        "Made = make()\n"
+        "class FromCall(Made): ...\n"
+        "class Paired[U](Holder[U]): ...\n"
+        "import sys\n"
+        "import typing as t\n"
+        "from . import base as b\n"
+        "if sys.version_info >= (3, 99):\n"
+        "    class Branchy(b.Speaks): ...\n"
+        "    class Future(Root): ...\n"
+        "else:\n"
+        "    class Branchy(b.Root, t.Protocol): ...\n"
+        "class UsesLate(Late): ...\n"
+        "class ViaStar(Exported): ...\n"
+        "class ViaHidden(Hidden): ...\n"
+        "from .base import Root as Late\n"
+        "from .impl import *\n"
+        # `sys` under another name, and `version_info` imported from it (task 4e follow-up):
+        # the test is decided by what the name is bound to, not by how it is spelled.
+        "import sys as _sys\n"
+        "from sys import version_info as _vi\n"
+        "if _sys.version_info >= (3, 99):\n"
+        "    from .base import Speaks as Picked\n"
+        "else:\n"
+        "    from .base import Root as Picked\n"
+        "class ByModuleAlias(Picked): ...\n"
+        "if _vi >= (3, 99):\n"
+        "    class ByValue(b.Speaks): ...\n"
+        "else:\n"
+        "    class ByValue(b.Root): ...\n"
+        "if _sys.version_info >= (3, 99):\n"
+        "    def pick() -> Speaks: ...\n"
+        "else:\n"
+        "    def pick() -> Root: ...\n"
+    ),
+}
+_SINGLE = (
+    "Box, Box.Lid, Box.Lid.Hinge, Colour, Typed, Tried, FromCall, Paired, Branchy, UsesLate, "
+    "ViaStar, ViaHidden, Future, ByModuleAlias, ByValue"
+)
+_AMBIGUOUS = "Twice, Local"
+
+
+def _kinds_app(names: str) -> dict[str, str]:
+    parameters = ", ".join(
+        f"p{position}: shapes.{name}" for position, name in enumerate(names.split(", "))
+    )
+    return {
+        "app/main.py": (
+            f"from kinds import shapes\ndef use({parameters}):\n    return shapes.make()\n"
+        )
+    }
+
+
+def _header_output(tmp_path: Path, names: str):
+    kinds = _install(tmp_path / "site", "kinds", "1.0", _KINDS)
+    report, tree = _scan(tmp_path, _kinds_app(names), (kinds,))
+    ((document, facts),) = [
+        (document, facts) for _, document, facts in tree if document.header_only
+    ]
+    return document, facts, report.uncovered
+
+
+def test_type_headers_from_class_statements_equal_a_whole_module_read(tmp_path: Path, monkeypatch):
+    """The header pass reads only the class statements a header needs (ruling R20), and
+    what it writes is what a read of every whole library module writes: every header, the
+    document record, and every line the scan reports. A header's class body (`fields`,
+    `methods`, fact schema 12, task 9c) is read from the class statement alone: a whole-module
+    read leaves it unread (None), so the two are compared without it."""
+    from sextant.ingress.extract.python import libraries
+
+    names = f"{_SINGLE}, {_AMBIGUOUS}"
+    statements = _header_output(tmp_path / "statements", names)
+    monkeypatch.setattr(
+        libraries.Libraries,
+        "_class_declaration",
+        lambda self, table, target, symbol: libraries.WHOLE_MODULE,
+    )
+    whole = _header_output(tmp_path / "whole", names)
+
+    def without_body(output):
+        document, facts, uncovered = output
+        return (
+            document,
+            [
+                fact.model_copy(update={"methods": None, "keywords": None})
+                for fact in facts
+                if isinstance(fact, TypeHeaderFact)
+            ],
+            uncovered,
+        )
+
+    # A class a read body calls gets a header too (`T = TypeVar("T")`, used by `Typed`), which
+    # a whole-module read, reading no body, does not reach.
+    whole_symbols = {bare_descriptor(fact.symbol) for fact in without_body(whole)[1]}
+    document, kept, uncovered = without_body(statements)
+    assert (
+        document,
+        [fact for fact in kept if bare_descriptor(fact.symbol) in whole_symbols],
+        uncovered,
+    ) == without_body(whole)
+    assert {bare_descriptor(fact.symbol) for fact in kept} - whole_symbols == {"typing/TypeVar#"}
+    assert all(fact.methods is None for fact in whole[1] if isinstance(fact, TypeHeaderFact))
+    bodies = {
+        bare_descriptor(fact.symbol): fact.methods
+        for fact in statements[1]
+        if isinstance(fact, TypeHeaderFact)
+    }
+    assert bodies["kinds/shapes/Box#"] is not None
+    symbols = {
+        bare_descriptor(fact.symbol) for fact in statements[1] if isinstance(fact, TypeHeaderFact)
+    }
+    assert {
+        "kinds/shapes/Box#",
+        "kinds/shapes/Box$Lid#",
+        "kinds/shapes/Box$Lid$Hinge#",
+        "kinds/shapes/Colour#",
+        "kinds/shapes/Typed#",
+        "kinds/shapes/Tried#",
+        "kinds/shapes/Paired#",
+        "kinds/shapes/Twice#",
+        "kinds/shapes/Local#",
+        "kinds/shapes#",
+        "kinds/base/Root#",
+        "kinds/base/Holder#",
+        "kinds/base/Speaks#",
+        "kinds/shapes/Branchy#",
+        "kinds/shapes/UsesLate#",
+    } <= symbols
+    # A base a star import gives is a name the file does not bind (`external`), listed in
+    # `__all__` or not: neither class gets a header.
+    assert not {"kinds/shapes/FromCall#", "kinds/shapes/ViaStar#", "kinds/shapes/ViaHidden#"} & (
+        symbols
+    )
+    headers = {
+        bare_descriptor(fact.symbol): fact
+        for fact in statements[1]
+        if isinstance(fact, TypeHeaderFact)
+    }
+    # The live arm of the version test (ruling R22): never the dead one's class or bases.
+    assert "kinds/shapes/Future#" not in symbols
+    branchy = headers["kinds/shapes/Branchy#"]
+    assert branchy.construct_kind == "protocol"
+    assert bare_descriptor(str(branchy.superclass)) == "kinds/base/Root#"
+    assert bare_descriptor(str(headers["kinds/shapes/UsesLate#"].superclass)) == "kinds/base/Root#"
+    for name in ("ByModuleAlias", "ByValue"):
+        assert bare_descriptor(str(headers[f"kinds/shapes/{name}#"].superclass)) == (
+            "kinds/base/Root#"
+        )
+
+
+def test_a_type_header_runs_no_whole_module_read_for_a_class_named_once(
+    tmp_path: Path, monkeypatch
+):
+    """A class whose name one class statement of its file holds, at module or class-body
+    level, is read from that statement: no library module is read whole for it. A name
+    two statements hold is read whole, as before, since which one the facts keep is the
+    whole file's question."""
+    from sextant.ingress.extract.python import libraries
+
+    read: list[str] = []
+    real = libraries.Libraries._module_symbols
+
+    def counted(self, table):
+        if table.source.module not in self._symbols:
+            read.append(table.source.module)
+        return real(self, table)
+
+    monkeypatch.setattr(libraries.Libraries, "_module_symbols", counted)
+
+    _header_output(tmp_path / "single", _SINGLE)
+    assert [module for module in read if module.startswith("kinds")] == []
+
+    read.clear()
+    _header_output(tmp_path / "ambiguous", _AMBIGUOUS)
+    assert [module for module in read if module.startswith("kinds")] == ["kinds/shapes"]
+
+
+def test_a_library_function_written_per_version_returns_the_live_arms_type(tmp_path: Path):
+    """`pick` is defined once per arm of `if _sys.version_info >= (3, 99)`, `sys` imported
+    as `_sys`: the call on its result is owned by the live arm's return, never a closed list
+    of both."""
+    kinds = _install(tmp_path / "site", "kinds", "1.0", _KINDS)
+    _, tree = _scan(
+        tmp_path,
+        {"app/main.py": "from kinds import shapes\ndef use():\n    return shapes.pick().go()\n"},
+        (kinds,),
+    )
+
+    (go,) = [site for site in _sites(tree, "app/main#use") if site.target.name == "go"]
+    assert go.target.owner == "kinds/base/Root#"
+
+
+def _library_index(here: str):
+    from sextant.ingress.extract.python.imports import ModuleIndex, version_tests
+
+    def index_for(tree):
+        tests = version_tests(tree, (3, 12))
+        return ModuleIndex(frozenset(), None, versions=lambda module: tests)
+
+    return index_for
+
+
+_PER_VERSION = (
+    "import sys\n"
+    "class A:\n    def go(self) -> None: ...\n"
+    "class B:\n    def go(self) -> None: ...\n"
+    "if sys.version_info >= (3, 99):\n"
+    "    def f() -> A: ...\n"
+    "    import json as codec\n"
+    "else:\n"
+    "    def f() -> B: ...\n"
+    "    codec = B()\n"
+    "def use():\n"
+    "    codec.go()\n"
+)
+
+
+def test_a_library_files_declared_returns_read_only_the_live_arm():
+    """`declared_types` of a library file read for 3.12 sees the `def` of the live arm, and
+    only it; the module's own files, read for no one Python, see neither, as before."""
+    import ast
+
+    from sextant.ingress.extract.python.imports import ModuleIndex, bind_names
+    from sextant.ingress.extract.python.structure import declared_types
+    from sextant.ingress.extract.python.typing_rules import TypeScope
+
+    tree = ast.parse(_PER_VERSION)
+    found = {}
+    for index in (_library_index("lib/m")(tree), ModuleIndex(frozenset())):
+        names = bind_names(tree.body, "lib/m", is_package=False, index=index)
+        types = TypeScope(names=names, here="lib/m", index=index)
+        returns, _ = declared_types(tree.body, "lib/m", types, is_package=False, index=index)
+        found[index.versions is not None] = {
+            key: value.symbol for key, value in returns.items() if "#f(" in key
+        }
+    assert list(found[True].values()) == ["lib/m/B#"]
+    assert found[False] == {}
+
+
+def test_a_library_files_module_names_are_typed_from_the_live_arm_only():
+    """`codec` is imported in the dead arm and written `B()` in the live one: read for 3.12,
+    its one write types it, so `codec.go()` is owned by `B`."""
+    import ast
+
+    from sextant.domain.facts import CallSiteFact
+    from sextant.ingress.extract.python.calls import FileContext
+    from sextant.ingress.extract.python.structure import file_facts
+
+    tree = ast.parse(_PER_VERSION)
+    index = _library_index("lib/m")(tree)
+    read = file_facts(tree, FileContext("lib/m", False, index, "p ", "d"), 20)
+    owners = [
+        fact.target.owner
+        for fact in read.facts
+        if isinstance(fact, CallSiteFact)
+        and fact.target.name == "go"
+        and bare_descriptor(fact.caller).startswith("lib/m#use")
+    ]
+    assert owners == ["lib/m/B#"]
+
+
+def test_int_enum_and_int_flag_headers_follow_the_running_python(tmp_path: Path):
+    """typeshed's `enum.pyi` defines `IntEnum` and `IntFlag` once per Python version range:
+    the headers are the arm the environment's Python runs (ruling R22), never the last arm
+    written. With no environment that is the running Python."""
+    import sys
+
+    report, tree = _scan(
+        tmp_path,
+        {"app/main.py": "import enum\nclass S(enum.IntEnum): ...\nclass F(enum.IntFlag): ...\n"},
+        (),
+    )
+
+    headers = {
+        bare_descriptor(fact.symbol): fact
+        for _, _, facts in tree
+        for fact in facts
+        if isinstance(fact, TypeHeaderFact)
+    }
+    parents = {
+        name: [
+            bare_descriptor(parent)
+            for parent in [headers[name].superclass, *headers[name].interfaces]
+            if parent is not None
+        ]
+        for name in ("enum/IntEnum#", "enum/IntFlag#")
+        if name in headers
+    }
+    assert sys.version_info >= (3, 12)
+    assert parents == {
+        "enum/IntEnum#": ["builtins/int#", "enum/ReprEnum#"],
+        "enum/IntFlag#": ["builtins/int#", "enum/ReprEnum#", "enum/Flag#"],
+    }
+    assert not [line for line in report.uncovered if line.startswith("enum.")]
 
 
 def test_a_library_class_whose_bases_are_not_all_read_gets_no_header(tmp_path: Path):
@@ -582,8 +999,10 @@ def test_a_call_into_a_library_method_is_external_and_coverage_counts_module_fil
     tmp_path: Path,
 ):
     """The module's own documents are what `coverage.documents` counts, the header
-    document aside; the `symbols` view holds no library entry; and a call into a library
-    method answers `external` in `method_resolution`, as for an unscanned jar type."""
+    document aside; the `symbols` view holds no library type or method, only the names and
+    `<clinit>` of a class body a header read (fact schema 12, task 9c review C2); and a call
+    into a library method answers `external` in `method_resolution`, as for an unscanned jar
+    type."""
     from sextant.application.resolve.call_edges import record_call_edges
     from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -604,7 +1023,10 @@ def test_a_call_into_a_library_method_is_external_and_coverage_counts_module_fil
 
     assert coverage["documents"] == 1
     assert coverage["type_headers"] == len(headers) > 0
-    assert all(symbol.startswith("app/") for symbol in symbols)
+    assert all(
+        symbol.startswith("app/") or symbol.endswith(".") or "#<clinit>(" in symbol
+        for symbol in symbols
+    )
     (get,) = resolutions
     assert get["reason"] == "external"
 

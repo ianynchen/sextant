@@ -104,6 +104,44 @@ class NotProvided:
 
 Injection = ProvidedBy | Ambiguous | NotProvided
 
+# A model whose parameters NAME their recipe (plan 2026-11-08-python-fastapi-inbound N5): the
+# recipe is the value a marker call is handed, not a method the container chooses by a key.
+NAMES_RECIPE = "names_recipe"
+# `empty_recipe: parameter_type`: a marker call handed no recipe makes the parameter's own type
+# the recipe (FastAPI's `Depends()`).
+PARAMETER_TYPE = "parameter_type"
+
+
+@dataclass(frozen=True)
+class RecipeCalls:
+    """The calls that name the recipe a parameter is filled with, across every `names_recipe`
+    model (N5): by `(owner, method)` in a call site's own spelling, the argument reference
+    holding the recipe. `empty` is the models' `empty_recipe` rule, None where none declares
+    one. The value walk reads it at walk time, beside a parameter's callers (ruling R14): which
+    calls mark a parameter is `parameter_markers`' answer, and which recipe one names is the
+    walk's own reading of the argument."""
+
+    calls: Mapping[tuple[str, str], Any] = field(default_factory=dict)
+    empty: str | None = None
+
+
+def recipe_calls(models: Mapping[str, Mapping[str, Any]] | None) -> RecipeCalls:
+    """Every `names_recipe` model's `recipe_calls` and `empty_recipe` (D02 §1c), read once per
+    index. The loader has checked their form (`yaml_source._check_injection`)."""
+    calls: dict[tuple[str, str], Any] = {}
+    empty: str | None = None
+    for model_id in sorted(models or {}):
+        model = (models or {})[model_id]
+        if model.get("injection") != NAMES_RECIPE:
+            continue
+        for entry in model.get("recipe_calls") or []:
+            calls[(type_descriptor(str(entry["owner"])), str(entry["method"]))] = entry[
+                "recipe_arg"
+            ]
+        empty = model.get("empty_recipe") or empty
+    return RecipeCalls(calls=calls, empty=empty)
+
+
 # No recipe in the module has the parameter's key (the recipe is in another module, or the
 # container makes the value another way).
 NO_RECIPE = "no_recipe"
@@ -552,7 +590,9 @@ class _Injected:
         # Sorted by id, so a method two models claim gets one answer in every run (NFR-1).
         for model_id in sorted(models):
             model = models[model_id]
-            if model.get("injection") is None:
+            # A model whose parameters name their recipe has no recipe to choose: the walk
+            # reads the one a marker call names (`recipe_calls`).
+            if model.get("injection") in (None, NAMES_RECIPE):
                 continue
             declaring = type_descriptor(str(model["declaring_annotation"]))
             injecting = frozenset(

@@ -52,6 +52,107 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **FastAPI inbound is read, and checked against FastAPI itself** (OI-208 plan 2, plan
+  `2026-11-08-python-fastapi-inbound.md`, spec `2026-11-06-python-reader-design.md` §3c as
+  amended by N1). `tests/e2e/test_orders_fastapi.py` analyses `fixtures/orders-fastapi` (FastAPI
+  0.162.0, pydantic 2.14.3, its own locked environment) and compares Sextant's routes,
+  parameters, recipes and wire names with what FastAPI and pydantic print for the same code
+  (`tests/e2e/fastapi_oracle.py`); every row Sextant writes for the fixture is pinned. Measured
+  against FastAPI's own route table: polar 668 of 671 (method, path) pairs, mealie 289 of 289.
+  Polar cold 36.9 s (target 60 s), warm 1.5 s; mealie 12.6 s and 1.2 s (test code not read). By
+  task:
+  - **Facts** (tasks 2, 3, 4b, 8, 9, 9c, 10b; fact schema 7 → 13). A parameter's default and its
+    annotation's value are facts (`Parameter.default`, `annotation_value`), and a subscripted
+    class is the `__class_getitem__` call it is. `type X = v` writes `v` as `X`'s value
+    (ruling R6). A class-body annotation is an instance field with its class-body value
+    (PEP 526). A construction is typed by the scanner (calling a class gives an instance of it;
+    a metaclass `__call__` decides), so `app = FastAPI(); @app.get` has an owner on the facts.
+    A generator's yields are facts (N10), `yielded` written only where true so a rewritten JVM
+    fact file keeps its bytes. Library class headers carry their fields, read by the
+    same reader as module classes. Old fact sets are read again once.
+  - **Speed** (tasks 4c, 4d, 4e, 8, 9b). The library type headers are kept when nothing they
+    depend on changed (polar warm 28.3 s → 1.95 s), and the header pass reads only the class
+    declarations it needs (45.5 s → 3.3 s). A `sys.version_info` test in a library is decided
+    by the environment's full Python version, by binding (`import sys as _sys` included), so a
+    library header is read from the arm that runs (`IntEnum`, `IntFlag`, 7 `TypedDict`s and
+    `ValidationInfo` on polar were wrong). Each per-walk cache records and replays the reads it
+    made (`values.Kept`), so a value kept across binding rounds is walked again when what it
+    read changes. The garbage collector's thresholds are raised while a module is analysed and
+    given back after (user ruling 2026-11-09), and statement walks skip expressions: polar cold
+    65.8 s → 53 s.
+  - **Parameter markers** (task 4). `parameter_markers(index)` reads each handler parameter's
+    marker calls from its default and its `Annotated` metadata, through helpers and module
+    names. An argument the caller leaves unfilled takes the parameter's default.
+  - **Routes** (task 5; N8, N9, rulings R1, R4). `catalogs/fastapi.yml` (style `fluent`):
+    the verb decorators, `api_route` and `add_api_route` on `APIRouter` and `FastAPI`; one row
+    per verb, the path as written, the handler, and the response from `response_model=` or the
+    return annotation. `methods=[]` (`no_methods`) and `-> X | Response`
+    (`invalid_response_type`) are refused, as FastAPI refuses them (user ruling 2026-11-08).
+  - **Prefixes** (task 6; ruling R23). Router `prefix`, `include_router` prefixes and
+    sub-application `mount` paths are joined by plain concatenation (`path_join: concatenate`),
+    as FastAPI joins them; a router subclass and an app subclass are read through their
+    parents. A factory-built router takes each caller's own prefix, verbs, path and handler.
+  - **Request parameters and bodies** (task 7; N3, N4, R26). `Query`, `Header` and `Cookie`
+    give `endpoint_metadata` rows with their wire names and requirements; a pydantic model
+    parameter is the body, embedded as FastAPI embeds it (`embed_arg`, `embed_markers`, user
+    ruling 2026-11-08). Refusals `path_variable_default`, `marked_twice` and
+    `path_variable_marked` (user ruling); no more are added.
+  - **Dependencies** (task 8; N5, N11). `Depends` and `Security` are read through the bean
+    model `injection: names_recipe`: a parameter takes the recipe's return beside its in-module
+    callers, the recipe's own parameters join the route's, `dependencies=` lists join from the
+    route, router, include and app, and each recipe is a `roots` row at the route's address.
+  - **pydantic shapes** (tasks 9, 9c; N12, N13, R24, R25). `catalogs/shape-models/pydantic.yml`:
+    wire names from `Field` aliases and the alias generator, configuration merged over the
+    written bases (class keywords included), `required` as pydantic decides it (NULL where the
+    default is not readable), JSON types and formats (`known_types`, checked against pydantic's
+    own JSON schema), a generic `response_model` read as the type it names, and query models.
+    User-approved keys: `excluded_when`, `open_when`, `output_fields`, `output_open_when` (with
+    `also_input` and `except_declared_by`), and the shape model's `wrappers`. The alias
+    generator `humps.main.camelize` is its own strategy word, `humps_camelize` (user approval
+    2026-11-09, final review M2), copied from pyhumps 3.8 and equal to it on 38,050 names: it
+    was read as `to_camel`, which gives `is2FaEnabled` where pyhumps gives `is2faEnabled`.
+    A shape is closed
+    where every field is read. `boundary diff` gives no verdict on a field whose requirement is
+    unknown.
+  - **Routes registered under an undecided test** (task 10b; OI-368 first half, design
+    approved by the user 2026-11-09; ruling of 2026-10-23, "deployment decides what it can
+    set"). A Python call site carries the tests it runs under within its body
+    (`call_site.guards`, fact schema 13). A route, include or mount whose calls run only under
+    such tests (its own body's, and its function's callers' where every caller is under one)
+    is published with its address and resolution unchanged and a new table,
+    `endpoint_existence` (graph schema 18), saying it exists "not evaluated": one row per row,
+    alternative, test and environment, kind `test`. The module document states the tests
+    under the route. A constant test and `TYPE_CHECKING` are decided and write nothing; an arm
+    that always raises guards nothing (it decides only whether the program starts), nor does
+    `if __name__ == "__main__":`, an entry point. A row derived through one call of a helper
+    (the call that gave its router, route, path or prefix) takes that call's tests, not the
+    helper's other callers'; one it cannot tie to a call is "not evaluated". On polar
+    the 192 `/backoffice` rows are "not evaluated"; on mealie, the 3 single-page-app routes
+    (registered only when `settings.PRODUCTION and not settings.TESTING` and the static-files
+    directory exists) and one unread dynamic route. No other row moved.
+  - **`app.host` is a mount with a host** (final review, OI-368 second half; key
+    `mount[].host_arg` approved by the user 2026-11-09). As Starlette 1.6.0's `Host` serves
+    it, the mounted app's routes are served at their own paths, on the named host only, and
+    the outer app's `dependencies=` do not run for them. Each such row carries an
+    `endpoint_metadata` entry of kind `host`, name `Host` (as vertx-web's `virtualHost`
+    writes one), valued with the host the value walk reads, or none at `unresolved`, never a
+    guess; and the registering call's tests. The system tier never links a call to a row
+    served on one host only by its path (`system_endpoint_metadata`, M06). On polar the
+    checkout-link row gains its host entry and is "not evaluated" under
+    `settings.CHECKOUT_LINK_HOST is not None`, and the 192 backoffice routes gain a second
+    row each at their own paths on `settings.BACKOFFICE_HOST`, "not evaluated" under
+    `settings.BACKOFFICE_ENABLED` and the `else` arm of `settings.BACKOFFICE_HOST is None`:
+    881 rows. Mealie and the fixture have no host: no row moved.
+  - **Test code is not read** (final review M1, user ruling 2026-11-09: only code that goes
+    to production counts). The Python scanner tells test code apart by pytest's own
+    collection rules, from the settings file pytest would choose (`pytest.toml`, `pytest.ini`,
+    `pyproject.toml`, `tox.ini`, `setup.cfg`): its `testpaths`, its `python_files` patterns
+    (else `test_*.py` and `*_test.py`), every `conftest.py`, and every `tests` or `test`
+    folder. Polar loses the 31 rows of apps that its tests build, and 648 of 2,053 files are
+    not read; mealie loses no row, and 209 of 705 files are not read.
+  - **Open issues** OI-346 to OI-416 (Plane SEXTANT-340 to SEXTANT-410) record what is not
+    read; the Python essay (`docs/coverage/python.md`) lists them by shape.
+
 - **The value walk works out each parameter's paths upward once** (ruling R39; M04). A
   parameter's (and a plainly read binding's) set of paths upward is computed once per
   `(position, frames)` and joined onto every path that reaches it, shared by every receiver

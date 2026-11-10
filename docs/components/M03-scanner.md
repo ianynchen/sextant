@@ -244,21 +244,30 @@ to `<relative path>.jsonl`. Folders on the detector's skip list are not entered,
 `.sextantignore` or its built-in layer excludes is not read (`ScanRequest.ignore`, matched
 as `resource_files.list_files` matches). A git-ignored file IS read: generated code such as
 `*_pb2.py` is often git-ignored and is part of the module. A file that cannot be opened (a
-broken link) goes on the uncovered list with its reason.
+broken link) goes on the uncovered list with its reason. **Test code is not read** (plan 2
+final review M1, user ruling 2026-11-09: only code that goes to production counts), as the JVM
+scanner never sees `src/test`: told apart by pytest's own collection rules
+(`pytest_collection.py`, probe `scripts/probes/pytest_collection.md`). The settings file is
+the one pytest chooses, from the import root up to the analysed root; a file is test code when
+it is at or below one of its `testpaths`, its name matches its `python_files` (else
+`test_*.py` and `*_test.py`), it is a `conftest.py`, or it is in a `tests` or `test` folder.
 
 **One file at a time, with the headers of the files it imports** (round 1, user choice A,
 2026-11-07; `project.py`). An import binds a name by path, `from app.models import Order` the
 member `Order` of the module `app/models`, or the module `app/models/Order` when such a file
 is in the import roots, and then, where another file of the module is the one named, through
 that file's HEADER: its module-level names (imports, re-exports, aliases, `NewType`s), its
-classes' written bases and type parameters, each `def`'s declared return and each class
-body's attribute declarations. Nothing else of its bodies is read. A re-export or an alias is
+classes' written bases and type parameters, each `def`'s declared return, each class
+body's attribute declarations and the type each module-level type alias is. Nothing else of
+its bodies is read. A re-export or an alias is
 followed to where the name is defined (a class of the module, or a library's defining symbol),
 as a library re-export is; a `NewType` names the class it wraps, and a call of it
 (`AccessibleOrganizationID(oid)`) is no construction: no call is written, and the value is the
-argument; a name the other file binds to a value or to a type alias its own
-scope reads (`SaveFixture = Callable[...]`) names no type here, rather than a path that is no
-class. A header is parsed once per scan however many files ask, and is bound against an index
+argument; a name the other file binds to a module-level type alias (`DbSession =
+Annotated[Session, Depends(get_db)]`, `X: TypeAlias = ...`, `type X = ...`; plan
+2026-11-08-python-fastapi-inbound N2) is the type the alias is, followed through each alias of
+another file to the type the last one is; a name the other file binds to any other value
+(`SaveFixture = Callable[...]`) names no type here, rather than a path that is no class. A header is parsed once per scan however many files ask, and is bound against an index
 that reads no headers, so what a file reads never depends on which file asked first. A name
 that two branches bind differently is a closed list of both, in written order.
 
@@ -276,10 +285,32 @@ file that did not change.
   the file cannot name as a class; nothing after it is written, and the document is
   `partial` with one `partial_reason` line per such class;
 - `<clinit>` per module and class body, `<init>` for `__init__`, one `method` per `def`;
-- a static `field` per name a module or class body assigns, and a `field_write` from that
-  body's `<clinit>`;
+- a `field` per name a module or class body assigns or annotates, and a `field_write` from
+  that body's `<clinit>` where it is given a value. A module's names are `static`. In a class
+  body an annotated name not written `ClassVar` (bare, dotted, in a string, or as
+  `Annotated`'s first argument) declares an instance variable, `static: false`, whatever its
+  value (PEP 526); a name assigned with no annotation, or a `ClassVar`, is the class's own,
+  `static: true`. An instance variable's annotation that is not a plain type is evaluated in the
+  class body after the value and written as `signature.annotation_value`, and a `TypedDict` key
+  the typing specification lets be left out carries `modifiers.not_required` (D00 §5a). The
+  instance variable's value is still its class-body `field_write`, which a
+  `self.x` read takes with every class's writes (ruling R33);
 - typed signatures from the written annotations (rule 1); `self` and `cls` are receivers,
-  not parameters;
+  not parameters. Every type a fact carries (a signature's parameters and return, a field's
+  type, a bound, a generic parent) has D00 §5b's `wire_type` at every level where the
+  language fixes it: `str` string, `int` integer, `float` number, `bool` boolean; `list`,
+  `set`, `frozenset`, `tuple`, `deque`, and `Sequence`, `MutableSequence`, `Collection`,
+  `Iterable`, `MutableSet` in their `typing` and `collections.abc` spellings, array; `dict`,
+  `defaultdict`, `OrderedDict`, `Counter`, and `Mapping`, `MutableMapping` in both spellings,
+  map; a type parameter of the enclosing class or function (`T` of `class C[T]`, of
+  `Generic[T]` or of a function's `TypeVar`, and `Self` in a class) object, as the JVM's `T`
+  is; any other class object. `bytes`, `bytearray` and the classes of
+  `datetime`, `uuid` and `decimal` are written as a scalar the serializer chooses, so they
+  carry none and are left to a catalog's `known_types`; so do `None` (a field written `None`
+  is a `null` on the wire, a return written `None` no payload), a special form
+  (`Any`, a union, `Literal`) and a written text that names no type. `wire_format` is never
+  set: the language fixes no format (a Python `int` has no width). The types the scanner
+  reads with (a header, a receiver's type) carry none;
 - decorators as `call_site` facts in the enclosing body's `<clinit>`: each decorator
   expression in written order, then each application from the bottom up, with the
   function as a `lambda` argument or the class as a `class` argument. A call on a value
@@ -300,10 +331,36 @@ file that did not change.
 
 A call's owner is named where the file can tell: a class of the file is its `<init>`; a
 function of the file, or a member of another module, is a static call on that module's
-type. Whether an imported member is a class is in a file this scanner does not read, so
-the resolver decides. A call on a name the file assigns names the static field
-(`receiver_field`); its owner is the name's type where the file gives it one (below), and
-is otherwise left to the resolver (D00 §5's virtual call with a receiver).
+type, and the resolver reads it as the construction where the member is a class. A call on
+a name the file assigns names the static field (`receiver_field`); its owner is the name's
+type where the file gives it one (below), and is otherwise left to the resolver (D00 §5's
+virtual call with a receiver).
+
+**Calling a class gives an instance of it** (ruling R17; design
+`2026-11-06-reading-decorators-design.md` §3b option A, extended to constructions). The
+scanner knows a member of another module is a class by that module's header (a class of
+the module) or by the library's own file: the static call's result is then that class, its
+type parameters filled as the library's constructor fills them. So `app = FastAPI()` makes
+`app.get(...)` a call on `fastapi/applications/FastAPI#`, and `s = Session()` with `Session`
+from another file makes `s.get()` a call on that `Session`, in a function body or at module
+level. The class gets a type header (below). **A name holding a class object** is the class
+`X` where the code writes `type[X]`: a parameter or local annotated so, a call whose written
+return is `type[X]` (a library's, or a `def` of the module), or a module-level name every
+write to which in its file is such a call. Another file's name is read through that file's
+header (`ModuleHeader.factories`, the function each write calls: polar's `APIRouter = get_api_router_class(APIRoute)`).
+Calling such a name is the `virtual <init>` of `X` with the name's field as
+`receiver_field` (R37: `X` or a subclass), and its result is an `X`. **What a class call makes is
+read as the typing specification reads it.** A metaclass (the class's own, or a base's) that
+defines its own `__call__` decides: where the overloads the arguments choose all return a type
+variable or `Self`, the result is an instance (`HTTPStatus(200)`); where one returns a class
+object, the call makes a new class (`Enum("Color", "RED GREEN")`), which has no class symbol,
+so the result has no type. The functional `NamedTuple(...)` and `TypedDict(...)` make a new
+class too: the name they are bound to is a `new_class` (as a `NewType` is a `new_type`), which
+names no type and whose call names no owner. A class of another file is constructed only
+where its module binds the name to that class alone (`class Session` then `Session = Client`
+is no `Session`), as the resolver reads it (`effective_calls._class_calls`). A module-level name of
+another file that holds an instance is not typed in the file that reads it: a write in a
+third file cannot be seen, and the resolver follows the name's writes.
 
 **A module-level name has the type of the values written to it in its file** (design
 `2026-11-06-reading-decorators-design.md` §3b): an assignment, or a `def` or `class` with
@@ -348,9 +405,14 @@ comprehensions included:
 - `xs[i]` is the call `xs.__getitem__(i)`. A slice is an `unresolved` argument (the
   grammar holds no slice object) that chooses a `slice` overload. Subscripting a class
   object makes a type (`__class_getitem__`), never the instance's `__getitem__` (ruling
-  R37): no call is written for a subscript in a type expression (a class base, `cast`'s
-  type, `isinstance`'s or `issubclass`'s class), nor for one of a class of this file, a
-  builtin, a typing form or a library class. A name imported from another file of the
+  R37): no `__getitem__` is written for a subscript in a type expression (a class base,
+  `cast`'s type, `isinstance`'s or `issubclass`'s class), nor for one of a class of this
+  file, a builtin, a typing form or a library class. Where the subscripted name is one such
+  class or form, the subscript is the `static` call `<form>#__class_getitem__`, one argument
+  per index element in written order (plan 2026-11-08 N2): `Annotated[int, Depends(f)]` is
+  `typing/Annotated#__class_getitem__` with `int` and the `Depends` call's result, and
+  `list[Item]` is `builtins/list#__class_getitem__(Item)`. Where it names none or several,
+  the parts are read and no call is written. A name imported from another file of the
   module may be a class too, which this file cannot see: the call is written, and the
   resolver answers a path whose receiver is the class itself `not_readable` ("a type
   form"), so no edge reaches the class's own `__getitem__`; the same holds for `__iter__`
@@ -372,7 +434,19 @@ comprehensions included:
   `modifiers.static` (bound to the class, as D00 §5a defines the word), and `cls` is not a
   parameter;
 - every parameter of a signature carries its `kind` (`positional_only`, `positional`,
-  `var_positional`, `keyword_only`, `var_keyword`, D00 §5a).
+  `var_positional`, `keyword_only`, `var_keyword`, D00 §5a);
+- **a parameter carries what its default and its annotation evaluate to** (plan
+  2026-11-08-python-fastapi-inbound N1, N2; D00 §5a): a `def` evaluates its defaults, then
+  each annotation that is not a plain type, where it is defined, so their calls are written
+  in the body that runs it (the owner's `<clinit>`, or the enclosing function for a nested
+  `def`), and the parameter's `default` and `annotation_value` name them, with
+  `declares_default`. An `Annotated[...]` annotation is the `__class_getitem__` call below;
+  a name bound to a module-level type alias (`X = Annotated[T, ...]`, `X: TypeAlias = ...`,
+  `type X = ...`, in this file or, through its header, another) is that alias's `field`, and
+  the parameter's type is `T`. A `type X = v` statement is read as `X = v` is (ruling R6):
+  its calls in the body, and a `field_write` of the result to `X`; Python evaluating `v` when
+  it is first asked for changes when it runs, not what it is. `...` is the field
+  `builtins#Ellipsis.`.
 
 **Types the module's own code declares** (OI-324 part 2):
 
@@ -438,7 +512,8 @@ followed. A list held in a local is read once as written, and
 `unresolved` after that, because the code it was handed to can change it.
 
 Every `return` is a `method_return`, plus `return None` where the end of the body is
-reachable. A generator has one `unresolved` return. An `@overload` stub, and an abstract or
+reachable. A generator has one `unresolved` return, and each `yield` is a `method_return`
+marked `yielded`, numbered before it (D00 §5, N10). An `@overload` stub, and an abstract or
 `Protocol` method whose body is only `...`, `pass` or a docstring, has no body and no
 `method_return`. `self.x = …` and `C.x = …` are `field_write`s; a write to an attribute of
 another object is not written. A module-level name that branches bind to several imports is
@@ -471,7 +546,26 @@ in the libraries of the scan, read lazily, each module once:
 A type file (`.pyi`) is read before a source file. Nothing is imported or run, and nothing
 is downloaded. A `sys.version_info` test in a type file is read against the environment's
 Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path); a
-`sys.platform` test gives both branches.
+`sys.platform` test gives both branches. That holds for every read of a library file, its
+names, its signatures and the facts its type headers are read from alike (ruling R22,
+2026-11-08; `imports.version_test`, one rule): only the arm that Python runs is read, so
+typeshed's `enum.pyi`, which defines `IntEnum` once per version range, gives the header of
+the running arm, `IntEnum(int, ReprEnum)` on 3.12, not the last arm written. The test is
+decided by what its name is bound to, not by its spelling: `sys.version_info` where the
+module's imports bind the name to the module `sys` under any name (`import sys as _sys`),
+or `version_info` where they bind it to `sys.version_info` (`from sys import version_info`);
+a name an import also binds to something else is not decided (`imports.version_tests`).
+The comparison is CPython's, against the whole `sys.version_info` where the environment
+states it (`pyvenv.cfg`'s `version_info = 3.12.4`; the running Python's where there is no
+environment): on 3.12.4 `> (3, 12)` holds and `<= (3, 12)` does not, and `>= (3, 12, 1)`
+holds. Where only the minor version is known (a `site-packages` path, or a `pyvenv.cfg`
+that does not state it), a test is decided only where every release of that minor version
+gives one answer; `>= (3, 12, 1)` on a bare 3.12 reads both arms. The whole version is in
+the libraries' fingerprint, so a micro upgrade re-reads every file.
+Every pass over a library file reads the live arm only: the names it binds, its bodies, the
+types of its module-level names, its declared returns and class members, and the class
+statements headers are read from, so a function written once per version has the live
+arm's return, never both. The module's own files are read whole, every branch.
 
 - **A library name is its defining symbol.** A re-export is followed through the library's
   own imports, into any distribution the environment holds (`fastapi.Request` is
@@ -543,13 +637,50 @@ Python (`pyvenv.cfg` of `ScanRequest.environment`, else its `site-packages` path
   or instance argument, a written base, a parameter or return type), then for each of its
   written bases, transitively: the defining symbol, the construct kind, the first base as
   `superclass` and the rest as `interfaces` (as a module class's), no annotation, and the
-  `origin`. A named type no library holds counts in `type_headers_unlocated`; `object` is
+  `origin`, and for every library class a static call names as a member of its module
+  (`FastAPI()` names `fastapi/applications/FastAPI#`). A named type no library holds counts
+  in `type_headers_unlocated`, except such a member, which may be a function; `object` is
   the boundary and gets none. A library class whose bases are not all read gets none
   either, with a line on the uncovered list. No library member, document or `symbol` fact
   is written, so library methods are not "found" (`method_resolution` answers `external`),
   `coverage.documents` counts the module's files only, and the `symbols` view holds the
   module's own. Library signatures are used only inside the scanner, to type the module's
   own calls (above).
+- **A header reads its class statement, not its module** (ruling R20, 2026-11-08). What a
+  header carries (the construct kind, the written parents and whether they stop early) is
+  read from the class statement alone: its bases are looked up against the names the
+  module binds and, for a nested class, each outer class body's, as the module's own facts
+  would look them up, so a re-export or a module attribute (`base.Speaks`) is followed to
+  its defining class as before. A module is a type with no parents. The whole module is
+  read, as before, only where one statement cannot say: a class name two class statements
+  of the file hold (a class defined on two branches, or one of its name inside a
+  function), since which one the facts keep is the whole file's question; a name no class
+  statement holds is no class. The arm of a version test the environment's Python does not
+  run holds no class statement, for either read. The headers are byte for byte what reading every module
+  whole writes (`test_type_headers_from_class_statements_equal_a_whole_module_read`; polar
+  and Sextant's own fact trees). On polar the pass went from 596 whole-module reads (45 s)
+  to 8 (3 s), then 3 once version tests were decided, and a cold run from 69 s to 51 s.
+- **A header's class body is read by the same reader as a module class's** (fact schema 12,
+  plan 2026-11-08 task 9c and its review C2; `structure.header_body_tree`,
+  `Libraries._class_bodies`). The library module is read by `file_facts` over a copy that
+  keeps what binds a name (imports, class and function statements), every function body left
+  out (and a module-level function's decorators and defaults), the classes' bodies, and of the
+  other module-level statements only the assignments to the names those classes use, followed
+  transitively. Kept from that read: each header class's field symbols, its `<clinit>`, its
+  writes and calls, and the module-level names it uses with their writes and the module
+  body's calls; each class's functions (name and return type) and class-statement keywords go
+  on its `type_header`. No class or method symbol is kept. A class a kept call names gets a
+  header in turn. A header only the whole-module read answers carries no body.
+- **A class statement's keywords** (`class A(Base, extra="allow")`, review C1) are written on
+  the class's `symbol` fact as `keywords`, in the call-argument grammar, `metaclass` left out.
+- **A class body's `if TYPE_CHECKING:` and `if False:`** never run (review Minor 1, re-review
+  N2): both arms are read as before, so what they declare stays a symbol (a type checker's
+  stub keeps its callers' callee), and a field only the dead arm declares carries
+  `modifiers.never_runs: true`, which keeps it out of a payload's field set. A name the
+  running arm declares too is a field. Any other test is read as before.
+- **A class body's dict display with text keys** is written as the `dict(key=...)` call it
+  builds, so a configuration written `model_config = {...}` is read as one written
+  `ConfigDict(...)` is.
 - **An opted-in library's bodies** (`extract_libraries`, D04 §2a) are read whole, as a
   jar is: the detector reports the environment's `site-packages` as the library root of
   each named distribution the module declares and has installed, and the library's own
@@ -564,8 +695,9 @@ a document's fact file where a fresh read would write the same bytes: the file's
 hash, the document's stamps, Sextant's code, the module's identity, the libraries and the
 Python are the same, and so is every answer the module index gave the file (which other
 files exist). A kept document adds to the report what it added the first time: its fact
-count, its uncovered lines and its library notes. The library type headers are read again
-on every run, from the types every document names. An opted-in library's scan keeps nothing:
+count, its uncovered lines and its library notes. The library type headers are kept the
+same way, while the libraries and the types every document names are the same (D01 §7
+"The type headers"). An opted-in library's scan keeps nothing:
 its subtree is discarded before every run. A file the scan neither keeps nor writes — deleted,
 newly ignored, or no longer readable — loses its fact file, as on a first run. On polar
 `server/`, a run with no file changed scans in 1.5 s instead of 14 s.

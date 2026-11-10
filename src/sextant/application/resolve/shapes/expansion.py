@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,8 +16,17 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.conditions import AnnotationArg, parse_condition
 from sextant.application.resolve.dispatch import ancestry_of
+from sextant.application.resolve.shapes.model_fields import (
+    FieldName,
+    ModelNames,
+    Naming,
+    library_bodies,
+    naming_of,
+    weaker,
+)
 from sextant.application.resolve.shapes.nullability import _nullability_of, _scope_prefixes
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, root_type
+from sextant.application.resolve.values import cached_value_index
 from sextant.domain.symbols import bare_descriptor, names_a_type, owner_of
 
 
@@ -30,9 +40,19 @@ class ExpandedShapes:
     unexpanded_types: tuple[str, ...]
 
 
-def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) -> ExpandedShapes:
+def derive_shapes(
+    workspace: Workspace,
+    catalog: Catalog,
+    roots: Sequence[str],
+    directions: tuple[AbstractSet[str], AbstractSet[str]] | None = None,
+) -> ExpandedShapes:
     """Expands each root into a `shapes` row and its `shape_fields`, following
     every reference it finds.
+
+    `directions` is the roots a request carries and the roots a response carries, for a shape
+    model that names a field option dropping a field from output (`excluded_when`, task 9
+    review M4): such a field leaves a shape only responses reach, stays in one only requests
+    reach, and stays at `partial` in one both reach or whose direction is not known (None).
 
     Cycles terminate by construction: an `object` field holds a *reference* to
     another shape, never an inlining, so `Node { Node parent; }` needs no depth
@@ -40,6 +60,7 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
     """
     rules = _rules_of(catalog)
     scope_prefixes = _scope_prefixes(workspace, rules)
+    names = _model_names(workspace, catalog, rules)
     declared = _Fields(workspace=workspace)
     accessors = _Accessors(workspace=workspace, rules=rules)
     descriptors = _declared_shapes(workspace)
@@ -55,6 +76,14 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
     # are written and the order the report names gaps (NFR-1).
     pending = list(dict.fromkeys(roots))
     expanded: set[str] = set()
+    # Per shape, the shapes it references and its fields an output option drops (`excluded_when`):
+    # ordinal -> True, or None where the option is written as no literal.
+    edges: dict[str, list[str]] = {}
+    dropped: dict[str, dict[int, bool | None]] = {}
+    # Per shape, its fields written on output only (`output_fields`, task 9c), and whether its
+    # output and its input are built by something other than its fields (`output_open_when`).
+    output_only: dict[str, set[int]] = {}
+    hooked: dict[str, tuple[bool, bool]] = {}
 
     while pending:
         shape_id = pending.pop(0)
@@ -93,6 +122,8 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
         # closed too. Making the accessor half report open would leave the two halves
         # disagreeing about one question.
         from_accessors = False
+        # The ordinals of fields read on input under a name other than the one published.
+        renamed: set[int] = set()
         if descriptor is not None:
             rows = _declared_rows_of(descriptor, referenced)
         else:
@@ -103,6 +134,10 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
                 _bound(declared.of(base), substitution),
                 enums,
                 referenced,
+                (base, names),
+                dropped.setdefault(shape_id, {}),
+                output_only.setdefault(shape_id, set()),
+                renamed,
             )
             if not rows:
                 from_accessors = bool(accessors.of(base))
@@ -115,6 +150,7 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
                     referenced,
                 )
         pending.extend(referenced)
+        edges[shape_id] = list(referenced)
         # Expansion needs field facts, and only scanned types have them, so a
         # type without them stops here whoever wrote it (ruling F4). Its
         # reference is still kept: an open, zero-field shape row (D2).
@@ -126,6 +162,19 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
         expandable = descriptor is not None or bool(declared.of(base)) or from_accessors
         if not expandable:
             unexpanded.append(shape_id)
+        # Task 9c: a model whose configuration lets it take keys no field declares
+        # (`open_when`), and one whose output or input something other than its fields builds
+        # (`output_open_when`, decided per direction below).
+        takes_more = False
+        if names is not None and descriptor is None:
+            takes_more = names.opened(base)
+            output_opens, input_opens = names.output_opens(base)
+            # A field read under another name than the published one, or one not read, leaves
+            # the shape's INPUT field set described under names a request does not use (N13 B
+            # keeps one shape, under output names): a shape input reaches is open.
+            input_opens = input_opens or bool(renamed)
+            if output_opens or input_opens:
+                hooked[shape_id] = (output_opens, input_opens)
         shapes.append(
             {
                 "shape_id": shape_id,
@@ -168,18 +217,162 @@ def derive_shapes(workspace: Workspace, catalog: Catalog, roots: Sequence[str]) 
                 # and a shape with an undescribed field is OPEN. Without this the raw
                 # envelope reported `open: false` while saying nothing about its own
                 # payload, which is a stronger claim than the evidence supports.
-                or any(_holds_an_undescribed_object(row) for row in rows),
+                or any(_holds_an_undescribed_object(row) for row in rows)
+                # N12: a field whose wire name a generator no entry names would give is not
+                # guessed at (§2g), so the description is not complete.
+                or any(row["wire_name"] is None for row in rows)
+                or takes_more,
             }
         )
         fields.extend(
             {"shape_id": shape_id, "ordinal": ordinal, **row} for ordinal, row in enumerate(rows)
         )
 
+    if any(dropped.values()) or any(output_only.values()) or hooked:
+        shapes, fields = _without_excluded(
+            shapes, fields, (dropped, output_only, hooked), edges, directions
+        )
     # Fields first: the shape row is what marks a shape settled for a later
     # catalog, so it is written once its fields are in (D02 §5).
     workspace.derive("shape_fields", fields=fields)
     workspace.derive("shapes", shapes=shapes)
     return ExpandedShapes(unexpanded_types=tuple(unexpanded))
+
+
+def _reached(starts: AbstractSet[str], edges: dict[str, list[str]]) -> set[str]:
+    """Every shape `starts` reach through the fields' references."""
+    seen: set[str] = set()
+    pending = list(starts)
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        pending.extend(edges.get(current, ()))
+    return seen
+
+
+def _without_excluded(
+    shapes: list[dict[str, object]],
+    fields: list[dict[str, object]],
+    marked: tuple[
+        dict[str, dict[int, bool | None]], dict[str, set[int]], dict[str, tuple[bool, bool]]
+    ],
+    edges: dict[str, list[str]],
+    directions: tuple[AbstractSet[str], AbstractSet[str]] | None,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """The shapes and fields with each field an output option drops (`excluded_when`) left out
+    of a shape only responses reach, kept in one only requests reach, and kept at `partial`
+    anywhere else: one shape holds both directions (N13 B), so a field present in one and
+    absent in the other is described there only in part. A field whose option is written as
+    no literal is `partial` wherever it stays.
+
+    A field written on output only (`output_fields`, task 9c) is the mirror: left out of a
+    shape only requests reach, kept in one only responses reach, `partial` anywhere else. A
+    shape whose output something other than its fields builds (`output_open_when`) is open
+    unless only requests reach it; one whose input is built so, unless only responses do."""
+    dropped, written_only, hooked = marked
+    inputs = _reached(directions[0], edges) if directions is not None else set()
+    outputs = _reached(directions[1], edges) if directions is not None else set()
+    by_shape: dict[str, list[dict[str, object]]] = {}
+    for row in fields:
+        by_shape.setdefault(str(row["shape_id"]), []).append(row)
+    kept_fields: list[dict[str, object]] = []
+    kept_shapes: list[dict[str, object]] = []
+    for shape in shapes:
+        shape_id = str(shape["shape_id"])
+        marks = dropped.get(shape_id) or {}
+        outputs_only = written_only.get(shape_id) or set()
+        rows = by_shape.get(shape_id, [])
+        output_only = shape_id in outputs and shape_id not in inputs
+        input_only = shape_id in inputs and shape_id not in outputs
+        output_opens, input_opens = hooked.get(shape_id, (False, False))
+        if (output_opens and not input_only) or (input_opens and not output_only):
+            shape = {**shape, "open": True}
+        if marks or outputs_only:
+            rewritten: list[dict[str, object]] = []
+            for row in rows:
+                ordinal = int(str(row["ordinal"]))
+                if ordinal in outputs_only:
+                    if input_only:
+                        continue
+                    if not output_only:
+                        row = {**row, "resolution": weaker(str(row["resolution"]), "partial")}
+                if ordinal in marks:
+                    excluded = marks[ordinal]
+                    if excluded is True and output_only:
+                        continue
+                    if excluded is None or not input_only:
+                        row = {**row, "resolution": weaker(str(row["resolution"]), "partial")}
+                rewritten.append(row)
+            rows = [{**row, "ordinal": ordinal} for ordinal, row in enumerate(rewritten)]
+            payload = [
+                {key: value for key, value in row.items() if key not in ("shape_id", "ordinal")}
+                for row in rows
+            ]
+            shape = {**shape, "content_hash": _content_hash(payload)}
+        kept_shapes.append(shape)
+        kept_fields.extend(rows)
+    return kept_shapes, kept_fields
+
+
+def _model_names(workspace: Workspace, catalog: Catalog, rules: "_Rules") -> ModelNames | None:
+    """The catalog's shape model's call-read naming (N12), None where it has none: each field's
+    value is read through the walk's index, the one the engines built
+    (`values.cached_value_index`)."""
+    if rules.naming is None:
+        return None
+    index = cached_value_index(
+        workspace,
+        catalog.not_hand_offs,
+        catalog.hand_off_effects,
+        catalog.bean_models,
+        catalog.value_annotations,
+        returns_arguments=catalog.returns_arguments,
+    )
+    return ModelNames(workspace, rules.naming, index)
+
+
+@dataclass
+class ModelFields:
+    """Each model's fields as its shape model names them (N12), for a reader of a model as a set
+    of request parameters (plan 2026-11-08-python-fastapi-inbound R25): the fields expansion
+    publishes, its own and its scanned ancestors', each with its `FieldName`."""
+
+    names: ModelNames
+    fields: "_Fields"
+
+    def of(self, model: str) -> list[tuple[str, FieldName]] | None:
+        """`model`'s fields in declaration order, `(declared name, FieldName)`; None where it has
+        none to read."""
+        declared = [
+            field
+            for field in self.fields.of(model)
+            if not field["static"]
+            and not field["transient"]
+            and not field.get("never_runs")
+            and not self.names.is_private(field["name"])
+        ]
+        if not declared:
+            return None
+        return [
+            (
+                field["name"],
+                self.names.of(
+                    model,
+                    owner_of(bare_descriptor(str(field["symbol"]))) or model,
+                    field["name"],
+                    field.get("annotation_value"),
+                ),
+            )
+            for field in declared
+        ]
+
+
+def model_fields(workspace: Workspace, catalog: Catalog) -> ModelFields | None:
+    """`ModelFields` for the catalog's shape model, None where it reads no names off calls."""
+    names = _model_names(workspace, catalog, _rules_of(catalog))
+    return None if names is None else ModelFields(names, _Fields(workspace=workspace))
 
 
 @dataclass(frozen=True)
@@ -202,6 +395,9 @@ class _Rules:
     conditional_wrappers: tuple[tuple[AnnotationArg, dict[str, Any]], ...]
     known_types: dict[str, dict[str, Any]]
     name_from: list[dict[str, str]]
+    # N12: the naming a shape model reads off the calls that make a field's value, None for a
+    # model naming fields by annotation alone (`model_fields.naming_of`).
+    naming: Naming | None
     ignore: tuple[str, ...]
     default_strategy: str
     # D02 §2f's accessor prefixes (W26), each with the `wire_type` its return must
@@ -344,7 +540,9 @@ def _rules_of(catalog: Catalog) -> _Rules:
         name_from=[
             {"annotation": _catalog_symbol(source["annotation"]), "arg": source["arg"]}
             for source in serialization.get("name_from", [])
+            if "annotation" in source
         ],
+        naming=naming_of(serialization),
         ignore=tuple(_catalog_symbol(name) for name in serialization.get("ignore", [])),
         # A catalog that declares no strategy renames nothing. Absence is not a
         # licence to invent one.
@@ -472,11 +670,22 @@ class _Fields:
         are open because they hold an unscanned DATE type — nothing to do with this rule.)*
         """
         _own, ancestry = self._declared()
+        described, every_base = self._described()
+        # A library class whose header read its body (task 9c) is described by it, as a
+        # scanned class is. Under the `c3` lookup every written parent is a base whose
+        # fields a subclass takes, so any of them, at any depth, may open the shape (task 9c
+        # review M1); under the JVM's, only the superclass chain can.
         return any(
-            kind == "extends" and not is_scanned
+            (kind == "extends" or every_base) and not is_scanned and parent not in described
             for holder in _closure_of(base, ancestry)
-            for _parent, kind, is_scanned in ancestry.get(holder, [])
+            for parent, kind, is_scanned in ancestry.get(holder, [])
         )
+
+    def _described(self) -> tuple[set[str], bool]:
+        """The library classes whose header read their body, and whether every written parent
+        is a base (the module fact's `c3` lookup, as `dispatch_of` reads it)."""
+        rules = {str(row["lookup"]) for row in self.workspace.query("lookup_rules")}
+        return set(self.workspace.once(library_bodies)), rules == {"c3"}
 
     def _declared(
         self,
@@ -516,6 +725,12 @@ def _declared_fields(workspace: Workspace) -> dict[str, list[dict[str, Any]]]:
                 "returns": _json_object(row["returns"]),
                 "static": bool(row["static"]),
                 "transient": bool(row["transient"]),
+                # The annotation's value where it is not a plain type, and whether the
+                # language lets the key be left out (`TypedDict`), Python's (D00 §5a).
+                "annotation_value": _json_object(row["annotation_value"]) or None,
+                "not_required": bool(row["not_required"]),
+                # Declared only where the class body never runs (`if TYPE_CHECKING:`): no field.
+                "never_runs": bool(row["never_runs"]),
             }
         )
     return owners
@@ -764,11 +979,35 @@ def _rows_of(
     declared: list[dict[str, Any]],
     enums: set[str],
     referenced: list[str],
+    model: tuple[str, ModelNames | None] = ("", None),
+    dropped: dict[int, bool | None] | None = None,
+    output_only: set[int] | None = None,
+    renamed: set[int] | None = None,
 ) -> list[dict[str, object]]:
     """One projected row per field that reaches the wire, appending every shape
-    the fields reference to `referenced`."""
+    the fields reference to `referenced`. `model` is the type the fields describe and the
+    shape model's call-read naming (N12), None where it has none. `dropped` receives the
+    ordinal of each row an output option drops (`excluded_when`): True, or None where the
+    option is written as no literal. `output_only` receives the ordinal of each row written on
+    output only (`output_fields`, task 9c), and `renamed` each row read on input under another
+    name than its published one, or under one not read."""
     rows: list[dict[str, object]] = []
+    shape, names = model
     for field in declared:
+        written_only = None
+        if field["static"] and not field["transient"] and names is not None:
+            holder = owner_of(bare_descriptor(str(field["symbol"])))
+            written_only = names.output_field(shape, holder or shape, field["name"])
+        if written_only is not None and not names.is_private(field["name"]):  # type: ignore[union-attr]
+            output, returns = written_only
+            rows.append(
+                _output_row(
+                    workspace, rules, scope_prefixes, enums, referenced, field, output, returns
+                )
+            )
+            if output_only is not None:
+                output_only.add(len(rows) - 1)
+            continue
         # On no payload, whoever wrote it: a value bound to the type rather than
         # to an instance, or one the language declares as not serialized. Both
         # are ordinary declarations — the facts keep them — and only the
@@ -777,14 +1016,25 @@ def _rows_of(
         # every field is excluded stays a type the pass expanded rather than one
         # it reports as a gap. No row at all, for the reason the ignore rule
         # below gives.
-        if field["static"] or field["transient"]:
+        if field["static"] or field["transient"] or field.get("never_runs"):
             continue
         annotations = workspace.query("annotations_of", target=field["symbol"])
         # No row, not a row marked absent: DR-5 would compare a field the
         # catalog says is off the wire against a peer that correctly omits it.
         if any(use["annotation"] in rules.ignore for use in annotations):
             continue
-        wire_name, evidence = _wire_name(rules, field["name"], annotations)
+        declared_name, evidence = _wire_name(rules, field["name"], annotations)
+        wire_name: str | None = declared_name
+        named = None
+        if names is not None:
+            # A name the serialiser keeps as a private attribute is no field (N12).
+            if names.is_private(field["name"]):
+                continue
+            holder = owner_of(bare_descriptor(str(field["symbol"])))
+            named = names.of(shape, holder or shape, field["name"], field.get("annotation_value"))
+            wire_name = named.output
+            if renamed is not None and named.input != named.output:
+                renamed.add(len(rows))
         # Rooted first: a field inside a declared envelope is described by what
         # the envelope holds, not by the envelope (D02 §2a).
         rooted = root_type(field["returns"], rules.wrappers)
@@ -797,6 +1047,8 @@ def _rows_of(
             scope_prefixes,
             field["symbol"],
         )
+        if named is not None and named.excluded is not False and dropped is not None:
+            dropped[len(rows)] = named.excluded
         rows.append(
             {
                 "wire_name": wire_name,
@@ -808,15 +1060,66 @@ def _rows_of(
                 # Presence machinery only, never nullability (D00 §5b): the
                 # one source this phase has is the wrapper chain rooting
                 # already recorded — an `optional` wrapper is what makes a
-                # field omittable.
-                "required": "optional" not in rooted.chain,
+                # field omittable. A shape model with a `required` rule says it
+                # instead (N12: `no_default`).
+                # A key the language lets be left out (a `TypedDict`'s `NotRequired`) is not
+                # required, whatever else is said.
+                # A shape model with a `required` rule that could not read whether a default
+                # is written publishes NULL: unknown, never a guess (ruled 2026-11-09).
+                "required": False
+                if field.get("not_required")
+                else (
+                    "optional" not in rooted.chain
+                    if named is None or names is None or names.naming.required is None
+                    else named.required
+                ),
                 "nullable": nullable,
-                "resolution": resolution,
+                "resolution": resolution if named is None else weaker(resolution, named.resolution),
                 "evidence": evidence,
                 "item": _item_of(described),
             }
         )
     return rows
+
+
+def _output_row(
+    workspace: Workspace,
+    rules: _Rules,
+    scope_prefixes: list[tuple[str, bool]],
+    enums: set[str],
+    referenced: list[str],
+    field: dict[str, Any],
+    named: FieldName,
+    returns: Any,
+) -> dict[str, object]:
+    """One row for a field written on output only (`output_fields`, task 9c): typed by what
+    its method returns, named and required as the shape model reads its decorator."""
+    reference = returns if isinstance(returns, dict) and returns else None
+    if reference is None:
+        described: dict[str, Any] = {"wire_type": None, "wire_format": None, "nullable": None}
+        nullable, resolution = None, "unresolved"
+    else:
+        rooted = root_type(reference, rules.wrappers)
+        described = _described(rules, rooted.reference, enums, referenced)
+        nullable, resolution = _nullability_of(
+            rules,
+            rooted.reference,
+            described["nullable"],
+            [],
+            scope_prefixes,
+            field["symbol"],
+        )
+    return {
+        "wire_name": named.output,
+        "field_number": None,
+        "wire_type": described["wire_type"],
+        "wire_format": described["wire_format"],
+        "required": named.required,
+        "nullable": nullable,
+        "resolution": weaker(resolution, named.resolution),
+        "evidence": "declared",
+        "item": _item_of(described),
+    }
 
 
 def _declared_rows_of(shape: dict[str, Any], referenced: list[str]) -> list[dict[str, object]]:
@@ -933,7 +1236,12 @@ def _described(
     """The recursive `{wire_type, wire_format, nullable, shape_id?, item?}`
     descriptor for one type reference (D01 §5)."""
     known = rules.known_types.get(reference["symbol"])
-    if known is not None:
+    if known is not None and known["wire"] in _COLLECTIONS:
+        # A collection a shape model names (a bare `list` reaching rooting as a symbol, as a
+        # type form's own does, R24): its wire type is the entry's, and what it holds is read
+        # from its arguments as a scanned collection's is, below.
+        reference = {**reference, "wire_type": known["wire"], "wire_format": known.get("format")}
+    elif known is not None:
         # Mapped and never expanded: a type the serialiser turns into a scalar
         # has no field list on the wire, and expanding it would invent one
         # (D02 §2g). A known type may also declare its own `nullable` (D02
@@ -964,7 +1272,11 @@ def _described(
         # What a collection holds is its last type argument: a keyed
         # collection's keys are strings on the wire, so only its value
         # argument describes the payload, and a sequence has just the one.
-        if reference["arguments"]:
+        # A sequence holding SEVERAL types by position (`tuple[int, str]`) has no one item
+        # type, so none is published and its owner is open (`_holds_an_undescribed_object`).
+        if reference["arguments"] and (
+            described["wire_type"] == "map" or len(reference["arguments"]) == 1
+        ):
             described["item"] = _described(rules, reference["arguments"][-1], enums, referenced)
     elif described["wire_type"] == "object":
         # F4 §5.2 (W25). The id carries the BOUND ARGUMENTS where the reference has

@@ -6,19 +6,31 @@ and runs the real pipeline with no catalogs, then reads `bound_receivers` (one r
 path the walk reached the receiver by) and `call_edges` (one edge per bound owner).
 """
 
+from functools import partial
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogSource
 from sextant.application.ports.scanner import ScanRequest
+from sextant.application.resolve import pipeline
 from sextant.application.resolve.call_edges import record_call_edges
 from sextant.application.resolve.pipeline import resolve
 from sextant.application.resolve.receiver_binding import bind_until_settled
 from sextant.application.resolve.return_flow import record_return_flows
+from sextant.application.resolve.values import (
+    READ_CALLERS,
+    RECEIVER,
+    producer_paths,
+    suffixes_kept,
+    value_index,
+)
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import Document, ModuleFact
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.extract.python.scanner import PythonScanner
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 _PREFIX = "sextant-python pypi shop 1 "
@@ -84,10 +96,28 @@ def _facts(tmp_path: Path, files: dict[str, str]) -> Path:
     return facts
 
 
-def _resolved(tmp_path: Path, files: dict[str, str]) -> DuckDbWorkspace:
+def _resolved(
+    tmp_path: Path, files: dict[str, str], catalogs: CatalogSource | None = None
+) -> DuckDbWorkspace:
+    """`files` resolved, with every input checked: the rounds bind what walking every site
+    whole each round binds (`bind_until_settled(..., incremental=False)`, the R25 reference),
+    from the start. No catalogs unless `catalogs` is given."""
+    source = catalogs or _NoCatalogs()
+    facts = _facts(tmp_path, files)
     workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
-    resolve(workspace, _facts(tmp_path, files), _NoCatalogs(), set())
+    resolve(workspace, facts, source, set())
+    whole = DuckDbWorkspace(tmp_path / "whole.duckdb")
+    with patch.object(
+        pipeline, "bind_until_settled", partial(bind_until_settled, incremental=False)
+    ):
+        resolve(whole, facts, source, set())
+    assert _table(workspace) == _table(whole)
+    whole.close()
     return workspace
+
+
+def _table(workspace: DuckDbWorkspace) -> list[str]:
+    return sorted(repr(sorted(row.items())) for row in workspace.query("bound_receivers"))
 
 
 def _site(workspace: DuckDbWorkspace, method: str, name: str) -> tuple[str, int]:
@@ -112,8 +142,9 @@ def _edges(workspace: DuckDbWorkspace, site: tuple[str, int]) -> list[dict[str, 
 
 def test_constructor_local_binds(tmp_path: Path):
     """`from app.a import Session; s = Session(); s.get()`: the scanner writes the class
-    call as a static call on the module (it cannot see that `Session` is a class), and the
-    resolver reads it as that class's constructor, so `s` is a `Session`."""
+    call as a static call on the module, and the resolver reads it as that class's
+    constructor. The scanner also knows `Session` is a class by `a.py`'s header (ruling R17),
+    so `s.get` is written with its owner and needs no bound receiver."""
     workspace = _resolved(
         tmp_path,
         {
@@ -122,10 +153,13 @@ def test_constructor_local_binds(tmp_path: Path):
         },
     )
     site = _site(workspace, "app/b#f(sig_dd69782a).", "get")
-    rows = _bound(workspace, site)
-    assert [(row["owner"], row["resolution"], row["evidence"]) for row in rows] == [
-        (_SESSION, "resolved", "syntax")
+    (owner,) = [
+        row["owner"]
+        for row in workspace.query("call_sites")
+        if (row["caller"], row["ordinal"]) == site
     ]
+    assert owner == _SESSION
+    assert _bound(workspace, site) == []
     assert [row["callee"] for row in _edges(workspace, site)] == [
         _PREFIX + "app/a/Session#get(sig_dd69782a)."
     ]
@@ -256,6 +290,31 @@ def test_a_class_attribute_a_subclass_overrides_is_both_values(tmp_path: Path):
             "        self.c.get(1)\n"
             "class D(B):\n"
             "    c = Client()\n",
+        },
+    )
+    site = _site(workspace, "app/b/B#use(sig_dd69782a).", "get")
+    assert _owners(workspace, site) == [
+        (_CLIENT, "narrowed", "None"),
+        (_SESSION, "narrowed", "None"),
+    ]
+    workspace.close()
+
+
+def test_a_self_read_still_takes_the_class_body_write(tmp_path: Path):
+    """Ruling R33, unchanged by PEP 526: `c: Session = Session()` declares an instance
+    variable, and its value is still the class body's write. `self.c` in the base is either
+    class's value."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "a.py": _A,
+            "b.py": "from app.a import Session, Client\n"
+            "class B:\n"
+            "    c: Session = Session()\n"
+            "    def use(self):\n"
+            "        self.c.get(1)\n"
+            "class D(B):\n"
+            "    c: Client = Client()\n",
         },
     )
     site = _site(workspace, "app/b/B#use(sig_dd69782a).", "get")
@@ -442,16 +501,19 @@ def test_no_caller_is_external(tmp_path: Path):
 
 
 def test_rounds_stop_when_nothing_new_binds(tmp_path: Path):
-    """`r.run(Session())` in another file than `Runner` is bound in round 1; only then is
-    `Runner.run` called by anything, so its parameter's call binds in round 2; round 3 binds
-    nothing and the rounds stop."""
+    """`r.run(Session())` in another file than `Runner` is bound in round 1 (`r` is what
+    `make` returns, which the scanner does not type); only then is `Runner.run` called by
+    anything, so its parameter's call binds in round 2; round 3 binds nothing and the rounds
+    stop."""
     facts = _facts(
         tmp_path,
         {
             "a.py": _A + "class Runner:\n    def run(self, s):\n        s.get('/r')\n",
             "b.py": "from app.a import Runner, Session\n"
+            "def make():\n"
+            "    return Runner()\n"
             "def main():\n"
-            "    r = Runner()\n"
+            "    r = make()\n"
             "    r.run(Session())\n",
         },
     )
@@ -526,7 +588,7 @@ def test_a_keyword_argument_fills_the_parameter_of_its_name(tmp_path: Path):
 
 def test_a_keyword_naming_no_parameter_fills_none(tmp_path: Path):
     """A keyword that names no parameter feeds none: `h(q=Session())` leaves `x` to its
-    default, which is `not_readable` on that caller's path, never the `Session`."""
+    default, `None` on that caller's path (ruling R16), never the `Session`."""
     workspace = _resolved(
         tmp_path,
         {
@@ -545,8 +607,33 @@ def test_a_keyword_naming_no_parameter_fills_none(tmp_path: Path):
         (_CLIENT, "None"),
     ]
     unfilled = next(row for row in rows if row["owner"] is None)
-    assert "parameter 0" in str(unfilled["detail"])
+    assert str(unfilled["detail"]) == "receiver of get is None on this path"
     assert {row["resolution"] for row in rows if row["owner"]} == {"partial"}
+    workspace.close()
+
+
+@pytest.mark.parametrize("default", ["()", "[]"])
+def test_an_empty_collection_default_is_not_none(tmp_path: Path, default: str):
+    """The near-miss of the `None` default (task 4 review): `x=()` and `x=[]` are `absent`
+    too, as an empty array is, but the code holds an empty collection there, not `None`."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "h.py": f"def h(x={default}):\n    x.count(1)\n",
+            "b.py": "from app.h import h\ndef f():\n    h()\n",
+        },
+    )
+    rows = _bound(workspace, _site(workspace, "app/h#h(sig_dd69782a).", "count"))
+    assert [(row["owner"], row["reason"], row["detail"]) for row in rows] == [
+        (
+            None,
+            "not_readable",
+            (
+                "receiver of count is an empty collection on this path, of a type the facts "
+                "do not write"
+            ),
+        )
+    ]
     workspace.close()
 
 
@@ -727,7 +814,7 @@ def test_a_positional_argument_to_a_variadic_function_fills_its_first_parameter(
 
 def test_a_keyword_only_parameter_is_filled_by_name_or_left_to_its_default(tmp_path: Path):
     """`def f(a, *, b=None)`: `f(x, b=Client())` fills `b`; `f(x)` leaves it to its default,
-    `not_readable` naming parameter 1."""
+    `None` (ruling R16), `not_readable` with that detail."""
     workspace = _resolved(
         tmp_path,
         {
@@ -744,7 +831,7 @@ def test_a_keyword_only_parameter_is_filled_by_name_or_left_to_its_default(tmp_p
         (_CLIENT, "None"),
     ]
     unfilled = next(row for row in rows if row["owner"] is None)
-    assert "parameter 1" in str(unfilled["detail"])
+    assert str(unfilled["detail"]) == "receiver of get is None on this path"
     kinds = {
         str(row["symbol"]).rsplit(" ", 1)[-1]: [
             parameter.get("kind") for parameter in row["signature"]["parameters"]
@@ -1226,5 +1313,349 @@ def test_what_a_class_object_call_made_is_an_instance(tmp_path: Path):
     built = _site(workspace, "app/run#build(sig_dd69782a).", "go")
     assert [(row["owner"], row["resolution"]) for row in _bound(workspace, built)] == [
         ("app/shapes/Repo#", "resolved")
+    ]
+    workspace.close()
+
+
+_ROUNDS = (
+    "class A:\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "def f(a):\n"
+    "    a.go()\n"
+    "def g():\n"
+    "    f(A())\n"
+    "def h(b):\n"
+    "    return b\n"
+)
+
+
+def _walked_parameter(tmp_path: Path):
+    """The index of `_ROUNDS`, with `f`'s receiver walked once by the binder's reader, so
+    `f`'s parameter has its upward paths shared on the index."""
+    workspace = _resolved(tmp_path, {"m.py": _ROUNDS})
+    index = value_index(workspace)
+    site = index.sites[_site(workspace, "app/m#f(sig_dd69782a).", "go")]
+    producer_paths(index, site, RECEIVER, frozenset(), shared="rounds")
+    return index
+
+
+def test_a_round_keeps_the_upward_paths_its_new_edges_cannot_change(tmp_path: Path):
+    """A round that adds callers only to `h` cannot change what `f`'s parameter holds, so its
+    paths upward are kept for the next round, not walked again."""
+    index = _walked_parameter(tmp_path)
+    kept = suffixes_kept(
+        index, frozenset({(READ_CALLERS, _PREFIX + "app/m#h(sig_dd69782a).")})
+    ).held
+
+    assert any(key[1][1] == _PREFIX + "app/m#f(sig_dd69782a)." for key in kept)
+
+
+def test_a_round_walks_again_the_upward_paths_its_new_edges_can_change(tmp_path: Path):
+    """A round that adds a caller of `f` changes what `f`'s parameter holds: its paths upward,
+    and every path built on them, are dropped and walked again."""
+    index = _walked_parameter(tmp_path)
+    kept = suffixes_kept(
+        index, frozenset({(READ_CALLERS, _PREFIX + "app/m#f(sig_dd69782a).")})
+    ).held
+
+    assert index.suffixes.held
+    assert not any(key[1][1] == _PREFIX + "app/m#f(sig_dd69782a)." for key in kept)
+
+
+_CHAIN = (
+    "class A:\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "def k(x):\n"
+    "    x.go()\n"
+    "def f(x):\n"
+    "    k(x)\n"
+    "def g():\n"
+    "    f(A())\n"
+)
+
+
+def test_a_round_walks_again_a_path_built_on_one_its_new_edges_change(tmp_path: Path):
+    """`k`'s parameter is read through `f`'s, two positions down: a round that adds a caller of
+    `f` changes what `k`'s parameter holds, so `k`'s paths upward are dropped too, not only
+    `f`'s. Each path carries the reads of every path it was built on."""
+    workspace = _resolved(tmp_path, {"m.py": _CHAIN})
+    index = value_index(workspace)
+    site = index.sites[_site(workspace, "app/m#k(sig_dd69782a).", "go")]
+    producer_paths(index, site, RECEIVER, frozenset(), shared="rounds")
+    kept = suffixes_kept(
+        index, frozenset({(READ_CALLERS, _PREFIX + "app/m#f(sig_dd69782a).")})
+    ).held
+
+    assert any(key[1][1] == _PREFIX + "app/m#k(sig_dd69782a)." for key in index.suffixes.held)
+    assert not any(key[1][1] == _PREFIX + "app/m#k(sig_dd69782a)." for key in kept)
+
+
+_GETTER = (
+    "class Cfg:\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "class Cfg2(Cfg):\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "class Cfg3(Cfg):\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "class Holder:\n"
+    "    def __init__(self, cfg) -> None:\n"
+    "        self.cfg = cfg\n"
+    "    def get_cfg(self):\n"
+    "        return self.cfg\n"
+    "def helper(c):\n"
+    "    c.go()\n"
+    "def mid(x):\n"
+    "    helper(x)\n"
+    "class Svc:\n"
+    "    def use(self, h: Holder) -> None:\n"
+    "        mid(h.get_cfg())\n"
+    "class Svc2:\n"
+    "    def other(self, d) -> None:\n"
+    "        helper(d)\n"
+    "def make():\n"
+    "    return Svc()\n"
+    "def make2():\n"
+    "    return Svc2()\n"
+    "def main() -> None:\n"
+    "    Svc().use(Holder(Cfg()))\n"
+    "    make().use(Holder(Cfg3()))\n"
+    "    make2().other(Cfg2())\n"
+)
+
+
+def test_a_kept_path_records_what_a_walk_inside_it_read(tmp_path: Path):
+    """Task 8 re-review C1: whether the getter's object arrives from code not scanned is asked
+    by a walk inside the walk, and what it read (the callers of `use`, which round 1 gives
+    `make().use(...)`) is part of `mid`'s kept paths. So `helper`'s `c.go()` is every `Cfg`
+    the code passes, round by round as when every site is walked whole."""
+    workspace = _resolved(tmp_path, {"m.py": _GETTER})
+    site = _site(workspace, "app/m#helper(sig_dd69782a).", "go")
+    rounds = sorted({str(row["owner"]) for row in _bound(workspace, site)})
+    bind_until_settled(workspace, (), incremental=False)
+    whole = sorted({str(row["owner"]) for row in _bound(workspace, site)})
+
+    assert rounds == ["app/m/Cfg#", "app/m/Cfg2#", "app/m/Cfg3#"]
+    assert rounds == whole
+
+
+_SETTER = (
+    "class Cfg:\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "class Cfg2(Cfg):\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "class Cfg3(Cfg):\n"
+    "    def go(self) -> None:\n"
+    "        pass\n"
+    "class Holder:\n"
+    "    def __init__(self) -> None:\n"
+    "        self.cfg = Cfg()\n"
+    "    def set_cfg(self, c) -> None:\n"
+    "        self.cfg = c\n"
+    "    def get_cfg(self):\n"
+    "        return self.cfg\n"
+    "def helper(c):\n"
+    "    c.go()\n"
+    "def mid1(x):\n"
+    "    helper(x)\n"
+    "def mid2(y):\n"
+    "    helper(y)\n"
+    "def use(h: Holder) -> None:\n"
+    "    v = h.get_cfg()\n"
+    "    mid1(v)\n"
+    "    mid2(v)\n"
+    "class Conf:\n"
+    "    def conf(self, h: Holder) -> None:\n"
+    "        h.set_cfg(Cfg3())\n"
+    "def make():\n"
+    "    return Conf()\n"
+)
+_OTHER = (
+    "class Svc2:\n"
+    "    def other(self, d) -> None:\n"
+    "        helper(d)\n"
+    "def make2():\n"
+    "    return Svc2()\n"
+)
+
+
+def _helper_owners(tmp_path: Path, text: str, name: str = "go") -> list[tuple[object, ...]]:
+    workspace = _resolved(tmp_path, {"m.py": text})
+    site = _site(workspace, "app/m#helper(sig_dd69782a).", name)
+    found = sorted({(row["owner"], row["resolution"]) for row in _bound(workspace, site)}, key=repr)
+    workspace.close()
+    return found
+
+
+def test_a_second_position_asking_a_kept_answer_takes_its_reads_too(tmp_path: Path):
+    """Task 8 re-review R3-1: `mid1` and `mid2` both read `h.get_cfg()`, and only the first to
+    ask works out which setter calls were made on `h`. The second takes that answer kept for
+    the walk, and must take what working it out read as well (`conf`'s calls, which round 1
+    gives), or its upward paths are kept across round 2 and `Cfg3`, set only on `h2`, stays.
+    `_resolved` checks the rounds against whole binding."""
+    found = _helper_owners(
+        tmp_path,
+        _SETTER + _OTHER + "def main() -> None:\n"
+        "    h = Holder()\n"
+        "    h2 = Holder()\n"
+        "    make().conf(h2)\n"
+        "    use(h)\n"
+        "    make2().other(Cfg2())\n",
+    )
+
+    assert [owner for owner, _ in found] == ["app/m/Cfg#", "app/m/Cfg2#"]
+
+
+def test_a_site_whose_value_crossed_a_method_only_inside_an_object_walk_is_walked_again(
+    tmp_path: Path,
+):
+    """Task 8 re-review round 3 (older than task 8): which setter calls were made on `h` is
+    read by a walk inside the walk, through `conf`'s callers, which round 1 gives. The site
+    depends on what that walk read, so round 2 walks it again: `Cfg` alone, resolved, as when
+    every site is walked whole (`_resolved`), not round 1's `Cfg` and `Cfg3`."""
+    found = _helper_owners(
+        tmp_path,
+        _SETTER + "def main() -> None:\n"
+        "    h = Holder()\n"
+        "    h2 = Holder()\n"
+        "    make().conf(h2)\n"
+        "    use(h)\n",
+    )
+
+    assert found == [("app/m/Cfg#", "resolved")]
+
+
+def test_a_getter_value_from_a_later_rounds_caller_is_walked_again(tmp_path: Path):
+    """Task 8 re-review Minor 1 (older than task 8): `use`'s only caller is bound in round 1,
+    and the getter's object is read through it only inside an object walk. The site depends
+    on that read, so it is walked again and gives `Cfg`, not `external`."""
+    found = _helper_owners(
+        tmp_path,
+        "class Cfg:\n"
+        "    def go(self) -> None:\n"
+        "        pass\n"
+        "class Holder:\n"
+        "    def __init__(self, cfg) -> None:\n"
+        "        self.cfg = cfg\n"
+        "    def get_cfg(self):\n"
+        "        return self.cfg\n"
+        "def helper(c):\n"
+        "    c.go()\n"
+        "class Svc:\n"
+        "    def use(self, h: Holder) -> None:\n"
+        "        helper(h.get_cfg())\n"
+        "def make():\n"
+        "    return Svc()\n"
+        "def main() -> None:\n"
+        "    make().use(Holder(Cfg()))\n",
+    )
+
+    assert found == [("app/m/Cfg#", "resolved")]
+
+
+# Task 8 re-review M4-1: each part of the call index a binding round changes, read by a walk,
+# is recorded (`_Walk._depends`), so a round walks again what read it. One input per part a
+# realistic program reaches; `_resolved` checks each against whole binding.
+
+
+def test_a_setter_with_no_argument_called_on_an_object_a_round_binds_is_walked_again(
+    tmp_path: Path,
+):
+    """`use_fast` takes no argument, so the call `box(h2).use_fast()` that round 1 binds adds
+    no caller of a parameter: it changes only which calls `use_fast` has (`called_at`). Round
+    1 counts its write as one on an unplaced object; round 2 places it on `h2`, never `h`. So
+    `c.go()` is `Cfg` alone, resolved, not `Cfg` and `Cfg3`."""
+    found = _helper_owners(
+        tmp_path,
+        "class Cfg:\n"
+        "    def go(self) -> None:\n"
+        "        pass\n"
+        "class Cfg3(Cfg):\n"
+        "    def go(self) -> None:\n"
+        "        pass\n"
+        "class Holder:\n"
+        "    def __init__(self) -> None:\n"
+        "        self.cfg = Cfg()\n"
+        "    def use_fast(self) -> None:\n"
+        "        self.cfg = Cfg3()\n"
+        "    def get_cfg(self):\n"
+        "        return self.cfg\n"
+        "def box(x):\n"
+        "    return x\n"
+        "def helper(c):\n"
+        "    c.go()\n"
+        "def use(h: Holder) -> None:\n"
+        "    v = h.get_cfg()\n"
+        "    helper(v)\n"
+        "def main() -> None:\n"
+        "    h = Holder()\n"
+        "    h2 = Holder()\n"
+        "    box(h2).use_fast()\n"
+        "    use(h)\n",
+    )
+
+    assert found == [("app/m/Cfg#", "resolved")]
+
+
+def test_a_call_of_a_function_value_a_round_binds_returns_what_its_body_returns(
+    tmp_path: Path,
+):
+    """`f()` calls the function `pick()` returns; round 1 binds the call to `get_repo`'s body
+    (`callees`), and only then is its result what that body returns. `helper` read that
+    call's callees in round 1, so round 2 walks it again: `Repo`, resolved."""
+    found = _helper_owners(
+        tmp_path,
+        "class Repo:\n"
+        "    def find(self) -> None:\n"
+        "        pass\n"
+        "def get_repo():\n"
+        "    return Repo()\n"
+        "def pick():\n"
+        "    return get_repo\n"
+        "def helper(c):\n"
+        "    c.find()\n"
+        "def main():\n"
+        "    f = pick()\n"
+        "    helper(f())\n",
+        "find",
+    )
+
+    assert found == [("app/m/Repo#", "resolved")]
+
+
+def test_a_value_from_a_cached_function_is_read_once_a_round_reaches_its_body(tmp_path: Path):
+    """`get_p()` calls the `functools.cache` wrapper, a library `__call__`; the value models
+    state it runs the function it wraps, so round 1 binds the call to `get_p`'s body (the
+    call now `reached` one). Before, the value was from code not scanned (`external`); after,
+    a body here was reached whose return the wrapper hands back, which the facts do not read
+    (`not_readable`). `helper` read whether the call reached a body, so round 2 walks it
+    again."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "m.py": "import functools\n"
+            "class P:\n"
+            "    def go(self) -> None:\n"
+            "        pass\n"
+            "@functools.cache\n"
+            "def get_p():\n"
+            "    return P()\n"
+            "def helper(c):\n"
+            "    c.go()\n"
+            "def main() -> None:\n"
+            "    helper(get_p())\n"
+        },
+        YamlCatalogSource(catalogs_dir()),
+    )
+    site = _site(workspace, "app/m#helper(sig_dd69782a).", "go")
+
+    assert [(row["owner"], row["reason"]) for row in _bound(workspace, site)] == [
+        (None, "not_readable")
     ]
     workspace.close()

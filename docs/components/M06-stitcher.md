@@ -117,6 +117,12 @@ step on the reactor path:**
   address nobody read. Measured cost: 5 of `apollo-portal`'s 10 outbound rows, and 0
   elsewhere — and for Apollo the link would have been correct, which is evidence for the rule
   and not proof of it.
+* **A route served on one host only is not matched by path** (plan 2 final review, OI-368,
+  2026-11-09). An inbound row with an `endpoint_metadata` entry of kind `host` (FastAPI's
+  `app.host`, a Vert.x `virtualHost`), read through the federated `system_endpoint_metadata`,
+  is served only to a request that names that host, which no outbound row's path says. It
+  does not enter the path index, so a call is never linked to it as to a route of the main
+  host; a call to its path stays unmatched where nothing else serves it.
 
 ### Step 3 — directional structural compatibility
 

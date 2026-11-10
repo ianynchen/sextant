@@ -163,7 +163,7 @@ not applied to Python.
 | FastAPI routes, Flask routes | `single_call`/`fluent` with `handler_arg` (decorator as call, §3a) |
 | `include_router(prefix=)`, click/typer groups | the `mount` block (`shapes/mounts.py`) |
 | `Depends(...)` | the DI-recipe hop (`bean_model`), with one new `injection` mode: the parameter names its recipe. A dependency's own parameters join the route's `request_params` (§2k), as FastAPI does. |
-| query, path, header, cookie, body parameters | `request_params` (§2k), with `Query`/`Path`/`Header`/`Body`/`Field` normalized into `Parameter.annotations`; defaults into `declares_default` |
+| query, path, header, cookie, body parameters | `request_params` (§2k), with `Query`/`Path`/`Header`/`Body`/`Field` normalized into `Parameter.annotations`; defaults into `declares_default` **Amended 2026-11-08 (user, plan 2 N1):** annotation arguments hold literals only, so a parameter carries its default and annotation as values instead, in two new fields `default` and `annotation_value` (D00) |
 | Pydantic shapes | a `shape_model` (`pydantic.yml`, §1b), naming by §2f, which must read `Field(alias=)`, `serialization_alias` and a model's `alias_generator`; `known_types` (§2g) for `datetime`, `UUID`, `Decimal` |
 | `response_model=` and the return type | `response` words, FastAPI's own rule: `response_model` first |
 | `httpx.Client(base_url=)` | `client_model`/`client_base` (§1g) |

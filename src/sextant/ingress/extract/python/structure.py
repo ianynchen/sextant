@@ -21,6 +21,8 @@ control-flow fields are read by a later part of this scanner.
 """
 
 import ast
+import copy
+from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 
 from sextant.domain.closed_sets import ConstructKind
@@ -42,19 +44,24 @@ from sextant.ingress.extract.python.calls import (
     INIT,
     BodyReader,
     FileContext,
+    ModuleType,
+    ParameterValues,
     Scope,
+    dict_construction,
     is_stub_body,
     own_return_type,
 )
 from sextant.ingress.extract.python.imports import (
     Binding,
-    CallableType,
     ModuleIndex,
     ProjectNames,
     Target,
     bind_names,
+    every_statement,
     holds_decorated_value,
     is_typing,
+    live_arm,
+    live_statements,
 )
 from sextant.ingress.extract.python.typing_rules import (
     ANY,
@@ -65,9 +72,12 @@ from sextant.ingress.extract.python.typing_rules import (
     Hierarchy,
     TypeScope,
     class_shape,
+    is_class_variable,
+    is_not_required,
     type_parameter_name,
     type_ref,
     type_symbol,
+    wire_projected,
     written_type,
 )
 
@@ -104,12 +114,12 @@ def file_facts(tree: ast.Module, context: FileContext, last_line: int) -> FileFa
     types, each time with the types the reading before found, until a reading finds no
     new type for a name it asked about. A type is only ever added there (a write whose
     type is known stays known), so those readings end, at most one per name."""
-    rebound = _rebound_names(tree)
+    rebound = _rebound_names(tree, context.index, context.here)
     writer = _Writer(context, rebound, None)
     writer.module(tree, last_line)
     if writer.agrees(writer.module_types()):
         return FileFacts(writer.facts, writer.not_read)
-    known: dict[str, str | CallableType] = {}
+    known: dict[str, ModuleType] = {}
     # Each reading that does not end adds a type to at least one name.
     limit = len(writer.written_names()) + 1
     for _ in range(limit):
@@ -135,11 +145,14 @@ def class_shapes(
 ) -> dict[str, ClassShape]:
     """The type parameters, written bases and members of each class the module body and
     its class bodies define, read before any body so a use above the class sees it. A name
-    bound more than once (a class defined on two branches) is not one class: none."""
+    bound more than once (a class defined on two branches) is not one class: none. A
+    library file's version tests are decided (`imports.live_statements`)."""
     found: dict[str, ClassShape] = {}
     seen: set[str] = set()
     pending: list[tuple[str | None, ast.ClassDef]] = [
-        (None, node) for node in body if isinstance(node, ast.ClassDef)
+        (None, node)
+        for node in live_statements(body, types.index, here)
+        if isinstance(node, ast.ClassDef)
     ]
     while pending:
         outer, node = pending.pop(0)
@@ -151,21 +164,23 @@ def class_shapes(
             seen.add(symbol)
             continue
         seen.add(symbol)
-        found[symbol] = class_shape(node, types, node.body)
-        pending += [(path, inner) for inner in node.body if isinstance(inner, ast.ClassDef)]
+        members = live_statements(node.body, types.index, here)
+        found[symbol] = class_shape(node, types, members)
+        pending += [(path, inner) for inner in members if isinstance(inner, ast.ClassDef)]
     return found
 
 
-def _rebound_names(tree: ast.Module) -> set[str]:
+def _rebound_names(tree: ast.Module, index: ModuleIndex, here: str) -> set[str]:
     """The module-level names some statement binds to a value this scanner does not read
     as a write: a loop or `with` target, an import, `del`, `:=`, an `except ... as`, a
-    `match` capture, `+=`, a `type` alias, or a `global` in a function. Such a name's
-    writes are not all known, so it has no class."""
+    `match` capture, `+=`, or a `global` in a function. Such a name's
+    writes are not all known, so it has no class. A library file's version tests are
+    decided: the arm its Python does not run binds nothing."""
     rebound: set[str] = set()
-    for node in ast.walk(tree):
+    for node in every_statement(tree.body, index, here):
         if isinstance(node, ast.Global):
             rebound.update(node.names)
-    for node in _module_level(tree.body):
+    for node in _module_level(tree.body, index, here):
         if isinstance(node, ast.Import | ast.ImportFrom):
             rebound.update(
                 (alias.asname or alias.name).partition(".")[0]
@@ -187,19 +202,22 @@ def _rebound_names(tree: ast.Module) -> set[str]:
             rebound.add(node.name)
         elif isinstance(node, ast.MatchMapping) and node.rest is not None:
             rebound.add(node.rest)
-        elif isinstance(node, ast.TypeAlias):
-            rebound.update(_names(node.name))
     return rebound
 
 
-def _module_level(body: list[ast.stmt]) -> list[ast.AST]:
+def _module_level(body: list[ast.stmt], index: ModuleIndex, here: str) -> list[ast.AST]:
     """Every node of the module's own scope: its statements and expressions, not the
-    bodies of the functions and classes it defines (a comprehension's `:=` binds here)."""
+    bodies of the functions and classes it defines (a comprehension's `:=` binds here),
+    nor the arm of a version test a library file's Python does not run."""
     found: list[ast.AST] = []
     pending: list[ast.AST] = list(body)
     while pending:
         node = pending.pop()
         found.append(node)
+        live = live_arm(node, index, here) if isinstance(node, ast.If) else None
+        if isinstance(node, ast.If) and live is not None:
+            pending.extend([node.test, *live])
+            continue
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
             # Its decorators and defaults run here; its body does not.
             pending.extend(getattr(node, "decorator_list", []))
@@ -217,7 +235,7 @@ class _Writer(BodyReader):
         self,
         context: FileContext,
         rebound: set[str],
-        module_types: dict[str, str | CallableType] | None,
+        module_types: dict[str, ModuleType] | None,
     ) -> None:
         self._context = context
         self.facts: list[Fact] = []
@@ -230,6 +248,10 @@ class _Writer(BodyReader):
         self.consulted = {}
         self._local_classes = {}
         self._hierarchy = Hierarchy(self._shape_or_none)
+        # The statements of a class body's arm that never runs (`if TYPE_CHECKING:`), by id,
+        # and the fields only such a statement declared, to the index of their fact.
+        self._never_runs: set[int] = set()
+        self._dead_fields: dict[str, int] = {}
         self._own_returns = {}
         self._own_fields = {}
 
@@ -301,20 +323,10 @@ class _Writer(BodyReader):
         owner = type_symbol(Target(self._context.here, path))
         generic = scope.types.with_type_parameters(node.type_params)
         unread = len(self.not_read)
-        written, parents_unread = self._parents(node, generic)
-        kind = ConstructKind.CLASS
-        if any(
-            is_typing(target, "Protocol")
-            for base_node in node.bases
-            for target in scope.types.lookup(_unsubscripted(base_node))
-        ):
-            kind = ConstructKind.PROTOCOL
-        elif any(
-            target.module == "enum" and target.member in _ENUM_BASES
-            for base_node in node.bases
-            for target in scope.types.lookup(_unsubscripted(base_node))
-        ):
-            kind = ConstructKind.ENUM
+        written, parents_unread, line = _parents(node, generic)
+        if line is not None:
+            self.not_read.append(line)
+        kind = _class_kind(node, scope.types)
         # Each written parent with its type arguments, where it has any (`RepositoryBase
         # [Product]`), as the JVM's generic supertype and interfaces (D00 §5a): what a class
         # of another file's type parameters are, read through this one.
@@ -330,8 +342,11 @@ class _Writer(BodyReader):
         # The bases and the class keywords are read where the class is defined.
         for written_base in node.bases:
             self._type_form(written_base, scope)
+        keywords: list[CallArgument] = []
         for keyword in node.keywords:
-            self._value(keyword.value, scope)
+            value = self._value(keyword.value, scope)
+            if keyword.arg != "metaclass":
+                keywords.append(value.model_copy(update={"keyword": keyword.arg or "**"}))
         self.facts.append(
             SymbolFact(
                 document_id=self._context.document_id,
@@ -345,8 +360,14 @@ class _Writer(BodyReader):
                 parents_unread=parents_unread,
                 type_parameters=_type_parameters(node.type_params, generic)
                 or self._generic_parameters(owner),
-                supertype=generic_bases[0] if generic_bases else None,
-                generic_interfaces=[base for base in generic_bases[1:] if base is not None],
+                supertype=wire_projected(generic_bases[0], generic)
+                if generic_bases and generic_bases[0] is not None
+                else None,
+                generic_interfaces=[
+                    wire_projected(base, generic) for base in generic_bases[1:] if base is not None
+                ],
+                # What the metaclass is handed beside the namespace (task 9c review C1).
+                keywords=keywords or None,
             )
         )
         class_names = bind_names(
@@ -364,6 +385,13 @@ class _Writer(BodyReader):
             self._body(clinit),
             path,
             protocol=kind == ConstructKind.PROTOCOL,
+            # `class C(TypedDict, total=False)`: the keys it declares may be left out.
+            total=not any(
+                keyword.arg == "total"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is False
+                for keyword in node.keywords
+            ),
             # `super()` starts at the first written parent; with none written it is
             # `object`, and where the parents were not read it is not known.
             super_owner=written[0]
@@ -377,53 +405,29 @@ class _Writer(BodyReader):
         if scope.frame is None and scope.class_path is None:
             self._module_write(node.name, applied, scope)
 
-    def _parents(
-        self, node: ast.ClassDef, types: TypeScope
-    ) -> tuple[list[str], ParentsUnread | None]:
-        """The written parents' symbols, in written order, up to the first one this file
-        cannot name as a class: a value (`Base = declarative_base()`), a call, or a name
-        it does not bind. Nothing after that one is written, so no later parent moves
-        into its place. The class then carries `parents_unread` (`not_readable` for a
-        value, a call or two different bindings; `external` for a name no statement of
-        the file binds, as a star import leaves it), and the document says the class's
-        parents were not all read. `object` is the root every class has, and is not
-        written, as the JVM's root is not (D00 §5 `superclass`)."""
-        written: list[str] = []
-        for position, base in enumerate(node.bases, 1):
-            targets = types.lookup(_unsubscripted(base))
-            if len(targets) != 1 or targets[0].kind in ("variable", "function"):
-                text = ast.unparse(base)
-                if not targets and isinstance(_unsubscripted(base), ast.Name | ast.Attribute):
-                    reason = _EXTERNAL
-                    detail = f"base {position} '{text}' is a name this file does not bind"
-                elif len(targets) > 1:
-                    reason = _NOT_READABLE
-                    detail = f"base {position} '{text}' is bound two ways, so it names no one class"
-                elif isinstance(_unsubscripted(base), ast.Call):
-                    reason = _NOT_READABLE
-                    detail = f"base {position} '{text}' is a call result, not a class name"
-                else:
-                    reason = _NOT_READABLE
-                    detail = f"base {position} '{text}' is a value, not a class name"
-                self.not_read.append(
-                    f"{node.name}: base {position} '{text}' is not a class name "
-                    "this file can read; parents from here on are not read"
-                )
-                return written, ParentsUnread(
-                    reason=reason, detail=f"{detail}; parents from here on are not read"
-                )
-            if targets[0] != Target(BUILTINS, "object"):
-                written.append(type_symbol(targets[0]))
-        return written, None
-
     # -- module and class names ----------------------------------------------------------
 
     def _assignment(self, node: ast.Assign | ast.AnnAssign, scope: Scope) -> None:
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        value = None if node.value is None else self._value(node.value, scope)
+        held = node.value
+        if scope.class_path is not None and scope.frame is None:
+            # A class body's dict display with text keys is the `dict(key=...)` it builds
+            # (task 9c): written so, a reader of a class's configuration reads it as a call.
+            held = dict_construction(held)
+        value = None if held is None else self._value(held, scope)
         written = None
+        instance = False
+        annotated = None
+        optional_key = False
         if isinstance(node, ast.AnnAssign):
             written = written_type(node.annotation, scope.types)
+            instance = not is_class_variable(node.annotation, scope.types)
+            if scope.class_path is not None and scope.frame is None and instance:
+                # A class body evaluates a field's annotation after its value (PEP 526), so
+                # an `Annotated[T, Field(...)]`'s calls are the class body's; the field keeps
+                # the annotation's value where it is not a plain type, as a parameter does.
+                annotated = self._annotation_value(node.annotation, scope)
+                optional_key = is_not_required(node.annotation, scope.types, total=scope.total)
         for target in targets:
             if value is not None and isinstance(target, ast.Attribute | ast.Subscript):
                 self._store(target, value, scope)
@@ -431,19 +435,40 @@ class _Writer(BodyReader):
             named = target if isinstance(target, ast.Name) else None
             for name in _names(target):
                 descriptor = f"{scope.owner}{name}."
+                dead = id(node) in self._never_runs
+                if descriptor in self._dead_fields and not dead:
+                    # Declared again where the code runs: a field after all.
+                    at = self._dead_fields.pop(descriptor)
+                    declared = self.facts[at]
+                    assert isinstance(declared, SymbolFact)
+                    kept = dict(declared.modifiers or {})
+                    kept.pop("never_runs", None)
+                    self.facts[at] = declared.model_copy(update={"modifiers": kept})
                 if descriptor not in scope.fields:
                     scope.fields.add(descriptor)
+                    if dead:
+                        self._dead_fields[descriptor] = len(self.facts)
                     self._symbol(
                         descriptor,
                         ConstructKind.FIELD,
                         scope.owner,
                         node.lineno,
                         node.end_lineno or node.lineno,
-                        signature=Signature(returns=written) if written is not None else None,
-                        # A module-level name, or a class attribute given a value in
-                        # the class body, belongs to the type. An annotation alone in a
-                        # class body declares an instance attribute.
-                        modifiers={"static": scope.class_path is None or value is not None},
+                        signature=Signature(
+                            returns=wire_projected(written, scope.types),
+                            annotation_value=annotated,
+                        )
+                        if written is not None
+                        else None,
+                        # A module-level name belongs to the module. In a class body an
+                        # annotated name not written `ClassVar` declares an instance
+                        # variable, whatever its value (PEP 526); a name assigned with no
+                        # annotation, or a `ClassVar`, belongs to the class.
+                        modifiers={"static": scope.class_path is None or not instance}
+                        # A `TypedDict` key the typing specification lets be left out.
+                        | ({"not_required": True} if optional_key else {})
+                        # Declared only where the class body never runs (`if TYPE_CHECKING:`).
+                        | ({"never_runs": True} if dead else {}),
                     )
                 if value is None:
                     continue
@@ -486,10 +511,9 @@ class _Writer(BodyReader):
             name = name + _SETTER_SUFFIX
         descriptor = method_descriptor(scope.owner, name, PY_SIGNATURE)
         callees = self._decorators(node, scope)
-        # The defaults are read where the function is defined, before it is decorated.
-        for default in [*node.args.defaults, *node.args.kw_defaults]:
-            if default is not None:
-                self._value(default, scope)
+        # The defaults, then the annotations that are not a plain type, are read where the
+        # function is defined, before it is decorated.
+        values = self._parameter_values(node.args, scope)
         if nested:
             self._method_known(descriptor, scope.owner, name)
         applied = self._apply(
@@ -510,7 +534,9 @@ class _Writer(BodyReader):
             scope.owner,
             node.lineno,
             node.end_lineno or node.lineno,
-            signature=self._signature(node, generic, skip_first=receiver_taken),
+            signature=_wire_signature(
+                self._signature(node, generic, skip_first=receiver_taken, values=values), generic
+            ),
             type_parameters=_type_parameters(node.type_params, generic),
             modifiers={
                 "abstract": abstract,
@@ -559,6 +585,7 @@ class _Writer(BodyReader):
         types: TypeScope,
         *,
         skip_first: bool,
+        values: ParameterValues | None = None,
     ) -> Signature:
         written = node.args
         # Each parameter with how a call fills it (D00 §5a `kind`), in the order Python lists
@@ -573,6 +600,8 @@ class _Writer(BodyReader):
         ordered += [(a, "keyword_only") for a in written.kwonlyargs]
         ordered += [(a, "var_keyword") for a in (written.kwarg,) if a is not None]
         parameters = []
+        defaults = {} if values is None else values.defaults
+        annotated = {} if values is None else values.annotated
         for argument, kind in ordered:
             found = (
                 UNANNOTATED
@@ -590,6 +619,9 @@ class _Writer(BodyReader):
                     type=found,
                     erased_symbol=found.symbol if names_a_type(found.symbol) or unnamed else ANY,
                     kind=kind,
+                    declares_default=argument.arg in defaults,
+                    default=defaults.get(argument.arg),
+                    annotation_value=annotated.get(argument.arg),
                 )
             )
         returned = (
@@ -630,15 +662,317 @@ class _Writer(BodyReader):
 
 def header_types(
     tree: ast.Module, module: str, types: TypeScope, is_package: bool
-) -> tuple[dict[str, ClassShape], dict[str, TypeRef], dict[str, TypeRef]]:
+) -> tuple[
+    dict[str, ClassShape],
+    dict[str, TypeRef],
+    dict[str, TypeRef],
+    dict[str, TypeRef],
+    dict[str, tuple[Target, ...]],
+]:
     """What another file's header says (`project.ProjectHeaders`): its class shapes, the
-    returns its `def`s declare and the attributes its class bodies declare, read as this
-    file's own are."""
+    returns its `def`s declare, the attributes its class bodies declare, the type each
+    module-level type alias is and the function each module-level name is written from
+    (`factory_calls`), read as this file's own are. An alias bound two ways, or whose
+    type the file does not name, has none."""
     classes = class_shapes(tree.body, module, types.names, types)
     returns, fields = declared_types(
         tree.body, module, types, is_package=is_package, index=types.index
     )
-    return classes, returns, fields
+    factories = factory_calls(tree, types)
+    aliases: dict[str, TypeRef] = {}
+    for name, binding in types.names.items():
+        if len(binding.targets) != 1:
+            continue
+        (target,) = binding.targets
+        if target.kind != "type_alias" or target.module != module or target.member != name:
+            continue
+        typed = type_ref(target.alias_of, types) if target.alias_of is not None else None
+        if typed is not None:
+            aliases[name] = typed
+    return classes, returns, fields, aliases, factories
+
+
+def single_classes(
+    tree: ast.Module, here: str, index: ModuleIndex
+) -> tuple[dict[str, list[ast.ClassDef]], frozenset[str]]:
+    """Each class the file's facts name by its statement alone (ruling R20), by its path
+    (`Outer.Inner`), with the class statements from the outermost to it: one at module or
+    class-body level, through `if`, `try`, `with`, loops and `match` as `file_facts` reads
+    them, whose name no other class statement of the file holds. A class defined twice, or
+    beside one of its name inside a function, is not here: which statement the facts keep
+    is the whole file's question. Beside them, the name of every class statement: a name
+    none holds is no class of the file's facts. An arm of a version test the read does not
+    run (`imports.live_arm`) holds no class statement."""
+    counts: dict[str, int] = {}
+    for every in every_statement(tree.body, index, here):
+        if isinstance(every, ast.ClassDef):
+            counts[every.name] = counts.get(every.name, 0) + 1
+    found: dict[str, list[ast.ClassDef]] = {}
+    pending: list[tuple[list[ast.ClassDef], list[ast.stmt]]] = [([], tree.body)]
+    while pending:
+        outer, body = pending.pop()
+        for statement in _scope_statements(body, index, here):
+            if isinstance(statement, ast.ClassDef):
+                chain = [*outer, statement]
+                if counts[statement.name] == 1:
+                    found[".".join(part.name for part in chain)] = chain
+                pending.append((chain, statement.body))
+    return found, frozenset(counts)
+
+
+def _scope_statements(body: list[ast.stmt], index: ModuleIndex, here: str) -> Iterator[ast.stmt]:
+    """Every statement of one scope that the read runs: `body`'s, and those of the blocks
+    its compound statements hold (one arm of a decided version test), not a function's or a
+    class's own body."""
+    for node in body:
+        yield node
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            continue
+        live = live_arm(node, index, here) if isinstance(node, ast.If) else None
+        if live is not None:
+            yield from _scope_statements(live, index, here)
+            continue
+        for _, value in ast.iter_fields(node):
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                if isinstance(item, ast.stmt):
+                    yield from _scope_statements([item], index, here)
+                elif isinstance(item, ast.ExceptHandler | ast.match_case):
+                    yield from _scope_statements(item.body, index, here)
+
+
+def class_header(
+    chain: list[ast.ClassDef], here: str, types: TypeScope, *, is_package: bool
+) -> tuple[ConstructKind, list[str], ParentsUnread | None]:
+    """What a type header says of the last class of `chain` (`single_classes`): its
+    construct kind, its written parents and whether they stop early, read against the
+    names `file_facts` reads its bases against (`types`, the module's, then each outer
+    class body's), so the two agree."""
+    path: str | None = None
+    for outer in chain[:-1]:
+        path = f"{path}.{outer.name}" if path else outer.name
+        generic = types.with_type_parameters(outer.type_params)
+        class_names = bind_names(
+            outer.body, here, is_package=is_package, index=types.index, owner=path
+        )
+        types = replace(generic, class_names=class_names, self_type=type_symbol(Target(here, path)))
+    node = chain[-1]
+    written, parents_unread, _ = _parents(node, types.with_type_parameters(node.type_params))
+    return _class_kind(node, types), written, parents_unread
+
+
+def header_body_tree(
+    tree: ast.Module, paths: list[str], index: ModuleIndex, here: str
+) -> tuple[ast.Module, frozenset[str]]:
+    """The library module `tree` as a type header reads its classes at `paths` (task 9c
+    review C2): with `file_facts`, the reader of a module's own classes, over a copy that
+    keeps what binds a name (imports, every class and function statement, each function's
+    body left out and a module-level function's decorators and defaults with it), the
+    classes' bodies, and of the module's other statements only the assignments to the names
+    those classes use, followed through the names those assignments use in turn. Also those
+    module-level names. A version test's arm the read does not run is left out, as
+    `file_facts` leaves it. Nothing of `tree` itself is changed."""
+    tops = {path.partition(".")[0] for path in paths}
+    used: set[str] = set()
+    for node in _scope_statements(tree.body, index, here):
+        if isinstance(node, ast.ClassDef) and node.name in tops:
+            used |= _names_used(node)
+    assignments = [
+        node
+        for node in _scope_statements(tree.body, index, here)
+        if isinstance(node, ast.Assign | ast.AnnAssign | ast.TypeAlias)
+    ]
+    while True:
+        grown = set(used)
+        for node in assignments:
+            if _assigned(node) & used:
+                grown |= _names_used(node)
+        if grown == used:
+            break
+        used = grown
+    body = _kept_statements(tree.body, used, index, here, tops)
+    return ast.Module(body=body or [ast.Pass()], type_ignores=[]), frozenset(used)
+
+
+def _names_used(node: ast.AST) -> set[str]:
+    """Every name `node` reads, a function's own body left out."""
+    found: set[str] = set()
+    pending: list[ast.AST] = [node]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, ast.Name):
+            found.add(current.id)
+        if isinstance(current, ast.FunctionDef | ast.AsyncFunctionDef):
+            pending.extend([*current.decorator_list, current.args])
+            if current.returns is not None:
+                pending.append(current.returns)
+            continue
+        pending.extend(ast.iter_child_nodes(current))
+    return found
+
+
+def _assigned(node: ast.Assign | ast.AnnAssign | ast.TypeAlias) -> set[str]:
+    targets = (
+        node.targets
+        if isinstance(node, ast.Assign)
+        else [node.name if isinstance(node, ast.TypeAlias) else node.target]
+    )
+    return {name for target in targets for name in _names(target)}
+
+
+def _kept_statements(
+    body: list[ast.stmt], used: set[str], index: ModuleIndex, here: str, tops: set[str]
+) -> list[ast.stmt]:
+    kept: list[ast.stmt] = []
+    for node in body:
+        if isinstance(node, ast.Import | ast.ImportFrom):
+            kept.append(node)
+        elif isinstance(node, ast.ClassDef) and node.name in tops:
+            kept.append(_without_function_bodies(node))
+        elif isinstance(node, ast.ClassDef):
+            # Another class binds its name and nothing a header class's body reads.
+            kept.append(
+                ast.copy_location(
+                    ast.ClassDef(
+                        name=node.name,
+                        bases=[],
+                        keywords=[],
+                        body=[ast.Pass()],
+                        decorator_list=[],
+                        type_params=[],
+                    ),
+                    node,
+                )
+            )
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            stub = _without_function_bodies(node)
+            stub.decorator_list = []
+            stub.args = copy.copy(node.args)
+            stub.args.defaults = []
+            stub.args.kw_defaults = [None] * len(node.args.kwonlyargs)
+            kept.append(stub)
+        elif isinstance(node, ast.Assign | ast.AnnAssign | ast.TypeAlias):
+            if _assigned(node) & used:
+                kept.append(node)
+        elif isinstance(node, ast.If):
+            live = live_arm(node, index, here)
+            if live is not None:
+                kept.extend(_kept_statements(live, used, index, here, tops))
+                continue
+            inner = _kept_statements(node.body, used, index, here, tops)
+            other = _kept_statements(node.orelse, used, index, here, tops)
+            if inner or other:
+                kept.append(
+                    ast.copy_location(
+                        ast.If(test=node.test, body=inner or [ast.Pass()], orelse=other), node
+                    )
+                )
+        elif isinstance(node, ast.Try | ast.TryStar):
+            inner = _kept_statements(node.body, used, index, here, tops)
+            handlers = [
+                ast.copy_location(
+                    ast.ExceptHandler(
+                        type=handler.type,
+                        name=handler.name,
+                        body=_kept_statements(handler.body, used, index, here, tops)
+                        or [ast.Pass()],
+                    ),
+                    handler,
+                )
+                for handler in node.handlers
+            ]
+            if inner or any(not isinstance(h.body[0], ast.Pass) for h in handlers):
+                kept.append(
+                    ast.copy_location(
+                        type(node)(
+                            body=inner or [ast.Pass()],
+                            handlers=handlers,
+                            orelse=_kept_statements(node.orelse, used, index, here, tops),
+                            finalbody=_kept_statements(node.finalbody, used, index, here, tops),
+                        ),
+                        node,
+                    )
+                )
+    return kept
+
+
+def _without_function_bodies[N: ast.stmt](node: N) -> N:
+    """A shallow copy of `node` with every function's body, at any depth, written `...`. The
+    statements it keeps are `node`'s own, unchanged."""
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+        stub = copy.copy(node)
+        stub.body = [ast.copy_location(ast.Expr(value=ast.Constant(value=...)), node)]
+        return stub
+    copied = None
+    for name, value in ast.iter_fields(node):
+        if isinstance(value, list) and value and isinstance(value[0], ast.stmt):
+            copied = copied or copy.copy(node)
+            setattr(copied, name, [_without_function_bodies(item) for item in value])
+        elif (
+            isinstance(value, list)
+            and value
+            and isinstance(value[0], ast.ExceptHandler | ast.match_case)
+        ):
+            copied = copied or copy.copy(node)
+            parts = []
+            for part in value:
+                held = copy.copy(part)
+                held.body = [_without_function_bodies(item) for item in part.body]
+                parts.append(held)
+            setattr(copied, name, parts)
+    return copied or node
+
+
+def factory_calls(tree: ast.Module, types: TypeScope) -> dict[str, tuple[Target, ...]]:
+    """The function each module-level name is written from, where every write to it in the
+    file is a call of a named function (`APIRouter = get_api_router_class(APIRoute)`), by
+    name: the function's target, as the file binds it. What the call returns is read by
+    `project.ProjectHeaders.class_object`, which may read another file's header (ruling
+    R17). A name some statement binds in a way not read as a write (`_rebound_names`), that
+    the file also binds as a function, a class or an import, or that a write gives any other
+    value, has none: the resolver follows its writes."""
+    rebound = _rebound_names(tree, types.index, types.here)
+    written: dict[str, list[Target | None]] = {}
+    for node in _module_level(tree.body, types.index, types.here):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        called = _called_function(value, types)
+        for target in targets:
+            for name in _names(target):
+                written.setdefault(name, []).append(
+                    called if isinstance(target, ast.Name) else None
+                )
+    found: dict[str, tuple[Target, ...]] = {}
+    for name, writes in written.items():
+        binding = types.names.get(name)
+        if (
+            name in rebound
+            or binding is None
+            or any(target.kind != "variable" for target in binding.targets)
+            or any(write is None for write in writes)
+        ):
+            continue
+        found[name] = tuple(dict.fromkeys(write for write in writes if write is not None))
+    return found
+
+
+def _called_function(value: ast.expr, types: TypeScope) -> Target | None:
+    """The one function a call written `f(...)` names, as the file binds `f`; None for any
+    other value."""
+    if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Name):
+        return None
+    binding = types.names.get(value.func.id)
+    if binding is None or len(binding.targets) != 1:
+        return None
+    (target,) = binding.targets
+    if target.kind not in (None, "function") or target.member is None or "." in target.member:
+        return None
+    return target
 
 
 def declared_types(
@@ -649,14 +983,16 @@ def declared_types(
     what a call of it declares it gives (`calls.own_return_type`). A name defined twice
     keeps one only where every definition declares the same; a decorated one has none.
     Beside them, the type each class body declares for an attribute (`client:
-    HttpClient`, PEP 526), by field symbol, read the same way."""
+    HttpClient`, PEP 526), by field symbol, read the same way. In a library file, a
+    statement of the live arm of a version test is read as one of the body it is in, and
+    the other arm is not read (`imports.live_statements`)."""
     found: dict[str, TypeRef | None] = {}
     fields: dict[str, TypeRef | None] = {}
     pending: list[tuple[str | None, list[ast.stmt], TypeScope]] = [(None, body, types)]
     while pending:
         path, statements, scope = pending.pop(0)
         owner = type_symbol(Target(here, path))
-        for node in statements:
+        for node in live_statements(statements, index, here):
             if isinstance(node, ast.ClassDef):
                 inner = f"{path}.{node.name}" if path else node.name
                 generic = scope.with_type_parameters(node.type_params)
@@ -735,12 +1071,88 @@ def _type_parameters(written: list[ast.type_param], scope: TypeScope) -> list[Ty
     for parameter in written:
         bound = getattr(parameter, "bound", None)
         bounds = (
-            [written_type(bound, scope)]
+            [wire_projected(written_type(bound, scope), scope)]
             if bound is not None and not isinstance(bound, ast.Tuple)
             else []
         )
         found.append(TypeParameter(name=type_parameter_name(parameter), bounds=bounds))
     return found
+
+
+def _wire_signature(signature: Signature, types: TypeScope) -> Signature:
+    """A signature as it is written to the facts: every type with its wire type (D00 §5b),
+    read in the scope the signature was read in."""
+    return signature.model_copy(
+        update={
+            "parameters": [
+                p.model_copy(update={"type": wire_projected(p.type, types)})
+                for p in signature.parameters
+            ],
+            "returns": None
+            if signature.returns is None
+            else wire_projected(signature.returns, types),
+        }
+    )
+
+
+def _parents(
+    node: ast.ClassDef, types: TypeScope
+) -> tuple[list[str], ParentsUnread | None, str | None]:
+    """The written parents' symbols, in written order, up to the first one this file
+    cannot name as a class: a value (`Base = declarative_base()`), a call, or a name
+    it does not bind. Nothing after that one is written, so no later parent moves
+    into its place. The class then carries `parents_unread` (`not_readable` for a
+    value, a call or two different bindings; `external` for a name no statement of
+    the file binds, as a star import leaves it), and the document says the class's
+    parents were not all read: the third value is its line. `object` is the root every
+    class has, and is not written, as the JVM's root is not (D00 §5 `superclass`)."""
+    written: list[str] = []
+    for position, base in enumerate(node.bases, 1):
+        targets = types.lookup(_unsubscripted(base))
+        if len(targets) != 1 or targets[0].kind in ("variable", "function", "new_class"):
+            text = ast.unparse(base)
+            if not targets and isinstance(_unsubscripted(base), ast.Name | ast.Attribute):
+                reason = _EXTERNAL
+                detail = f"base {position} '{text}' is a name this file does not bind"
+            elif len(targets) > 1:
+                reason = _NOT_READABLE
+                detail = f"base {position} '{text}' is bound two ways, so it names no one class"
+            elif isinstance(_unsubscripted(base), ast.Call):
+                reason = _NOT_READABLE
+                detail = f"base {position} '{text}' is a call result, not a class name"
+            else:
+                reason = _NOT_READABLE
+                detail = f"base {position} '{text}' is a value, not a class name"
+            line = (
+                f"{node.name}: base {position} '{text}' is not a class name "
+                "this file can read; parents from here on are not read"
+            )
+            return (
+                written,
+                ParentsUnread(reason=reason, detail=f"{detail}; parents from here on are not read"),
+                line,
+            )
+        if targets[0] != Target(BUILTINS, "object"):
+            written.append(type_symbol(targets[0]))
+    return written, None, None
+
+
+def _class_kind(node: ast.ClassDef, types: TypeScope) -> ConstructKind:
+    """A protocol where a written base is `Protocol`, an enum where one is an `enum` base,
+    else a class; the bases read where the class statement is."""
+    if any(
+        is_typing(target, "Protocol")
+        for base_node in node.bases
+        for target in types.lookup(_unsubscripted(base_node))
+    ):
+        return ConstructKind.PROTOCOL
+    if any(
+        target.module == "enum" and target.member in _ENUM_BASES
+        for base_node in node.bases
+        for target in types.lookup(_unsubscripted(base_node))
+    ):
+        return ConstructKind.ENUM
+    return ConstructKind.CLASS
 
 
 def _unsubscripted(node: ast.expr) -> ast.expr:

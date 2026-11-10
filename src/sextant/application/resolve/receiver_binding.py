@@ -32,8 +32,9 @@ crossed out of such a function: its other callers are not in the module.
 **Rounds.** A call bound here becomes an edge, and an edge is a caller: `r.run(s)` is an edge
 only once `r` is bound, and `Runner.run`'s parameter has a caller only then. So binding runs
 in rounds until one binds no new owner (`bind_until_settled`), at most `ROUNDS`. After the
-first round only a site whose walk depended on a new caller is walked again (R25): one whose
-paths crossed out of, or ended at a parameter of, a method a newly bound call reaches. The new
+first round only a site whose walk read something a new edge changes is walked again (R25):
+the callers of a method a newly bound call reaches, or the callees of a newly bound call, as
+the walk records reading them, its nested walks' reads included (`values.Kept`). The new
 callers are added to the walk's index directly, from the same dispatch answer `call_edges`
 draws, so the edges are drawn once, after the last round. Where the last round still bound
 something, every receiver it left unbound says so: it may be bound by a round not run.
@@ -49,10 +50,16 @@ from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.call_edges import FunctionCalls, record_call_edges
 from sextant.application.resolve.values import (
+    ABSENT,
     ESCAPES,
     EXTERNAL,
     NOT_READABLE,
+    READ_CALLED_AT,
+    READ_CALLEES,
+    READ_CALLERS,
+    READ_REACHED,
     RECEIVER,
+    Kept,
     Producer,
     ValueIndex,
     bind_by_name,
@@ -60,6 +67,7 @@ from sextant.application.resolve.values import (
     called_function,
     producer_paths,
     reset_value_index,
+    suffixes_kept,
     value_index,
 )
 from sextant.domain.closed_sets import Evidence, Resolution
@@ -105,13 +113,16 @@ _Union = tuple[tuple[str, ...], bool]
 
 @dataclass(frozen=True)
 class _Walked:
-    """One site's walk: its ends, and the methods whose callers it read — a path crossed out
-    of one, or ended at one of its parameters. None where that is not known (a path the walk
-    could not hold), and the site is walked again every round. `functions` are the bodies,
-    bare, of the function values a `__call__`'s paths ended at (ruling R29), in path order."""
+    """One site's walk: its ends, and what the walk read that a binding round can change, as
+    the walk records it (`values.Kept`): a method's callers, a site's callees, whether a site
+    reached a body, a writer's calls — every read, by the site's own positions and by every
+    walk inside its walk, the reads `suffixes_kept` keeps an upward path on. None where that
+    is not known (a path the walk could not hold), and the site is walked again every round.
+    `functions` are the bodies, bare, of the function values a `__call__`'s paths ended at
+    (ruling R29), in path order."""
 
     found: tuple[_Found, ...]
-    depends_on: frozenset[str] | None
+    depends_on: frozenset[Any] | None
     functions: tuple[str, ...] = ()
 
     @property
@@ -155,15 +166,17 @@ def bind_until_settled(
     if not incremental:
         return _every_round_whole(workspace, catalogs)
     started = time.perf_counter()
-    index = value_index(workspace, returns_arguments=_returns_arguments(catalogs))
+    index = value_index(
+        workspace, returns_arguments=_returns_arguments(catalogs), **_beans(catalogs)
+    )
     context = _context(workspace, index)
     walked: dict[tuple[str, int], _Walked] = {}
-    gained: frozenset[str] | None = None
+    changed: frozenset[Any] | None = None
     counts: list[int] = []
     capped = False
     for round_number in range(1, ROUNDS + 1):
         before = {key: one.reached for key, one in walked.items()}
-        walked.update(_walk(index, context, gained, walked))
+        walked.update(_walk(index, context, changed, walked))
         newly = [key for key, one in walked.items() if one.reached - before.get(key, frozenset())]
         counts.append(len(newly))
         _log.info(
@@ -178,7 +191,7 @@ def bind_until_settled(
         if round_number == ROUNDS:
             capped = True
             break
-        index, gained = _with_new_callers(index, newly, before, walked)
+        index, changed = _with_new_callers(index, newly, before, walked)
     _write(workspace, index, walked, capped)
     if any(counts):
         started = time.perf_counter()
@@ -195,7 +208,9 @@ def _every_round_whole(workspace: Workspace, catalogs: Sequence[Catalog]) -> tup
     for round_number in range(1, ROUNDS + 1):
         started = time.perf_counter()
         before = {key: one.reached for key, one in walked.items()}
-        index = value_index(workspace, returns_arguments=_returns_arguments(catalogs))
+        index = value_index(
+            workspace, returns_arguments=_returns_arguments(catalogs), **_beans(catalogs)
+        )
         walked = _walk(index, _context(workspace, index), None, {})
         newly = sum(1 for key, one in walked.items() if one.reached - before.get(key, frozenset()))
         counts.append(newly)
@@ -218,6 +233,19 @@ def _returns_arguments(catalogs: Sequence[Catalog]) -> tuple[dict[str, Any], ...
     .returns_arguments`, the same on every catalog): a call of a wrapper one of them made runs
     the function it wraps (design 2026-11-06-reading-decorators §3e)."""
     return catalogs[0].returns_arguments if catalogs else ()
+
+
+def _beans(catalogs: Sequence[Catalog]) -> dict[str, Any]:
+    """The bean models and value annotations every catalog carries (`Catalog.bean_models`,
+    `Catalog.value_annotations`): a parameter a framework fills is read as it fills it, a
+    recipe a marker call names beside the callers (plan 2026-11-08 N5), as every other reader
+    of the index reads it. None and empty with no catalog."""
+    if not catalogs:
+        return {}
+    return {
+        "bean_models": catalogs[0].bean_models,
+        "value_annotations": catalogs[0].value_annotations,
+    }
 
 
 def _functions(walked: Mapping[tuple[str, int], _Walked]) -> dict[tuple[str, int], FunctionCalls]:
@@ -260,19 +288,20 @@ def _context(workspace: Workspace, index: ValueIndex) -> _Context:
 def _walk(
     index: ValueIndex,
     context: _Context,
-    gained: frozenset[str] | None,
+    changed: frozenset[Any] | None,
     previous: Mapping[tuple[str, int], _Walked],
 ) -> dict[tuple[str, int], _Walked]:
-    """Every call the facts leave without an owner, walked — or, with `gained` set, only
-    those whose previous walk read the callers of a method in it, or is not known not to."""
+    """Every call the facts leave without an owner, walked — or, with `changed` set (the last
+    round's new edges, as reads), only those whose previous walk read one of them, or is not
+    known not to."""
     walked: dict[tuple[str, int], _Walked] = {}
     for key, site in index.sites.items():
         wrapper = _calls_a_library_wrapper(index, key, site)
         if not wrapper and (site.get("owner") is not None or site.get("invoke_kind") != _VIRTUAL):
             continue
-        if gained is not None:
+        if changed is not None:
             depends_on = previous[key].depends_on
-            if depends_on is not None and not depends_on & gained:
+            if depends_on is not None and depends_on.isdisjoint(changed):
                 continue
         walked[key] = _wrapped(index, site) if wrapper else _paths(index, site, context)
     return walked
@@ -298,11 +327,10 @@ def _wrapped(index: ValueIndex, site: Mapping[str, Any]) -> _Walked:
     `result_calls` wrapper runs. No path names an owner here, so the site keeps the one its
     facts name and gets no `bound_receivers` row."""
     functions: list[str] = []
-    depends_on: set[str] = set()
-    for producer, path in producer_paths(
-        index, site, RECEIVER, frozenset(), which_object=True, functions=True
+    depends_on: set[Any] = set()
+    for producer, _ in producer_paths(
+        index, site, RECEIVER, frozenset(), which_object=True, functions=True, reads=depends_on
     ):
-        depends_on.update(path.crossed_out_of())
         body = None if producer.ended_at is None else called_function(producer.ended_at)
         if body is not None and body not in functions:
             functions.append(body)
@@ -314,11 +342,11 @@ def _with_new_callers(
     newly: Sequence[tuple[str, int]],
     before: Mapping[tuple[str, int], frozenset[str]],
     walked: Mapping[tuple[str, int], _Walked],
-) -> tuple[ValueIndex, frozenset[str]]:
+) -> tuple[ValueIndex, frozenset[Any]]:
     """`index` as `value_index` would build it once `call_edges` held the edges of every
     owner `newly` gained, and the methods those edges reach: each new owner's bodies, by the
     dispatch answer `call_edges` draws them with, as callers of their parameters and as the
-    bodies the site reaches."""
+    bodies the site reaches. With it, what the round changed, as a walk records reading it."""
     dispatch = index.dispatch
     assert dispatch is not None
     edges: list[dict[str, object]] = []
@@ -384,17 +412,43 @@ def _with_new_callers(
             called_at.setdefault(str(edge["callee"]), []).append(
                 (str(edge["caller"]), int(str(edge["ordinal"])))
             )
+    new_callers = {key: tuple(value) for key, value in callers.items()}
+    new_callees = {key: tuple(value) for key, value in callees.items()}
+    new_called_at = {key: tuple(value) for key, value in called_at.items()}
+    reached = index.reached | {(str(e["caller"]), int(str(e["ordinal"]))) for e in edges}
+    # What the round changed, as a walk records reading it (`values.suffixes_kept`): an upward
+    # path that read none of it is what it was, and is kept rather than walked again.
+    changed = frozenset(
+        {
+            (READ_CALLERS, key[0])
+            for key, value in new_callers.items()
+            if index.callers.get(key) != value
+        }
+        | {
+            (READ_CALLEES, key)
+            for key, value in new_callees.items()
+            if index.callees.get(key) != value
+        }
+        | {
+            (READ_CALLED_AT, writer)
+            for writer, value in new_called_at.items()
+            if index.called_at.get(writer) != value
+        }
+        | {(READ_REACHED, site) for site in reached - index.reached}
+    )
     patched = replace(
         index,
-        callers={key: tuple(value) for key, value in callers.items()},
-        callees={key: tuple(value) for key, value in callees.items()},
-        called_at={key: tuple(value) for key, value in called_at.items()},
-        reached=index.reached | {(str(e["caller"]), int(str(e["ordinal"]))) for e in edges},
-        objects={},
-        slots_memo={},
-        suffixes={},
+        callers=new_callers,
+        callees=new_callees,
+        called_at=new_called_at,
+        reached=reached,
+        objects=Kept(),
+        suffixes=suffixes_kept(index, changed),
+        markers=[],
+        markers_kept=Kept(),
+        recipes_read=Kept(),
     )
-    return patched, frozenset(str(edge["callee"]) for edge in edges)
+    return patched, changed
 
 
 def _write(
@@ -430,7 +484,7 @@ def _write(
 def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Walked:
     """Every path the walk reaches `site`'s receiver by, as the type it is there or the
     reason it is none — `which_object`, since what is done to an object never makes it an
-    object of another type — and the methods whose callers those paths read."""
+    object of another type — and what the walk read that a binding round can change."""
     name = str(site["name"])
     parameter = site.get("receiver_parameter")
     if parameter is not None and site.get("receiver_field") is None:
@@ -438,7 +492,7 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
         if union is not None:
             return _Walked(_members(name, union), frozenset())
     found: list[_Found] = []
-    depends_on: set[str] = set()
+    depends_on: set[Any] = set()
     dropped: list[Producer] = []
     handed_on = context.handed_on
     functions: list[str] = []
@@ -452,12 +506,10 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
         functions=True,
         declared_types=True,
         shared=_RECEIVER_READER,
+        reads=depends_on,
     ):
         path_id = _JOIN.join(path.labels())
         crossed = path.crossed_out_of()
-        depends_on.update(crossed)
-        if producer.parameter is not None:
-            depends_on.add(producer.parameter[0])
         ended = producer.ended_at
         owner = None if ended is None else bound_owner(ended)
         body = None if ended is None or name != _CALL else called_function(ended)
@@ -511,6 +563,21 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
         elif body is not None:
             if body not in functions:
                 functions.append(body)
+        elif ended is not None and ended.kind == ABSENT:
+            # The code states the value on this path: `None` (a default the call leaves, `=
+            # None`, ruling R16, or a `None` written), which has no method to bind, or an
+            # empty collection (`()`, `[]`), whose type the facts do not write.
+            found.append(
+                (
+                    path_id,
+                    None,
+                    NOT_READABLE,
+                    f"receiver of {name} is None on this path"
+                    if ended.null
+                    else f"receiver of {name} is an empty collection on this path, of a type "
+                    "the facts do not write",
+                )
+            )
         else:
             found.append(
                 (

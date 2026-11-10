@@ -389,8 +389,8 @@ Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 | `relationship` | Subject, object, relationship kind | Hierarchy, dispatch, class diagrams |
 | `occurrence` | Symbol, range, enclosing symbol, role | Type-reference edges, `uses` |
 | `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |
-| `type_header` | **A DEPENDENCY type's place in the hierarchy, read from its class-file header in the resolved classpath** (2026-10-21, user decision A): symbol (the library's own coordinate and version), construct kind, superclass, interfaces, class-level annotations in the `annotation` fact's own `use` shape, and the `origin` jar. Emitted for every type the module's own classes refer to and did not compile, then transitively up each one's superclass and interfaces; a type in no jar on the classpath (the JDK's) gets none, so the catalog's declared roots stay the JDK boundary. **No member of the type is read** — no method, field, body or call site — so method lookup is untouched and the type stays "not scanned" to every consumer asking about its methods. **A kind of its own, deliberately**: were these `symbol`/`annotation` facts, the engines minting endpoint rows would see a library's `@RestController` or `CrudRepository` as this module's (measured risk). Only the type lattice reads them: `superclasses`, `implementations`, and `error_advice`'s class-annotation lookup. **Python (2026-11-06, ruled A, "like Java"):** the same fact and the same meaning, read from the installed environment and the pinned typeshed copy instead of a classpath (M03 "Libraries"): a header for every library type the module's facts name (a class, or a module, which is a type, ruling R4), then up each one's bases; `superclass` is the first written base and `interfaces` the rest, in written order, as the scanner maps a module class's (`object` is not written, and is the boundary, as the JVM's root type is); no `annotations` (a decorator is a call); `origin` is the distribution's PEP 503 name, or `typeshed@<commit>/<stub package>@<version>` where the type file is typeshed's (`typeshed@13ffe24…/requests@~=2.33.0`; the standard library is the stub package `stdlib`, at the environment's Python version), and `version` the installed version (`.` for the standard library). A library class whose bases are not all read (§5a `parents_unread`) gets no header, since the fact has no key to say so: a lookup reaching it ends there. The `c3` lookup reads a header's parents to place it, and ends at it, since its methods are not read | `type_hierarchy`, `supertype_dispatch`, the throwable walk, `@ResponseStatus` on a handled exception's class |
-| `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, `receiver_parameter` (the receiver as the enclosing method's parameter N where it is one, absent otherwise), `receiver_field` (the static field a `getstatic` receiver was read from, absent otherwise), `dominator`, `on_every_exit`, `post_dominator`, `reaches_return` and `loop_group` (the call's place in the method's control flow, rule 9), structured `arguments` | Call edges, dispatch, traces, endpoints |
+| `type_header` | **A DEPENDENCY type's place in the hierarchy, read from its class-file header in the resolved classpath** (2026-10-21, user decision A): symbol (the library's own coordinate and version), construct kind, superclass, interfaces, class-level annotations in the `annotation` fact's own `use` shape, and the `origin` jar. Emitted for every type the module's own classes refer to and did not compile, then transitively up each one's superclass and interfaces; a type in no jar on the classpath (the JDK's) gets none, so the catalog's declared roots stay the JDK boundary. **No member of the type is read** — no method, field, body or call site — so method lookup is untouched and the type stays "not scanned" to every consumer asking about its methods. **A kind of its own, deliberately**: were these `symbol`/`annotation` facts, the engines minting endpoint rows would see a library's `@RestController` or `CrudRepository` as this module's (measured risk). Only the type lattice reads them: `superclasses`, `implementations`, and `error_advice`'s class-annotation lookup. **Python (2026-11-06, ruled A, "like Java"):** the same fact and the same meaning, read from the installed environment and the pinned typeshed copy instead of a classpath (M03 "Libraries"): a header for every library type the module's facts name (a class, or a module, which is a type, ruling R4), and for every library class a `static` call names as a member of its module (`fastapi/applications#FastAPI` gives `fastapi/applications/FastAPI#`; a member that is no class gets none and is not counted unlocated, ruling R17), then up each one's bases; `superclass` is the first written base and `interfaces` the rest, in written order, as the scanner maps a module class's (`object` is not written, and is the boundary, as the JVM's root type is); no `annotations` (a decorator is a call); `origin` is the distribution's PEP 503 name, or `typeshed@<commit>/<stub package>@<version>` where the type file is typeshed's (`typeshed@13ffe24…/requests@~=2.33.0`; the standard library is the stub package `stdlib`, at the environment's Python version), and `version` the installed version (`.` for the standard library). A library class whose bases are not all read (§5a `parents_unread`) gets no header, since the fact has no key to say so: a lookup reaching it ends there. The `c3` lookup reads a header's parents to place it, and ends at it, since its methods are not read. **A Python header's class body is read (fact schema 12, plan 2026-11-08 task 9c and its review C2):** by the scanner's own reader (`file_facts`) over the library module with every function body left out and only the module-level names the header classes use, so its names, their values, the calls that made them and the module-level names they use are ordinary `symbol` (field and `<clinit>`), `field_write` and `call_site` facts of the header document, read by every consumer as a module class's are. No class `symbol` and no method `symbol` is written: the type stays a header, its methods unread. The header itself carries `methods` (`{name, returns, parameters}`, each function and constructor the body defines, `parameters` their types with the receiver taken; absent where the body was not read, which is how a reader tells "declares nothing" from "not read") and `keywords` (the class statement's keyword arguments, as a module class's `symbol` fact carries them, `symbol.keywords`). A class only a whole-module read answers, and every JVM header, carries neither. A class a read body calls gets a header, as one a module's call names does. Still no method body is read | `type_hierarchy`, `supertype_dispatch`, the throwable walk, `@ResponseStatus` on a handled exception's class |
+| `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, `receiver_parameter` (the receiver as the enclosing method's parameter N where it is one, absent otherwise), `receiver_field` (the static field a `getstatic` receiver was read from, absent otherwise), `dominator`, `on_every_exit`, `post_dominator`, `reaches_return` and `loop_group` (the call's place in the method's control flow, rule 9), structured `arguments`, and on a Python site `guards` (the undecided tests it runs under within its body, fact schema 13) | Call edges, dispatch, traces, endpoints |
 | — | The invoke-kind set includes **`throw`**: a throw site is a call-site-shaped observation whose target is the thrown exception type. It is what gives traces their `throws` terminal. | Trace terminals, blast radius |
 | `field_write` | The writing method's symbol, the assigned field's symbol, and EITHER the source parameter's ordinal OR the value it was written from — a constant, or the call whose result it is | The field resolution ladder (2F), the value walk's sixth edge |
 | `constant` | Symbol, value | Topic and URL resolution. **`value` keeps the type the class file recorded** — a JSON string, number or boolean — because a consumer resolving an address needs the string and one reading a port needs the number, and flattening either to text would put a re-parse between the reader and the class file. **A non-finite double or float arrives as its Java spelling in a STRING** (`"NaN"`, `"Infinity"`, `"-Infinity"`): RFC 8259 has no literal for them, so writing one unquoted makes the fact file invalid for a conforming reader. The field's own descriptor distinguishes that from a String constant reading `NaN` |
@@ -719,7 +719,60 @@ exactly as the nullability projection is — never on a partial alignment. It is
 not `ext.kotlin`, because a binding rule compares it across languages: Spring's binder treats a
 defaulted Kotlin parameter as optional (`MethodParameter.isOptional` → `KotlinDelegate.isOptional`,
 spring-core 6.1.6), and a .NET extractor sets the same key from a parameter's `HasDefault` (R1,
-2026-09-19).
+2026-09-19). The Python scanner writes it on every parameter with `= ...` written (plan
+2026-11-08-python-fastapi-inbound N1, approved by the user 2026-11-08). The model writes the
+key back only where it is true, so a JVM fact file it rewrites keeps its bytes.
+
+**A Python parameter carries the values its default and its annotation evaluate to** (N1, N2,
+OI-328; approved by the user 2026-11-08), in the call-argument grammar (§5 `call_site`), the
+two values `inspect.signature` gives a framework:
+
+- `default`: the default's value, set wherever `declares_default` is. `limit: int = 10` is
+  `{kind: int, value: 10}`; `db = Depends(get_db)` is `{kind: unresolved, source: n}`.
+- `annotation_value`: the annotation's value, written only where it is not a plain type. An
+  `Annotated[...]` is the result of the call that makes it (below). A name bound to a
+  module-level type alias is `{kind: field, symbol: <the alias's field>}`, in this file or in
+  another file of the module (`d: DbSession` is `{kind: field, symbol: app/deps#DbSession.}`).
+  Absent for every other annotation, whose value `type` already says.
+- **Where a `source` points.** A `def` evaluates its defaults, then its annotations, in the
+  body that runs it, and the scanner writes their calls there: the owner type's `<clinit>`
+  for a module function or a method (a module body or a class body), the enclosing function
+  for a nested `def`. A `source` in either field names a call `result` of that body.
+- **A subscript of a type form, evaluated as a value, is the static call
+  `<form>#__class_getitem__`** (ruling R37), with one argument per index element in written
+  order, each read as a type expression is; its result is the form.
+  `Annotated[str, Query(max_length=3)]` is `typing/Annotated#__class_getitem__` with the
+  arguments `{kind: class, symbol: builtins/str#}` and the `Query` call's result;
+  `response_model=list[Item]` is `builtins/list#__class_getitem__(Item)`. The form is named
+  where the subscripted name is one class of this file, a builtin class, a typing form or a
+  library class; where it is none of these, or several, no call is written and the value is
+  `unresolved`.
+- **A module-level type alias** is `X = Annotated[T, …]`, `X: TypeAlias = …` or `type X = …`.
+  A parameter annotated `X` has the type `T`. Another file's alias is read through that file's
+  header (M03), and an alias of another file's alias ends at the type the last one is, never
+  at the path of an alias, which names no class. A cross-file alias's `annotation_value` names
+  its field whether or not the type it is can be named. **A `type X = v` statement is read as
+  `X = v` is** (ruling R6): the same calls in `<clinit>`, a static field `X`, and a
+  `field_write` of the result to it. Python evaluates `v` when it is first asked for (FastAPI
+  reads it through `__value__`); that changes when it runs, not what it is.
+- **`...` is the builtin constant it is**: `{kind: field, symbol: builtins#Ellipsis.}`
+  (`Query(...)`, which means required), never `unresolved`.
+
+**A Python class-body field carries its annotation's value the same way** (fact schema 11, plan
+2026-11-08 task 9 review M1): `signature.annotation_value`, beside `signature.returns`, written
+only where the annotation is not a plain type, by the rule above (`plain_name: Annotated[str,
+Field(alias="P")]` is the `__class_getitem__` call's result). A class body evaluates a field's
+value, then its annotation (PEP 526), so the calls are the class body's (`<clinit>`), after
+the value's. Absent on every JVM signature and on every other Python symbol. **A `TypedDict` key
+the typing specification lets be left out carries `modifiers.not_required: true`**: one written
+`NotRequired[...]`, or any key of a class written `total=False` not written `Required[...]`
+(either may be `Annotated`'s first argument). Absent everywhere else. **A class-body field only
+an arm that never runs declares** (`if TYPE_CHECKING:`, `if False:`) carries
+`modifiers.never_runs: true` (fact schema 12, task 9c re-review N2): still a symbol, no payload
+field.
+
+Absent on every JVM parameter: a Kotlin default's expression lives in the `$default` bridge's
+body. Both fields are written back only where set. They moved the fact schema version to 8.
 
 **Literal values have a typed model**: string, number, boolean, enum reference, **class
 reference — captured as a symbol reference, not a string** — and arrays of these. This is
@@ -754,7 +807,8 @@ at all.
 **A Python type reference is the type the code writes** (spec 2026-11-06 §3a, rule 1). Its
 name is bound through the file's own imports, by path: the other file is not read.
 `Optional[X]` and `X | None` are `X` with `nullable: true`. A union is the arguments of
-`typing/Union#`. `type[X]` is `X`. `Annotated[X, …]` is `X`. A type variable is its bare name,
+`typing/Union#`. `type[X]` is `X`. `Annotated[X, …]` is `X`, and a module-level type alias is
+the type it is written to be (above). A type variable is its bare name,
 as on the JVM, and a PEP 695 type parameter (`def f[S]`, `class C[T]`) is also written in
 the declaration's `type_parameters`. An annotation the file writes and does not bind keeps
 its written text, bare (`Mystery`): it names no type (`names_a_type`) and is never
@@ -792,8 +846,9 @@ written text, which names none. **A type named through another file of the modul
 by where it is defined** (round 1): a re-export (`from .order import Order` in a package
 `__init__`), a module-level alias and a `NewType` of a class are followed through the
 module files' headers to the class, or to a library's defining symbol where the chain leaves
-the module, as a library re-export is (M03 "Libraries"); a name another file binds to a value
-or to an alias its own scope reads names no type here. The class itself carries `parents_unread` (§5 table): method lookup treats such a class as "parents not read" — its lookup ends with `external` — and never as "no parents". **Evidence:** every type a Python document states is written in source, so it is
+the module, as a library re-export is (M03 "Libraries"); a name another file binds to a
+module-level type alias is the type the alias is, and a name it binds to any other value
+names no type here. The class itself carries `parents_unread` (§5 table): method lookup treats such a class as "parents not read" — its lookup ends with `external` — and never as "no parents". **Evidence:** every type a Python document states is written in source, so it is
 `declared`, the word §5d gives a source origin. The document says so: `language` is the
 source language and `class_major` is 0. No reference carries an evidence field of its own.
 
@@ -808,6 +863,21 @@ declared shapes arrive in it already, because it is what schema formats natively
 Java `long` and an OpenAPI `integer/int64` meet in the middle as `integer/int64`. This
 vocabulary is a closed set, and it is the comparison level of DR-5's structural matching
 and FR-11's drift report — never Java types against spec types directly.
+
+**A Python type reference carries the wire type the language fixes, and nothing else**
+(plan 2 task 3), in the JVM's words: `str` is `string`, `int` `integer`, `float` `number`,
+`bool` `boolean`; `list`, `set`, `frozenset`, `tuple`, `deque`, and `Sequence`,
+`MutableSequence`, `Collection`, `Iterable`, `MutableSet` (`typing` and `collections.abc`
+alike) are `array`; `dict`, `defaultdict`, `OrderedDict`, `Counter`, `Mapping` and
+`MutableMapping` are `map`; a type parameter of the enclosing class or function (PEP 695,
+`Generic[T]`, a function's `TypeVar`, and `Self` in a class) is `object`, as the JVM's `T`
+is, so a generic model's `T` field stays open; every other class is `object`. `bytes`, `bytearray` and the classes of `datetime`, `uuid` and `decimal` have no wire
+type: a serializer chooses the scalar each becomes, so a catalog's `known_types` says it, as
+it does for a JVM `Instant`. `None` has none: written for a field it is a `null` on the wire,
+for a return no payload, and the vocabulary has one word for neither. A special form (`Any`, a union, `Literal`) and a
+written text that names no type have none either. `wire_format` is not set: the language
+fixes no width. The projection reaches every level of a reference (`Optional[list[str]]` is a
+nullable `array` whose argument is a `string`) and every reference a Python fact carries.
 
 **An enumeration reaches the wire as `enum`, never as a record.** A type reference cannot say
 which of the two it points at, so the answer comes from the referenced type's own
@@ -1025,6 +1095,15 @@ The full shape, verbatim:
 Python call on a value does not know the value's type when the scanner reads it. The scanner
 leaves the owner out, and the resolver binds it later from the receiver's value id. Every
 other `invoke_kind`, and a `virtual` call with no receiver, must name an owner.
+
+**A Python call on a value the code fixes names its owner** (ruling R17, 2026-11-08). A value
+is fixed by a construction (`app = FastAPI()`, `s = Session()`, a class of a library or of
+the module, M03) or by a written `type[X]`. A name that holds a class object `X` (every write
+to it is a call written to give `type[X]`) is called as the `virtual <init>` of `X`, with the
+name's static field as `receiver_field`: `X` or a subclass is constructed, as `cls()` is
+(R37). The call of a class through its module (`fastapi/applications#FastAPI`) stays the
+`static` call the file writes, and the resolver reads it as the construction. The class gets a
+`type_header` for that reading.
 
 **`target.descriptor`** makes the target unambiguous. `owner.name` alone collides; two
 methods named `execute` are not the same method.
@@ -1324,6 +1403,9 @@ above:
   the values that fill the holes. With no value in it, it is the `string` itself.
 - `a if c else b` and `a or b` are `merge`; `await x` is the value of `x`; `with x as y` is
   the call `x.__enter__()` (`__aenter__` for `async with`), and `y` is its result.
+- A subscript of a type form, evaluated as a value, is the `static` call
+  `<form>#__class_getitem__`, one argument per index element (§5a), and `...` is the field
+  `builtins#Ellipsis.`.
 - A nested function is a method of the same owner, named after the function that holds it
   (`outer$inner`), as kotlinc names a local function. A `lambda` is
   `lambda$<method>$<n>`, as javac names a lambda body (`static` for a module or class body,
@@ -1360,6 +1442,25 @@ above:
   no `post_dominator` and do not reach a return. `yield` and `await` are not exits. A call
   after a `return` is written (the JVM writes no unreachable site) with no `dominator`,
   `post_dominator` or `loop_group`, and `on_every_exit` and `reaches_return` false.
+- **`guards`** (fact schema 13, OI-368, approved by the user 2026-11-09): the tests a call runs
+  under within its own body that the scanner does not decide, outermost first, each
+  `{test, holds, reads}`. `test` is the test as the code writes it (`ast.unparse`); `holds` is
+  the arm the call is in — `true` in an `if` arm or a conditional expression's first value,
+  `false` in the `else` arm, the second value, and every statement after an arm that always
+  returns where the other arm does not, to the end of that block. An arm that always raises
+  guards nothing — neither the arm beside it nor what follows: its test decides only whether
+  the program goes on (`if bad: raise ValueError(...)`), and code that does not run is not
+  described (ruled 2026-11-07); "always raises" reads `with`, `try` and `finally` as
+  `_falls_through` does. The entry-point test `__name__ == "__main__"` (either way round, or
+  `!=`) guards nothing either: it chooses how the module starts, not what exists (ruled
+  2026-11-09); `reads`
+  are the names and dotted names the test reads (`settings.ENV`, `os.path.exists`), each once,
+  in the order it reads them. A test the language decides writes nothing: a constant,
+  `typing.TYPE_CHECKING` (with `not` either way), and a library's version test read for a known
+  Python (whose dead arm is not read at all). A nested function or `lambda` starts with none:
+  its calls run when it is called, and whoever calls it is the resolver's to follow. Absent
+  where a call runs under no test, and on every JVM site. A fact set of an older vintage has no
+  guards and is refused and re-extracted.
 
 **`method_return` is a fact of its own, one per return instruction** (capability 9.18) —
 what a method hands back:
@@ -1407,7 +1508,15 @@ carries it as `OI-15`.
 **Python:** every `return` is a `method_return`, and so is the implicit `return None`
 where the end of the body is reachable, as `{"kind": "null"}` — a Python function hands
 `None` back, so it is a value, not a void return. A generator hands back a generator object,
-so it has one `unresolved` return. An `@overload` stub, and an abstract or `Protocol` method
+so it has one `unresolved` return. **Each `yield` is a `method_return` of its own with
+`"yielded": true`** (plan 2026-11-08-python-fastapi-inbound N10): `value` is what it hands out
+(a bare `yield` hands out `None`), and the yields are numbered in written order before the
+generator object's own return, so `(method, ordinal)` stays one fact. A yield is no return: a
+call of the method still hands back the generator object, and the `method_returns` view leaves
+yields out; the one reader asking what a generator yields reads them apart (`method_yields`),
+as FastAPI hands a yield dependency's first yield to the parameter it fills. `yield from` hands
+on another iterator's values and is no value here. `yielded` is false on every other return: the JVM
+extractor writes none, which reads as false. An `@overload` stub, and an abstract or `Protocol` method
 whose body is only `...`, `pass` or a docstring, has no `method_return`: it has no body.
 
 **`field_write` is a fact of its own, ANY method, direct traces only** — a method assigns a

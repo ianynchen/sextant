@@ -304,3 +304,66 @@ analyses it, and then every file is read again, as it must be.
   in 264 files, and those 264 are read again. Every kept file was compared with a fresh
   analysis of the changed tree: the fact files are byte for byte the same, and so are the
   tables and `metadata.json`.
+
+## Baseline for FastAPI plan 2 (Task 0, 2026-11-08)
+
+Branch `cov/python-fastapi` at c11c7bd9, which holds `main` plus plan 2's documents only (no
+reader code changed). Same machine, Python and command as "Final measurements" above:
+`sextant module analyze examples/py-polar/server --workspace <new folder>`, wall time of the whole
+command, one run each. Cold is a new folder. Warm is the same command again, no file changed.
+
+| Tree | Cold | Warm | Cold target 60 s / ceiling 300 s | Warm target 10 s / ceiling 30 s |
+|---|---|---|---|---|
+| polar `server/` | 42.5 s (scan 20.1 s for 229,689 facts, resolve 21.1 s) | 3.2 s | met | met |
+
+The run reads the same 2,053 files as before. The cold figure is within the 36.5 s to 43.7 s
+range of the earlier rounds. Every later task of plan 2 compares with these two numbers.
+
+## Task 10 of FastAPI plan 2 (2026-11-09, at 311fa0cc)
+
+Branch `cov/python-fastapi` at 311fa0cc plus Task 10's tests and documents (no reader code
+changed). Same machine and command as the Task 0 baseline above, each service with its own
+environment synced (`.venv`), so the library type headers are read. One cold and one warm run
+each; machine load about 2.2.
+
+| Tree | Cold | Scan | Resolve | Warm | Cold target 60 s / ceiling 300 s | Warm target 10 s / ceiling 30 s |
+|---|---|---|---|---|---|---|
+| polar `server/` | 53.5 s | 26.8 s (249,987 facts) | 25.2 s | 2.2 s | met | met |
+| mealie | 15.2 s | 8.0 s (67,782 facts) | 5.1 s | 1.3 s | met | met |
+| `fixtures/orders-fastapi` | 2.4 s | 0.6 s (2,158 facts) | 0.6 s | | met | |
+
+- **From the baseline to here.** polar cold went 42.5 s → 53.5 s and its fact count 229,689 →
+  249,987. Most of the difference is the synced environment: with FastAPI, starlette and
+  pydantic installed, their type headers and the library class bodies pydantic's fields need
+  are read (task 9c), which the baseline, run without them, did not do. The highest cold time on
+  the way was about 69.5 s (task 4b, before the header pass was cut down in tasks 4c and 4d) and
+  about 65 s (task 9c); task 9b brought it back under the 60 s target. The progress ledger has
+  each step.
+- **One edited file** still pays the whole resolve: 40.4 s on polar at 311fa0cc (task 9b). That
+  needs an incremental resolve (OI-360).
+- **The largest single resolve costs left** are binding round 2 (3.4 s) and the two
+  `value_index` builds (about 4.5 s together), OI-387.
+- **dispatch** (`examples/py-dispatch`) is not measured: it has no installed environment, and
+  nothing was installed for this run.
+
+## End of FastAPI plan 2 (after the final review fixes, 2026-11-09)
+
+Same machine and command; one cold and one warm run each, machine load about 2.5. The final
+rows include `app.host` read as a mount (polar 881 rows). The first
+row of each service is the branch after Task 10b (4c6cea65), measured the same day; the second
+is the branch after the final review fixes. Test code is no longer read (final review M1,
+`scripts/probes/pytest_collection.md`): polar reads 1,405 of its 2,053 files, mealie 496 of 705.
+
+| Tree | Cold | Scan | Resolve | Warm | Cold target 60 s / ceiling 300 s | Warm target 10 s / ceiling 30 s |
+|---|---|---|---|---|---|---|
+| polar `server/`, after Task 10b | 54.1 s | 27.9 s (249,987 facts) | 24.7 s | 2.0 s | met | met |
+| polar `server/`, final | 36.9 s | 18.7 s (146,781 facts) | 16.6 s | 1.5 s | met | met |
+| mealie, after Task 10b | 15.4 s | 8.1 s (67,782 facts) | 5.2 s | 1.3 s | met | met |
+| mealie, final | 12.6 s | 5.9 s (41,210 facts) | 4.6 s | 1.2 s | met | met |
+| `fixtures/orders-fastapi`, final | 2.3 s | 0.6 s (2,179 facts) | 0.7 s | | met | |
+
+- **Why it is faster.** The 648 polar test files held 41 % of its facts and most of the
+  callers the value walk follows (pytest fixtures and tests call the services with many
+  values). Without them the scan reads fewer files and fewer library headers, and the resolve
+  walks fewer paths.
+

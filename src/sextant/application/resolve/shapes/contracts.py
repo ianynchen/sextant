@@ -1,5 +1,6 @@
 import json
 import re
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
@@ -19,7 +20,7 @@ from sextant.application.resolve.shapes.expansion import (
     derive_shapes,
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, _matching_wrapper, root_type
-from sextant.domain.symbols import names_a_type
+from sextant.domain.symbols import ANY_TYPE, LITERAL_TYPES, UNION_TYPE, names_a_type
 
 
 def derive_endpoint_shapes(
@@ -56,6 +57,7 @@ def derive_endpoint_shapes(
     ordered = sorted(
         catalogs, key=lambda catalog: (catalog.direction != "inbound", str(catalog.source))
     )
+    parsed = _parse_request_roots(workspace, catalogs)
     for catalog in ordered:
         # Gated exactly as derive_endpoints gates it: a catalog skipped there
         # produced no endpoints and must contribute no shapes either. The skip
@@ -71,11 +73,17 @@ def derive_endpoint_shapes(
         # picked out of the two columns by hand: strictly more complete than
         # the 2A roots, which only a bare `object` payload ever reached.
         referenced: list[str] = []
-        found = _contracts_of(workspace, endpoints, catalog, settled, rules, enums, referenced)
+        # The roots read on input and the roots written on output, for a shape model that
+        # drops a field from output alone (`excluded_when`, task 9 review M4): every endpoint
+        # column, by the row's direction, and every payload a parse binds (re-review R2-5).
+        directions: tuple[set[str], set[str]] = (set(parsed), set())
+        found = _contracts_of(
+            workspace, endpoints, catalog, settled, rules, enums, referenced, directions
+        )
         # Deduped in the order the endpoints reached them, which is the order
         # the shape rows are written and the report names gaps (NFR-1).
         roots = list(dict.fromkeys(referenced))
-        unexpanded.extend(derive_shapes(workspace, catalog, roots).unexpanded_types)
+        unexpanded.extend(derive_shapes(workspace, catalog, roots, directions).unexpanded_types)
         for owner, columns in found.items():
             settled.setdefault(owner, {}).update(columns)
 
@@ -162,6 +170,7 @@ def _contracts_of(
     rules: "_Rules",
     enums: set[str],
     referenced: list[str],
+    directions: tuple[set[str], set[str]] | None = None,
 ) -> dict[str, dict[str, str]]:
     """The descriptors one catalog can name for each endpoint's owner, leaving
     out every column an earlier catalog already answered — restricted, first,
@@ -225,6 +234,8 @@ def _contracts_of(
             # single caller can each carry a genuinely different payload.
             for column in (_REQUEST, _RESPONSE):
                 referenced.extend(_shape_roots_of(endpoint.get(column)))
+                if directions is not None:
+                    _directed(directions, endpoint, column, endpoint.get(column))
             continue
         if not owner or owner in found:
             continue
@@ -247,6 +258,9 @@ def _contracts_of(
                 signature.get("returns"), rules, enums, referenced, wrappers
             ),
         }
+        if directions is not None:
+            for column, descriptor in columns.items():
+                _directed(directions, endpoint, column, descriptor)
         kept = {
             column: descriptor
             for column, descriptor in columns.items()
@@ -255,6 +269,39 @@ def _contracts_of(
         if kept:
             found[owner] = kept
     return found
+
+
+def _directed(
+    directions: tuple[set[str], set[str]],
+    endpoint: Mapping[str, object],
+    column: str,
+    descriptor: object,
+) -> None:
+    """Adds one column's roots to the shapes read on input (`directions[0]`) or written on
+    output (`directions[1]`): an inbound row reads its request and writes its response, an
+    outbound one the reverse, a `both` row each column both ways."""
+    roots = _shape_roots_of(descriptor)
+    direction = endpoint.get("direction")
+    if direction == "both":
+        directions[0].update(roots)
+        directions[1].update(roots)
+        return
+    written = (column == _RESPONSE) == (direction != "outbound")
+    directions[written].update(roots)
+
+
+def _parse_request_roots(workspace: Workspace, catalogs: list[Catalog]) -> set[str]:
+    """`parse_binding.parse_request_roots`, read only where a catalog's shape model drops a
+    field from output alone (`excluded_when`): no other rule reads a shape's direction. Imported
+    here, as parse binding reads this module."""
+    if not any(
+        (naming := _rules_of(catalog).naming) is not None and naming.excluded_when is not None
+        for catalog in catalogs
+    ):
+        return set()
+    from sextant.application.resolve.shapes.parse_binding import parse_request_roots
+
+    return parse_request_roots(workspace, catalogs)
 
 
 def _shape_roots_of(descriptor_json: object) -> list[str]:
@@ -269,12 +316,21 @@ def _shape_roots_of(descriptor_json: object) -> list[str]:
     C1)."""
     if descriptor_json is None:
         return []
-    node = json.loads(str(descriptor_json))
+    return _roots_in(json.loads(str(descriptor_json)))
+
+
+def _roots_in(node: object) -> list[str]:
+    """`_shape_roots_of` over a parsed descriptor: its `shape_id`, its `item` chain, and each
+    field type of a body assembled from several parameters (`fields`, D01 §3; task 9
+    re-review R2-1), in written order."""
     roots: list[str] = []
     while isinstance(node, dict):
         shape_id = node.get("shape_id")
         if shape_id is not None:
             roots.append(str(shape_id))
+        for field in node.get("fields") or []:
+            if isinstance(field, dict):
+                roots.extend(_roots_in(field.get("type")))
         node = node.get("item")
     return roots
 
@@ -345,6 +401,9 @@ def _body_parameter(
     paths: frozenset[str],
     index: dict[str, list[tuple[str, dict[str, Any]]]],
     members: dict[str, set[str]],
+    calls: Mapping[int, tuple[str, str]] | None = None,
+    scalars: Mapping[int, bool | None] | None = None,
+    every: list[tuple[int, dict[str, Any]]] | None = None,
 ) -> tuple[int, dict[str, Any]] | None:
     """The payload parameter the catalog's body rule marks, as its DECLARED
     index and the parameter itself (D02 §2 as amended). The marker wins, where
@@ -361,6 +420,18 @@ def _body_parameter(
     signature — the row's composed paths for the `path_variable` implicit
     binding, the per-type member annotations for `container` — handed in
     rather than looked up so the caller builds them once (GUIDELINES §8.7).
+
+    **A framework that marks with a call** (`marker_calls`, `bound_by_calls`, plan
+    2026-11-08-python-fastapi-inbound N4) is read off `calls`: each parameter's marker call, by
+    declared index, as `(owner, method)` — the one its framework reads, chosen by the caller
+    (`request_requirements.read_parameters`), `BOUND` where the parameter is bound for a reason
+    of its own (a receiver, markers read differently on two paths), and absent where it carries
+    none. A parameter marked with a `marker_calls` call is the body whatever its type; one
+    marked with a `bound_by_calls` call is bound; and the `scalar` implicit binding binds an
+    unmarked parameter `scalars` does not call non-scalar (`False`): a scalar is a query
+    parameter, and one whose kind is not read is never claimed as the body. Among the marked
+    and the unbound together, the body is the sole one; `every`, where handed a list, receives
+    all of them, for a framework that embeds several in one object (`embed_arg`).
 
     The index is carried, not only the type, because 2G's parse binding
     (`shapes/parse_binding.py`) joins a call argument that NAMES a parameter
@@ -408,11 +479,13 @@ def _body_parameter(
         ]
         return bare[0] if len(bare) == 1 else None
     if fallback == "sole_unbound":
-        bound_by = declared.get("bound_by")
-        if not isinstance(bound_by, list) or not bound_by:
+        bound_by = declared.get("bound_by", [])
+        bound_calls = body_calls(catalog, "bound_by_calls")
+        if not isinstance(bound_by, list) or not (bound_by or bound_calls):
             raise CatalogError(
                 f"loading catalog {catalog.source}: `fallback: sole_unbound` requires a "
-                "non-empty `request_body.bound_by` list — the word means 'unbound by THESE'"
+                "non-empty `request_body.bound_by` or `bound_by_calls` list — the word means "
+                "'unbound by THESE'"
             )
         implicit = declared.get("implicit_bindings") or []
         if not isinstance(implicit, list) or not set(implicit) <= _IMPLICIT_BINDINGS:
@@ -422,20 +495,67 @@ def _body_parameter(
             )
         binders = {_catalog_symbol(a) for a in bound_by}
         variables = _path_variables(paths) if "path_variable" in implicit else frozenset()
+        marker_calls = body_calls(catalog, "marker_calls")
+        marked = calls or {}
         unbound = [
             (i, p)
             for i, p in enumerate(parameters)
-            if not _is_bound(p, binders, excluded, variables, "container" in implicit, members)
+            if marked.get(i) in marker_calls
+            or (
+                i not in marked
+                and not _is_bound(p, binders, excluded, variables, "container" in implicit, members)
+                and not ("scalar" in implicit and (scalars or {}).get(i, False) is not False)
+            )
         ]
+        if every is not None:
+            every.extend(unbound)
         return unbound[0] if len(unbound) == 1 else None
     return None
+
+
+def body_calls(catalog: Catalog, key: str) -> frozenset[tuple[str, str]]:
+    """`request_body.marker_calls` or `.bound_by_calls` (plan 2026-11-08-python-fastapi-inbound
+    N4), each a dotted `<owner>.<method>` read as the `(owner, method)` a call site writes:
+    the calls that make a parameter the body, and the calls that bind it to something else.
+    Empty where the catalog declares none. A list of anything but dotted names is refused."""
+    declared = (catalog.matches.get("request_body") or {}).get(key, [])
+    if not isinstance(declared, list) or not all(
+        isinstance(name, str) and "." in name for name in declared
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `request_body.{key}` is a list of dotted "
+            f"`<owner>.<method>` names, got {declared!r}"
+        )
+    return body_calls_of(declared)
+
+
+def body_calls_of(declared: list[str]) -> frozenset[tuple[str, str]]:
+    """Dotted `<owner>.<method>` names, checked by the caller, as `(owner, method)` pairs."""
+    return frozenset(
+        (_catalog_symbol(owner), method)
+        for owner, _, method in (name.rpartition(".") for name in declared)
+    )
 
 
 # Every key a `request_body` block may carry (D02 §2's `request_body` paragraphs,
 # spec 2026-09-18 §4). Closed for the reason `protocol_hint`'s block is: a key
 # this rule does not read is refused rather than ignored.
 _REQUEST_BODY_KEYS = frozenset(
-    {"annotation", "fallback", "bound_by", "excludes", "implicit_bindings"}
+    {
+        "annotation",
+        "fallback",
+        "bound_by",
+        "excludes",
+        "implicit_bindings",
+        "marker_calls",
+        "bound_by_calls",
+        "embed_arg",
+        "name_arg",
+        "embed_markers",
+        "required_when",
+        "default_arg",
+        "annotated_default",
+    }
 )
 
 
@@ -452,11 +572,58 @@ def declares_container(catalog: Catalog) -> bool:
 # the two bindings Quarkus REST reads off no annotation at all (its
 # `EndpointIndexer`, CP-19 row 4). Declared by `quarkus-rest.yml` alone;
 # `jakarta-jaxrs.yml` declares none, because under Jersey `byId(String id)`
-# beneath `@Path("/{id}")` IS an entity body.
-_IMPLICIT_BINDINGS = frozenset({"path_variable", "container"})
+# beneath `@Path("/{id}")` IS an entity body. `scalar` (plan 2026-11-08-python-fastapi-inbound
+# N4) is FastAPI's: an unmarked parameter of a scalar type is a query parameter
+# (`analyze_param`'s `field_annotation_is_scalar`), so only another type can be the body.
+_IMPLICIT_BINDINGS = frozenset({"path_variable", "container", "scalar"})
 # A path template's variable: `{name}` or `{name: regex}` — the name is the
 # token before the `:`, and the regex may hold anything but a closing brace.
 _PATH_VARIABLE = re.compile(r"\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?::[^}]*)?\}")
+
+
+def is_scalar(
+    reference: Mapping[str, Any],
+    known_types: Mapping[str, Mapping[str, Any]],
+    enums: set[str],
+    is_class: Callable[[str], bool],
+) -> bool | None:
+    """Whether a parameter's type is a scalar on the wire (plan 2026-11-08-python-fastapi-inbound
+    N4, the `scalar` implicit binding and `request_params`' `scalar_only`): its wire projection
+    is a scalar, it is a shape-model `known_types` entry whose wire is one, or it is an
+    enumeration (written as its value), or a `Literal` form. An object, an array or a map is
+    not. A union is a
+    scalar where every member is and not where any member is not; the unknown type is one,
+    since nothing makes it compound (FastAPI's `field_annotation_is_scalar`: complex only for a
+    model, a mapping, a sequence, a dataclass or an upload). None where the kind is not read:
+    a type with no wire projection that no shape model knows, and an `object` that `is_class`
+    does not know as a class (an alias read as a type, such as pydantic's `UUID4 =
+    Annotated[UUID, ...]`, is no class, and its wire is not the alias's)."""
+    symbol = str(reference.get("symbol"))
+    if symbol == UNION_TYPE:
+        members = [
+            is_scalar(member, known_types, enums, is_class) for member in reference["arguments"]
+        ]
+        if False in members:
+            return False
+        return True if members and all(members) else None
+    if symbol == ANY_TYPE or symbol in LITERAL_TYPES:
+        return True
+    known = known_types.get(symbol)
+    if known is not None:
+        return known.get("wire") in _SCALAR_WIRES
+    if symbol in enums:
+        return True
+    wire = reference.get("wire_type")
+    if wire in _SCALAR_WIRES:
+        return True
+    if wire == "object" and not is_class(symbol):
+        return None
+    return False if wire in _COMPOUND_WIRES else None
+
+
+# D00 §5b's wire types a single value is written as, and the ones that hold others.
+_SCALAR_WIRES = frozenset({"string", "integer", "number", "boolean"})
+_COMPOUND_WIRES = frozenset({"object", "array", "map"})
 
 
 def _path_variables(paths: frozenset[str]) -> frozenset[str]:
@@ -485,6 +652,18 @@ def _is_bound(
     if parameter.get("name") in variables:
         return True
     return container and bool(members.get(symbol, set()) & binders)
+
+
+def payload_descriptor(
+    reference: dict[str, Any] | None,
+    rules: "_Rules",
+    enums: set[str],
+    referenced: list[str],
+    wrappers: list[dict[str, Any]],
+) -> str | None:
+    """`_payload_descriptor`, for an engine outside this module: the wire descriptor a
+    signature-level type reference roots at, or None for no payload."""
+    return _payload_descriptor(reference, rules, enums, referenced, wrappers)
 
 
 def _payload_descriptor(

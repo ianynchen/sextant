@@ -6487,7 +6487,7 @@ def test_a_window_stops_enumerating_at_the_cap(branches):
     `_windowed` gives the same row, but only after the window has built every path — 2^N of
     them. So the window itself, nine guarded setters on one object, is one path ending
     `non_enumerable`, never 512 built first."""
-    walk = values._Walk(value_index(branches), configuring=_OPTIONS_SETTERS)
+    walk = values._Walk(value_index(branches), configuring=_OPTIONS_SETTERS, deps=[])
     assert walk._window(_symbol(_USES, "many9", "()V"), ("value", 1), 0, 10) == (
         ((), "non_enumerable"),
     )

@@ -96,6 +96,45 @@ SEXTANT_VERSION = version("sextant")
 #             is refused and re-extracted. While 7 was unshipped, `module` also gained
 #             `entry_points` (the programs a Python build declares; design
 #             2026-11-06-reading-decorators §7a, approved by the user 2026-11-06).
+#     8       a parameter gains `default` and `annotation_value` (the values its default and
+#             its annotation evaluate to, in the call-argument grammar) and the model keeps
+#             `declares_default`, which the JVM extractor already wrote (plan
+#             2026-11-08-python-fastapi-inbound N1, N2; OI-328; approved by the user
+#             2026-11-08). A subscript of a type form is the static call
+#             `<form>#__class_getitem__`, and `...` is the field `builtins#Ellipsis.`. A fact
+#             set of the older vintage has no parameter values, so a reader would take every
+#             Python parameter for one with no default; it is refused and re-extracted.
+#     9       no shape change: a Python call on a name a construction or a written `type[X]`
+#             fixes is written with its `target.owner` (plan 2026-11-08-python-fastapi-inbound
+#             Task 4b, ruling R17), a call of a name holding a class object is a `virtual
+#             <init>` of that class, and a library class that a static call names gets a type
+#             header. A fact set of the older vintage leaves those owners to the resolver,
+#             which reads none of them on a library class it has no header for; it is refused
+#             and re-extracted.
+#     10      `method_return.yielded` (plan 2026-11-08-python-fastapi-inbound N10): a Python
+#             generator writes one `method_return` per `yield`, marked `yielded`, numbered
+#             before the generator object's own `unresolved` return. A fact set of the older
+#             vintage has no yields, so a reader would take a generator for one that yields
+#             nothing it can read; it is refused and re-extracted.
+#     11      a Python class-body field gains the value of its annotation where that is not a
+#             plain type (`signature.annotation_value`, a parameter's word since 8: pydantic's
+#             `Annotated[T, Field(...)]`), and `modifiers.not_required` where the typing
+#             specification lets a `TypedDict` key be left out (plan 2026-11-08 task 9 review
+#             M1, M6). A fact set of the older vintage holds neither, so a reader would take an
+#             `Annotated` field for one with no metadata and every `TypedDict` key for a
+#             required one; it is refused and re-extracted.
+#     12      a Python `type_header` whose class body was read carries `methods` (each function
+#             and its return type) and `keywords`, and the body itself is written as the header
+#             document's own field, `<clinit>`, field-write and call-site facts, by the module's
+#             reader; a class `symbol` carries its class-statement `keywords`; a class body's
+#             `if TYPE_CHECKING:` declares nothing (plan 2026-11-08 task 9c and its review). A
+#             fact set of the older vintage reads every library class as one whose fields nobody
+#             can see, so every model extending one stays open; it is refused and re-extracted.
+#     13      a Python `call_site` gains `guards`: the tests the call runs under within its own
+#             body that the scanner does not decide (`{test, holds, reads}`, OI-368, approved by
+#             the user 2026-11-09). A fact set of the older vintage has none, so a reader would
+#             take every registration for one made wherever the module runs; it is refused and
+#             re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -208,6 +247,12 @@ SEXTANT_VERSION = version("sextant")
 #             `unresolved` where nothing was bound. A workspace of the older vintage has no
 #             such table and draws such a call to a target named after no owner, so it is
 #             refused and re-analysed.
+#     18      `endpoint_existence`, a new derived table: where each registered row exists when
+#             the calls registering it run only under tests the analysis does not decide, one
+#             row per (endpoint row, alternative, test, environment), kind `test`, `holds`
+#             `unresolved` (OI-368, approved by the user 2026-11-09). A workspace of the older
+#             vintage has no such table, so a reader would take every such row for one served
+#             wherever the module runs; it is refused and re-analysed.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -234,6 +279,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 7
-GRAPH_SCHEMA_VERSION = 17
+FACT_SCHEMA_VERSION = 13
+GRAPH_SCHEMA_VERSION = 18
 BOUNDARY_VOCABULARY_VERSION = 5

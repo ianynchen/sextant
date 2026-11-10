@@ -50,7 +50,9 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _install(site: Path, version: str) -> None:
+def _install(
+    site: Path, version: str, source: str = "def hello() -> str:\n    return 'hi'\n"
+) -> None:
     """`greet` as an installer leaves it: its file, and a `.dist-info` whose `RECORD`
     lists it."""
     for old in site.glob("greet-*.dist-info"):
@@ -59,7 +61,7 @@ def _install(site: Path, version: str) -> None:
         old.rmdir()
     info = site / f"greet-{version}.dist-info"
     _write(info / "METADATA", f"Metadata-Version: 2.1\nName: greet\nVersion: {version}\n\n")
-    _write(site / "greet" / "__init__.py", "def hello() -> str:\n    return 'hi'\n")
+    _write(site / "greet" / "__init__.py", source)
     _write(site / "greet" / "py.typed", "")
     record = ["greet/__init__.py,sha256=x,1", "greet/py.typed,,"]
     record += [f"{info.name}/METADATA,,", f"{info.name}/RECORD,,"]
@@ -240,6 +242,123 @@ def test_a_file_another_imports_edited_in_its_header_rereads_its_importers(
     _assert_same_as_fresh(project, warm, tmp_path)
 
 
+# A module-level type alias in `shop/models.py` and a parameter annotated with it in
+# `shop/service.py` (plan 2026-11-08 N2): the parameter's type and annotation value are read
+# through `shop/models.py`'s header.
+_ALIASED_MODELS = (
+    "from typing import Annotated\n"
+    "class Order:\n    def total(self) -> int:\n        return 1\n"
+    "class Invoice:\n    pass\n"
+    "OrderRef = Annotated[Order, 'ref']\n"
+)
+_ALIASED_SERVICE = "from shop.models import OrderRef\n\n\ndef run(o: OrderRef):\n    return 1\n"
+
+
+def test_editing_an_alias_rereads_the_files_that_import_it(project: Path, tmp_path: Path):
+    """`OrderRef` changes what it is an alias of: `shop/service.py`, whose parameter is typed
+    by it, is read again, and its facts are a fresh run's."""
+    _write(project / "shop" / "models.py", _ALIASED_MODELS)
+    _write(project / "shop" / "service.py", _ALIASED_SERVICE)
+    warm = tmp_path / "warm"
+    _analyze(project, warm)
+    before = _modified(warm)
+
+    _write(
+        project / "shop" / "models.py",
+        _ALIASED_MODELS.replace("Annotated[Order, ", "Annotated[Invoice, "),
+    )
+    _analyze(project, warm)
+
+    rewritten = _rewritten(before, _modified(warm)) - _MODULE_DOCUMENTS
+    assert {"shop/models.py.jsonl", "shop/service.py.jsonl"} <= rewritten
+    assert "Invoice#" in (warm / "facts" / "shop" / "service.py.jsonl").read_text()
+    _assert_same_as_fresh(project, warm, tmp_path)
+
+
+def test_editing_an_alias_rereads_a_file_that_reads_it_through_another_alias(
+    project: Path, tmp_path: Path
+):
+    """`shop/service.py` imports `Ref` from `shop/more.py`, an alias of `shop/models.py`'s
+    `OrderRef`: editing `OrderRef` alone re-reads `shop/service.py`, whose parameter's type
+    the chain ends at."""
+    _write(project / "shop" / "models.py", _ALIASED_MODELS)
+    _write(
+        project / "shop" / "more.py",
+        "from typing import Annotated\nfrom shop.models import OrderRef\n"
+        "Ref = Annotated[OrderRef, 'more']\n",
+    )
+    _write(
+        project / "shop" / "service.py",
+        "from shop.more import Ref\n\n\ndef run(o: Ref):\n    return 1\n",
+    )
+    warm = tmp_path / "warm"
+    _analyze(project, warm)
+    before = _modified(warm)
+
+    _write(
+        project / "shop" / "models.py",
+        _ALIASED_MODELS.replace("Annotated[Order, ", "Annotated[Invoice, "),
+    )
+    _analyze(project, warm)
+
+    assert "shop/service.py.jsonl" in _rewritten(before, _modified(warm))
+    assert "Invoice#" in (warm / "facts" / "shop" / "service.py.jsonl").read_text()
+    _assert_same_as_fresh(project, warm, tmp_path)
+
+
+def test_editing_a_factorys_class_rereads_the_files_that_call_its_name(
+    project: Path, tmp_path: Path
+):
+    """`shop/routing.py` binds `Made` to a call of `shop/kit.py`'s factory, written to return
+    `type[Order]`, and `shop/service.py` constructs `Made`. Editing the factory's return to
+    `type[Invoice]` re-reads `shop/service.py`, whose construction then names `Invoice`
+    (ruling R17), as a fresh run does."""
+    _write(project / "shop" / "models.py", _ALIASED_MODELS)
+    _write(
+        project / "shop" / "kit.py",
+        "from shop.models import Invoice, Order\n\n\ndef make() -> type[Order]:\n"
+        "    return Order\n",
+    )
+    _write(project / "shop" / "routing.py", "from shop.kit import make\n\nMade = make()\n")
+    _write(
+        project / "shop" / "service.py",
+        "from shop.routing import Made\n\n\ndef run():\n    return Made()\n",
+    )
+    warm = tmp_path / "warm"
+    _analyze(project, warm)
+    before = _modified(warm)
+    assert "shop/models/Order#" in (warm / "facts" / "shop" / "service.py.jsonl").read_text()
+
+    _write(
+        project / "shop" / "kit.py",
+        "from shop.models import Invoice, Order\n\n\ndef make() -> type[Invoice]:\n"
+        "    return Invoice\n",
+    )
+    _analyze(project, warm)
+
+    assert "shop/service.py.jsonl" in _rewritten(before, _modified(warm))
+    written = (warm / "facts" / "shop" / "service.py.jsonl").read_text()
+    assert "shop/models/Invoice#" in written
+    assert "shop/models/Order#" not in written
+    _assert_same_as_fresh(project, warm, tmp_path)
+
+
+def test_editing_a_body_beside_an_alias_rereads_only_that_file(project: Path, tmp_path: Path):
+    """A body of `shop/models.py` changes and its alias does not: only that file is read
+    again."""
+    _write(project / "shop" / "models.py", _ALIASED_MODELS)
+    _write(project / "shop" / "service.py", _ALIASED_SERVICE)
+    warm = tmp_path / "warm"
+    _analyze(project, warm)
+    before = _modified(warm)
+
+    _write(project / "shop" / "models.py", _ALIASED_MODELS.replace("return 1", "return 2"))
+    _analyze(project, warm)
+
+    assert _rewritten(before, _modified(warm)) - _MODULE_DOCUMENTS == {"shop/models.py.jsonl"}
+    _assert_same_as_fresh(project, warm, tmp_path)
+
+
 def test_one_file_added_rereads_it_and_every_file_whose_import_it_changes(
     project: Path, tmp_path: Path
 ):
@@ -376,3 +495,168 @@ def test_a_record_that_cannot_be_read_rereads_its_file(project: Path, tmp_path: 
         "shop/models.py.jsonl",
     }
     _assert_same_as_fresh(project, warm, tmp_path)
+
+
+# The type-header pass (D01 §7 "Reuse", ruling R19): `greet` declares classes, and a module
+# file names one, so the header document holds library types and their bases.
+_GREET_CLASSES = (
+    "class Base:\n    pass\n\n\n"
+    "class Other:\n    pass\n\n\n"
+    "class Greeter(Base):\n    pass\n\n\n"
+    "class Waver(Other):\n    pass\n\n\n"
+    "def hello() -> str:\n    return 'hi'\n"
+)
+_HEADERS = "__type_headers__.jsonl"
+
+
+@pytest.fixture
+def typed(project: Path) -> Path:
+    """The project with `greet` declaring classes and `shop/greeting.py` naming one."""
+    _install(project / ".venv" / "lib" / "python3.12" / "site-packages", "1.0", _GREET_CLASSES)
+    _write(
+        project / "shop" / "greeting.py",
+        "from greet import Greeter\n\n\ndef make() -> Greeter:\n    return Greeter()\n",
+    )
+    return project
+
+
+@pytest.fixture
+def library_reads(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """One entry per library module a scan reads: each module the libraries look up for the
+    first time, whatever then reads it (a header, a name, a signature)."""
+    from sextant.ingress.extract.python import libraries
+
+    read: list[str] = []
+    real = libraries.Libraries._table
+
+    def counted(self, module):
+        if module not in self._tables:
+            read.append(module)
+        return real(self, module)
+
+    monkeypatch.setattr(libraries.Libraries, "_table", counted)
+    return read
+
+
+def _header_symbols(workspace: Path) -> list[str]:
+    lines = (workspace / "facts" / _HEADERS).read_text().splitlines()[1:]
+    return [
+        json.loads(line)["symbol"] for line in lines if json.loads(line)["kind"] == "type_header"
+    ]
+
+
+def test_a_warm_run_reads_no_library_file(typed: Path, tmp_path: Path, library_reads: list[str]):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    assert library_reads, "the first run reads the library's headers"
+    assert any("Greeter" in symbol for symbol in _header_symbols(warm))
+    library_reads.clear()
+
+    _analyze(typed, warm)
+
+    assert library_reads == []
+
+
+def test_an_edit_naming_no_new_type_keeps_the_headers(typed: Path, tmp_path: Path):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    before = _modified(warm)
+
+    # A body edit: the file names the same types as before.
+    _write(
+        typed / "shop" / "service.py",
+        "from shop.api import handle\n\n\ndef run():\n    handle()\n    return handle()\n",
+    )
+    _analyze(typed, warm)
+
+    assert "shop/service.py.jsonl" in _rewritten(before, _modified(warm))
+    assert _HEADERS not in _rewritten(before, _modified(warm))
+    _assert_same_as_fresh(typed, warm, tmp_path)
+
+
+def test_reused_headers_equal_a_fresh_run(typed: Path, tmp_path: Path):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    before = _modified(warm)
+
+    _analyze(typed, warm)
+
+    assert _HEADERS not in _rewritten(before, _modified(warm))
+    _assert_same_as_fresh(typed, warm, tmp_path)
+
+
+def test_a_library_upgrade_rereads_the_headers(typed: Path, tmp_path: Path):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    before = _modified(warm)
+
+    # 2.0 moves `Greeter` onto another base: its header must say so.
+    _install(
+        typed / ".venv" / "lib" / "python3.12" / "site-packages",
+        "2.0",
+        _GREET_CLASSES.replace("class Greeter(Base)", "class Greeter(Other)"),
+    )
+    _analyze(typed, warm)
+
+    assert _HEADERS in _rewritten(before, _modified(warm))
+    assert any("Other" in symbol for symbol in _header_symbols(warm))
+    _assert_same_as_fresh(typed, warm, tmp_path)
+
+
+def test_a_newly_named_library_type_rereads_the_headers(typed: Path, tmp_path: Path):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    assert not any("Waver" in symbol for symbol in _header_symbols(warm))
+    before = _modified(warm)
+
+    _write(
+        typed / "shop" / "service.py",
+        "from greet import Waver\n\n\ndef run() -> Waver:\n    return Waver()\n",
+    )
+    _analyze(typed, warm)
+
+    assert _HEADERS in _rewritten(before, _modified(warm))
+    assert any("Waver" in symbol for symbol in _header_symbols(warm))
+    _assert_same_as_fresh(typed, warm, tmp_path)
+
+
+def test_a_header_record_that_cannot_be_read_rereads_the_headers(typed: Path, tmp_path: Path):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    before = _modified(warm)
+    connection = duckdb.connect(str(warm / "workspace.duckdb"))
+    try:
+        connection.execute(f"UPDATE scan_reuse SET detail = '{{}}' WHERE target = '{_HEADERS}'")
+    finally:
+        connection.close()
+
+    _analyze(typed, warm)
+
+    assert _HEADERS in _rewritten(before, _modified(warm))
+    _assert_same_as_fresh(typed, warm, tmp_path)
+
+
+def test_deleting_the_file_that_names_a_type_rereads_the_headers(typed: Path, tmp_path: Path):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    before = _modified(warm)
+
+    (typed / "shop" / "greeting.py").unlink()
+    _analyze(typed, warm)
+
+    assert _HEADERS in _rewritten(before, _modified(warm))
+    assert not any("Greeter" in symbol for symbol in _header_symbols(warm))
+    _assert_same_as_fresh(typed, warm, tmp_path)
+
+
+def test_an_edit_that_stops_naming_a_type_rereads_the_headers(typed: Path, tmp_path: Path):
+    warm = tmp_path / "warm"
+    _analyze(typed, warm)
+    before = _modified(warm)
+
+    _write(typed / "shop" / "greeting.py", "def make() -> int:\n    return 1\n")
+    _analyze(typed, warm)
+
+    assert _HEADERS in _rewritten(before, _modified(warm))
+    assert not any("Greeter" in symbol for symbol in _header_symbols(warm))
+    _assert_same_as_fresh(typed, warm, tmp_path)

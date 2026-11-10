@@ -25,10 +25,12 @@ from sextant.ingress.extract.python.calls import FileContext
 from sextant.ingress.extract.python.imports import ModuleIndex, module_path
 from sextant.ingress.extract.python.libraries import (
     Libraries,
+    called_types,
     record_files,
     referenced_types,
 )
 from sextant.ingress.extract.python.project import ProjectHeaders, header_digest
+from sextant.ingress.extract.python.pytest_collection import PytestCollection
 from sextant.ingress.extract.python.structure import file_facts, header_types
 from sextant.resources import code_identity, typeshed_dir
 
@@ -83,6 +85,8 @@ class PythonScanner:
         )
         modules = frozenset(_module_paths(relative for _, relative in files))
         previous = {record.target: record for record in request.previous}
+        # The header document's record is not a source file's (`_kept_headers`).
+        previous_headers = previous.pop(_HEADER_FILE, None)
         # The module's own files, read by header for the files that import them (round 1,
         # user choice A): one parse each per scan, against an index that reads no headers.
         project = (
@@ -109,6 +113,9 @@ class PythonScanner:
         # from (D00 §5 `type_header`).
         own: set[str] = set()
         referenced: set[str] = set()
+        # The classes a static call may name (`called_types`): a header where a library
+        # declares one, and no count of unlocated types where none does.
+        called: set[str] = set()
         # Only the module's own scan keeps documents (OI-325): an opted-in library's is read
         # whole into a subtree the stage discards before every run (D04 §2a).
         inputs = _inputs(request, prefix, libraries) if request.origin is None else None
@@ -156,6 +163,7 @@ class PythonScanner:
                 library_notes.extend(kept.library_notes)
                 own.update(kept.declared)
                 referenced.update(kept.referenced)
+                called.update(kept.called)
                 records.append(kept.record)
                 continue
             try:
@@ -185,9 +193,11 @@ class PythonScanner:
             facts += len(read.facts)
             declared = _declared(read.facts)
             types = referenced_types(read.facts)
+            maybe = called_types(read.facts)
             if libraries is not None:
                 own.update(declared)
                 referenced |= types
+                called |= maybe
             if inputs is not None:
                 asked = sorted(index.asked)
                 records.append(
@@ -202,6 +212,7 @@ class PythonScanner:
                                 "library_notes": file_library_notes,
                                 "declared": sorted(declared),
                                 "referenced": sorted(types),
+                                "called": sorted(maybe),
                                 "content_hash": document.content_hash,
                                 "header": own_header,
                             },
@@ -213,17 +224,52 @@ class PythonScanner:
             # After every module file, as the JVM scanner reads its classpath: the one
             # synthetic document of every library type's header. It is not a file this
             # module holds, so `documents` does not count it.
-            libraries.notes = []
+            #
+            # It reads whole library modules, so it is kept as a document is (D01 §7
+            # "Reuse", ruling R19): its key is the scan's inputs (the libraries' fingerprint,
+            # both Pythons, Sextant's code, the module) and the types the facts name, the
+            # module's own among them. A changed set reads it again whole: the headers are
+            # written in the order a read from the referenced types meets them, which a
+            # merge of the new types' headers into the kept ones would not keep.
+            assert inputs is not None
             document_id = hashlib.sha256(f"type-headers:{request.module_id}".encode()).hexdigest()
-            headers, unlocated, not_read = libraries.headers(referenced, own, document_id)
-            write_fact_file(
-                request.out_dir / _HEADER_FILE,
-                _header_document(request, document_id, libraries.identity, unlocated),
-                list(headers),
+            key = _headers_key(inputs, referenced, own, called)
+            path = request.out_dir / _HEADER_FILE
+            kept_headers = _kept_headers(
+                previous_headers, key, request, document_id, libraries, path
             )
-            facts += len(headers)
-            uncovered.extend(dict.fromkeys([*library_notes, *libraries.notes]))
-            uncovered.extend(not_read)
+            if kept_headers is None:
+                libraries.notes = []
+                headers, unlocated, not_read = libraries.headers(
+                    referenced, own, document_id, called
+                )
+                write_fact_file(
+                    path,
+                    _header_document(request, document_id, libraries.identity, unlocated),
+                    list(headers),
+                )
+                kept_headers = _KeptHeaders(
+                    ReuseRecord(
+                        target=_HEADER_FILE,
+                        key=key,
+                        detail=json.dumps(
+                            {
+                                "facts": len(headers),
+                                "unlocated": unlocated,
+                                "notes": list(libraries.notes),
+                                "not_read": not_read,
+                            },
+                            separators=(",", ":"),
+                        ),
+                    ),
+                    len(headers),
+                    list(libraries.notes),
+                    not_read,
+                )
+            records.append(kept_headers.record)
+            facts += kept_headers.facts
+            uncovered.extend(dict.fromkeys([*library_notes, *kept_headers.notes]))
+            uncovered.extend(kept_headers.not_read)
         return ScanReport(
             documents=documents,
             facts=facts,
@@ -245,6 +291,51 @@ class _Kept:
     library_notes: list[str]
     declared: list[str]
     referenced: list[str]
+    called: list[str]
+
+
+@dataclass(frozen=True)
+class _KeptHeaders:
+    """The header document a scan keeps or writes, and what it added to the scan's report."""
+
+    record: ReuseRecord
+    facts: int
+    notes: list[str]
+    not_read: list[str]
+
+
+def _headers_key(inputs: str, referenced: set[str], own: set[str], called: set[str]) -> str:
+    """The header document's key: the scan's inputs, and the types its read starts from."""
+    text = json.dumps([inputs, sorted(referenced), sorted(own), sorted(called)])
+    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+
+
+def _kept_headers(
+    record: ReuseRecord | None,
+    key: str,
+    request: ScanRequest,
+    document_id: str,
+    libraries: Libraries,
+    path: Path,
+) -> _KeptHeaders | None:
+    """The previous scan's header document, where a fresh read would write the same: the
+    key is the same, and the fact file still holds the document that scan wrote."""
+    if record is None or record.key != key:
+        return None
+    try:
+        detail = json.loads(record.detail)
+        unlocated = int(detail["unlocated"])
+        kept = _KeptHeaders(
+            record,
+            int(detail["facts"]),
+            [str(note) for note in detail["notes"]],
+            [str(line) for line in detail["not_read"]],
+        )
+    except (ValueError, TypeError, KeyError):
+        return None
+    if read_document(path) != _header_document(request, document_id, libraries.identity, unlocated):
+        return None
+    return kept
 
 
 def _inputs(request: ScanRequest, prefix: str, libraries: Libraries | None) -> str:
@@ -297,6 +388,7 @@ def _kept(
             [str(note) for note in detail["library_notes"]],
             [str(symbol) for symbol in detail["declared"]],
             [str(symbol) for symbol in detail["referenced"]],
+            [str(symbol) for symbol in detail["called"]],
         )
     except (ValueError, TypeError, KeyError):
         # A record this build cannot read — a damaged row, or one an older build wrote in
@@ -368,10 +460,16 @@ def _header_document(
 
 
 def _python_files(root: Path, ignore: IgnoreRules | None) -> list[str]:
-    """Every `.py` file under `root` that `ignore` does not exclude, relative and
-    `/`-separated, in sorted order. Folders are skipped by the detector's own rule. A
-    git-ignored file is read: generated code (`*_pb2.py`) is often git-ignored and is
-    part of the module."""
+    """Every `.py` file under `root` that `ignore` does not exclude and that is not test
+    code, relative and `/`-separated, in sorted order. Folders are skipped by the
+    detector's own rule. A git-ignored file is read: generated code (`*_pb2.py`) is often
+    git-ignored and is part of the module. Test code is told apart by pytest's own
+    collection rules (`pytest_collection.py`): it runs only in a test process, never where
+    the module is deployed."""
+    tests = PytestCollection.of(
+        Path(os.path.abspath(root)),
+        Path(os.path.abspath(ignore.repo_root if ignore is not None else root)),
+    )
     found: list[str] = []
     for current, folders, files in os.walk(root):
         folders[:] = sorted(
@@ -379,12 +477,15 @@ def _python_files(root: Path, ignore: IgnoreRules | None) -> list[str]:
             for folder in folders
             if not is_skipped_folder(current, folder)
             and not _ignored(Path(current) / folder, root, ignore)
+            and not tests.holds_folder(tests.root / Path(current).relative_to(root) / folder)
         )
         base = Path(current).relative_to(root)
         found.extend(
             (base / name).as_posix()
             for name in sorted(files)
-            if name.endswith(_SUFFIX) and not _ignored(Path(current) / name, root, ignore)
+            if name.endswith(_SUFFIX)
+            and not _ignored(Path(current) / name, root, ignore)
+            and not tests.holds(tests.root / base / name)
         )
     return sorted(found)
 

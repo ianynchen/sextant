@@ -10,7 +10,7 @@ from pathlib import Path
 
 from pydantic import TypeAdapter
 
-from sextant.domain.facts import Document, Fact
+from sextant.domain.facts import CallSiteFact, Document, Fact
 from sextant.domain.redaction import Redactor
 
 _FACT_ADAPTER: TypeAdapter[Fact] = TypeAdapter(Fact)
@@ -28,6 +28,11 @@ def _line(model: Document | Fact) -> str:
     # a module that has no library to extract at all (NFR-1).
     if isinstance(model, Document) and dumped["origin"] is None:
         del dumped["origin"]
+    # A call under no undecided test carries no `guards` KEY (D00 §5, fact schema 13), for the
+    # same reason: the JVM extractor never writes one, and a JVM fact file this writer rewrites
+    # must stay byte for byte what the extractor wrote.
+    if isinstance(model, CallSiteFact) and dumped["guards"] is None:
+        del dumped["guards"]
     return json.dumps(dumped, sort_keys=True, separators=(",", ":"))
 
 

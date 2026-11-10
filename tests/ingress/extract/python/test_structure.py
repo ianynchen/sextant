@@ -3,6 +3,7 @@ existing facts — modules and classes as types, a body as `<clinit>`, module-le
 static fields, decorators as the calls they are. Every tree is built in `tmp_path`; nothing
 is imported or run."""
 
+import ast
 import sys
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from sextant.domain.facts import (
 )
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.symbols import PY_SIGNATURE, bare_descriptor, disambiguator_of, names_a_type
+from sextant.ingress.extract.python.imports import every_statement
 from sextant.ingress.extract.python.scanner import PythonScanner
 
 DIS = disambiguator_of(PY_SIGNATURE)
@@ -328,11 +330,13 @@ def test_pep_695_type_parameters_are_type_variables(tmp_path: Path):
     symbols = _symbols(tree)
     ident = symbols[f"app/m#ident({DIS})."][0]
     assert ident.signature is not None
-    assert ident.signature.parameters[0].type == TypeRef(symbol="S")
-    assert ident.signature.returns == TypeRef(symbol="S")
+    # A type parameter is an object on the wire, as the JVM's `T` is (D00 §5b).
+    assert ident.signature.parameters[0].type == TypeRef(symbol="S", wire_type="object")
+    assert ident.signature.returns == TypeRef(symbol="S", wire_type="object")
     assert ident.type_parameters == [TypeParameter(name="S")]
     get = symbols[f"app/m/Box#get({DIS})."][0]
-    assert get.signature is not None and get.signature.returns == TypeRef(symbol="T")
+    assert get.signature is not None
+    assert get.signature.returns == TypeRef(symbol="T", wire_type="object")
     assert symbols["app/m/Box#"][0].type_parameters == [TypeParameter(name="T")]
 
 
@@ -637,7 +641,7 @@ def test_the_languages_own_descriptors_keep_the_method_model(tmp_path: Path):
         },
     )
 
-    fields = {w.field for w in _facts(tree, FieldWriteFact)}
+    fields = {w.field for w in _facts(tree, FieldWriteFact) if w.field.startswith("app/")}
     assert fields == {"app/k/K#h.", "app/k/K#i."}
 
 
@@ -670,3 +674,37 @@ def test_types_that_do_not_settle_are_dropped_with_a_note(tmp_path: Path, monkey
     (call,) = [c for c in _facts(tree, CallSiteFact) if c.target.name == "open"]
     assert call.target.owner is None
     assert any(n.startswith("app/m.py: ") and "did not settle" in n for n in report.uncovered)
+
+
+def test_the_statement_walk_meets_every_statement_ast_walk_meets() -> None:
+    """`every_statement` (plan 2 task 9b) walks statement blocks only, never into an
+    expression, since no expression holds a statement: every statement `ast.walk` meets, a
+    `global` in a nested function, a handler's, a `case`'s and a class's in a `with` among
+    them, and nothing else."""
+    tree = ast.parse(
+        "import sys\n"
+        "def f(x=lambda: 1):\n"
+        "    def g():\n"
+        "        global A\n"
+        "        try:\n"
+        "            pass\n"
+        "        except E as e:\n"
+        "            global B\n"
+        "        finally:\n"
+        "            del e\n"
+        "    return [y for y in x if (z := y)]\n"
+        "match v:\n"
+        "    case [a, *rest]:\n"
+        "        with open() as h:\n"
+        "            class C:\n"
+        "                global D\n"
+        "    case _:\n"
+        "        while True:\n"
+        "            async def k(): pass\n"
+        "        else:\n"
+        "            pass\n"
+    )
+    walked = [node for node in ast.walk(tree) if isinstance(node, ast.stmt)]
+    read = [node for node in every_statement(tree.body) if isinstance(node, ast.stmt)]
+    assert len(read) == len(walked)
+    assert {id(node) for node in read} == {id(node) for node in walked}

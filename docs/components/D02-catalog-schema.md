@@ -190,6 +190,13 @@ style … today `derived_resource` alone" after `config_join` had joined the set
 after `detect.required` shipped; it is corrected here rather than left as a document a
 reader would have to disbelieve (§5.3).*
 
+**A coordinate is spelled as the module's build records it**: `groupId:artifactId` for a JVM
+build, and for a Python one the distribution name as PEP 503 normalizes it (`fastapi`,
+`sqlalchemy-utils`), which is how the Python detector writes `dependency_coordinates`. A
+distribution name is accepted only where one of the catalog's `measured` rows names it as the
+artifact the rule was read from, so a JVM catalog's group-less `spring-boot-starter-web` is
+still the missing-group typo it looks like. Any other spelling is refused at load.
+
 **`detect.required` (F2 §3.6) makes the coordinates a conjunct for ONE CATALOG whose style
 is not gated.** Style was a proxy for "is this catalog's evidence enough to name its
 framework", and `spring-stomp` / `spring-rsocket` are the pair where the proxy fails: both
@@ -414,6 +421,17 @@ routes back to a private copy. A catalog whose payload-type knowledge genuinely 
 adds a SECOND model and names that; a private copy is `A-C3` waiting for a different
 symbol.
 
+**A second model ships for Python: `pydantic.yml`** (plan 2026-11-08-python-fastapi-inbound
+N12, N13), which `fastapi.yml` names. Its naming is read off the CALL that made a field's
+class-body value rather than off an annotation (§2f's call-read keys), and its `known_types`
+carry pydantic's JSON mode and mirror the Python projection's collections (§2g). The loader
+checks every shape model's keys (`yaml_source._check_shape_model`): an unknown key, or a key of
+§2f/§2g in another form, is refused naming the file.
+
+**A shape model may also declare `wrappers`** (§2a): a serialiser's envelope (pydantic's
+`SkipJsonSchema[X]`, which writes the `X` it holds) is the serialiser's knowledge, so every
+catalog naming the model unwraps it, after the catalog's own envelopes (task 9 re-review R2-9).
+
 **This is what makes a Jackson 2 / Jackson 3 split tractable** (Stage 6). `@JsonProperty`
 kept its exact FQN across the split, so the two cannot be told apart by annotation
 spelling — but `tools.jackson.core:jackson-databind` and
@@ -470,6 +488,7 @@ jar (`by:`):
 | `presence` | `@ConditionalOnMissingBean` / `@ConditionalOnBean`: `missing`, `present`, `type_attrs` (`value` and `type`, one set), `name_attrs`, `annotation_attrs` (a separate criterion), `order_reason` (what a loop holding a `missing` condition says), `present_cycle_reason` (what a loop of `present` conditions alone says) | CP-44 rows 1-3 |
 | `qualifier_meta_annotations` | the annotations that make another annotation a QUALIFIER (JSR-330's `@Qualifier`, Jakarta and javax). Read by the dispatch registration reader: an observer whose event parameter also carries a qualifier is kept with no key (§2m). Declared in `catalogs/bean-models/cdi.yml`, which the two CDI event catalogs name; a non-empty list of names, refused at load otherwise | CDI's observer resolution (stated, not probed: CP-59 bounds it) |
 | `injection` | how the container matches a parameter to a recipe (spec 2026-11-05 di-recipe-hop §2c): `exact_key` — Dagger's key, the qualifier annotation with all its attributes plus the full type with its type arguments, an unqualified parameter matching an unqualified recipe only, no name rung and no primary; or `candidates` — Spring's ladder (`qualifier_annotation`, the only bean of the type, `primary_annotation`, the name). Required on a model that declares `declaring_annotation`. The ladder keys are required for `candidates` only; `exact_key` requires `qualifier_meta_annotations`. Refused at load otherwise | Dagger: measured on a kapt probe (investigation `oi-304-investigation.md` §2); Spring: CP-27 row 15 |
+| `injection: names_recipe` | the third mode (plan 2026-11-08-python-fastapi-inbound N5): a parameter NAMES its recipe, the value a marker call is handed, so there is no key and no candidate. `recipe_calls: [{owner, method, recipe_arg}, …]` names the calls (`owner` dotted, `method` as a call site spells it, `<init>` for a construction) and the argument holding the recipe (a position, `{keyword: name}` or `{arg: N, keyword: name}`); `empty_recipe: parameter_type` makes the parameter's written type the recipe where the call is handed none or `None`. The value walk reads it at walk time (`values._Walk._parameter`, ruling R14): the parameter's markers (`parameter_markers`) name the call — the last in its `Annotated` metadata on each path, else its default's — and the recipe, read by the call reader, is called by the call-of-a-value rules: a function's returns (a generator's yields, D00 §5), a class's construction, an instance's class `__call__` return. That is one more path BESIDE the parameter's callers in the module, never before them (a direct call passing an argument stays its own path), and with no caller the only one. The recipe's own parameters are filled the same way. Declares no `declaring_annotation`; refused at load otherwise. In `catalogs/bean-models/fastapi.yml` (`Depends`, `Security`) | FastAPI 0.162.0 `dependencies/utils.py` (`analyze_param`, `solve_dependencies`) |
 | `multibinding_annotations` | the annotations that make a recipe add to a collection (`@IntoSet`, `@IntoMap`, `@ElementsIntoSet`). Such a recipe is never a candidate for `T` itself. In `catalogs/bean-models/dagger.yml` | Dagger's multibinding rule (stated) |
 | `injecting_annotations` | the annotations marking a constructor whose parameters the container fills (`javax.inject.Inject`, `jakarta.inject.Inject`). In `catalogs/bean-models/dagger.yml` | JSR-330 (stated) |
 | `interface_registrations` | a list of `{supertypes, annotation, excluded_by, by}`: an interface assignable to a listed supertype, or carrying `annotation` (itself, a meta-annotation, or an interface it extends), and not carrying `excluded_by` itself, is a bean the framework implements at run time (Spring Data repositories) | CP-46 |
@@ -1063,16 +1082,54 @@ matches:
     (or `{name: regex}`, the token before the `:`) in the row's composed path; (3)
     `container` is declared and the parameter's class declares a field or method carrying a
     `bound_by` annotation. **`implicit_bindings: [path_variable, container]`** is a closed
-    vocabulary of those two words, refused otherwise; absent means neither. Only
+    vocabulary of those two words and `scalar` (below), refused otherwise; absent means
+    neither. Only
     `quarkus-rest.yml` declares them, because they are Quarkus REST's own indexer rules
     (`EndpointIndexer.java:1380-1413`); `jakarta-jaxrs.yml` deliberately declares none, since
     under Jersey `byId(String id)` beneath `@Path("/{id}")` IS an entity body. Any other
     annotation on a parameter — `@Valid`, `@NotNull`, Jackson's, Lombok's — is invisible to
     this word, because it is invisible to the framework. Zero or several unbound parameters
     mean no contract, as with `sole_unannotated`.
+  - **A framework that marks with a CALL** (plan 2026-11-08-python-fastapi-inbound N4,
+    approved): an inbound `fluent` catalog declares `request_body` too, read on each row its
+    engine derives, with each parameter's marker call beside its signature (§2k mechanism 4:
+    the call that made its default, or the last of the catalog's markers in its `Annotated`
+    metadata). **`marker_calls: [<owner>.<method>, …]`** make a parameter the body whatever its
+    type (FastAPI's `Body`, `Form`, `File`); **`bound_by_calls`** are the other marker calls
+    (`Query`, `Header`, `Cookie`, `Path`, `Depends`, `Security`), and a parameter carrying one
+    is bound — either list satisfies `sole_unbound`'s non-empty requirement. The implicit
+    binding **`scalar`** binds an unmarked parameter whose type is a scalar (the wire projection
+    is `string`/`integer`/`number`/`boolean`, a shape-model `known_types` entry with such a
+    wire, or an enumeration; a `Literal` form; a union where every member is; the unknown
+    type), and one whose
+    kind is not read (no wire projection and no `known_types` entry, or an `object` wire on a
+    symbol the module neither declares nor holds a type header for: an alias read as a type is
+    no class, so its kind is its `known_types` entry's, as pydantic's `UUID4` is a string) —
+    FastAPI reads a scalar as a query parameter, and
+    a parameter whose kind is unknown is never claimed as the body.
+    `list[int]` is an array, so unmarked it is the body. A receiver, and a parameter whose
+    markers read differently on two paths, are bound. Among the marked and the unbound
+    together, the body is the sole one. **`embed_arg: <reference>`** and **`name_arg:
+    <reference>`** (plan 2026-11-08-python-fastapi-inbound Task 7, ruled) say when the framework
+    EMBEDS the body (FastAPI's `_should_embed_body_fields`): where there are several body
+    parameters, or the one's marker writes `embed_arg` as the literal `True`
+    (`Body(1, embed=True)`), or (ruling R26) the one's marker is one of **`embed_markers: {
+    calls: [<owner>.<method>, …], unless_subtype_of: [<type>, …] }`** and its type is no
+    subtype of those types by the module's type hierarchy (FastAPI's `Form`/`File`: a field of
+    the form unless it is a pydantic `BaseModel`), the body is an object with one field per body
+    parameter, in declared order, named by the string its marker writes at `name_arg` (the
+    alias; NULL where written as anything else) else by the parameter's own name — a descriptor
+    with `fields` and no `shape_id` ([D01](D01-graph-schema.md) §3). Each field is `required` or
+    `optional` by the request-parameter entry's own keys, written on the block:
+    `required_when`, `default_arg` and `annotated_default` (§2k mechanism 4); an unmarked field
+    is `optional` where it declares a default. The loader refuses `marker_calls`,
+    `bound_by_calls`, `embed_arg`, `name_arg` and `embed_markers` on any style but `fluent`, and
+    `bound_by_calls` beside `fallback: sole_unannotated`. `fastapi.yml` declares it; no JVM catalog names a
+    call.
   - **The block's key set is closed** — `annotation`, `fallback`, `bound_by`, `excludes`,
-    `implicit_bindings`, and nothing else (`contracts.py::_REQUEST_BODY_KEYS`, added after
-    the final review). An unknown key is refused by name rather than ignored, because a
+    `implicit_bindings`, `marker_calls`, `bound_by_calls`, `embed_arg`, `name_arg`,
+    `embed_markers`, `required_when`, `default_arg`, `annotated_default`, and nothing else
+    (`contracts.py::_REQUEST_BODY_KEYS`, added after the final review). An unknown key is refused by name rather than ignored, because a
     misspelt `excludes` read as absent would make a context type the body, silently. The
     per-type member fold `container` reads (`conditions.member_annotations_by_type`) is
     built only for a run in which some catalog declares `container`; every other run is
@@ -2285,6 +2342,79 @@ the table does not name is no verb: `method` NULL at `unresolved`, never the roo
 `verb_values` holding anything but `fields`, and a key that is not one owner and one field, are
 refused at load.
 
+**A verb list** (plan 2026-11-08-python-fastapi-inbound N8, `fastapi.yml`'s `api_route`):
+`http_method: { keyword: methods, absent: GET, case: upper }` — an argument reference (`{keyword:
+name}` or `{arg: N, keyword: name}`) beside either or both of two keys — reads the argument as a
+list of verbs. A list or set the code writes gives one row per element, a repeated verb once (an
+enumerable set is exact). A list that is not all string literals (an element that is a
+parameter) is read through the value walk: one row per verb it reads, and one row with `method`
+NULL at `unresolved` for what stays unread. A container a module name holds (`methods=VERBS`) is
+not read element by element: the code may change it after the write, and the facts cannot show
+that it does not (they state no index store, `del` or change in another file, and write a tuple
+and a list alike), so it is one row with `method` NULL at `unresolved`. **`absent`** is the verb where the argument is not written or the
+code writes `None` (the framework's default). **`case: upper`** respells each verb as the
+framework does before it serves it (the only case word). An EMPTY list derives no row and is
+filed as a `refused_registration` open question (reason `no_methods`): FastAPI asserts a route
+has a method. A refused registration whose path was not read is filed too, its path NULL. The
+rendered question says the framework raises when the route is registered, at import, so the
+application does not start. A verb list with any other key, no keyword, an empty `absent` or
+another `case` is refused at load.
+
+**`matches.response_fallback: { from: handler_return, none_types: [<type>, …] }`** (N9) reads
+the response of an inbound row whose `response` capture writes no argument from the handler
+instead (`from: handler_return`, the one word), FastAPI's rule where `response_model` is not
+written. A capture whose argument is written keeps the capture's rule: the type it names, an
+explicit `None` being no response at `resolved`. From the handler:
+- **Its written return type**: no response where it is a `none_types` type or a subtype of one
+  (by the module's type hierarchy; a type whose supertypes were not read is neither); the
+  descriptor the type roots at otherwise, which is no response for a type that reaches no wire
+  (the `None` type, a generator's iterator) — the `annotation_driven` response rule. A union
+  naming a `none_types` type beside others derives no row and is filed as a
+  `refused_registration` (reason `invalid_response_type`): FastAPI cannot build a response
+  field for it. Any other union, and the unknown type (`Any`), name no one type: the response
+  is not read.
+- **No return type written**: the one type every value the handler returns is, a construction
+  being an instance of its class. Every value a `none_types` class (or subtype) is no response;
+  such a value beside others, several types, or a value whose type is not read, leave the
+  response not read.
+- **The handler not read** reads no response.
+
+A response not read here leaves the row's address read and its response column NULL, so the
+row is no surer than `partial` (where checkpoint ruling I1 drops an unread written capture to
+`unresolved`). Anything but the one form is refused at load.
+
+**A response written as a module name** (`response_model=Out`, `Out` imported from another
+file: a `field`-kind argument) is the class that name holds, read through the value walk on the
+chain's own path, where every path answers the same type. **A response written as a type form**
+(`response_model=ListResource[Order]`, `list[Order]`: the value of a `<form>#__class_getitem__`
+call, D00 §5a) is the type the form names, with its arguments, each a class, a name holding one,
+or a form in turn (plan 2026-11-08-python-fastapi-inbound R24, `arguments.type_form_reference`),
+**where the form's owner is a class**: one the module declares, or one the shape model's
+`known_types` gives a wire type (`list`). `Optional[X]` and `Union[...]` are the language's
+special forms, no class, so a value naming one, or holding one anywhere (`list[Optional[X]]`, an
+alias of a union), is not read here (task 9 review M3). A subscript of a class imported from
+another file, which the scanner writes `__getitem__`, is the same form where the walk reads its
+receiver as a class:
+`ListResource[Order]` is the shape `ListResource#<Order#>`, whose field typed by the class's
+parameter is bound to `Order`, and `list[Order]` an `array` of `Order` (the shape model's
+`known_types` names `list` an array, §2g). Read where every path names the same type. Any other
+answer leaves the argument as written.
+
+**A handler that is not itself a function value** (a decorated function under a second route
+decorator, a function under a decorator) is followed back as a call of it would be (design
+2026-11-06-reading-decorators §3d): through each decorator a value model states hands the
+function back (`returns_argument`), into module code, to each function a path reaches — one
+row's handler, or one alternative each, `narrowed`. Where no path reaches a function because a
+library call no value model states made the value OF one of the module's functions (a decorator
+applied to it, a wrapper handed it), the handler is not read: the row keeps its address at
+`partial` with `handler` NULL, and a `handler_pass_through` open question names the call
+(reason `external`). A module name nothing writes that names a method on its class
+(`self.endpoint`, a bound method) is that method, read through the class's lookup order and each
+subtype's (rulings R29, R33); where no class defines it, or the handler is a value whose source
+the facts do not state (`s.h` on a local object), the handler is not read: `partial`, and a
+`handler_pass_through` question with reason `not_readable`. Any other handler argument reads as
+before.
+
 **`matches.refuses_unrooted_path: true`** (DR-6, Vert.x spec §3a) declares that the framework
 THROWS on an inbound path that is empty or has no leading `/` (Vert.x's `RouteImpl.checkPath`),
 where another repairs it. A fully read path of that shape derives no row, is never passed to
@@ -2339,7 +2469,8 @@ names its first. A malformed entry, or `framework_handlers`/`handler_methods` wi
 `passes_on`, is refused at load, as is an `order` capture that is neither `argN` nor `last`.
 
 **`matches.router_type: [<type>, …]` and `matches.mount: [{owner, method, descriptor?,
-router_arg, prefix_arg | prefix_from: receiver_path, wildcard?, refuses?}, …]`** (Vert.x spec
+router_arg, prefix_arg | prefix_from: receiver_path, wildcard?, strip_trailing?, refuses?,
+dependencies_arg?, host_arg?}, …]`** (Vert.x spec
 §3c) declare sub-router mounts: a route registered on a router serves under the prefix of every
 mount that received that same router — the object one producer made, reached along one call
 path. The producers are derived from the facts by type: every call returning a `router_type`
@@ -2351,7 +2482,15 @@ mount's path is read WITHIN the joined path, so a helper that builds and mounts 
 call gives each caller's routes that caller's prefix. The prefix is the mount path — the path
 of the route the mount call is made on (`prefix_from: receiver_path`, which must name a
 declared `terminal`), or the string argument `prefix_arg` — less a trailing `wildcard` and the
-`/` before it, joined by **`matches.path_join`** (`leading_slash` or absent, as `combinator`'s).
+`/` before it (every trailing copy of the one character **`strip_trailing`** names, where it
+names one — part of plan 2026-11-08 N7: Starlette's `Mount` strips `path.rstrip("/")`, so
+`/api//` mounts at `/api`), joined
+by **`matches.path_join`** (`leading_slash` or absent, as `combinator`'s; or, on a `fluent`
+catalog, **`concatenate`**, plan 2026-11-08 ruling R23: plain string concatenation with the
+served path published as written — never passed to `canonical_http_path`, so FastAPI's
+`"/orders" + ""` is `/orders` and a route `x` under `/r` is `/rx`). A `prefix_arg` the call does
+not write is the empty prefix: the router mounts at the parent's root, as a route with no path
+does.
 Nested mounts compose, one router mounted at several prefixes serves under each (`resolved`),
 and a router no mount received serves at its root, as read. A mount path not read whole gives
 the named hole `<prefix>` in front of the route's path, `partial`, which is never linked by
@@ -2359,9 +2498,63 @@ path, with a `mount_prefix` open question (D01) naming the mount call and the ar
 prefix was read at. A route reached only through a refused mount derives no row; a router
 reached on one path through a mount and on another through none serves under both. `refuses` lists what the framework throws on — `exact` (a path with no trailing
 `wildcard`), `pattern` (a pattern path), `wildcard` (a mount point ending in it) — and such a
-mount adds no prefix and is filed as a `refused_registration` open question (D01). A malformed
-entry, either key without the other, or a `prefix_from` mount that is not a terminal, is
-refused at load.
+mount adds no prefix and is filed as a `refused_registration` open question (D01). For a
+prefix (plan 2026-11-08 N7, ruling R4) `refuses` also lists `unrooted` (a non-empty prefix not
+starting with `/`; reason `unrooted_path`), `trailing_slash` (a non-empty prefix ending in `/`,
+a lone `/` included) and `empty_path` (a mount whose own prefix is empty, of a route whose path
+below the mount — every prefix inside it included — is empty too: decided per route, which has
+no row; the router's other routes keep theirs). `dependencies_arg` (plan N6) names the argument
+holding the dependencies a mount adds to every route below it, read by the request reader (each
+element of the list written there one recipe call, `injection: names_recipe`, §1c). **A mount
+declaring none hands no dependency on, its own or any router's above it**: it serves the router
+as an application of its own (Starlette's `mount`), where an include registers each route on
+the router it includes it in, behind that router's own dependencies. **`host_arg`** (OI-368,
+approved by the user 2026-11-09) names the argument holding the host the mounted router is
+served on (Starlette's `Host`): every route below it carries an `endpoint_metadata` entry of
+kind `host`, name `Host`, valued with the host the value walk reads at that argument within the
+route's path (`resolved`, `narrowed` among several, a template at `partial`, else no value at
+`unresolved`: never guessed), the innermost host where hosts nest. A mount with a `host_arg`
+may name no prefix (`prefix_arg` left out): the router serves at its own paths on that host.
+Rows served on one host are never linked by path (M06). A malformed entry, either key without
+the other, a `host_arg` beside `prefix_from`, or a `prefix_from` mount that is not a terminal,
+is refused at load.
+
+**`matches.router_holds: [{owner, method, prefix_arg?, dependencies_arg?, refuses?}, …]`** (plan
+2026-11-08 N7, approved) declares a prefix a router HOLDS from its construction
+(`APIRouter(prefix="/orders")`), which is not a mount: the framework composes it with the
+prefixes the router is served under, where two mounts are two serving places. Where a route's
+router, or a mount's parent router, was made by a call an entry names — the producer the mount
+join already reaches, a construction through a factory-made subclass included — the prefix
+`prefix_arg` reads there, within the path the producer was reached on, goes in front of every
+route registered on that router and of every mount made on it, behind every prefix the router is
+served under: `include(prefix) + held + route path`, nested includes composing. Not written, it
+is no prefix; not read whole, the named hole `<prefix>`, `partial`, with a `mount_prefix`
+question naming the construction. `refuses` takes `unrooted` and `trailing_slash`, as a mount's
+do: a refused construction raises, so nothing on that router is served, and it is filed as a
+`refused_registration` question under no verb.
+
+A **subclass** is read by the general rules (task 6 review): a mount's and a hold's owners are
+widened by `Dispatch.heirs`, as a root's are, so `class App(FastAPI)`'s `include_router` and
+`class S(APIRouter): pass`'s constructor match; and a construction of a subclass of a hold owner
+whose own `__init__` runs is read at each hold-matching construction of a supertype that body
+makes (`super().__init__(prefix=prefix)`), on the path entering that body from the
+construction, so the parameter is that construction's argument (mealie's
+`AdminAPIRouter(prefix="/admin")`). Where neither can be read — the body hands on no readable
+prefix — the held prefix is the `<prefix>` hole at `partial`, never the empty prefix.
+
+**Each call is read on its own** (M-1): the held prefix keeps the path it was read on and a
+mount the path it agreed on, both folded into the router's place (`Prefix.places`). Where a
+route's prefixes were reached on several such paths — a factory building a router per call,
+included per call — the route is derived once per path, its captures (path, verb list,
+handler) read on that path with that path's prefixes alone: polar's
+`get_oauth_login_router("apple", callback_method="POST")` serves POST under `/apple` only, and a
+CRUD factory `make(prefix, handler)` serves each caller's handler at that caller's prefix.
+`dependencies_arg` is the mount entry's: the dependencies the construction holds run before
+every route registered on that router and every route included in it (N6). An entry may hold
+dependencies and no prefix — `prefix_arg` left out, `dependencies_arg` written —
+(`FastAPI(dependencies=...)`, whose own router holds them). The key needs `router_type`;
+anything malformed is refused at load. Cost: one cached read per router
+construction a route or mount reaches, per path.
 
 **An argument capture may name a keyword** (design 2026-11-06-reading-decorators §3a,
 approved). Wherever a capture reads `argN` — `url`, `body`, `response`, `channel`, `host`,
@@ -5672,7 +5865,7 @@ every environment.
 ## 2e. Nullability declarations
 
 **Declared in the shape model, not in a catalog (§1b).** The block below is the
-grammar; the one shipped copy of it lives in `catalogs/shape-models/json.yml`, and a
+grammar; the shipped copies live in `catalogs/shape-models/json.yml` and `pydantic.yml`, and a
 catalog reaches it with `shape_model:`. A catalog declaring one of its own is refused.
 
 Which annotation means "may be null" is framework knowledge, so catalogs declare it and
@@ -5722,7 +5915,7 @@ instead. Neither table can be skipped — the scanner reads both.
 ## 2f. Serialisation naming
 
 **Declared in the shape model, not in a catalog (§1b).** The block below is the
-grammar; the one shipped copy of it lives in `catalogs/shape-models/json.yml`, and a
+grammar; the shipped copies live in `catalogs/shape-models/json.yml` and `pydantic.yml`, and a
 catalog reaches it with `shape_model:`. A catalog declaring one of its own is refused.
 
 `shape_fields.wire_name` is the identity ([D01](D01-graph-schema.md) §5), and a source field
@@ -5791,12 +5984,132 @@ name against an observed one is how a matcher reports agreement it has not estab
 wire, and a shape carrying it would fail DR-5's directional comparison against a peer that
 correctly omits it.
 
+### Naming read off calls (plan 2026-11-08-python-fastapi-inbound N12, N13)
+
+A serialiser that names a field by the call that made its class-body value (pydantic's
+`price: Decimal = Field(alias="Price")`) is declared with these keys, all in
+`catalogs/shape-models/pydantic.yml`; `shapes/model_fields.py` reads them and knows no
+serialiser by name. The field's class-body value is read through the value walk
+(`values.producer_paths`), so a helper returning the call is followed; one read per field with
+a value, one configuration fold per class, each kept for the pass.
+
+```yaml
+serialization:
+  name_from:                 # the OUTPUT name: the first written on the call
+    - { call: pydantic.fields.Field, arg: { keyword: serialization_alias } }
+    - { call: pydantic.fields.Field, arg: { keyword: alias } }
+  input_name_from:           # N13: the name a request is read under, the first written
+    - { call: pydantic.fields.Field, arg: { keyword: validation_alias } }
+    - { call: pydantic.fields.Field, arg: { keyword: alias } }
+  alias_priority: { call: pydantic.fields.Field, arg: { keyword: alias_priority }, generator_wins: 1 }
+  name_generator:
+    config_field: model_config                       # the class-body name holding the config
+    config_call: pydantic.config.ConfigDict.<init>    # the call that makes it
+    arg: { keyword: alias_generator }
+    by_name: [{ keyword: populate_by_name }, { keyword: validate_by_name }]
+    functions:                                        # each with the probe that read it
+      - { function: pydantic.alias_generators.to_camel, strategy: camel, by: <probe> }
+  required: no_default
+  defaults:                  # where a call making the value writes a default
+    - { call: pydantic.fields.Field, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+        required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis } }
+  private_prefix: "_"
+```
+
+- **`name_from` with `call`** (beside the `annotation` form): the output name is the first entry
+  written on the call the value ended at, else the generator's name for the field, else the
+  name. **`input_name_from`**: the input name, likewise. **The naming calls in the field's
+  `Annotated` metadata** (its `annotation_value`, D00 §5a) are read too, as pydantic merges them
+  (`FieldInfo.from_annotated_attribute`, task 9 review M1): the metadata's calls in written
+  order, then the value's, each overriding only what it writes (`alias` writing both names); a
+  plain value is the default. A literal `alias_priority` equal to
+  `generator_wins` lets the generator replace both.
+- **`name_generator`**: the class's `config_field`, made by `config_call`, merged over its
+  written bases in written order, the last base winning, then the class's own (ruling R2,
+  pydantic's `ConfigWrapper.for_model`, not the C3 order). A field takes the first generator
+  set on its way from the model to the class declaring it (an inherited field keeps the alias a
+  parent's generator gave it where the model sets `None`). `functions` maps a function to a
+  strategy word: `camel` and `pascal` are pydantic's `to_camel` and `to_pascal` exactly, and
+  `humps_camelize` is pyhumps 3.8's `humps.main.camelize` exactly (`humps_camelize.md`; user
+  approval 2026-11-09, plan 2 final review M2: it differs from `to_camel` on `is_2fa_enabled`,
+  `HTTP_code` and `ID`). **A generator no entry names is not
+  guessed at**: the fields it names get `wire_name` NULL at `unresolved`, and the shape is open
+  (§2g's rule). A `by_name` argument written `True` makes a renamed field accept its own name too.
+- **`required: no_default`** (the one rule): a field is required where it writes no default (a
+  bare `x: int = ...` writes none, as `required_when`'s field says; re-review R2-3),
+  read by `defaults` on each naming call in merge order (`required_when` written as the named
+  field writes none). **A default not read is not a default** (task 9 review M2): a value made by
+  a call that is no naming call (sqlmodel's own `Field`, a helper the walk does not see into), or
+  a default argument in an unpacked `*args`/`**kwargs`, leaves `required` unread: the row
+  publishes `required` NULL (unknown) at `partial`, never a guess (ruled 2026-11-09). A field
+  with no value at all is required. A `TypedDict` key the
+  language marks not required (`modifiers.not_required`, D00 §5a) is not required whatever the
+  model says. Without the key, `required` keeps the wrapper rule (`optional` wrapper).
+- **`private_prefix`**: a name starting with it is no field.
+- **`excluded_when: {keyword: <name>, value: <literal>}`** (task 9 review M4, ruled 2026-11-09):
+  the naming-call option that drops a field from OUTPUT (pydantic's `exclude=True`), merged as
+  names are. The field leaves a shape only output reaches, stays in one only input reaches,
+  and stays at `partial` in one both reach or whose direction is not known, since one shape
+  holds both directions (N13 B). An option written as no literal leaves the field at
+  `partial`. **Every source of a shape counts** (task 9 re-review R2-1, R2-5), read before
+  any shape is expanded: each endpoint column by the row's direction (an inbound row reads
+  its request and writes its response, an outbound row the reverse, a `both` row each both
+  ways), through the column's `item` chain and every field of a body assembled from several
+  parameters (`fields`), and every payload a parse binds (`parse_calls`, read on input).
+- **`open_when: {arg: <argument>, values: [<literal>, ...]}`** (task 9c, approved 2026-11-09):
+  the configuration argument (read off `name_generator`'s `config_call`s, merged as the
+  generator is, the last class writing it winning) whose listed literal lets a model take keys
+  no field declares (pydantic's `extra='allow'`). Such a shape is open. So is one whose argument
+  is written as no literal, or whose configuration is not read: it may be the listed one.
+  `config_call` may list several constructions; a class body's dict display with text keys is
+  read as the `dict(...)` it builds (the scanner writes it so), so `builtins.dict.<init>` names
+  a plain dict.
+- **`output_fields: [{decorator, name_from?, absent_when?}]`** (task 9c): a method carrying the
+  decorator is a field written on OUTPUT and never read (pydantic's `@computed_field`), typed
+  by what the method returns. Its name is `name_from` written as a literal, else the
+  generator's name for the method's, else the method's; it is required unless `absent_when`
+  is written. It is no field of a shape only input reaches, a field of one only output
+  reaches, and `partial` in one both reach or whose direction is not known (N13 B). The
+  decorator is read off the value the class body writes the method's name (D00 §5a), or off
+  the header's `methods` for a library class.
+- **`output_open_when: [{decorator} | {method, also_input?, except_declared_by?}]`** (task 9c):
+  what builds a model's output from something other than its fields. A method on the model's
+  way up carrying the decorator (`@model_serializer`) opens a shape output reaches. For a
+  `method` entry, the nearest declaration of that method on the way up opens it, unless it is
+  the one `except_declared_by` declares (the base's default, which the framework does not
+  call); `also_input` opens a shape input reaches too. What the method does is not read.
+- **A library base's fields** (task 9c): a base read from a type header whose class body was
+  read (D00 §5 `type_header`) contributes its fields as a scanned class does, read by the same
+  reader off the same kind of facts, and no longer opens the shape
+  (`reaches_an_unscanned_SUPERCLASS`). A base with no header, or a header whose body was not
+  read, keeps the shape open: under the `c3` lookup (D00 §5 `module.lookup`) EVERY written
+  base at any depth counts, since each one's fields are the subclass's (review M1); under the
+  JVM's, only the superclass chain.
+- **Class-statement keywords** (review C1): a class's `keywords` (D00 §5a) are read as a
+  further configuration call, merged after the class's own `config_field` value, which
+  pydantic's `ConfigWrapper.for_model` does (`pydantic_field_sets.md` §13): `class A(BaseModel,
+  extra='allow')` is open, and its `alias_generator=` names its fields.
+- **A name only a never-running arm declares** (`if TYPE_CHECKING:`, D00 §5a
+  `modifiers.never_runs`) is no field, as a `ClassVar` is none.
+- **A field read under another name** (task 9c): a field whose input name differs from its
+  published (output) name, or whose input name is not read (`AliasChoices`), leaves the shape's
+  input field set described under names a request does not send, so a shape input reaches (or
+  whose direction is not known) is open; one only output reaches is not. The field itself stays
+  `partial`, as below.
+- **Resolution (N13 option B).** One shape per type, under the output names. A field whose
+  accepted input names differ from its output name is `partial`: a `validation_alias`, a
+  `serialization_alias` beside another input name, `by_name` on a renamed field. So is one whose
+  names the code does not let us read: an argument written as no literal (an `AliasChoices`,
+  an `alias_priority` from a call), an unpacked `**kwargs` at the call (mealie's
+  `UpdatedAtField`), a configuration not read, two paths that disagree. The field's resolution is
+  the weaker of this and its nullability's.
+
 ---
 
 ## 2g. Types with a known wire form
 
 **Declared in the shape model, not in a catalog (§1b).** The block below is the
-grammar; the one shipped copy of it lives in `catalogs/shape-models/json.yml`, and a
+grammar; the shipped copies live in `catalogs/shape-models/json.yml` and `pydantic.yml`, and a
 catalog reaches it with `shape_model:`. A catalog declaring one of its own is refused.
 
 Some types are objects in code and something else entirely on the wire. `java.time.Instant`
@@ -5822,6 +6135,17 @@ known_types:
 This is the boundary against the extractor's own projection (§D1 of the Phase 2A plan): the
 extractor converts what the **language** leaves no choice about — primitives, their boxes,
 `String`, arrays, collections. A catalog converts what the **serialiser** decides.
+
+**Optional keys on an entry:** `format` (`null` writes no format, the Python projection's
+spelling of none), `nullable`, and `by`, the probe that read the entry. **A collection entry**
+(`wire: array` or `map`) holds what its reference's last argument describes, as a scanned
+collection does: the Python projection's collections are mirrored in `pydantic.yml` for a type
+form read as a bare symbol (`response_model=list[Order]`, §2's response rule), and
+`tests/architecture/test_known_types_mirror_the_projection.py` holds the mirror to
+`typing_rules._WIRE_TYPES`.
+
+**A sequence holding several types by position** (`tuple[int, str]`) has no one item type: no
+`item` is published and its owner is open. A `map`'s item is its last argument, as before.
 
 **A third-party type with no entry here is not guessed at.** Expansion stops, the shape is
 marked open, the type reference is kept, and [M04](M04-resolver.md) reports the type that
@@ -6265,6 +6589,88 @@ switch that takes no value); `requirement` is the framework's default, `required
 `declared`. A parameter's type has no column. Any other key, a `kind` or `requirement` outside
 its set, a reference in another shape, an `optional_when` that is not exactly `{arg, equals}`
 with a literal, or one call named twice, is refused naming the file.
+
+**On an inbound `fluent` catalog of routes** (plan 2026-11-08-python-fastapi-inbound N3, N4,
+approved), the same entry is matched on a handler PARAMETER's marker calls, by the engine that
+derives each route, once per row (a variable a prefix adds to the path is the path's on that
+row alone):
+
+```yaml
+request_params:
+  - { owner: fastapi.param_functions, method: Header, kind: header, name_arg: { keyword: alias },
+      requirement: required, default_arg: [{ arg: 0, keyword: default }, { keyword: default_factory }],
+      required_when: { arg: { arg: 0, keyword: default }, equals_field: builtins.Ellipsis },
+      annotated_default: parameter,
+      spelling: { replace: { "_": "-" }, unless: { arg: { keyword: convert_underscores }, equals: false } } }
+  - { unmarked: true, kind: query, requirement: required, scalar_only: true }
+```
+
+- **The marker.** A parameter's markers are the calls that produced its default and each of
+  its `Annotated` metadata elements, on every path (`parameter_markers`, through aliases in any
+  file). Of the calls the catalog names — the entries', `request_body.marker_calls` and
+  `.bound_by_calls` — the one that made the default, or the LAST in `Annotated` (FastAPI's
+  `fastapi_specific_annotations[-1]`; a non-marker element changes nothing), is the parameter's
+  marker. Two paths are two readings; each row any reading gives is written once.
+- `kind` is one of `header`, `query`, `cookie` (§3's inbound set); `argument`/`option`/`flag`
+  stay a catalog of commands'. **The name**: the string at `name_arg` where it is written, else
+  the parameter's own name respelled by **`spelling: { replace: { <from>: <to> }, unless?: {
+  arg: <reference>, equals: <literal> } }`** — not respelled where the `unless` argument is
+  written with that value, not read (NULL, `unresolved`) where it is written as anything but a
+  literal (`Header`'s `convert_underscores`).
+- **The requirement.** `default_arg` may be a LIST of references, any written being a default.
+  **`required_when: { arg: <reference>, equals_field: <owner>.<name> }`** answers `required`
+  where that argument is written as that static field (`...` is `builtins.Ellipsis`), before
+  `default_arg`. **`annotated_default: parameter`** (the one word): a marker in `Annotated`
+  takes the parameter's own `=` default, `optional` where it `declares_default`, the marker's
+  own arguments deciding otherwise.
+- **The `unmarked` entry**, `{ unmarked: true, kind, requirement, scalar_only? }`, at most one:
+  a parameter carrying none of the catalog's markers that names no path variable is one row
+  of that `kind`, named as written, `optional` where it `declares_default` and the entry's
+  `requirement` otherwise — with `scalar_only: true`, only where its type is a scalar (the
+  `scalar` binding of §2's `request_body`); any other type is the body rule's.
+- **A marked parameter of a class's type** (an `object` the module knows as a class) names no
+  one value: the framework reads the class's fields as the parameters (FastAPI's query, header
+  and cookie models; plan 2026-11-08-python-fastapi-inbound R25, FastAPI 0.162.0's
+  `_get_param_aliases`, `scripts/probes/fastapi_param_models.md`). Where the catalog's shape
+  model reads the class's fields (§2f's call-read naming), one row per field, of the entry's
+  kind: named by the field's INPUT name (§2f `input_name_from`, else the generator's, else the
+  field's own name, which the entry's `spelling` respells — a `Header` model's `x_trace_id` is
+  `x-trace-id`, an alias never), `required` where the field writes no default, at the input
+  name's resolution (`partial` where the field is read under more than one name, `unresolved`
+  with `name` NULL where its input name is not read). FastAPI 0.115.12 differs (it reads no
+  field under an alias or a generated name) and is not mirrored. Where the shape model reads no
+  fields, one row of the entry's kind with `name` and `requirement` NULL at `unresolved`, never
+  the parameter's own name. So too for a type written as text naming no type (a class defined
+  inside a function, polar's `SortingGetter`): it may be such a class.
+- **No row** for a parameter whose marker is no entry's (the path's `Path`, a body marker, a
+  dependency), for a path variable, for a receiver, or for a handler whose parameters are not
+  read.
+- **The marker classes.** A marker made by constructing its class (`fastapi.params.Depends(f)`)
+  is the construction's `<init>` call, named `<owner>.<init>` in `marker_calls` /
+  `bound_by_calls` and `method: <init>` on an entry: `parameter_markers` stops at every
+  construction, as at a call. **Refused** (DR-6, no row, a `refused_registration` question, the application not
+  starting): a marker in `Annotated` beside a marker default (`marked_twice`), a path variable
+  with a marker in `Annotated` and a default (`path_variable_default`), and a path variable
+  carrying an entry's call or a `marker_calls` call (`path_variable_marked`), checked in that
+  order. A refused route is never published.
+- **A path not read whole.** An `unmarked` row on a route whose address is `partial` or
+  `unresolved` takes that resolution, never `resolved`: the parameter may name one of the
+  path's unread variables. A parameter refused on one path and not on another is read on the paths that are not.
+- **The recipes the route runs first** (plan 2026-11-08 N5, N6, approved). Every recipe call
+  (`injection: names_recipe`, §1c) a handler parameter's marker names, and every element of a
+  `dependencies` capture on the route's root (`dependencies: { keyword: dependencies }`, an
+  argument capture of §2's `fluent`), of a `router_holds[].dependencies_arg` on each router the
+  row is served through and of a `mount[].dependencies_arg` on each include, names the bodies
+  that run: a function's own, a class's constructor by lookup order, an instance's class
+  `__call__`. Each body's parameters (its receiver aside) are read as the handler's are, on the
+  same row's path variables and address, and their own recipe calls in turn, each body once
+  (FastAPI's `get_flat_dependant`): their rows are the row's. Each body is a `roots` row at the
+  row's address (D01). A recipe parameter's reading never refuses the route; a recipe's body
+  parameters are not read (a gap: FastAPI flattens them into the body).
+- `caller` is the handler, `value` NULL, `evidence` `declared`, as for a command. Each entry is
+  bound to its row and follows it (Ruling 7). An `unmarked` entry, an `equals_field` not
+  dotted, an `annotated_default` other than `parameter`, a `spelling` of another shape, or any
+  of the three keys on a catalog of commands, is refused naming the file.
 
 ## 2l. What an annotation says ABOUT an inbound endpoint — `metadata_from`
 

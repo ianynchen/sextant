@@ -19,6 +19,10 @@ written bases map them on to theirs (`class Users(list[User])`): `substitute` an
 `Hierarchy`, the typing specification's rules for generic classes, read by the scanner to
 type what a library method returns (OI-324).
 
+A module-level type alias (`X = Annotated[T, ...]`, `X: TypeAlias = ...`, `type X = ...`) is
+the type it is written to be, in this file and, through its header, in every file that
+imports it (`project.py`).
+
 A name the file does not bind gives no type: it is never guessed. A name bound to a closed
 list (`imports.py`) is the union of what each binding names. A name of a library is its
 defining symbol where the scan's libraries say (`libraries.py`); elsewhere an imported name
@@ -75,6 +79,41 @@ _ALIASES = {
 _TYPING_NAMES = frozenset({"typing", "typing_extensions"})
 OBJECT = "builtins/object#"
 TUPLE = "builtins/tuple#"
+# D00 §5b: the wire type of each class whose wire form the language itself fixes, in the
+# vocabulary's own words. A map's keys are arbitrary, which `object` cannot say.
+_WIRE_TYPES = {
+    "builtins/str#": "string",
+    "builtins/int#": "integer",
+    "builtins/float#": "number",
+    "builtins/bool#": "boolean",
+    "builtins/list#": "array",
+    "builtins/set#": "array",
+    "builtins/frozenset#": "array",
+    "builtins/tuple#": "array",
+    "typing/Sequence#": "array",
+    "collections/abc/Sequence#": "array",
+    "typing/MutableSequence#": "array",
+    "collections/abc/MutableSequence#": "array",
+    "typing/Collection#": "array",
+    "collections/abc/Collection#": "array",
+    "typing/Iterable#": "array",
+    "collections/abc/Iterable#": "array",
+    "typing/MutableSet#": "array",
+    "collections/abc/MutableSet#": "array",
+    "collections/deque#": "array",
+    "builtins/dict#": "map",
+    "typing/Mapping#": "map",
+    "collections/abc/Mapping#": "map",
+    "typing/MutableMapping#": "map",
+    "collections/abc/MutableMapping#": "map",
+    "collections/defaultdict#": "map",
+    "collections/OrderedDict#": "map",
+    "collections/Counter#": "map",
+}
+# Classes a serializer writes as a scalar of its own choosing (N12 `known_types`): the
+# language fixes none of them, so they carry no wire type here.
+_SERIALIZERS = frozenset({"builtins/bytes#", "builtins/bytearray#"})
+_SERIALIZER_MODULES = frozenset({"datetime", "uuid", "decimal"})
 # The type variable `Self` is read as in a library's signature: the receiver's type fills it.
 SELF = "Self"
 # The forms whose type arguments are a class's own type parameters, and nothing else.
@@ -143,6 +182,99 @@ def written_type(node: ast.expr, scope: TypeScope) -> TypeRef:
     return TypeRef(symbol=ast.unparse(node))
 
 
+def wire_projected(written: TypeRef, scope: TypeScope) -> TypeRef:
+    """`written` with D00 §5b's wire type at every level, where the language fixes it:
+    `str` is a string, `list` an array, `dict` a map, any other class an object. A type
+    parameter of the enclosing class or function (`T`, `Self`) is an object, as the JVM's
+    `T` is: what fills it is a type, never a scalar the language fixes. `None`, a special
+    form (`Any`, a union, `Literal`), a written text that names no type, and a class a
+    serializer writes as a scalar of its own choosing carry none."""
+    arguments = [wire_projected(argument, scope) for argument in written.arguments]
+    symbol = written.symbol
+    module = symbol.partition("/")[0]
+    wire: str | None
+    if symbol in _WIRE_TYPES:
+        wire = _WIRE_TYPES[symbol]
+    elif _is_type_parameter(symbol, scope):
+        wire = "object"
+    elif (
+        symbol == NONE
+        or not names_a_type(symbol)
+        or module in _TYPING_NAMES
+        or module in _SERIALIZER_MODULES
+        or symbol in _SERIALIZERS
+    ):
+        wire = None
+    else:
+        wire = "object"
+    return written.model_copy(update={"arguments": arguments, "wire_type": wire})
+
+
+def _is_type_parameter(symbol: str, scope: TypeScope) -> bool:
+    """Whether a bare symbol is a type variable the scope binds (`class C[T]`, `def f[S]`,
+    `T = TypeVar("T")`), or `Self` inside a class: the one way a type reference is a bare
+    name that names a type to come, rather than text the file does not name."""
+    if symbol == SELF:
+        return scope.self_type is not None
+    if names_a_type(symbol) or not symbol.isidentifier():
+        return False
+    targets = scope.lookup(ast.Name(id=symbol))
+    return len(targets) == 1 and targets[0].kind == "type_variable"
+
+
+def is_class_variable(annotation: ast.expr, scope: TypeScope, depth: int = _DEPTH) -> bool:
+    """Whether a class-body annotation is `ClassVar`, bare or with its type argument, in a
+    string, or as the first argument of `Annotated`: the one form that makes an annotated
+    class-body name the class's own rather than an instance variable (PEP 526)."""
+    if depth == 0:
+        return False
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            annotation = ast.parse(annotation.value.strip(), mode="eval").body
+        except SyntaxError:
+            return False
+    head = annotation.value if isinstance(annotation, ast.Subscript) else annotation
+    if not isinstance(head, ast.Name | ast.Attribute):
+        return False
+    targets = scope.lookup(head)
+    if len(targets) != 1:
+        return False
+    if is_typing(targets[0], "ClassVar"):
+        return True
+    if is_typing(targets[0], "Annotated") and isinstance(annotation, ast.Subscript):
+        written = annotation.slice
+        first = written.elts[0] if isinstance(written, ast.Tuple) else written
+        return is_class_variable(first, scope, depth - 1)
+    return False
+
+
+def is_not_required(
+    annotation: ast.expr, scope: TypeScope, *, total: bool, depth: int = _DEPTH
+) -> bool:
+    """Whether a class-body annotation lets its key be left out (the typing specification's
+    `TypedDict` rule): `NotRequired[...]`, or any key of a class written `total=False` not
+    written `Required[...]`; either may sit as `Annotated`'s first argument or in a string."""
+    if depth == 0:
+        return not total
+    if isinstance(annotation, ast.Constant) and isinstance(annotation.value, str):
+        try:
+            annotation = ast.parse(annotation.value.strip(), mode="eval").body
+        except SyntaxError:
+            return not total
+    head = annotation.value if isinstance(annotation, ast.Subscript) else annotation
+    targets = scope.lookup(head) if isinstance(head, ast.Name | ast.Attribute) else []
+    if len(targets) == 1 and isinstance(annotation, ast.Subscript):
+        if is_typing(targets[0], "NotRequired"):
+            return True
+        if is_typing(targets[0], "Required"):
+            return False
+        if is_typing(targets[0], "Annotated"):
+            written = annotation.slice
+            first = written.elts[0] if isinstance(written, ast.Tuple) else written
+            return is_not_required(first, scope, total=total, depth=depth - 1)
+    return not total
+
+
 def type_symbol(target: Target) -> str:
     """The SCIP type descriptor of a target: `app/m#` for a module, `app/m/C#` for a
     class, `app/m/Outer$Inner#` for a nested class (D00 §1)."""
@@ -186,9 +318,20 @@ def _named(target: Target, scope: TypeScope, depth: int) -> TypeRef | None:
         return TypeRef(symbol=target.member.rpartition(".")[2])
     if target.kind == "type_alias" and target.alias_of is not None:
         return _read(target.alias_of, scope, depth - 1)
-    if target.kind in ("variable", "function"):
+    if target.kind in ("variable", "function", "new_class"):
         return None
     headers = scope.index.headers
+    if (
+        target.kind is None
+        and target.member is not None
+        and headers is not None
+        and scope.index.owns(target.module)
+    ):
+        # Another file of the module binds the name to a module-level type alias
+        # (`DbSession = Annotated[Session, ...]`): as a type here it is what the alias is.
+        aliased = headers.alias(target.module, target.member)
+        if aliased is not None:
+            return aliased
     if (
         target.kind is None
         and target.member is not None
@@ -291,6 +434,9 @@ class ClassShape:
     bases: tuple[TypeRef, ...] | None
     members: frozenset[str]
     methods: frozenset[str] = frozenset()
+    # The metaclass the class statement writes (`class Enum(metaclass=EnumMeta)`), by its
+    # symbol; None where none is written. A base's is the class's too (`metaclass_of`).
+    metaclass: str | None = None
 
 
 def class_shape(node: ast.ClassDef, scope: TypeScope, body: list[ast.stmt]) -> ClassShape:
@@ -323,7 +469,17 @@ def class_shape(node: ast.ClassDef, scope: TypeScope, body: list[ast.stmt]) -> C
         n.name for n in body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)
     )
     held = None if bases is None else tuple(bases)
-    return ClassShape(tuple(listed), held, class_members(body), methods)
+    metaclass = next(
+        (
+            written.symbol
+            for keyword in node.keywords
+            if keyword.arg == "metaclass"
+            for written in [type_ref(keyword.value, generic)]
+            if written is not None and names_a_type(written.symbol)
+        ),
+        None,
+    )
+    return ClassShape(tuple(listed), held, class_members(body), methods, metaclass)
 
 
 def is_class_object(annotation: ast.expr, types: TypeScope, depth: int = 8) -> bool:

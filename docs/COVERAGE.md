@@ -53,7 +53,7 @@ and each protocol's own per-framework table opens its §5 section.
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
-| **Python** | none | 4A 1B 1C | 1A | 1B | 2A | 2A 1B | 2B |
+| **Python** | ✅ `ast` | ◐ (3A 1B 1C) | 1A | 1B | 2A | 2A 1B | 2B |
 | **Rust** | none | 1A 2B 1C | 1B | — | 1A | 1A 1B | 1B |
 | **Swift** | none | 1A | 1A 1B | — | 1A | 1B | — |
 | **C# / .NET** | none | · | · | · | · | · | · |
@@ -725,7 +725,7 @@ the JAX-RS line. Apache Camel was ruled out of scope earlier that day, and the d
 | **Go** | **`go/packages`** + `go/ssa` | Full | No (deps only) | **`callgraph/{cha,rta,vta}` ships with the Go toolchain** | `registration_call` |
 | **TypeScript** | **`ts.TypeChecker`** compiler API | Full where annotated | No | `Jelly` | `registration_call` + `annotation` + `filesystem` |
 | **Swift** | **IndexStoreDB** (index-while-building) | Full | Yes (macOS) | Index carries call relations | `registration_call` |
-| **Python** | None exists, so **our own scanner** over the standard library's `ast`, with typeshed and the installed environment's type files (pyright, Pyrefly and ty answer over a language server; mypy's documented API returns report text only: [comparison](research/2026-11-06-python-type-tools.md)) | What the code and libraries write: annotations, unions, `type[X]`, overloads. **Not** a generic's elements, `isinstance` narrowing, or annotation-only fields ([essay](coverage/python.md)) | No: the installed environment is read, never built or run | We write it, as for the JVM: receiver binding per path, C3 lookup | `fluent` with `entry_point` roots (click) ✅ built; FastAPI, Flask, Django not yet |
+| **Python** | None exists, so **our own scanner** over the standard library's `ast`, with typeshed and the installed environment's type files (pyright, Pyrefly and ty answer over a language server; mypy's documented API returns report text only: [comparison](research/2026-11-06-python-type-tools.md)) | What the code and libraries write: annotations, unions, `type[X]`, overloads. **Not** a generic's elements, `isinstance` narrowing, or annotation-only fields ([essay](coverage/python.md)) | No: the installed environment is read, never built or run | We write it, as for the JVM: receiver binding per path, C3 lookup | `fluent` with `entry_point` roots (click) ✅ built; FastAPI inbound ✅ built (routes, prefixes, request parameters, `Depends` recipes, pydantic shapes; checked against FastAPI's own route table); Flask, Django not yet |
 | **Rust** | ⛔ **None stable.** `syn` has no types; rustdoc JSON needs `cargo +nightly … -Z unstable-options` and its `FORMAT_VERSION` breaks between releases | Syntax only | — | None | `annotation` (syntax-only) |
 | **JavaScript** | `ts.TypeChecker` via `allowJs` + `checkJs` | Inferred, plus JSDoc | No | `Jelly` | as TypeScript |
 | **C# / .NET** | Compiled assemblies — IL plus metadata — via `System.Reflection.Metadata` or Mono.Cecil; Roslyn's semantic model where source is needed | Full | Yes (or the published assemblies) | We would write it, as for the JVM | `annotation` + `registration_call` |
@@ -760,6 +760,19 @@ carry several reasons, one per path). No Python protocol row ships, so the §2 c
 unchanged. The essay has what is read, what is not and why, and the measured numbers;
 `docs/research/2026-11-06-python-performance.md` has the times against the budget (cold met,
 warm 10 s target missed on polar: 27.6 s).
+
+**FastAPI inbound was built 2026-11-08 to 2026-11-09** (OI-208 plan 2,
+`docs/superpowers/plans/2026-11-08-python-fastapi-inbound.md`). `catalogs/fastapi.yml` reads
+routes (verbs, paths, handlers, responses), router, include and sub-application prefixes,
+query, header and cookie parameters, request bodies, and `Depends` recipes (each recipe a root
+at the route's address). `catalogs/shape-models/pydantic.yml` gives each pydantic model its
+wire names, required fields and JSON types, and closes the shape where every field is read.
+`tests/e2e/test_orders_fastapi.py` compares Sextant with FastAPI and pydantic themselves on
+`fixtures/orders-fastapi`: routes, parameters, recipes and wire names are equal, and every row
+is pinned. On two real services, measured against FastAPI's own route table in each service's
+own environment: polar 668 of 671 (method, path) pairs (the 3 others are one `partial` row),
+mealie 289 of 289. The §5.1 FastAPI row ships, so the Python REST-in cell changes. The essay
+has what is read, what is not, and the open issues (OI-346 to OI-416).
 
 Per-language essays — toolchain detail, payload handling, structural oddities:
 [Go](coverage/go.md) · [Rust](coverage/rust.md) · [Python](coverage/python.md) ·
@@ -808,7 +821,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**118 of 132 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**119 of 133 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -832,6 +845,8 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |  | `jakarta.enterprise:jakarta.enterprise.cdi-api` | 4.1.0 |
 |  | `javax.enterprise:cdi-api` | 1.0.0, 2.0.0 |
 | `click` | `click` | 8.5.0 |
+| `fastapi` | `fastapi` | 0.115.12, 0.162.0 |
+|  | `pydantic` | 2.14.3 |
 | `google-pubsub-client` | `com.google.cloud:google-cloud-pubsub` | 1.129.3 |
 | `google-pubsub-subscriber` | `com.google.cloud:google-cloud-pubsub` | 1.127.3 |
 | `grpc-java` | `io.grpc:protoc-gen-grpc-java` | 1.62.2, 1.81.0 |
@@ -2219,7 +2234,7 @@ that each row's own listener was individually checked against the configured des
 |---|---|---|---|---|
 | **Protobuf** | `.proto`, or the `FileDescriptorProto` embedded in generated code | repository **and** compiled output | message type name | ✅ **both origins.** The embedded descriptor is harvested from the generated holder class and the `.proto` compiled with a bundled `protoc`; both feed one interpreter, and where both declare the same schema the **compiled one wins** (DR-4) |
 | **Avro** | `.avsc`, or `SCHEMA$` on a `SpecificRecordBase` subclass | repository **and** compiled output | record full name; on Kafka, the **subject** `<topic>-value` | ◐ **both origins**, with two limits: only the Avro-1.12 `SCHEMA$` shape is harvested (below), and **no subject is derived** |
-| **JSON** | Usually none — **the DTO type declaration is the spec** | code | type reference | ✅ since Phase 2A — the shape tables *are* this row |
+| **JSON** | Usually none — **the DTO type declaration is the spec** | code | type reference | ✅ since Phase 2A — the shape tables *are* this row. **Python:** a pydantic 2 model is the spec (`shape-models/pydantic.yml`, OI-208 plan 2): wire names from `Field` aliases and the model's alias generator, required fields, JSON types, computed fields, and a closed shape where every field is read, each checked against pydantic 2.14.3's own JSON schema |
 | JSON Schema | Fastify route options, OpenAPI `components`, `zod` | code or artifact | `$ref` / type reference | **out of scope.** `json_schema` is a reserved format value: a catalog that writes it is refused by name rather than read as something adjacent |
 | XML | XSD, WSDL | repository **only** — a contract file compiles into no class, so there is no second origin | namespace + element name, as one QName that is both the shape's `symbol` and its `schema_name` | ✅ since Phase 2I, at `declared`. One reader claims both extensions and one interpreter branch merges every contract file in the module into a single type universe before projecting — **stdlib `ElementTree`, no new dependency**. Global elements and named complex types become shapes; `minOccurs="0"`, `nillable`, unbounded repeats and enumeration facets become presence, nullability, arrays and enum symbols; **`field_number` is NULL — the format numbers nothing** |
 | **GraphQL SDL** | `.graphqls` / `.graphql` under `src/main/resources/graphql` | repository **only** — SDL compiles into no class, so there is no second origin | the type's own name, which is both its `symbol` and its `schema_name` | ✅ since Phase 2H, at `declared`. The reader emits each file verbatim and the interpreter merges every file in the module into one type universe before projecting (the protobuf-pool precedent, because the runtime merges them too). Object, interface, input and enum types become shapes; **`field_number` is NULL — the format numbers nothing** |
@@ -2591,7 +2606,7 @@ arrive there.
 | TS | Fastify | Fastify `fastify.get(p, { schema }, h)` | **options object carries a JSON Schema** | `registration_call` | A |
 | TS | Next.js / SvelteKit / Remix / Nuxt | **Next.js / SvelteKit / Remix / Nuxt** | **path is the file path, verb is the exported symbol name** | `filesystem` | **B** — read the build's route manifest, walk as fallback ([D02](components/D02-catalog-schema.md) `filesystem` style) |
 | TS | tRPC | tRPC `publicProcedure.input(z.object(…)).query(fn)` | contract is a `zod` schema | `fluent_chain` | B |
-| Python | FastAPI | **FastAPI** `@app.get("/items/{id}")`, `response_model=` | **types mandatory — the framework cannot run without them** | `annotation` | A |
+| Python | FastAPI | **FastAPI** `@app.get("/items/{id}")`, `response_model=` | **types mandatory — the framework cannot run without them** | `annotation` | ✅ shipped (`fastapi.yml` with `shape-models/pydantic.yml`; FastAPI 0.115.12 and 0.162.0, pydantic 2.14.3; OI-208 plan 2). Read as `fluent` calls, since a decorator is the call it is. Pinned against FastAPI's own route table on `fixtures/orders-fastapi` by `tests/e2e/test_orders_fastapi.py`. A route, include or mount registered only under a test the analysis does not decide keeps its row and is stated as existing "not evaluated" (`endpoint_existence`, OI-368). `app.host(host, app)` is a mount with a host: its routes carry a `host` entry and the call's tests, and are never linked by path as routes of the main host. **Stated boundaries:** a dependency's own body parameters are not read (OI-378); a type written as text is not read (OI-348). The rest are in [the Python essay](coverage/python.md) |
 | Python | Litestar | Litestar `@get("/items/{id:int}")` | same | `annotation` | A |
 | Python | Flask | Flask `@app.route(p, methods=["GET"])`, blueprints | prefix joined at `register_blueprint` | `annotation` + `registration_call` | A |
 | Python | aiohttp, Starlette | aiohttp `app.router.add_get(p, h)`, Starlette `Route(p, ep, methods=[…])` | — | `registration_call` | A |

@@ -140,6 +140,28 @@ _FRAMEWORK_DEFAULT_AT_THE_ROOT = {
         "`takeFromWithExecutionContext` copy another builder's verb whole, and the catalog "
         "says its GET is wrong there."
     ),
+    # A verb LIST read off the call (D02 §2's `fluent` style, N8): the `absent` GET applies
+    # only where the matched call itself writes no `methods` or writes `None`.
+    **{
+        (
+            "fastapi",
+            "roots",
+            method,
+            "http_method",
+            "{'keyword': 'methods', 'absent': 'GET', 'case': 'upper'}",
+        ): (
+            "FastAPI's own default for a route that names no methods: `if methods is None: "
+            "methods = ['GET']` (`routing.py:_populate_api_route_state`, 0.162.0 R 1072-1074, "
+            "0.115.12 `APIRoute.__init__` E 492-494, `scripts/probes/fastapi_rules.md` §3). "
+            "The list is read off this call's own `methods` argument; the GET stands only "
+            "where that argument is not written or is `None`. Admissible because the route "
+            "is made by this call and nothing after it sets its verb: `add_api_route` is the "
+            "chain's terminal, and `api_route`'s one step is the `__call__` that registers "
+            "the route. It stops being right the day FastAPI lets a route's methods be set "
+            "after it is made."
+        )
+        for method in ("api_route", "add_api_route")
+    },
 }
 
 

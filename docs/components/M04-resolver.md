@@ -165,7 +165,10 @@ exactly that body, the rule a JVM call on a lambda's functional interface reache
 body by (`call_edges._edge`'s `dynamic` lookup; the row keeps the site's `virtual`). No owner
 is written to `bound_receivers` for such a path: it has no row there, and counts in the site's
 tier as one more thing the call may run (a function on one path and a `Runner` on another are
-two edges, `narrowed`). Every other reader keeps a function value as a body and not a value
+two edges, `narrowed`). A name a `def` binds, read as a field nothing writes (a function
+another file imports and uses as a value: `from deps import get_db`, then `Depends(get_db)`), is
+that function to this reader too (`ValueIndex.named_functions`, plan 2026-11-08 Task 8), one
+answer per function of the name. Every other reader keeps a function value as a body and not a value
 (ruled 2026-09-22), and an f-string (`concat`) is never one (R19b). The bodies reach
 `call_edges` from the binder in memory and are stored in no other table (ruling R31): nothing
 redraws `call_edges` after binding, which `tests/architecture/test_call_edges_drawn_last.py`
@@ -237,7 +240,19 @@ holds on every path into the parameter, so it is one row per class on the parame
 not one per open path (the path cap counts them). An `escapes` path has a value, changed after
 it was made, and gains nothing. An attribute's declaration answers only where its
 class is one of the module whose lookup order is read and defines no `__get__` (a descriptor's
-read runs `__get__`, and a library class's methods are not read here).
+read runs `__get__`, and a library class's methods are not read here). **A class attribute's
+written value is read the same way** (task 9c re-review N1, `_Walk._through_descriptors`): an
+object whose class, nearest ancestor first, declares `__get__` (a module class's method facts,
+or a header-read library class's `methods`) gives what `__get__` is written to return where that
+names a class; where it names a type variable and the constructor takes a callable (a decorator
+wrapping a function: pydantic's `deprecated_instance_property` on `model_fields`), what the
+wrapped function is written to return, found through the call that made the value; else, or
+where that is a descriptor in turn, nothing read. Never the descriptor class. A module's
+attributes are not read through a descriptor, and neither is an object an instance holds
+(`self.tool = Tool()`): only one every write of which its own class body makes, as Python runs
+`__get__` only for an object found on the class (review R2-2). A `__get__` declared more than once
+with different returns (overloads by class or instance access) gives nothing read (R2-1); one
+written to return `Self` gives the descriptor object itself.
 
 **Each parameter's and binding's paths upward are worked out once** (ruling R39, round 2;
 `walkbug-report.md`). A parameter's answer, and a binding read plainly (not on an object, not
@@ -261,11 +276,65 @@ same reasons on fewer path rows.
 `c3`, by Python's calling rule over each parameter's `kind` (D00 §5a): positionals fill the
 positional parameters in order and the rest go to `*args`; a keyword fills the positional or
 keyword-only parameter of its name and the rest go to `**kwargs`; after a `*` argument no
-later positional's place is known, and a `**` argument may fill any parameter left. A
-parameter none of this decides — its default, one only an unpacked argument may fill, a
-`*args`/`**kwargs` parameter — is `not_readable` on that caller's path, naming the parameter
+later positional's place is known, and a `**` argument may fill any parameter left
 (`values.parameter_slots`), the one calling rule: the scanner writes arguments as written
-(R27). A constructor is bound by its `__init__`'s parameters, as any callee. A method called
+(R27). **A call that fills no argument for a parameter passes its `default`** (Python's
+rule, plan 2026-11-08-python-fastapi-inbound Task 4, rulings R15 and R16), on that caller's
+path: the parameter's `default` (D00 §5a) is resolved in the frame of the body that runs the
+`def` (`values.defining_body`), with the rest of that body as its `escapes` window. `= None`
+is `absent`, so the type reader adds no declared type beside it (R40 adds one only beside an
+open path); the answer carries `null`, so a receiver read there says the value is None, where
+an empty collection (`()`, `[]`, also `absent`) says it is one. A parameter a call's unpacked argument may fill is not left to its default
+(`values.unpacked_may_fill`): a `*` value may fill a `positional_only` or `positional`
+parameter, a `**` mapping a `positional` or `keyword_only` one. That path, a parameter with no
+default and a `*args`/`**kwargs` parameter are `not_readable` on that caller's path, naming
+the parameter. No JVM parameter has a `default`.
+
+**The body that runs a `def`** is read from the naming rule D00 §5a and M03 state, since no
+fact names it (ruling R15): a name with no `$` (a module function or a method) is run by its
+owner's `<clinit>`, the module or class body; `outer$inner` by `outer`; `lambda$<m>$<n>` by
+`<m>`, where `static` is `<clinit>` and `new` is `<init>`. A Python name holds no `$`, so the
+split is exact; where a function named `static` or `new` and the body that name stands for
+are both declared, the body is not known and no default is read.
+
+**Parameter markers** (`resolve/parameter_markers.py`, N1, N2, ruling R14): for each
+parameter, the call that produced its `default` and the call that produced each element of
+its `Annotated` metadata (the static `__class_getitem__` call of `typing/Annotated#` or
+`typing_extensions/Annotated#`, R8, after its first argument, flattened where that argument
+is itself such a form), in written order, one `Marker` per path: `order` is the element's
+written position among the metadata, and `path` the index of the path it was read on, so
+markers on one path hold together and two paths stay alternatives. Each value is read through
+`values.producer_paths`, so an alias in a module field or another file's field, an alias of an
+alias, a helper returning the call and each write of a field are followed; a path ending
+anywhere but a call (a literal, a construction, a value the walk cannot read) gives no
+marker. The producer reader keeps two ends at two library calls apart (`Answer.made_by`), as
+it keeps two ends at two parameters apart. Built once per `ValueIndex` and kept on it, as
+the walk's upward paths are: the index reads derived tables, so `Workspace.once` cannot hold
+it, and the function takes the index, so it cannot be asked before the catalog-aware index
+exists. It names no framework; which marker calls mean what is catalog data.
+
+**A parameter that names its recipe** (plan 2026-11-08-python-fastapi-inbound N5, ruling R14;
+[D02](D02-catalog-schema.md) §1c `injection: names_recipe`): where one of a parameter's markers
+is a recipe call a bean model names (the last in its `Annotated` metadata on each path, else
+its default's), `values._Walk._parameter` reads one more path BESIDE the parameter's callers
+— never before them, so a direct call's argument stays that caller's own path, and with no
+caller it is the only path, the framework's fill being no longer outside the code. The recipe
+is the call's `recipe_arg`, read by the call reader (`recipe_values`, once per call and
+parameter per index); a call handed none, or `None`, is the parameter's written type under
+`empty_recipe: parameter_type`. It is called by the call-of-a-value rules (`_recipe_runs`): a
+class is constructed (R37), a function gives its returns — a generator its yields (D00 §5,
+N10), every yield a first one since the framework runs it as a context manager — and an
+instance its class's `__call__` returns (R29), each return a path step `filled-by` read in the
+recipe's own body with no frame pushed, as a container's recipe is (di-recipe-hop), once per body
+and joined onto each parameter's path (the framework runs a recipe once per request, so two
+parameters it fills agree on its return). **The framework's call is a calling context of the
+method** (`caller-of`, labelled for the framework): one execution takes every parameter from the
+framework's fill or every one from one direct caller, never a mix. It crosses out to no caller in
+the module, so it adds no `escapes` row, and the binder still counts the method's callers among
+what the site depends on (`Path.filled_in`), so a caller a later round adds is read. A recipe
+whose body is not read is `external` where its lookup leaves the scanned code. The marker
+pass's own walks see no recipe: they stop at calls, so a recipe is no part of where they end.
+Dagger's and Spring's `injected` recipes are read before callers, as before. A constructor is bound by its `__init__`'s parameters, as any callee. A method called
 through its class — a `static` call on a class, or a call whose receiver is a name that is a
 class (`Base.__init__(self, x)`, `H.use(h, x)`) — to a method that takes `self` is handed
 `self` as its first positional argument (`values.call_slots`); a classmethod or staticmethod
@@ -278,7 +347,11 @@ binds nothing new, at most eight; a receiver still unbound when the eighth round
 something is `not_readable "receiver of <name> not followed after 8 rounds"`. After the first
 round only a site whose walk read the callers of a method a newly bound call reaches is walked
 again (R25), over the walk's index with those callers added from the same dispatch answer;
-`call_edges` is drawn once more after the last round. The table is the one a whole re-walk
+`call_edges` is drawn once more after the last round. **A round keeps every shared upward path
+its new edges cannot change** (`values.suffixes_kept`): each path records what it read that a
+round changes — a method's callers, a site's callees, whether a site reached a body, a writer's
+calls — the reads of every path it was built on included, and a round drops only the paths that
+read one of the parts its edges changed. The table is the one a whole re-walk
 over `call_edges` redrawn each round leaves (`bind_until_settled(incremental=False)`, measured
 equal on polar).
 

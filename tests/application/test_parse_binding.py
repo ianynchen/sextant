@@ -26,7 +26,7 @@ import pytest
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.resolve.open_questions import reset_open_questions
-from sextant.application.resolve.shapes.parse_binding import bind_parse_calls
+from sextant.application.resolve.shapes.parse_binding import bind_parse_calls, parse_request_roots
 from sextant.domain.closed_sets import ConstructKind, OriginTier
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import (
@@ -797,3 +797,18 @@ def test_a_payload_whose_extends_reaches_no_marker_binds_nothing(tmp_path: Path)
     bind_parse_calls(workspace, [_catalog()])
 
     assert _shapes(workspace) == {"queue": BYTES_PAYLOAD}
+
+
+def test_the_shapes_parse_binding_binds_are_known_before_the_shape_pass(tmp_path: Path):
+    """Task 9 re-review R2-5: a payload a parse binds is a request, and the shape pass must know
+    it when it expands the shape (`excluded_when` keeps a field a request carries), so the
+    roots `bind_parse_calls` will bind are read before it runs, by the same reading."""
+    workspace = _workspace(
+        tmp_path,
+        _marked(SCROLL),
+        _method(LISTENER, "onEvent"),
+        _call(_handler(), SCROLL, "decode", _parameter(0)),
+    )
+    _seed(workspace)
+
+    assert parse_request_roots(workspace, [_catalog()]) == {SCROLL}

@@ -25,19 +25,23 @@ from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.effective_calls import effective_call_sites
+from sextant.application.resolve.parameter_markers import _site
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _Rules
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.application.resolve.values import (
     EXPRESSION,
     LITERAL,
+    RECEIVER,
     STRING,
+    SYMBOL,
     UNPACKED_DETAIL,
     UNPACKED_SLOT,
     Answer,
     Path,
     ValueIndex,
     argument_slot,
+    producer_paths,
     resolve_positions,
     resolve_site,
 )
@@ -48,6 +52,7 @@ from sextant.domain.symbols import (
     bare_descriptor,
     member_name,
     method_name,
+    names_a_type,
     owner_of,
     parameter_types,
 )
@@ -1579,6 +1584,10 @@ def _reference_of(
     if kind == "class":
         symbol = argument.get("symbol")
         return None if symbol is None else _bare_reference(str(symbol))
+    if kind == TYPE_FORM:
+        # A type form read as the type it names (`type_form_reference`, R24).
+        reference = argument.get("reference")
+        return reference if isinstance(reference, dict) else None
     if kind in _LITERAL_WIRE_TYPES:
         return _literal_reference(str(kind))
     if kind == _PARAMETER_KIND:
@@ -1639,6 +1648,116 @@ def _reference_of(
         # asked for.
         return _terminal_reference(ctor_arguments[payload_ctor_arg])
     return _bare_reference(symbol)
+
+
+# The argument kind a reader gives a value it read as a type form (`type_form_reference`): never
+# written by a scanner, only by the reader that read the form, with the `reference` it names.
+TYPE_FORM = "type_form"
+# A subscript of a class, as a call (N2): `<form>#__class_getitem__(arguments)`; and a subscript
+# the scanner could not tell was of a class (a class imported from another file), the protocol
+# call `__getitem__` on it, which subscripting a CLASS runs as `__class_getitem__`.
+_CLASS_GETITEM = "__class_getitem__"
+_GETITEM = "__getitem__"
+
+
+def type_form_reference(
+    index: ValueIndex,
+    site: Mapping[str, Any],
+    slot: int,
+    is_class: Callable[[str], bool],
+    within: Path | None = None,
+) -> dict[str, Any] | None:
+    """The type a value in a type slot names where it is a type form (plan
+    2026-11-08-python-fastapi-inbound R24): `ListResource[Order]` and `list[Order]` are the
+    static call `<form>#__class_getitem__` (N2), read as a D00 §5a reference to the form's class
+    holding each argument, a class or a form in turn (a name holding a class is that class). A
+    subscript written `__getitem__` on a value the walk reads as a CLASS (a class imported from
+    another file) is the same form: Python runs `__class_getitem__` for it. Every path of the
+    value is read (`values.producer_paths`; `within`, a path the reader already took, keeps only
+    the paths agreeing with it), and only one type every path names is the answer: None where a
+    path ends at anything else, or two paths name two types. **A form is a type only where its
+    owner is a class** (`is_class`: a class the module declares, or one the shape model gives a
+    wire type, such as `list`): `Optional[X]` and `Union[...]` are the language's special
+    forms, no class, so a value naming one, or holding one anywhere, is None."""
+    found: dict[str, dict[str, Any]] = {}
+    for made, answer in _type_ends(index, site, slot, within):
+        reference: dict[str, Any] | None
+        if made is not None and made.get("name") in (_CLASS_GETITEM, _GETITEM):
+            reference = _form_reference(index, made, is_class)
+        elif (
+            made is None
+            and answer is not None
+            and answer.kind == LITERAL
+            and answer.literal_kind == SYMBOL
+            and names_a_type(str(answer.value))
+        ):
+            # A name holding a class, as an argument of a form (`list[Alias]`).
+            reference = _bare_reference(str(answer.value))
+        else:
+            return None
+        if reference is None:
+            return None
+        found[json.dumps(reference, sort_keys=True)] = reference
+    return next(iter(found.values())) if len(found) == 1 else None
+
+
+def _type_ends(
+    index: ValueIndex, site: Mapping[str, Any], slot: int, within: Path | None
+) -> list[tuple[Mapping[str, Any] | None, Answer | None]]:
+    """Where each path of `site`'s argument at `slot` ends: the call that made it, else the
+    value. A value a subscript made in the same frame is that subscript, which the walk ends at
+    with no call named where the subscript is a protocol call (`__getitem__`)."""
+    arguments = site.get("arguments") or []
+    written = arguments[slot] if 0 <= slot < len(arguments) else None
+    source = written.get("source") if isinstance(written, dict) else None
+    if source is not None:
+        caller = str(site["caller"])
+        made = [
+            index.sites.get((caller, ordinal))
+            for ordinal in index.producers.get((caller, int(source)), ())
+        ]
+        if made and all(one is not None and one.get("name") == _GETITEM for one in made):
+            return [(one, None) for one in made]
+    ends: list[tuple[Mapping[str, Any] | None, Answer | None]] = []
+    for producer, path in producer_paths(index, site, slot, frozenset()):
+        if within is not None and path.joined(within) is None:
+            continue
+        ends.append((_site(index, producer), producer.ended_at))
+    return ends
+
+
+def _form_reference(
+    index: ValueIndex, form: Mapping[str, Any], is_class: Callable[[str], bool]
+) -> dict[str, Any] | None:
+    """One subscript of a class as the reference it names: the subscripted class (the static
+    call's owner, or the class a `__getitem__` call's receiver holds on every path), with each
+    written argument, a class or a type form, as its type argument."""
+    owner: str | None = str(form.get("owner")) if form.get("name") == _CLASS_GETITEM else None
+    if owner is None:
+        held = {
+            str(producer.ended_at.value)
+            for producer, _ in producer_paths(index, form, RECEIVER, frozenset())
+            if producer.ended_at is not None
+            and producer.ended_at.kind == LITERAL
+            and producer.ended_at.class_object
+        }
+        if len(held) != 1:
+            return None
+        (owner,) = held
+    if not is_class(owner):
+        return None
+    arguments: list[dict[str, Any]] = []
+    for slot, argument in enumerate(form.get("arguments") or []):
+        if argument.get("keyword") is not None:
+            return None
+        if argument.get("kind") == "class" and argument.get("symbol") is not None:
+            arguments.append(_bare_reference(str(argument["symbol"])))
+            continue
+        nested = type_form_reference(index, form, slot, is_class)
+        if nested is None:
+            return None
+        arguments.append(nested)
+    return {**_bare_reference(owner), "arguments": arguments}
 
 
 def _terminal_reference(argument: dict[str, Any] | None) -> dict[str, Any] | None:

@@ -229,6 +229,51 @@ def test_an_older_hand_built_symbol_fact_still_validates_without_the_2b_fields()
     assert fact.superclass is None
 
 
+def test_jvm_parameters_validate_unchanged():
+    """A JVM parameter as the extractor writes it (`declares_default` only where true, no
+    Python value): the model keeps `declares_default` (D00 §5a, R1) and writes back exactly
+    the keys it read, so a JVM fact file rewritten by `write_fact_file` keeps its bytes. The
+    two Python values (N1) are absent, never `null`."""
+    written = {
+        "annotations": [],
+        "erased_symbol": "java/lang/Integer#",
+        "kind": None,
+        "name": "page",
+        "receiver": False,
+        "type": {
+            "arguments": [],
+            "nullable": False,
+            "nullable_resolution": "resolved",
+            "symbol": "java/lang/Integer#",
+            "wire_format": "int32",
+            "wire_type": "integer",
+        },
+    }
+    defaulted = Parameter.model_validate({**written, "declares_default": True})
+    plain = Parameter.model_validate(written)
+
+    assert defaulted.declares_default
+    assert defaulted.model_dump(mode="json") == {**written, "declares_default": True}
+    assert not plain.declares_default
+    assert plain.model_dump(mode="json") == written
+    assert plain.default is None and plain.annotation_value is None
+
+
+def test_a_return_writes_no_yielded_key_unless_it_yields(tmp_path: Path):
+    """`yielded` is written only where true (plan 2 final review Minor 1): a JVM `method_return`
+    as the extractor writes it has no such key, so a JVM fact file rewritten by
+    `write_fact_file` keeps its bytes; a Python `yield` keeps `"yielded":true`."""
+    line = '{"document_id":"doc_1","kind":"method_return","method":"m","ordinal":0,"value":null}'
+    written = {"document_id": "doc_1", "kind": "method_return", "method": "m", "ordinal": 0}
+    path = tmp_path / "facts.jsonl"
+    write_fact_file(path, DOCUMENT, [MethodReturnFact.model_validate_json(line)])
+
+    assert path.read_text().splitlines()[1] == line
+    yielded = MethodReturnFact.model_validate({**written, "yielded": True})
+    assert yielded.model_dump(mode="json")["yielded"] is True
+    assert "yielded" not in MethodReturnFact.model_validate(written).model_dump(mode="json")
+
+
 def test_a_class_symbol_lists_its_implemented_interfaces_in_declaration_order():
     # `implemented_interfaces`: erased interface symbols, in the order the
     # class declares them (D00 §5a) — round-trips like `supertype` above.

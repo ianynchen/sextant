@@ -1,15 +1,17 @@
 # Coverage — Python
 
-**The Python reader's foundation ships; no web framework is read yet.** Built by OI-208 plan 1
-(`docs/superpowers/plans/2026-11-06-python-reader-foundation.md`, spec
-`docs/superpowers/specs/2026-11-06-python-reader-design.md`), and proved on Sextant's own code
-(`tests/e2e/test_sextant_reads_itself.py`). FastAPI is next, then Flask, then Django (ruled
-2026-10-26). Detection shapes are defined in [COVERAGE.md](../COVERAGE.md) §1. The typing
+**The Python reader's foundation ships, and FastAPI inbound is read.** The foundation was built
+by OI-208 plan 1 (`docs/superpowers/plans/2026-11-06-python-reader-foundation.md`, spec
+`docs/superpowers/specs/2026-11-06-python-reader-design.md`) and proved on Sextant's own code
+(`tests/e2e/test_sextant_reads_itself.py`). FastAPI inbound was built by plan 2
+(`docs/superpowers/plans/2026-11-08-python-fastapi-inbound.md`) and proved against FastAPI's own
+route table (`tests/e2e/test_orders_fastapi.py`). Outbound HTTP clients are next (plan 3), then
+Flask, then Django (ruled 2026-10-26). Detection shapes are defined in [COVERAGE.md](../COVERAGE.md) §1. The typing
 problem this language creates is analysed in [COVERAGE.md](../COVERAGE.md) §10.
 
 > **Scope.** [COVERAGE.md](../COVERAGE.md) §5 is canonical for tier and status,
-> organised by protocol. No Python protocol row ships yet, so every Python cell there is still
-> a plan. This file holds what does not fit a protocol row: what the reader reads, what it
+> organised by protocol. The FastAPI REST-inbound row ships; every other Python cell there is
+> still a plan. This file holds what does not fit a protocol row: what the reader reads, what it
 > does not, the toolchain verdict, the payload story, and the structural oddities of the
 > language.
 
@@ -38,7 +40,12 @@ after the facts is the existing one, extended where Python needs it.
   including the implicit `return None`, are `method_return` facts. Module-level names and
   `self.x = …` are `field_write` facts. A decorated `def` holds its decorators' result, and a
   decorator is the call it is (`@router.get("/x")` is `router.get("/x")(f)`), never an
-  annotation.
+  annotation. **Test code is not read**: code that runs only in a test process is not part of
+  what the module serves. It is told apart by pytest's own collection rules, read from the
+  settings file pytest itself would choose: the `testpaths`, the `python_files` patterns (else
+  `test_*.py` and `*_test.py`), every `conftest.py`, and every `tests` or `test` folder
+  (`scripts/probes/pytest_collection.md`). On polar this leaves 648 of 2,053 files unread, on
+  mealie 209 of 705.
 - **Types written in the code:** annotations, `Optional`, unions, `type[X]`, `@overload` chosen
   by argument types (a closed list where they cannot be told apart), PEP 695 type parameters,
   and the library signatures of the installed environment (`.venv`, `venv`, or the one uv or
@@ -59,6 +66,56 @@ after the facts is the existing one, extended where Python needs it.
 - **Commands.** `catalogs/click.yml` makes each click command an `entry_point` root, its path
   the command words (`sextant module analyze`), and each `click.argument` and `click.option`
   a `request_params` row (`argument`, `option` or `flag`). A trace starts at each command.
+- **FastAPI routes** (`catalogs/fastapi.yml`, plan 2). Every rule is FastAPI's own, quoted with
+  source lines in `scripts/probes/fastapi_rules.md` and measured on FastAPI 0.115.12 and 0.162.0.
+  - A route is the decorator call it is (`@router.get("/x")`), or `add_api_route` and
+    `api_route`. Each verb is one row; `methods=None` is `GET`.
+  - The path is kept as written and joined to its prefixes by plain concatenation, as FastAPI
+    joins them: the router's own `prefix`, each `include_router` prefix, and each sub-application
+    `mount`. A router subclass that passes its prefix to `super().__init__` holds it. A router
+    that a factory builds per caller gets each caller's prefix and verbs.
+  - The handler is the decorated function, or the bound method or function given to
+    `add_api_route`.
+  - The response is `response_model=` where it is written, else the return annotation. A
+    generic model (`ListResource[X]`, `list[X]`) is read as the type it names. `-> None` and a
+    `Response` subclass give no response model.
+  - Shapes FastAPI refuses at start-up (`methods=[]`, an empty prefix and path, a prefix that
+    does not start with `/` or ends with `/`) give no row and say why. No more such shapes are
+    detected: code that does not start is not Sextant's concern (ruled 2026-11-08).
+  - A route, include or mount registered only under a test Sextant does not decide
+    (`if settings.DEBUG:`, `if not os.path.exists(...): return`, in its own body or in every
+    caller of the function that makes it) keeps its row, and `endpoint_existence` says it
+    exists "not evaluated", naming each test as the code writes it (OI-368, ruling of
+    2026-10-23: a deployment decides such a test). A constant test and `TYPE_CHECKING` are
+    decided. A `sys.version_info` test in the module's own code is not: the deployment picks
+    the interpreter. An arm that always raises guards nothing (`if bad: raise ...` decides only
+    whether the app starts), and neither does `if __name__ == "__main__":`, an entry point. A
+    helper called once under a test and once not gives each row the test of the call it was
+    derived through (the call that gave its router, route, path or prefix); a row it cannot
+    tie to one call is "not evaluated", never served on the strength of another call. Measured: polar's 192 `/backoffice` rows, mealie's 3
+    single-page-app routes and one unread dynamic route; no other row moved.
+- **Request parameters and bodies.** `Query`, `Header`, `Cookie` (the functions and the
+  `fastapi.params` classes), in a default or in `Annotated`, give `endpoint_metadata` rows with
+  the wire name (an `alias`, or the header's spelling with `-`), and `required` or `optional`
+  as FastAPI decides it. An unmarked scalar is a query parameter; a path variable is part of the
+  path, not a row. A pydantic model parameter is the body; several body parameters, or
+  `Body(embed=True)`, or one non-model `Form`/`File` parameter, make an embedded body with one
+  field per parameter. A class-typed `Query()` parameter (a query model) gives one row per
+  field.
+- **Dependencies** (`Depends`, `Security`). A parameter filled by a recipe takes the recipe's
+  return (a generator's first `yield`), as one more path beside its in-module callers. A
+  recipe's own query, header and cookie parameters join the route's. Route, router, include and
+  app `dependencies=` lists join the routes they reach; a mounted sub-application does not take
+  its parent's. Each recipe FastAPI runs for a route is a `roots` row at the route's address.
+- **pydantic shapes** (`catalogs/shape-models/pydantic.yml`). The wire name comes from
+  `serialization_alias`, `alias` or `validation_alias`, else the model's `alias_generator`
+  (configuration merged over the written bases as pydantic merges it), else the field name. A
+  field whose accepted input names differ from its output name is `partial` (one shape for both
+  directions). `required` follows pydantic: a field with no default is required; an unreadable
+  default is NULL (unknown). `exclude=True` drops a field from a shape only responses reach.
+  `@computed_field` adds an output field. Library base classes' fields are read from their
+  headers, so a shape is closed where every field is read; `extra="allow"`, a custom
+  serializer hook or an unread base keeps it open.
 
 ## Measured
 
@@ -93,6 +150,42 @@ On the development Mac, Python 3.14.10. Full figures and commands:
   whole resolve (13 s on polar), which only an incremental resolve would shorten. The scan is
   not run in parallel, which spec §5 also planned; it would shorten the cold run. The
   performance file has the measurements.
+
+### FastAPI (plan 2)
+
+Measured on 2026-11-09 at the end of plan 2, on the development Mac (Python 3.14.10). FastAPI's
+own route table is printed by `tests/e2e/fastapi_oracle.py`, run in each service's own
+environment: it imports the app and asks FastAPI. Sextant never runs the code it reads.
+
+| | `fixtures/orders-fastapi` | polar `server/` | mealie |
+|---|---|---|---|
+| FastAPI routes (method, path pairs) | 13 (14) | 625 (671) | 289 (289) |
+| Sextant FastAPI rows | 14 | 881 | 293 |
+| Pairs FastAPI serves that Sextant finds | 14 of 14 | 668 of 671 | 289 of 289 |
+| Rows `resolved` / `partial` / `unresolved` | 14 / 0 / 0 | 717 / 119 / 45 | 245 / 47 / 1 |
+| Cold analysis (target 60 s, ceiling 300 s) | 2.3 s | 36.9 s | 12.6 s |
+| Warm analysis, no file changed (target 10 s) | | 1.5 s | 1.2 s |
+
+- **The fixture equals FastAPI.** `tests/e2e/test_orders_fastapi.py` compares each route's
+  method, path, handler and response model, its parameters (kind, wire name, required), its
+  body, and the recipes FastAPI runs for it, with FastAPI's answer. The wire names and required
+  fields of `OrderIn` (as a request reads it) and `OrderOut` (as a response writes it) equal
+  pydantic's own JSON schema. Every row Sextant writes for the fixture is pinned: an extra row
+  fails.
+- **polar.** The 3 pairs not found are the versioned `GET /2026-04/openapi.json`,
+  `/2026-10/openapi.json` and `/2027-01/openapi.json`, which Sextant gives as one `partial` row,
+  `/{}/openapi.json`. The 31 rows of apps written inside `tests/` are gone since test code
+  is not read. 193 rows are served only through `app.host(...)`, which FastAPI's table
+  for `polar.app` (run with no host set) does not hold: the checkout-link route
+  `/{client_secret}` and a second row of each of the 192 backoffice routes, at its own path.
+  Each carries a `host` entry (the settings field is not read, so the host is `unresolved`)
+  and exists "not evaluated" under the tests its `app.host` call is under.
+- **mealie.** The 3 rows FastAPI does not serve are the single-page-app routes, registered only
+  when `settings.PRODUCTION and not settings.TESTING` and the static-files directory exists
+  (`mealie/app.py`, `routes/spa/__init__.py`). The oracle ran with `PRODUCTION=true` and no
+  static files, so FastAPI returned before registering them. Sextant publishes all three as
+  existing "not evaluated" under both tests.
+- **dispatch** (`examples/py-dispatch`) was not measured: it has no installed environment.
 
 ## What is not read, and why
 
@@ -150,7 +243,7 @@ The comparison with a type checker, which solves the first four exactly, is
 | `break` or `continue` after a `finally` | unresolved where the `finally` value is exact | Task 6, parked |
 | an unreachable call | written, with no dominator and both flow flags false | R15: never a wrong true |
 | a call inside a `with` block | never `on_every_exit`; the call after is dominated by `__enter__` only | R16 |
-| a parameter's default value | not a fact | R27 note: FastAPI's `Depends(...)` defaults will need one (plan 2) |
+| a parameter's default value | a fact since plan 2 (`Parameter.default`, `annotation_value`) | plan 2 task 2 |
 | a function-level `try` import binding a class on each branch | the last binding is taken | Task 5, deferred |
 | two import roots holding one relative path | one file's facts overwrite the other's | Task 4, deferred |
 | `@x.setter`, `@x.deleter` | the setter's receiver is not tied to `x`; the deleter reads as a second body | Task 4, deferred |
@@ -181,6 +274,27 @@ The comparison with a type checker, which solves the first four exactly, is
 | a keyword-form capture under `--shadow` | not seen by the shadow ask reader | Task 9b §9 item 11, logged |
 | a group made by a class constructor | not tied to its entry-point name | Task 9b re-review, logged |
 | a program started by the code (`subprocess`, `java -jar`) | not recorded | OI-323 |
+
+**FastAPI and pydantic** (each an open issue in Plane; the full list is OI-346 to OI-416 in
+`docs/open-issues.md`):
+
+| Shape | What happens | Record |
+|---|---|---|
+| a type written as text (`"Annotated[int, Field(alias='S')]"`, a quoted alias) | not read: the name, the body or the marker is lost | OI-348 |
+| a dependency's own body parameters | no request body | OI-378 |
+| a `@dataclass` or library class as a recipe; a bound method or staticmethod recipe | no parameters and no root; `not_readable` | OI-379, OI-380 |
+| `response_model=Out` written as a keyword | the descriptor says `nullable: true` (the JVM class-literal rule) | OI-362 |
+| `response_model=List[X]` (`typing.List`, `Dict`) | `unresolved` | OI-395 |
+| `-> Iterator[X]` on a function that is not a generator | no response | OI-361 |
+| `APIRouter.mount`; a decorator alias on two paths | not read | OI-369, OI-364 |
+| a subclass of `params.Query` or of `Request`; a parameter typed `object` | not a marker; a body | OI-374, OI-371, OI-375 |
+| shapes FastAPI refuses or accepts only at start-up | not all mirrored (ruled: no more are added) | OI-370, OI-367 |
+| `class Config:` (pydantic 1 style); `validate_by_alias=False`; `response_model_by_alias=False` | not read | OI-388, OI-389 |
+| `create_model(...)` as a base; a pydantic dataclass's `config=`; `RootModel` redeclaring `root` | a closed shape that is wrong | OI-401, OI-402, OI-406 |
+| `Field(exclude_if=...)` on a plain field; `@field_serializer` | required; the annotation's type | OI-403, OI-346 |
+| `UploadFile` | its header attributes as fields | OI-407 |
+| a field default made through `*args`, or by a library helper | `required` NULL | OI-396, OI-408 |
+| a recipe path over `PATH_CAP` | `non_enumerable` (10 polar sites) | OI-377 |
 
 **Finding modules:**
 
@@ -228,8 +342,9 @@ is `docs/research/2026-11-06-python-type-tools.md`.
 
 ---
 
-**The sections below are the inventory the framework plans start from.** None of their rows is
-read yet: they say what each framework and library writes, and how hard it is to read.
+**The sections below are the inventory the framework plans start from.** Only FastAPI and
+Pydantic are read today (above); the other rows say what each framework and library writes, and
+how hard it is to read.
 
 ## Inbound HTTP
 
@@ -293,7 +408,7 @@ Ranked by how much we can recover:
 
 | Style | Recoverable | Note |
 |---|---|---|
-| **Pydantic** (`class Order(BaseModel)`) | **Fully** | Fields, types, defaults, `Optional`, aliases via `Field(alias=…)`. As good as a Java DTO. Used by FastAPI and Litestar, so the *modern* frameworks come with typed payloads attached. |
+| **Pydantic** (`class Order(BaseModel)`) | **Fully** | Fields, types, defaults, `Optional`, aliases via `Field(alias=…)`. As good as a Java DTO. Used by FastAPI and Litestar, so the *modern* frameworks come with typed payloads attached. **Read since plan 2** (`shape-models/pydantic.yml`, above). |
 | `dataclasses`, `attrs`, `TypedDict`, `msgspec` | Fully | Declared fields with annotations |
 | `marshmallow` schemas | Fully | `fields.Str(required=True)` — declarative, and carries `required` explicitly |
 | Django / DRF serializers | Mostly | Declarative fields; `ModelSerializer` derives them from the model, so the model must be read too |

@@ -17,7 +17,7 @@ json` binds `json` to `ujson` and to `json`, and never to the first one silently
 
 import ast
 import builtins
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, Protocol
 
@@ -29,11 +29,20 @@ if TYPE_CHECKING:
 # What a name of THIS file is, where the file can tell. An imported name has no kind:
 # whether `fastapi.FastAPI` is a class or a function is in a file this scanner does not
 # read.
-Kind = Literal["class", "function", "variable", "type_variable", "type_alias", "new_type"]
+# `new_class` is a name bound to a class the code makes by a call (the typing
+# specification's functional `NamedTuple` and `TypedDict`): a new class with no class
+# symbol, so the name names no type and a call of it is no construction of a known class.
+Kind = Literal[
+    "class", "function", "variable", "type_variable", "type_alias", "new_type", "new_class"
+]
 
 # The calls that make a name a type variable (the typing specification's three).
 _TYPE_VARIABLE_FACTORIES = frozenset({"TypeVar", "ParamSpec", "TypeVarTuple"})
+# The typing specification's functional forms that make a new class (ruling R17 review).
+_CLASS_FACTORIES = frozenset({"NamedTuple", "TypedDict"})
 _TYPING_MODULES = frozenset({"typing", "typing_extensions"})
+# What a statement can be inside: another statement's block, a handler's or a `case`'s.
+_BLOCKS = (ast.stmt, ast.excepthandler, ast.match_case)
 
 
 @dataclass(frozen=True)
@@ -115,6 +124,19 @@ class LibraryNames(Protocol):
         filled by the arguments, or None."""
         ...
 
+    def metaclass_call(
+        self,
+        metaclass: str,
+        arguments: Sequence[CallArgument],
+        argument_types: Sequence[TypeRef | None],
+        *,
+        unpacked: bool,
+    ) -> TypeRef | bool:
+        """What calling a class of the metaclass `metaclass` gives: True for an instance of
+        the class called, the one other class it names, or False where it makes a new class
+        or cannot be told."""
+        ...
+
     @property
     def hierarchy(self) -> "Hierarchy":
         """The lookup orders of the libraries' classes, worked out once per scan."""
@@ -152,6 +174,26 @@ class ProjectNames(Protocol):
         """The type a class body of another file of the module declares for an attribute."""
         ...
 
+    def names_an_alias(self, module: str, name: str) -> bool:
+        """Whether that file binds `module.name` to a module-level type alias, whether or not
+        the type it is can be named."""
+        ...
+
+    def alias(self, module: str, name: str) -> TypeRef | None:
+        """The type `module.name` is, where that file binds it to a module-level type alias
+        (`DbSession = Annotated[Session, ...]` is `Session`). None for any other name."""
+        ...
+
+    def binds_class(self, module: str, name: str) -> bool:
+        """Whether that file binds `module.name` to its own class `name` alone, and to no other
+        value on any statement: a call of it constructs that class."""
+        ...
+
+    def class_object(self, module: str, name: str) -> str | None:
+        """The class `X` that `module.name` holds, where every write to it in that file gives
+        a written `type[X]` (ruling R17). None for any other name."""
+        ...
+
 
 # The question a file asks for another file's header (`project.HEADER`).
 _HEADER_QUESTION = "header"
@@ -172,6 +214,12 @@ class ModuleIndex:
     asked: set[tuple[str, str]] | None = field(default=None, compare=False, repr=False)
     # The headers of the module's files (`project.py`), where the scan reads them.
     headers: ProjectNames | None = field(default=None, compare=False, repr=False)
+    # How a library module's version tests are decided (`libraries.py`), by module path:
+    # the Python it is read for and its names for `sys` (`VersionTests`), as that Python runs
+    # only one arm (ruling R22). None for the module's own files, whose every branch is read.
+    versions: "Callable[[str], VersionTests | None] | None" = field(
+        default=None, compare=False, repr=False
+    )
     # Every module path and every folder above one: `owns`' answer, worked out once,
     # because every name of another module asks it (GUIDELINES §8.7).
     _owned: frozenset[str] = field(init=False, repr=False, compare=False)
@@ -204,6 +252,159 @@ class ModuleIndex:
             else path in (self.modules if question == "is_module" else self._owned)
             for question, path in asked
         ]
+
+
+@dataclass(frozen=True)
+class VersionTests:
+    """What one library module's `if` on the Python version is decided against (ruling
+    R22): the Python it is read for, the names the module's imports bind to the module
+    `sys` (`import sys`, `import sys as _sys`), and those they bind to `sys.version_info`
+    (`from sys import version_info`). `release` is that Python's whole `sys.version_info`
+    (`(3, 12, 4, "final", 0)`) where the environment states it; None where only the minor
+    version is known."""
+
+    python: tuple[int, int]
+    modules: frozenset[str]
+    values: frozenset[str]
+    release: tuple[int | str, ...] | None = None
+
+
+def version_tests(
+    tree: ast.Module, python: tuple[int, int], release: tuple[int | str, ...] | None = None
+) -> VersionTests:
+    """The module's names for `sys` and `sys.version_info`, by its imports, wherever they
+    are written. A name some import binds to anything else as well is neither: what it is
+    when the test runs depends on which import ran."""
+    modules: set[str] = set()
+    values: set[str] = set()
+    other: set[str] = set()
+    for node in every_statement(tree.body):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "sys":
+                    modules.add(alias.asname or "sys")
+                else:
+                    other.add(alias.asname or alias.name.partition(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                bound = alias.asname or alias.name
+                if node.module == "sys" and node.level == 0 and alias.name == "version_info":
+                    values.add(bound)
+                else:
+                    other.add(bound)
+    return VersionTests(python, frozenset(modules - other), frozenset(values - other), release)
+
+
+def every_statement(
+    body: list[ast.stmt], index: "ModuleIndex | None" = None, here: str = ""
+) -> Iterator[ast.AST]:
+    """Every statement of `body` at every depth, as `ast.walk` meets them, with the handlers
+    and `case`s that hold some; with `index`, not those of an arm of a version test the read
+    does not run (`live_arm`). No expression holds a statement, so the walk never goes into
+    one (plan 2 task 9b: walking every node was most of what `version_tests`,
+    `structure._rebound_names` and `calls._rebound_nonlocal` cost)."""
+    pending: list[ast.AST] = list(body)
+    while pending:
+        node = pending.pop()
+        yield node
+        live = (
+            live_arm(node, index, here) if index is not None and isinstance(node, ast.If) else None
+        )
+        if live is not None:
+            pending.extend(live)
+        else:
+            pending.extend(
+                child for child in ast.iter_child_nodes(node) if isinstance(child, _BLOCKS)
+            )
+
+
+def live_arm(node: ast.If, index: ModuleIndex, here: str) -> list[ast.stmt] | None:
+    """The one arm of `node` that runs, where `node` tests the Python version and `index`
+    reads the library module `here` for a known Python (`ModuleIndex.versions`); None where
+    both arms are read."""
+    tests = index.versions(here) if index.versions is not None else None
+    decided = None if tests is None else version_test(node.test, tests)
+    if decided is None:
+        return None
+    return node.body if decided else node.orelse
+
+
+def live_statements(body: list[ast.stmt], index: ModuleIndex, here: str) -> list[ast.stmt]:
+    """`body` with each `if` on the Python version that `live_arm` decides replaced by the
+    statements of its live arm, at every depth; every other statement as it is."""
+    found: list[ast.stmt] = []
+    for node in body:
+        live = live_arm(node, index, here) if isinstance(node, ast.If) else None
+        if live is None:
+            found.append(node)
+        else:
+            found.extend(live_statements(live, index, here))
+    return found
+
+
+def version_test(test: ast.expr, tests: VersionTests) -> bool | None:
+    """`sys.version_info >= (3, 11)` and its other comparisons, `sys` and `version_info`
+    being whatever names the module's imports bind them to; None for any other test.
+
+    Read as CPython reads it: the whole `sys.version_info` against the written tuple, so
+    on 3.12.4 `> (3, 12)` holds (a longer tuple with an equal start is the greater) and
+    `>= (3, 12, 1)` holds. Where only the minor version is known, the test is decided only
+    where every release of that minor version gives one answer, its first (`3.12.0`
+    alpha) and any later; else None, so both arms are read, never a guessed one."""
+    if not (
+        isinstance(test, ast.Compare)
+        and len(test.ops) == 1
+        and _names_version_info(test.left, tests)
+        and isinstance(test.comparators[0], ast.Tuple)
+    ):
+        return None
+    try:
+        written = tuple(ast.literal_eval(part) for part in test.comparators[0].elts)
+    except (ValueError, TypeError):
+        return None
+    if not all(isinstance(part, int | str) and not isinstance(part, bool) for part in written):
+        return None
+    if tests.release is not None:
+        return _compared(test.ops[0], tests.release, written)
+    first = _compared(test.ops[0], (*tests.python, 0, "alpha", 0), written)
+    last = _compared(test.ops[0], (*tests.python, _LAST_MICRO), written)
+    return first if first == last else None
+
+
+# Above every micro version a release has: the last release of a minor version.
+_LAST_MICRO = 1 << 30
+
+
+def _compared(
+    operator: ast.cmpop, running: tuple[int | str, ...], written: tuple[object, ...]
+) -> bool | None:
+    try:
+        if isinstance(operator, ast.GtE):
+            return running >= written
+        if isinstance(operator, ast.Gt):
+            return running > written
+        if isinstance(operator, ast.Lt):
+            return running < written
+        if isinstance(operator, ast.LtE):
+            return running <= written
+    except TypeError:
+        # A number written where the release has its level (`(3, 12, 0, 0)`): Python
+        # itself raises.
+        return None
+    return None
+
+
+def _names_version_info(node: ast.expr, tests: VersionTests) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in tests.values
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "version_info"
+        and isinstance(node.value, ast.Name)
+        and node.value.id in tests.modules
+    )
 
 
 def module_path(relative: str) -> tuple[str, bool]:
@@ -311,7 +512,11 @@ class _Binder:
         elif isinstance(node, ast.Assign | ast.AnnAssign):
             self._assignment(node, names)
         elif isinstance(node, ast.If):
-            names = _either(names, [self.run(node.body, names), self.run(node.orelse, names)])
+            decided = live_arm(node, self._index, self._here)
+            if decided is not None:
+                names = self.run(decided, names)
+            else:
+                names = _either(names, [self.run(node.body, names), self.run(node.orelse, names)])
         elif isinstance(node, ast.Try | ast.TryStar):
             tried = self.run(node.orelse, self.run(node.body, names))
             handled = [self.run(handler.body, names) for handler in node.handlers]
@@ -387,10 +592,16 @@ class _Binder:
         ):
             return "type_alias", node.value
         value = node.value
+        if isinstance(value, ast.Subscript) and self._is_typing(value.value, names, {"Annotated"}):
+            # `X = Annotated[T, ...]` (plan 2026-11-08 N2): the name holds the form, and as a
+            # type it is `T`, as a `TypeAlias` is what it is written to be.
+            return "type_alias", value
         if isinstance(value, ast.Call) and self._is_typing(
             value.func, names, _TYPE_VARIABLE_FACTORIES
         ):
             return "type_variable", None
+        if isinstance(value, ast.Call) and self._is_typing(value.func, names, _CLASS_FACTORIES):
+            return "new_class", None
         return "variable", None
 
     def _is_typing(
@@ -519,6 +730,13 @@ def holds_decorated_value(
     it carries a decorator that is not one of the language's own method kinds. With both
     kinds, the name holds the outermost decorator's result (design §3e)."""
     return any(not is_descriptor(d, node.name, lookup) for d in node.decorator_list)
+
+
+def makes_a_class(target: Target) -> bool:
+    """Whether calling `target` makes a new class: one of the typing specification's
+    functional forms (`NamedTuple("Point", ...)`, `TypedDict("Movie", ...)`), never by the
+    name alone."""
+    return any(is_typing(target, name) for name in _CLASS_FACTORIES)
 
 
 def is_typing(target: Target, name: str) -> bool:

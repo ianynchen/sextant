@@ -1,0 +1,4 @@
+# The fixture is a Python project of its own (it has a pyproject.toml), so reading Sextant's
+# repository would find it as a second module. Sextant reads itself as one module; the
+# fixture is analysed on its own, by its own tests.
+fixtures/orders-fastapi/

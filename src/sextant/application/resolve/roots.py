@@ -58,6 +58,15 @@ route is an address whose handler no chain reader named, so it is an endpoint
 with no root at all, and this pass cannot give a trace to a method nothing
 names.
 
+## The recipes a framework runs first are a catalog's too
+
+A framework that runs recipes before a route's handler (FastAPI's `Depends`, plan 2026-11-08
+N11) starts work at the route's address in each of them: an authentication check, a database
+session. Which ones run is read by the engine that reads the route's parameters
+(`engines/fluent.py`), so the engine writes one `inbound_endpoint` row per recipe at that
+address, and this pass keeps it as it keeps an entry point. The recipe is not the row's
+handler: the handler does not call it, so no call edge stands in for it.
+
 ## The third kind is a catalog's, not this pass's
 
 `entry_point` — D00 §4's third member — is **not derived here**. Which
@@ -165,13 +174,15 @@ def record_roots(workspace: Workspace) -> None:
     kind, then the address, so two runs over one workspace insert the same
     bytes in the same order.
 
-    The `entry_point` rows a catalog's engine wrote (module docstring) are kept, in the same
-    order with the rest: this pass derives the other two kinds and never those.
+    The rows a catalog's engine wrote (module docstring) are kept, in the same order with the
+    rest: the `entry_point` rows, which this pass never derives, and the recipe rows (plan
+    2026-11-08 N11), `inbound_endpoint` at an endpoint row's address, which name no handler of
+    that row and so cannot be derived from `endpoints`.
     """
     kept = {
         (
             _text(row["handler"]),
-            RootKind.ENTRY_POINT,
+            RootKind(str(row["root_kind"])),
             _text(row["protocol"]),
             _text(row["method"]),
             _text(row["path"]),
@@ -179,7 +190,6 @@ def record_roots(workspace: Workspace) -> None:
             _text(row["path_kind"]),
         )
         for row in workspace.query("roots")
-        if str(row["root_kind"]) == str(RootKind.ENTRY_POINT)
     }
     workspace.derive("roots_reset")
     found = (

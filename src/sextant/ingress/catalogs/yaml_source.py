@@ -66,6 +66,8 @@ class YamlCatalogSource:
             models[str(_required(raw, "id", path))] = raw
             if subdirectory == "bean-models":
                 _check_bean_model(raw, path)
+            if subdirectory == "shape-models":
+                _check_shape_model(raw, path)
         return models
 
     def bean_models(self) -> dict[str, dict[str, Any]]:
@@ -508,6 +510,7 @@ class YamlCatalogSource:
             shape = _shape_model_of(raw, shape_models, path)
             _check_made_by(raw, path)
             _check_argument_references(raw, raw.get("style"), path)
+            _check_request_body(raw, path)
             catalogs.append(
                 Catalog(
                     id=_required(raw, "id", path),
@@ -542,7 +545,13 @@ class YamlCatalogSource:
                     # defines it, so `wrappers` stays on the catalog while the
                     # three payload-TYPE blocks below come from the shared
                     # model (D02 §1b).
-                    wrappers=raw.get("wrappers", []),
+                    # A shape model's own envelopes (a serialiser's type that writes the payload it
+                    # holds, `SkipJsonSchema[X]`) follow the catalog's: every catalog naming the
+                    # model unwraps them (task 9 re-review R2-9).
+                    wrappers=[
+                        *raw.get("wrappers", []),
+                        *(shape.get("wrappers", []) if shape is not raw else []),
+                    ],
                     # D02 §2e, §2f, §2g — the shape model's, resolved above. A
                     # catalog naming no `shape_model` and declaring none of the
                     # three still loads and contributes none, which is the
@@ -1173,6 +1182,212 @@ def _bean_model_of(
 _CONDITION_KINDS = ("profile", "property", "other")
 
 
+# D02 §1b, §2f, §2g: the keys a shape model may hold, the keys its `serialization` block may
+# hold, and N12's generator strategy words and `required` rule (`shapes.model_fields`).
+_SHAPE_MODEL_KEYS = frozenset(
+    {"id", "displayName", "serialization", "nullability", "known_types", "wrappers"}
+)
+_SERIALIZATION_KEYS = frozenset(
+    {
+        "name_from",
+        "ignore",
+        "default_strategy",
+        "accessors",
+        "input_name_from",
+        "alias_priority",
+        "name_generator",
+        "required",
+        "defaults",
+        "private_prefix",
+        "excluded_when",
+        "open_when",
+        "output_fields",
+        "output_open_when",
+    }
+)
+_GENERATOR_STRATEGIES = frozenset({"camel", "pascal", "humps_camelize"})
+_REQUIRED_RULES = frozenset({"no_default"})
+_KNOWN_TYPE_KEYS = frozenset({"type", "wire", "format", "nullable", "by"})
+
+
+def _check_shape_model(raw: dict[str, Any], path: Path) -> None:
+    """Refuses a malformed shape model, naming the file (D02 §1b, §2f, §2g; plan
+    2026-11-08-python-fastapi-inbound N12, N13): an unknown key, a `name_from` or
+    `input_name_from` entry naming neither an `annotation` nor a `call` with its argument, a
+    malformed `alias_priority`, `name_generator`, `defaults` or `known_types` entry, a strategy
+    or `required` rule outside N12's words, a generator function naming no probe (`by:`). A
+    typo here would silently strip every payload of the naming it believes it has."""
+    where = f"loading model {path}"
+    unknown = sorted(set(raw) - _SHAPE_MODEL_KEYS)
+    serialization = raw.get("serialization") or {}
+    unknown += sorted(f"serialization.{key}" for key in set(serialization) - _SERIALIZATION_KEYS)
+    if unknown:
+        raise CatalogError(f"{where}: unknown keys {unknown}")
+
+    def dotted(value: Any) -> bool:
+        return isinstance(value, str) and "." in value
+
+    def call_entry(entry: Any, name: str, extra: frozenset[str] = frozenset()) -> None:
+        if not (
+            isinstance(entry, dict)
+            and dotted(entry.get("call"))
+            and _is_argument_reference(entry.get("arg"))
+            and set(entry) <= {"call", "arg"} | extra
+        ):
+            raise CatalogError(f"{where}: `{name}` entry is `{{call, arg}}`, got {entry!r}")
+
+    for entry in serialization.get("name_from") or []:
+        if isinstance(entry, dict) and "annotation" in entry:
+            continue
+        call_entry(entry, "serialization.name_from")
+    for entry in serialization.get("input_name_from") or []:
+        call_entry(entry, "serialization.input_name_from")
+    if "alias_priority" in serialization:
+        priority = serialization["alias_priority"]
+        call_entry(priority, "serialization.alias_priority", frozenset({"generator_wins"}))
+        if not isinstance(priority.get("generator_wins"), int):
+            raise CatalogError(f"{where}: `alias_priority.generator_wins` is an integer")
+    generator = serialization.get("name_generator")
+    if generator is not None:
+        functions = generator.get("functions") if isinstance(generator, dict) else None
+        config_calls = generator.get("config_call") if isinstance(generator, dict) else None
+        if not (
+            isinstance(generator, dict)
+            and set(generator) <= {"config_field", "config_call", "arg", "by_name", "functions"}
+            and isinstance(generator.get("config_field"), str)
+            and (
+                dotted(config_calls)
+                or (
+                    isinstance(config_calls, list)
+                    and bool(config_calls)
+                    and all(dotted(call) for call in config_calls)
+                )
+            )
+            and _is_argument_reference(generator.get("arg"))
+            and all(_is_argument_reference(one) for one in generator.get("by_name") or [])
+            and isinstance(functions, list)
+        ):
+            raise CatalogError(
+                f"{where}: `name_generator` is `{{config_field, config_call (one or a list), "
+                f"arg, by_name?, functions}}`, got {generator!r}"
+            )
+        for entry in functions:
+            if not (
+                isinstance(entry, dict)
+                and set(entry) == {"function", "strategy", "by"}
+                and dotted(entry["function"])
+                and entry["strategy"] in _GENERATOR_STRATEGIES
+            ):
+                raise CatalogError(
+                    f"{where}: `name_generator.functions` entry is `{{function, strategy, by}}` "
+                    f"with a strategy in {sorted(_GENERATOR_STRATEGIES)}, got {entry!r}"
+                )
+            _check_probe(entry["by"], where)
+    if "required" in serialization and serialization["required"] not in _REQUIRED_RULES:
+        raise CatalogError(
+            f"{where}: `required` is one of {sorted(_REQUIRED_RULES)}, got "
+            f"{serialization['required']!r}"
+        )
+    for entry in serialization.get("defaults") or []:
+        when = entry.get("required_when") if isinstance(entry, dict) else None
+        if not (
+            isinstance(entry, dict)
+            and set(entry) <= {"call", "default_arg", "required_when"}
+            and dotted(entry.get("call"))
+            and isinstance(entry.get("default_arg"), list)
+            and all(_is_argument_reference(one) for one in entry["default_arg"])
+            and (
+                when is None
+                or (
+                    isinstance(when, dict)
+                    and set(when) == {"arg", "equals_field"}
+                    and _is_argument_reference(when["arg"])
+                    and dotted(when["equals_field"])
+                )
+            )
+        ):
+            raise CatalogError(
+                f"{where}: `defaults` entry is `{{call, default_arg: [<reference>], "
+                f"required_when?: {{arg, equals_field}}}}`, got {entry!r}"
+            )
+    excluded = serialization.get("excluded_when")
+    if "excluded_when" in serialization and not (
+        isinstance(excluded, dict)
+        and set(excluded) == {"keyword", "value"}
+        and isinstance(excluded["keyword"], str)
+        and excluded["keyword"].isidentifier()
+        and isinstance(excluded["value"], str | int | float | bool)
+    ):
+        raise CatalogError(
+            f"{where}: `excluded_when` is `{{keyword: <name>, value: <literal>}}`, got {excluded!r}"
+        )
+    opened = serialization.get("open_when")
+    if "open_when" in serialization and not (
+        isinstance(opened, dict)
+        and set(opened) == {"arg", "values"}
+        and _is_argument_reference(opened["arg"])
+        and isinstance(opened["values"], list)
+        and opened["values"]
+        and all(isinstance(value, str) for value in opened["values"])
+    ):
+        raise CatalogError(
+            f"{where}: `open_when` is `{{arg: <argument>, values: [<literal>, ...]}}`, got "
+            f"{opened!r}"
+        )
+    for entry in serialization.get("output_fields") or []:
+        if not (
+            isinstance(entry, dict)
+            and set(entry) <= {"decorator", "name_from", "absent_when"}
+            and dotted(entry.get("decorator"))
+            and all(
+                _is_argument_reference(entry[key])
+                for key in ("name_from", "absent_when")
+                if key in entry
+            )
+        ):
+            raise CatalogError(
+                f"{where}: `output_fields` entry is `{{decorator, name_from?, absent_when?}}`, "
+                f"got {entry!r}"
+            )
+    for entry in serialization.get("output_open_when") or []:
+        decorator = isinstance(entry, dict) and set(entry) == {"decorator"}
+        method = (
+            isinstance(entry, dict)
+            and set(entry) <= {"method", "also_input", "except_declared_by"}
+            and isinstance(entry.get("method"), str)
+            and entry["method"].isidentifier()
+            and isinstance(entry.get("also_input", False), bool)
+            and ("except_declared_by" not in entry or dotted(entry["except_declared_by"]))
+        )
+        if not ((decorator and dotted(entry["decorator"])) or method):
+            raise CatalogError(
+                f"{where}: `output_open_when` entry is `{{decorator}}` or `{{method, also_input?, "
+                f"except_declared_by?}}`, got {entry!r}"
+            )
+    prefix = serialization.get("private_prefix")
+    if "private_prefix" in serialization and not (isinstance(prefix, str) and prefix):
+        raise CatalogError(f"{where}: `private_prefix` is a non-empty string, got {prefix!r}")
+    for entry in raw.get("known_types") or []:
+        if not (
+            isinstance(entry, dict)
+            and set(entry) <= _KNOWN_TYPE_KEYS
+            and isinstance(entry.get("type"), str)
+            and isinstance(entry.get("wire"), str)
+        ):
+            raise CatalogError(
+                f"{where}: `known_types` entry is `{{type, wire, format?, nullable?, by?}}`, "
+                f"got {entry!r}"
+            )
+        if "by" in entry:
+            _check_probe(entry["by"], where)
+
+
+def _check_probe(by: Any, where: str) -> None:
+    """A `by:` is the path of the probe that read the rule."""
+    if not isinstance(by, str) or not by:
+        raise CatalogError(f"{where}: `by` names the probe that read the rule, got {by!r}")
+
+
 def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
     """Refuses a malformed `conditions` or `presence` block of a bean model — or a malformed
     `stereotypes` / `configuration_annotation` / `stereotype_name_attrs` /
@@ -1302,6 +1517,56 @@ def _check_bean_model(raw: dict[str, Any], path: Path) -> None:
 
 
 _INJECTIONS = ("exact_key", "candidates")
+_NAMES_RECIPE = "names_recipe"
+_EMPTY_RECIPES = ("parameter_type",)
+
+
+def _check_names_recipe(raw: dict[str, Any], where: str) -> None:
+    """`injection: names_recipe`'s keys (`_check_injection`): a misspelt one would leave every
+    marked parameter filled by nothing, read as a parameter no call fills."""
+    if "declaring_annotation" in raw:
+        raise CatalogError(
+            f"{where}: `injection: names_recipe` reads the recipe a call names; it declares no "
+            "`declaring_annotation`"
+        )
+    calls = raw.get("recipe_calls")
+    if not isinstance(calls, list) or not calls:
+        raise CatalogError(f"{where}: `injection: names_recipe` needs a non-empty `recipe_calls`")
+    for entry in calls:
+        reference = entry.get("recipe_arg") if isinstance(entry, dict) else None
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"owner", "method", "recipe_arg"}
+            or not all(isinstance(entry[key], str) and entry[key] for key in ("owner", "method"))
+            or not _is_argument_reference(reference)
+        ):
+            raise CatalogError(
+                f"{where}: a `recipe_calls` entry is `{{owner, method, recipe_arg}}`, "
+                f"`recipe_arg` a position, `{{keyword: name}}` or `{{arg: N, keyword: name}}`, "
+                f"got {entry!r}"
+            )
+    if raw.get("empty_recipe", _EMPTY_RECIPES[0]) not in _EMPTY_RECIPES:
+        raise CatalogError(
+            f"{where}: `empty_recipe` is one of {list(_EMPTY_RECIPES)}, got {raw['empty_recipe']!r}"
+        )
+
+
+def _is_argument_reference(value: Any) -> bool:
+    """A position, or `{keyword: name}` / `{arg: N, keyword: name}` (`_check_argument_references`'
+    form)."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value >= 0
+    if not isinstance(value, dict) or not set(value) <= _REFERENCE_KEYS:
+        return False
+    keyword, position = value.get("keyword"), value.get("arg", 0)
+    return (
+        isinstance(keyword, str)
+        and keyword.isidentifier()
+        and isinstance(position, int)
+        and not isinstance(position, bool)
+        and position >= 0
+    )
+
 
 # Spring's rungs (D02 §1c): `candidates` weighs the candidates by them, `exact_key` reads none.
 _LADDER_KEYS = ("qualifier_annotation", "name_attrs", "primary_annotation")
@@ -1312,7 +1577,15 @@ def _check_injection(raw: dict[str, Any], where: str) -> None:
     §2c). The value walk reads every model, so a model that declares recipes must say how
     the container matches a parameter to one: `exact_key` (Dagger's qualifier and full type)
     or `candidates` (Spring's ladder, whose keys it then needs). A model with no
-    `declaring_annotation` declares no recipe and says nothing about injection."""
+    `declaring_annotation` declares no recipe and says nothing about injection.
+
+    `names_recipe` (plan 2026-11-08 N5) is the third: the recipe is the value a marker call is
+    handed, so the model names those calls (`recipe_calls`: `{owner, method, recipe_arg}`,
+    `recipe_arg` an argument reference) and, optionally, what a call handed none makes the
+    recipe (`empty_recipe: parameter_type`), and declares no `declaring_annotation`."""
+    if raw.get("injection") == _NAMES_RECIPE:
+        _check_names_recipe(raw, where)
+        return
     if "declaring_annotation" not in raw:
         for key in ("injection", "multibinding_annotations", "injecting_annotations"):
             if key in raw:
@@ -1485,6 +1758,13 @@ def _slice_outside(raw: dict[str, object], path: Path) -> tuple[dict[str, object
     return tuple(outside)
 
 
+# A Python module's coordinate (D00 §5's `dependency_coordinates`): the distribution name as
+# PEP 503 normalizes it, which is how the Python detector records it (`detect/python.py`'s
+# `normalize_name`) — lower case, each run of `-`, `_` and `.` one `-`. Any other spelling
+# matches nothing the detector writes.
+_DISTRIBUTION_NAME = re.compile(r"[a-z0-9]+(-[a-z0-9]+)*")
+
+
 def _coordinates(raw: dict[str, Any], path: Path) -> tuple[str, ...]:
     """D02 §1's `detect.coordinates`, checked here for the reason every other
     value in this file is: it reaches a comparison against the coordinates a
@@ -1511,13 +1791,28 @@ def _coordinates(raw: dict[str, Any], path: Path) -> tuple[str, ...]:
             f"— got {detect!r} (D02 §1)"
         )
     declared = detect.get("coordinates", [])
+    # A distribution name is a Python build's coordinate only where the catalog's rule was read
+    # out of that distribution (`measured[].artifact`): a JVM catalog's group-less
+    # `spring-boot-starter-web` is shaped like one and is still the missing-group typo.
+    measured = raw.get("measured")
+    distributions = {
+        str(row.get("artifact"))
+        for row in (measured if isinstance(measured, list) else [])
+        if isinstance(row, dict)
+    }
     valid = isinstance(declared, list) and all(
-        isinstance(entry, str) and entry.count(":") == 1 for entry in declared
+        isinstance(entry, str)
+        and (
+            entry.count(":") == 1
+            or (_DISTRIBUTION_NAME.fullmatch(entry) is not None and entry in distributions)
+        )
+        for entry in declared
     )
     if not valid:
         raise CatalogError(
             f"loading catalog {path}: `detect.coordinates` must be a list of "
-            f"`groupId:artifactId` coordinates — got {declared!r} (D02 §1)"
+            f"`groupId:artifactId` coordinates, or PEP 503 distribution names the catalog's "
+            f"`measured` rows read its rule from — got {declared!r} (D02 §1)"
         )
     return tuple(declared)
 
@@ -1812,7 +2107,10 @@ def _returns_argument(entry: Any, path: Path) -> dict[str, Any]:
 # The styles whose engines read an argument written in a keyword form (`{keyword: name}`,
 # `{arg: N, keyword: name}`, design 2026-11-06-reading-decorators §3a), and the keys whose
 # every reader there takes such a reference (`values.argument_slot`, `_arg_at`): `single_call`'s
-# own `methods` positions, a `mount`'s two, and a call-naming `request_params` entry's. Every
+# own `methods` positions, a `mount`'s four (`router_arg`, `prefix_arg`, `dependencies_arg`,
+# `host_arg`),
+# a `router_holds` entry's two, a call-naming `request_params` entry's, and `request_body`'s
+# `embed_arg` (plan 2026-11-08 Task 7, on a `fluent` catalog). Every
 # other `*_arg` key is read as an integer somewhere (`client_arg`, `class_arg`, `value_arg`,
 # `block_arg`, `options_arg`, `handler_arg`, `payload_arg`, `receiver_arg`, …), and so is
 # `channel_arg` on a catalog that declares `dispatch` (`dispatch_hops`), so a mapping there
@@ -1830,16 +2128,44 @@ _REFERENCE_ARGUMENT_KEYS = frozenset(
         "address_arg_2",
         "router_arg",
         "prefix_arg",
+        "dependencies_arg",
+        "host_arg",
         "name_arg",
         "required_arg",
         "default_arg",
         "flag_arg",
+        "embed_arg",
     }
 )
 # `annotation_arg` names an annotation attribute's condition (`protocol_hint`, `wrappers`), a
 # mapping by design and no argument of a call.
 _NOT_AN_ARGUMENT = frozenset({"annotation_arg"})
 _REFERENCE_KEYS = frozenset({"arg", "keyword"})
+
+
+# `request_body`'s keys that name the CALLS a framework marks a parameter with, and how it
+# embeds a body (plan 2026-11-08 N4, Task 7): read only by the `fluent` engine, which matches
+# a handler's parameters against its markers; an `annotation_driven` catalog reads annotations.
+_BODY_CALL_KEYS = ("marker_calls", "bound_by_calls", "embed_arg", "name_arg", "embed_markers")
+
+
+def _check_request_body(raw: dict[str, Any], path: Path) -> None:
+    """`request_body`'s call keys only on a `fluent` catalog, and `bound_by_calls` never beside
+    `fallback: sole_unannotated` (which reads no binding): either would be read as nothing."""
+    body = (raw.get("matches") or {}).get("request_body")
+    if not isinstance(body, dict):
+        return
+    misplaced = [key for key in _BODY_CALL_KEYS if key in body]
+    if misplaced and raw.get("style") != "fluent":
+        raise CatalogError(
+            f"loading catalog {path}: `request_body` keys {misplaced} name the calls a `fluent` "
+            f"catalog's handlers carry; a `{raw.get('style')}` catalog reads annotations"
+        )
+    if "bound_by_calls" in body and body.get("fallback") == "sole_unannotated":
+        raise CatalogError(
+            f"loading catalog {path}: `request_body.bound_by_calls` belongs to `fallback: "
+            f"sole_unbound`, not `sole_unannotated`"
+        )
 
 
 def _check_argument_references(node: Any, style: Any, path: Path, dispatch: bool = False) -> None:

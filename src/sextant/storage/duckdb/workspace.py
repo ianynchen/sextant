@@ -49,7 +49,10 @@ _NAMED_QUERIES = {
     "fields": """
         SELECT symbol, document_id, seq, signature -> 'returns' AS returns,
                coalesce((modifiers ->> 'static')::BOOLEAN, false) AS "static",
-               coalesce((modifiers ->> 'transient')::BOOLEAN, false) AS "transient"
+               coalesce((modifiers ->> 'transient')::BOOLEAN, false) AS "transient",
+               signature -> 'annotation_value' AS annotation_value,
+               coalesce((modifiers ->> 'not_required')::BOOLEAN, false) AS not_required,
+               coalesce((modifiers ->> 'never_runs')::BOOLEAN, false) AS never_runs
         FROM symbols
         WHERE construct_kind = 'field'
         ORDER BY document_id, seq
@@ -119,6 +122,15 @@ _NAMED_QUERIES = {
     # instruction order, twice (NFR-1) — the same total ordering
     # `call_sites` takes for the same reason.
     "method_returns": "SELECT method, ordinal, value FROM method_returns ORDER BY method, ordinal",
+    # What each generator yields (`method_return.yielded`, plan 2026-11-08 N10), which the
+    # `method_returns` view leaves out: one row per `yield`, in the same order and grammar.
+    "method_yields": (
+        "SELECT payload ->> 'method' AS method, (payload ->> 'ordinal')::INTEGER AS ordinal, "
+        "payload -> 'value' AS value FROM raw_facts WHERE kind = 'method_return' "
+        "AND coalesce((payload ->> 'yielded')::BOOLEAN, false) "
+        "AND document_id IN (SELECT document_id FROM selected_documents) "
+        "ORDER BY method, ordinal"
+    ),
     # 2Q `G3`'s own derived table. Ordered so a site's candidate callees and
     # each callee's several returns read in one fixed order (NFR-1); `caller,
     # ordinal` alone is not total, since a site whose dispatch narrowed to
@@ -508,6 +520,33 @@ _NAMED_QUERIES = {
                FROM raw_facts WHERE kind = 'module'
            )
         ORDER BY s.symbol
+    """,
+    # The Python headers whose class body was read (D00 §5 `type_header`, fact schema 12), each
+    # with the functions it defines; the body's names are the header document's own `symbol`
+    # facts. Read by shape expansion (plan 2026-11-08 task 9c); no endpoint engine reads it.
+    "type_header_bodies": """
+        SELECT payload ->> 'symbol' AS symbol, payload -> 'methods' AS methods
+        FROM raw_facts
+        WHERE kind = 'type_header' AND (payload -> 'methods') IS NOT NULL
+        ORDER BY symbol
+    """,
+    # The Python module types (`construct_kind: module`, D00 §5a): an attribute read off a
+    # module is not a class attribute's, so no descriptor's `__get__` runs (task 9c re-review N1).
+    "module_types": """
+        SELECT symbol FROM symbols WHERE construct_kind = 'module' ORDER BY symbol
+    """,
+    # Each class statement's keyword arguments (fact schema 12, task 9c review C1): a module
+    # class's off its `symbol` fact, a library class's off its type header.
+    "class_keywords": """
+        SELECT payload ->> 'symbol' AS symbol, payload -> 'keywords' AS keywords
+        FROM raw_facts
+        WHERE kind = 'symbol' AND (payload -> 'keywords') IS NOT NULL
+          AND document_id IN (SELECT document_id FROM selected_documents)
+        UNION ALL
+        SELECT payload ->> 'symbol' AS symbol, payload -> 'keywords' AS keywords
+        FROM raw_facts
+        WHERE kind = 'type_header' AND (payload -> 'keywords') IS NOT NULL
+        ORDER BY symbol
     """,
     "type_header_annotations": """
         SELECT payload ->> 'symbol'          AS target,
@@ -1029,6 +1068,23 @@ _NAMED_QUERIES = {
         ORDER BY protocol, direction, method, path, caller, kind, name, value,
                  resolution, evidence, requirement
     """,
+    # OI-368: where each registered row exists, by the row; the identity columns and every
+    # condition column complete the order (NFR-1). `row_id` is kept here (the documents key on
+    # it, as on `endpoints`) and left out of the export.
+    "endpoint_existence": """
+        SELECT * FROM endpoint_existence
+        ORDER BY row_id, route, position, via, kind, expression, environment
+    """,
+    # OI-368: the call sites that run under a test of their own body (D00 §5 `guards`), and
+    # the calls that run each method, read once per resolve (`registration_conditions`).
+    "call_site_guards": """
+        SELECT caller, ordinal, guards FROM call_sites WHERE guards IS NOT NULL
+        ORDER BY caller, ordinal
+    """,
+    "calls_running": """
+        SELECT DISTINCT callee, caller, ordinal FROM call_edges WHERE callee IS NOT NULL
+        ORDER BY callee, caller, ordinal
+    """,
     # Spec 2026-09-19 §4d/§5a. The combinator's stash of per-route requirements, read once
     # per resolve by the requirements pass. Ordered on the whole row for the reason the
     # query above is: two selectors under one route are two rows that tie on every
@@ -1307,6 +1363,12 @@ _NAMED_QUERIES = {
     "system_bean_presence": (
         "SELECT * FROM system_bean_presence ORDER BY participant, bean, environment"
     ),
+    # Every inbound row served on one host only (an `endpoint_metadata` entry of kind `host`,
+    # OI-368), by its identity: the rows the linker leaves out of its path index.
+    "system_endpoint_hosts": (
+        "SELECT DISTINCT participant, protocol, method, path FROM system_endpoint_metadata "
+        "WHERE direction = 'inbound' AND kind = 'host' ORDER BY participant, protocol, method, path"
+    ),
 }
 
 # What the export PROJECTION masks (2K design §1), each named where its own
@@ -1506,9 +1568,11 @@ _EXPORT_QUERIES = {
     # services on (2K Task 1 review, ruled). Joined on the column's own
     # canonical JSON text, which is what `_stage_redactions` staged.
     "call_sites": f"""
-        SELECT c.* REPLACE (coalesce(j.masked::JSON, c.arguments) AS arguments)
+        SELECT c.* REPLACE (coalesce(j.masked::JSON, c.arguments) AS arguments,
+                            coalesce(g.masked, c.guards) AS guards)
         FROM call_sites c
         LEFT JOIN {_REDACTED_JSON} j ON j.original = c.arguments::VARCHAR
+        LEFT JOIN {_REDACTED_JSON} g ON g.original = c.guards
         ORDER BY c.caller, c.ordinal
     """,
     "symbols": "SELECT * FROM symbols ORDER BY symbol",
@@ -1671,6 +1735,21 @@ _EXPORT_QUERIES = {
         ORDER BY c.protocol, c.direction, c.method, c.path, c.handler, c.kind, c.expression,
                  c.environment, c.caller, c.via, c.bean_kind, c.bean
     """,
+    # OI-368: where each registered row exists. `path` is the row's own, so it masks by the
+    # address map; `expression` and `evidence` quote the code's test, masked as a condition's
+    # are (`redact_json`, `redact_condition_evidence`). `row_id` names nothing outside the run.
+    "endpoint_existence": f"""
+        SELECT x.* EXCLUDE (row_id)
+                   REPLACE (coalesce(a.masked, x.path) AS path,
+                            coalesce(j.masked, x.expression) AS expression,
+                            coalesce(t.masked, x.evidence) AS evidence)
+        FROM endpoint_existence x
+        LEFT JOIN {_REDACTED_ADDRESSES} a ON a.address = x.path
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = x.expression
+        LEFT JOIN {_REDACTED_EVIDENCE} t ON t.original = x.evidence
+        ORDER BY x.protocol, x.direction, x.method, x.path, x.handler, x.caller, x.route,
+                 x.position, x.via, x.expression, x.environment
+    """,
     "bean_conditions": f"""
         SELECT b.* REPLACE (coalesce(j.masked, b.expression) AS expression,
                             coalesce(t.masked, b.evidence) AS evidence)
@@ -1784,10 +1863,15 @@ _EXPORTED_TABLES = tuple(sorted(_EXPORT_QUERIES))
 _FACT_ONLY = frozenset(
     {
         "documents",
+        # The call sites under a test of their own body (OI-368): `call_sites` alone.
+        "call_site_guards",
         # The class-level annotations of header-read dependency types (D00 §5
         # `type_header`): a read over `raw_facts` alone, so cached per load like every
         # other fact query — the cache rule test is what said so.
         "type_header_annotations",
+        "type_header_bodies",
+        "class_keywords",
+        "module_types",
         "type_headers",
         # The module's own types and its siblings' (`symbols` and `documents`, both facts).
         "own_types",
@@ -1807,6 +1891,7 @@ _FACT_ONLY = frozenset(
         "call_sites",
         "field_writes",
         "method_returns",
+        "method_yields",
         "supertypes",
         "implementations",
         "superclasses",
@@ -1948,6 +2033,8 @@ _NAMED_DERIVATIONS = {
     "method_resolution_insert": "insert_method_resolution.sql",
     "endpoint_metadata_reset": "reset_endpoint_metadata.sql",
     "endpoint_metadata_insert": "insert_endpoint_metadata.sql",
+    "endpoint_existence_reset": "reset_endpoint_existence.sql",
+    "endpoint_existence_insert": "insert_endpoint_existence.sql",
     "bean_conditions_reset": "reset_bean_conditions.sql",
     "bean_conditions_insert": "insert_bean_conditions.sql",
     "interface_beans_insert": "insert_interface_beans.sql",
@@ -2284,6 +2371,9 @@ _FEDERATED_VIEWS: tuple[tuple[str, str, str], ...] = (
     # Where each conditional bean exists, per environment: the verdict a link states for
     # either end, read beside the rows above (spec 2026-10-22-conditional-beans §3).
     ("system_bean_presence", "bean_presence", "*"),
+    # Each participant's `endpoint_metadata`, for the routes served on one host only (a `host`
+    # entry, OI-368): the linker never takes one for a route of the main host.
+    ("system_endpoint_metadata", "endpoint_metadata", "*"),
 )
 
 # Names `schema.sql` once declared as a TABLE and now declares as a VIEW (spec
@@ -2710,6 +2800,7 @@ class DuckDbWorkspace:
             "SELECT DISTINCT path AS address FROM endpoints WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT peer FROM endpoints WHERE peer IS NOT NULL "
             "UNION SELECT DISTINCT path FROM endpoint_metadata WHERE path IS NOT NULL "
+            "UNION SELECT DISTINCT path FROM endpoint_existence WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM endpoint_conditions WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM open_questions WHERE path IS NOT NULL "
             "UNION SELECT DISTINCT path FROM roots WHERE path IS NOT NULL "
@@ -2781,7 +2872,10 @@ class DuckDbWorkspace:
             "UNION SELECT DISTINCT value::VARCHAR FROM method_returns WHERE value IS NOT NULL "
             "UNION SELECT DISTINCT value::VARCHAR FROM constants WHERE value IS NOT NULL "
             "UNION SELECT DISTINCT value::VARCHAR FROM field_writes WHERE value IS NOT NULL "
-            "UNION SELECT DISTINCT expression FROM bean_conditions WHERE expression IS NOT NULL"
+            "UNION SELECT DISTINCT expression FROM bean_conditions WHERE expression IS NOT NULL "
+            # OI-368: a code test's text, quoted in a guard and in a row's existence entry.
+            "UNION SELECT DISTINCT guards FROM call_sites WHERE guards IS NOT NULL "
+            "UNION SELECT DISTINCT expression FROM endpoint_existence WHERE expression IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_JSON,
@@ -2802,7 +2896,8 @@ class DuckDbWorkspace:
         # property condition quotes is masked by its KEY, which `redact_text` cannot see.
         evidence_rows = self._connection.execute(
             "SELECT DISTINCT evidence FROM bean_conditions WHERE evidence IS NOT NULL "
-            "UNION SELECT DISTINCT evidence FROM bean_presence WHERE evidence IS NOT NULL"
+            "UNION SELECT DISTINCT evidence FROM bean_presence WHERE evidence IS NOT NULL "
+            "UNION SELECT DISTINCT evidence FROM endpoint_existence WHERE evidence IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_EVIDENCE,

@@ -26,20 +26,31 @@ declares `request_requirement_attrs` and owns an inbound row (two shipped), the 
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
+from functools import partial
+from itertools import product
 from typing import Any
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.effective_calls import effective_call_sites
 from sextant.application.resolve.engines.annotation_driven import effective_annotation_uses
+from sextant.application.resolve.parameter_markers import Marker
 from sextant.application.resolve.routing_conflicts import _discriminators
 from sextant.application.resolve.shapes.arguments import _all_string_channels, _arg_at
+from sextant.application.resolve.shapes.contracts import body_calls
+from sextant.application.resolve.shapes.inbound_routes import (
+    MARKED_TWICE,
+    PATH_VARIABLE_DEFAULT,
+    PATH_VARIABLE_MARKED,
+)
+from sextant.application.resolve.shapes.model_fields import FieldName
 from sextant.application.resolve.shapes.rooting import _catalog_symbol
 from sextant.application.resolve.values import argument_reference
 from sextant.domain.redaction import REDACTED, Redactor
-from sextant.domain.symbols import bare_descriptor
+from sextant.domain.symbols import bare_descriptor, names_a_type
 
 # The redactor every ORIGIN writer of `endpoint_metadata` holds, built as
 # `engines/fluent.py` and `resolve/endpoint_attributes.py` build theirs: the built-ins
@@ -537,7 +548,9 @@ _REQUIREMENTS = frozenset({"binder", "optional"})
 # The styles whose `request_params` entries name a call (design 2026-11-06-reading-decorators
 # §3d, approved): a decorator's own arguments say what the parameter is.
 _CALL_STYLES = frozenset({"fluent"})
-# The keys such an entry carries.
+# The keys such an entry carries. `required_when`, `annotated_default` and `spelling` are read
+# on an entry matched on a handler parameter's markers (plan 2026-11-08-python-fastapi-inbound
+# N3); a decorator's own entry (click) never writes them.
 _REQUEST_PARAM_CALL_KEYS = frozenset(
     {
         "owner",
@@ -549,13 +562,27 @@ _REQUEST_PARAM_CALL_KEYS = frozenset(
         "default_arg",
         "flag_arg",
         "optional_when",
+        "required_when",
+        "annotated_default",
+        "spelling",
     }
 )
+# The keys of the one `unmarked` entry (N4): what a parameter carrying none of the catalog's
+# marker calls is.
+_UNMARKED_KEYS = frozenset({"unmarked", "kind", "requirement", "scalar_only"})
+# `annotated_default`'s one word: a marker written in `Annotated` takes the parameter's own
+# default (FastAPI's `field_info.default = value`).
+_PARAMETER_DEFAULT = "parameter"
 # `name_arg`'s rule form (D02 §1f, §2): every string the call writes positionally.
 ALL_STRINGS = "all_strings"
 # What a command-line parameter is (D01 §3's inbound `kind` set, design §3d, approved): a
-# positional word, a named value, or a named switch that takes no value.
+# positional word, a named value, or a named switch that takes no value. What an HTTP request
+# parameter a marker call declares is (N3), on a catalog of routes: a header, a query parameter
+# or a cookie (`_PARAMETER_KINDS`).
 _CALL_KINDS = frozenset({"argument", "option", "flag"})
+_PARAMETER_KINDS = frozenset({"header", "query", "cookie"})
+# The keys only an entry matched on a parameter's markers reads.
+_MARKER_KEYS = frozenset({"required_when", "annotated_default", "spelling"})
 FLAG = "flag"
 # The framework's default for an entry naming a call: it rejects a command line without the
 # parameter, or it does not. `binder` is an annotation word, and `absent` a route-tree one.
@@ -566,7 +593,11 @@ def request_param_calls(catalog: Catalog) -> dict[tuple[str, str], dict[str, Any
     """A chain catalog's `request_params` entries, by the `(owner, method)` of the call each
     names (design 2026-11-06-reading-decorators §3d, approved): `{owner, method, kind,
     name_arg, requirement, required_arg?, default_arg?, flag_arg?}`, each `*_arg` an argument
-    reference (a position, `{keyword: name}` or `{arg: N, keyword: name}`). Validated here,
+    reference (a position, `{keyword: name}` or `{arg: N, keyword: name}`). On a catalog of
+    routes the entries name the marker calls a handler's parameters carry (plan
+    2026-11-08-python-fastapi-inbound N3): `kind` a request parameter's, `default_arg` one
+    reference or a list, and `required_when`, `annotated_default`, `spelling` beside them; its
+    `unmarked` entry is checked here and read by `unmarked_request_param`. Validated here,
     for the reason `_request_params` gives: a misspelt key read as absent turns the rule into
     another one silently. Empty where the catalog declares none."""
     declared = catalog.matches.get("request_params")
@@ -575,19 +606,27 @@ def request_param_calls(catalog: Catalog) -> dict[tuple[str, str], dict[str, Any
     where = f"loading catalog {catalog.source}: `request_params`"
     if not isinstance(declared, list):
         raise CatalogError(f"{where} must be a list of entries, got {declared!r}")
+    # A catalog of commands names the decorators a command passed (click); any other names the
+    # marker calls a route handler's parameters carry (N3), with their own kinds and keys.
+    commands = catalog.root_kind is not None
+    kinds = _CALL_KINDS if commands else _PARAMETER_KINDS
+    keys = _REQUEST_PARAM_CALL_KEYS - _MARKER_KEYS if commands else _REQUEST_PARAM_CALL_KEYS
     entries: dict[tuple[str, str], dict[str, Any]] = {}
     for entry in declared:
-        if not isinstance(entry, dict) or not set(entry) <= _REQUEST_PARAM_CALL_KEYS:
+        if not commands and isinstance(entry, dict) and "unmarked" in entry:
+            _check_unmarked(entry, where)
+            continue
+        if not isinstance(entry, dict) or not set(entry) <= keys:
             raise CatalogError(
                 f"{where} entries that name a call carry only "
-                f"{'/'.join(sorted(_REQUEST_PARAM_CALL_KEYS))}, got {entry!r}"
+                f"{'/'.join(sorted(keys))}, got {entry!r}"
             )
         for key in ("owner", "method", "kind", "name_arg", "requirement"):
             if key not in entry:
                 raise CatalogError(f"{where} entry lacks `{key}`: {entry!r}")
-        if entry["kind"] not in _CALL_KINDS:
+        if entry["kind"] not in kinds:
             raise CatalogError(
-                f"{where} `kind` must be one of {sorted(_CALL_KINDS)}, got {entry['kind']!r}"
+                f"{where} `kind` must be one of {sorted(kinds)}, got {entry['kind']!r}"
             )
         if entry["requirement"] not in _CALL_REQUIREMENTS:
             raise CatalogError(
@@ -597,7 +636,17 @@ def request_param_calls(catalog: Catalog) -> dict[tuple[str, str], dict[str, Any
         for key in ("name_arg", "required_arg", "default_arg", "flag_arg"):
             if key == "name_arg" and entry[key] == ALL_STRINGS:
                 continue
-            if key in entry and argument_reference(entry[key], spelled=False) is None:
+            # `default_arg` may name several arguments, any of which written is a default
+            # (N3: `default` and `default_factory`).
+            references = (
+                entry[key]
+                if key == "default_arg" and isinstance(entry.get(key), list)
+                else [entry.get(key)]
+            )
+            if key in entry and (
+                not references
+                or any(argument_reference(each, spelled=False) is None for each in references)
+            ):
                 raise CatalogError(
                     f"{where} `{key}` is a position, `{{keyword: name}}` or "
                     f"`{{arg: N, keyword: name}}`, got {entry[key]!r}"
@@ -613,6 +662,7 @@ def request_param_calls(catalog: Catalog) -> dict[tuple[str, str], dict[str, Any
                 f"{where} `optional_when` is `{{arg: <reference>, equals: <literal>}}`, "
                 f"got {when!r}"
             )
+        _check_marker_keys(entry, where)
         call = (_catalog_symbol(str(entry["owner"])), str(entry["method"]))
         if call in entries:
             raise CatalogError(f"{where} names `{entry['owner']}.{entry['method']}` twice")
@@ -682,9 +732,484 @@ def _requirement_of_call(entry: Mapping[str, Any], arguments: list[dict[str, Any
                 return None
             if type(value) is type(when["equals"]) and value == when["equals"]:
                 return "optional"
-    if "default_arg" in entry and _arg_at(arguments, entry["default_arg"]) is not None:
+    required_when = entry.get("required_when")
+    if required_when is not None:
+        written = _arg_at(arguments, required_when["arg"])
+        if written is not None and _is_field(written, required_when["equals_field"]):
+            return "required"
+    if "default_arg" in entry and any(
+        _arg_at(arguments, reference) is not None for reference in _references(entry["default_arg"])
+    ):
         return "optional"
     return str(entry["requirement"])
+
+
+def _references(declared: Any) -> list[Any]:
+    """A `*_arg` key's references: the list `default_arg` may be, else the one."""
+    return list(declared) if isinstance(declared, list) else [declared]
+
+
+def _is_field(argument: Mapping[str, Any], dotted: str) -> bool:
+    """Whether an argument is written as the static field `dotted` names (`<owner>.<name>`, D00
+    §5's `field` kind: `builtins.Ellipsis` is `...`)."""
+    owner, _, name = dotted.rpartition(".")
+    return argument.get("kind") == "field" and argument.get("symbol") == (
+        f"{_catalog_symbol(owner)}{name}."
+    )
+
+
+def _check_marker_keys(entry: Mapping[str, Any], where: str) -> None:
+    """The three keys an entry matched on a parameter's markers reads (N3), each in its one
+    form: `required_when: {arg: <reference>, equals_field: <owner>.<name>}`, `annotated_default:
+    parameter`, and `spelling: {replace: {<from>: <to>}, unless?: {arg: <reference>, equals:
+    <literal>}}`."""
+    when = entry.get("required_when")
+    if when is not None and not (
+        isinstance(when, dict)
+        and set(when) == {"arg", "equals_field"}
+        and argument_reference(when["arg"], spelled=False) is not None
+        and isinstance(when["equals_field"], str)
+        and "." in when["equals_field"]
+    ):
+        raise CatalogError(
+            f"{where} `required_when` is `{{arg: <reference>, equals_field: <owner>.<name>}}`, "
+            f"got {when!r}"
+        )
+    if "annotated_default" in entry and entry["annotated_default"] != _PARAMETER_DEFAULT:
+        raise CatalogError(
+            f"{where} `annotated_default` is `{_PARAMETER_DEFAULT}`, got "
+            f"{entry['annotated_default']!r}"
+        )
+    spelling = entry.get("spelling")
+    if spelling is None:
+        return
+    replace = spelling.get("replace") if isinstance(spelling, dict) else None
+    unless = spelling.get("unless") if isinstance(spelling, dict) else None
+    if not (
+        isinstance(spelling, dict)
+        and set(spelling) <= {"replace", "unless"}
+        and isinstance(replace, dict)
+        and replace
+        and all(isinstance(key, str) and isinstance(to, str) for key, to in replace.items())
+        and (
+            unless is None
+            or (
+                isinstance(unless, dict)
+                and set(unless) == {"arg", "equals"}
+                and argument_reference(unless["arg"], spelled=False) is not None
+                and isinstance(unless["equals"], str | int | float | bool)
+            )
+        )
+    ):
+        raise CatalogError(
+            f"{where} `spelling` is `{{replace: {{<from>: <to>}}, unless?: {{arg: <reference>, "
+            f"equals: <literal>}}}}`, got {spelling!r}"
+        )
+
+
+def _check_unmarked(entry: Mapping[str, Any], where: str) -> None:
+    """The `unmarked` entry (N4), checked: `{unmarked: true, kind, requirement, scalar_only?}`,
+    `kind` a request parameter's and `requirement` a call entry's."""
+    if (
+        not set(entry) <= _UNMARKED_KEYS
+        or entry.get("unmarked") is not True
+        or entry.get("kind") not in _PARAMETER_KINDS
+        or entry.get("requirement") not in _CALL_REQUIREMENTS
+        or not isinstance(entry.get("scalar_only", False), bool)
+    ):
+        raise CatalogError(
+            f"{where} the `unmarked` entry is `{{unmarked: true, kind, requirement, "
+            f"scalar_only?}}`, got {entry!r}"
+        )
+
+
+def unmarked_request_param(catalog: Catalog) -> Mapping[str, Any] | None:
+    """The catalog's one `unmarked` entry (N4), or None; checked by `request_param_calls`, which
+    every reader calls first. Two are refused."""
+    found = [
+        entry
+        for entry in catalog.matches.get("request_params") or []
+        if isinstance(entry, dict) and "unmarked" in entry
+    ]
+    if len(found) > 1:
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `request_params` declares `unmarked` twice"
+        )
+    return found[0] if found else None
+
+
+def body_field_requirement(
+    declared: Mapping[str, Any], marker: Marker | None, parameter: Mapping[str, Any]
+) -> str:
+    """Whether one field of an embedded body is required (FastAPI's `analyze_param`, as for a
+    request parameter): unmarked, `optional` where the parameter declares a default; marked in
+    `Annotated` (`request_body.annotated_default: parameter`), the same; otherwise the marker's
+    own arguments by `request_body.required_when` and `.default_arg` (`Body(None)` is
+    optional, `Body()` and `Body(...)` required)."""
+    defaulted = "optional" if parameter.get("declares_default") is True else "required"
+    if marker is None:
+        return defaulted
+    if (
+        marker.where == "annotation"
+        and declared.get("annotated_default") == _PARAMETER_DEFAULT
+        and parameter.get("declares_default") is True
+    ):
+        return "optional"
+    entry = {
+        "requirement": "required",
+        **{key: declared[key] for key in ("required_when", "default_arg") if key in declared},
+    }
+    return str(_requirement_of_call(entry, list(marker.site.get("arguments") or [])))
+
+
+# A parameter the body rule must take as bound for a reason of its own (`read_parameters`): a
+# receiver, or one whose markers read differently on two paths.
+BOUND = ("", "")
+
+
+@dataclass(frozen=True)
+class ParameterRules:
+    """What an inbound `fluent` catalog reads off its handlers' parameters (N3, N4): its entries
+    matched on a marker call, by `(owner, method)`; its `unmarked` entry; every call it names as
+    a marker (`markers`: the entries', `request_body.marker_calls` and `.bound_by_calls`); and
+    the markers that claim a parameter for something other than the path (`claims`: the
+    entries' and `marker_calls`), which a path variable cannot carry."""
+
+    entries: Mapping[tuple[str, str], Mapping[str, Any]]
+    unmarked: Mapping[str, Any] | None
+    markers: frozenset[tuple[str, str]]
+    claims: frozenset[tuple[str, str]]
+
+
+def parameter_rules(catalog: Catalog) -> ParameterRules | None:
+    """The catalog's `ParameterRules`, checked at the run's start; None where it declares no
+    `request_params`."""
+    if catalog.matches.get("request_params") is None:
+        return None
+    entries = request_param_calls(catalog)
+    body = body_calls(catalog, "marker_calls")
+    _check_body_embedding(catalog)
+    return ParameterRules(
+        entries=entries,
+        unmarked=unmarked_request_param(catalog),
+        markers=frozenset(entries) | body | body_calls(catalog, "bound_by_calls"),
+        claims=frozenset(entries) | body,
+    )
+
+
+def _check_body_embedding(catalog: Catalog) -> None:
+    """`request_body`'s embedding keys on a catalog of routes, checked at the run's start:
+    `embed_markers: {calls: [<owner>.<method>, ...], unless_subtype_of: [<type>, ...]}`, and
+    the requirement keys a field reads, in a request-parameter entry's forms (`_check_marker_keys`)."""
+    declared = catalog.matches.get("request_body") or {}
+    where = f"loading catalog {catalog.source}: `request_body`"
+    markers = declared.get("embed_markers")
+    if markers is not None and not (
+        isinstance(markers, dict)
+        and set(markers) == {"calls", "unless_subtype_of"}
+        and all(
+            isinstance(markers[key], list)
+            and markers[key]
+            and all(isinstance(name, str) and "." in name for name in markers[key])
+            for key in ("calls", "unless_subtype_of")
+        )
+    ):
+        raise CatalogError(
+            f"{where} `embed_markers` is `{{calls: [<owner>.<method>, ...], unless_subtype_of: "
+            f"[<type>, ...]}}`, got {markers!r}"
+        )
+    _check_marker_keys(declared, where)
+    if "default_arg" in declared and any(
+        argument_reference(each, spelled=False) is None
+        for each in _references(declared["default_arg"])
+    ):
+        raise CatalogError(f"{where} `default_arg` is a reference or a list of them")
+
+
+@dataclass(frozen=True)
+class ParameterReading:
+    """What one handler's parameters demand of a request on one row (`read_parameters`): the
+    rows `(kind, name, requirement, resolution)`, each parameter's marker call by declared
+    index as the body rule reads it (`contracts._body_parameter`'s `calls`), the marker itself
+    where one reading names it (`marked`: an embedded body field reads its arguments), and the
+    reason the framework refuses the registration, or None."""
+
+    rows: tuple[tuple[str, str | None, str | None, str], ...]
+    calls: Mapping[int, tuple[str, str]]
+    refused: str | None
+    marked: Mapping[int, Marker] = dataclass_field(default_factory=dict)
+
+
+def read_parameters(
+    rules: ParameterRules,
+    parameters: Sequence[Mapping[str, Any]],
+    markers: Callable[[int], Sequence[Marker]],
+    variables: frozenset[str],
+    scalar: Callable[[Mapping[str, Any]], bool | None],
+    address: str = "resolved",
+    models: Callable[[str], Sequence[tuple[str, FieldName]] | None] | None = None,
+) -> ParameterReading:
+    """Each handler parameter as the framework reads it on one row (N3, N4; FastAPI's
+    `analyze_param`, quoted in `scripts/probes/fastapi_rules.md` §4):
+
+    - **its marker** is the call the catalog names that made its default, and the LAST one in
+      its `Annotated` metadata (`fastapi_specific_annotations[-1]`), a non-marker element
+      changing nothing. `markers(i)` gives each path's markers (`parameter_markers`); two
+      paths are two readings, each read on its own, a row any gives written once;
+    - **refused** (the route has no row): a marker in `Annotated` beside a marker default
+      (`marked_twice`), one on a path variable that also has a default (`path_variable_default`)
+      and a marker on a path variable that claims it for something else (`path_variable_marked`),
+      in the order FastAPI asserts them. A parameter refused on one path and not another is
+      read on the paths that are not;
+    - **marked** with an entry's call: one row, `parameter_request_row`; where its type is a
+      class (an `object`), the class's fields are the parameters (FastAPI's query, header and
+      cookie models, R25): one row each, `model_parameter_row`, where `models` reads the class's
+      fields, else one row of the entry's kind naming nothing at `unresolved`; with another
+      marker, none (the path's `Path`, the body's, a dependency);
+    - **unmarked**: a path variable is the address's; else the `unmarked` entry where its type
+      is a scalar (`scalar_only`), optional where it declares a default, at the row's `address`
+      resolution: on a path not read whole, the parameter may name one of its variables, so the
+      row is no surer than the path; else nothing here (the body rule reads it).
+
+    A receiver is no request parameter."""
+    rows: dict[tuple[str, str | None, str | None, str], None] = {}
+    calls: dict[int, tuple[str, str]] = {}
+    marked: dict[int, Marker] = {}
+    for index, parameter in enumerate(parameters):
+        if parameter.get("receiver") is True:
+            calls[index] = BOUND
+            continue
+        found = markers(index)
+        defaults = {
+            marker.path: marker
+            for marker in found
+            if marker.where == "default" and _call_of(marker) in rules.markers
+        }
+        annotated: dict[int, Marker] = {}
+        for marker in found:
+            if marker.where == "annotation" and _call_of(marker) in rules.markers:
+                held = annotated.get(marker.path)
+                if held is None or marker.order > held.order:
+                    annotated[marker.path] = marker
+        default_paths: list[Marker | None] = [*defaults.values()] or [None]
+        annotation_paths: list[Marker | None] = [*annotated.values()] or [None]
+        pairs = list(product(default_paths, annotation_paths))
+        readings = [
+            _reading(rules, parameter, default, annotation, variables, scalar, address, models)
+            for default, annotation in pairs
+        ]
+        kept = [reading for reading in readings if reading[0] is None]
+        winning = [
+            annotation or default
+            for (default, annotation), reading in zip(pairs, readings, strict=True)
+            if reading[0] is None
+        ]
+        if len(winning) == 1 and winning[0] is not None:
+            marked[index] = winning[0]
+        if not kept:
+            return ParameterReading(rows=(), calls={}, refused=readings[0][0])
+        winners = {winner for _, winner, _ in kept}
+        if winners != {None}:
+            winner = winners.pop() if len(winners) == 1 else None
+            calls[index] = winner if winner is not None else BOUND
+        for _, _, found_rows in kept:
+            rows.update(dict.fromkeys(found_rows))
+    return ParameterReading(rows=tuple(rows), calls=calls, refused=None, marked=marked)
+
+
+@dataclass(frozen=True)
+class Dependant:
+    """What the recipes a route's framework runs before its handler demand of a request (plan
+    2026-11-08 N5, N6, N11): their own parameters' rows, in `read_parameters`' form, and the
+    recipe bodies that run, each once, in the order they were met."""
+
+    rows: tuple[tuple[str, str | None, str | None, str], ...]
+    recipes: tuple[str, ...]
+
+
+def read_dependant(
+    rules: ParameterRules,
+    calls: Sequence[tuple[Mapping[str, Any], tuple[str, int] | None]],
+    bodies: Callable[[Mapping[str, Any], tuple[str, int] | None], Sequence[str]],
+    parameters: Callable[[str], Sequence[Mapping[str, Any]] | None],
+    markers: Callable[[str, int], Sequence[Marker]],
+    recipe_calls: Callable[[Sequence[Marker]], Sequence[Mapping[str, Any]]],
+    variables: frozenset[str],
+    scalar: Callable[[Mapping[str, Any]], bool | None],
+    address: str,
+    models: Callable[[str], Sequence[tuple[str, FieldName]] | None] | None = None,
+) -> Dependant:
+    """The route's dependant flattened, as FastAPI flattens it (`get_flat_dependant`): each
+    recipe call in `calls` (a handler parameter's marker, with that parameter, or a
+    `dependencies=` entry, with none) names the bodies that run (`bodies`); each body's own
+    parameters (`parameters`, the receiver aside) are read as a handler's are
+    (`read_parameters`, on the same row's path variables and address), and each of those
+    parameters' own recipe calls (`recipe_calls` over `markers`) is read in turn. A body met
+    twice is read once, so a recipe that depends on itself ends. What a refused reading of a
+    recipe's parameter would say is not read: the route's own reading decides refusal."""
+    rows: dict[tuple[str, str | None, str | None, str], None] = {}
+    ran: dict[str, None] = {}
+    pending = list(calls)
+    while pending:
+        call, parameter = pending.pop(0)
+        for body in bodies(call, parameter):
+            if body in ran:
+                continue
+            ran[body] = None
+            declared = parameters(body) or ()
+            reading = read_parameters(
+                rules,
+                declared,
+                partial(markers, body),
+                variables,
+                scalar,
+                address,
+                models,
+            )
+            rows.update(dict.fromkeys(reading.rows))
+            for position in range(len(declared)):
+                pending.extend(
+                    (site, (body, position)) for site in recipe_calls(markers(body, position))
+                )
+    return Dependant(rows=tuple(rows), recipes=tuple(ran))
+
+
+def _call_of(marker: Marker) -> tuple[str, str]:
+    """A marker's call, as `(owner, method)`."""
+    return (str(marker.site.get("owner")), str(marker.site["name"]))
+
+
+def _reading(
+    rules: ParameterRules,
+    parameter: Mapping[str, Any],
+    default: Marker | None,
+    annotation: Marker | None,
+    variables: frozenset[str],
+    scalar: Callable[[Mapping[str, Any]], bool | None],
+    address: str,
+    models: Callable[[str], Sequence[tuple[str, FieldName]] | None] | None = None,
+) -> tuple[str | None, tuple[str, str] | None, list[tuple[str, str | None, str | None, str]]]:
+    """One reading of one parameter (`read_parameters`): the refusal, else None; its marker
+    call, None where it has none; its rows."""
+    variable = parameter.get("name") in variables
+    if annotation is not None and variable and parameter.get("declares_default") is True:
+        return PATH_VARIABLE_DEFAULT, None, []
+    if annotation is not None and default is not None:
+        return MARKED_TWICE, None, []
+    marker = annotation or default
+    if marker is None:
+        unmarked = rules.unmarked
+        if (
+            variable
+            or unmarked is None
+            or (unmarked.get("scalar_only") is True and scalar(parameter["type"]) is not True)
+        ):
+            return None, None, []
+        requirement = (
+            "optional"
+            if parameter.get("declares_default") is True
+            else str(unmarked["requirement"])
+        )
+        return (
+            None,
+            None,
+            [(str(unmarked["kind"]), str(parameter["name"]), requirement, address)],
+        )
+    call = _call_of(marker)
+    if variable and call in rules.claims:
+        return PATH_VARIABLE_MARKED, None, []
+    entry = rules.entries.get(call)
+    if entry is None:
+        return None, call, []
+    # A parameter of a class's type names no one value: the framework reads the class's fields
+    # as the parameters (FastAPI's query, header and cookie models, `_get_flat_fields_from_
+    # params`, R25), one row each, where the shape model reads them (`models`). Where it does
+    # not, one row of the entry's kind, its name and requirement not read, so the row never
+    # names a parameter the request does not carry. So too for a type written as text naming
+    # no type (a class defined in a function, polar's `SortingGetter`): it may be such a class.
+    kind = scalar(parameter["type"])
+    if (kind is False and parameter["type"].get("wire_type") == "object") or (
+        kind is None and not names_a_type(str(parameter["type"].get("symbol")))
+    ):
+        fields = (
+            models(str(parameter["type"].get("symbol")))
+            if models is not None and kind is False
+            else None
+        )
+        if fields:
+            return None, call, [model_parameter_row(entry, marker, *one) for one in fields]
+        return None, call, [(str(entry["kind"]), None, None, "unresolved")]
+    return None, call, [parameter_request_row(entry, marker, parameter)]
+
+
+def parameter_request_row(
+    entry: Mapping[str, Any], marker: Marker, parameter: Mapping[str, Any]
+) -> tuple[str, str | None, str | None, str]:
+    """`(kind, name, requirement, resolution)` of one parameter an entry's marker call marks (N3):
+
+    - **the name**: the string literal at `name_arg` where it is written (NULL at `unresolved`
+      where it is written as anything else), else the parameter's own name, respelled by
+      `spelling` (`replace` each `from` with its `to`) unless its `unless` argument is written
+      with its value — written with no literal value, the name is not read;
+    - **the requirement**: a marker in `Annotated` of an `annotated_default: parameter` entry
+      takes the parameter's own default, `optional` where it declares one; otherwise, and for
+      a marker that is the default, `request_param_rows`' order with `required_when` before
+      `default_arg`: `required` where that argument is written as the named static field."""
+    arguments = list(marker.site.get("arguments") or [])
+    written = _arg_at(arguments, entry.get("name_arg"))
+    name: str | None
+    if written is not None:
+        name = _literal(written, "string")
+    else:
+        name = _spelled(str(parameter["name"]), entry.get("spelling"), arguments)
+    if (
+        marker.where == "annotation"
+        and entry.get("annotated_default") == _PARAMETER_DEFAULT
+        and parameter.get("declares_default") is True
+    ):
+        requirement: str | None = "optional"
+    else:
+        requirement = _requirement_of_call(entry, arguments)
+    return (str(entry["kind"]), name, requirement, "resolved" if name is not None else "unresolved")
+
+
+def model_parameter_row(
+    entry: Mapping[str, Any], marker: Marker, declared: str, named: FieldName
+) -> tuple[str, str | None, str | None, str]:
+    """`(kind, name, requirement, resolution)` of one field of a model an entry's marker call
+    marks (R25; FastAPI 0.162.0 `_get_param_aliases`, `scripts/probes/fastapi_param_models.md`):
+
+    - **the name** is the field's input name (`FieldName.input`); where that is the field's own
+      name, the entry's `spelling` respells it, as for a parameter's own name (a `Header`
+      model's `x_trace_id` is `x-trace-id`), and an alias or a generated name is kept as it is;
+    - **the requirement** is the field's own: `required` where it writes no default;
+    - **the resolution** is the input name's (`FieldName.input_resolution`)."""
+    name = named.input
+    if name is not None and name == declared:
+        name = _spelled(declared, entry.get("spelling"), list(marker.site.get("arguments") or []))
+    requirement = None if named.required is None else ("required" if named.required else "optional")
+    resolution = named.input_resolution if name is not None else "unresolved"
+    return (str(entry["kind"]), name, requirement, resolution)
+
+
+def _spelled(
+    name: str, spelling: Mapping[str, Any] | None, arguments: list[dict[str, Any]]
+) -> str | None:
+    """A parameter's own name as an entry's `spelling` writes it on the wire (N3)."""
+    if spelling is None:
+        return name
+    unless = spelling.get("unless")
+    if unless is not None:
+        written = _arg_at(arguments, unless["arg"])
+        if written is not None:
+            value = written.get("value") if written.get("kind") in _LITERAL_KINDS else None
+            if value is None:
+                return None
+            if type(value) is type(unless["equals"]) and value == unless["equals"]:
+                return name
+    for old, new in spelling["replace"].items():
+        name = name.replace(old, new)
+    return name
 
 
 # The literal kinds (D00 §5) an `optional_when` value is read from.

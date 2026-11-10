@@ -3,8 +3,9 @@
 A file is still read one at a time (M03), but what it imports from another file of the same
 module is read the way a library is (`libraries.py`): that file's HEADER and nothing else of
 its bodies — its module-level names (imports, re-exports and aliases, as `imports.py` binds
-them), its classes' written bases and type parameters, the return each `def` declares and
-the attribute each class body declares (`client: HttpClient`). A file's header is parsed
+them), its classes' written bases and type parameters, the return each `def` declares, the
+attribute each class body declares (`client: HttpClient`) and the type each module-level
+type alias is (`DbSession = Annotated[Session, Depends(get_db)]` is `Session`). A file's header is parsed
 once per scan, whichever files import it.
 
 - **Defining symbols, as for a library:** a name another file re-exports (`from .order import
@@ -26,16 +27,22 @@ from pathlib import Path
 
 from sextant.domain.facts import TypeRef
 from sextant.domain.symbols import (
+    PY_SIGNATURE,
     is_type_descriptor,
+    method_descriptor,
     names_a_type,
     owner_of,
     without_type_marker,
 )
+from sextant.ingress.extract.python.calls import TYPE_OF
 from sextant.ingress.extract.python.imports import Binding, ModuleIndex, Target, bind_names
 from sextant.ingress.extract.python.typing_rules import ClassShape, TypeScope, type_symbol
 
 # The question a file asks the module index for another file's header (`ModuleIndex.asked`).
 HEADER = "header"
+# A bound on how many aliases of other files one type is followed through, so an alias that
+# names itself ends.
+_ALIAS_DEPTH = 32
 
 
 @dataclass(frozen=True)
@@ -47,6 +54,12 @@ class ModuleHeader:
     returns: dict[str, TypeRef]
     fields: dict[str, TypeRef]
     digest: str
+    # The type each module-level type alias is (`DbSession = Annotated[Session, ...]`,
+    # `X: TypeAlias = ...`, `type X = ...`), by name, read in the file's own scope.
+    aliases: dict[str, TypeRef]
+    # The function each module-level name is written from, where every write to it in the
+    # file is a call of a named function (ruling R17), by name, as the file binds it.
+    factories: dict[str, tuple[Target, ...]]
 
 
 def header_digest(tree: ast.Module) -> str:
@@ -96,7 +109,13 @@ class ProjectHeaders:
         plain: ModuleIndex,
         read: Callable[
             [ast.Module, str, TypeScope, bool],
-            tuple[dict[str, ClassShape], dict[str, TypeRef], dict[str, TypeRef]],
+            tuple[
+                dict[str, ClassShape],
+                dict[str, TypeRef],
+                dict[str, TypeRef],
+                dict[str, TypeRef],
+                dict[str, tuple[Target, ...]],
+            ],
         ],
     ) -> None:
         self._files = files
@@ -104,8 +123,9 @@ class ProjectHeaders:
         # The index a header is bound against: the module's paths and the libraries, with no
         # headers of its own, so one file's header never reads another's.
         self._plain = plain
-        # `structure`'s readers of a module body: its class shapes, declared returns and
-        # attribute declarations (handed in, as `structure` is the module that reads files).
+        # `structure`'s readers of a module body: its class shapes, declared returns,
+        # attribute declarations, type aliases and the functions module-level names are
+        # written from (handed in, as `structure` is the module that reads files).
         self._read = read
         self._headers: dict[str, ModuleHeader | None] = {}
         self._hashes: dict[str, str | None] = {}
@@ -142,7 +162,13 @@ class ProjectHeaders:
         found: list[Target] = []
         for target in binding.targets:
             if target.module == module and target.member == name:
-                found.append(Target(module, name))
+                # A class a call makes keeps saying so (`new_class`); every other own name is
+                # followed by what it is bound to.
+                found.append(
+                    Target(module, name, "new_class")
+                    if target.kind == "new_class"
+                    else Target(module, name)
+                )
             elif target.member is not None and "." not in target.member:
                 deeper = self.member(target.module, target.member, seen | {(module, name)})
                 reached = deeper or (Target(target.module, target.member),)
@@ -151,8 +177,9 @@ class ProjectHeaders:
                     reached = tuple(replace(one, kind="new_type") for one in reached)
                 found.extend(reached)
             else:
-                # A `NewType` keeps saying it is one: a call of it is no construction.
-                kind = target.kind if target.kind == "new_type" else None
+                # A `NewType`, or a class a call makes, keeps saying it is one: a call of it
+                # is no construction of a known class.
+                kind = target.kind if target.kind in ("new_type", "new_class") else None
                 found.append(Target(target.module, target.member, kind))
         return tuple(dict.fromkeys(found))
 
@@ -169,7 +196,7 @@ class ProjectHeaders:
                 return False
             binding = header.names.get(target.member or "")
             if binding is None or any(
-                own.kind not in ("variable", "function", "type_alias")
+                own.kind not in ("variable", "function", "type_alias", "new_class")
                 for own in binding.targets
                 if own.module == target.module
             ):
@@ -235,6 +262,71 @@ class ProjectHeaders:
         """The type a class body of another module file declares for an attribute."""
         return self._declared(field, lambda header: header.fields)
 
+    def names_an_alias(self, module: str, name: str) -> bool:
+        """Whether `module` binds `name`, on its one binding, to a module-level type alias of its
+        own, whether or not the type the alias is can be named."""
+        header = self.header(module)
+        binding = None if header is None else header.names.get(name)
+        return (
+            binding is not None
+            and len(binding.targets) == 1
+            and binding.targets[0].kind == "type_alias"
+            and binding.targets[0].module == module
+        )
+
+    def alias(self, module: str, name: str) -> TypeRef | None:
+        """The type `module.name` is where that file binds it to a module-level type alias,
+        its types by their defining symbols. None for any other name."""
+        header = self.header(module)
+        written = None if header is None else header.aliases.get(name)
+        return None if written is None else self._typed(written)
+
+    def binds_class(self, module: str, name: str) -> bool:
+        """Whether `module` binds `name` to its own class `name` alone, its one binding the
+        class statement: `Session = Client` after `class Session` binds the name to `Client`,
+        and `Session = make()` makes it a variable, as `effective_calls._class_calls` reads
+        both."""
+        header = self.header(module)
+        binding = None if header is None else header.names.get(name)
+        return binding is not None and binding.targets == (Target(module, name, "class"),)
+
+    def class_object(self, module: str, name: str) -> str | None:
+        """The class `X` that `module.name` holds, where every write to it in that file is a
+        call of a `def` of the module whose written return is `type[X]` (ruling R17; polar's
+        `APIRouter = get_api_router_class(APIRoute)`), by its defining symbol. None for any
+        other name, and where the writes give two classes: the closed list is never one."""
+        header = self.header(module)
+        called = None if header is None else header.factories.get(name)
+        if not called:
+            return None
+        held = {self._factory_class(target) for target in called}
+        if len(held) != 1:
+            return None
+        return held.pop()
+
+    def _factory_class(self, target: Target) -> str | None:
+        """The class `X` a call of the function `target` gives, where the `def` of the module
+        that defines it declares `type[X]`; None for any other function."""
+        if target.member is None:
+            return None
+        defined = self.member(target.module, target.member) or (target,)
+        if len(defined) != 1 or defined[0].member is None or defined[0].module not in self._files:
+            return None
+        (function,) = defined
+        returned = self.returns(
+            method_descriptor(
+                type_symbol(Target(function.module)), str(function.member), PY_SIGNATURE
+            )
+        )
+        if (
+            returned is None
+            or returned.symbol != TYPE_OF
+            or len(returned.arguments) != 1
+            or not names_a_type(returned.arguments[0].symbol)
+        ):
+            return None
+        return returned.arguments[0].symbol
+
     def digest(self, module: str) -> str | None:
         """The digest of `module`'s header, for the reuse key: the previous scan's where the
         file's content is the same, else read now. None where `module` is no readable file."""
@@ -278,15 +370,35 @@ class ProjectHeaders:
         path = without_type_marker(symbol)
         return path if path in self._files else path.rpartition("/")[0]
 
-    def _typed(self, written: TypeRef) -> TypeRef:
-        """`written` with each type it names by its defining symbol."""
+    def _typed(self, written: TypeRef, depth: int = _ALIAS_DEPTH) -> TypeRef:
+        """`written` with each type it names by its defining symbol. A name another module
+        file binds to a type alias (read in that file's scope, which reads no other header,
+        as a path) is the type the alias is: the path names no class."""
         symbol = self.canonical(written.symbol) if names_a_type(written.symbol) else written.symbol
-        arguments = [self._typed(argument) for argument in written.arguments]
+        aliased = None if written.arguments or depth == 0 else self._aliased(symbol)
+        if aliased is not None:
+            found = self._typed(aliased, depth - 1)
+            if written.nullable and not found.nullable:
+                found = found.model_copy(
+                    update={"nullable": True, "nullable_resolution": written.nullable_resolution}
+                )
+            return found
+        arguments = [self._typed(argument, depth) for argument in written.arguments]
         if symbol == written.symbol and all(
             new == old for new, old in zip(arguments, written.arguments, strict=True)
         ):
             return written
         return written.model_copy(update={"symbol": symbol, "arguments": arguments})
+
+    def _aliased(self, symbol: str) -> TypeRef | None:
+        """The type a top-level type symbol of a module file is, where that file binds its
+        name to a type alias; None for a class and anything else."""
+        path = without_type_marker(symbol)
+        module, _, member = path.rpartition("/")
+        if not is_type_descriptor(symbol) or "$" in member or module not in self._files:
+            return None
+        header = self.header(module)
+        return None if header is None else header.aliases.get(member)
 
     def _build(self, module: str) -> ModuleHeader | None:
         path, is_package = self._files[module]
@@ -296,5 +408,7 @@ class ProjectHeaders:
             return None
         names = bind_names(tree.body, module, is_package=is_package, index=self._plain)
         types = TypeScope(names=names, here=module, index=self._plain)
-        classes, returns, fields = self._read(tree, module, types, is_package)
-        return ModuleHeader(names, classes, returns, fields, header_digest(tree))
+        classes, returns, fields, aliases, factories = self._read(tree, module, types, is_package)
+        return ModuleHeader(
+            names, classes, returns, fields, header_digest(tree), aliases, factories
+        )

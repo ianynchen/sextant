@@ -20,6 +20,9 @@ PY_SIGNATURE = "(*)"
 # resolver that binds a receiver to a union's members.
 UNION_TYPE = "typing/Union#"
 ANY_TYPE = "typing/Any#"
+# The typing form of a value from a closed set of literals (`Literal["a", "b"]`), in both
+# spellings: its values are scalars the language writes.
+LITERAL_TYPES = frozenset({"typing/Literal#", "typing_extensions/Literal#"})
 
 # D00 §5a's type marker: the character a TYPE descriptor ends at, and the one a
 # member descriptor carries its owner's name up to. Named here because this
@@ -79,6 +82,17 @@ def with_owner(descriptor: str, owner: str) -> str:
     overrides, so its bare descriptor is the overridden one's under its own type: the
     pass-through reader expands a handler method to its overrides this way."""
     return owner + descriptor.rpartition(_TYPE_MARKER)[2]
+
+
+def with_method_name(symbol: str, name: str) -> str:
+    """The method `name` of the same owner as the method `symbol`, with the same argument
+    list and coordinates: `app/run#f(sig_1).` with `<clinit>` is `app/run#<clinit>(sig_1).`.
+    For a reader that finds a method by the naming rule D00 §5a states (the body a `def` runs
+    in, plan 2026-11-08-python-fastapi-inbound ruling R15), where every method of the language
+    carries one argument list."""
+    owner, marker, member = symbol.rpartition(_TYPE_MARKER)
+    _, paren, arguments = member.partition(_ARGUMENTS_OPEN)
+    return owner + marker + name + paren + arguments
 
 
 def owner_of(descriptor: str) -> str | None:

@@ -371,6 +371,7 @@ needs it.
 | `resolved_config` | Key, value, source, environment, or unresolved with a reason |
 | `open_questions` | One question a programmatic pass refused to guess at: wire identity, question kind, the candidate answers, the trail that reached the impasse, and the endpoint row's `method_kind`/`path_kind` where the question is filed against one (since 13) |
 | `endpoint_conditions` | **A VIEW, not a table** (since `GRAPH_SCHEMA_VERSION` 4, spec `2026-10-22-conditional-beans-design.md`): the conditions an endpoint row carries, found by joining it to the bean its code lives in — its code's own bean where the code is one, else the class SERVING the row (`endpoints.served_by`, since 12; the enclosing class where that is NULL) — [Conditional beans](#conditional-beans) below. Columns: PR #61's (`protocol`, `direction`, `method`, `path`, `handler`, `kind`, `expression`, `environment`, `holds`, `resolution`, `evidence`), then `caller`, `via`, `bean_kind`, `bean`. Rows of BOTH directions now (an outbound row's code is its `caller`); condition-less route rows (`kind` NULL) are left out. Structured for a machine; the architecture document is the one verbose rendering. The matcher never reads it — an endpoint is an endpoint — and a link states each end's conditions beside it. Whether the row EXISTS in an environment is `bean_presence`'s answer, never "every row here holds" |
+| `endpoint_existence` | Where an endpoint row EXISTS when the calls registering it run only under tests the analysis does not decide (OI-368, approved by the user 2026-11-09; the ruling of 2026-10-23, "deployment decides what it can set"): one row per (endpoint row, alternative, test, environment the module resolves), keyed by the row — `row_id`, bound when written and followed as `endpoint_metadata`'s is, beside the identity columns `protocol`, `direction`, `method`, `path`, `handler`, `caller` that a reader outside the run joins on. The calls are the route's own registration, every include or mount its router is served through, and, where every call that runs a function is itself under a test, that call's tests too, followed up the call graph. `route` numbers the alternatives (the row exists where every test of one alternative goes its way; AND within, OR across), and `position` orders one alternative's tests outermost first; where the row was derived through one call of a helper — the call its router, route, path or prefix value was read through — the helper's other callers do not count, and where one registration gives several rows that its paths cannot tie to one call, a call under no test does not make a row "served" while another call of the helper is under one (it is "not evaluated" under that call's tests); `via` is the method whose body holds the test; `kind` is `test`; `expression` is JSON `{test, holds, reads}` from D00's `call_site.guards`; `holds` and `resolution` are `unresolved` — no test is evaluated, the repository's value included — and `evidence` says so, quoting the test. A row registered under no test has none. Exported with `row_id` left out, `path` masked by the address map, `expression` and `evidence` as a condition's are. Not read through `endpoint_conditions`, which joins by bean |
 | `endpoint_metadata` | One entry an outbound call carries beside its address and payload — a header, and in principle a key or an attribute — with the endpoint it belongs to, the caller, its kind, name and **redacted** value, and its own resolution and evidence; and, on an inbound row, **`requirement`** — what the framework enforces (`required`/`optional`/`absent`), NULL where the code states nothing; `caller` on an inbound row is the handler. Two routing alternatives that collapse to one address keep only the requirements they share — a demand one alternative makes and another does not is not one the framework enforces there |
 | `channel_bindings` (temp) | One edge between an in-process CHANNEL and a method at one of its ends: `channel`, `role` (`fed_by`, `read_by`, `sends_to`), `symbol`, `protocol`, `direction`, `destination`, `catalog_id`, `resolution`. Working state of one resolve — replaced whole beside `endpoints`, never in a bundle — joined into `endpoints` rows by `resolve/channel_bindings.py` and read by `config_join.gaps` |
 
@@ -518,7 +519,8 @@ questions — so `wire_type` and `wire_format` are separate columns rather than 
 consumer would have to re-split (decision D1 of the shapes-and-nullability plan). `nullable`
 sits beside `required` because [D00](D00-fact-schema.md) §5a makes them independent
 two-valued flags: a field may be required-and-nullable or optional-and-not-null, and one
-column cannot hold two answers. `resolution` and `evidence` accompany it per decision D3 of
+column cannot hold two answers. `required` is NULL where the code does not let it be read (a Python field
+whose default is made by a call nothing reads, ruled 2026-11-09): unknown, never a guess. `resolution` and `evidence` accompany it per decision D3 of
 that plan and the general trust-field rule ([D00](D00-fact-schema.md) §3) — a `nullable` read
 off a language default and one confirmed by an explicit annotation are different claims, and
 DR-5's comparison must be able to tell them apart rather than trusting both equally. `tags` is
@@ -555,7 +557,12 @@ descriptor** (`{wire_type, wire_format, nullable, shape_id?, item?}`) rather tha
 shape id — the grammar `shape_fields.item` uses above, reused rather than duplicated. A
 `List<OrderView>` response is
 `{"wire_type":"array","item":{"wire_type":"object","shape_id":…}}`; a scalar response is
-recorded rather than dropped (`{"wire_type":"string"}`); and `NULL` means exactly *no
+recorded rather than dropped (`{"wire_type":"string"}`); a body a framework assembles from
+several handler parameters (D02 §2's `request_body.embed_arg`, FastAPI's embedded body) is an
+`object` with no `shape_id` and a `fields` list, one `{name, required, type}` per parameter in
+declared order, `required` the word `required` or `optional`, `type` the field's own descriptor
+(`NULL` for none) — the document renders it as a field table, a field of a named shape citing
+that shape; and `NULL` means exactly *no
 payload* — a `void` return, or no body parameter — the one meaning it has always had. On a
 row whose own `resolution` is `unresolved` ([D02](D02-catalog-schema.md) §2's `single_call`:
 any declared capture — url, body or response — that failed to resolve drops the row's
@@ -1015,7 +1022,7 @@ materialisation where measurement demands it, not presumed everywhere.
 |---|---|---|
 | `participants` | Service or external, name, aliases, **bundle location**, commit | Natively |
 | `links` | Outbound endpoint, inbound endpoint, trust fields, candidates | Natively |
-| `symbols`, `edges`, `endpoints`, `shapes`, `shape_fields`, `traces`, `endpoint_conditions`, `bean_presence` | Each participant's own graph — `endpoint_conditions` as `system_endpoint_conditions` and `bean_presence` as `system_bean_presence`, the conditions each end of a link carries and where its bean exists, which a link states beside itself (spec `2026-10-21-conditional-controllers-design.md`, ruling 2; `2026-10-22-conditional-beans-design.md`) | **Views over the bundles** |
+| `symbols`, `edges`, `endpoints`, `shapes`, `shape_fields`, `traces`, `endpoint_conditions`, `bean_presence`, `endpoint_metadata` | Each participant's own graph — `endpoint_conditions` as `system_endpoint_conditions` and `bean_presence` as `system_bean_presence`, the conditions each end of a link carries and where its bean exists, which a link states beside itself (spec `2026-10-21-conditional-controllers-design.md`, ruling 2; `2026-10-22-conditional-beans-design.md`); `endpoint_metadata` as `system_endpoint_metadata`, whose `host` entries name the inbound rows served on one host only, which the linker never links by path (OI-368) | **Views over the bundles** |
 
 The system workspace does **not** copy the estate's graphs. Bundles are Parquet, and one
 query reads Parquet across many paths, so a view is enough.
@@ -1121,7 +1128,15 @@ framework raises on rather than repairs (`unrooted_path`: a route path that is e
 leading `/`, where the catalog declares `refuses_unrooted_path`; for a sub-router mount the
 catalog's `mount[].refuses` declares, Vert.x spec §3c, `exact_mount_path`: a mount path with
 no trailing wildcard, `pattern_mount_path`: a regular expression path, `wildcard_mount_point`:
-a mount point given the wildcard the framework adds) — on ONE row per refused
+a mount point given the wildcard the framework adds; for a prefix, `mount[].refuses` or
+`router_holds[].refuses`, plan 2026-11-08 N7, `unrooted_path`: a non-empty prefix with no
+leading `/`, `trailing_slash`: a prefix ending in `/`, `empty_path`: an empty include prefix
+over a route whose path below it is empty too; for a route, D02 §2's `fluent` style,
+`no_methods`: a verb list written empty, `invalid_response_type`: a response type uniting a
+`response_fallback.none_types` type with others; for a handler parameter, D02 §2k mechanism 4,
+plan 2026-11-08 N3/N4, `marked_twice`: a marker both in `Annotated` and as the default,
+`path_variable_marked`: a path variable carrying a marker that claims it for something else,
+`path_variable_default`: a path variable with a marker in `Annotated` and a default) — on ONE row per refused
 `(protocol, method, path)`, the path as written, since no endpoint row carries it; a
 `handler_pass_through` candidate holds `handler`, `caller` and `unread` — an inbound row whose
 handler is not readable here (Vert.x spec §3b: it hands the request's context to a method
@@ -1285,7 +1300,14 @@ row per command path that reaches a handler — `protocol`, `method` and both ma
 `path` the command's words joined by one space, the outermost the program's name
 (`sextant module analyze`), and `handler` NULL where the command's function is behind a
 library decorator no value model states (such a row starts no trace) — and `record_roots`
-keeps those rows beside the two kinds it derives. The table is emptied once per resolve by the pipeline, before any engine runs
+keeps those rows beside the two kinds it derives. **A recipe a framework runs before a route's
+handler is a root at that route's address** (plan 2026-11-08 N11): an `inbound_endpoint` row
+whose `handler` is the recipe's body (FastAPI's `Depends`: a function, a class's constructor,
+an instance's class `__call__`) and whose address is the endpoint row's, written by the engine
+that reads the route's parameters ([D02](D02-catalog-schema.md) §2k) and kept by `record_roots`
+as an entry point is. It means: a request to this address runs this method before the handler,
+and its trace starts there too. The handler does not call it, so no `call_edges` row stands in
+for it. The table is emptied once per resolve by the pipeline, before any engine runs
 (design 2026-11-06-reading-decorators §5; `docs/open-issues.md` OI-22, closed).
 
 **One ROOT per handler and kind; one ROW per address that reaches it.** A method serving
@@ -1603,6 +1625,7 @@ own cadence.
 | 14 | `scheduled_work` gains `refused`: why the framework refuses the call that schedules a job, NULL where it accepts it, read from the catalog's `hand_off_effects` (spec `2026-11-02-per-path-truth-design.md` rule 7, the column ruled by the user 2026-11-02). A refused row's handler is not a root. The export carries the column, and the boundary vocabulary moves to 4 (`schedule` gains the attribute) [ruled 2026-11-02 by the user] | refused by its stamp exactly as at 5 to 13, so a refused schedule is never read from an older vintage as one that runs |
 | 15 | `message_handlers`, a new derived table: each behavior's message handler cases in the order the behavior tries them (spec `2026-11-04-akka-pekko-actors-design.md` §3b, approved by the user with the design). The export carries it. Renamed before release (spec `2026-11-05-in-process-dispatch-design.md` §3): `dispatch_registrations`, columns `group`, `position`, `key_type`, `key_value`, `key_object`, `predicated`, `handler`, `delivers`, `match`, `mechanism`, and `rpc_hops` renamed `hops`; still 15, since no 15 was released | refused by its stamp exactly as at 5 to 14, so a workspace without the table is re-analysed rather than read as one that builds no behavior |
 | 17 | `bound_receivers`, a new derived table: the owner of each call the facts leave to the resolver, one row per path (spec `2026-11-06-python-reader-design.md` §3b); `call_edges` gains rows with a NULL `target` and `resolution` `unresolved` for such a call nothing bound. The export carries the table | refused by its stamp exactly as at 5 to 16, so a workspace without the table is re-analysed rather than read as one with nothing to bind |
+| 18 | `endpoint_existence`, a new derived table: where each registered row exists when the calls registering it run only under undecided tests, kind `test`, `holds` `unresolved` (OI-368, approved by the user 2026-11-09). The export carries it, `row_id` left out | refused by its stamp exactly as at 5 to 17, so a workspace without the table is re-analysed rather than read as one whose every row is served wherever the module runs |
 
 **The last row is deliberately blunt.** Any Sextant version change re-derives, because
 derivation logic may have changed and there is no cheap way to know. Re-derivation is the
@@ -1673,6 +1696,21 @@ no document field names are added to it, because a fact can depend on them:
   A file in `site-packages` edited by hand, without its `RECORD` changing, is NOT seen: an
   installer rewrites `RECORD` and a hand edit does not. Analyse into a new workspace after
   editing an installed library by hand.
+
+**The type headers** (ruling R19, 2026-11-08). The Python scanner's one `header_only`
+document reads library modules (596 whole ones on polar, 45 of a 46 s warm scan, before
+[M03](M03-scanner.md)'s class-statement read cut that to 3 s), so it is kept like a document. Its key is the scan's inputs above (Sextant's code, the stamps, the running
+Python, the module, and the libraries' fingerprint, which holds the environment's Python)
+and the three sets of types its read starts from: the types the module's facts name
+(`referenced_types`), the classes a static call may name (`called_types`), and the module's
+own types, which get no header. Each set comes from every document, kept or read, so an edit
+that names no new type keeps the headers, and one that names a new type, or drops one, reads
+them all again. The read is redone whole rather than merged: headers are written in the
+order a read from the sorted referenced types meets them, and the count of unlocated types
+is over the whole set, so the new types' headers merged into the kept ones would not be the
+bytes a fresh read writes. The record (target `__type_headers__.jsonl`) holds the header
+count, the unlocated count, and the report lines the read added; the kept fact file must
+still hold the document record a fresh read would write. Polar warm: 28.3 s to 1.9 s.
 
 The record of each document is a workspace table, `scan_reuse`, that the scanner fills and
 reads through the scan port (`ReuseRecord`) and no other command reads; it is emptied before

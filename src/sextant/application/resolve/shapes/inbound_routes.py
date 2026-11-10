@@ -20,6 +20,11 @@ from sextant.domain.paths import EXPRESSION_OPENS
 # The one `path_join` a catalog may declare, beside "absent" (verbatim). Named once so the
 # engine that validates the catalog and the engine that applies it read the same word.
 LEADING_SLASH = "leading_slash"
+# A `fluent` catalog's `path_join` for a framework that joins a prefix and a path by plain
+# string concatenation and serves the result as it is (FastAPI, plan 2026-11-08 ruling R23):
+# the join is verbatim, and the served path is never cleaned (`canonical_http_path`): `""`
+# stays `""`, `x` stays `x`, `//` stays `//`.
+CONCATENATE = "concatenate"
 # How a `root_kind: entry_point` catalog joins its words: one space, as a command is typed
 # (design 2026-11-06-reading-decorators §4, ruled: a rule, not a catalog value).
 WORDS = "words"
@@ -67,11 +72,16 @@ def _media_strings(argument: Any) -> list[str]:
 def validated_path_join(matches: Mapping[str, Any], source: object, style: str) -> str | None:
     """`matches.path_join`, checked at load so a typo is refused rather than read as
     verbatim, which would publish the glued address the word exists to prevent: absent, or
-    `leading_slash`, the one rule. `style` names the D02 style the refusal cites."""
-    if matches.get("path_join", LEADING_SLASH) != LEADING_SLASH:
+    `leading_slash`, the one rule; on a `fluent` catalog also `concatenate`, verbatim with
+    nothing cleaned (`CONCATENATE`), which only `fluent` applies. `style` names the D02 style
+    the refusal cites."""
+    allowed = (LEADING_SLASH, CONCATENATE) if style == "fluent" else (LEADING_SLASH,)
+    if matches.get("path_join", LEADING_SLASH) not in allowed:
         raise CatalogError(
             f"loading catalog {source}: `path_join: "
-            f"{matches.get('path_join')!r}` — the only value is `{LEADING_SLASH}`; "
+            f"{matches.get('path_join')!r}` — the "
+            f"{'only value is' if len(allowed) == 1 else 'values are'} "
+            f"{', '.join(f'`{value}`' for value in allowed)}; "
             f"leave it out for verbatim concatenation (D02 §2's `{style}` style)"
         )
     return matches.get("path_join")
@@ -176,6 +186,26 @@ UNROOTED_PATH = "unrooted_path"
 EXACT_MOUNT_PATH = "exact_mount_path"
 PATTERN_MOUNT_PATH = "pattern_mount_path"
 WILDCARD_MOUNT_POINT = "wildcard_mount_point"
+# A prefix the framework refuses (`mount[].refuses`, `router_holds[].refuses`; plan
+# 2026-11-08 N7): one ending in `/` (FastAPI: "A path prefix must not end with '/'"), and an
+# include with no prefix of a route whose path is empty too ("Prefix and path cannot be both
+# empty").
+TRAILING_SLASH = "trailing_slash"
+EMPTY_PATH = "empty_path"
+# A route given an empty list of verbs (`http_method`'s list form, D02 §2's `fluent` style): the
+# framework refuses a route that serves no verb at all.
+NO_METHODS = "no_methods"
+# A route whose response type the framework cannot build a response from: a union naming a
+# type the catalog says is no response model (`response_fallback.none_types`) beside others.
+INVALID_RESPONSE_TYPE = "invalid_response_type"
+# A handler parameter the framework refuses (`request_requirements.read_parameters`; plan
+# 2026-11-08 N3, N4): a marker both in `Annotated` and as the default (FastAPI: "Cannot specify
+# `Depends` in `Annotated` and default value together", and the two like it), a marker other
+# than the path's on a path variable ("Cannot use `Query` for path param"), and a path variable
+# with a marker in `Annotated` and a default ("Path parameters cannot have default values").
+MARKED_TWICE = "marked_twice"
+PATH_VARIABLE_MARKED = "path_variable_marked"
+PATH_VARIABLE_DEFAULT = "path_variable_default"
 
 
 # What an unread piece of a partly read path starts with, each spelled by the layer that
@@ -201,12 +231,12 @@ def is_unrooted(path: str, read_whole: bool) -> bool:
 
 
 def file_refusal(
-    refusals: dict[tuple[str, str | None, str], dict[str, Any]],
+    refusals: dict[tuple[str, str | None, str | None], dict[str, Any]],
     *,
     protocol: str,
     method: str | None,
     method_kind: str | None,
-    path: str,
+    path: str | None,
     reason: str,
     caller: str,
     handler: str | None,
@@ -216,7 +246,8 @@ def file_refusal(
     `refusals` is the run's accumulator, written to `open_questions` once at the end. An
     `open_questions` row is identified by `(protocol, method, path, question)`, so every
     registration of one refused address shares one row and each is a candidate of it,
-    sorted (NFR-1) when the rows are built by `refusal_rows`."""
+    sorted (NFR-1) when the rows are built by `refusal_rows`. A refused registration whose
+    path was not read is filed with `path` None: the framework still refuses it."""
     row = refusals.setdefault(
         (protocol, method, path),
         {
@@ -233,11 +264,11 @@ def file_refusal(
 
 
 def refusal_rows(
-    refusals: Mapping[tuple[str, str | None, str], dict[str, Any]],
+    refusals: Mapping[tuple[str, str | None, str | None], dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """The `open_questions` rows of a run's refusals, in a stable order."""
     rows = []
-    for key in sorted(refusals, key=lambda k: (k[0], k[1] or "", k[2])):
+    for key in sorted(refusals, key=lambda k: (k[0], k[1] or "", k[2] or "")):
         candidates = sorted(
             refusals[key]["candidates"], key=lambda c: json.dumps(c, sort_keys=True)
         )

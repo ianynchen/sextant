@@ -876,6 +876,45 @@ def _condition_entries(
     return [first, DetailEntry(_text("Of this module's environments"), _runs(verdict), None)]
 
 
+def _existence_entries(
+    rows: Sequence[Mapping[str, object]], redactor: Redactor
+) -> list[DetailEntry]:
+    """Where a registered row exists when the calls registering it run only under tests the
+    analysis does not decide (`endpoint_existence`, OI-368): the two lines a conditional bean's
+    row gets — the tests, then the verdict among the module's environments, every one of them
+    "not evaluated". Each alternative is its tests joined by "and"; several are joined by
+    "or". Empty for a row registered under no test, which is almost every row."""
+    if not rows:
+        return []
+    routes: dict[int, dict[tuple[str, bool], None]] = {}
+    for row in sorted(rows, key=lambda r: (int(str(r["route"])), int(str(r["position"])))):
+        expression = json.loads(str(row["expression"]))
+        test = redactor.redact_text(str(expression["test"]))
+        routes.setdefault(int(str(row["route"])), {})[(test, bool(expression["holds"]))] = None
+    # Alternatives in their numbered order, each one's tests outermost first (`position`).
+    spelled = [
+        " and ".join(
+            f"the code's test `{test}` is {'true' if holds else 'false'}" for test, holds in tests
+        )
+        for _, tests in sorted(routes.items())
+    ]
+    words = spelled[0] if len(spelled) == 1 else " or ".join(f"({one})" for one in spelled)
+    per_environment: dict[str, set[str]] = {}
+    for row in rows:
+        evidence = redact_condition_evidence(redactor, str(row["evidence"]))
+        per_environment.setdefault(str(row["environment"]), set()).add(evidence)
+    verdict = _presence_verdict(
+        [
+            {"environment": environment, "holds": "unresolved", "evidence": "; ".join(sorted(why))}
+            for environment, why in sorted(per_environment.items())
+        ]
+    )
+    return [
+        DetailEntry(_text("Exists only when"), _runs(f"{words}, not evaluated"), None),
+        DetailEntry(_text("Of this module's environments"), _runs(verdict), None),
+    ]
+
+
 def _route_label(via: str | None, bean: str) -> str:
     """A registration route as a reader names it: the factory method, or the scanned class —
     the bean's own, or, for an inherited body, the heir class whose route it runs on."""
@@ -1251,7 +1290,30 @@ _REFUSAL_PHRASES = {
     "exact_mount_path": "refuses to mount a router on a path with no trailing wildcard",
     "pattern_mount_path": "refuses to mount a router on a regular expression path",
     "wildcard_mount_point": "refuses a mount point that ends in the wildcard it adds",
+    "no_methods": "refuses a route given an empty list of methods",
+    "invalid_response_type": "refuses a response type that unites a response class with others",
+    "trailing_slash": "refuses a path prefix that ends in `/`",
+    "empty_path": "refuses a route whose prefix and path are both empty",
+    "marked_twice": "refuses a handler parameter marked both in its annotation and its default",
+    "path_variable_marked": "refuses a path variable marked as another kind of parameter",
+    "path_variable_default": "refuses a path variable given a default",
 }
+# What the refusal does to the application, per reason word where it is not the route's own
+# loss: a framework that raises when the route is registered (at import) stops the application
+# starting at all.
+_RAISES_AT_IMPORT = (
+    "raising when the route is registered, at import, so the application does not start"
+)
+_REFUSAL_CONSEQUENCES = {
+    "no_methods": _RAISES_AT_IMPORT,
+    "invalid_response_type": _RAISES_AT_IMPORT,
+    "trailing_slash": _RAISES_AT_IMPORT,
+    "empty_path": _RAISES_AT_IMPORT,
+    "marked_twice": _RAISES_AT_IMPORT,
+    "path_variable_marked": _RAISES_AT_IMPORT,
+    "path_variable_default": _RAISES_AT_IMPORT,
+}
+_SERVES_NOTHING = "so it serves nothing for it"
 
 
 def _candidate_line(question: str, candidate: dict[str, object]) -> str:
@@ -1413,9 +1475,11 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
         # the sentence names the registering method and the handler, which are what a
         # reader opens, and says the reason the framework refuses it.
         handler = candidate["handler"] or "no handler read"
+        reason = str(candidate["reason"])
+        consequence = _REFUSAL_CONSEQUENCES.get(reason, _SERVES_NOTHING)
         return (
             f"registered by {candidate['caller']} ({handler}); the framework "
-            f"{_REFUSAL_PHRASES[str(candidate['reason'])]}, so it serves nothing for it"
+            f"{_REFUSAL_PHRASES[reason]}, {consequence}"
         )
     if question == "handler_pass_through":
         # Vert.x spec §3b: an inbound row whose handler is not readable here, filed by
@@ -1616,6 +1680,10 @@ def assemble_module_document(
 
     # Read once, by every section below that states where a derived row exists.
     beans = _bean_conditions(report, redactor)
+    # Where each registered row exists, by the row (OI-368), read once.
+    existence: dict[object, list[Mapping[str, object]]] = {}
+    for row in report.endpoint_existence:
+        existence.setdefault(row["row_id"], []).append(row)
     sections.append(MachineHeading(2, "Inbound endpoints"))
     inbound = [e for e in report.endpoints if str(e["direction"]) in ("inbound", "both")]
     if inbound:
@@ -1661,9 +1729,10 @@ def assemble_module_document(
             streaming = _streaming_entry(endpoint.get("response_shape"))
             via = _via_entry(endpoint, origin_by_symbol)
             fails_with = _fails_with_entry(endpoint, throws_by_root)
-            conditions = _condition_entries(
-                endpoint.get("handler"), beans, endpoint.get("served_by")
-            )
+            conditions = [
+                *_condition_entries(endpoint.get("handler"), beans, endpoint.get("served_by")),
+                *_existence_entries(existence.get(endpoint.get("row_id"), []), redactor),
+            ]
             entries = [
                 entry
                 for entry in (via, request, response, streaming, fails_with, *conditions)
@@ -3396,7 +3465,8 @@ def _shape_fields_table(rows: Sequence[dict[str, object]]) -> MachineTable:
         )
         wire_format = row.get("wire_format")
         field_type = f"{row['wire_type']} ({wire_format})" if wire_format else str(row["wire_type"])
-        required = "yes" if row["required"] else "no"
+        # NULL where the code does not let it be read (a default made by a call not read).
+        required = "not read" if row["required"] is None else ("yes" if row["required"] else "no")
         nullable = "yes" if row["nullable"] else "no"
         table_rows.append((_text(wire_name), _text(field_type), _text(required), _text(nullable)))
     return MachineTable(_SHAPE_FIELD_HEADERS, tuple(table_rows))
@@ -3557,13 +3627,22 @@ def _cited_named_shapes(
             descriptor_json = endpoint.get(key)
             if descriptor_json is None:
                 continue
-            shape_id = json.loads(str(descriptor_json)).get("shape_id")
-            if not shape_id:
-                continue
-            shape_id = str(shape_id)
-            rows = fields_by_shape.get(shape_id, [])
-            if rows and shape_id not in cited:
-                cited[shape_id] = rows
+            descriptor = json.loads(str(descriptor_json))
+            # An assembled body (`fields`, D01 §3) has no shape of its own: its fields' shapes
+            # are the ones it cites.
+            for shape_id in [
+                descriptor.get("shape_id"),
+                *(
+                    (field.get("type") or {}).get("shape_id")
+                    for field in descriptor.get("fields") or ()
+                ),
+            ]:
+                if not shape_id:
+                    continue
+                shape_id = str(shape_id)
+                rows = fields_by_shape.get(shape_id, [])
+                if rows and shape_id not in cited:
+                    cited[shape_id] = rows
     return cited
 
 
@@ -3586,6 +3665,10 @@ def _descriptor_entry(
     if descriptor_json is None:
         return None
     descriptor = json.loads(str(descriptor_json))
+    if isinstance(descriptor.get("fields"), list):
+        return DetailEntry(
+            _text(label), None, _assembled_fields_table(descriptor["fields"], shape_names)
+        )
     shape_id = descriptor.get("shape_id")
     if not shape_id:
         return DetailEntry(_text(label), _text(_inline_descriptor(descriptor)), None)
@@ -3593,6 +3676,39 @@ def _descriptor_entry(
     if not fields_by_shape.get(shape_id):
         return DetailEntry(_text(label), _text(_SHAPE_NONE_RECORDED), None)
     return DetailEntry(_text(label), _shape_ref(shape_names[shape_id]), None)
+
+
+def _assembled_fields_table(
+    fields: list[dict[str, object]], shape_names: dict[str, str]
+) -> MachineTable:
+    """A body the framework assembles from the handler's parameters (D01 §3's `fields`): one
+    row per field, the shape table's own columns, a field of a NAMED shape citing that shape's
+    `### Shapes` entry. An unread name or type says so rather than leaving a blank."""
+    rows = []
+    for field in fields:
+        described = field.get("type")
+        if not isinstance(described, dict):
+            field_type: tuple[Run, ...] = _text("not read")
+        else:
+            shape_id = described.get("shape_id")
+            if shape_id and str(shape_id) in shape_names:
+                field_type = (
+                    *_text(f"{described.get('wire_type')} "),
+                    *_shape_ref(shape_names[str(shape_id)]),
+                )
+            else:
+                field_type = _text(_inline_descriptor(described))
+        nullable = isinstance(described, dict) and bool(described.get("nullable"))
+        required = field.get("required")
+        rows.append(
+            (
+                _text(str(field["name"]) if field.get("name") is not None else "not read"),
+                field_type,
+                _text("yes" if required == "required" else "no" if required else "not read"),
+                _text("yes" if nullable else "no"),
+            )
+        )
+    return MachineTable(_SHAPE_FIELD_HEADERS, tuple(rows))
 
 
 def _streaming_entry(descriptor_json: object) -> DetailEntry | None:
