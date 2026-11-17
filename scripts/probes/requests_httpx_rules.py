@@ -187,6 +187,62 @@ rule(
     "wire: requests json=/data=, httpx json=/content=, request(method, url) all reach the server as written"
 )
 
+# 5b. A verb written in lower case (plan 3 ruling R10): both libraries upper-case it.
+requests.request("get", BASE + "/lower-r")
+assert seen[-1][:2] == ("GET", "/lower-r")
+requests.Session().request("patch", BASE + "/lower-s")
+assert seen[-1][:2] == ("PATCH", "/lower-s")
+httpx.request("get", BASE + "/lower-x")
+assert seen[-1][:2] == ("GET", "/lower-x")
+httpx.Client().request("delete", BASE + "/lower-c")
+assert seen[-1][:2] == ("DELETE", "/lower-c")
+rule(
+    "request(method, url): the method string is upper-cased by both libraries ('get' is sent as GET)"
+)
+
+# 5c. Several body keywords on one call (plan 3 ruling R11): which one becomes the body.
+requests.post(BASE + "/rj", json={"j": 1}, data={"d": "v"})
+assert seen[-1][2] == b"d=v" and "x-www-form-urlencoded" in seen[-1][3]
+requests.post(BASE + "/rf", json={"j": 1}, data={"d": "v"}, files={"f": b"x"})
+assert "multipart/form-data" in seen[-1][3] and b'name="d"' in seen[-1][2]
+assert b'name="f"' in seen[-1][2] and b'"j"' not in seen[-1][2]
+requests.post(BASE + "/re", json={"j": 1}, data={})
+assert json.loads(seen[-1][2]) == {"j": 1}
+httpx.post(BASE + "/xj", json={"j": 1}, data={"d": "v"})
+assert seen[-1][2] == b"d=v" and "x-www-form-urlencoded" in seen[-1][3]
+httpx.post(BASE + "/xc", json={"j": 1}, data={"d": "v"}, content=b"raw")
+assert seen[-1][2] == b"raw"
+httpx.post(BASE + "/xf", json={"j": 1}, data={"d": "v"}, files={"f": b"x"})
+assert "multipart/form-data" in seen[-1][3] and b'name="d"' in seen[-1][2]
+assert b'name="f"' in seen[-1][2] and b'"j"' not in seen[-1][2]
+httpx.post(BASE + "/xe", json={"j": 1}, data={})
+assert json.loads(seen[-1][2]) == {"j": 1}
+requests.post(BASE + "/rn")
+assert seen[-1][2] == b""
+httpx.post(BASE + "/xn")
+assert seen[-1][2] == b""
+rule(
+    "several body keywords: requests files > data > json (data= and files= go together as multipart); "
+    "httpx content > files > data > json (the same multipart rule); an empty data= gives way to json=; "
+    "a call with no body keyword sends no body"
+)
+assert positional(requests.Session.request)[:7] == [
+    "method",
+    "url",
+    "params",
+    "data",
+    "headers",
+    "cookies",
+    "files",
+]
+assert positional(requests.Session.request)[15] == "json"
+assert positional(requests.api.request) == ["method", "url"]
+assert positional(requests.api.post)[:3] == ["url", "data", "json"]
+rule(
+    "body positions: requests post(url, data, json): data 1, json 2; put/patch(url, data): data 1; "
+    "Session.request: data 3, files 6, json 15; requests.request(method, url, **kwargs): none"
+)
+
 # 6. requests.Session has no base URL.
 s = requests.Session()
 assert not hasattr(s, "base_url")

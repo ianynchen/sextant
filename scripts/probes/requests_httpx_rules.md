@@ -22,6 +22,9 @@ asked for. Every row is an `assert` in the script, so a cell that failed would h
 | `request(method, url)` | 0, 1 | 0, 1 |
 | body keywords | `json`, `data`, `files`; no `content` | `content`, `data`, `json`, `files` on post/put/patch/request only |
 | base URL on the client | none (`Session` has no `base_url`) | `base_url`, appended after a forced trailing slash |
+| verb written in lower case (`request("get", url)`) | upper-cased, sent as `GET` | upper-cased, sent as `GET` |
+| several body keywords on one call | `files` > `data` > `json` | `content` > `files` > `data` > `json` |
+| no body keyword | no body sent | no body sent |
 
 ## Defining symbols
 
@@ -61,6 +64,33 @@ the stub is not the only source for it, and it is not "no type information".
   in httpx (module level, `Client` and `AsyncClient`).
 - Wire: `requests.post(json={"k":1})` sends a JSON body; `data={"k":"v"}` sends `k=v` as
   `application/x-www-form-urlencoded`; `httpx.post(content=b"raw")` sends `raw`.
+
+## Verb case (ruling R10)
+
+`requests.request("get", url)`, `Session().request("patch", url)`, `httpx.request("get", url)`
+and `Client().request("delete", url)` reach the server as `GET`, `PATCH`, `GET`, `DELETE`.
+requests upper-cases in `PreparedRequest.prepare_method` (`self.method.upper()`), httpx in
+`Request.__init__` (`self.method = method.upper()`). A verb written as a string literal is
+therefore read upper-cased.
+
+## Several body keywords (ruling R11)
+
+Measured on the wire, with `json=`, `data=`, `files=` and `content=` given together:
+
+- requests (`PreparedRequest.prepare_body`): `files=` makes a multipart body of `files` and
+  `data` together; otherwise a non-empty `data=` is the (form) body; otherwise `json=`
+  (`if not data and json is not None`). Order: **`files` > `data` > `json`**. An empty
+  `data={}` gives way to `json=`.
+- httpx (`httpx._content.encode_request`): `content=` wins; then `files=` (multipart, with
+  `data`); then a non-empty `data=`; then `json=`. Order: **`content` > `files` > `data` >
+  `json`**. A `data=` that is not a mapping is sent as `content=` (with a
+  `DeprecationWarning`). An empty `data={}` gives way to `json=`.
+- A call with none of them sends an empty body, in both libraries: no body.
+
+Positions of the body parameters: requests `post(url, data, json)` has `data` at 1 and `json`
+at 2; `put`/`patch(url, data)` `data` at 1; `Session.request` has `data` at 3, `files` at 6,
+`json` at 15; `requests.request(method, url, **kwargs)` takes every body by keyword. httpx
+takes every body by keyword.
 
 ## base_url
 
