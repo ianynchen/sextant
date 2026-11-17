@@ -18,6 +18,7 @@ against a bridge names a body no caller reads. This module is the ONE projection
 
 from dataclasses import dataclass
 from typing import Any
+from weakref import WeakKeyDictionary
 
 from sextant.application.ports.workspace import Workspace
 from sextant.domain.symbols import (
@@ -416,3 +417,50 @@ def _through_bridge(site: dict[str, Any], bridge: _Bridge) -> dict[str, Any] | N
             receiver.get("value") if receiver.get("kind") == "parameter" else None
         )
     return row
+
+
+# The owner a settled receiver binding gives each call the facts left unowned, per workspace
+# for one load: keyed weakly on the workspace and tied to the load's call-site list, so a
+# reload builds it again.
+_BOUND: "WeakKeyDictionary[Workspace, tuple[object, dict[str, list[int]]]]" = WeakKeyDictionary()
+_RESOLVED = "resolved"
+
+
+def bound_positions(workspace: Workspace) -> dict[str, list[int]]:
+    """The positions in `effective_call_sites` of the calls whose facts name no owner
+    (`self.session.post(…)` on a field the scanner wrote no type for), by the owner
+    `bound_receivers` binds them to (plan 3 ruling R9) — only where EVERY path the binding
+    read names one and the same owner, at `resolved`. Paths that disagree, or a path naming
+    none, leave the site unowned: that is the true answer.
+
+    Read only after the binding has settled (`pipeline`: `bind_until_settled` runs before
+    the engines), which is why it is not one of `effective_call_sites`' projections: that
+    list is folded from facts alone (`Workspace.once`). A JVM module's facts name every
+    owner, so its table, and this map, are empty."""
+    sites = effective_call_sites(workspace)
+    held = _BOUND.get(workspace)
+    if held is not None and held[0] is sites:
+        return held[1]
+    owners: dict[tuple[str, int], set[str]] = {}
+    refused: set[tuple[str, int]] = set()
+    for row in workspace.query("bound_receivers"):
+        key = (str(row["caller"]), int(str(row["ordinal"])))
+        if row["owner"] is None or row["resolution"] != _RESOLVED:
+            refused.add(key)
+        else:
+            owners.setdefault(key, set()).add(str(row["owner"]))
+    agreed = {
+        key: next(iter(named))
+        for key, named in owners.items()
+        if key not in refused and len(named) == 1
+    }
+    found: dict[str, list[int]] = {}
+    if agreed:
+        for position, site in enumerate(sites):
+            if site["owner"] is not None:
+                continue
+            owner = agreed.get((str(site["caller"]), int(site["ordinal"])))
+            if owner is not None:
+                found.setdefault(owner, []).append(position)
+    _BOUND[workspace] = (sites, found)
+    return found

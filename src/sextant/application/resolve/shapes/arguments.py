@@ -1614,6 +1614,10 @@ def _reference_of(
         # the `symbol` it does not carry.
         declared = declared_parameters[index].get("type")
         return declared if isinstance(declared, dict) else None
+    if kind == "unresolved" and catalog_rules.rules.serializers:
+        serialized = _serialized_model(argument, workspace_types, catalog_rules.rules)
+        if serialized is not None:
+            return serialized
     if kind != "instance":
         # `null`, `lambda`, `unresolved`, `field`, `concat`: none of these names a payload
         # type at all. A `field`'s type is knowable in the same way a parameter's is and is
@@ -1649,6 +1653,45 @@ def _reference_of(
         # asked for.
         return _terminal_reference(ctor_arguments[payload_ctor_arg])
     return _bare_reference(symbol)
+
+
+def _serialized_model(
+    argument: dict[str, Any], workspace_types: CallFacts, rules: _Rules
+) -> dict[str, Any] | None:
+    """The model an argument serialises where it is the result of one of the shape model's
+    `serializers` called in this method (`json=order.model_dump(by_alias=True)`, plan 3 N4):
+    the call's own owner, the type the scanner read its receiver as. Only where the call
+    writes `serializer_names_when` (pydantic's `by_alias=True`): without it the call writes the
+    fields' own names, which are not the shape's wire names where a field is renamed, so the
+    body is not described."""
+    source = argument.get("source")
+    if source is None:
+        return None
+    made = next(
+        (
+            site
+            for site in workspace_types.caller_call_sites
+            if site.get("result") == source and site.get("name") in rules.serializers
+        ),
+        None,
+    )
+    if made is None or made.get("owner") is None:
+        return None
+    if rules.serializer_names_when is not None:
+        keyword, value = rules.serializer_names_when
+        written = next(
+            (one for one in made.get("arguments") or [] if one.get("keyword") == keyword), None
+        )
+        # A literal equal to the value, of the value's own kind (`1` is not `True`).
+        if (
+            written is None
+            or written.get("value") != value
+            or (written.get("kind") == "boolean") != isinstance(value, bool)
+        ):
+            return None
+    # What a serialiser writes is never None, and a Python reference states no format (D00
+    # §5b), as the parameter a model is handed by does.
+    return {**_bare_reference(str(made["owner"])), "nullable": False, "wire_format": None}
 
 
 # The argument kind a reader gives a value it read as a type form (`type_form_reference`): never

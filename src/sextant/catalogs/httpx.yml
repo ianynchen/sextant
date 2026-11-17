@@ -1,0 +1,63 @@
+id: httpx
+displayName: httpx (the module functions, Client and AsyncClient)
+style: single_call
+protocol: http
+direction: outbound
+
+# Every rule below is httpx's own, measured on the wire by
+# `scripts/probes/requests_httpx_rules.py` (results and `Client._merge_url` quoted in
+# `requests_httpx_rules.md`) against httpx 0.28.1 as the running process reported it.
+
+detect:
+  coordinates: [httpx]
+
+measured:
+  - { artifact: httpx, versions: ["0.28.1"], identity: reported,
+      by: scripts/probes/requests_httpx_rules.md }
+
+# A payload is a pydantic model, or a call that serialises one (`order.model_dump()`, the
+# shape model's `serializers`).
+shape_model: pydantic
+
+matches:
+  # The DEFINING symbols (plan 3 ruling R1): the module functions are in `httpx/_api.py`, the
+  # clients in `httpx/_client.py`. httpx rewrites `__module__` to `httpx` on all of them; the
+  # defining file is what a call resolves to.
+  owner: [httpx._api, httpx._client.Client, httpx._client.AsyncClient]
+  # THE BASE (probe "base_url"): a client built with `base_url=` sends a relative address to
+  # that base, by `Client._merge_url` (`append_to_base`). A client is the RECEIVER of its
+  # calls; a module function has none, and its relative address is one httpx refuses
+  # (`UnsupportedProtocol`), so it is kept at `unresolved`. So is a relative address on a
+  # client the walk does not reach, or one built without `base_url`.
+  #
+  # Not read: `client.base_url = …` after construction (a property assignment, not a call).
+  client_base:
+    client_arg: receiver
+    ladder:
+      - { owner: httpx._client.Client,      method: <init>, base_arg: { keyword: base_url } }
+      - { owner: httpx._client.AsyncClient, method: <init>, base_arg: { keyword: base_url } }
+    join: append_to_base
+  # THE BODY (probe "Several body keywords"): `content=`, else `files=` (multipart, with
+  # `data=`), else a non-empty `data=`, else `json=` — the first of the list the call writes
+  # is the body, and a call writing none sends no body. All are keyword-only. `get`, `head`,
+  # `options` and `delete` take none of them (plan 3 ruling R3), so they declare no body.
+  #
+  # THE VERB of `request`/`stream(method, url)` is its argument, upper-cased by httpx
+  # (`Request.__init__`, probe "Verb case").
+  methods:
+    - { name: get,     http_method: GET,     url_arg: { arg: 0, keyword: url } }
+    - { name: options, http_method: OPTIONS, url_arg: { arg: 0, keyword: url } }
+    - { name: head,    http_method: HEAD,    url_arg: { arg: 0, keyword: url } }
+    - { name: delete,  http_method: DELETE,  url_arg: { arg: 0, keyword: url } }
+    - { name: post,    http_method: POST,    url_arg: { arg: 0, keyword: url },
+        body_arg: [{ keyword: content }, { keyword: files }, { keyword: data }, { keyword: json }] }
+    - { name: put,     http_method: PUT,     url_arg: { arg: 0, keyword: url },
+        body_arg: [{ keyword: content }, { keyword: files }, { keyword: data }, { keyword: json }] }
+    - { name: patch,   http_method: PATCH,   url_arg: { arg: 0, keyword: url },
+        body_arg: [{ keyword: content }, { keyword: files }, { keyword: data }, { keyword: json }] }
+    - { name: request, method_arg: { arg: 0, keyword: method }, method_case: upper,
+        url_arg: { arg: 1, keyword: url },
+        body_arg: [{ keyword: content }, { keyword: files }, { keyword: data }, { keyword: json }] }
+    - { name: stream,  method_arg: { arg: 0, keyword: method }, method_case: upper,
+        url_arg: { arg: 1, keyword: url },
+        body_arg: [{ keyword: content }, { keyword: files }, { keyword: data }, { keyword: json }] }

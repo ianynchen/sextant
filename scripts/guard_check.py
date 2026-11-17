@@ -3126,7 +3126,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/engines/single_call.py",
-                find="                            else _verb_from_answer(binding.slots.get(verb_slot)),\n",
+                find="                            else _verb_from_answer(\n"
+                "                                binding.slots.get(verb_slot), method.get(_METHOD_CASE)\n"
+                "                            ),\n",
                 replace="                            else None,  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -5005,8 +5007,8 @@ GUARDS: dict[str, Guard] = {
                 # A (`docs/performance.md`) turned the per-site test into a read of
                 # the owners' own positions in the shared `CallSiteIndex`; the guard
                 # is the same, and disabling it reads every position instead.
-                find="            index.positions_by_owner.get(owner, [])\n"
-                "            for owner in dict.fromkeys((*owners, *sorted({heir for heir, _ in inherited})))",
+                find="                index.positions_by_owner.get(owner, [])\n"
+                "                for owner in dict.fromkeys((*owners, *sorted({heir for heir, _ in inherited})))",
                 replace="            range(len(call_sites)) for _ in [None]"
                 "  # guard disabled by scripts/guard_check.py",
             ),
@@ -10226,7 +10228,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",
-                find="        if any(_same_name(site, call) for call in (*self._rungs, self._setter)):\n",
+                find="        if any(_same_name(site, call) for call in (*self._rungs, *setter)):\n",
                 replace="        if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -10240,7 +10242,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",
-                find='        if site.get("owner") == self._setter["owner"]:\n',
+                find='        if self._setter is not None and site.get("owner") == self._setter["owner"]:\n',
                 replace="        if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),

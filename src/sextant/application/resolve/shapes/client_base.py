@@ -49,9 +49,12 @@ from sextant.application.resolve.values import (
     NOT_READABLE,
     RECEIVER,
     STRING,
+    UNPACKED_SLOT,
     UNRESOLVED,
     Path,
     ValueIndex,
+    argument_reference,
+    argument_slot,
     inexact,
     object_of,
     producer_paths,
@@ -72,9 +75,23 @@ REPLACE_LAST_SEGMENT = "replace_last_segment"
 # request's own part wins, and an absolute request reads neither. It moves only the peer:
 # Vert.x never rewrites the path.
 FILL_AUTHORITY = "fill_authority"
-_JOINS = (REPLACE_LAST_SEGMENT, FILL_AUTHORITY)
+# The join httpx's `Client._merge_url` makes (0.28.1, quoted and measured in
+# `scripts/probes/requests_httpx_rules.md` "base_url"): the base's path is made to end in `/`,
+# the relative address's leading `/`s are stripped, and the rest is APPENDED — a leading `/`
+# never resets to the host's root — then dot segments are removed.
+APPEND_TO_BASE = "append_to_base"
+_JOINS = (REPLACE_LAST_SEGMENT, FILL_AUTHORITY, APPEND_TO_BASE)
+# The joins a ladder of block or argument rungs may declare.
+_LADDER_JOINS = (REPLACE_LAST_SEGMENT, APPEND_TO_BASE)
 
 _KEYS = {"client_arg", "ladder", "setter", "join", "may_set_base"}
+# THE ARGUMENT RUNG (plan 3 ruling R8): a client handed its base as an argument of the call
+# that builds it — `httpx.Client(base_url="…")` — rather than set inside a block. The rung
+# names that argument (`base_arg`, an argument reference, `values.argument_slot`), and a
+# ladder of argument rungs has no block to hold a setter, so `setter` and `may_set_base`
+# are not declared.
+_BASE_ARG = "base_arg"
+_BLOCK_ONLY_KEYS = {"setter", "may_set_base"}
 # THE OPTIONS-OBJECT RUNG (Vert.x spec 2026-10-30 §3d, §3g item 7). A client configured by an
 # OBJECT handed to its factory — `WebClient.create(vertx, options)` — rather than by a block:
 # each rung names the factory and the argument holding the object (`options_arg`), and the
@@ -108,6 +125,7 @@ _DEFAULT_PORTS = "default_ports"
 # a `scheme`, and a `port` where the call sets one too.
 _REQUEST_KEYS = {"scheme", "port"}
 _RUNG_KEYS = {"owner", "method", "block_arg", "descriptor", "parent"}
+_ARGUMENT_RUNG_KEYS = {"owner", "method", _BASE_ARG, "descriptor"}
 _SETTER_KEYS = {"owner", "method", "value_arg", "descriptor"}
 # One `may_set_base` entry: an owner, optionally narrowed to a method and a descriptor, and
 # optionally to a call whose argument `arg` reads the static field `field` (`{owner, name}`)
@@ -153,16 +171,26 @@ def _validated(declared: Any, source: object) -> Mapping[str, Any] | None:
         isinstance(rung, dict) and "options_arg" in rung for rung in ladder
     ):
         return _validated_options(declared, where)
-    unknown = sorted(set(declared) - _KEYS - {_DEFAULT_PORTS})
-    missing = sorted(_KEYS - set(declared))
+    by_argument = isinstance(ladder, list) and any(
+        isinstance(rung, dict) and _BASE_ARG in rung for rung in ladder
+    )
+    keys = _KEYS - _BLOCK_ONLY_KEYS if by_argument else _KEYS
+    unknown = sorted(set(declared) - keys - {_DEFAULT_PORTS})
+    missing = sorted(keys - set(declared))
     if unknown or missing:
-        raise CatalogError(
-            f"{where} declares {sorted(_KEYS)}; unknown {unknown}, missing {missing}"
-        )
-    _index(declared["client_arg"], f"{where}'s `client_arg`")
+        raise CatalogError(f"{where} declares {sorted(keys)}; unknown {unknown}, missing {missing}")
+    # The client of an argument rung's call is its receiver (`client.get("/x")`) or an
+    # argument; a block ladder's is an argument (`fluent` reads a receiver client only through
+    # an options rung).
+    if not (by_argument and declared["client_arg"] == CLIENT_IS_RECEIVER):
+        _index(declared["client_arg"], f"{where}'s `client_arg`")
     ladder = declared["ladder"]
     if not isinstance(ladder, list) or not ladder:
         raise CatalogError(f"{where}'s `ladder` is a non-empty list of calls, got {ladder!r}")
+    if by_argument:
+        for rung in ladder:
+            _argument_rung(rung, f"{where}'s `ladder` entry {rung!r}")
+        return _ladder_join(declared, where)
     for rung in ladder:
         _call(rung, _RUNG_KEYS, "block_arg", f"{where}'s `ladder` entry {rung!r}")
         if "parent" in rung and rung["parent"] not in _PARENTS:
@@ -172,11 +200,6 @@ def _validated(declared: Any, source: object) -> Mapping[str, Any] | None:
                 f"{list(_PARENTS)}"
             )
     _call(declared["setter"], _SETTER_KEYS, "value_arg", f"{where}'s `setter`")
-    if declared["join"] != REPLACE_LAST_SEGMENT:
-        raise CatalogError(
-            f"{where}'s `join` is `{REPLACE_LAST_SEGMENT}` for a ladder of block rungs (one of "
-            f"{list(_JOINS)} by shape), got {declared['join']!r}"
-        )
     may = declared["may_set_base"]
     if not isinstance(may, list):
         raise CatalogError(f"{where}'s `may_set_base` is a list of calls, got {may!r}")
@@ -188,6 +211,41 @@ def _validated(declared: Any, source: object) -> Mapping[str, Any] | None:
     ):
         raise CatalogError(
             f"{where}'s `{_DEFAULT_PORTS}` maps each scheme to its default port, got {ports!r}"
+        )
+    return _ladder_join(declared, where)
+
+
+def _argument_rung(rung: Any, where: str) -> None:
+    """One argument rung: `{owner, method, base_arg}` and an optional `descriptor`, every rung
+    of its ladder one (a block rung's reader cannot read it, nor the other way)."""
+    if not isinstance(rung, dict) or _BASE_ARG not in rung:
+        raise CatalogError(
+            f"{where}: a ladder of argument rungs (`{_BASE_ARG}`) mixes in another shape; one "
+            f"ladder is one shape"
+        )
+    unknown = sorted(set(rung) - _ARGUMENT_RUNG_KEYS)
+    if unknown:
+        raise CatalogError(
+            f"{where} declares unknown {unknown}; it may declare {sorted(_ARGUMENT_RUNG_KEYS)}"
+        )
+    for word in ("owner", "method"):
+        if not isinstance(rung.get(word), str) or not rung[word]:
+            raise CatalogError(f"{where} names no `{word}`")
+    if "descriptor" in rung and not isinstance(rung["descriptor"], str):
+        raise CatalogError(f"{where}'s `descriptor` is a method descriptor string")
+    if argument_reference(rung[_BASE_ARG], spelled=False) is None:
+        raise CatalogError(
+            f"{where}'s `{_BASE_ARG}` is an argument reference (a position, `{{keyword: name}}` "
+            f"or `{{arg: N, keyword: name}}`), got {rung[_BASE_ARG]!r}"
+        )
+
+
+def _ladder_join(declared: dict[str, Any], where: str) -> Mapping[str, Any]:
+    """`declared`, once its `join` is one a ladder of block or argument rungs may use."""
+    if declared["join"] not in _LADDER_JOINS:
+        raise CatalogError(
+            f"{where}'s `join` is one of {list(_LADDER_JOINS)} for a ladder of block or argument "
+            f"rungs ({list(_JOINS)} by shape), got {declared['join']!r}"
         )
     return MappingProxyType(declared)
 
@@ -440,8 +498,10 @@ class _Ladder:
         self._rungs = [
             {**rung, "owner": type_descriptor(str(rung["owner"]))} for rung in declared["ladder"]
         ]
-        setter = declared["setter"]
-        self._setter = {**setter, "owner": type_descriptor(str(setter["owner"]))}
+        setter = declared.get("setter")
+        self._setter = (
+            None if setter is None else {**setter, "owner": type_descriptor(str(setter["owner"]))}
+        )
         self._may_set = [
             {
                 **entry,
@@ -459,9 +519,14 @@ class _Ladder:
                     else {}
                 ),
             }
-            for entry in declared["may_set_base"]
+            for entry in declared.get("may_set_base", ())
         ]
         self._stops = frozenset((rung["owner"], str(rung["method"])) for rung in self._rungs)
+        # An argument rung's base is fixed when the client is built: the question is only
+        # WHICH construction built it, so a call made on the client in between (`aclose()`,
+        # another request) does not make it another client (`which_object`, the object
+        # reader's switch). A block ladder keeps the window it always had.
+        self._by_argument = any(_BASE_ARG in rung for rung in self._rungs)
 
     def base_of(
         self, site: Mapping[str, Any], slot: int | str, seen: tuple[tuple[str, int], ...]
@@ -469,7 +534,19 @@ class _Ladder:
         """The base of the client at `slot` of `site`: one per path the producer reader
         finds, and only where every path agrees."""
         bases: list[str] = []
-        for producer in producers_of(self._values, site, slot, self._stops):
+        producers = (
+            tuple(
+                dict.fromkeys(
+                    producer
+                    for producer, _ in producer_paths(
+                        self._values, site, slot, self._stops, which_object=True
+                    )
+                )
+            )
+            if self._by_argument
+            else producers_of(self._values, site, slot, self._stops)
+        )
+        for producer in producers:
             if producer.caller is None or producer.ordinal is None:
                 return None, producer.reason or NOT_READABLE
             built = (producer.caller, producer.ordinal)
@@ -510,6 +587,8 @@ class _Ladder:
             # The declared owner and method under an overload no rung declares: the call is
             # reached, and what its block means is not measured.
             return None, NOT_READABLE
+        if _BASE_ARG in rung:
+            return self._argument_base(site, rung)
         base, reason = self._block_base(site, rung)
         if reason is not None:
             return None, reason
@@ -537,7 +616,7 @@ class _Ladder:
         receiver = int(str(block.get("captures") or 0))
         base: str | None = None
         for inner in self._by_caller.get(body, []):
-            if _matches(inner, self._setter):
+            if self._setter is not None and _matches(inner, self._setter):
                 address, reason = self._setter_value(inner)
                 if address is None or not (_has_host(address) or carries_expression(address)):
                     return None, reason or NOT_READABLE
@@ -557,10 +636,30 @@ class _Ladder:
                 base = set_there
         return base, None
 
-    def _setter_value(self, site: Mapping[str, Any]) -> tuple[str | None, str | None]:
-        """The string the setter at `site` is handed: the literal, or the one value every
-        path of the walk agrees on there."""
-        slot = int(self._setter["value_arg"])
+    def _argument_base(
+        self, site: Mapping[str, Any], rung: Mapping[str, Any]
+    ) -> tuple[str | None, str | None]:
+        """The base an argument rung's construction at `site` is handed (`base_arg`): an
+        absolute address or a configuration expression, read as a setter's value is. A
+        construction handed none has no base — httpx then refuses a relative address
+        (`UnsupportedProtocol`, probe "base_url") — so no join is made, as where a base is
+        handed and not read."""
+        slot = argument_slot(site["arguments"] or [], rung[_BASE_ARG])
+        if slot is None or slot == UNPACKED_SLOT:
+            return None, NOT_READABLE
+        address, reason = self._setter_value(site, slot)
+        if address is None or not (_has_host(address) or carries_expression(address)):
+            return None, reason or NOT_READABLE
+        return address, None
+
+    def _setter_value(
+        self, site: Mapping[str, Any], slot: int | None = None
+    ) -> tuple[str | None, str | None]:
+        """The string the setter at `site` is handed (or the argument at `slot` of it): the
+        literal, or the one value every path of the walk agrees on there."""
+        if slot is None:
+            assert self._setter is not None
+            slot = int(self._setter["value_arg"])
         answers = [
             reached["value"]
             for reached in resolve_positions(self._workspace, {"value": (site, slot)}, self._values)
@@ -608,9 +707,10 @@ class _Ladder:
         - a call `may_set_base` lists (`install(DefaultRequest) { … }`, row 92)."""
         if self._rung_of(site) is not None:
             return False
-        if any(_same_name(site, call) for call in (*self._rungs, self._setter)):
+        setter = () if self._setter is None else (self._setter,)
+        if any(_same_name(site, call) for call in (*self._rungs, *setter)):
             return True
-        if site.get("owner") == self._setter["owner"]:
+        if self._setter is not None and site.get("owner") == self._setter["owner"]:
             return True
         return any(_listed(site, entry) for entry in self._may_set)
 
@@ -1104,6 +1204,8 @@ def join_url(
     `default_ports` the scheme's default port each is rendered against: see
     `_with_request_scheme`. `path_only` reads `relative` as a path handed over as it stands,
     never parsed as an address: see `_path_onto`."""
+    if rule == APPEND_TO_BASE and request is None and not path_only:
+        return _append_to_base(base, relative)
     if rule != REPLACE_LAST_SEGMENT:
         raise ValueError(f"no join rule {rule!r}; the rules are {list(_JOINS)}")
     if request is None:
@@ -1254,6 +1356,50 @@ def _replace_last_segment(base: str, relative: str) -> str | None:
             request.fragment or origin.fragment,
         )
     )
+
+
+def _append_to_base(base: str, relative: str) -> str | None:
+    """httpx 0.28.1's `Client._merge_url` (probe "base_url", every row of its table):
+    `base_url.raw_path + merge_url.raw_path.lstrip("/")` over a base whose path ends in `/`
+    (`_enforce_trailing_slash`), then dot segments removed — so `/users`, `users` and `./users`
+    over `…/api` are all `…/api/users`, `../x` is `…/x`, an empty address is `…/api/`, and a
+    query the address carries is kept. A protocol-relative `//other.example/x` keeps the base's
+    host and appends its path (`…/api/x`).
+
+    DECLINES (None) what the probe did not measure: an address with a scheme and no host, a
+    fragment, a `//` with no host, a base carrying a query or a fragment."""
+    request = urlsplit(relative)
+    origin = urlsplit(base)
+    if request.scheme or request.fragment:
+        return None
+    if relative.startswith("//") and not request.hostname:
+        return None
+    if origin.query or origin.fragment:
+        return None
+    directory = origin.path if origin.path.endswith("/") else origin.path + "/"
+    path = _without_dot_segments(directory + request.path.lstrip("/"))
+    return urlunsplit((origin.scheme, origin.netloc, path, request.query, ""))
+
+
+def _without_dot_segments(path: str) -> str:
+    """RFC 3986 §5.2.4 on an absolute path, the normalisation httpx's `copy_with` applies to
+    the merged path (probe "base_url": `…/api/../x` is `…/x`)."""
+    kept: list[str] = []
+    segments = path.split("/")[1:]
+    for position, segment in enumerate(segments):
+        last = position == len(segments) - 1
+        if segment == ".":
+            if last:
+                kept.append("")
+            continue
+        if segment == "..":
+            if kept:
+                kept.pop()
+            if last:
+                kept.append("")
+            continue
+        kept.append(segment)
+    return "/" + "/".join(kept)
 
 
 def _scheme_of(address: str) -> tuple[str | None, bool]:

@@ -21,7 +21,7 @@ from typing import Any, cast
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
-from sextant.application.resolve.effective_calls import effective_call_sites
+from sextant.application.resolve.effective_calls import bound_positions, effective_call_sites
 from sextant.application.resolve.shapes.arguments import (
     QUERY_KIND,
     CallFacts,
@@ -63,6 +63,7 @@ from sextant.application.resolve.shapes.rooting import (
     names_a_type,
 )
 from sextant.application.resolve.values import (
+    RECEIVER,
     UNPACKED_SLOT,
     ValueIndex,
     argument_slot,
@@ -152,6 +153,12 @@ _ADDRESS_PARTS = "address_parts"
 # What a call sets on its request's URL before its address is read (spec 2026-10-26 §3g item
 # 2): read by `shapes.client_base.request_url_of`, meaningful only beside `client_base`.
 _REQUEST_URL = "request_url"
+# How the library writes a verb its call is handed as text (`request("get", url)`, plan 3
+# ruling R10): `upper`, the one case rule measured (requests and httpx upper-case it, probe
+# `requests_httpx_rules.md` "Verb case"). A row reading a text verb with no rule reads it as
+# written.
+_METHOD_CASE = "method_case"
+_METHOD_CASES = ("upper",)
 
 
 def _channel_declared(method: dict[str, Any]) -> bool:
@@ -466,10 +473,22 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         for name in dict.fromkeys(str(method["name"]) for method in methods)
         for heir in dispatch.heirs(owner, name)
     }
+    # A call whose facts name no owner and whose receiver binding settled on one (plan 3
+    # ruling R9, `bound_positions`) is read as a call on that owner: `self.session.post(…)`
+    # on a field the scanner wrote no type for.
+    bound = bound_positions(workspace)
+    bound_owner = {
+        position: owner
+        for owner in dict.fromkeys((*owners, *sorted({heir for heir, _ in inherited})))
+        for position in bound.get(owner, ())
+    }
     positions = sorted(
-        chain.from_iterable(
-            index.positions_by_owner.get(owner, [])
-            for owner in dict.fromkeys((*owners, *sorted({heir for heir, _ in inherited})))
+        chain(
+            chain.from_iterable(
+                index.positions_by_owner.get(owner, [])
+                for owner in dict.fromkeys((*owners, *sorted({heir for heir, _ in inherited})))
+            ),
+            bound_owner,
         )
     )
     # The walk's index, built on the FIRST `channel_via` row that reaches it and not
@@ -480,6 +499,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     values: ValueIndex | None = None
     for position in positions:
         site = call_sites[position]
+        if position in bound_owner:
+            site = {**site, "owner": bound_owner[position]}
         if site["owner"] not in owners and (site["owner"], site["name"]) not in inherited:
             continue
         arguments = site["arguments"]
@@ -529,8 +550,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # declaring both, so at most one of the two is ever present
             # here.
             url_argument = _arg_at(arguments, method.get("url_arg", method.get("channel_arg")))
-            body_argument = _arg_at(arguments, method.get("body_arg"))
-            body_declared = method.get("body_arg") is not None
+            body_argument, body_declared = _body_of(arguments, method.get("body_arg"))
             if _LAMBDA_ARG in method:
                 # THE DESTINATION IS INSIDE THE ARGUMENT (`OI-74`, W57).
                 # `sqsTemplate.send(to -> to.queue("shipments-lambda").payload(event))`
@@ -865,7 +885,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                         (
                             verb
                             if verb_slot is None
-                            else _verb_from_answer(binding.slots.get(verb_slot)),
+                            else _verb_from_answer(
+                                binding.slots.get(verb_slot), method.get(_METHOD_CASE)
+                            ),
                             read_answer(binding.slots.get(url_slot)),
                             _is_narrowed(binding.slots.get(url_slot))
                             or (
@@ -1184,13 +1206,23 @@ def _sent_to(
         return destination
     if declared is None:
         return destination if not path_only else (None, path, resolution)
-    slot = int(declared["client_arg"])
-    argument = _arg_at(arguments, slot)
-    client = (
-        None
-        if argument is None
-        else {**argument, "captured_at": (site["caller"], site["ordinal"], slot)}
-    )
+    client: dict[str, Any] | None
+    if declared["client_arg"] == CLIENT_IS_RECEIVER:
+        # The client is the call's receiver (`client.get("/x")`); a call made on no value (a
+        # module function) has no client, so a relative address it states joins nothing.
+        client = (
+            None
+            if site.get("invoke_kind") == "static"
+            else {"captured_at": (site["caller"], site["ordinal"], RECEIVER)}
+        )
+    else:
+        slot = int(declared["client_arg"])
+        argument = _arg_at(arguments, slot)
+        client = (
+            None
+            if argument is None
+            else {**argument, "captured_at": (site["caller"], site["ordinal"], slot)}
+        )
     address, resolution = against_client_base(
         workspace, values, client, declared, path, method.get(_REQUEST_URL), path_only
     )
@@ -1229,6 +1261,12 @@ def _validate_client_rows(rows: list[dict[str, Any]], declared: Any, catalog: Ca
     for row in rows:
         where = f"loading catalog {catalog.source}: `{row['name']}`"
         request_url_of(row, declared, where)
+        case = row.get(_METHOD_CASE)
+        if case is not None and (case not in _METHOD_CASES or "method_arg" not in row):
+            raise CatalogError(
+                f"{where} declares `{_METHOD_CASE}: {case!r}`, which is one of "
+                f"{list(_METHOD_CASES)} beside a `method_arg` (D02 §2's single_call style)"
+            )
         parts = row.get(_ADDRESS_PARTS)
         if parts is not None and not (
             isinstance(parts, list)
@@ -2208,14 +2246,24 @@ def _narrowed_if(
     return address
 
 
-def _verb_from_answer(answer: Any) -> str | None:
+def _verb_from_answer(answer: Any, case: Any = None) -> str | None:
     """The verb a walked binding holds at the `method_arg` slot: an `enum` constant the
     walk carried as a `symbol` literal (`org/springframework/http/HttpMethod#POST.` reads
-    as `POST`, exactly as `_verb_of` reads the same symbol off a call-site argument). None
-    for anything else — a verb the walk could not reach stays NULL, as it always has."""
-    if answer is None or answer.kind != "literal" or answer.literal_kind != "symbol":
+    as `POST`, exactly as `_verb_of` reads the same symbol off a call-site argument), or a
+    string literal written as the row's `method_case` says. None for anything else — a verb
+    the walk could not reach stays NULL, as it always has."""
+    if answer is None or answer.kind != "literal":
+        return None
+    if answer.literal_kind == "string":
+        return _cased(str(answer.value), case)
+    if answer.literal_kind != "symbol":
         return None
     return member_name(str(answer.value))
+
+
+def _cased(verb: str, case: Any) -> str:
+    """A verb the code states as text, as the library sends it (`method_case`)."""
+    return verb.upper() if case == "upper" else verb
 
 
 def _verb_of(method: dict[str, Any], arguments: list[dict[str, Any]]) -> str | None:
@@ -2234,6 +2282,32 @@ def _verb_of(method: dict[str, Any], arguments: list[dict[str, Any]]) -> str | N
     if literal is not None:
         return str(literal)
     arg = _arg_at(arguments, method.get("method_arg"))
+    if arg is not None and arg.get("kind") == "string" and isinstance(arg.get("value"), str):
+        # A verb the code states as text (plan 3 ruling R10), as the library sends it.
+        return _cased(str(arg["value"]), method.get(_METHOD_CASE))
     if arg is None or arg.get("kind") != "enum" or not arg.get("symbol"):
         return None
     return member_name(str(arg["symbol"]))
+
+
+def _body_of(arguments: list[dict[str, Any]], declared: Any) -> tuple[dict[str, Any] | None, bool]:
+    """The body a row's `body_arg` reads, and whether the call declares one (ruling I1's
+    `declared`).
+
+    A position (the JVM's form) is declared whenever the row names it. A keyword form, or a
+    LIST of them in the library's own precedence (plan 3 ruling R11: requests sends `files`,
+    else `data`, else `json`), names arguments a call may leave out: the first the call
+    writes is the body, and a call writing none of them sends NO body — it is not a body the
+    reader failed to read, so the row is not marked down for it."""
+    if declared is None:
+        return None, False
+    if isinstance(declared, list):
+        for slot in declared:
+            found = _arg_at(arguments, slot)
+            if found is not None:
+                return found, True
+        return None, False
+    found = _arg_at(arguments, declared)
+    if isinstance(declared, dict) and found is None:
+        return None, False
+    return found, True

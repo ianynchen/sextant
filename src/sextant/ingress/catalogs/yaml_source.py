@@ -1203,6 +1203,8 @@ _SERIALIZATION_KEYS = frozenset(
         "open_when",
         "output_fields",
         "output_open_when",
+        "serializers",
+        "serializer_names_when",
     }
 )
 _GENERATOR_STRATEGIES = frozenset({"camel", "pascal", "humps_camelize"})
@@ -1320,6 +1322,28 @@ def _check_shape_model(raw: dict[str, Any], path: Path) -> None:
     ):
         raise CatalogError(
             f"{where}: `excluded_when` is `{{keyword: <name>, value: <literal>}}`, got {excluded!r}"
+        )
+    serializers = serialization.get("serializers")
+    if "serializers" in serialization and not (
+        isinstance(serializers, list)
+        and serializers
+        and all(isinstance(name, str) and name.isidentifier() for name in serializers)
+    ):
+        raise CatalogError(
+            f"{where}: `serializers` is a non-empty list of method names, got {serializers!r}"
+        )
+    names_when = serialization.get("serializer_names_when")
+    if "serializer_names_when" in serialization and not (
+        "serializers" in serialization
+        and isinstance(names_when, dict)
+        and set(names_when) == {"keyword", "value"}
+        and isinstance(names_when["keyword"], str)
+        and names_when["keyword"].isidentifier()
+        and isinstance(names_when["value"], str | int | float | bool)
+    ):
+        raise CatalogError(
+            f"{where}: `serializer_names_when` is `{{keyword: <name>, value: <literal>}}` beside "
+            f"`serializers`, got {names_when!r}"
         )
     opened = serialization.get("open_when")
     if "open_when" in serialization and not (
@@ -2135,8 +2159,12 @@ _REFERENCE_ARGUMENT_KEYS = frozenset(
         "default_arg",
         "flag_arg",
         "embed_arg",
+        "base_arg",
     }
 )
+# The one `*_arg` key that may hold a LIST of argument references (plan 3 ruling R11): a
+# `single_call` row's `body_arg`, the body keywords a library takes in its own precedence.
+_LIST_ARGUMENT_KEYS = frozenset({"body_arg"})
 # `annotation_arg` names an annotation attribute's condition (`protocol_hint`, `wrappers`), a
 # mapping by design and no argument of a call.
 _NOT_AN_ARGUMENT = frozenset({"annotation_arg"})
@@ -2184,6 +2212,18 @@ def _check_argument_references(node: Any, style: Any, path: Path, dispatch: bool
     if not isinstance(node, dict):
         return
     for key, value in node.items():
+        if key in _LIST_ARGUMENT_KEYS and isinstance(value, list):
+            if (
+                style != "single_call"
+                or not value
+                or not all(_is_argument_reference(one) for one in value)
+            ):
+                raise CatalogError(
+                    f"loading catalog {path}: `{key}: {value!r}` — a list of argument "
+                    f"references is read on a single_call row only, a non-empty list, each a "
+                    f"position or `{{keyword: name}}` / `{{arg: N, keyword: name}}`"
+                )
+            continue
         if (
             isinstance(key, str)
             and key.endswith("_arg")

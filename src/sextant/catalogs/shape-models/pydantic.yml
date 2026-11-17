@@ -100,6 +100,14 @@ serialization:
     - { decorator: pydantic.functional_serializers.model_serializer }
     - { method: __get_pydantic_core_schema__, also_input: true,
         except_declared_by: pydantic.main.BaseModel }
+  # SERIALISED BY A CALL (plan 3 N4): `json=order.model_dump(…)` hands a library the dict or
+  # text a model's serialiser writes, so the body is the RECEIVER's shape — but only with
+  # `by_alias=True`. Without it (pydantic 2.14.3's default, `serialize_by_alias` unset) the
+  # call writes the fields' OWN names (`customer_id`), not the wire names the shape holds
+  # (`customerId`), so such a body is not described (measured on the fixture's `OrderIn`:
+  # `model_dump()` gives `customer_id`, `model_dump(by_alias=True)` gives `customerId`).
+  serializers: [model_dump, model_dump_json]
+  serializer_names_when: { keyword: by_alias, value: true }
 
 # pydantic 2's JSON mode (`pydantic_known_types.md`): each of these is written as a string, with
 # the `format` pydantic's own JSON schema states for it, the same in serialization and

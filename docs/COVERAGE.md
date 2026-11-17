@@ -821,7 +821,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**119 of 133 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**121 of 135 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -859,6 +859,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |  | `net.devh:grpc-server-spring-boot-starter` | 3.1.0.RELEASE |
 |  | `org.springframework.grpc:spring-grpc-core` | 0.10.0 |
 | `guava-queues` | `com.google.guava:guava` | 32.0.0.jre |
+| `httpx` | `httpx` | 0.28.1 |
 | `jakarta-jaxrs` | `jakarta.ws.rs:jakarta.ws.rs-api` | 3.1.0, 4.0.0 |
 | `jakarta-jms` | `jakarta.jms:jakarta.jms-api` | 3.1.0 |
 | `jakarta-jws` | `com.sun.xml.ws:jaxws-rt` | 4.0.2 |
@@ -922,6 +923,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |  | `io.quarkus:quarkus-reactive-routes-deployment` | 3.17.5 |
 | `quarkus-rest` | `io.quarkus:quarkus-rest` | 3.17.5, 3.39.4 |
 | `quartz` | `org.quartz-scheduler:quartz` | 2.5.1 |
+| `requests` | `requests` | 2.34.2 |
 | `retrofit` | `com.squareup.retrofit2:retrofit` | 2.11.0 |
 | `smallrye-reactive-messaging` | `io.quarkus:quarkus-messaging` | 3.17.5, 3.40.1.1 |
 |  | `io.quarkus:quarkus-messaging-deployment` | 3.17.5, 3.40.1.1 |

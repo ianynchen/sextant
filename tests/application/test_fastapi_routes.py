@@ -43,6 +43,7 @@ def _resolved(
     libraries: tuple[LibraryRoot, ...],
     files: dict[str, str],
     catalogs: Path | None = None,
+    locked: dict[str, str] = _LOCKED,
 ) -> DuckDbWorkspace:
     source = tmp_path / "src"
     for name, text in files.items():
@@ -85,8 +86,8 @@ def _resolved(
                 source_roots=["src"],
                 output_dirs=["src"],
                 lookup="c3",
-                dependency_coordinates=list(_LOCKED),
-                dependency_versions=dict(_LOCKED),
+                dependency_coordinates=list(locked),
+                dependency_versions=dict(locked),
             )
         ],
     )

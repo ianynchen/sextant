@@ -413,6 +413,12 @@ class _Rules:
     # Scope annotation symbol -> the `nullable` value it implies for
     # everything the symbol it was found on claims (`_scope_prefixes`).
     scope_annotations: dict[str, bool]
+    # The methods that serialise a model (`order.model_dump()`, plan 3 N4): an argument that
+    # is such a call carries its RECEIVER's shape — only where the call writes
+    # `serializer_names_when`'s keyword as its value (`by_alias=True`), since otherwise it
+    # writes the fields' own names, not the shape's wire names. Empty for a model naming none.
+    serializers: tuple[str, ...] = ()
+    serializer_names_when: tuple[str, Any] | None = None
 
 
 def _origin_tiers(workspace: Workspace) -> dict[str, str]:
@@ -561,6 +567,15 @@ def _rules_of(catalog: Catalog) -> _Rules:
             _catalog_symbol(entry["annotation"]): _SCOPE_MEANINGS[entry["means"]]
             for entry in nullability.get("scope", [])
         },
+        serializers=tuple(str(name) for name in serialization.get("serializers", [])),
+        serializer_names_when=(
+            None
+            if serialization.get("serializer_names_when") is None
+            else (
+                str(serialization["serializer_names_when"]["keyword"]),
+                serialization["serializer_names_when"]["value"],
+            )
+        ),
     )
 
 
