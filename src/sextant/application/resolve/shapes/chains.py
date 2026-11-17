@@ -90,6 +90,7 @@ from sextant.application.resolve.values import (
     cached_value_index,
     counts_split,
     inexact,
+    object_of,
     producer_paths,
     producers_of,
     read_through_hand_off,
@@ -3221,7 +3222,7 @@ def _chain_key(site: dict[str, Any]) -> Any:
     — is what the next call in the chain actually holds; every other call's
     own `result` is its answer, exactly as it is fed forward in real
     bytecode."""
-    return site["receiver"] if site["name"] == "<init>" else site["result"]
+    return object_of(site)
 
 
 def _step_captures(step: dict[str, Any], site: dict[str, Any]) -> dict[str, Any]:

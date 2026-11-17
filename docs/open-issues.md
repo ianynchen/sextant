@@ -344,7 +344,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-338 | [SEXTANT-332](https://app.plane.so/portolan/browse/SEXTANT-332/) | The call-edges-drawn-last guard misses an aliased import or a direct derive |
 | OI-339 | [SEXTANT-333](https://app.plane.so/portolan/browse/SEXTANT-333/) | A module-level for / with / except target is not a write, so a function reading that name gets the earlier value |
 | OI-340 | [SEXTANT-334](https://app.plane.so/portolan/browse/SEXTANT-334/) | A field written from outside its class (obj.x = v) is not seen, so reads of it keep the class's own value |
-| OI-341 | [SEXTANT-335](https://app.plane.so/portolan/browse/SEXTANT-335/) | Three catalog readers key a construction's object by receiver, which a virtual <init> does not have |
+| OI-341 | [SEXTANT-335](https://app.plane.so/portolan/browse/SEXTANT-335/) | Three catalog readers key a construction's object by receiver, which a virtual <init> does not have — **closed 2026-11-17** (`values.object_of`: the receiver where present, else the construction's own result; all three readers use it) |
 | OI-342 | [SEXTANT-336](https://app.plane.so/portolan/browse/SEXTANT-336/) | Constructor dispatch adds only a subtype's own __init__, missing an inherited mixin __init__ |
 | OI-343 | [SEXTANT-337](https://app.plane.so/portolan/browse/SEXTANT-337/) | The second binding round costs 5 s on polar after constructions answer instances |
 | OI-344 | [SEXTANT-338](https://app.plane.so/portolan/browse/SEXTANT-338/) | Type-variable rule limits: Enum members, constrained TypeVars, overload type arguments, __new__, imported class subscripts |

@@ -53,6 +53,7 @@ from sextant.application.resolve.values import (
     Path,
     ValueIndex,
     inexact,
+    object_of,
     producer_paths,
     producers_of,
     read_through_hand_off,
@@ -979,7 +980,7 @@ class _Options:
             if caller in self._configured_through_fields:
                 return True
             row = self._values.sites[(caller, ordinal)]
-            made = row.get("receiver") if row.get("name") == "<init>" else row.get("result")
+            made = object_of(row)
             if made is not None and (caller, int(str(made))) in self._values.stored:
                 return True
             on = row.get("receiver_parameter")

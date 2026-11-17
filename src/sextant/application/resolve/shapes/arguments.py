@@ -41,6 +41,7 @@ from sextant.application.resolve.values import (
     Path,
     ValueIndex,
     argument_slot,
+    object_of,
     producer_paths,
     resolve_positions,
     resolve_site,
@@ -1869,7 +1870,6 @@ def _linked_constructor(
     `argument`, so its own method's sites are searched (`sites_of`)."""
     if source is None:
         return None
-    key = "receiver" if name == "<init>" else "result"
     # `argument`, where the caller has one, names the method the `source` id belongs to.
     pool = (
         workspace_types.caller_call_sites
@@ -1882,7 +1882,7 @@ def _linked_constructor(
             for site in pool
             if site.get("name") == name
             and site.get("owner") == owner_symbol
-            and site.get(key) == source
+            and object_of(site) == source
             and (arity is None or len(site.get("arguments") or []) == arity)
             and (descriptor is None or site.get("descriptor") == descriptor)
         ),

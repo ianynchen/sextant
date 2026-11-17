@@ -220,6 +220,18 @@ RECEIVER = "receiver"
 
 # A construction's name at a call site (D00 §5).
 _INIT = "<init>"
+
+
+def object_of(row: Mapping[str, Any]) -> Any:
+    """The value id a call row's object is held under (OI-341, follow-the-object): a
+    construction's own `receiver` where it has one (the JVM's `<init>` is void), else its
+    `result` (the virtual `<init>` the Python scanner writes); any other call's `result`.
+    None where the row names neither, so nothing is keyed by a guess."""
+    if row["name"] == _INIT and row.get("receiver") is not None:
+        return row["receiver"]
+    return row.get("result")
+
+
 # The written types that name no one class (D00 §5a): a union's members are each a type,
 # `Any` is every type, and `None` has no method.
 _UNION = "typing/Union#"

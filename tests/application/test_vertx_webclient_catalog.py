@@ -702,6 +702,11 @@ class _Client(_Body):
         )
         return made
 
+    def new_by_value(self, owner: str) -> int:
+        """A construction written the way the Python scanner writes one: a `virtual` `<init>`
+        with no receiver, the object being the call's own result."""
+        return self.call(owner, "<init>", "()V", None, [], invoke_kind="virtual")
+
     def options(self, *setters: tuple[str, str, CallArgument], owner: str = OPTIONS) -> int:
         """`new WebClientOptions().setX(…).setY(…)`, chained (CP-56 row 323)."""
         value = self.new(owner)
@@ -870,6 +875,52 @@ def test_options_configured_statement_by_statement_beside_other_settings_are_rea
     body.on(client, ("get", _URI, [_string("/q")]), _send())
 
     assert _calls(_rows(tmp_path, body)) == [("GET", "search:80", "/q", "resolved")]
+
+
+@pytest.mark.parametrize("by_value", [False, True], ids=["by-receiver", "by-value"])
+def test_options_stored_where_they_are_constructed_are_not_known_whichever_way_they_are_keyed(
+    tmp_path: Path, by_value: bool
+):
+    """OI-341: a construction's object is its receiver where it has one and the construction's
+    own result where it has none (a `virtual` `<init>`, the Python scanner's form). The
+    constructor stores the object itself in a field and configures it by a statement, so
+    anything may change it later: peer NULL, `partial`, for both forms."""
+    owner = "com/acme/vertx/Search#"
+    init = _MODULE + method_descriptor(owner, "<init>", "()V")
+    start = _MODULE + method_descriptor(owner, "start", "()V")
+    query = _MODULE + method_descriptor(owner, "query", "()V")
+    building = _Client(init)
+    made = building.new_by_value(OPTIONS) if by_value else building.new(OPTIONS)
+    building.call(OPTIONS, "setDefaultHost", _SET_HOST, made, [_string("search")], "virtual")
+    starting = _Client(start)
+    client = starting.create(CallArgument(kind="field", symbol=owner + "options."))
+    sending = _Client(query)
+    get = sending.call(CLIENT, "get", _URI, None, [_string("/q")])
+    sending.call(REQUEST, "send", _SEND, get, [])
+    sending.sites[0] = sending.sites[0].model_copy(
+        update={"receiver_field": owner + "client.", "receiver": 3}
+    )
+    facts = [
+        *building.sites,
+        *starting.sites,
+        *sending.sites,
+        FieldWriteFact(
+            document_id="doc_1",
+            field=owner + "client.",
+            value=CallArgument(kind="unresolved", source=client),
+            written_by=start,
+        ),
+        FieldWriteFact(
+            document_id="doc_1",
+            field=owner + "options.",
+            value=CallArgument(kind="unresolved", source=made),
+            written_by=init,
+        ),
+    ]
+    workspace = _resolve_fluent_walked(tmp_path, facts, _vertx_webclient())
+    rows = [dict(row) for row in workspace.query("endpoints")]
+    workspace.close()
+    assert _calls(rows) == [("GET", None, "/q", "partial")]
 
 
 @pytest.mark.pins("client_base.an-UNSET-part-takes-the-FRAMEWORKS-default")
