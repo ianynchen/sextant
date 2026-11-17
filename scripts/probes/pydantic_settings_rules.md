@@ -27,7 +27,7 @@ is an `assert` in the script.
 
 - Default: `env_prefix` + field name. `APP_PORT` fills `port` under `env_prefix="APP_"`; plain `PORT` does not.
 - An alias replaces it. `validation_alias` wins over `alias`; the default `env_prefix_target="variable"`
-  applies the prefix to field-name variables only. Quoted from `sources/base.py:~576`:
+  applies the prefix to field-name variables only. Quoted from `PydanticBaseSettingsSource._extract_field_info` in `sources/base.py`:
 
   > `env_prefix = self.env_prefix if self.env_prefix_target in ('alias', 'all') else ''`
 
@@ -41,7 +41,7 @@ is an `assert` in the script.
 ## Case
 
 - Default `case_sensitive=False`: `env_prefix`, field name and the environment key all compare
-  case-insensitively (`sources/base.py:540 _apply_case_sensitive` lower-cases). `env_prefix="app_"`
+  case-insensitively (`_apply_case_sensitive` in `sources/base.py` lower-cases). `env_prefix="app_"`
   with field `Port` reads `APP_PORT` and `app_port`. polar's `env_prefix="polar_"` relies on this.
 - `case_sensitive=True`: only the exact spelling `env_prefix` + field name is read
   (`APP_port` yes; `APP_PORT`, `app_port` no).
@@ -49,7 +49,7 @@ is an `assert` in the script.
 ## Precedence and files
 
 - Highest first: init kwargs, environment, dotenv file(s), secrets dir, field default.
-  Quoted from `main.py:357`: `return init_settings, env_settings, dotenv_settings, file_secret_settings`.
+  Quoted from `BaseSettings.settings_customise_sources` in `pydantic_settings/main.py`: `return init_settings, env_settings, dotenv_settings, file_secret_settings`.
 - Per field: environment variable > dotenv value > default (probe: `.env` has `APP_PORT=11`;
   with env `APP_PORT=21` the field is 21; a field in neither is its default).
 - A missing `env_file` is silently ignored (no error, default used).
@@ -58,4 +58,4 @@ is an `assert` in the script.
 - dotenv keys match case-insensitively (`app_port=41` fills `APP_PORT`'s field).
 - **A dotenv key that matches no field fails construction** with `extra_forbidden` (BaseSettings
   default `extra="forbid"`), prefixed or not. `extra="ignore"` avoids it. Plain environment
-  variables are never extra. (`sources/providers/dotenv.py:~153-190`: `is_extra_allowed = self.config.get('extra') != 'forbid'`.)
+  variables are never extra. (`DotEnvSettingsSource.__call__` in `sources/providers/dotenv.py`: `is_extra_allowed = self.config.get('extra') != 'forbid'`.)

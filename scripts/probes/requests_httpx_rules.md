@@ -67,14 +67,14 @@ the stub is not the only source for it, and it is not "no type information".
 - `requests.Session` has no base URL: no `base_url` attribute; `Session(base_url=...)` raises
   `TypeError`; `session.get("/relative")` raises `MissingSchema` ("Invalid URL '/relative': No scheme supplied...").
   Every requests URL is absolute.
-- httpx, quoted from `httpx/_client.py:391 Client._merge_url`:
+- httpx, quoted from `Client._merge_url` in `httpx/_client.py`:
 
   > To merge URLs we always append to the base URL. To get this behaviour correct we always
   > ensure the base URL ends in a '/' separator, and strip any leading '/' from the merge URL.
   > ... `Client(base_url="https://www.example.com/subpath")` ... `build_request("GET", "/path").url`
   > `URL('https://www.example.com/subpath/path')`
 
-  with `_enforce_trailing_slash` (`:234`): the stored `base_url` ends in `/` whenever it has a path.
+  with `_enforce_trailing_slash` : the stored `base_url` ends in `/` whenever it has a path.
   Measured (the same for `Client` and `AsyncClient`):
 
   | base_url | request path | final URL |
