@@ -1,0 +1,243 @@
+"""Pin the `requests` and `httpx` call rules the Python outbound catalog copies (plan 3, Task 0).
+
+Run it inside the orders-fastapi fixture's own environment, never Sextant's:
+
+    fixtures/orders-fastapi/.venv/bin/python -I scripts/probes/requests_httpx_rules.py
+
+Every rule is asserted, then printed. Requests go to a local HTTP server so the path, method and
+body that reach the wire are what the library actually sends. The probe runs the libraries on
+purpose; Sextant itself never does (spec 7). Rules and quotes are in `requests_httpx_rules.md`.
+"""
+
+from __future__ import annotations
+
+import http.server
+import importlib.metadata
+import inspect
+import json
+import threading
+
+import httpx
+import requests
+import requests.api
+import requests.sessions
+
+VERBS = {"get", "options", "head", "post", "put", "patch", "delete"}
+seen: list[tuple[str, str, bytes, str]] = []
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def _any(self) -> None:
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        seen.append((self.command, self.path, body, self.headers.get("Content-Type", "")))
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = _any
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+BASE = f"http://127.0.0.1:{server.server_port}"
+
+
+def rule(text: str) -> None:
+    print(f"RULE: {text}")
+
+
+def params(fn: object) -> list[str]:
+    return [p for p in inspect.signature(fn).parameters if p != "self"]  # type: ignore[arg-type]
+
+
+def positional(fn: object) -> list[str]:
+    return [
+        n
+        for n, p in inspect.signature(fn).parameters.items()  # type: ignore[arg-type]
+        if n != "self" and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+    ]
+
+
+print("versions:", {d: importlib.metadata.version(d) for d in ("requests", "httpx", "httpcore")})
+
+# 1. Defining symbols (the owner module a call resolves to).
+assert requests.get.__module__ == "requests.api" and requests.request.__module__ == "requests.api"
+assert requests.Session.get.__module__ == "requests.sessions"
+assert requests.Session.request.__module__ == "requests.sessions"
+assert requests.Session is requests.sessions.Session
+
+
+def sourcefile(obj: object) -> str:
+    return inspect.getsourcefile(inspect.unwrap(obj)).rsplit("/", 1)[-1]  # type: ignore[arg-type]
+
+
+# httpx rewrites __module__ of its public names to "httpx"; the defining file is the truth.
+assert httpx.get.__module__ == "httpx" and sourcefile(httpx.get) == "_api.py"
+assert sourcefile(httpx.request) == "_api.py" and sourcefile(httpx.stream) == "_api.py"
+assert (
+    sourcefile(httpx.Client.get) == "_client.py"
+    and sourcefile(httpx.AsyncClient.get) == "_client.py"
+)
+assert (
+    sourcefile(httpx.Client.__init__) == "_client.py"
+    and sourcefile(httpx.AsyncClient.__init__) == "_client.py"
+)
+rule(
+    "owners: requests.api.{request,get,...}; requests.sessions.Session.{request,get,...}; "
+    "httpx._api.{request,get,...,stream} and httpx._client.{Client,AsyncClient}.{request,get,...,stream} "
+    "by defining FILE (their __module__ reads 'httpx')"
+)
+
+# 2. Verb set.
+for mod, name in ((requests.api, "requests.api"), (httpx._api, "httpx._api")):
+    for v in VERBS | {"request"}:
+        assert callable(getattr(mod, v)), (name, v)
+for cls in (requests.Session, httpx.Client, httpx.AsyncClient):
+    for v in VERBS | {"request"}:
+        assert callable(getattr(cls, v)), (cls, v)
+assert not hasattr(requests.api, "stream") and not hasattr(requests.Session, "stream")
+assert hasattr(httpx._api, "stream") and hasattr(httpx.Client, "stream")
+rule(
+    f"verb methods on every surface: {sorted(VERBS)} plus request; httpx alone adds stream(method, url)"
+)
+
+# 3. url_arg positions.
+for v in VERBS:
+    assert positional(getattr(requests.api, v))[0] == "url", v
+    assert positional(getattr(requests.Session, v))[0] == "url", v
+    assert positional(getattr(httpx._api, v))[0] == "url", v
+    assert positional(getattr(httpx.Client, v))[0] == "url", v
+    assert positional(getattr(httpx.AsyncClient, v))[0] == "url", v
+for fn in (
+    requests.api.request,
+    requests.Session.request,
+    httpx._api.request,
+    httpx.Client.request,
+    httpx.AsyncClient.request,
+    httpx._api.stream,
+    httpx.Client.stream,
+):
+    assert positional(fn)[:2] == ["method", "url"], fn
+rule("verb helpers: url is positional 0; request()/stream(): method positional 0, url positional 1")
+# requests.get's second positional is params; requests.post's is data; httpx verbs take only url positionally.
+assert positional(requests.api.get)[:2] == ["url", "params"]
+assert positional(requests.api.post)[:2] == ["url", "data"] and positional(requests.api.put)[
+    :2
+] == ["url", "data"]
+assert positional(requests.api.patch)[:2] == ["url", "data"]
+assert positional(requests.api.delete) == ["url"] and positional(requests.api.head) == ["url"]
+assert positional(httpx._api.get) == ["url"] and positional(httpx._api.post) == ["url"]
+assert positional(httpx.Client.post) == ["url"]
+rule(
+    "requests.api: get(url, params), post(url, data, json), put/patch(url, data), others (url) only; httpx verbs: url only"
+)
+
+# 4. Keyword bodies.
+for v in ("post", "put", "patch"):
+    assert params(getattr(requests.api, v))[:2] == ["url", "data"], v
+    assert params(getattr(requests.Session, v))[:2] == ["url", "data"], v
+    assert ("json" in params(getattr(requests.api, v))[:3]) == (v == "post"), (
+        v
+    )  # put/patch: json= in **kwargs
+    assert {"json", "data", "content", "files"} <= set(params(getattr(httpx._api, v))), v
+    assert {"json", "data", "content", "files"} <= set(params(getattr(httpx.Client, v))), v
+assert "content" not in params(requests.Session.request)
+assert {"json", "data", "files"} <= set(params(requests.Session.request))
+assert {"json", "data", "content", "files"} <= set(params(httpx._api.request))
+assert {"json", "data", "content", "files"} <= set(params(httpx.Client.request))
+for v in ("get", "head", "options", "delete"):  # httpx: no body keyword on the bodiless verbs
+    for fn in (getattr(httpx._api, v), getattr(httpx.Client, v), getattr(httpx.AsyncClient, v)):
+        assert not ({"json", "data", "content", "files"} & set(params(fn))), (v, fn)
+assert "kwargs" in params(requests.api.get) and "kwargs" in params(requests.api.delete)
+rule(
+    "body keywords: requests post(url, data, json, **kwargs), put/patch(url, data, **kwargs) and request(method, url, **kwargs): "
+    "json=/data=/files= and never content=; httpx: content=/data=/json=/files= (module, Client and "
+    "AsyncClient post/put/patch/request; httpx get/head/options/delete take none)"
+)
+try:
+    requests.post(BASE, content=b"x")
+    raise AssertionError("requests accepted content=")
+except TypeError as err:
+    print("requests.post(content=) ->", err)
+
+# 5. Wire behaviour of the same shapes.
+requests.post(BASE + "/a", json={"k": 1})
+assert (
+    seen[-1][:2] == ("POST", "/a") and json.loads(seen[-1][2]) == {"k": 1} and "json" in seen[-1][3]
+)
+requests.post(BASE + "/b", data={"k": "v"})
+assert seen[-1][2] == b"k=v" and "x-www-form-urlencoded" in seen[-1][3]
+requests.request("PUT", BASE + "/c")
+assert seen[-1][:2] == ("PUT", "/c")
+requests.request(method="DELETE", url=BASE + "/d")
+assert seen[-1][:2] == ("DELETE", "/d")
+httpx.post(BASE + "/e", json={"k": 1})
+assert seen[-1][:2] == ("POST", "/e") and json.loads(seen[-1][2]) == {"k": 1}
+httpx.post(BASE + "/f", content=b"raw")
+assert seen[-1][2] == b"raw"
+httpx.request("PATCH", BASE + "/g")
+assert seen[-1][:2] == ("PATCH", "/g")
+with httpx.stream("GET", BASE + "/h"):
+    pass
+assert seen[-1][:2] == ("GET", "/h")
+rule(
+    "wire: requests json=/data=, httpx json=/content=, request(method, url) all reach the server as written"
+)
+
+# 6. requests.Session has no base URL.
+s = requests.Session()
+assert not hasattr(s, "base_url")
+try:
+    requests.Session(base_url=BASE)  # type: ignore[call-arg]
+    raise AssertionError("Session took base_url")
+except TypeError as err:
+    print("requests.Session(base_url=) ->", err)
+try:
+    s.get("/relative")
+    raise AssertionError("relative url accepted")
+except requests.exceptions.MissingSchema as err:
+    print("Session.get('/relative') ->", err)
+s.get(BASE + "/s")
+assert seen[-1][:2] == ("GET", "/s")
+rule(
+    "requests.Session has no base URL: a relative path raises MissingSchema; every url is absolute"
+)
+
+# 7. httpx base_url join.
+print("httpx _merge_url source:\n" + inspect.getsource(httpx.Client._merge_url))
+cases = [
+    ("https://h.example/api", "/users", "https://h.example/api/users"),
+    ("https://h.example/api", "users", "https://h.example/api/users"),
+    ("https://h.example/api/", "/users", "https://h.example/api/users"),
+    ("https://h.example", "/users", "https://h.example/users"),
+    ("https://h.example/api", "", "https://h.example/api/"),
+    ("https://h.example/api", "https://other.example/x", "https://other.example/x"),
+    (
+        "https://h.example/api",
+        "//other.example/x",
+        "https://h.example/api/x",
+    ),  # scheme-less: host dropped
+    ("https://h.example/api", "./x", "https://h.example/api/x"),
+    ("https://h.example/api", "x?q=1", "https://h.example/api/x?q=1"),
+    ("https://h.example/api", "../x", "https://h.example/x"),
+]
+for base, path, want in cases:
+    for cls in (httpx.Client, httpx.AsyncClient):
+        got = str(cls(base_url=base).build_request("GET", path).url)
+        assert got == want, (cls.__name__, base, path, got, want)
+    print(f"base_url={base!r} + {path!r} -> {want}")
+assert str(httpx.Client(base_url="https://h.example/api").base_url) == "https://h.example/api/"
+assert str(httpx.Client(base_url="https://h.example").base_url) == "https://h.example"
+rule(
+    "httpx base_url: trailing slash forced; a relative path has its leading '/' stripped and is APPENDED "
+    "to base_url's path; an absolute URL ignores base_url; no base_url -> relative path unusable"
+)
+try:
+    httpx.Client().get("/x")
+    raise AssertionError
+except httpx.UnsupportedProtocol as err:
+    print("httpx.Client().get('/x') ->", err)
+print("OK")
