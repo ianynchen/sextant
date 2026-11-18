@@ -296,9 +296,15 @@ async def joins() -> None:
         try:
             async with s.get("//other.example/x"):
                 pass
-            raise AssertionError("scheme-less host accepted")
         except AssertionError as err:
-            print(f"get('//other.example/x') -> {type(err).__name__}: {err}")
+            # The library's own bare `assert port is not None` in aiohttp/connector.py.
+            assert err.__traceback__ is not None
+            assert inspect.getinnerframes(err.__traceback__)[-1].filename.endswith(
+                "aiohttp/connector.py"
+            ), "rejected somewhere other than the connector"
+            print(f"get('//other.example/x') -> {type(err).__name__} from aiohttp/connector.py")
+        else:
+            raise SystemExit("probe failure: scheme-less host accepted")
     # What construction refuses.
     for bad, exc in (
         ("https://h.example/api", ValueError),  # path without a trailing '/'
@@ -341,7 +347,7 @@ rule(
     "a leading '/' RESETS to the host root (base 'https://h.example/api/' + '/users' -> "
     "'https://h.example/users'); a path without a leading '/' is appended to the base path "
     "('https://h.example/api/' + 'users' -> '.../api/users'); '//host/x' is NOT joined (it has a host) and the "
-    "request then fails (AssertionError, no port); an absolute URL wins; '.'/'..' segments are normalised; an empty path gives the base itself"
+    "request then fails with a bare AssertionError raised by the connector's `assert port is not None` in aiohttp/connector.py (asserted by origin file); an absolute URL wins; '.'/'..' segments are normalised; an empty path gives the base itself"
 )
 rule(
     "ClientSession(base_url=...) raises at construction: ValueError('base_url must have a trailing "

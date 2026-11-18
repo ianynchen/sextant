@@ -147,7 +147,7 @@ the opposite of httpx's append. Measured:
 | `https://h.example/api/` | `x?q=1` | `https://h.example/api/x?q=1` |
 | `https://h.example/api/?x=1` | `users` | `https://h.example/api/users` (base query dropped) |
 | `https://h.example/api/` | `https://other.example/x` | `https://other.example/x` (absolute wins) |
-| `https://h.example/api/` | `//other.example/x` | **not joined**: it has a host, so `url.absolute` is true; `_build_url` returns it unchanged and the request then fails (`AssertionError`, no scheme/port) |
+| `https://h.example/api/` | `//other.example/x` | **not joined**: it has a host, so `url.absolute` is true; `_build_url` returns it unchanged and the request then fails with a bare `AssertionError` raised from `aiohttp/connector.py` (the probe asserts the raising file; there is no message) |
 
 Construction rejections: `ClientSession(base_url="https://h.example/api")` and
 `".../api?x=1"` raise `ValueError("base_url must have a trailing '/'")` (a path not ending in
