@@ -149,6 +149,11 @@ SEXTANT_VERSION = version("sextant")
 #             can type, to the field symbol a call argument would name for it (plan 3 ruling
 #             R27). A fact set of the older vintage gives a guard no field to link to a
 #             configuration key; it is refused and re-extracted.
+#     17      a Python module variable written once from a call of a scanned `def` that declares
+#             `-> X` (`settings = get_settings()`, also under a bare `functools.cache` or
+#             `lru_cache`) holds X, so its attribute reads are `field` facts where they were
+#             `unresolved` (OI-444, OI-445). A fact set of the older vintage leaves them
+#             untyped; it is refused and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -293,6 +298,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 16
+FACT_SCHEMA_VERSION = 17
 GRAPH_SCHEMA_VERSION = 18
 BOUNDARY_VOCABULARY_VERSION = 5

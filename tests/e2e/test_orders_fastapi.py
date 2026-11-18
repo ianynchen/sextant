@@ -1056,7 +1056,32 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             None,
             "resolved",
         ),
-        ("app/settings#<clinit>", 0, "special", "app/settings/Settings#<init>", None, "resolved"),
+        # `settings = get_settings()` under `@lru_cache`: the construction moved into the def.
+        ("app/settings#<clinit>", 0, "static", "functools#lru_cache", None, "resolved"),
+        (
+            "app/settings#<clinit>",
+            1,
+            "virtual",
+            "app/settings#get_settings",
+            "app/settings#get_settings",
+            "resolved",
+        ),
+        (
+            "app/settings#<clinit>",
+            1,
+            "virtual",
+            "functools/_lru_cache_wrapper#__call__",
+            None,
+            "resolved",
+        ),
+        (
+            "app/settings#get_settings",
+            0,
+            "special",
+            "app/settings/Settings#<init>",
+            None,
+            "resolved",
+        ),
         (
             "app/settings/Settings#<clinit>",
             0,

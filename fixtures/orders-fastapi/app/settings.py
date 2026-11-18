@@ -1,7 +1,10 @@
 """The service's settings, as a service reads its peers' addresses: a pydantic-settings class
 whose fields come from `ORDERS_`-prefixed environment variables, then the `.env` file it names,
 then the defaults written here. Sextant publishes a field read as its key (`${ORDERS_RATES_URL}`
-with this default) and fills it per environment from the file (plan 3 Task 5)."""
+with this default) and fills it per environment from the file (plan 3 Task 5). The module
+variable is bound by a typed-return call, as mealie writes it (was `Settings()` in plan 3)."""
+
+from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -17,4 +20,9 @@ class Settings(BaseSettings):
     carrier_token: str = Field("none", alias="CARRIER_TOKEN")
 
 
-settings = Settings()
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()

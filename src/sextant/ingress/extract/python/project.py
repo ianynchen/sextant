@@ -307,8 +307,9 @@ class ProjectHeaders:
     def variable_class(self, module: str, name: str) -> str | None:
         """The class whose instance `module.name` holds, where every write to it in that file
         constructs one and the same class (`settings = Settings()`, ruling R23), by its
-        defining symbol: a class of the module or of a library. None for any other name: two
-        classes, a call of a function, any other value."""
+        defining symbol: a class of the module or of a library. Likewise where the one write calls
+        a scanned `def` that declares `-> X` (OI-444). None for any other name: two classes, a
+        call of an unannotated function, any other value."""
         header = self.header(module)
         called = None if header is None else header.factories.get(name)
         if not called or len(called) != 1:
@@ -320,12 +321,32 @@ class ProjectHeaders:
         if len(defined) != 1 or defined[0].member is None:
             return None
         symbol = type_symbol(defined[0])
+        if self._has_shape(symbol):
+            return symbol
+        returned = self._returned_class(defined[0])
+        return returned if returned is not None and self._has_shape(returned) else None
+
+    def _has_shape(self, symbol: str) -> bool:
+        """Whether `symbol` is a class of the module or of a library with a known shape."""
         libraries = self._plain.libraries
-        if self.shape_of(symbol) is None and (
-            libraries is None or libraries.shape_of(symbol) is None
-        ):
+        return self.shape_of(symbol) is not None or (
+            libraries is not None and libraries.shape_of(symbol) is not None
+        )
+
+    def _returned_class(self, function: Target) -> str | None:
+        """The class `X` a call of the function `function` gives, where the `def` of the module
+        that defines it declares `-> X` (`settings = get_settings()`, OI-444); None for any
+        other function, and for `type[X]`, which is the class, not an instance."""
+        if function.module not in self._files:
             return None
-        return symbol
+        returned = self.returns(
+            method_descriptor(
+                type_symbol(Target(function.module)), str(function.member), PY_SIGNATURE
+            )
+        )
+        if returned is None or returned.symbol == TYPE_OF or not names_a_type(returned.symbol):
+            return None
+        return returned.symbol
 
     def _factory_class(self, target: Target) -> str | None:
         """The class `X` a call of the function `target` gives, where the `def` of the module

@@ -709,6 +709,10 @@ DESCRIPTORS = frozenset(
         ("abc", "abstractmethod"),
     }
 )
+# The standard library's decorators whose wrapper calls the function and returns what it
+# returns, bare form only (measured: scripts/probes/python_wrappers.md). Read only for the
+# return a module variable's factory declares; the name stays a value everywhere else.
+CALL_THROUGH = frozenset({("functools", "cache"), ("functools", "lru_cache")})
 _BUILTINS = "builtins"
 _BUILTIN_NAMES = frozenset(dir(builtins))
 # A property's own decorators (`@x.setter` on `def x`): the property's methods.
@@ -741,6 +745,19 @@ def holds_decorated_value(
     it carries a decorator that is not one of the language's own method kinds. With both
     kinds, the name holds the outermost decorator's result (design §3e)."""
     return any(not is_descriptor(d, node.name, lookup) for d in node.decorator_list)
+
+
+def calls_through(
+    node: ast.FunctionDef | ast.AsyncFunctionDef, lookup: Callable[[ast.expr], tuple[Target, ...]]
+) -> bool:
+    """Whether every decorator of `node` is a bare `CALL_THROUGH` name, so a call of the
+    decorated name gives what the `def` declares it returns."""
+    return bool(node.decorator_list) and all(
+        isinstance(d, ast.Name | ast.Attribute)
+        and len(targets := lookup(d)) == 1
+        and (targets[0].module, targets[0].member) in CALL_THROUGH
+        for d in node.decorator_list
+    )
 
 
 def makes_a_class(target: Target) -> bool:

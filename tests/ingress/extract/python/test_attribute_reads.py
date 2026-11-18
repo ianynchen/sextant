@@ -90,6 +90,45 @@ def test_a_variable_another_file_constructs_once_holds_that_class(tmp_path: Path
     assert _owner_of(tree, "app/run#f", "reload") == [None]
 
 
+def _typed_return(tmp_path: Path, factory: str, tail: str = ""):
+    return _scan(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/conf.py": _CLASSES + factory + "settings = get_settings()\n" + tail,
+            "app/run.py": "from app.conf import settings, send\ndef f():\n    send(settings.url)\n",
+        },
+    )
+
+
+def test_a_variable_from_a_typed_return_call_holds_the_class(tmp_path: Path):
+    tree = _typed_return(
+        tmp_path,
+        "from functools import lru_cache\n@lru_cache\ndef get_settings() -> Service:\n    return Service()\n",
+    )
+    url = _argument(tree, "app/run#f", "send")
+    assert (url.kind, url.symbol) == ("field", "app/conf/Base#url.")
+
+
+def test_an_unannotated_factory_leaves_the_variable_untyped(tmp_path: Path):
+    tree = _typed_return(tmp_path, "def get_settings():\n    return Service()\n")
+    assert _argument(tree, "app/run#f", "send").kind == "unresolved"
+
+
+def test_a_class_returning_factory_is_not_an_instance(tmp_path: Path):
+    tree = _typed_return(tmp_path, "def get_settings() -> type[Service]:\n    return Service\n")
+    assert _argument(tree, "app/run#f", "send").kind == "unresolved"
+
+
+def test_a_reassigned_variable_stays_untyped(tmp_path: Path):
+    tree = _typed_return(
+        tmp_path,
+        "def get_settings() -> Service:\n    return Service()\n",
+        "settings = None\n",
+    )
+    assert _argument(tree, "app/run#f", "send").kind == "unresolved"
+
+
 def test_a_variable_written_from_two_classes_holds_neither(tmp_path: Path):
     tree = _scan(
         tmp_path,
