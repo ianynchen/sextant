@@ -338,3 +338,48 @@ def test_a_call_through_factory_returning_a_star_re_exported_class(tmp_path: Pat
     )
     url = _argument(tree, "app/run#f", "send")
     assert (url.kind, url.symbol) == ("field", "app/pkg/models/Service#url.")
+
+
+def test_a_same_file_variable_from_an_imported_typed_factory_holds_the_class(tmp_path: Path):
+    # The mealie/app.py shape: the file binds the variable from an imported factory and reads it.
+    tree = _scan(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/factory.py": _CLASSES + "def get_settings() -> Service:\n    return Service()\n",
+            "app/run.py": "from app.factory import get_settings, send\n"
+            "settings = get_settings()\n"
+            "def f():\n"
+            "    send(settings.url)\n",
+        },
+    )
+    url = _argument(tree, "app/run#f", "send")
+    assert (url.kind, url.symbol) == ("field", "app/factory/Base#url.")
+
+
+def test_a_same_file_variable_written_twice_from_typed_calls_stays_untyped(tmp_path: Path):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/run.py": _CLASSES + "def get_settings() -> Service:\n    return Service()\n"
+            "settings = get_settings()\n"
+            "settings = None\n"
+            "def f():\n"
+            "    send(settings.url)\n",
+        },
+    )
+    assert _argument(tree, "app/run#f", "send").kind == "unresolved"
+
+
+def test_a_same_file_variable_from_a_plain_typed_def_holds_the_class(tmp_path: Path):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/run.py": _CLASSES + "def get_settings() -> Service:\n    return Service()\n"
+            "settings = get_settings()\n"
+            "def f():\n"
+            "    send(settings.url)\n",
+        },
+    )
+    url = _argument(tree, "app/run#f", "send")
+    assert (url.kind, url.symbol) == ("field", "app/run/Base#url.")
