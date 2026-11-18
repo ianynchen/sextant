@@ -97,7 +97,11 @@ settings = get_settings()
 
 ### Task 1b: Star re-export member resolution (controller addition, ruling R4)
 
-**Added mid-plan 2026-11-18.** Task 1's rung is correct but mealie did not move: `from mealie.core.settings import AppSettings` resolves through the package's `__init__.py`, which binds `AppSettings` only via `from .settings import *` — and the scanner skips star imports (imports.py, both `alias.name == "*": continue` arms). This is a general name-resolution gap: every member imported from a package that re-exports it with a star is unresolved, for calls and shapes alike. OI-444's stated example (mealie) needs it, so it is in scope.
+**Added mid-plan 2026-11-18.** Task 1's rung is correct but mealie did not move, for TWO reasons, both in scope (ruling R4; the Task 1 reviewer confirmed the second):
+1. Star re-exports: `from mealie.core.settings import AppSettings` resolves through the package's `__init__.py`, which binds `AppSettings` only via `from .settings import *` — and the scanner skips star imports (imports.py, both `alias.name == "*": continue` arms). Every member imported from a package that re-exports it with a star is unresolved, for calls and shapes alike.
+2. Cross-file call-through factories: the per-file `through` set (structure.py ~:268-273, ~:318) covers the module's OWN defs only, so `from mealie.core.config import get_app_settings; settings = get_app_settings()` never gets a factory entry when the def is decorated. The factories recording must also accept a call of an imported name when the DEFINING module's header shows a call-through-wrapped def (the shared returns table already carries its declared return after Task 1's fix round).
+
+**Acceptance:** mealie's 4 settings guards move `test` → `property` in the regenerated pin; both mechanisms carry unit tests.
 
 **Files:**
 - Modify: `src/sextant/ingress/extract/python/imports.py` (record a module's star-import bases in its header; on a member lookup that finds no explicit binding, consult the star bases' headers, Python's own rules: explicit bindings win over star names; `__all__` restricts a star when the source module defines it, else public names only (no leading `_`); later star import wins over earlier; chains followed with a visited-set guard)

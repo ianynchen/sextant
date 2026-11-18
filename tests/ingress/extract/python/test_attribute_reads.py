@@ -129,6 +129,34 @@ def test_a_reassigned_variable_stays_untyped(tmp_path: Path):
     assert _argument(tree, "app/run#f", "send").kind == "unresolved"
 
 
+def test_a_call_of_a_call_through_def_anywhere_is_typed_by_its_return(tmp_path: Path):
+    # The wrapper returns what the def returns, so a call inside a function is typed too.
+    tree = _scan(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/conf.py": _CLASSES
+            + "from functools import lru_cache\n"
+            + "@lru_cache\ndef get_settings() -> Service:\n    return Service()\n",
+            "app/run.py": "from app.conf import get_settings, send\n"
+            "def f():\n"
+            "    x = get_settings()\n"
+            "    send(x.url)\n",
+        },
+    )
+    url = _argument(tree, "app/run#f", "send")
+    assert (url.kind, url.symbol) == ("field", "app/conf/Base#url.")
+
+
+def test_a_call_form_decorator_leaves_the_return_unread(tmp_path: Path):
+    tree = _typed_return(
+        tmp_path,
+        "from functools import lru_cache\n"
+        "@lru_cache(maxsize=None)\ndef get_settings() -> Service:\n    return Service()\n",
+    )
+    assert _argument(tree, "app/run#f", "send").kind == "unresolved"
+
+
 def test_a_variable_written_from_two_classes_holds_neither(tmp_path: Path):
     tree = _scan(
         tmp_path,
