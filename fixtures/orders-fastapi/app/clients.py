@@ -9,6 +9,7 @@ import httpx
 import requests
 
 from app.schemas import OrderIn
+from app.settings import settings
 
 INVENTORY = "https://inventory.example"
 
@@ -64,7 +65,7 @@ def record(order_id: str) -> None:
 
 
 def rates(currency: str) -> None:
-    with httpx.Client(base_url="https://rates.example/v1") as client:
+    with httpx.Client(base_url=settings.rates_url) as client:
         client.get(f"/rates/{currency}")
 
 

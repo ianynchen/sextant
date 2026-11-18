@@ -9,5 +9,7 @@ class whose repository value is True). FastAPI run with that value serves it; Se
 the route as existing "not evaluated", since it decides no such test (OI-368). Plan 3 moves the
 switch to a settings read once settings fields are linked to configuration keys.
 
-Left for plan 3, listed here and not written: `app/clients.py` (outbound calls with f-string
-URLs) and `app/settings.py` (a pydantic-settings class with `env_file`).
+`app/clients.py` holds the outbound calls (`requests`, `httpx`, addresses read from the
+environment). `app/settings.py` is a pydantic-settings class with `env_prefix`, one alias and
+`env_file=".env"`; the `.env` beside this file sets two of its keys, and the rates client's
+`base_url` is one of its fields.

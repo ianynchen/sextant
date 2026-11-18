@@ -16,7 +16,11 @@ from click.testing import CliRunner
 
 from fixture_build import FIXTURES
 from reason_guard import outside_the_list, stored_reason_tables, stored_reasons_outside_the_list
+from sextant.application.resolve.config import scope_config_models, with_config_model
+from sextant.application.resolve.resolved_peers import resolved_peers
 from sextant.cli.app import cli
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 ORACLE = Path(__file__).with_name("fastapi_oracle.py")
@@ -538,26 +542,29 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             None,
             None,
         ),
-        # A client a `with` statement opens: `__enter__` returns it (plan 3 R13).
+        # A client a `with` statement opens: `__enter__` returns it (plan 3 R13). Its base is a
+        # settings field: the key with its default (plan 3 Task 5, R24/R25), carried and never
+        # joined, as every configuration base is (`against_client_base`).
         (
             "outbound",
             "GET",
-            "rates.example",
-            "/v1/rates/{currency}",
+            None,
+            "${ORDERS_RATES_URL:-https://rates.example/v1}/rates/{currency}",
             "app/clients#rates",
-            "resolved",
+            "partial",
             None,
             None,
         ),
         # A client handed in by a caller nothing reads: the path is kept, no peer (Review Focus 3).
         ("outbound", "GET", None, "/status", "app/clients#status", "unresolved", None, None),
         # A deployment-set address read by name: the expression, never the default the call
-        # carries (plan 3 Task 3, rulings N1 and R17); the f-string keeps the whole address.
+        # carries as the value (plan 3 Task 3, rulings N1 and R17), which renders inside it
+        # (R25); the f-string keeps the whole address.
         (
             "outbound",
             "GET",
             None,
-            "http://${AUDIT_HOST}/audit",
+            "http://${AUDIT_HOST:-audit.local}/audit",
             "app/clients#audit",
             "resolved",
             None,
@@ -1043,6 +1050,16 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             None,
             "resolved",
         ),
+        ("app/settings#<clinit>", 0, "special", "app/settings/Settings#<init>", None, "resolved"),
+        (
+            "app/settings/Settings#<clinit>",
+            0,
+            "special",
+            "pydantic_settings/main/SettingsConfigDict#<init>",
+            None,
+            "resolved",
+        ),
+        ("app/settings/Settings#<clinit>", 1, "static", "pydantic/fields#Field", None, "resolved"),
         ("app/schemas/OrderIn#<clinit>", 0, "static", "pydantic/fields#Field", None, "resolved"),
         ("app/schemas/OrderOut#<clinit>", 0, "static", "pydantic/fields#Field", None, "resolved"),
         (
@@ -1098,6 +1115,11 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
     ],
     # No open question: a new refusal or question on the fixture fails here.
     "open_questions": [],
+    # The `.env` the settings class names (plan 3 Task 4), the one environment it gives.
+    "resolved_config": [
+        ("CARRIER_TOKEN", "dev-token", ".env", "default", None),
+        ("ORDERS_RATES_URL", "https://rates.internal/v1", ".env", "default", None),
+    ],
     "shapes": [
         ("app/schemas/OrderIn#", False),
         ("app/schemas/OrderOut#", False),
@@ -1164,6 +1186,13 @@ def _pinned_rows(workspace) -> dict[str, list[tuple[object, ...]]]:
             r["reason"],
         ),
         "open_questions": lambda r: (r["method"], r["path"], r["question"], r["evidence"]),
+        "resolved_config": lambda r: (
+            r["key"],
+            r["value"],
+            r["source"],
+            r["environment"],
+            r["unresolved_reason"],
+        ),
         "shapes": lambda r: (r["shape_id"], r["open"]),
         "shape_fields": lambda r: (
             r["shape_id"],
@@ -1193,6 +1222,20 @@ def test_every_fixture_row_is_pinned(workspace):
     assert _pinned_rows(workspace) == {
         table: sorted(rows, key=repr) for table, rows in PINNED.items()
     }
+
+
+def test_a_settings_base_is_filled_per_environment_from_the_named_file(workspace):
+    """`resolved_peers` fills the rates client's key from the `.env` the class names, over the
+    default the class writes (pydantic-settings' precedence, plan 3 Task 5)."""
+    catalogs = with_config_model(
+        scope_config_models(workspace, YamlCatalogSource(catalogs_dir()).load())
+    )
+    answers = [
+        (row["environment"], row["resolved_path"], row["unresolved_reason"])
+        for row in resolved_peers(workspace, catalogs)
+        if _bare(row["caller"]).startswith("app/clients#rates")
+    ]
+    assert answers == [("default", "https://rates.internal/v1/rates/{currency}", None)]
 
 
 def test_the_document_says_the_conditional_route_is_not_evaluated(
