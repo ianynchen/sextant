@@ -2225,6 +2225,11 @@ class BodyReader:
                 if isinstance(typed, TypeRef):
                     return typed
                 return TypeRef(symbol=typed) if isinstance(typed, str) else None
+        if isinstance(node, ast.Attribute) and _is_dotted(node):
+            # `os.environ[...]`: a variable of a library module, typed by its own file.
+            targets = self._targets(node, scope)
+            if targets is not None and len(targets) == 1 and targets[0].kind in (None, "variable"):
+                return self._library_variable(targets[0])
         return None
 
     def _typed(self, node: ast.expr, value: CallArgument, scope: Scope) -> TypeRef | None:
@@ -2385,6 +2390,8 @@ class BodyReader:
         """The class whose instance (or, for a class object, whose class) a module-level
         name of this file holds: the owner of a call made on the name."""
         typed = self._module_type(target)
+        if typed is None:
+            typed = self._library_variable(target)
         if isinstance(typed, TypeRef):
             return _class_of(typed)
         return typed if isinstance(typed, str) else None
@@ -2403,6 +2410,15 @@ class BodyReader:
         ):
             return None
         return headers.class_object(target.module, target.member)
+
+    def _library_variable(self, target: Target) -> TypeRef | None:
+        """The class a variable of a LIBRARY module is written to hold, as its own file writes
+        it (R16): the question `_module_type` answers for this file's names, answered for
+        another module's from that module's text."""
+        libraries = self._context.index.libraries
+        if libraries is None or self._context.index.owns(target.module):
+            return None
+        return libraries.variable_type(target)
 
     def _module_type(self, target: Target) -> "ModuleType | None":
         """The type every write in this file gives the module-level name `target`, where

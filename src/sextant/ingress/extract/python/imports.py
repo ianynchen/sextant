@@ -96,6 +96,11 @@ class LibraryNames(Protocol):
         one target, or the closed list where the library's branches bind it differently."""
         ...
 
+    def variable_type(self, target: Target) -> TypeRef | None:
+        """The class a library module's variable `target` is written to hold (`environ:
+        _Environ[str]`), or None where the library writes no one class for it."""
+        ...
+
     def call_returns(
         self,
         owner: str,
