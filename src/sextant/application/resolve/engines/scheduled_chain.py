@@ -122,6 +122,7 @@ from sextant.application.resolve.values import (
     ValueIndex,
     cached_value_index,
     entered_position,
+    object_of,
     producer_paths,
     producers_of,
     resolve_positions,
@@ -1616,14 +1617,10 @@ def _reading_calls(
 
 def _effective(caller: str, context: _Context) -> dict[Any, Mapping[str, Any]]:
     """`caller`'s call sites by the value id each one produces, for `chain_text`'s nested
-    arguments: a constructor's value is its `receiver` (CP-3), every other call's its
-    `result`."""
+    arguments: a constructor's value is its `receiver` (CP-3; its `result` for a virtual `<init>`), every
+    other call's its `result` (`values.object_of`)."""
     sites = context.workspace.once(call_site_index).by_caller.get(caller, [])
-    return {
-        (site["receiver"] if site["name"] == "<init>" else site["result"]): site
-        for site in sites
-        if (site["receiver"] if site["name"] == "<init>" else site["result"]) is not None
-    }
+    return {object_of(site): site for site in sites if object_of(site) is not None}
 
 
 def _call_facts(caller: str, context: _Context) -> CallFacts:
