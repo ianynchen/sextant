@@ -1,7 +1,7 @@
 """A call that reads a deployment-set key by name is the expression `${KEY}` (plan 3 Task 3,
 approved N1; rulings R16, R17): `os.getenv("HOST")`, `os.environ["HOST"]` and
-`os.environ.get("HOST", "d")` (`value-models/python-environment.yml`). A default the call
-carries is declared and never the value; a key that is no literal is `non_enumerable`.
+`os.environ.get("HOST", "d")` (`value-models/python-environment.yml`). A literal default the
+call carries renders as `${KEY:-default}`; a key that is no literal is `non_enumerable`.
 
 Each test scans a small program with the real Python scanner and reads the outbound row's
 address, as `test_python_outbound` does."""
@@ -42,8 +42,8 @@ def _addresses(tmp_path, libraries, body: str) -> list[tuple[object, ...]]:
     ],
 )
 def test_an_environment_read_in_a_url_is_the_key_expression(tmp_path, libraries, read):
-    """The default a call carries is never the value: every spelling reads `${HOST}`, a literal
-    default rendered inside it after the model's separator (plan 3 ruling R25)."""
+    """Every spelling reads `${HOST}`, a literal default
+    rendered inside it after the model's separator (plan 3 ruling R25)."""
     key = "HOST:-localhost" if "localhost" in read else "HOST"
     assert _addresses(tmp_path, libraries, f"    requests.get(f'http://{{{read}}}/x')\n") == [
         (None, f"http://${{{key}}}/x", "resolved")
@@ -123,54 +123,3 @@ def test_a_call_stated_twice_is_refused(tmp_path):
     row = "{ owner: os, method: getenv, key_arg: 0, by: x.md }"
     with pytest.raises(CatalogError, match="twice"):
         _loaded(tmp_path, f"id: invented\nenvironment_reads:\n  - {row}\n  - {row}\n")
-
-
-# --- The declared default ----------------------------------------------------------------------
-
-
-def _read(tmp_path, libraries, body: str):
-    """The answer of the one read `body` makes, as the walk gives it for `requests.get`'s url."""
-    from test_fastapi_routes import _resolved
-    from test_python_outbound import _MODELS
-
-    from sextant.application.resolve.values import resolve_site, value_index
-    from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
-    from sextant.resources import catalogs_dir
-
-    workspace = _resolved(
-        tmp_path, libraries, {"main.py": _HEAD + body, "models.py": _MODELS}, locked=_CLIENTS
-    )
-    source = YamlCatalogSource(catalogs_dir())
-    index = value_index(
-        workspace, returns_arguments=source.returns_arguments() + source.environment_reads()
-    )
-    (site,) = [
-        row
-        for row in workspace.query("call_sites")
-        if row["name"] == "get" and str(row["owner"]).startswith("requests")
-    ]
-    answers = [
-        binding.slots[0]
-        for binding in resolve_site(
-            workspace, {"caller": site["caller"], "ordinal": site["ordinal"]}, index=index
-        )
-    ]
-    workspace.close()
-    return answers
-
-
-@pytest.mark.parametrize(
-    ("read", "default"),
-    [
-        ("os.getenv('K', 'dflt')", "dflt"),
-        ("os.environ.get('K', 'dflt')", "dflt"),
-        ("os.environ.get('K', default='dflt')", "dflt"),
-        ("os.getenv('K', 8080)", 8080),
-        ("os.getenv('K')", None),
-        ("os.environ['K']", None),
-        ("os.getenv('K', var)", None),  # a default that is no literal records nothing
-    ],
-)
-def test_a_literal_default_is_recorded_and_is_never_the_value(tmp_path, libraries, read, default):
-    (answer,) = _read(tmp_path, libraries, f"    requests.get({read})\n")
-    assert (answer.kind, answer.value, answer.default) == ("expression", "${K}", default)

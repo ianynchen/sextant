@@ -489,11 +489,6 @@ class Answer:
     # but no one of them is the value: `url_of_answer` publishes one at `narrowed`,
     # `channel_of_answer` refuses it, and `_joined` marks a template filled from one.
     narrowed: bool = False
-    # **The default an environment read carries, DECLARED and never the value** (plan 3 Task 3,
-    # N1): `os.getenv("K", "d")` is `${K}` with `"d"` here, the literal the call writes at its
-    # `default_arg` (a default that is no literal records nothing). Outside equality, as
-    # `parameter` is: the default is evidence about the read, not part of which value it is.
-    default: Any = dataclass_field(default=None, compare=False)
     # **The class the identifying call names beside this value** (spec 2026-11-05 §2): set only
     # by an identity entry declaring `class_arg`, from that SAME producing call's argument,
     # read on the same path in the same walk (`_Walk._with_class`), so a key and the class of
@@ -879,7 +874,7 @@ class ValueIndex:
     )
     # The calls that read a deployment-set key (`environment_reads` in `value-models/`),
     # `(owner, name)` -> `(key reference, default reference or None)`. Read by
-    # `_Walk._environment_read`; the default is declared, never the value.
+    # `_Walk._environment_read`; a literal default renders into the expression.
     environment_reads: Mapping[tuple[str, str], tuple[Any, Any]] = dataclass_field(
         default_factory=dict
     )
@@ -5363,7 +5358,7 @@ class _Walk:
         frames: "_Frames",
     ) -> tuple[_Reached, ...]:
         """The expression of the key argument `stated[0]` names, or `non_enumerable` (see
-        `_environment_read`), carrying the literal at `stated[1]` as its declared default."""
+        `_environment_read`), a literal default at `stated[1]` rendered into it."""
         arguments = row["arguments"] or []
         slot = argument_slot(arguments, stated[0])
         if slot is None or slot == UNPACKED_SLOT:
@@ -5387,7 +5382,6 @@ class _Walk:
                 Answer(
                     kind=EXPRESSION,
                     value="${" + str(answer.value) + rendered + "}",
-                    default=default,
                 )
                 if answer.kind == LITERAL and answer.literal_kind == STRING
                 else _unresolved(NON_ENUMERABLE),
