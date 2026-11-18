@@ -191,3 +191,150 @@ def test_a_guard_names_the_field_each_typed_read_of_its_test_is(tmp_path: Path):
     (guard,) = site.guards
     # `os.name` is a library module's variable, read as the call argument reads it.
     assert guard.fields == {"settings.url": "app/conf/Base#url.", "os.name": "os#name."}
+
+
+_MODELS = "class Service:\n    url: str = 'https://x.example'\n"
+_READ = "from app.pkg import Service\ndef send(x): ...\ndef f(s: Service):\n    send(s.url)\n"
+
+
+def _starred(tmp_path: Path, files: dict[str, str]):
+    """`app/run.py` reads `Service` from the package `app/pkg`, whose files are `files`."""
+    return _argument(
+        _scan(
+            tmp_path,
+            {
+                "app/__init__.py": "",
+                **{f"app/pkg/{name}": text for name, text in files.items()},
+                "app/run.py": _READ,
+            },
+        ),
+        "app/run#f",
+        "send",
+    )
+
+
+def test_a_name_a_package_star_re_exports_is_the_class_it_defines(tmp_path: Path):
+    url = _starred(tmp_path, {"__init__.py": "from .models import *\n", "models.py": _MODELS})
+    assert (url.kind, url.symbol) == ("field", "app/pkg/models/Service#url.")
+
+
+def test_a_star_exports_only_what_all_lists(tmp_path: Path):
+    url = _starred(
+        tmp_path,
+        {
+            "__init__.py": "from .models import *\n",
+            "models.py": "__all__ = ['Other']\nclass Other: ...\n" + _MODELS,
+        },
+    )
+    assert url.kind == "unresolved"
+
+
+def test_a_star_carries_a_name_all_lists(tmp_path: Path):
+    url = _starred(
+        tmp_path,
+        {
+            "__init__.py": "from .models import *\n",
+            "models.py": "__all__ = ['Service']\n" + _MODELS,
+        },
+    )
+    assert url.kind == "field"
+
+
+def test_a_star_leaves_a_leading_underscore_name_behind(tmp_path: Path):
+    url = _starred(
+        tmp_path,
+        {
+            "__init__.py": "from .models import *\n",
+            "models.py": _MODELS.replace("Service", "_Service"),
+        },
+    )
+    assert url.kind == "unresolved"
+
+
+def test_an_explicit_binding_beats_a_star_name(tmp_path: Path):
+    url = _starred(
+        tmp_path,
+        {
+            "__init__.py": "from .models import *\nfrom .own import Service\n",
+            "models.py": _MODELS.replace("url", "star_url"),
+            "own.py": _MODELS,
+        },
+    )
+    assert (url.kind, url.symbol) == ("field", "app/pkg/own/Service#url.")
+
+
+def test_a_later_star_wins_over_an_earlier_one(tmp_path: Path):
+    url = _starred(
+        tmp_path,
+        {
+            "__init__.py": "from .first import *\nfrom .second import *\n",
+            "first.py": _MODELS.replace("url", "first_url"),
+            "second.py": _MODELS,
+        },
+    )
+    assert (url.kind, url.symbol) == ("field", "app/pkg/second/Service#url.")
+
+
+def test_a_star_chain_is_followed_to_the_definition(tmp_path: Path):
+    url = _starred(
+        tmp_path,
+        {
+            "__init__.py": "from .middle import *\n",
+            "middle.py": "from .models import *\n",
+            "models.py": _MODELS,
+        },
+    )
+    assert (url.kind, url.symbol) == ("field", "app/pkg/models/Service#url.")
+
+
+def test_a_star_cycle_ends_with_the_name_unresolved(tmp_path: Path):
+    url = _starred(
+        tmp_path,
+        {
+            "__init__.py": "from .a import *\n",
+            "a.py": "from .b import *\n",
+            "b.py": "from .a import *\n",
+        },
+    )
+    assert url.kind == "unresolved"
+
+
+def test_an_imported_call_through_factory_types_the_variable(tmp_path: Path):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/factory.py": _CLASSES
+            + "from functools import lru_cache\n"
+            + "@lru_cache\ndef get_settings() -> Service:\n    return Service()\n",
+            "app/conf.py": "from app.factory import get_settings\nsettings = get_settings()\n",
+            "app/run.py": "from app.conf import settings\n"
+            "from app.factory import send\n"
+            "def f():\n"
+            "    send(settings.url)\n",
+        },
+    )
+    url = _argument(tree, "app/run#f", "send")
+    assert (url.kind, url.symbol) == ("field", "app/factory/Base#url.")
+
+
+def test_a_call_through_factory_returning_a_star_re_exported_class(tmp_path: Path):
+    # The mealie shape: the return names a class the package only star-re-exports, and
+    # another file binds the variable from the imported factory.
+    tree = _scan(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/pkg/__init__.py": "from .models import *\n",
+            "app/pkg/models.py": _MODELS,
+            "app/factory.py": "from functools import lru_cache\nfrom app.pkg import Service\n"
+            "@lru_cache\ndef get_settings() -> Service:\n    return Service()\n",
+            "app/conf.py": "from app.factory import get_settings\nsettings = get_settings()\n",
+            "app/run.py": "from app.conf import settings\n"
+            "def send(x): ...\n"
+            "def f():\n"
+            "    send(settings.url)\n",
+        },
+    )
+    url = _argument(tree, "app/run#f", "send")
+    assert (url.kind, url.symbol) == ("field", "app/pkg/models/Service#url.")

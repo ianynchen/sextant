@@ -464,6 +464,46 @@ def member_of(
     return (Target(target.module, name),)
 
 
+def star_bases(body: list[ast.stmt], here: str, *, is_package: bool) -> tuple[str, ...]:
+    """The modules a file's top-level `from m import *` statements read, in written order.
+    shortcut: a star inside `if` or `try` is not read, when a real package writes one."""
+    binder = _Binder(here, is_package, ModuleIndex(frozenset()), None)
+    return tuple(
+        base
+        for node in body
+        if isinstance(node, ast.ImportFrom)
+        and any(alias.name == "*" for alias in node.names)
+        and (base := binder._from_base(node)) is not None
+    )
+
+
+def star_exports(body: list[ast.stmt]) -> tuple[str, ...] | None:
+    """The names a top-level `__all__ = [...]` (a list or tuple of strings) lists, which are
+    all a star import of the file takes; None where the file writes no `__all__`. An `__all__`
+    written any other way lists none that can be told: nothing travels."""
+    found: tuple[str, ...] | None = None
+    value: ast.expr | None
+    for node in body:
+        if isinstance(node, ast.Assign):
+            names, value = [t for t in node.targets if isinstance(t, ast.Name)], node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names, value = [node.target], node.value
+        else:
+            continue
+        if any(name.id == "__all__" for name in names):
+            items: list[ast.expr | None] = (
+                list(value.elts) if isinstance(value, ast.List | ast.Tuple) else [None]
+            )
+            found = tuple(
+                item.value
+                for item in items
+                if isinstance(item, ast.Constant) and isinstance(item.value, str)
+            )
+            if len(found) != len(items):
+                found = ()
+    return found
+
+
 def bind_names(
     body: list[ast.stmt],
     here: str,

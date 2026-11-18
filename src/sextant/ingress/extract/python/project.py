@@ -35,7 +35,14 @@ from sextant.domain.symbols import (
     without_type_marker,
 )
 from sextant.ingress.extract.python.calls import TYPE_OF
-from sextant.ingress.extract.python.imports import Binding, ModuleIndex, Target, bind_names
+from sextant.ingress.extract.python.imports import (
+    Binding,
+    ModuleIndex,
+    Target,
+    bind_names,
+    star_bases,
+    star_exports,
+)
 from sextant.ingress.extract.python.typing_rules import ClassShape, TypeScope, type_symbol
 
 # The question a file asks the module index for another file's header (`ModuleIndex.asked`).
@@ -60,6 +67,10 @@ class ModuleHeader:
     # The function each module-level name is written from, where every write to it in the
     # file is a call of a named function (ruling R17), by name, as the file binds it.
     factories: dict[str, tuple[Target, ...]]
+    # The modules its top-level `from m import *` statements read, in written order, and the
+    # names its `__all__` lists (None where it writes none): what a star import takes from it.
+    stars: tuple[str, ...] = ()
+    exports: tuple[str, ...] | None = None
 
 
 def header_digest(tree: ast.Module) -> str:
@@ -158,7 +169,7 @@ class ProjectHeaders:
             return None
         binding = header.names.get(name)
         if binding is None:
-            return None
+            return self._starred(module, header, name, seen)
         found: list[Target] = []
         for target in binding.targets:
             if target.module == module and target.member == name:
@@ -182,6 +193,25 @@ class ProjectHeaders:
                 kind = target.kind if target.kind in ("new_type", "new_class") else None
                 found.append(Target(target.module, target.member, kind))
         return tuple(dict.fromkeys(found))
+
+    def _starred(
+        self, module: str, header: ModuleHeader, name: str, seen: frozenset[tuple[str, str]]
+    ) -> tuple[Target, ...] | None:
+        """Where `module.name` is defined when `module` binds `name` by no statement of its own
+        but a `from m import *` may: Python's rule, the last star that takes the name winning.
+        A star takes a name its source lists in `__all__`, else any without a leading `_`. A
+        source that is no file of the module (a library) says nothing, so the name stays as
+        written."""
+        for base in reversed(header.stars):
+            source = self.header(base)
+            if source is None:
+                continue
+            if name not in source.exports if source.exports is not None else name.startswith("_"):
+                continue
+            found = self.member(base, name, seen | {(module, name)})
+            if found is not None:
+                return found
+        return None
 
     def names_a_value(self, module: str, name: str) -> bool:
         """Whether `module.name`, followed to where it is defined, is bound to a value, a
@@ -454,5 +484,13 @@ class ProjectHeaders:
         types = TypeScope(names=names, here=module, index=self._plain)
         classes, returns, fields, aliases, factories = self._read(tree, module, types, is_package)
         return ModuleHeader(
-            names, classes, returns, fields, header_digest(tree), aliases, factories
+            names,
+            classes,
+            returns,
+            fields,
+            header_digest(tree),
+            aliases,
+            factories,
+            star_bases(tree.body, module, is_package=is_package),
+            star_exports(tree.body),
         )
