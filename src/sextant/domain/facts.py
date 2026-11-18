@@ -539,12 +539,16 @@ class CallGuard(BaseModel):
     is the arm the call is in — true in the `if` arm, false in the `else` arm and after an arm
     that always returns. An arm that always raises guards nothing, nor does the entry-point
     test `__name__ == "__main__"` (ruled 2026-11-09). `reads` are the names and dotted names
-    the test reads, in the order it reads them. Python only."""
+    the test reads, in the order it reads them. `fields` maps a read to the field it is where the
+    scanner can type it (R27). Python only."""
 
     model_config = {"frozen": True}
     test: str
     holds: bool
     reads: list[str] = Field(default_factory=list)
+    # Each read the scanner can type, to the field symbol a call argument would name for it
+    # (plan 3 ruling R27); a read it cannot type is absent, never guessed.
+    fields: dict[str, str] = Field(default_factory=dict)
 
 
 class CallSiteFact(BaseModel):

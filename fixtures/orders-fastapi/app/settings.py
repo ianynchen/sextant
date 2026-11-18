@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="orders_", env_file=".env")
 
     rates_url: str = "https://rates.example/v1"
+    # Read by `app/main.py` to include `app/support.py`: a deployment decides it.
+    support_routes: bool = True
     # An alias replaces the name and takes no prefix: read from `CARRIER_TOKEN`.
     carrier_token: str = Field("none", alias="CARRIER_TOKEN")
 

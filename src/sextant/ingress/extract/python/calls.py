@@ -597,7 +597,23 @@ class BodyReader:
         `call_site.guards`); None where the language decides the test (`_runs`)."""
         if self._runs(test, scope) is not None or _entry_point_test(test):
             return None
-        return CallGuard(test=ast.unparse(test), holds=holds, reads=_reads(test))
+        reads = _reads(test)
+        return CallGuard(
+            test=ast.unparse(test), holds=holds, reads=reads, fields=self._fields(reads, scope)
+        )
+
+    def _fields(self, reads: list[str], scope: Scope) -> dict[str, str]:
+        """Each dotted read of a test that is a read of a field, to that field's symbol, as the
+        same text would be as a call argument (`_value`, R23; ruling R27). A read it cannot type
+        is left out. A dotted name holds no call, so reading it writes none."""
+        found: dict[str, str] = {}
+        for text in reads:
+            node = ast.parse(text, mode="eval").body
+            if isinstance(node, ast.Attribute):
+                value = self._value(node, scope)
+                if value.kind == "field" and value.symbol:
+                    found[text] = value.symbol
+        return found
 
     def _guard_after(self, node: ast.stmt, scope: Scope) -> CallGuard | None:
         """The guard an `if` puts on the statements after it, where exactly one of its arms

@@ -36,7 +36,7 @@ EXPECTED: dict[
     tuple[tuple[str, ...], str], tuple[str, str | None, set[tuple[str, str, bool]], list[str]]
 ] = {
     (("GET",), "/health"): ("health", "dict[str, str]", {REQUEST_ID}, []),
-    # Included only under `if flags.SUPPORT_ROUTES:`; the repository's value is True, so FastAPI
+    # Included only under `if settings.support_routes:`; the field's default is True, so FastAPI
     # run with it serves the route. Sextant publishes it "not evaluated" (OI-368).
     (("GET",), "/support/ping"): ("ping", "dict[str, str]", {REQUEST_ID}, []),
     (("GET",), "/api/v1/orders/{order_id}"): (
@@ -316,20 +316,27 @@ ORDER_OUT_BY_KEYWORD = (
 )
 
 PINNED: dict[str, list[tuple[object, ...]]] = {
-    # The one route included under a test (`if flags.SUPPORT_ROUTES:`): FastAPI run with the
-    # repository's value serves it, and Sextant says it exists "not evaluated" (OI-368).
+    # The one route included under a test (`if settings.support_routes:`), a settings field the
+    # deployment sets: FastAPI run with the default serves it, and Sextant says it exists "not
+    # evaluated" (OI-368), a property condition on the field's key, the default as evidence.
     "endpoint_existence": [
         (
             "GET",
             "/support/ping",
             0,
             "app/main#<clinit>",
-            "test",
-            '{"holds": true, "reads": ["flags.SUPPORT_ROUTES"], "test": "flags.SUPPORT_ROUTES"}',
+            "property",
+            (
+                '{"holds": true, "keys": ["ORDERS_SUPPORT_ROUTES"], '
+                '"reads": ["settings.support_routes"], "test": "settings.support_routes"}'
+            ),
             "default",
             "unresolved",
             "unresolved",
-            "a condition this analysis does not evaluate: `flags.SUPPORT_ROUTES`",
+            (
+                "`ORDERS_SUPPORT_ROUTES` is set by the deployment; this module's `default` "
+                "configuration sets nothing, its default is `True`"
+            ),
         ),
     ],
     "endpoints": [
@@ -886,7 +893,6 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             "app/deps/User#<init>",
             "resolved",
         ),
-        ("app/flags#<clinit>", 0, "special", "app/flags/Flags#<init>", None, "resolved"),
         ("app/main#<clinit>", 0, "static", "fastapi/param_functions#Depends", None, "resolved"),
         (
             "app/main#<clinit>",
@@ -1251,6 +1257,7 @@ def test_the_document_says_the_conditional_route_is_not_evaluated(
     document = (out / "render" / "architecture.md").read_text(encoding="utf-8")
     block = document[document.index("- `GET /support/ping`") :].split("\n- ", 1)[0]
     assert (
-        "Exists only when: the code's test `flags.SUPPORT_ROUTES` is true, not evaluated" in block
+        "Exists only when: the code's test `settings.support_routes` is true, not evaluated"
+        in block
     )
     assert "not evaluated by this analysis in any of the 1 environments" in block

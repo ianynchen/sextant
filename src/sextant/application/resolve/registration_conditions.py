@@ -28,10 +28,18 @@ Each guard of each alternative is one `endpoint_existence` row per environment t
 resolves (D01): kind `test`, its expression the test as the code writes it with the arm it is
 in, `holds = unresolved`. Names no framework: the calls are the engine's, the tests the facts'.
 
+A guard every one of whose reads is a read of a settings field (`call_site.guards[].fields`,
+the scanner's typed reads, R27; the field's key by `settings_fields`, plan 3 Task 5) is kind
+`property` instead, as a bean's property condition is: its expression names the keys, the verdict
+stays "not evaluated" (the deployment sets a key, ruled 2026-10-23), and the repository's value
+for each key is evidence: what the module's environment configuration sets, else the field's
+class-body default. A guard with any read that is not such a field stays `test`: the part no
+key explains cannot be called a property condition.
+
 **Stated limits.** A function in a cycle of calls is taken to run unconditionally while the
 cycle is being followed (the old answer, never a dropped row). A test is never evaluated, even
-where its value is written in the repository: plan 3 links a settings field to its
-configuration key. A class body's statements are read with no test the module body puts them
+where its value is written in the repository. A read the scanner cannot type is not linked to a
+settings field, so its guard stays `test`. A class body's statements are read with no test the module body puts them
 under.
 
 Cost (GUIDELINES §8.7): per inbound catalog run, one read of the guarded call sites (a fact
@@ -44,10 +52,21 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.bean_conditions import property_evidence
+from sextant.application.resolve.dispatch import dispatch_of
+from sextant.application.resolve.settings_fields import (
+    CONFIG_MODEL_FORM,
+    SettingsKey,
+    settings_keys,
+)
+from sextant.domain.symbols import bare_descriptor
 
 # The condition kind of a test the analysis does not evaluate (D01 `endpoint_existence.kind`).
 TEST = "test"
+# The condition kind of a test that reads only settings fields (the bean model's own word).
+PROPERTY = "property"
 # The environment of a module that resolves none of its own (`resolved_config` holds none).
 DEFAULT_ENVIRONMENT = "default"
 # The one spelling of a condition left open, which `bean_presence` in `schema.sql` spells too
@@ -55,8 +74,9 @@ DEFAULT_ENVIRONMENT = "default"
 # holds the two equal).
 NOT_EVALUATED = "a condition this analysis does not evaluate: "
 
-# One guard: the method whose body holds the test, the test as written, the arm, its reads.
-Guard = tuple[str, str, bool, tuple[str, ...]]
+# One guard: the method whose body holds the test, the test as written, the arm, its reads, and
+# the field symbol of each read the scanner could type (read, symbol).
+Guard = tuple[str, str, bool, tuple[str, ...], tuple[tuple[str, str], ...]]
 # The guards of one alternative, outermost first (a caller's before its callee's, an include's
 # before the routes under it), each once.
 Conjunction = tuple[Guard, ...]
@@ -166,7 +186,13 @@ def conditions_of(workspace: Workspace) -> Conditions:
     for row in workspace.query("call_site_guards"):
         caller = str(row["caller"])
         guards[(caller, int(str(row["ordinal"])))] = tuple(
-            (caller, str(g["test"]), bool(g["holds"]), tuple(g.get("reads") or ()))
+            (
+                caller,
+                str(g["test"]),
+                bool(g["holds"]),
+                tuple(g.get("reads") or ()),
+                tuple(sorted((g.get("fields") or {}).items())),
+            )
             for g in json.loads(str(row["guards"]))
         )
     callers: dict[str, list[tuple[str, int]]] = {}
@@ -185,6 +211,50 @@ def environments_of(workspace: Workspace) -> tuple[str, ...]:
 
 
 @dataclass(frozen=True)
+class SettingsReads:
+    """What a guard that reads settings fields is explained by: each settings field's key by
+    bare field symbol (`settings_fields.settings_keys`), and what each environment's
+    configuration sets for a key (None: a placeholder the module does not fill)."""
+
+    keys: Mapping[str, SettingsKey]
+    config: Mapping[str, Mapping[str, str | None]]
+
+
+def settings_reads_of(workspace: Workspace, catalog: Catalog) -> SettingsReads:
+    """The settings fields of the module the catalog's config model declares, empty where it
+    declares none. Read once per resolve, and only for a run whose rows are guarded."""
+    model = next(
+        (row for row in catalog.returns_arguments if row.get("form") == CONFIG_MODEL_FORM), None
+    )
+    if model is None or not model.get("settings_form"):
+        return SettingsReads({}, {})
+    keys = settings_keys(workspace, model, workspace.once(dispatch_of))
+    config: dict[str, dict[str, str | None]] = {}
+    for row in workspace.query("resolved_config"):
+        value = row["value"]
+        if value is None and row.get("source") is None:
+            continue  # never declared in the environment: "nothing", not a placeholder
+        config.setdefault(str(row["environment"]), {})[str(row["key"])] = (
+            None if value is None else str(value)
+        )
+    return SettingsReads(keys, config)
+
+
+def _settings_keys_of(guard: Guard, settings: SettingsReads) -> list[SettingsKey] | None:
+    """The key of each read of `guard`, where every read is a read of a settings field with a
+    key; None where any is not (a read the scanner could not type, a name, a field of another
+    class), and then the guard is a `test`."""
+    fields = dict(guard[4])
+    found = [
+        settings.keys.get(bare_descriptor(fields[read])) if read in fields else None
+        for read in guard[3]
+    ]
+    if not found or any(one is None or one.key is None for one in found):
+        return None
+    return [one for one in found if one is not None]
+
+
+@dataclass(frozen=True)
 class Existence:
     """Where the calls one registration of a row ran, read two ways (`Conditions.of_sites`):
     `tied`, through the calls its paths chose, and `untied`, taking no call under no test as
@@ -199,6 +269,7 @@ class Existence:
 def existence_rows(
     registrations: Sequence[tuple[Mapping[str, Any], Existence]],
     environments: Sequence[str],
+    settings: SettingsReads | None = None,
 ) -> list[dict[str, Any]]:
     """The `endpoint_existence` rows of each registered row: its alternatives OR-ed across
     every registration that made it, nothing for a row one of them makes unconditionally.
@@ -221,9 +292,18 @@ def existence_rows(
         if alternatives == UNCONDITIONAL:
             continue
         for route, conjunction in enumerate(sorted(alternatives)):
-            for position, (method, test, holds, reads) in enumerate(conjunction):
+            for position, guard in enumerate(conjunction):
+                method, test, holds, reads = guard[:4]
+                explained = _settings_keys_of(guard, settings) if settings else None
+                keys = (
+                    []
+                    if explained is None
+                    else list(dict.fromkeys(str(one.key) for one in explained))
+                )
                 expression = json.dumps(
-                    {"holds": holds, "reads": list(reads), "test": test}, sort_keys=True
+                    {"holds": holds, "reads": list(reads), "test": test}
+                    | ({"keys": keys} if explained is not None else {}),
+                    sort_keys=True,
                 )
                 for environment in environments:
                     written.append(
@@ -237,12 +317,26 @@ def existence_rows(
                             "route": route,
                             "position": position,
                             "via": method,
-                            "kind": TEST,
+                            "kind": TEST if explained is None else PROPERTY,
                             "expression": expression,
                             "environment": environment,
                             "holds": "unresolved",
                             "resolution": "unresolved",
-                            "evidence": f"{NOT_EVALUATED}`{test}`",
+                            "evidence": f"{NOT_EVALUATED}`{test}`"
+                            if explained is None or settings is None
+                            else _evidence(explained, environment, settings),
                         }
                     )
     return written
+
+
+def _evidence(found: Sequence[SettingsKey], environment: str, settings: SettingsReads) -> str:
+    """A property guard's evidence in one environment: the bean property condition's lines for
+    its keys, with a field's class-body default said where the configuration sets nothing, and
+    the file a key may come from where the module names one through no literal (R26)."""
+    config = settings.config.get(environment, {})
+    keys = list(dict.fromkeys(str(one.key) for one in found))
+    defaults = {str(one.key): one.default for one in found if one.default is not None}
+    text = property_evidence(keys, environment, config, defaults)
+    named = [one.file_detail() for one in found if one.file is not None and one.key not in config]
+    return "; ".join([text, *dict.fromkeys(named)])

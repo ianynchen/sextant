@@ -104,3 +104,23 @@ def test_a_variable_written_from_two_classes_holds_neither(tmp_path: Path):
     )
     assert _argument(tree, "app/run#f", "send").kind == "unresolved"
     assert _owner_of(tree, "app/run#f", "reload") == [None]
+
+
+def test_a_guard_names_the_field_each_typed_read_of_its_test_is(tmp_path: Path):
+    # R27: `guards[].fields` maps a read's text to the field symbol the same read would be as a
+    # call argument; a read the scanner cannot type is absent from it.
+    tree = _scan(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/conf.py": _CLASSES + "settings = Service()\n",
+            "app/run.py": "from app.conf import settings, send\n"
+            "import os\n"
+            "if settings.url and os.name and unknown.x:\n"
+            "    send(1)\n",
+        },
+    )
+    (site,) = [s for s in _sites(tree, "app/run#<clinit>") if s.target.name == "send"]
+    (guard,) = site.guards
+    # `os.name` is a library module's variable, read as the call argument reads it.
+    assert guard.fields == {"settings.url": "app/conf/Base#url.", "os.name": "os#name."}

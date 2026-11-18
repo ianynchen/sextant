@@ -36,6 +36,7 @@ from sextant.application.resolve.registration_conditions import (
     conditions_of,
     environments_of,
     existence_rows,
+    settings_reads_of,
 )
 from sextant.application.resolve.request_requirements import (
     ParameterReading,
@@ -619,7 +620,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     if registrations:
         # After the rows, never before: each entry is bound to its row's `row_id` as it is
         # written (`insert_endpoint_existence.sql`), the `endpoint_metadata` discipline.
-        existence = existence_rows(registrations, environments_of(workspace))
+        existence = existence_rows(
+            registrations, environments_of(workspace), settings_reads_of(workspace, catalog)
+        )
         if existence:
             workspace.derive("endpoint_existence_insert", rows=existence)
     if recipe_roots:
