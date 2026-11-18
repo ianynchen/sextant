@@ -62,6 +62,11 @@ def record(order_id: str) -> None:
     ledger_client().delete(f"/entries/{order_id}")
 
 
+def rates(currency: str) -> None:
+    with httpx.Client(base_url="https://rates.example/v1") as client:
+        client.get(f"/rates/{currency}")
+
+
 def status(client: httpx.Client) -> int:
     return client.get("/status").status_code
 

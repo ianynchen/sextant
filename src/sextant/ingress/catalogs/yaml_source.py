@@ -368,6 +368,8 @@ class YamlCatalogSource:
           decorator factory whose decorator hands the function back: click's `option`);
         - `result_calls` — calling the call's result runs the call's own argument N with the
           same arguments (a wrapper: `functools.cache`);
+        - `returns_receiver: true` — the call returns the object it is called on (ruling 4 of
+          spec 2026-10-30, the same word; plan 3 R13: `httpx.Client.__enter__`);
         - `by` — the probe that measured it, required as `identified_by`'s is.
 
         A call stated twice is refused naming the file, as `identified_by`'s is: two entries
@@ -2095,7 +2097,10 @@ def _hand_off_effect(entry: Any, path: Path) -> dict[str, Any]:
 
 # The three things a `returns_argument` entry may say a call does with its argument N
 # (design 2026-11-06-reading-decorators §3d, §3e).
-_RETURNS_FORMS = ("returns", "result_returns", "result_calls")
+_RETURNS_FORMS = ("returns", "result_returns", "result_calls", "returns_receiver")
+# The form that names no argument: the call returns its receiver, written `returns_receiver:
+# true` as a `fluent` step writes it (ruling 4, spec 2026-10-30; plan 3 R13).
+_RETURNS_RECEIVER = "returns_receiver"
 
 
 def _returns_argument(entry: Any, path: Path) -> dict[str, Any]:
@@ -2119,11 +2124,14 @@ def _returns_argument(entry: Any, path: Path) -> dict[str, Any]:
             f"{where} is `{{owner, method, <one of {', '.join(_RETURNS_FORMS)}>: argN, by}}`, "
             f"got {entry!r}"
         )
+    if forms[0] == _RETURNS_RECEIVER and entry[_RETURNS_RECEIVER] is not True:
+        raise CatalogError(f"{where}: `{_RETURNS_RECEIVER}` is written `true`, got {entry!r}")
     return {
         "owner": type_descriptor(str(entry["owner"])),
         "method": str(entry["method"]),
         "form": forms[0],
-        "arg": _arg_index(entry[forms[0]], where),
+        # The receiver is no argument: the position is unused for that form.
+        "arg": 0 if forms[0] == _RETURNS_RECEIVER else _arg_index(entry[forms[0]], where),
         "by": str(entry["by"]),
     }
 

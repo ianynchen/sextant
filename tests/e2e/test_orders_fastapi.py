@@ -538,6 +538,17 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             None,
             None,
         ),
+        # A client a `with` statement opens: `__enter__` returns it (plan 3 R13).
+        (
+            "outbound",
+            "GET",
+            "rates.example",
+            "/v1/rates/{currency}",
+            "app/clients#rates",
+            "resolved",
+            None,
+            None,
+        ),
         # A client handed in by a caller nothing reads: the path is kept, no peer (Review Focus 3).
         ("outbound", "GET", None, "/status", "app/clients#status", "unresolved", None, None),
         # The client a dependency yields (`Depends(notifier)` on `create`), its base joined.
@@ -750,6 +761,9 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             "resolved",
         ),
         ("app/clients#notify", 0, "virtual", "httpx/_client/AsyncClient#post", None, "resolved"),
+        ("app/clients#rates", 0, "special", "httpx/_client/Client#<init>", None, "resolved"),
+        ("app/clients#rates", 1, "virtual", "httpx/_client/Client#__enter__", None, "resolved"),
+        ("app/clients#rates", 3, "virtual", "httpx/_client/Client#get", None, "resolved"),
         (
             "app/clients#record",
             0,
@@ -1045,6 +1059,7 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
     "bound_receivers": [
         ("app/admin#<clinit>", 2, None, "unresolved", "external"),
         ("app/admin#<clinit>", 4, None, "unresolved", "external"),
+        ("app/clients#rates", 3, "httpx/_client/Client#", "resolved", None),
         ("app/clients#record", 2, "httpx/_client/Client#", "resolved", None),
         ("app/clients#stock", 3, None, "unresolved", "external"),
         ("app/clients/Billing#charge", 1, "requests/sessions/Session#", "resolved", None),

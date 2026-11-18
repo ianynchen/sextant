@@ -768,6 +768,11 @@ not, that it is genuinely a constructor rather than an ordinary void call.
 - **`result_calls: argN`** — calling the call's result runs the call's OWN argument N with the
   same arguments: a wrapper. `python-wrappers.yml` states `functools.cache` and `lru_cache`,
   `contextlib.contextmanager` and `asynccontextmanager`, and `tenacity.retry`.
+- **`returns_receiver: true`** — the call returns the object it is called on (ruling 4 of spec
+  2026-10-30, the `fluent` step's word, here in a value model; plan 3 R13).
+  `value-models/python-clients.yml` states httpx's `Client.__enter__` and
+  `AsyncClient.__aenter__` and requests' `Session.__enter__`, so `with … as c` binds `c` to
+  the client its construction built.
 
 `owner` is dotted as every catalog spells a type, a module included (`click.decorators` is the
 facts' `click/decorators#`). `by` is required, as `identified_by`'s is; a call stated in two

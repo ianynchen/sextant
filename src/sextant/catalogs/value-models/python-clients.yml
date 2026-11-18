@@ -1,0 +1,17 @@
+id: python-clients
+displayName: HTTP clients a `with` statement opens, which hand back the client itself
+
+# WHAT THIS FILE IS (D02 §1f, `returns_argument`, its `returns_receiver` form; plan 3 ruling
+# R13). `with httpx.Client(...) as c` binds `c` to what `Client.__enter__` returns, and each
+# call below returns the very object it is called on — measured (`entered is opened`) and
+# quoted (`return self`) in `scripts/probes/requests_httpx_rules.md`. So `c` is the client
+# its construction built, base address and all. `requests.sessions.Session` has no
+# `__aenter__`, so none is stated.
+
+returns_argument:
+  - { owner: httpx._client.Client, method: __enter__, returns_receiver: true,
+      by: scripts/probes/requests_httpx_rules.md }
+  - { owner: httpx._client.AsyncClient, method: __aenter__, returns_receiver: true,
+      by: scripts/probes/requests_httpx_rules.md }
+  - { owner: requests.sessions.Session, method: __enter__, returns_receiver: true,
+      by: scripts/probes/requests_httpx_rules.md }

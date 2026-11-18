@@ -183,6 +183,31 @@ def test_a_relative_address_joins_the_base_the_client_was_built_with(tmp_path, l
     ]
 
 
+def test_a_client_a_with_statement_opens_is_the_client_it_built(tmp_path, libraries):
+    """Plan 3 R13: `Client.__enter__`, `AsyncClient.__aenter__` and `Session.__enter__` return
+    the client itself (`value-models/python-clients.yml`), so the name `with … as` binds is
+    that client: its owner, and its base, are the construction's."""
+    assert _outbound(
+        tmp_path,
+        libraries,
+        "import httpx\n"
+        "import requests\n"
+        "def sync() -> None:\n"
+        "    with httpx.Client(base_url='https://a.example/v1') as client:\n"
+        "        client.get('/x')\n"
+        "async def run() -> None:\n"
+        "    async with httpx.AsyncClient(base_url='https://b.example') as client:\n"
+        "        await client.post('/y')\n"
+        "def session() -> None:\n"
+        "    with requests.Session() as http:\n"
+        "        http.delete('https://c.example/z')\n",
+    ) == [
+        ("DELETE", "c.example", "/z", "app/main#session", "resolved", None),
+        ("GET", "a.example", "/v1/x", "app/main#sync", "resolved", None),
+        ("POST", "b.example", "/y", "app/main#run", "resolved", None),
+    ]
+
+
 @pytest.mark.parametrize(
     ("base", "path", "sent"),
     [

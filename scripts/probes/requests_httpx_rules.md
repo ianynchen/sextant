@@ -25,6 +25,7 @@ asked for. Every row is an `assert` in the script, so a cell that failed would h
 | verb written in lower case (`request("get", url)`) | upper-cased, sent as `GET` | upper-cased, sent as `GET` |
 | several body keywords on one call | `files` > `data` > `json` | `content` > `files` > `data` > `json` |
 | no body keyword | no body sent | no body sent |
+| `with` / `async with` value | `Session.__enter__` returns self | `Client.__enter__`, `AsyncClient.__aenter__` return self |
 
 ## Defining symbols
 
@@ -91,6 +92,16 @@ Positions of the body parameters: requests `post(url, data, json)` has `data` at
 at 2; `put`/`patch(url, data)` `data` at 1; `Session.request` has `data` at 3, `files` at 6,
 `json` at 15; `requests.request(method, url, **kwargs)` takes every body by keyword. httpx
 takes every body by keyword.
+
+## `with` returns the client (ruling R13)
+
+`with httpx.Client(...) as c`, `async with httpx.AsyncClient(...) as c` and
+`with requests.Session() as s` bind the name to what `__enter__`/`__aenter__` returns. Each is
+defined on that class (`__qualname__` `Client.__enter__`, `AsyncClient.__aenter__`,
+`Session.__enter__`), and each returns the client itself — measured `entered is opened` for all
+three. Quoted: `httpx._client.Client.__enter__` and `AsyncClient.__aenter__` end `return self`
+after opening their transports; `requests.sessions.Session.__enter__` is `return self`.
+`Session` has no `__aenter__`.
 
 ## base_url
 

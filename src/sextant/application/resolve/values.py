@@ -251,6 +251,7 @@ _CALL = "__call__"
 _RETURNS = "returns"
 _RESULT_RETURNS = "result_returns"
 _RESULT_CALLS = "result_calls"
+_RETURNS_RECEIVER = "returns_receiver"
 
 # D00 §5's argument grammar, read as answers. `long` answers `int` because the
 # distinction is a storage width and not a kind of value a consumer branches on; a catalog
@@ -5208,6 +5209,7 @@ class _Walk:
         2026-11-06-reading-decorators §3d and §3e), or None where no statement applies:
 
         - `returns: N` on the call: the value is its argument N (`Objects.requireNonNull`);
+        - `returns_receiver` on the call: the value is its receiver (`Client.__enter__`);
         - `result_returns: N` on the call that made this call's RECEIVER, in this method: this
           call applies a decorator that hands its argument back, so the value is this call's
           argument N (click's `option(...)` applied to a function is the function);
@@ -5228,6 +5230,10 @@ class _Walk:
         own = stated.get((str(row.get("owner")), str(row["name"])))
         if own is not None and own[0] == _RETURNS:
             return self._stated_slot(site, row, own[1], trail, frames)
+        if own is not None and own[0] == _RETURNS_RECEIVER:
+            # The call returns the object it is called on (`with httpx.Client() as c`: `c` is
+            # the client `__enter__` was called on, plan 3 R13): the value is its receiver.
+            return self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames)
         if own is not None and own[0] == _RESULT_CALLS and self._functions:
             runs = tuple(
                 reached

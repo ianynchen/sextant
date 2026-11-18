@@ -11,6 +11,7 @@ purpose; Sextant itself never does (spec 7). Rules and quotes are in `requests_h
 
 from __future__ import annotations
 
+import asyncio
 import http.server
 import importlib.metadata
 import inspect
@@ -241,6 +242,29 @@ assert positional(requests.api.post)[:3] == ["url", "data", "json"]
 rule(
     "body positions: requests post(url, data, json): data 1, json 2; put/patch(url, data): data 1; "
     "Session.request: data 3, files 6, json 15; requests.request(method, url, **kwargs): none"
+)
+
+# 5d. A client opened by `with` / `async with` is the client itself (plan 3 ruling R13).
+for cls, name in ((httpx.Client, "__enter__"), (requests.sessions.Session, "__enter__")):
+    assert getattr(cls, name).__qualname__ == f"{cls.__name__}.{name}", (cls, name)
+    opened = cls()
+    with opened as entered:
+        assert entered is opened, cls
+assert httpx.AsyncClient.__aenter__.__qualname__ == "AsyncClient.__aenter__"
+assert not hasattr(requests.sessions.Session, "__aenter__")
+
+
+async def _entered() -> bool:
+    opened = httpx.AsyncClient()
+    async with opened as entered:
+        return entered is opened
+
+
+assert asyncio.run(_entered())
+rule(
+    "with/async with: httpx.Client.__enter__, httpx.AsyncClient.__aenter__ and "
+    "requests.sessions.Session.__enter__ (each defined on that class) return the client itself; "
+    "Session has no __aenter__"
 )
 
 # 6. requests.Session has no base URL.
