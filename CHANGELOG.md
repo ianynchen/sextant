@@ -52,6 +52,30 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Python `requests` and `httpx` calls are read, with the configuration that fills their
+  addresses** (OI-208 plan 3, plan `2026-11-17-python-outbound-config-pins.md`, spec
+  `2026-11-06-python-reader-design.md` §3c remainder and §3d). `requests.yml` and `httpx.yml`
+  (`single_call`) read the module functions, `Session`, `Client` and `AsyncClient`, inside a
+  `with` statement or not: the verb (a string verb upper-cased as the libraries do), the address,
+  and a body by each library's own keyword precedence (a pydantic model, or `model_dump(by_alias=True)`
+  of one). An `httpx` client's `base_url=` is joined as httpx joins it. An address from
+  `os.getenv` / `os.environ` is `${KEY}`; from a pydantic-settings field it is
+  `${PREFIX_FIELD:-default}`, filled per environment from the `.env` file the class names (a
+  dotenv reader, python-dotenv 1.2.4's syntax). A route under a test that reads only settings
+  fields is stated as existing "not evaluated" with the field's key as a `property` condition
+  (OI-368). Pinned on `fixtures/orders-fastapi` and on polar (33 outbound rows), mealie (16)
+  and dispatch (13, new), each with FastAPI's own route table for the inbound side (dispatch 287
+  of 287); the nine field pins are green. aiohttp and urllib3 are not read (OI-454). Eight
+  words are new in the catalog grammar (D02): `environment_reads`, `settings_form`,
+  `{from_argument: env_file}`, `serializers` with `serializer_names_when`, the `base_arg` ladder
+  rung with `client_arg: receiver` and the `append_to_base` join, a list-valued `body_arg`,
+  `method_case`, and `returns_receiver` in a value model. A catalog may now declare only models
+  (D02 §1, amended), and the fact schema is 16: library module variables are typed (14),
+  attribute reads on a known class are `field` arguments and a module variable takes the class of
+  its one construction (15), and `call_site.guards[].fields` links a guard's read to its field
+  (16). The three catalog readers that keyed a construction's object by receiver now use
+  `values.object_of` (OI-341). 37 issues are logged, OI-418 to OI-454.
+
 - **FastAPI inbound is read, and checked against FastAPI itself** (OI-208 plan 2, plan
   `2026-11-08-python-fastapi-inbound.md`, spec `2026-11-06-python-reader-design.md` §3c as
   amended by N1). `tests/e2e/test_orders_fastapi.py` analyses `fixtures/orders-fastapi` (FastAPI

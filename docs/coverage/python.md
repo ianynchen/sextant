@@ -1,12 +1,14 @@
 # Coverage — Python
 
-**The Python reader's foundation ships, and FastAPI inbound is read.** The foundation was built
+**The Python reader's foundation ships, FastAPI inbound is read, and so are `requests` and `httpx` outbound with the configuration that fills their addresses.** The foundation was built
 by OI-208 plan 1 (`docs/superpowers/plans/2026-11-06-python-reader-foundation.md`, spec
 `docs/superpowers/specs/2026-11-06-python-reader-design.md`) and proved on Sextant's own code
 (`tests/e2e/test_sextant_reads_itself.py`). FastAPI inbound was built by plan 2
 (`docs/superpowers/plans/2026-11-08-python-fastapi-inbound.md`) and proved against FastAPI's own
-route table (`tests/e2e/test_orders_fastapi.py`). Outbound HTTP clients are next (plan 3), then
-Flask, then Django (ruled 2026-10-26). Detection shapes are defined in [COVERAGE.md](../COVERAGE.md) §1. The typing
+route table (`tests/e2e/test_orders_fastapi.py`). Outbound HTTP clients, environment and settings
+configuration and the field pins were built by plan 3
+(`docs/superpowers/plans/2026-11-17-python-outbound-config-pins.md`). Flask is next, then
+ then Django (ruled 2026-10-26). Detection shapes are defined in [COVERAGE.md](../COVERAGE.md) §1. The typing
 problem this language creates is analysed in [COVERAGE.md](../COVERAGE.md) §10.
 
 > **Scope.** [COVERAGE.md](../COVERAGE.md) §5 is canonical for tier and status,
@@ -185,7 +187,39 @@ environment: it imports the app and asks FastAPI. Sextant never runs the code it
   (`mealie/app.py`, `routes/spa/__init__.py`). The oracle ran with `PRODUCTION=true` and no
   static files, so FastAPI returned before registering them. Sextant publishes all three as
   existing "not evaluated" under both tests.
-- **dispatch** (`examples/py-dispatch`) was not measured: it has no installed environment.
+- **dispatch** (`examples/py-dispatch`) was not measured at plan 2: it had no installed
+  environment. Plan 3 measures it (below).
+
+### Outbound and configuration (plan 3)
+
+Measured on 2026-11-17 at the end of plan 3, same machine. Each service's environment is made
+from its lock with `uv sync --frozen` (`scripts/field_check.py`); dispatch has no lock of its
+own that `uv lock` accepts, so its pin holds a lock made once from a copy of its `pyproject.toml`
+without three Netflix-internal references (`py-dispatch.uv.lock`, on Python 3.12 because
+`thinc` 8.3.4 has no wheel for 3.13).
+
+| | `fixtures/orders-fastapi` | polar `server/` | mealie | dispatch |
+|---|---|---|---|---|
+| Sextant outbound HTTP rows (pinned) | pinned row by row | 33 | 16 | 13 |
+| Sextant inbound HTTP rows | unchanged | 881 | 293 | 291 |
+| Pairs FastAPI serves that Sextant finds | unchanged | 668 of 671 | 289 of 289 | 287 of 287 |
+| Cold analysis (target 60 s) | | 38.5 s | 12.9 s | 15.0 s |
+| Warm analysis (target 10 s) | | 1.5 s | 0.9 s | 0.9 s |
+
+- **The inbound tables did not move.** polar and mealie equal plan 2's counts. dispatch's 4
+  extra rows are `/slack/*` entry points that FastAPI's table does not hold; they are published
+  as existing without a condition (OI-451).
+- **Outbound rows were checked by hand.** 15 rows over the three services were read against the
+  code and equal it; none was changed to fit. polar's rows include the Resend and GitHub
+  calls with `${POLAR_RESEND_API_BASE_URL}`-style addresses (`${KEY}` is the key the deployment
+  sets); an address that arrives in a parameter stays `unresolved` with the reason.
+- **polar's 385 guarded routes are no longer "test".** They are the routes under a
+  `settings.<field>` test; each is now a `property` condition on the field's key (below).
+  mealie's 4 settings guards stay `test`: `get_app_settings()` returns its settings through
+  `@lru_cache`, a call with a declared return type, and a variable set from one is untyped
+  (OI-444).
+- **No oracle exists for outbound rows**: FastAPI cannot say what a service calls. The pin is
+  the rows themselves, each from a read of the code.
 
 ## What is not read, and why
 
@@ -367,12 +401,86 @@ how hard it is to read.
 
 ## Outbound HTTP
 
-| Library | Shape | Detection |
-|---|---|---|
-| `requests` | `requests.get(url)`, `session.post(url, json=…)` | `registration_call` — the verb is the function name, the URL the first argument. The easiest outbound form in any language. |
-| `httpx` | same shape, sync and async | `registration_call` |
-| `aiohttp` | `session.get(url)` inside `async with` | `registration_call` |
-| `urllib3` | `http.request("GET", url)` | `registration_call` — verb is a string argument |
+| Library | Shape | Detection | Status |
+|---|---|---|---|
+| `requests` | `requests.get(url)`, `requests.request("get", url)`, `session.post(url, json=…)` | `single_call` — the verb is the function name or a string argument, the URL the first argument | **Built** (`requests.yml`, 2.34.2) |
+| `httpx` | same shape, sync and async; `httpx.Client(base_url=…)` | `single_call` | **Built** (`httpx.yml`, 0.28.1) |
+| `aiohttp` | `session.get(url)` inside `async with` | `single_call` | Not built (OI-454) |
+| `urllib3` | `http.request("GET", url)` | `single_call` — verb is a string argument | Not built (OI-454) |
+
+**What the built rows read.**
+
+- **The verb** is the function or method name (`get`, `post`, `put`, `patch`, `delete`, `head`,
+  `options`), or for `request` and `stream` the string argument, upper-cased as both libraries
+  upper-case it (`request("get", u)` is a GET). A verb that is not a literal is `unresolved`.
+- **The address** is the first argument (`url`). A literal is `resolved`; an address built from
+  `os.getenv("K")` or `os.environ["K"]` is the expression `${K}`; one from a settings field is
+  `${PREFIX_FIELD:-default}` (configuration, below); a parameter or a helper's result is read
+  through the value walk and is `unresolved` with a reason where the code does not say.
+- **The body** is the pydantic model passed, or `model_dump(by_alias=True)` /
+  `model_dump_json(by_alias=True)` of one. Without `by_alias=True` those calls write the fields'
+  own names, not the wire names the shape holds, so the body is not described. The body keyword
+  chosen is the library's own: requests takes `files`, else a non-empty `data`, else `json`;
+  httpx takes `content`, else `files`, else a non-empty `data`, else `json`. A call that writes
+  none sends no body and the row stays resolvable. The module functions of requests take every
+  body through `**kwargs`; httpx's `get`, `head`, `options` and `delete` take none.
+- **A client's base.** An `httpx.Client(base_url=…)` or `AsyncClient(base_url=…)` is the base of
+  the calls made on it; a relative address is joined as httpx's `_merge_url` joins it (`/users`,
+  `users` and `./users` over `…/api` are `…/api/users`). A base that is a configuration key is
+  carried at `partial` and not joined: the join depends on a trailing `/` the key does not say. A
+  relative address on a client the walk does not reach, or one built without `base_url`, is
+  `unresolved`; httpx refuses it. `requests.Session` holds no base. `client.base_url = …` after
+  construction is not read (OI-421).
+- **A `with` statement.** `with httpx.Client(…) as c` binds `c` to the client its construction
+  built (`__enter__` and `__aenter__` return their receiver, probe-measured for httpx's `Client`
+  and `AsyncClient` and requests' `Session`), so its base and options hold.
+- **A client held in a field** (`self.session.post(…)` where the scanner wrote no type for the
+  field) is owned when every path the resolver's receiver binding settled names the same owner. A
+  `fluent` or `combinator` chain does not use that map (OI-422); Python outbound is `single_call`.
+
+---
+
+## Configuration
+
+Plan 3 reads the configuration a Python service sets its addresses and switches with. A
+deployment decides every key here, so a value found is the repository's value as evidence
+(ruled 2026-10-23), never a fact about production.
+
+- **Environment reads.** `os.getenv("K")`, `os.environ["K"]` and `os.environ.get("K")` are the
+  expression `${K}` (`value-models/python-environment.yml`). A default the call carries is
+  recorded as declared and is never the value. A key that is not a literal is `non_enumerable`.
+  `getenv("K") or "d"` reads as a branch and publishes at `partial` without the default
+  (OI-435). The read depends on the scanner naming `os.environ`'s type from `os`'s own header
+  (fact schema 14).
+- **Settings classes** (pydantic-settings 2.16.3). A class whose bases reach `BaseSettings`
+  reads each field's key as `env_prefix` plus the field's name, or its alias (`validation_alias`
+  before `alias`; an alias takes no prefix under the default `env_prefix_target`), upper-cased
+  unless `case_sensitive=True`. A field read in code (`settings.rates_url`) is the expression
+  `${ORDERS_RATES_URL:-https://rates.example/v1}` (the class-body literal after `:-`). The
+  reader types `settings` from its ONE initializing construction, in this file or another
+  (fact schema 15); a variable written twice is untyped and its reads stay `unresolved`. A rule
+  written as something that is not a literal (`env_prefix=PREFIX`) leaves the key `unresolved`.
+  A Python instance field takes no class-body default in the plain walk, so a read of a plain
+  (non-settings) model's field never publishes its default (OI-447).
+- **The `.env` file.** The file a settings class names with `env_file` (a string or tuple, the
+  later file overriding) is read as python-dotenv reads it (comments, quotes, `export`,
+  `${NAME}` and `${NAME:-default}` expansion), inside the module only. Its keys are the `default`
+  environment's `resolved_config` rows, and `resolved_peers` fills a `${KEY}` address from them,
+  else from the class default, else `external`. A file name written through a variable is read by
+  nobody: each key of the class is `external`, its detail naming the expression (polar: 242
+  rows). The built-in ignore rules still refuse a named file other than `.env` and `.env.*`
+  (`secrets/app.env` is refused), and so does a `.sextantignore`.
+- **Property conditions.** A route or mount registered under a test that reads only settings
+  fields (`if settings.support_routes:`) is existence `not evaluated` with kind `property` and
+  the field's key as the condition (`ORDERS_SUPPORT_ROUTES`), the default as evidence. The
+  scanner links each guard read it can type to its field symbol (fact schema 16,
+  `call_site.guards[].fields`); a guard that also reads a call, or one that reads a field the
+  scanner cannot type, stays `test`. polar: 385 rows moved from `test` to `property`; mealie: 4
+  stay `test` (OI-444).
+- **Not read.** A value given at construction time (`Settings(rates_url=…)`, `_env_file=`;
+  OI-442); lower-case keys in a `.env` file (OI-440); two settings classes naming different
+  files (all keys go to one `default` environment, OI-441); `env_file=None` (OI-443);
+  `@lru_cache`'d accessors of a settings object (OI-444).
 
 ---
 

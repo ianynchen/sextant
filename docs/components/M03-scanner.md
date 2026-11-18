@@ -380,6 +380,25 @@ ever adds a type): the file is then read once more with no module-level types, a
 uncovered list says `<file>: the types of its module-level names did not settle in N
 readings, so none is written`. The analysis goes on.
 
+**A variable of a library module has the type that module's header writes** (fact schema 14,
+plan 3 ruling R16, plan 2's R17 extended to library headers). `os.environ.get(…)` is a call on
+`os/_Environ#` because `os`'s own file (typeshed's, or the installed library's) writes
+`environ: _Environ[str]`; the same rule applies to every `lib.var.method(…)`. A header that
+writes no type for the name leaves the owner out, as before.
+
+**An attribute read on a value of a known class is a `field` argument** (fact schema 15, ruling
+R23). `s.url` with `s: Service`, or `settings.url` with `settings = Settings()`, is
+`{kind: field, symbol: <the class's field>}` where it was `unresolved`. **A module variable takes
+the class of its ONE initializing construction**, in its own file or read from another file's
+header; a variable written by two constructions, by a function call, or reassigned is untyped,
+and its reads stay `unresolved` (types written or proved, never guessed). A call whose
+declared return type is a class (`settings = get_settings()` under `@lru_cache`) is not read as
+a construction, so that variable is untyped (OI-444).
+
+**A guard's reads are typed the same way** (fact schema 16, ruling R27): each read of a
+`call_site.guards` test the scanner can type is mapped to the field symbol a call argument would
+name for it (`CallGuard.fields`). A read it cannot type is absent from the map.
+
 **A file Python cannot parse** goes on the uncovered list with the reason, and the rest
 of the module is scanned. The grammar is the one of the Python that runs Sextant, and the
 reason names that version: a file written for a newer Python than that is not read.

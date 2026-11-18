@@ -53,7 +53,7 @@ and each protocol's own per-framework table opens its §5 section.
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
-| **Python** | ✅ `ast` | ◐ (3A 1B 1C) | 1A | 1B | 2A | 2A 1B | 2B |
+| **Python** | ✅ `ast` | ◐ (3A 1B 1C) | ◐ (1A) | 1B | 2A | 2A 1B | 2B |
 | **Rust** | none | 1A 2B 1C | 1B | — | 1A | 1A 1B | 1B |
 | **Swift** | none | 1A | 1A 1B | — | 1A | 1B | — |
 | **C# / .NET** | none | · | · | · | · | · | · |
@@ -759,7 +759,7 @@ body (34, 0.1%), or unresolved with a reason from the one reason list (3,893, 16
 carry several reasons, one per path). No Python protocol row ships, so the §2 cells are
 unchanged. The essay has what is read, what is not and why, and the measured numbers;
 `docs/research/2026-11-06-python-performance.md` has the times against the budget (cold met,
-warm 10 s target missed on polar: 27.6 s).
+warm 10 s target missed on polar at plan 1's end, 27.6 s; met since: 1.5 s warm and 38.5 s cold on polar at the end of plan 3).
 
 **FastAPI inbound was built 2026-11-08 to 2026-11-09** (OI-208 plan 2,
 `docs/superpowers/plans/2026-11-08-python-fastapi-inbound.md`). `catalogs/fastapi.yml` reads
@@ -773,6 +773,19 @@ is pinned. On two real services, measured against FastAPI's own route table in e
 own environment: polar 668 of 671 (method, path) pairs (the 3 others are one `partial` row),
 mealie 289 of 289. The §5.1 FastAPI row ships, so the Python REST-in cell changes. The essay
 has what is read, what is not, and the open issues (OI-346 to OI-416).
+
+**Python outbound HTTP and configuration were built 2026-11-17** (OI-208 plan 3). `requests` and
+`httpx` are read (`catalogs/requests.yml`, `httpx.yml`): the verb, the address with an httpx
+client's `base_url` joined as httpx joins it, a body, and a call inside a `with` statement. An
+address from `os.getenv` or `os.environ` is `${KEY}`; one from a pydantic-settings field is its
+key (`${PREFIX_FIELD:-default}`), filled per environment from the `.env` file the class names. A
+route registered under a settings flag is stated as existing "not evaluated" with the key as
+the condition. Pinned on `fixtures/orders-fastapi` and on three real services against their own
+route tables: polar 33, mealie 16 and dispatch 13 outbound rows; the inbound tables are unchanged
+(881 and 293 rows, dispatch 287 of 287). The §5.2 requests/httpx row ships, so the Python REST-out
+cell changes to `◐ (1A)`: aiohttp and urllib3 are not read. The configuration work moves no §2b
+cell; it fills the address of a REST-out row, and the §2b grid scores protocols. The essay has the
+numbers and the open issues (OI-418 to OI-454).
 
 Per-language essays — toolchain detail, payload handling, structural oddities:
 [Go](coverage/go.md) · [Rust](coverage/rust.md) · [Python](coverage/python.md) ·
@@ -2919,7 +2932,8 @@ or to MicroProfile's programmatic `RestClientBuilder.baseUri(URI)` (the step's a
 | Java | Vert.x WebClient | A call to the **module's own server** (the vertx-examples web-client modules start a server and call `localhost`) | the self-call rule | `fluent_chain` | **Boundary — published as an outbound row.** The self-call rule covers gRPC only (tier B, `OI-198`) |
 | Go | net/http client | `http.Get(url)`, `http.NewRequest(m, url, b)` + `client.Do` | `registration_call` / `fluent_chain` | A |
 | TS | fetch, axios | `fetch(url, {method})`, `axios.get(url)` (+ instance `baseURL`) | `registration_call` | A |
-| Python | requests, httpx, aiohttp, urllib3 | `requests.get(url)`, `httpx`, `aiohttp`, `urllib3.request("GET", url)` | `registration_call` | **A — the easiest outbound form in any language** |
+| Python | requests, httpx | `requests.get(url)`, `requests.request("get", url)`, `Session.post(url, json=…)`, `httpx.get(url)`, `httpx.Client(base_url=…)` and `AsyncClient`, with or without a `with` statement | `single_call` | ✅ **shipped** (`requests.yml`, `httpx.yml`; requests 2.34.2, httpx 0.28.1; OI-208 plan 3). A single call carries the verb (a string verb is upper-cased as the library does), the address, and a body from the library's own body keywords in its own precedence. An httpx `base_url=` joins as `Client._merge_url` does; a relative address on a client no construction reaches stays `unresolved`. An address read from `os.getenv` / `os.environ` is the expression `${KEY}` and from a settings field the key `${PREFIX_FIELD:-default}`, filled per environment from the `.env` file the class names. A body is a pydantic model, or `model_dump(by_alias=True)` of one. Pinned on `fixtures/orders-fastapi` (`tests/e2e/test_orders_fastapi.py`); polar 33, mealie 16, dispatch 13 outbound rows, each of 15 hand-checked against the code. **Stated boundaries:** `client.base_url = …` after construction is not read (OI-421); a receiver whose binding is read only by `fluent` or `combinator` is not owned (OI-422); `data=None` counts as a written body (OI-426) |
+| Python | aiohttp, urllib3 | `aiohttp.ClientSession().get(url)`, `urllib3.request("GET", url)` | `single_call` | **A — not built; the same form as the shipped requests and httpx rows** (OI-454) |
 | Rust | reqwest, hyper | `reqwest` `client.get(u).send()`, `hyper` builder | `fluent_chain` | B |
 | Swift | Alamofire | Alamofire `AF.request(url, method: .get)` | `registration_call` | A |
 | Swift | URLSession | `URLSession` + `URLRequest.httpMethod = "POST"` — **verb is a property assignment** — a shape seen nowhere else | `fluent_chain` | B |

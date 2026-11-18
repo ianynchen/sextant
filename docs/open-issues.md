@@ -421,6 +421,43 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-415 | [SEXTANT-409](https://app.plane.so/portolan/browse/SEXTANT-409/) | _simplest keeps the lexicographically first order of a guard set reached in two orders, not the outermost-first one |
 | OI-416 | [SEXTANT-410](https://app.plane.so/portolan/browse/SEXTANT-410/) | An include_router of a router a library builds loses its routes with no trace |
 | OI-417 | [SEXTANT-411](https://app.plane.so/portolan/browse/SEXTANT-411/) | Vert.x virtualHost metadata is attached to no row |
+| OI-418 | Plane: pending | The by-value form of values.object_of is untested at _chain_key and _linked_constructor, and object_of has no unit test of its own |
+| OI-419 | Plane: pending | values.object_of reads row["name"] where the readers it replaced read row.get("name"), so a construction row with no name raises instead of being skipped |
+| OI-420 | Plane: pending | _chain_key gives an absent receiver and an absent result the same None key, so a construction with neither matches a later call whose receiver is None |
+| OI-421 | Plane: pending | An httpx base set after construction (client.base_url = …) is not read: the stale base joins and the row is published resolved |
+| OI-422 | Plane: pending | The owner map for an unannotated instance field (R9) feeds single_call only: a fluent or combinator chain on such a field is still unowned |
+| OI-423 | Plane: pending | A protocol-relative address (//host/x) on an httpx client with a base is published as written, resolved, where httpx joins it onto the base's host |
+| OI-424 | Plane: pending | A relative address on a requests call resolves with a NULL peer; requests raises MissingSchema, so the row describes a call that does not run |
+| OI-425 | Plane: pending | The loader does not refuse join: append_to_base beside request_url or address_parts, which that join never reads |
+| OI-426 | Plane: pending | A body keyword written as the literal None (data=None) counts as a written body, so the row carries a body the call does not send |
+| OI-427 | Plane: pending | A body parameter typed bytes (or any type with no shape) has no descriptor, so the row states no body shape |
+| OI-428 | Plane: pending | A serialiser call's body (order.model_dump(by_alias=True)) names the shape of the receiver's WRITTEN type, so a receiver typed as a base class names the base's shape |
+| OI-429 | Plane: pending | The fluent engine does not refuse client_arg: receiver in a catalog that cannot use it |
+| OI-430 | Plane: pending | The single_call guard harness has no control for the outbound client catalogs, and test_python_outbound holds a stray non-docstring string |
+| OI-431 | Plane: pending | url_of_answer's ${…} branch ignores answer.inexact, so an inexact answer holding a placeholder is read as exact |
+| OI-432 | Plane: pending | Rows of Catalog.returns_arguments now have two shapes (an integer argument, or a mapping with an optional default), which a future reader of the table can mistake for one |
+| OI-433 | Plane: pending | The non-os branches of the scanner's library module-variable typing (variable_type) are untested |
+| OI-434 | Plane: pending | The string "environment_read" is defined in two modules |
+| OI-435 | Plane: pending | os.getenv("K") or "d" reads as a branch and is published partial with neither the key nor the default |
+| OI-436 | Plane: pending | The pydantic placeholder rule's model choice is alphabetical when a module's dependencies are empty or unrecorded, so a bare JVM module could be given the pydantic model |
+| OI-437 | Plane: pending | Catalogs are loaded twice per analyze (about 55 ms), once for the models and once for the engines |
+| OI-438 | Plane: pending | A named-.env fact file stays in the workspace and keeps matching after the code stops naming it |
+| OI-439 | Plane: pending | A .env file a settings class names is read even when the class itself is in an unscanned (ignored) path |
+| OI-440 | Plane: pending | Lower-case keys in a .env file are not matched to a settings field (python-dotenv keeps their case; pydantic-settings folds it) |
+| OI-441 | Plane: pending | Two settings classes naming different env_file values layer into one default environment, so a key from one file answers for a field of the other class |
+| OI-442 | Plane: pending | A value given at construction time (Settings(rates_url=…), _env_file=…) is not seen, so the field still reads as the environment's key |
+| OI-443 | Plane: pending | env_file=None written as a literal is treated as a variable file name, so every key is external where the true answer is the class default |
+| OI-444 | Plane: pending | A module variable set from a call with a declared return type (settings = get_settings() under @lru_cache, mealie's get_app_settings) is untyped, so its field reads stay unresolved and its guards stay test |
+| OI-445 | Plane: pending | No scanner test pins a module variable reassigned to None or set from a function call, the shapes that must leave it untyped |
+| OI-446 | Plane: pending | The settings-rung text helper (_text) wraps a one-line call and its docstring was reflowed in the same change |
+| OI-447 | Plane: pending | A Python instance-field read takes no class-body default anywhere in the plain walk: 6 polar edges went from partial to unresolved when R23 removed the default |
+| OI-448 | Plane: pending | The evidence masking regex (_QUOTED_SETTING) misses ", its default is `X`", so a module's own rule text can re-show a masked value |
+| OI-449 | Plane: pending | registration_conditions.existence_rows carries a redundant `or settings is None` clause and a docstring longer than the module's others |
+| OI-450 | Plane: pending | settings_keys is recomputed for every guarded resolve instead of once per pass |
+| OI-451 | Plane: pending | The /slack/* entry-point rows of dispatch are published with no condition, though a deployment decides whether they are mounted |
+| OI-452 | Plane: pending | A pin built from a modified pyproject lock (dispatch) freezes library-absent rows as normal, so a drift in a dependency that is absent from the lock is not visible |
+| OI-453 | Plane: pending | The field_check uv path has no test for its online fallback, --python or routing, and a drift between pyproject and the lock is invisible to a frozen sync |
+| OI-454 | Plane: pending | aiohttp and urllib3 outbound calls are not read (the REST-out Python cell is partial) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

@@ -1416,7 +1416,21 @@ above:
   share an ordinal or a value id.
 - `receiver_field` and a `field` argument name a field only where every name before it is a
   module or a class (`os.path`, `Config.client`). An attribute of a variable
-  (`app.state.client`) names no symbol: a call on it names only its receiver.
+  (`app.state.client`) names no symbol: a call on it names only its receiver. **Two
+  exceptions where the scanner can type the variable, never guess it** (fact schema 14 and 15,
+  plan 3 R16, R23):
+  - **A variable of a library module** (fact schema 14). `os.environ.get(…)` and `os.environ[…]`
+    are calls on a name the module's own header writes the type of (`environ: _Environ[str]`):
+    the call carries the owner `os/_Environ#`, where it carried none. The rule is general for
+    every `lib.var.method(…)`; the library's text is the source, as a project module's is for
+    plan 2's R17. A header that writes no type for the name gives no owner.
+  - **An attribute read on a value of a known class** (fact schema 15). `s.url` with
+    `s: Service`, or `settings.url` where `settings = Settings()` is the module variable's
+    ONE initializing construction (in another file of the module too), is
+    `{kind: field, symbol: <the field the class declares>}`, where it was `unresolved`
+    (polar: 484 such reads). A module variable written by two constructions, by a function
+    call, or reassigned is untyped and its reads stay `unresolved`; so does one set from a call
+    with a declared return type (`settings = get_settings()` under `@lru_cache`, OI-444).
 - A module-level name that branches bind to several imports (`try: import ujson as json` /
   `except ImportError: import json`) is a static field with one `field_write` per import, so
   a call on it names the field as `receiver_field`. As an argument it is a `merge`.
@@ -1460,7 +1474,11 @@ above:
   Python (whose dead arm is not read at all). A nested function or `lambda` starts with none:
   its calls run when it is called, and whoever calls it is the resolver's to follow. Absent
   where a call runs under no test, and on every JVM site. A fact set of an older vintage has no
-  guards and is refused and re-extracted.
+  guards and is refused and re-extracted. **`fields`** (fact schema 16, plan 3 R27): an optional
+  map from each read of the test the scanner can type to the field symbol a call argument would
+  name for it, in the same spelling (`settings.support_routes` to `app/settings/Settings#support_routes.`).
+  A read the scanner cannot type is absent from the map, never guessed. Absent where no read is
+  typed and on every JVM site; a fact set of the older vintage is refused and re-extracted.
 
 **`method_return` is a fact of its own, one per return instruction** (capability 9.18) —
 what a method hands back:
