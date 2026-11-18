@@ -783,9 +783,11 @@ route registered under a settings flag is stated as existing "not evaluated" wit
 the condition. Pinned on `fixtures/orders-fastapi` and on three real services against their own
 route tables: polar 33, mealie 16 and dispatch 13 outbound rows; the inbound tables are unchanged
 (881 and 293 rows, dispatch 287 of 287). The §5.2 requests/httpx row ships, so the Python REST-out
-cell changes to `◐ (1A)`: aiohttp and urllib3 are not read. The configuration work moves no §2b
+cell changes to `◐ (1A)`: aiohttp and urllib3 were not read then. They are read now (see the 2026-11-18 note below), and the cell is `✅`. The configuration work moves no §2b
 cell; it fills the address of a REST-out row, and the §2b grid scores protocols. The essay has the
-numbers and the open issues (OI-418 to OI-458).
+numbers and the open issues (OI-418 to OI-474).
+
+**Python aiohttp and urllib3 outbound calls were built 2026-11-18** (`catalogs/aiohttp.yml`, `urllib3.yml`), so the Python REST-out cell is `✅`. The corpus has no real aiohttp or urllib3 call site, so the evidence is the wire probe and the fixture, not a real service. The same branch types a module variable set from a typed call (`settings = get_settings()`), which moved mealie's `endpoint_existence` from 8 `test` / 0 `property` to 5 `test` / 3 `property`.
 
 Per-language essays — toolchain detail, payload handling, structural oddities:
 [Go](coverage/go.md) · [Rust](coverage/rust.md) · [Python](coverage/python.md) ·

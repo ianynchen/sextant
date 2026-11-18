@@ -52,6 +52,16 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Python module variables take the class of a typed call, and aiohttp and urllib3 calls are
+  read** (OI-444, OI-445, OI-454). `settings = get_settings()` is typed from the function's
+  declared return, through `functools.cache` and `lru_cache` (bare form), a star re-export
+  through a package `__init__` (explicit beats star; `__all__`, else public names), and a call in
+  the same file; the fact schema is 17. mealie `endpoint_existence` went from 8 `test` / 0
+  `property` to 5 `test` / 3 `property`; typed settings guards went from 6 to 24. `aiohttp.yml`
+  and `urllib3.yml` (`single_call`) read the verb, the address and a body; the Python REST-out
+  cell is `✅`. The corpus has no real aiohttp or urllib3 call site: the evidence is the wire probe
+  (`scripts/probes/aiohttp_urllib3_rules.py`) and the fixture. 16 issues are logged, OI-459 to
+  OI-474.
 - **Python `requests` and `httpx` calls are read, with the configuration that fills their
   addresses** (OI-208 plan 3, plan `2026-11-17-python-outbound-config-pins.md`, spec
   `2026-11-06-python-reader-design.md` §3c remainder and §3d). `requests.yml` and `httpx.yml`
