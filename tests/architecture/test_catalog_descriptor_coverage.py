@@ -85,7 +85,7 @@ _NO_DESCRIPTOR_KEY_IN_THIS_ENGINE = frozenset(
 # signature, so its name is the method, and its call sites carry no erased descriptor to pin
 # (the Python scanner writes `(*)`). The defect above — two overloads sharing a count — cannot
 # arise; listed by catalog so a JVM catalog can never borrow the exemption.
-_NO_OVERLOADS_IN_THIS_LANGUAGE = frozenset({"requests", "httpx"})
+_NO_OVERLOADS_IN_THIS_LANGUAGE = frozenset({"requests", "httpx", "aiohttp"})
 
 
 def method_rows() -> list[dict[str, str]]:

@@ -783,7 +783,7 @@ def main(argv: list[str]) -> int:
 
     # (g) Ktor's own join of a relative address onto the base
     for entry in ran:
-        if entry[0] == "MERGE":
+        if entry[0] == "MERGE" and not entry[1].endswith("(p)"):
             _, label, base, relative, result = entry
             emit(
                 f"`DefaultRequest` join: {label} (g)",
@@ -956,6 +956,16 @@ def main(argv: list[str]) -> int:
                 f"`DefaultRequest` join through {kind} call: {label} (o)",
                 "client",
                 f"base `{base}`, path `{address}` -> the engine received `{result}`",
+            )
+
+    # (p) whether the join removes dot segments (aiohttp's does)
+    for entry in ran:
+        if entry[0] == "MERGE" and entry[1].endswith("(p)"):
+            _, label, base, relative, result = entry
+            emit(
+                f"`DefaultRequest` join: {label}",
+                "client",
+                f'base `{base}`, call `get("{relative}")` -> Ktor sent `{result}`',
             )
     return 0
 

@@ -589,6 +589,30 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             None,
             None,
         ),
+        # An `aiohttp` session built with `base_url` (it ends in `/`, as aiohttp requires): the
+        # relative address appends to it, and the body is `OrderIn` by wire name (aiohttp probe).
+        (
+            "outbound",
+            "POST",
+            "labels.example",
+            "/v1/print",
+            "app/clients#label",
+            "resolved",
+            ORDER_IN,
+            None,
+        ),
+        # A session with no `base_url`: aiohttp raises on a relative address, so the path is
+        # kept and no peer is named.
+        (
+            "outbound",
+            "GET",
+            None,
+            "/parcels/{parcel_id}",
+            "app/clients#parcel",
+            "unresolved",
+            None,
+            None,
+        ),
     ],
     "endpoint_metadata": [
         (
@@ -762,6 +786,41 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             "resolved",
         ),
         ("app/clients#<clinit>", 1, "special", "httpx/_client/Client#<init>", None, "resolved"),
+        (
+            "app/clients#label",
+            0,
+            "special",
+            "aiohttp/client/ClientSession#<init>",
+            None,
+            "resolved",
+        ),
+        (
+            "app/clients#label",
+            1,
+            "virtual",
+            "aiohttp/client/ClientSession#__aenter__",
+            None,
+            "resolved",
+        ),
+        ("app/clients#label", 2, "virtual", "app/schemas/OrderIn#model_dump", None, "resolved"),
+        ("app/clients#label", 3, "virtual", "aiohttp/client/ClientSession#post", None, "resolved"),
+        (
+            "app/clients#parcel",
+            0,
+            "special",
+            "aiohttp/client/ClientSession#<init>",
+            None,
+            "resolved",
+        ),
+        (
+            "app/clients#parcel",
+            1,
+            "virtual",
+            "aiohttp/client/ClientSession#__aenter__",
+            None,
+            "resolved",
+        ),
+        ("app/clients#parcel", 3, "virtual", "aiohttp/client/ClientSession#get", None, "resolved"),
         ("app/clients#audit", 0, "virtual", "os/_Environ#get", None, "resolved"),
         ("app/clients#audit", 2, "static", "requests/api#get", None, "resolved"),
         ("app/clients#carriers", 0, "virtual", "httpx/_client/Client#request", None, "resolved"),

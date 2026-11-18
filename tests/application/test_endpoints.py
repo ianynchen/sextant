@@ -8504,9 +8504,9 @@ def test_every_shipped_alternate_owner_is_a_distinct_resolvable_symbol():
     # every single-owner catalog uses, not a one-element list — §3.1's list form is for
     # more than one spelling of ONE owner, never a wrapper around a single name. A test
     # that silently found none would pass forever once the key was renamed. `requests.yml`
-    # and `httpx.yml` (plan 3 Task 2) make eleven: each names one library's module functions
+    # and `httpx.yml` (plan 3 Task 2) and `aiohttp.yml` make twelve: each names one library's module functions
     # and its client classes, the same functions under two (three) owners.
-    assert listed == 11, f"expected eleven catalogs with an owner list, found {listed}"
+    assert listed == 12, f"expected twelve catalogs with an owner list, found {listed}"
 
 
 def test_a_malformed_owner_is_refused_before_the_endpoints_table_is_emptied(tmp_path):
