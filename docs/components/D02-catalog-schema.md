@@ -789,6 +789,21 @@ value whose type the facts name and whose `__call__` no body here has (typeshed 
 `@functools.cache`'s name as `_lru_cache_wrapper`), for the functions its receiver is, and the
 edge to each is drawn beside the library edge. A position counts positional arguments only.
 
+**`environment_reads` — a call that reads a deployment-set key by name** (plan 3 Task 3, N1,
+approved 2026-11-17). A `value-models/` file may declare `environment_reads: [{owner, method,
+key_arg, default_arg?, by}]`; each `*_arg` is an integer or `{keyword: name}` / `{arg: N,
+keyword: name}` as elsewhere. A call matching an entry is the expression `${KEY}`, KEY being the
+string its `key_arg` stands for; a key that is no string is `unresolved non_enumerable`. **The
+default the call carries is declared and never the value** (the `getenv(...) ?: default` default
+the JVM once published as resolved): `default_arg` names it so a reader can show it, and the walk
+never reads it. `value-models/python-environment.yml` states `os.getenv` and `os._Environ`'s
+`__getitem__` and `get`, the typeshed symbols; `os.environ`'s owner is the class its header writes
+(`environ: _Environ[str]`, ruling R16: a library module's variable is typed from that module's
+own text, as plan 2's R17 types a project module's). The entries ride the stated-call table
+(`Catalog.returns_arguments`, form `environment_read`) to `values._Walk._environment_read`, which
+runs where `_stated_value` does. Refused naming the file: a missing `key_arg` or `by`, an
+unknown key, an argument that is no reference, and one call stated twice.
+
 An edit here moves `_catalog_hash` (`api._MODEL_DIRECTORIES`), like an edit to any of the
 other four directories: it is knowledge a run was produced with.
 

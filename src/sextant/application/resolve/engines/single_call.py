@@ -105,6 +105,7 @@ _CONCAT = "concat"
 # calls a BINDING and §5a is careful not to name after one language's word for it. Its value
 # is reached by the sixth edge.
 _FIELD = "field"
+_UNRESOLVED = "unresolved"
 
 _DIRECTIONS = sorted(member.value for member in Direction)
 
@@ -855,7 +856,15 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 and _LAMBDA_ARG not in method
                 and not configured
                 and isinstance(url_argument, dict)
-                and url_argument.get("kind") in assembled_kinds
+                and (
+                    url_argument.get("kind") in assembled_kinds
+                    # **A call's result is a value the walk can state** (R17): the argument
+                    # names the call that made it (`source`), as a `concat` names its pieces.
+                    or (
+                        url_argument.get("kind") == _UNRESOLVED
+                        and url_argument.get("source") is not None
+                    )
+                )
             ):
                 if values is None:
                     values = cached_value_index(

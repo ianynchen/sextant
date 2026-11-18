@@ -252,6 +252,9 @@ _RETURNS = "returns"
 _RESULT_RETURNS = "result_returns"
 _RESULT_CALLS = "result_calls"
 _RETURNS_RECEIVER = "returns_receiver"
+# A call that reads a deployment-set key by name (`Catalog.returns_arguments`, form
+# `environment_read`, plan 3 Task 3): its value is the expression `${KEY}`.
+_ENVIRONMENT_READ = "environment_read"
 
 # D00 §5's argument grammar, read as answers. `long` answers `int` because the
 # distinction is a storage width and not a kind of value a consumer branches on; a catalog
@@ -866,6 +869,12 @@ class ValueIndex:
     # `returns`, `result_returns` or `result_calls` of its argument at that position. Read by
     # `_Walk._stated_value`; empty, nothing is stated and the walk reads as before.
     stated_returns: Mapping[tuple[str, str], tuple[str, int]] = dataclass_field(
+        default_factory=dict
+    )
+    # The calls that read a deployment-set key (`environment_reads` in `value-models/`),
+    # `(owner, name)` -> `(key reference, default reference or None)`. Read by
+    # `_Walk._environment_read`; the default is declared, never the value.
+    environment_reads: Mapping[tuple[str, str], tuple[Any, Any]] = dataclass_field(
         default_factory=dict
     )
     # The return type each method of a `c3` module declares (`signature.returns`), by bare
@@ -1635,6 +1644,12 @@ def value_index(
         stated_returns={
             (str(entry["owner"]), str(entry["method"])): (str(entry["form"]), int(entry["arg"]))
             for entry in returns_arguments
+            if entry["form"] != _ENVIRONMENT_READ
+        },
+        environment_reads={
+            (str(entry["owner"]), str(entry["method"])): (entry["arg"], entry.get("default"))
+            for entry in returns_arguments
+            if entry["form"] == _ENVIRONMENT_READ
         },
         declared_returns={key: value for key, value in declared_returns.items() if value},
         declared_fields={key: value for key, value in declared_fields.items() if value},
@@ -5067,6 +5082,11 @@ class _Walk:
         stated = None if row is None else self._stated_value(site, row, trail, frames)
         if stated is not None:
             return stated
+        # **A call that reads a deployment-set key by name is that key's expression**, never
+        # the default it carries (plan 3 Task 3, N1).
+        read = None if row is None else self._environment_read(site, row, trail, frames)
+        if read is not None:
+            return read
         # **The producer is a call, and this is where the walk used to be stuck** (§0b,
         # and it is the correction that design says it made three times before it stuck).
         # A backward walk reaching `session.createQueue("raw-audit")` has a `Queue` object
@@ -5252,6 +5272,62 @@ class _Walk:
         if applied is None or applied[0] != _RESULT_RETURNS:
             return None
         return self._stated_slot(site, row, applied[1], trail, frames)
+
+    def _environment_read(
+        self,
+        site: tuple[str, int],
+        row: Mapping[str, Any],
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...] | None:
+        """`${KEY}` for a call `ValueIndex.environment_reads` states, KEY being the string its
+        key argument stands for; `non_enumerable` where that argument is anything else (an open
+        set of keys). The call's default argument is never read: a default the code carries is
+        not what a deployment has, so it cannot reach the answer (D00's `getenv ?: default`
+        war story). None where the call is no stated read."""
+        reads = self._index.environment_reads
+        if not reads:
+            return None
+        owner = row.get("owner")
+        if owner is None and row.get("receiver") is not None:
+            # A method on an object (`os.environ.get`): the facts name no owner, so the
+            # receiver, read on this path, names the type whose method runs (`bound_owner`).
+            reached: list[_Reached] = []
+            for path, answer in self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames):
+                bound = bound_owner(answer)
+                stated = None if bound is None else reads.get((bound, str(row["name"])))
+                if stated is not None:
+                    reached.extend(self._environment_key(site, row, stated[0], path, frames))
+            return tuple(reached) or None
+        stated = reads.get((str(owner), str(row["name"])))
+        if stated is None:
+            return None
+        return self._environment_key(site, row, stated[0], trail, frames)
+
+    def _environment_key(
+        self,
+        site: tuple[str, int],
+        row: Mapping[str, Any],
+        key: Any,
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...]:
+        """The expression of the key argument `key` names, or `non_enumerable` (see
+        `_environment_read`)."""
+        slot = argument_slot(row["arguments"] or [], key)
+        if slot is None or slot == UNPACKED_SLOT:
+            return _only(trail, _unresolved(NON_ENUMERABLE))
+        return tuple(
+            (
+                reached_trail,
+                Answer(kind=EXPRESSION, value="${" + str(answer.value) + "}")
+                if answer.kind == LITERAL and answer.literal_kind == STRING
+                else _unresolved(NON_ENUMERABLE),
+            )
+            for reached_trail, answer in self._resolve(
+                (_SLOT, site[0], site[1], slot), trail, frames
+            )
+        )
 
     def _stated_slot(
         self,

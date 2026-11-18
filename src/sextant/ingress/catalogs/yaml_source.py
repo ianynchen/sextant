@@ -397,6 +397,36 @@ class YamlCatalogSource:
                 stated[key] = (read, path)
         return tuple(read for _, (read, _) in sorted(stated.items()))
 
+    def environment_reads(self) -> tuple[dict[str, Any], ...]:
+        """Every entry `value-models/*.yml` declares under `environment_reads` (plan 3 Task 3,
+        approved N1): a call that reads a deployment-set key by name, so its value is the
+        expression `${KEY}` and never what the code falls back to. Each entry is `{owner,
+        method, key_arg, default_arg?, by}`: `key_arg` the argument naming the key, `default_arg`
+        the argument carrying a default (declared, never the value); both an integer or
+        `{keyword: name}` / `{arg: N, keyword: name}` as every `*_arg` is. Returned in the
+        `returns_arguments` row shape with form `environment_read`, so it rides the same
+        plumbing to the value walk. A call stated twice is refused naming the file."""
+        stated: dict[tuple[str, str], dict[str, Any]] = {}
+        for path in sorted((self._directory / "value-models").glob("*.yml")):
+            raw = _load(path.read_text(encoding="utf-8"))
+            declared = raw.get("environment_reads") if isinstance(raw, dict) else None
+            if declared is None:
+                continue
+            if not isinstance(declared, list) or not declared:
+                raise CatalogError(
+                    f"loading value model {path}: `environment_reads` must be a non-empty list"
+                )
+            for entry in declared:
+                read = _environment_read(entry, path)
+                key = (read["owner"], read["method"])
+                if key in stated:
+                    raise CatalogError(
+                        f"loading value model {path}: `environment_reads` states "
+                        f"`{entry['owner']}.{entry['method']}` twice — one call is stated once"
+                    )
+                stated[key] = read
+        return tuple(read for _, read in sorted(stated.items()))
+
     def value_model(self) -> list[dict[str, Any]]:
         """The identity of every PRODUCING call this source knows (spec 2026-09-22 §2,
         D02 §1f): which argument of a call carries the value its result stands for.
@@ -491,7 +521,7 @@ class YamlCatalogSource:
         hand_off_effects = self.hand_off_effects()
         # What a stated library call does with one of its arguments (`value-models/`'s
         # `returns_argument`, design 2026-11-06-reading-decorators §3d), read once likewise.
-        returns_arguments = self.returns_arguments()
+        returns_arguments = self.returns_arguments() + self.environment_reads()
         # The conformance table, read once per source for the same reason: it is
         # knowledge about TYPES rather than about any one catalog, and the engines need
         # it to refuse a producer whose return type cannot be the declared parameter
@@ -2132,6 +2162,40 @@ def _returns_argument(entry: Any, path: Path) -> dict[str, Any]:
         "form": forms[0],
         # The receiver is no argument: the position is unused for that form.
         "arg": 0 if forms[0] == _RETURNS_RECEIVER else _arg_index(entry[forms[0]], where),
+        "by": str(entry["by"]),
+    }
+
+
+# The `returns_arguments` form an `environment_reads` entry is read as (`values.ENVIRONMENT_READ`).
+ENVIRONMENT_READ = "environment_read"
+
+
+def _environment_read(entry: Any, path: Path) -> dict[str, Any]:
+    """One `environment_reads` entry, checked and converted to a `returns_arguments` row."""
+    where = f"loading value model {path}: an `environment_reads` entry"
+    if not isinstance(entry, dict):
+        raise CatalogError(f"{where} is a mapping, got {entry!r}")
+    key = entry.get("key_arg")
+    default = entry.get("default_arg")
+    if (
+        set(entry) - {"owner", "method", "key_arg", "default_arg", "by"}
+        or not isinstance(entry.get("owner"), str)
+        or not isinstance(entry.get("method"), str)
+        or not str(entry["method"]).isidentifier()
+        or not entry.get("by")
+        or not _is_argument_reference(key)
+        or (default is not None and not _is_argument_reference(default))
+    ):
+        raise CatalogError(
+            f"{where} is `{{owner, method, key_arg, default_arg?, by}}` with each `*_arg` an "
+            f"integer or `{{keyword: name}}`, got {entry!r}"
+        )
+    return {
+        "owner": type_descriptor(str(entry["owner"])),
+        "method": str(entry["method"]),
+        "form": ENVIRONMENT_READ,
+        "arg": key,
+        "default": default,
         "by": str(entry["by"]),
     }
 

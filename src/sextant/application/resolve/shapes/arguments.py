@@ -469,7 +469,15 @@ def url_of_answer(answer: "Answer | None") -> tuple[str | None, str | None, str]
             resolution = str(Resolution.NARROWED)
         return peer, path, resolution
     if answer.kind == EXPRESSION:
-        return url_of({"kind": EXPRESSION, "value": str(answer.value)})
+        text = str(answer.value)
+        if carries_expression(text) and not _holes(text):
+            # **A deployment-set value the code read by name** (`os.getenv("HOST")`, plan 3
+            # Task 3): the walk stated the whole address, so it stays WHOLE in `path`, peer NULL,
+            # as a `${…}` literal does (`test_an_absolute_base_with_an_embedded_placeholder_is_
+            # never_split`), for the per-environment join to fill. Only a walked answer is
+            # read so: `url_of`'s own `${…}` expression stays unresolved.
+            return None, text, str(Resolution.RESOLVED)
+        return url_of({"kind": EXPRESSION, "value": text})
     return None, None, str(Resolution.UNRESOLVED)
 
 

@@ -1,7 +1,8 @@
 """The services an order talks to, called the ways a service calls them: `requests` at module
 level and through a `Session`, `httpx` through clients holding a `base_url`, and one
-`AsyncClient` handed to a route by a dependency."""
+`AsyncClient` handed to a route by a dependency, and addresses a deployment sets."""
 
+import os
 from collections.abc import AsyncIterator
 
 import httpx
@@ -81,3 +82,11 @@ async def notifier() -> AsyncIterator[httpx.AsyncClient]:
 
 async def notify(client: httpx.AsyncClient, order_id: str) -> None:
     await client.post("events", json={"order": order_id})
+
+
+def audit() -> None:
+    requests.get(f"http://{os.environ.get('AUDIT_HOST', 'audit.local')}/audit")
+
+
+def webhook() -> None:
+    requests.post(os.environ["WEBHOOK_URL"])

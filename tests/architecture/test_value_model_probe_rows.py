@@ -66,10 +66,12 @@ def declared_identities() -> dict[str, list[dict[str, object]]]:
         # same two rules.
         # `returns_argument` (design 2026-11-06-reading-decorators §3d) states what a call hands
         # back, read by every catalog at once: held to the same two rules too.
+        # `environment_reads` (plan 3 Task 3) states what a call reads from the deployment.
         found[path.stem] = [
             *(document.get("identified_by") or []),
             *(document.get("hand_off_effects") or []),
             *(document.get("returns_argument") or []),
+            *(document.get("environment_reads") or []),
         ]
     return found
 

@@ -551,6 +551,19 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
         ),
         # A client handed in by a caller nothing reads: the path is kept, no peer (Review Focus 3).
         ("outbound", "GET", None, "/status", "app/clients#status", "unresolved", None, None),
+        # A deployment-set address read by name: the expression, never the default the call
+        # carries (plan 3 Task 3, rulings N1 and R17); the f-string keeps the whole address.
+        (
+            "outbound",
+            "GET",
+            None,
+            "http://${AUDIT_HOST}/audit",
+            "app/clients#audit",
+            "resolved",
+            None,
+            None,
+        ),
+        ("outbound", "POST", None, "${WEBHOOK_URL}", "app/clients#webhook", "resolved", None, None),
         # The client a dependency yields (`Depends(notifier)` on `create`), its base joined.
         (
             "outbound",
@@ -735,7 +748,11 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             "resolved",
         ),
         ("app/clients#<clinit>", 1, "special", "httpx/_client/Client#<init>", None, "resolved"),
+        ("app/clients#audit", 0, "virtual", "os/_Environ#get", None, "resolved"),
+        ("app/clients#audit", 2, "static", "requests/api#get", None, "resolved"),
         ("app/clients#carriers", 0, "virtual", "httpx/_client/Client#request", None, "resolved"),
+        ("app/clients#webhook", 0, "virtual", "os/_Environ#__getitem__", None, "resolved"),
+        ("app/clients#webhook", 1, "static", "requests/api#post", None, "resolved"),
         (
             "app/clients#ledger_client",
             0,
