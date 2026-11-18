@@ -400,9 +400,9 @@ class YamlCatalogSource:
     def environment_reads(self) -> tuple[dict[str, Any], ...]:
         """Every entry `value-models/*.yml` declares under `environment_reads` (plan 3 Task 3,
         approved N1): a call that reads a deployment-set key by name, so its value is the
-        expression `${KEY}` and never what the code falls back to. Each entry is `{owner,
+        expression `${KEY}`, or `${KEY:-default}` with a literal default. Each entry is `{owner,
         method, key_arg, default_arg?, by}`: `key_arg` the argument naming the key, `default_arg`
-        the argument carrying a default (declared, never the value); both an integer or
+        the argument carrying a default (rendered after the key); both an integer or
         `{keyword: name}` / `{arg: N, keyword: name}` as every `*_arg` is. Returned in the
         `returns_arguments` row shape with form `environment_read`, so it rides the same
         plumbing to the value walk. A call stated twice is refused naming the file."""

@@ -3,7 +3,7 @@ displayName: Reads of the process environment, which a deployment sets
 
 # WHAT THIS FILE IS (D02 §1f, `environment_reads`; plan 3 Task 3, approved N1). A call that
 # reads a key by name is the expression `${KEY}` — the deployment's to set, as a `${…}`
-# placeholder is. A default the call carries is declared and never the value; a key that is no
+# placeholder is. A literal default renders as `${KEY:-default}`, used only where nothing sets the key; a key that is no
 # literal is `non_enumerable`. The symbols are the ones typeshed declares: `os.getenv`, and
 # `__getitem__` and `get` on `os._Environ`, the class of `os.environ`.
 
