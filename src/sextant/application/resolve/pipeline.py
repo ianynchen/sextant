@@ -9,7 +9,11 @@ from sextant.application.ports.catalogs import CatalogSource
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.bean_conditions import record_bean_conditions
 from sextant.application.resolve.call_edges import record_call_edges
-from sextant.application.resolve.config import resolve_config, scope_config_models
+from sextant.application.resolve.config import (
+    resolve_config,
+    scope_config_models,
+    with_config_model,
+)
 from sextant.application.resolve.dispatch_hops import record_dispatch_hops, record_key_handlers
 from sextant.application.resolve.dispatch_registrations import record_dispatch_registrations
 from sextant.application.resolve.endpoint_attributes import record_endpoint_attributes
@@ -166,7 +170,7 @@ def resolve(
     reset_value_index()
     with _timed("load_facts"):
         loaded = workspace.load_facts(fact_root)
-    declared = scope_config_models(workspace, catalogs.load())
+    declared = with_config_model(scope_config_models(workspace, catalogs.load()))
     # M04 pass 2 (D01, D02 §2i): the generic config-model interpreter, run
     # before endpoint derivation — the `config_join` engine (2F design §3)
     # that will consume `resolved_config` runs as an endpoint style, so its

@@ -67,6 +67,8 @@ from typing import Any, NamedTuple
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dependencies import _declared_coordinates
+from sextant.application.resolve.dispatch import dispatch_of
+from sextant.application.resolve.settings_fields import CONFIG_MODEL_FORM, settings_keys
 from sextant.application.resolve.values import CYCLE, EXTERNAL
 
 # The relaxed-binding rule this pass has always used, now in `domain` because
@@ -126,6 +128,28 @@ def scope_config_models(workspace: Workspace, catalogs: list[Catalog]) -> list[C
     ]
 
 
+def with_config_model(catalogs: list[Catalog]) -> list[Catalog]:
+    """`catalogs`, each carrying the module's config model (`config_model_of`) to the value walk
+    as one more `returns_arguments` row (form `settings_fields.CONFIG_MODEL_FORM`): its
+    placeholders, and its `settings_form` and named-file keyword where it declares them (plan 3
+    Task 5, R24, R25). Called once the models are scoped (`scope_config_models`), so the walk
+    renders an expression in the delimiters `resolved_peers` reads it with. Unchanged where the
+    module has no model."""
+    model = config_model_of(catalogs)
+    if not model:
+        return catalogs
+    row = {
+        "form": CONFIG_MODEL_FORM,
+        "placeholders": placeholder_rule(model)[0],
+        "settings_form": model.get("settings_form"),
+        "sources": list(model.get("sources", [])),
+    }
+    return [
+        replace(catalog, returns_arguments=(*catalog.returns_arguments, row))
+        for catalog in catalogs
+    ]
+
+
 def placeholder_rule(model: Mapping[str, Any]) -> tuple[dict[str, str], str]:
     """A config model's `placeholders` and `key_matching` (D02 §2i), defaulted as this
     pass defaults them — what `substitute` and a lookup beside it need to read a
@@ -164,10 +188,42 @@ def resolve_config(workspace: Workspace, catalogs: list[Catalog]) -> None:
         _validate_model(catalog)
     entries = workspace.query("config_entries")
     documents = {str(row["document_id"]): row for row in workspace.query("documents")}
+    written: set[tuple[str, str]] = set()
     for catalog in declared:
         rows = _resolve_model(catalog.config_model, entries, documents)
+        written.update((str(row["key"]), str(row["environment"])) for row in rows)
         if rows:
             workspace.derive("resolved_config_insert", rows=rows)
+    rows = _keys_a_variable_file_may_set(workspace, config_model_of(catalogs), written)
+    if rows:
+        workspace.derive("resolved_config_insert", rows=rows)
+
+
+def _keys_a_variable_file_may_set(
+    workspace: Workspace, model: Mapping[str, Any], written: set[tuple[str, str]]
+) -> list[dict[str, object]]:
+    """R26: each key of a settings class whose file is named through no literal, `external` in
+    the model's default environment with the detail naming that expression, where no file read
+    already gives the key a row. Empty for a model with no `settings_form`."""
+    if not model.get("settings_form"):
+        return []
+    environment = str(model.get("profiles", {}).get("default_profile", "default"))
+    rows: dict[str, dict[str, object]] = {}
+    for found in settings_keys(workspace, model, workspace.once(dispatch_of)).values():
+        if found.key is None or found.file is None or (found.key, environment) in written:
+            continue
+        rows.setdefault(
+            found.key,
+            {
+                "key": found.key,
+                "value": None,
+                "source": None,
+                "environment": environment,
+                "unresolved_reason": EXTERNAL,
+                "unresolved_detail": found.file_detail(),
+            },
+        )
+    return [rows[key] for key in sorted(rows)]
 
 
 def _validate_model(catalog: Catalog) -> None:

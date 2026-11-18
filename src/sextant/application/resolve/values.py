@@ -146,6 +146,7 @@ from sextant.application.resolve.beans import (
 )
 from sextant.application.resolve.dispatch import DYNAMIC, Dispatch, dispatch_of
 from sextant.application.resolve.effective_calls import effective_call_sites
+from sextant.application.resolve.settings_fields import CONFIG_MODEL_FORM, settings_keys
 from sextant.domain.config_keys import carries_expression
 from sextant.domain.symbols import (
     bare_descriptor,
@@ -882,6 +883,14 @@ class ValueIndex:
     environment_reads: Mapping[tuple[str, str], tuple[Any, Any]] = dataclass_field(
         default_factory=dict
     )
+    # The delimiters of the module's config model (`config.with_config_model`), None where it
+    # has none: an environment read's literal default renders after its `default_separator`
+    # (plan 3 ruling R25), so `resolved_peers` reads it back with the same rule.
+    placeholders: Mapping[str, str] | None = None
+    # Each settings field's answer by bare field symbol (`settings_fields.settings_keys`): its
+    # key expression, or `not_readable` where a name rule is no literal. Read by `_Walk._value`
+    # before any write of the field (plan 3 Task 5, R24).
+    settings_fields: Mapping[str, "Answer"] = dataclass_field(default_factory=dict)
     # The return type each method of a `c3` module declares (`signature.returns`), by bare
     # descriptor, as the fact writes it; a method two facts declare differently has none.
     # Read only by the type reader (`_Walk._declared_answers`). Empty for a JVM module, whose
@@ -1508,12 +1517,28 @@ def value_index(
     produced: dict[str, list[tuple[str, Mapping[str, Any]]]] = {}
     stored: set[tuple[str, int]] = set()
     stored_parameters: set[tuple[str, int]] = set()
+    field_rows = list(workspace.query("fields"))
+    instance_fields = frozenset(
+        bare_descriptor(str(row["symbol"])) for row in field_rows if not row["static"]
+    )
     for row in workspace.query("field_writes"):
         _record_store(row, stored, stored_parameters)
         written = row.get("value")
         if written is None or row["field"] is None:
             continue
         if row.get("written_by") is not None and str(row["written_by"]) in dead:
+            continue
+        # **A class-body value of an instance field is a default, not what an object holds**
+        # (plan 3 ruling R23): a model's constructor the code never writes (pydantic's,
+        # a dataclass's) sets the field per call, so reading the default as the value would
+        # publish a per-call value as a fact. Only the settings rung reads it, as the
+        # configuration default it is (`settings_fields`). A JVM class initializer writes
+        # static fields alone, so this never applies there.
+        if (
+            by_name
+            and CLASS_BODY in str(row.get("written_by"))
+            and bare_descriptor(str(row["field"])) in instance_fields
+        ):
             continue
         entry = json.loads(str(written)) if isinstance(written, str) else written
         if not isinstance(entry, dict):
@@ -1579,7 +1604,6 @@ def value_index(
             called_at.setdefault(str(row["callee"]), []).append(
                 (str(row["caller"]), int(str(row["ordinal"])))
             )
-    field_rows = list(workspace.query("fields"))
     static_fields = frozenset(
         bare_descriptor(str(row["symbol"])) for row in field_rows if row["static"]
     )
@@ -1597,6 +1621,8 @@ def value_index(
         for key, row in sites.items()
         if key not in reached and row.get("owner") is not None
     )
+    # The module's config model, as `config.with_config_model` hands it over (plan 3 Task 5).
+    model = next((entry for entry in returns_arguments if entry["form"] == CONFIG_MODEL_FORM), None)
     return ValueIndex(
         sites=sites,
         receivers={key: tuple(value) for key, value in receivers.items()},
@@ -1649,13 +1675,27 @@ def value_index(
         stated_returns={
             (str(entry["owner"]), str(entry["method"])): (str(entry["form"]), int(entry["arg"]))
             for entry in returns_arguments
-            if entry["form"] != _ENVIRONMENT_READ
+            if entry["form"] not in (_ENVIRONMENT_READ, CONFIG_MODEL_FORM)
         },
         environment_reads={
             (str(entry["owner"]), str(entry["method"])): (entry["arg"], entry.get("default"))
             for entry in returns_arguments
             if entry["form"] == _ENVIRONMENT_READ
         },
+        placeholders=None if model is None else dict(model["placeholders"]),
+        settings_fields=(
+            {}
+            if model is None or not by_name
+            else {
+                field: (
+                    _unresolved(NOT_READABLE)
+                    if expression is None
+                    else Answer(kind=EXPRESSION, value=expression)
+                )
+                for field, found in settings_keys(workspace, model, dispatch).items()
+                for expression in (found.expression(model["placeholders"]),)
+            }
+        ),
         declared_returns={key: value for key, value in declared_returns.items() if value},
         declared_fields={key: value for key, value in declared_fields.items() if value},
         class_parameters=_class_parameters(workspace) if by_name else {},
@@ -3908,6 +3948,11 @@ class _Walk:
             symbol = argument.get("symbol")
             if symbol is None:
                 return _only(trail, _unresolved(NOT_READABLE))
+            # A settings field is its configuration key, whatever its class body writes
+            # (plan 3 Task 5, R24): the deployment decides the value.
+            setting = self._index.settings_fields.get(bare_descriptor(str(symbol)))
+            if setting is not None:
+                return _only(trail, setting)
             # The unseen-object rule (`_binding`, OI-222) is decided HERE, where the reading
             # method is known, and marks the position only when it applies: every other read
             # keeps the one position a binding has always had, so memo and cycle detection
@@ -5330,10 +5375,20 @@ class _Walk:
             if written is not None and written.get("kind") in _LITERAL_KINDS
             else None
         )
+        # R25: where the module's config model is known, a literal default renders after its
+        # separator, as a settings field's does; the key alone otherwise.
+        marks = self._index.placeholders
+        rendered = (
+            "" if marks is None or default is None else marks["default_separator"] + str(default)
+        )
         return tuple(
             (
                 reached_trail,
-                Answer(kind=EXPRESSION, value="${" + str(answer.value) + "}", default=default)
+                Answer(
+                    kind=EXPRESSION,
+                    value="${" + str(answer.value) + rendered + "}",
+                    default=default,
+                )
                 if answer.kind == LITERAL and answer.literal_kind == STRING
                 else _unresolved(NON_ENUMERABLE),
             )

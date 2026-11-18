@@ -26,11 +26,25 @@ config_model:
   # How a settings class is written: the class-body field holding the config call, and the calls
   # that make it (`SettingsConfigDict(...)`, or a dict display, which the scanner writes as the
   # `dict(...)` it builds). The same forms `shape-models/pydantic.yml` reads in its own context.
+  #
+  # Plan 3 Task 5 (N2, R24): which classes are settings classes and which key each field is read
+  # from, for the value walk (`resolve/settings_fields.py`). The probe's rules ("Environment
+  # name", "Case"): the key is `env_prefix` + the field name; an alias (`validation_alias`
+  # before `alias`) replaces the name and takes no prefix under the default
+  # `env_prefix_target="variable"` ("alias" prefixes aliases only, "all" both); names compare
+  # case-insensitively unless `case_sensitive=True`. A rule written as no literal leaves the
+  # key unknown (ruling R4).
   settings_form:
     config_field: model_config
     config_call:
       - pydantic_settings.main.SettingsConfigDict.<init>
       - builtins.dict.<init>
+    settings_base: pydantic_settings.main.BaseSettings
+    prefix_key:
+      keyword: env_prefix
+      target: { keyword: env_prefix_target, default: variable, name: [variable, all], alias: [alias, all] }
+    name_from: [validation_alias, alias, name]
+    case_insensitive: { default: true, unless: { keyword: case_sensitive, value: true } }
   # python-dotenv expands `${NAME}` and `${NAME:-default}` in every value, quoted or not.
   placeholders:
     open: "${"

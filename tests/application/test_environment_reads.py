@@ -42,17 +42,20 @@ def _addresses(tmp_path, libraries, body: str) -> list[tuple[object, ...]]:
     ],
 )
 def test_an_environment_read_in_a_url_is_the_key_expression(tmp_path, libraries, read):
-    """The default a call carries is never the value: every spelling reads `${HOST}`."""
+    """The default a call carries is never the value: every spelling reads `${HOST}`, a literal
+    default rendered inside it after the model's separator (plan 3 ruling R25)."""
+    key = "HOST:-localhost" if "localhost" in read else "HOST"
     assert _addresses(tmp_path, libraries, f"    requests.get(f'http://{{{read}}}/x')\n") == [
-        (None, "http://${HOST}/x", "resolved")
+        (None, f"http://${{{key}}}/x", "resolved")
     ]
 
 
 @pytest.mark.parametrize("read", ["os.getenv('U')", "os.environ['U']", "os.environ.get('U', 'd')"])
 def test_an_environment_read_is_the_whole_address(tmp_path, libraries, read):
     """R17: an argument that is a call's result resolves through the same walk as any value."""
+    key = "U:-d" if "'d'" in read else "U"
     assert _addresses(tmp_path, libraries, f"    requests.get({read})\n") == [
-        (None, "${U}", "resolved")
+        (None, f"${{{key}}}", "resolved")
     ]
 
 

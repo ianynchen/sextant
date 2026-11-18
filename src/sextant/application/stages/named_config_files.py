@@ -19,22 +19,11 @@ from pathlib import Path
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.config import FROM_ARGUMENT
+from sextant.application.resolve.settings_fields import config_call_forms
 from sextant.domain.factfile import read_fact_tree
 from sextant.domain.facts import CallArgument, CallSiteFact, FieldWriteFact
 from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.resource_files import named_file
-from sextant.domain.symbols import type_descriptor
-
-
-def _forms(dotted: str) -> set[tuple[str, str]]:
-    """The (owner, name) pairs the extractor may write for one catalog call (`a.b.C.<init>`):
-    a class construction, or — for a class called as a function — the module's own call."""
-    owner, _, method = dotted.rpartition(".")
-    module, _, cls = owner.rpartition(".")
-    forms = {(type_descriptor(owner), method)}
-    if method == "<init>" and module:
-        forms.add((type_descriptor(module), cls))
-    return forms
 
 
 def _names(argument: CallArgument) -> list[str] | None:
@@ -65,7 +54,7 @@ def named_config_files(
     found: list[Path] = []
     for keyword, form in selected:
         field = f"#{form['config_field']}."
-        calls = {pair for dotted in form["config_call"] for pair in _forms(dotted)}
+        calls = {pair for dotted in form["config_call"] for pair in config_call_forms(dotted)}
         token = f'"keyword":"{keyword}"'.encode()
         for _, document, facts in read_fact_tree(fact_root, containing=token):
             if document.origin is not None or document.header_only:
