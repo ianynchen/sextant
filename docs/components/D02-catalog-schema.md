@@ -36,7 +36,7 @@ matches:
 | Field | Meaning |
 |---|---|
 | `id` | Stable. Appears in `evidence` and in skip reports. |
-| `style` | Which engine interprets `matches` |
+| `style` | Which engine interprets `matches`. Required with `matches`; a **declaration-only** file (amended 2026-11-17) carries neither and instead requires `id`, `detect` and a `config_model`, and no engine runs it |
 | `protocol`, `direction`, `format` | From [D00](D00-fact-schema.md)'s closed sets. **Defaults** — a match may resolve them differently, see §2c. Omitted only by a NON-WIRE style, below |
 | `detect` | Coordinates that make this catalog's framework rule applicable to a module, plus `required`, `satisfied_by` and `superseded_by`. **Read since Phase 2O Task 6 — by two styles, and by any catalog setting `detect.required`; `superseded_by` is read for every catalog that declares it** — see below |
 | `measured` | The artifact(s) and version(s) this catalog's rule was verified against, and the probe that verified it — §1a |

@@ -61,10 +61,12 @@ names the key and the place. No code branches on the detail.
 """
 
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import replace
 from typing import Any, NamedTuple
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
+from sextant.application.resolve.dependencies import _declared_coordinates
 from sextant.application.resolve.values import CYCLE, EXTERNAL
 
 # The relaxed-binding rule this pass has always used, now in `domain` because
@@ -87,6 +89,11 @@ class Unresolved(NamedTuple):
     detail: str
 
 
+# D02 §2i's source entry naming a file by an argument of the code's call (`stages/
+# named_config_files.py` reads the name), and the one document language such a read produces.
+FROM_ARGUMENT = "from_argument"
+NAMED_FILE_LANGUAGE = "dotenv"
+
 _DEFAULT_PLACEHOLDERS = {"open": "${", "close": "}", "default_separator": ":"}
 
 
@@ -97,6 +104,26 @@ def config_model_of(catalogs: Sequence[Catalog]) -> Mapping[str, Any]:
     that asks what a placeholder IS (the `scheduled_work` engines and
     `resolve/resolved_schedules.py`) asks the same model and cannot disagree on the opener."""
     return next((c.config_model for c in catalogs if c.config_model), {})
+
+
+def scope_config_models(workspace: Workspace, catalogs: list[Catalog]) -> list[Catalog]:
+    """`catalogs`, each model its module cannot use left out of it (plan 3 Task 4): a model
+    belongs to a module whose own dependencies select its catalog, or to one whose build speaks
+    the same kind of coordinate (a `group:artifact` against a bare distribution name) and
+    selects none, as a Quarkus module has always read the Spring model. `config_model_of` then
+    takes the first model of what is left, and cannot pick one family's for a module of the other. Where the module recorded no dependencies nothing is left out."""
+    declared = _declared_coordinates(workspace)
+    if not declared:
+        return catalogs
+    grouped = any(":" in one for one in declared)
+    return [
+        replace(catalog, config_model={})
+        if catalog.config_model
+        and declared.isdisjoint(catalog.detect_coordinates)
+        and any((":" in one) != grouped for one in catalog.detect_coordinates)
+        else catalog
+        for catalog in catalogs
+    ]
 
 
 def placeholder_rule(model: Mapping[str, Any]) -> tuple[dict[str, str], str]:
@@ -193,10 +220,16 @@ def _resolve_model(
     # base FILE), 2 = locked via the filename marker (a variant FILE).
     matches: list[tuple[int, str, int, str | None, int]] = []
     for source_index, source in enumerate(sources):
-        pattern = str(source["pattern"])
         for document_id, document in documents.items():
             relative_path = str(document["relative_path"])
-            filename_profile = _match_source(pattern, relative_path, allow_filename_profile)
+            if FROM_ARGUMENT in source:
+                # A file the code names: the only documents of this language are ones a read by
+                # name produced (the walk never claims one), and a file has no profile.
+                filename_profile = "" if document["language"] == NAMED_FILE_LANGUAGE else None
+            else:
+                filename_profile = _match_source(
+                    str(source["pattern"]), relative_path, allow_filename_profile
+                )
             if filename_profile is None:
                 continue
             doc_indices = sorted({index for (doc, index) in by_doc if doc == document_id})

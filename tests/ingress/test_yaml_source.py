@@ -897,3 +897,42 @@ def test_a_group_less_jvm_coordinate_is_still_refused(tmp_path: Path):
         YamlCatalogSource(tmp_path).load()
 
     assert "detect.coordinates" in str(raised.value)
+
+
+# --- A declaration-only catalog (D02 §1, amended 2026-11-17, R20) ------------------------------
+
+_DECLARATION = (
+    "id: settings-lib\ndetect:\n  coordinates: [settings-lib]\n"
+    "measured:\n  - { artifact: settings-lib, versions: ['1'], identity: reported, by: p.md }\n"
+    "config_model:\n  sources:\n    - { from_argument: env_file }\n"
+)
+
+
+def test_a_catalog_may_declare_a_model_and_no_style_or_matches(tmp_path: Path):
+    """The family's config owner need not be a routing catalog: no engine ever runs it."""
+    (tmp_path / "settings-lib.yml").write_text(_DECLARATION, encoding="utf-8")
+
+    [catalog] = YamlCatalogSource(tmp_path).load()
+
+    assert (catalog.id, catalog.style, catalog.matches) == ("settings-lib", "", {})
+    assert catalog.detect_coordinates == ("settings-lib",)
+    assert catalog.config_model == {"sources": [{"from_argument": "env_file"}]}
+
+
+@pytest.mark.parametrize(
+    "text, missing",
+    [
+        ("id: bare\ndetect:\n  coordinates: [x]\n", "config_model"),
+        (_DECLARATION.replace("detect:\n  coordinates: [settings-lib]\n", ""), "detect"),
+        (_DECLARATION.replace("id: settings-lib\n", ""), "id"),
+        (_DECLARATION + "style: fluent\n", "matches"),
+        (_DECLARATION + "matches: {}\n", "style"),
+    ],
+)
+def test_a_catalog_with_neither_or_half_a_routing_declaration_is_refused(
+    tmp_path: Path, text: str, missing: str
+):
+    (tmp_path / "broken.yml").write_text(text, encoding="utf-8")
+
+    with pytest.raises(CatalogError, match=f"broken.yml.*`{missing}`"):
+        YamlCatalogSource(tmp_path).load()

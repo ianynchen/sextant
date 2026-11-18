@@ -821,7 +821,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**121 of 135 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**122 of 136 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -917,6 +917,8 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `pekko-pubsub-send` | `org.apache.pekko:pekko-cluster-tools_2.13` | 1.1.3 |
 | `pekko-pubsub-subscribe` | `org.apache.pekko:pekko-cluster-tools_2.13` | 1.1.3 |
 | `pekko-receptionist` | `org.apache.pekko:pekko-actor-typed_2.13` | 1.1.3 |
+| `pydantic-settings` | `pydantic-settings` | 2.16.3 |
+|  | `python-dotenv` | 1.2.4 |
 | `quarkus-consume-event` | `io.quarkus:quarkus-vertx` | 3.17.5 |
 |  | `io.quarkus:quarkus-vertx-deployment` | 3.17.5 |
 | `quarkus-reactive-routes` | `io.quarkus:quarkus-reactive-routes` | 3.17.5 |

@@ -12580,6 +12580,28 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "pydantic-settings.env-file-is-read-from-the-model-config-field": Guard(
+        what="only the call written as the settings class's `model_config` names its env file (plan 3 Task 4)",
+        why="without it any `SettingsConfigDict(env_file=...)` anywhere in the module would open that file as configuration",
+        edits=(
+            Edit(
+                path="sextant/application/stages/named_config_files.py",
+                find="if not (isinstance(fact, FieldWriteFact) and fact.field.endswith(field)):",
+                replace="if not isinstance(fact, FieldWriteFact):",
+            ),
+        ),
+    ),
+    "pydantic-settings.model-is-selected-by-the-modules-dependencies": Guard(
+        what="a module reads the file its settings class names only when its own dependencies select the settings catalog",
+        why="without it every module that merely calls a function of the same name would open the file it names",
+        edits=(
+            Edit(
+                path="sextant/application/stages/named_config_files.py",
+                find="and not set(catalog.detect_coordinates).isdisjoint(module.dependency_coordinates)",
+                replace="and True",
+            ),
+        ),
+    ),
 }
 
 
@@ -12769,6 +12791,9 @@ def copy_tree(destination: Path) -> Path:
         # kotlinc's coroutine classes, field accessors and collector classes, read off real
         # facts.
         "orders-kotlin-channels",
+        # The Python fixture's locked environment: the Python readers' tests scan against the
+        # libraries installed in it (`orders_fastapi_env`), so a pinned one needs it.
+        "orders-fastapi",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

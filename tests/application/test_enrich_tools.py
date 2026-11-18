@@ -1122,6 +1122,7 @@ def test_config_bearing_extensions_pins_both_directions_against_the_real_registr
     config_readers = [reader for reader in READERS if reader.reads_schema_sources is False]
     schema_readers = [reader for reader in READERS if reader.reads_schema_sources is True]
     assert {reader.__class__.__name__ for reader in config_readers} == {
+        "DotenvReader",
         "PropertiesReader",
         "YamlConfigReader",
     }

@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import importlib.metadata
 import inspect
+import io
 import os
 import tempfile
 from pathlib import Path
 
+from dotenv import dotenv_values
 from pydantic import AliasChoices, Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings.sources.providers import dotenv as _provider
 
 print(
     "versions:",
@@ -243,6 +246,58 @@ clean()
 rule(
     "sources, highest first: init kwargs, environment, dotenv, secrets dir, then field default "
     "(settings_customise_sources returns init_settings, env_settings, dotenv_settings, file_secret_settings)"
+)
+
+# 6. The dotenv file's syntax: pydantic-settings reads the file with python-dotenv's `dotenv_values`
+# (interpolation on), so these are python-dotenv's own rules (plan 3 Task 4).
+assert "dotenv_values(file_path, encoding=encoding)" in inspect.getsource(_provider)
+
+
+def env(text: str) -> dict[str, str | None]:
+    return dict(dotenv_values(stream=io.StringIO(text)))
+
+
+assert (
+    env("# c\n\nA=1\nexport B=two words\n  C = spaced  \nD=\nE\n")
+    == {
+        "A": "1",
+        "B": "two words",
+        "C": "spaced",
+        "D": "",
+        "E": None,
+    }
+)  # comments and blank lines skipped; `export` allowed; spaces around `=` trimmed; no `=` -> no value
+assert env("A=b # c\nB=a#b\n") == {
+    "A": "b",
+    "B": "a#b",
+}  # a trailing comment needs whitespace before `#`
+assert (
+    env('A="x # y"\nB=\'it\\\'s\'\nC=\'no\\nescape\'\nD="t\\tab"\nE="q" # c\nF="multi\nline"\n')
+    == {
+        "A": "x # y",
+        "B": "it's",
+        "C": "no\\nescape",
+        "D": "t\tab",
+        "E": "q",
+        "F": "multi\nline",
+    }
+)  # quotes keep `#`; single quotes unescape only \\ and \'; double quotes decode \\n \\t ...; multi-line allowed
+assert env("A=1\nA=2\nB='q'x\nC=3\n") == {
+    "A": "2",
+    "C": "3",
+}  # later duplicate wins; a malformed line is skipped
+assert env("A=1\nB=\"${A}x\"\nC='${A}x'\nD=${NOPE}\nE=${NOPE:-dflt}\nF=${A:-dflt}\n") == {
+    "A": "1",
+    "B": "1x",
+    "C": "1x",
+    "D": "",
+    "E": "dflt",
+    "F": "1",
+}  # `${NAME}` and `${NAME:-default}` are expanded in EVERY value, quoted or not
+rule(
+    "dotenv syntax (python-dotenv): KEY=VALUE, `#` comments (trailing only after whitespace), `export`, "
+    "single/double quotes (escapes: single \\ and \\', double \\ \\' \\\" a b f n r t v), later duplicate wins, "
+    "malformed line skipped, `${NAME}` / `${NAME:-default}` expanded in every value"
 )
 
 print("OK")

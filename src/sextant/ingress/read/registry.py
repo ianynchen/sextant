@@ -6,6 +6,7 @@ silently drift apart (2K Task 5 fix round 1, minor)."""
 
 from sextant.application.ports.artifacts import ArtifactReader
 from sextant.ingress.read.avsc import AvscReader
+from sextant.ingress.read.dotenv import DotenvReader
 from sextant.ingress.read.graphql_sdl import GraphqlSdlReader
 from sextant.ingress.read.properties import PropertiesReader
 from sextant.ingress.read.proto_source import ProtoSourceReader
@@ -19,6 +20,7 @@ from sextant.ingress.read.yaml_config import YamlConfigReader
 READERS: tuple[ArtifactReader, ...] = (
     PropertiesReader(),
     YamlConfigReader(),
+    DotenvReader(),
     AvscReader(),
     ProtoSourceReader(),
     GraphqlSdlReader(),

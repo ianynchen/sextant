@@ -22,6 +22,7 @@ is an `assert` in the script.
 | precedence | init > environment > dotenv > secrets > default |
 | missing `env_file` | ignored silently |
 | dotenv key with no field | `extra_forbidden` unless `extra="ignore"` |
+| dotenv syntax | python-dotenv's: see "dotenv file syntax" |
 
 ## Environment name
 
@@ -59,3 +60,20 @@ is an `assert` in the script.
 - **A dotenv key that matches no field fails construction** with `extra_forbidden` (BaseSettings
   default `extra="forbid"`), prefixed or not. `extra="ignore"` avoids it. Plain environment
   variables are never extra. (`DotEnvSettingsSource.__call__` in `sources/providers/dotenv.py`: `is_extra_allowed = self.config.get('extra') != 'forbid'`.)
+
+## dotenv file syntax
+
+pydantic-settings reads the file with python-dotenv's `dotenv_values(file_path, encoding=encoding)`
+(`sources/providers/dotenv.py`, interpolation on by default). Sextant's reader
+(`ingress/read/dotenv.py`) follows what the probe asserts:
+
+- `KEY=VALUE`; blank lines and `#` lines are skipped; `export KEY=VALUE` is allowed; spaces around
+  `=` and at the ends of an unquoted value are trimmed; a key with no `=` has no value.
+- An unquoted value ends at ` #` (a `#` after whitespace); `a#b` keeps its `#`.
+- Quotes: `'...'` unescapes only `\\` and `\'`; `"..."` decodes `\\ \' \" \a \b \f \n \r \t \v`; both
+  keep a `#` and may span lines. A quoted value followed by anything but a comment is a malformed line.
+- A later duplicate key wins; a malformed line is skipped, the rest of the file is read.
+- `${NAME}` and `${NAME:-default}` are expanded in every value, quoted or not; a name set nowhere is
+  the empty string there. Sextant keeps the text and lets the config pass fill it (the model's
+  `placeholders`, `default_separator: ":-"`), so a name the file does not set is `external`: the
+  deployment's environment is consulted first by python-dotenv too.

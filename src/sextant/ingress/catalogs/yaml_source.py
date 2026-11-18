@@ -539,6 +539,8 @@ class YamlCatalogSource:
             raw = _load(path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise CatalogError(f"loading catalog {path}: not a YAML mapping")
+            declaration_only = _declaration_only(raw, path)
+            matches = raw.get("matches", {})
             shape = _shape_model_of(raw, shape_models, path)
             _check_made_by(raw, path)
             _check_argument_references(raw, raw.get("style"), path)
@@ -546,7 +548,7 @@ class YamlCatalogSource:
             catalogs.append(
                 Catalog(
                     id=_required(raw, "id", path),
-                    style=_required(raw, "style", path),
+                    style="" if declaration_only else _required(raw, "style", path),
                     protocol=_closed_or_absent(raw, "protocol", Protocol, path),
                     direction=_closed_or_absent(raw, "direction", Direction, path),
                     # Ruling 3 — optional, and a closed word where it is written.
@@ -560,7 +562,9 @@ class YamlCatalogSource:
                     # merged into the catalog's own the same way — the base a client's
                     # relative calls join is the client's, shared by every catalog
                     # whose calls it issues.
-                    matches=_with_client_model(
+                    matches={}
+                    if declaration_only
+                    else _with_client_model(
                         _with_step_model(_required(raw, "matches", path), raw, step_models, path),
                         raw,
                         client_models,
@@ -648,11 +652,11 @@ class YamlCatalogSource:
                     # declared registration call means, which calls hand a value over and
                     # where it is, and which calls take one from an object.
                     dispatch=_dispatch(raw, path),
-                    dispatch_registrations=_dispatch_registrations(raw["matches"], path),
-                    dispatch_sends=_dispatch_sends(raw["matches"], path),
-                    dispatch_receives=_dispatch_receives(raw["matches"], path),
-                    dispatch_views=_dispatch_views(raw["matches"], path),
-                    dispatch_implementations=_dispatch_implementations(raw["matches"], path),
+                    dispatch_registrations=_dispatch_registrations(matches, path),
+                    dispatch_sends=_dispatch_sends(matches, path),
+                    dispatch_receives=_dispatch_receives(matches, path),
+                    dispatch_views=_dispatch_views(matches, path),
+                    dispatch_implementations=_dispatch_implementations(matches, path),
                 )
             )
             # The merged `matches` too: a client model's `client_base` rungs reach the engine
@@ -1687,6 +1691,17 @@ def _check_injection(raw: dict[str, Any], where: str) -> None:
             raise CatalogError(
                 f"{where}: `{key}` must be a non-empty list of annotation names, got {names!r}"
             )
+
+
+def _declaration_only(raw: dict[str, Any], path: Path) -> bool:
+    """Whether a file declares a model for its family and no boundary (D02 §1, amended
+    2026-11-17): it has neither `style` nor `matches`, and then it needs `id`, `detect` and a
+    `config_model`. No engine runs it. A file with either of the two keeps requiring both."""
+    if "style" in raw or "matches" in raw:
+        return False
+    for key in ("id", "detect", "config_model"):
+        _required(raw, key, path)
+    return True
 
 
 def _required(raw: dict[str, Any], key: str, path: Path) -> Any:

@@ -1,0 +1,40 @@
+id: pydantic-settings
+displayName: pydantic-settings (a settings class and the dotenv file it names)
+
+# A DECLARATION-ONLY catalog (D02 §1, amended 2026-11-17): the config owner of the Python family
+# is not a routing catalog, so it carries no `style` and no `matches` and no engine runs it.
+# Plan 3 Task 4 (N3): the `.env` file a settings class names is a config source. The rules are
+# python-dotenv's (the library pydantic-settings reads the file with) and pydantic-settings' own,
+# measured in `scripts/probes/pydantic_settings_rules.md`.
+
+detect:
+  coordinates: [pydantic-settings]
+
+measured:
+  - { artifact: pydantic-settings, versions: ["2.16.3"], identity: reported,
+      by: scripts/probes/pydantic_settings_rules.md }
+  - { artifact: python-dotenv, versions: ["1.2.4"], identity: reported,
+      by: scripts/probes/pydantic_settings_rules.md }
+
+config_model:
+  sources:
+    # The file the settings class's config call names with its `env_file` argument: a string or a
+    # tuple of strings written in the call (the later file overrides the earlier). One unprofiled
+    # source, so its rows are the `default` environment. A name written through a variable is
+    # read by nobody: the field that reads it is `external`.
+    - { from_argument: env_file }
+  # How a settings class is written: the class-body field holding the config call, and the calls
+  # that make it (`SettingsConfigDict(...)`, or a dict display, which the scanner writes as the
+  # `dict(...)` it builds). The same forms `shape-models/pydantic.yml` reads in its own context.
+  settings_form:
+    config_field: model_config
+    config_call:
+      - pydantic_settings.main.SettingsConfigDict.<init>
+      - builtins.dict.<init>
+  # python-dotenv expands `${NAME}` and `${NAME:-default}` in every value, quoted or not.
+  placeholders:
+    open: "${"
+    close: "}"
+    default_separator: ":-"
+    by: scripts/probes/pydantic_settings_rules.md
+  key_matching: exact
