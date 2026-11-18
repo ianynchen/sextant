@@ -31,7 +31,8 @@ IGNORE_FILE = ".sextantignore"
 # Non-negatable (module docstring above). Fixed shapes for the credential
 # material a repository is least likely to remember to list itself —
 # `.sextant.yml`'s `redact:` widens VALUE masking the same way, but a file
-# this set names is never opened at all, additions or not.
+# this set names is never opened by a walk, additions or not; only a file the code NAMES as
+# its dotenv file (`DOTENV_PATTERNS`) is opened, and then only if nothing else excludes it.
 #
 # EVERY pattern here must match at EVERY DEPTH, because `matches` judges a
 # path relative to the REPOSITORY root while the thing being protected
@@ -62,6 +63,13 @@ BUILTIN_PATTERNS = (
 # else — no repository input ever reaches this spec, which is what makes it
 # the non-negatable layer rather than merely the first lines of one.
 _BUILTIN_SPEC = pathspec.PathSpec.from_lines("gitwildmatch", BUILTIN_PATTERNS)
+
+# The two built-in shapes a file the code names as its dotenv file is exempt from (N3). Nothing
+# else is: another built-in pattern or the repo's own `.sextantignore` still refuses it.
+DOTENV_PATTERNS = (".env", ".env.*")
+_BEYOND_DOTENV_SPEC = pathspec.PathSpec.from_lines(
+    "gitwildmatch", [pattern for pattern in BUILTIN_PATTERNS if pattern not in DOTENV_PATTERNS]
+)
 
 
 class IgnoreRules:
@@ -128,3 +136,11 @@ class IgnoreRules:
         relative = path.relative_to(self._repo_root) if path.is_absolute() else path
         candidate = relative.as_posix()
         return _BUILTIN_SPEC.match_file(candidate) or self._repo_spec.match_file(candidate)
+
+    def matches_beyond_dotenv(self, path: Path) -> bool:
+        """`matches`, except that the two `DOTENV_PATTERNS` do not count: whether anything ELSE
+        excludes `path` — another built-in pattern (`**/secrets/**`) or the repo's own
+        `.sextantignore`. For a file the code names as its dotenv file."""
+        relative = path.relative_to(self._repo_root) if path.is_absolute() else path
+        candidate = relative.as_posix()
+        return _BEYOND_DOTENV_SPEC.match_file(candidate) or self._repo_spec.match_file(candidate)

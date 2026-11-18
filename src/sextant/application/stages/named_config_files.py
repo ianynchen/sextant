@@ -21,6 +21,7 @@ from sextant.application.ports.detector import ModuleModel
 from sextant.application.resolve.config import FROM_ARGUMENT
 from sextant.domain.factfile import read_fact_tree
 from sextant.domain.facts import CallArgument, CallSiteFact, FieldWriteFact
+from sextant.domain.ignorefile import IgnoreRules
 from sextant.domain.resource_files import named_file
 from sextant.domain.symbols import type_descriptor
 
@@ -48,10 +49,11 @@ def _names(argument: CallArgument) -> list[str] | None:
 
 
 def named_config_files(
-    module: ModuleModel, fact_root: Path, catalogs: Sequence[Catalog]
+    module: ModuleModel, fact_root: Path, catalogs: Sequence[Catalog], ignore: IgnoreRules
 ) -> tuple[Path, ...]:
     """The files under the module's root its settings classes name, in the order they are named
-    (a later one overrides an earlier one, so the order is the precedence), each once."""
+    (a later one overrides an earlier one, so the order is the precedence), each once. The walk's
+    exclusions all still hold except the dotenv shapes themselves (`matches_beyond_dotenv`)."""
     selected = [
         (source[FROM_ARGUMENT], form)
         for catalog in catalogs
@@ -83,6 +85,10 @@ def named_config_files(
                     names = _names(argument) if argument.keyword == keyword else None
                     for name in names or []:
                         path = named_file(module.root, name)
-                        if path is not None and path not in found:
+                        if (
+                            path is not None
+                            and not ignore.matches_beyond_dotenv(path)
+                            and path not in found
+                        ):
                             found.append(path)
     return tuple(found)

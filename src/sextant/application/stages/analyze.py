@@ -453,7 +453,7 @@ def analyze(
     # The files the module's own code names as config (a settings class's `env_file`), read by
     # the reader that claims each NAME. The walk above never sees them: the built-in ignore layer
     # hides every `.env` from it, and a file nothing names is never opened.
-    unread = list(named_config_files(module, fact_root, catalogs.load()))
+    unread = list(named_config_files(module, fact_root, catalogs.load(), ignore))
     for reader in readers:
         owned = tuple(file for file in unread if reader.accepts(file.name))
         if not owned:

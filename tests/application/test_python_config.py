@@ -237,3 +237,41 @@ def test_a_module_without_the_settings_library_reads_no_env_file(tmp_path: Path,
         coordinates=("fastapi",),
     )
     assert rows == []
+
+
+def test_a_named_file_the_repos_own_ignore_file_lists_is_not_read(tmp_path: Path, libraries):
+    """The carve-out covers the built-in `.env` shapes and nothing else: what the user excluded
+    stays excluded even when the code names it."""
+    rows, keys = _analyzed(
+        tmp_path,
+        libraries,
+        {
+            "src/app/settings.py": _settings('"deploy/prod.env"'),
+            "deploy/prod.env": "LEAK=1\n",
+            ".sextantignore": "deploy/*.env\n",
+        },
+    )
+    assert rows == [] and keys == set()
+
+
+def test_a_named_file_under_another_built_in_pattern_is_not_read(tmp_path: Path, libraries):
+    rows, keys = _analyzed(
+        tmp_path,
+        libraries,
+        {"src/app/settings.py": _settings('"secrets/app.env"'), "secrets/app.env": "LEAK=1\n"},
+    )
+    assert rows == [] and keys == set()
+
+
+def test_a_named_dot_env_under_the_user_layer_negation_is_still_read(tmp_path: Path, libraries):
+    """The carve-out itself: a plain named `.env` is read although the built-in layer lists it."""
+    rows, _ = _analyzed(
+        tmp_path,
+        libraries,
+        {
+            "src/app/settings.py": _settings('".env"'),
+            ".env": "A=1\n",
+            ".sextantignore": "# nothing here names it\nbuild/\n",
+        },
+    )
+    assert rows == [("A", "1", "default", ".env", None)]
