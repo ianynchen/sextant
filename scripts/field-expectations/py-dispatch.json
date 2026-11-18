@@ -5,7 +5,7 @@
   "build": "uv",
   "python": "3.12",
   "lock": "py-dispatch.uv.lock",
-  "oracle": "app.router.routes walked with the oracle's rules (fastapi_oracle.py needs FastAPI 0.162; dispatch pins 0.115.12), 2026-11-17: 287 routes, 287 pairs; Sextant finds 287 of 287. Its 4 further inbound rows are POST /slack/event, /slack/command, /slack/action, /slack/menu, declared in plugins/dispatch_slack/endpoints.py, which the plugin entry points load only when dispatch is installed (it is not).",
+  "oracle": "tests/e2e/fastapi_oracle.py dispatch.main:app (run with src/ as the root, dummy DISPATCH_ENCRYPTION_KEY, DATABASE_HOSTNAME, DATABASE_CREDENTIALS), 2026-11-17: 287 routes, 287 pairs; Sextant finds 287 of 287. Its 4 further inbound rows are POST /slack/event, /slack/command, /slack/action, /slack/menu, declared in plugins/dispatch_slack/endpoints.py, which the plugin entry points load only when dispatch is installed (it is not).",
   "uv": "py-dispatch.uv.lock was generated once with uv 0.13.9 on 2026-11-17 from the pinned pyproject.toml with the `netflix` extra, the `netflix` dependency group and the [tool.uv.sources] path entry removed (all three name ../dispatch-internal-plugins, a Netflix-internal package that is not on any index, so `uv lock` of the unmodified file fails). It is the resolution; `uv sync --frozen` does not re-check it against pyproject.toml.",
   "endpoints": {
     "inbound": {

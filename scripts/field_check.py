@@ -25,7 +25,7 @@ the repository root (`mall-admin.json` is the first to need any of them):
 - **`maven`** — the Maven launcher, defaulting to the wrapper `./mvnw`. `macrozheng/mall`
   ships no wrapper, so its pin names the system `mvn`; naming it here rather than falling
   back silently keeps "which Maven built this" a property of the recorded pin.
-- **`build`** — `"uv"` for a Python upstream: `_ensure_compiled` then runs `uv sync --frozen
+- **`build`** — `"uv"` for a Python upstream: `_ensure_environment` then runs `uv sync --frozen
   --no-install-project` in the module (offline first, online once, like Maven) instead of a
   Maven build, and `maven`/`jdk` are unused. `--frozen` never re-resolves, so the environment
   is the lock's. **`lock`**, with it, names a sidecar lock under `field-expectations/` for an
