@@ -194,18 +194,18 @@ def test_a_guard_names_the_field_each_typed_read_of_its_test_is(tmp_path: Path):
 
 
 _MODELS = "class Service:\n    url: str = 'https://x.example'\n"
-_READ = "from app.pkg import Service\ndef send(x): ...\ndef f(s: Service):\n    send(s.url)\n"
+_READ = "from app.pkg import {0}\ndef send(x): ...\ndef f(s: {0}):\n    send(s.url)\n"
 
 
-def _starred(tmp_path: Path, files: dict[str, str]):
-    """`app/run.py` reads `Service` from the package `app/pkg`, whose files are `files`."""
+def _starred(tmp_path: Path, files: dict[str, str], name: str = "Service"):
+    """`app/run.py` reads `name` from the package `app/pkg`, whose files are `files`."""
     return _argument(
         _scan(
             tmp_path,
             {
                 "app/__init__.py": "",
                 **{f"app/pkg/{name}": text for name, text in files.items()},
-                "app/run.py": _READ,
+                "app/run.py": _READ.format(name),
             },
         ),
         "app/run#f",
@@ -247,8 +247,21 @@ def test_a_star_leaves_a_leading_underscore_name_behind(tmp_path: Path):
             "__init__.py": "from .models import *\n",
             "models.py": _MODELS.replace("Service", "_Service"),
         },
+        "_Service",
     )
     assert url.kind == "unresolved"
+
+
+def test_a_star_carries_a_leading_underscore_name_all_lists(tmp_path: Path):
+    url = _starred(
+        tmp_path,
+        {
+            "__init__.py": "from .models import *\n",
+            "models.py": "__all__ = ['_Service']\n" + _MODELS.replace("Service", "_Service"),
+        },
+        "_Service",
+    )
+    assert (url.kind, url.symbol) == ("field", "app/pkg/models/_Service#url.")
 
 
 def test_an_explicit_binding_beats_a_star_name(tmp_path: Path):
