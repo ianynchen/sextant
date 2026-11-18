@@ -392,8 +392,8 @@ config_model:
 # reactor-linking spec 2026-10-19; `D01`'s `participants.aliases`, `M05`'s "alias index").
 #
 # **On this file for the reason `config_model` and `terminals` are** — the family's base
-# catalog carries what is true across the family, a declaration-only file cannot be a catalog
-# (`style` and `matches` are required and this declares no boundary), and every catalog is
+# catalog carries what is true across the family (a declaration-only file, `pydantic-settings.yml`,
+# is also a catalog since D02 §1's 2026-11-17 amendment), and every catalog is
 # loaded regardless of gating, so the declaration reaches every module.
 #
 # **A build coordinate is not a service name, and the gap is not cosmetic.** The artifactId is

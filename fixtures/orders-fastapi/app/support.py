@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
-# Included only under `if flags.SUPPORT_ROUTES:` (`app/main.py`), a repository constant
-# (`app/flags.py`) that Sextant does not evaluate.
+# Included only under `if settings.support_routes:` (`app/main.py`), a settings field the
+# deployment sets, which Sextant does not evaluate.
 router = APIRouter()
 
 

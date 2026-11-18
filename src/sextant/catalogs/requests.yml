@@ -1,0 +1,58 @@
+id: requests
+displayName: requests (the module functions and Session)
+style: single_call
+protocol: http
+direction: outbound
+
+# Every rule below is requests' own, measured on the wire by
+# `scripts/probes/requests_httpx_rules.py` (results in `requests_httpx_rules.md`) against
+# requests 2.34.2 as the running process reported it.
+
+detect:
+  coordinates: [requests]
+
+measured:
+  - { artifact: requests, versions: ["2.34.2"], identity: reported,
+      by: scripts/probes/requests_httpx_rules.md }
+
+# A payload is a pydantic model, or a call that serialises one (`order.model_dump()`, the
+# shape model's `serializers`).
+shape_model: pydantic
+
+matches:
+  # The DEFINING symbols (plan 3 ruling R1): the module functions are `requests.api`'s
+  # (`requests.get` re-exports `requests.api.get`), the methods `requests.sessions.Session`'s
+  # (`requests.Session is requests.sessions.Session`). The two take their arguments at the
+  # same positions (probe "Verbs and positions").
+  owner: [requests.api, requests.sessions.Session]
+  # NO `client_base`: a `Session` holds no base URL (probe "base_url": `Session(base_url=…)`
+  # raises, a relative URL raises `MissingSchema`), so every address is the whole address.
+  #
+  # THE BODY (probe "Several body keywords"): `files=` (multipart, with `data=`), else a
+  # non-empty `data=` (a form), else `json=` — the first of the list the call writes is the
+  # body, and a call writing none sends no body. Every verb takes them, through `**kwargs`
+  # where it does not name them (plan 3 ruling R2): `post(url, data, json)` names `data` at 1
+  # and `json` at 2, `put`/`patch(url, data)` `data` at 1, `Session.request` `data` at 3,
+  # `files` at 6 and `json` at 15; `requests.request(method, url, **kwargs)` names none, and a
+  # positional body there is a call that does not run. `content=` is refused (`TypeError`).
+  #
+  # THE VERB of `request(method, url)` is its argument, upper-cased by requests
+  # (`prepare_method`, probe "Verb case"): `request("get", u)` is a GET.
+  methods:
+    - { name: get,     http_method: GET,     url_arg: { arg: 0, keyword: url },
+        body_arg: [{ keyword: files }, { keyword: data }, { keyword: json }] }
+    - { name: options, http_method: OPTIONS, url_arg: { arg: 0, keyword: url },
+        body_arg: [{ keyword: files }, { keyword: data }, { keyword: json }] }
+    - { name: head,    http_method: HEAD,    url_arg: { arg: 0, keyword: url },
+        body_arg: [{ keyword: files }, { keyword: data }, { keyword: json }] }
+    - { name: delete,  http_method: DELETE,  url_arg: { arg: 0, keyword: url },
+        body_arg: [{ keyword: files }, { keyword: data }, { keyword: json }] }
+    - { name: post,    http_method: POST,    url_arg: { arg: 0, keyword: url },
+        body_arg: [{ keyword: files }, { arg: 1, keyword: data }, { arg: 2, keyword: json }] }
+    - { name: put,     http_method: PUT,     url_arg: { arg: 0, keyword: url },
+        body_arg: [{ keyword: files }, { arg: 1, keyword: data }, { keyword: json }] }
+    - { name: patch,   http_method: PATCH,   url_arg: { arg: 0, keyword: url },
+        body_arg: [{ keyword: files }, { arg: 1, keyword: data }, { keyword: json }] }
+    - { name: request, method_arg: { arg: 0, keyword: method }, method_case: upper,
+        url_arg: { arg: 1, keyword: url },
+        body_arg: [{ arg: 6, keyword: files }, { arg: 3, keyword: data }, { arg: 15, keyword: json }] }

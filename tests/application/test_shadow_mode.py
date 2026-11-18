@@ -443,6 +443,8 @@ _ASKS_PER_CATALOG = {
     "spring-websocket-client": (4, 4),
     "spring-ws-template": (6, 6),
     "temporal-untyped": (3, 3),
+    "requests": (16, 16),
+    "httpx": (11, 11),
     "vertx-eventbus": (12, 20),
     "vertx-eventbus-chain": (7, 7),
     "vertx-web": (40, 45),
@@ -506,7 +508,9 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # **+4 on 2026-11-08** (Task 6): its mounts' positions, same comment.
     # **+12 on 2026-11-08** (Task 7): its request-parameter entries' positions, same comment.
     # **+2 on 2026-11-09** (plan 2 final review, OI-368): the host mount's positions.
-    assert sum(asks for asks, _ in counted.values()) == 1509
+    # **+27 on 2026-11-17** (plan 3 Task 2): the new `requests` (16) and `httpx` (11) catalogs,
+    # same comment.
+    assert sum(asks for asks, _ in counted.values()) == 1536
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

@@ -41,6 +41,7 @@ from sextant.application.resolve.values import (
     Path,
     ValueIndex,
     argument_slot,
+    object_of,
     producer_paths,
     resolve_positions,
     resolve_site,
@@ -468,7 +469,15 @@ def url_of_answer(answer: "Answer | None") -> tuple[str | None, str | None, str]
             resolution = str(Resolution.NARROWED)
         return peer, path, resolution
     if answer.kind == EXPRESSION:
-        return url_of({"kind": EXPRESSION, "value": str(answer.value)})
+        text = str(answer.value)
+        if carries_expression(text) and not _holes(text):
+            # **A deployment-set value the code read by name** (`os.getenv("HOST")`, plan 3
+            # Task 3): the walk stated the whole address, so it stays WHOLE in `path`, peer NULL,
+            # as a `${…}` literal does (`test_an_absolute_base_with_an_embedded_placeholder_is_
+            # never_split`), for the per-environment join to fill. Only a walked answer is
+            # read so: `url_of`'s own `${…}` expression stays unresolved.
+            return None, text, str(Resolution.RESOLVED)
+        return url_of({"kind": EXPRESSION, "value": text})
     return None, None, str(Resolution.UNRESOLVED)
 
 
@@ -1613,6 +1622,10 @@ def _reference_of(
         # the `symbol` it does not carry.
         declared = declared_parameters[index].get("type")
         return declared if isinstance(declared, dict) else None
+    if kind == "unresolved" and catalog_rules.rules.serializers:
+        serialized = _serialized_model(argument, workspace_types, catalog_rules.rules)
+        if serialized is not None:
+            return serialized
     if kind != "instance":
         # `null`, `lambda`, `unresolved`, `field`, `concat`: none of these names a payload
         # type at all. A `field`'s type is knowable in the same way a parameter's is and is
@@ -1648,6 +1661,45 @@ def _reference_of(
         # asked for.
         return _terminal_reference(ctor_arguments[payload_ctor_arg])
     return _bare_reference(symbol)
+
+
+def _serialized_model(
+    argument: dict[str, Any], workspace_types: CallFacts, rules: _Rules
+) -> dict[str, Any] | None:
+    """The model an argument serialises where it is the result of one of the shape model's
+    `serializers` called in this method (`json=order.model_dump(by_alias=True)`, plan 3 N4):
+    the call's own owner, the type the scanner read its receiver as. Only where the call
+    writes `serializer_names_when` (pydantic's `by_alias=True`): without it the call writes the
+    fields' own names, which are not the shape's wire names where a field is renamed, so the
+    body is not described."""
+    source = argument.get("source")
+    if source is None:
+        return None
+    made = next(
+        (
+            site
+            for site in workspace_types.caller_call_sites
+            if site.get("result") == source and site.get("name") in rules.serializers
+        ),
+        None,
+    )
+    if made is None or made.get("owner") is None:
+        return None
+    if rules.serializer_names_when is not None:
+        keyword, value = rules.serializer_names_when
+        written = next(
+            (one for one in made.get("arguments") or [] if one.get("keyword") == keyword), None
+        )
+        # A literal equal to the value, of the value's own kind (`1` is not `True`).
+        if (
+            written is None
+            or written.get("value") != value
+            or (written.get("kind") == "boolean") != isinstance(value, bool)
+        ):
+            return None
+    # What a serialiser writes is never None, and a Python reference states no format (D00
+    # §5b), as the parameter a model is handed by does.
+    return {**_bare_reference(str(made["owner"])), "nullable": False, "wire_format": None}
 
 
 # The argument kind a reader gives a value it read as a type form (`type_form_reference`): never
@@ -1869,7 +1921,6 @@ def _linked_constructor(
     `argument`, so its own method's sites are searched (`sites_of`)."""
     if source is None:
         return None
-    key = "receiver" if name == "<init>" else "result"
     # `argument`, where the caller has one, names the method the `source` id belongs to.
     pool = (
         workspace_types.caller_call_sites
@@ -1882,7 +1933,7 @@ def _linked_constructor(
             for site in pool
             if site.get("name") == name
             and site.get("owner") == owner_symbol
-            and site.get(key) == source
+            and object_of(site) == source
             and (arity is None or len(site.get("arguments") or []) == arity)
             and (descriptor is None or site.get("descriptor") == descriptor)
         ),

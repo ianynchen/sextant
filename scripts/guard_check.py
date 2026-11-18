@@ -3126,7 +3126,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/engines/single_call.py",
-                find="                            else _verb_from_answer(binding.slots.get(verb_slot)),\n",
+                find="                            else _verb_from_answer(\n"
+                "                                binding.slots.get(verb_slot), method.get(_METHOD_CASE)\n"
+                "                            ),\n",
                 replace="                            else None,  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -5005,8 +5007,8 @@ GUARDS: dict[str, Guard] = {
                 # A (`docs/performance.md`) turned the per-site test into a read of
                 # the owners' own positions in the shared `CallSiteIndex`; the guard
                 # is the same, and disabling it reads every position instead.
-                find="            index.positions_by_owner.get(owner, [])\n"
-                "            for owner in dict.fromkeys((*owners, *sorted({heir for heir, _ in inherited})))",
+                find="                index.positions_by_owner.get(owner, [])\n"
+                "                for owner in dict.fromkeys((*owners, *sorted({heir for heir, _ in inherited})))",
                 replace="            range(len(call_sites)) for _ in [None]"
                 "  # guard disabled by scripts/guard_check.py",
             ),
@@ -10226,7 +10228,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",
-                find="        if any(_same_name(site, call) for call in (*self._rungs, self._setter)):\n",
+                find="        if any(_same_name(site, call) for call in (*self._rungs, *setter)):\n",
                 replace="        if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -10240,7 +10242,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path="sextant/application/resolve/shapes/client_base.py",
-                find='        if site.get("owner") == self._setter["owner"]:\n',
+                find='        if self._setter is not None and site.get("owner") == self._setter["owner"]:\n',
                 replace="        if False:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -12578,6 +12580,28 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "pydantic-settings.env-file-is-read-from-the-model-config-field": Guard(
+        what="only the call written as the settings class's `model_config` names its env file (plan 3 Task 4)",
+        why="without it any `SettingsConfigDict(env_file=...)` anywhere in the module would open that file as configuration",
+        edits=(
+            Edit(
+                path="sextant/application/stages/named_config_files.py",
+                find="if not (isinstance(fact, FieldWriteFact) and fact.field.endswith(field)):",
+                replace="if not isinstance(fact, FieldWriteFact):",
+            ),
+        ),
+    ),
+    "pydantic-settings.model-is-selected-by-the-modules-dependencies": Guard(
+        what="a module reads the file its settings class names only when its own dependencies select the settings catalog",
+        why="without it every module that merely calls a function of the same name would open the file it names",
+        edits=(
+            Edit(
+                path="sextant/application/stages/named_config_files.py",
+                find="and not set(catalog.detect_coordinates).isdisjoint(module.dependency_coordinates)",
+                replace="and True",
+            ),
+        ),
+    ),
 }
 
 
@@ -12767,6 +12791,9 @@ def copy_tree(destination: Path) -> Path:
         # kotlinc's coroutine classes, field accessors and collector classes, read off real
         # facts.
         "orders-kotlin-channels",
+        # The Python fixture's locked environment: the Python readers' tests scan against the
+        # libraries installed in it (`orders_fastapi_env`), so a pinned one needs it.
+        "orders-fastapi",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

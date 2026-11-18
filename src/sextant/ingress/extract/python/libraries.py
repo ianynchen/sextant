@@ -353,6 +353,38 @@ class Libraries:
             return (Target(target.module, f"{target.member}.{name}"),)
         return None
 
+    def variable_type(self, target: Target) -> TypeRef | None:
+        """The class the module variable `target` is written to hold, read from the tree
+        `_table` already parsed: its one annotated assignment (`environ: _Environ[str]`), where
+        the library writes exactly one, whose written type names a class. The variable is
+        looked up where the library defines it, as a member is (`member`)."""
+        if target.member is None or "." in target.member:
+            return None
+        found = self.member(Target(target.module), target.member)
+        if found is None or len(found) != 1 or found[0].member is None:
+            return None
+        (defined,) = found
+        table = self._table(defined.module)
+        if table is None:
+            return None
+        written = [
+            node.annotation
+            for node in _statements(table.tree.body, table.versions)
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == defined.member
+        ]
+        if len(written) != 1:
+            return None
+        recording, self._recording = self._recording, False
+        inside, self._inside = self._inside, True
+        try:
+            typed = written_type(written[0], self._scope(table))
+        finally:
+            self._recording = recording
+            self._inside = inside
+        return typed if names_a_type(typed.symbol) else None
+
     def call_returns(
         self,
         owner: str,

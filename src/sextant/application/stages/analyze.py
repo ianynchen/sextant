@@ -36,6 +36,7 @@ from sextant.application.ports.scanner import (
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.endpoints import SkippedCatalog
 from sextant.application.resolve.pipeline import ResolveReport, report_of, resolve
+from sextant.application.stages.named_config_files import named_config_files
 from sextant.domain.closed_sets import OriginTier
 from sextant.domain.factfile import (
     config_fact_target,
@@ -449,6 +450,24 @@ def analyze(
                 write_fact_file(target, document, config_facts)
                 entries += len(config_facts)
                 read_scanner_ids.add(document.scanner_id)
+    # The files the module's own code names as config (a settings class's `env_file`), read by
+    # the reader that claims each NAME. The walk above never sees them: the built-in ignore layer
+    # hides every `.env` from it, and a file nothing names is never opened.
+    unread = list(named_config_files(module, fact_root, catalogs.load(), ignore))
+    for reader in readers:
+        owned = tuple(file for file in unread if reader.accepts(file.name))
+        if not owned:
+            continue
+        unread = [file for file in unread if file not in owned]
+        request = ReadRequest(
+            module_id=module.module_id, version=module.version, files=owned, root=module.root
+        )
+        for document, config_facts in reader.read(request):
+            write_fact_file(
+                config_fact_target(fact_root, document.relative_path), document, config_facts
+            )
+            entries += len(config_facts)
+            read_scanner_ids.add(document.scanner_id)
     # Schema roots are read the same way, through the same registry — a
     # reader claims its own extension (`avsc`/`proto`/`graphqls`) regardless
     # of which root it is handed, and only the schema readers are offered

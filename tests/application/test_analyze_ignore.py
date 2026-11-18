@@ -119,6 +119,47 @@ def test_an_ignored_config_file_contributes_zero_config_entries(tmp_path: Path):
     assert "kept.key" in keys
 
 
+def test_an_env_file_in_the_resource_walk_is_never_read_even_with_the_dotenv_reader(
+    tmp_path: Path,
+):
+    """The dotenv reader opens a file the code NAMES (plan 3 Task 4), and only that. The walk
+    over a resource root still hides every `.env` (the built-in layer) and the reader claims
+    no suffix, so an unnamed `.env` beside a sibling that is read contributes nothing."""
+    from sextant.ingress.read.dotenv import DotenvReader
+
+    resource_root = tmp_path / "src" / "main" / "resources"
+    resource_root.mkdir(parents=True)
+    (resource_root / ".env").write_text("UNNAMED_SECRET=x\n", encoding="utf-8")
+    (resource_root / ".env.local").write_text("UNNAMED_LOCAL=x\n", encoding="utf-8")
+    (resource_root / "prod.env").write_text("UNNAMED_PROD=x\n", encoding="utf-8")
+    (resource_root / "application.yml").write_text("kept:\n  key: kept-value\n", encoding="utf-8")
+    schema_root = tmp_path / "schema"
+    schema_root.mkdir()
+    fact_root = tmp_path / "facts"
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    try:
+        analyze(
+            path=tmp_path,
+            workspace=workspace,
+            detectors=[_FakeDetector(_module(tmp_path, resource_root, schema_root))],
+            scanners=[_NoOpScanner()],
+            catalogs=_EmptyCatalogs(),
+            fact_root=fact_root,
+            progress=NullProgress(),
+            readers=[DotenvReader(), YamlConfigReader()],
+        )
+    finally:
+        workspace.close()
+
+    keys = {
+        entry.key_path
+        for _, _, facts in read_fact_tree(fact_root)
+        for entry in facts
+        if entry.kind == "config_entry"
+    }
+    assert keys == {"kept.key"}
+
+
 def test_an_ignored_schema_file_contributes_zero_shapes(tmp_path: Path):
     """The same wiring, on the SCHEMA loop — a `.wsdl` `.sextantignore`
     names must contribute no `embedded_descriptor` fact, while a sibling

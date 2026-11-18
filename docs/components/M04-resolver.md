@@ -202,6 +202,30 @@ A receiver that is a parameter whose written type is a union (`Session | Client`
 member, one row each, `narrowed`; a `None` member is left out and the detail says so, and a
 union holding the unknown type or the root type is no closed list.
 
+**An environment read is a deployment-set key, and a settings field is its key** (plan 3
+Tasks 3 and 5; D02 §1f `environment_reads`, §2i `settings_form`). The walk reads a call matching
+an `environment_reads` entry as the expression `${KEY}`, or `${KEY:-default}` where the call
+carries a literal default (`values._Walk._environment_read`); `resolved_peers` fills the default
+only in an environment where nothing sets the key. A `field` argument whose symbol
+is a settings field answers `${KEY:-default}` (the settings rung, `resolve/settings_fields.py`),
+the key from the field's name or alias, the class's prefix and case rule; it runs before any write
+of the field is read, and a rule written as no literal answers `not_readable`. For a Python module,
+a class-body write to an INSTANCE field is not a value in the plain walk
+(OI-447); JVM class initializers write static fields only, so JVM modules do not change. A
+call-result argument of a `single_call` URL or channel (`requests.get(os.getenv("U"))`) is walked
+through the same machinery for every `single_call` catalog (ruling R17, R19). The named `.env`
+file is read after the scan by `stages/named_config_files.py` and its keys fill `resolved_peers`
+per environment, else the class default, else `external` (detail: the expression). A guard whose
+reads are all settings fields is judged a `property` condition on their keys in
+`registration_conditions.existence_rows`, per row, existence `not evaluated`, the repository's
+value as evidence; a guard that reads anything else stays `test`.
+
+**A call with no owner in the facts is owned by its settled receiver binding, for `single_call`
+only** (ruling R9, `effective_calls.bound_positions`). Where EVERY path the binding settled names
+one and the same owner at `resolved`, `single_call` reads the site as a call on it; disagreeing or
+unsettled paths leave it unowned. `fluent` and `combinator` read `effective_call_sites` as the
+facts wrote it and do not see this map, so a chain on an untyped field is still not owned (OI-422).
+
 **What the code declares answers where what it runs does not** (OI-324 part 2, the type
 reader `producer_paths(..., declared_types=True)`, which only receiver binding uses). A
 call's result is what its callee's body returns, path by path, first; a return path the body

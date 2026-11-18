@@ -150,7 +150,8 @@ def derive_endpoints_with_runs(
             _bound(_engine_for(_wire_identity_checked(_shape_checked(catalog))), catalog, catalogs),
         )
         for catalog in catalogs
-        if not _reads_by_a_later_pass(catalog)
+        # A declaration-only catalog (no `style`, D02 §1) declares a model: no engine runs it.
+        if catalog.style and not _reads_by_a_later_pass(catalog)
     ]
     # Emptied once, here, rather than once per catalog: D02 §5 has two
     # catalogs both matching and both producing endpoints, so a per-catalog

@@ -146,6 +146,7 @@ from sextant.application.resolve.beans import (
 )
 from sextant.application.resolve.dispatch import DYNAMIC, Dispatch, dispatch_of
 from sextant.application.resolve.effective_calls import effective_call_sites
+from sextant.application.resolve.settings_fields import CONFIG_MODEL_FORM, settings_keys
 from sextant.domain.config_keys import carries_expression
 from sextant.domain.symbols import (
     bare_descriptor,
@@ -220,6 +221,18 @@ RECEIVER = "receiver"
 
 # A construction's name at a call site (D00 §5).
 _INIT = "<init>"
+
+
+def object_of(row: Mapping[str, Any]) -> Any:
+    """The value id a call row's object is held under (OI-341, follow-the-object): a
+    construction's own `receiver` where it has one (the JVM's `<init>` is void), else its
+    `result` (the virtual `<init>` the Python scanner writes); any other call's `result`.
+    None where the row names neither, so nothing is keyed by a guess."""
+    if row["name"] == _INIT and row.get("receiver") is not None:
+        return row["receiver"]
+    return row.get("result")
+
+
 # The written types that name no one class (D00 §5a): a union's members are each a type,
 # `Any` is every type, and `None` has no method.
 _UNION = "typing/Union#"
@@ -239,6 +252,10 @@ _CALL = "__call__"
 _RETURNS = "returns"
 _RESULT_RETURNS = "result_returns"
 _RESULT_CALLS = "result_calls"
+_RETURNS_RECEIVER = "returns_receiver"
+# A call that reads a deployment-set key by name (`Catalog.returns_arguments`, form
+# `environment_read`, plan 3 Task 3): its value is the expression `${KEY}`.
+_ENVIRONMENT_READ = "environment_read"
 
 # D00 §5's argument grammar, read as answers. `long` answers `int` because the
 # distinction is a storage width and not a kind of value a consumer branches on; a catalog
@@ -855,6 +872,20 @@ class ValueIndex:
     stated_returns: Mapping[tuple[str, str], tuple[str, int]] = dataclass_field(
         default_factory=dict
     )
+    # The calls that read a deployment-set key (`environment_reads` in `value-models/`),
+    # `(owner, name)` -> `(key reference, default reference or None)`. Read by
+    # `_Walk._environment_read`; a literal default renders into the expression.
+    environment_reads: Mapping[tuple[str, str], tuple[Any, Any]] = dataclass_field(
+        default_factory=dict
+    )
+    # The delimiters of the module's config model (`config.with_config_model`), None where it
+    # has none: an environment read's literal default renders after its `default_separator`
+    # (plan 3 ruling R25), so `resolved_peers` reads it back with the same rule.
+    placeholders: Mapping[str, str] | None = None
+    # Each settings field's answer by bare field symbol (`settings_fields.settings_keys`): its
+    # key expression, or `not_readable` where a name rule is no literal. Read by `_Walk._value`
+    # before any write of the field (plan 3 Task 5, R24).
+    settings_fields: Mapping[str, "Answer"] = dataclass_field(default_factory=dict)
     # The return type each method of a `c3` module declares (`signature.returns`), by bare
     # descriptor, as the fact writes it; a method two facts declare differently has none.
     # Read only by the type reader (`_Walk._declared_answers`). Empty for a JVM module, whose
@@ -1481,12 +1512,28 @@ def value_index(
     produced: dict[str, list[tuple[str, Mapping[str, Any]]]] = {}
     stored: set[tuple[str, int]] = set()
     stored_parameters: set[tuple[str, int]] = set()
+    field_rows = list(workspace.query("fields"))
+    instance_fields = frozenset(
+        bare_descriptor(str(row["symbol"])) for row in field_rows if not row["static"]
+    )
     for row in workspace.query("field_writes"):
         _record_store(row, stored, stored_parameters)
         written = row.get("value")
         if written is None or row["field"] is None:
             continue
         if row.get("written_by") is not None and str(row["written_by"]) in dead:
+            continue
+        # **A class-body value of an instance field is a default, not what an object holds**
+        # (plan 3 ruling R23): a model's constructor the code never writes (pydantic's,
+        # a dataclass's) sets the field per call, so reading the default as the value would
+        # publish a per-call value as a fact. Only the settings rung reads it, as the
+        # configuration default it is (`settings_fields`). A JVM class initializer writes
+        # static fields alone, so this never applies there.
+        if (
+            by_name
+            and CLASS_BODY in str(row.get("written_by"))
+            and bare_descriptor(str(row["field"])) in instance_fields
+        ):
             continue
         entry = json.loads(str(written)) if isinstance(written, str) else written
         if not isinstance(entry, dict):
@@ -1552,7 +1599,6 @@ def value_index(
             called_at.setdefault(str(row["callee"]), []).append(
                 (str(row["caller"]), int(str(row["ordinal"])))
             )
-    field_rows = list(workspace.query("fields"))
     static_fields = frozenset(
         bare_descriptor(str(row["symbol"])) for row in field_rows if row["static"]
     )
@@ -1570,6 +1616,8 @@ def value_index(
         for key, row in sites.items()
         if key not in reached and row.get("owner") is not None
     )
+    # The module's config model, as `config.with_config_model` hands it over (plan 3 Task 5).
+    model = next((entry for entry in returns_arguments if entry["form"] == CONFIG_MODEL_FORM), None)
     return ValueIndex(
         sites=sites,
         receivers={key: tuple(value) for key, value in receivers.items()},
@@ -1622,7 +1670,27 @@ def value_index(
         stated_returns={
             (str(entry["owner"]), str(entry["method"])): (str(entry["form"]), int(entry["arg"]))
             for entry in returns_arguments
+            if entry["form"] not in (_ENVIRONMENT_READ, CONFIG_MODEL_FORM)
         },
+        environment_reads={
+            (str(entry["owner"]), str(entry["method"])): (entry["arg"], entry.get("default"))
+            for entry in returns_arguments
+            if entry["form"] == _ENVIRONMENT_READ
+        },
+        placeholders=None if model is None else dict(model["placeholders"]),
+        settings_fields=(
+            {}
+            if model is None or not by_name
+            else {
+                field: (
+                    _unresolved(NOT_READABLE)
+                    if expression is None
+                    else Answer(kind=EXPRESSION, value=expression)
+                )
+                for field, found in settings_keys(workspace, model, dispatch).items()
+                for expression in (found.expression(model["placeholders"]),)
+            }
+        ),
         declared_returns={key: value for key, value in declared_returns.items() if value},
         declared_fields={key: value for key, value in declared_fields.items() if value},
         class_parameters=_class_parameters(workspace) if by_name else {},
@@ -3875,6 +3943,11 @@ class _Walk:
             symbol = argument.get("symbol")
             if symbol is None:
                 return _only(trail, _unresolved(NOT_READABLE))
+            # A settings field is its configuration key, whatever its class body writes
+            # (plan 3 Task 5, R24): the deployment decides the value.
+            setting = self._index.settings_fields.get(bare_descriptor(str(symbol)))
+            if setting is not None:
+                return _only(trail, setting)
             # The unseen-object rule (`_binding`, OI-222) is decided HERE, where the reading
             # method is known, and marks the position only when it applies: every other read
             # keeps the one position a binding has always had, so memo and cycle detection
@@ -5054,6 +5127,11 @@ class _Walk:
         stated = None if row is None else self._stated_value(site, row, trail, frames)
         if stated is not None:
             return stated
+        # **A call that reads a deployment-set key by name is that key's expression**, never
+        # the default it carries (plan 3 Task 3, N1).
+        read = None if row is None else self._environment_read(site, row, trail, frames)
+        if read is not None:
+            return read
         # **The producer is a call, and this is where the walk used to be stuck** (§0b,
         # and it is the correction that design says it made three times before it stuck).
         # A backward walk reaching `session.createQueue("raw-audit")` has a `Queue` object
@@ -5196,6 +5274,7 @@ class _Walk:
         2026-11-06-reading-decorators §3d and §3e), or None where no statement applies:
 
         - `returns: N` on the call: the value is its argument N (`Objects.requireNonNull`);
+        - `returns_receiver` on the call: the value is its receiver (`Client.__enter__`);
         - `result_returns: N` on the call that made this call's RECEIVER, in this method: this
           call applies a decorator that hands its argument back, so the value is this call's
           argument N (click's `option(...)` applied to a function is the function);
@@ -5216,6 +5295,10 @@ class _Walk:
         own = stated.get((str(row.get("owner")), str(row["name"])))
         if own is not None and own[0] == _RETURNS:
             return self._stated_slot(site, row, own[1], trail, frames)
+        if own is not None and own[0] == _RETURNS_RECEIVER:
+            # The call returns the object it is called on (`with httpx.Client() as c`: `c` is
+            # the client `__enter__` was called on, plan 3 R13): the value is its receiver.
+            return self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames)
         if own is not None and own[0] == _RESULT_CALLS and self._functions:
             runs = tuple(
                 reached
@@ -5234,6 +5317,79 @@ class _Walk:
         if applied is None or applied[0] != _RESULT_RETURNS:
             return None
         return self._stated_slot(site, row, applied[1], trail, frames)
+
+    def _environment_read(
+        self,
+        site: tuple[str, int],
+        row: Mapping[str, Any],
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...] | None:
+        """`${KEY}` for a call `ValueIndex.environment_reads` states, KEY being the string its
+        key argument stands for; `non_enumerable` where that argument is anything else (an open
+        set of keys). The call's default argument is never read: a default the code carries is
+        not what a deployment has, so it cannot reach the answer (D00's `getenv ?: default`
+        war story). None where the call is no stated read."""
+        reads = self._index.environment_reads
+        if not reads:
+            return None
+        owner = row.get("owner")
+        if owner is None and row.get("receiver") is not None:
+            # A method on an object (`os.environ.get`): the facts name no owner, so the
+            # receiver, read on this path, names the type whose method runs (`bound_owner`).
+            reached: list[_Reached] = []
+            for path, answer in self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames):
+                bound = bound_owner(answer)
+                stated = None if bound is None else reads.get((bound, str(row["name"])))
+                if stated is not None:
+                    reached.extend(self._environment_key(site, row, stated, path, frames))
+            return tuple(reached) or None
+        stated = reads.get((str(owner), str(row["name"])))
+        if stated is None:
+            return None
+        return self._environment_key(site, row, stated, trail, frames)
+
+    def _environment_key(
+        self,
+        site: tuple[str, int],
+        row: Mapping[str, Any],
+        stated: tuple[Any, Any],
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...]:
+        """The expression of the key argument `stated[0]` names, or `non_enumerable` (see
+        `_environment_read`), a literal default at `stated[1]` rendered into it."""
+        arguments = row["arguments"] or []
+        slot = argument_slot(arguments, stated[0])
+        if slot is None or slot == UNPACKED_SLOT:
+            return _only(trail, _unresolved(NON_ENUMERABLE))
+        given = None if stated[1] is None else argument_slot(arguments, stated[1])
+        written = None if given is None or given == UNPACKED_SLOT else arguments[given]
+        default = (
+            written.get("value")
+            if written is not None and written.get("kind") in _LITERAL_KINDS
+            else None
+        )
+        # R25: where the module's config model is known, a literal default renders after its
+        # separator, as a settings field's does; the key alone otherwise.
+        marks = self._index.placeholders
+        rendered = (
+            "" if marks is None or default is None else marks["default_separator"] + str(default)
+        )
+        return tuple(
+            (
+                reached_trail,
+                Answer(
+                    kind=EXPRESSION,
+                    value="${" + str(answer.value) + rendered + "}",
+                )
+                if answer.kind == LITERAL and answer.literal_kind == STRING
+                else _unresolved(NON_ENUMERABLE),
+            )
+            for reached_trail, answer in self._resolve(
+                (_SLOT, site[0], site[1], slot), trail, frames
+            )
+        )
 
     def _stated_slot(
         self,

@@ -96,6 +96,11 @@ class LibraryNames(Protocol):
         one target, or the closed list where the library's branches bind it differently."""
         ...
 
+    def variable_type(self, target: Target) -> TypeRef | None:
+        """The class a library module's variable `target` is written to hold (`environ:
+        _Environ[str]`), or None where the library writes no one class for it."""
+        ...
+
     def call_returns(
         self,
         owner: str,
@@ -192,6 +197,12 @@ class ProjectNames(Protocol):
     def class_object(self, module: str, name: str) -> str | None:
         """The class `X` that `module.name` holds, where every write to it in that file gives
         a written `type[X]` (ruling R17). None for any other name."""
+        ...
+
+    def variable_class(self, module: str, name: str) -> str | None:
+        """The class whose instance `module.name` holds, where that file writes it from one
+        construction of one class (`settings = Settings()`, ruling R23). None for any other
+        name, and where its writes construct two classes."""
         ...
 
 

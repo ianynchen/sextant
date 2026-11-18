@@ -81,6 +81,12 @@ _NO_DESCRIPTOR_KEY_IN_THIS_ENGINE = frozenset(
     }
 )
 
+# Whole catalogs of a language with NO overloads (plan 3 Task 2): a Python function has one
+# signature, so its name is the method, and its call sites carry no erased descriptor to pin
+# (the Python scanner writes `(*)`). The defect above — two overloads sharing a count — cannot
+# arise; listed by catalog so a JVM catalog can never borrow the exemption.
+_NO_OVERLOADS_IN_THIS_LANGUAGE = frozenset({"requests", "httpx"})
+
 
 def method_rows() -> list[dict[str, str]]:
     """Every `methods:` row in every shipped catalog, wherever it is nested.
@@ -152,7 +158,9 @@ def test_every_catalog_method_row_declares_a_descriptor():
         {
             (row["catalog"], row["where"], row["name"], row["arity"])
             for row in method_rows()
-            if not row["descriptor"] and _identity(row) not in _NO_DESCRIPTOR_KEY_IN_THIS_ENGINE
+            if not row["descriptor"]
+            and _identity(row) not in _NO_DESCRIPTOR_KEY_IN_THIS_ENGINE
+            and row["catalog"] not in _NO_OVERLOADS_IN_THIS_LANGUAGE
         }
     )
     assert undeclared == [], (

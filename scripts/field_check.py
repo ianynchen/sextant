@@ -16,7 +16,7 @@ exactly that commit before validating, so upstream drift can never masquerade as
 regression — refreshing a pin (a new `commit`, and the counts/routes re-recorded against
 it) is a deliberate, reviewed act, not something this script does on its own.
 
-Three optional keys carry an upstream whose build is not one wrapper-script invocation at
+Four optional keys carry an upstream whose build is not one wrapper-script invocation at
 the repository root (`mall-admin.json` is the first to need any of them):
 
 - **`module`** — the path under the clone that `analyze`/`render` run against, and whose
@@ -25,6 +25,14 @@ the repository root (`mall-admin.json` is the first to need any of them):
 - **`maven`** — the Maven launcher, defaulting to the wrapper `./mvnw`. `macrozheng/mall`
   ships no wrapper, so its pin names the system `mvn`; naming it here rather than falling
   back silently keeps "which Maven built this" a property of the recorded pin.
+- **`build`** — `"uv"` for a Python upstream: `_ensure_environment` then runs `uv sync --frozen
+  --no-install-project` in the module (offline first, online once, like Maven) instead of a
+  Maven build, and `maven`/`jdk` are unused. `--frozen` never re-resolves, so the environment
+  is the lock's. **`lock`**, with it, names a sidecar lock under `field-expectations/` for an
+  upstream that commits none (`py-dispatch.uv.lock`): it is copied into the module as an
+  untracked `uv.lock`, which `_checkout`'s `--untracked-files=no` ignores. **`python`**
+  is the interpreter series handed to `uv sync --python` where the machine default has no wheel
+  for a locked package (`py-dispatch`: `thinc` has none for 3.13 and its source build fails).
 - **`jdk`** — the MAJOR Java version the upstream's build requires, checked against the one
   Maven will actually use (its own `-v` banner) and REFUSED on a mismatch rather than left
   to fail somewhere inside the build. `macrozheng/mall` is why: on a JDK newer than 21 its
@@ -96,6 +104,7 @@ from __future__ import annotations
 import html
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -231,6 +240,29 @@ def _refused_if_wrong_jdk(repo: Path, maven: str, required_major: str) -> None:
         raise FieldCheckFailure(
             f"{repo} pins JDK {required_major} and Maven will use {found.group(1)}; "
             f"set JAVA_HOME to a {required_major} JDK and re-run"
+        )
+
+
+def _ensure_environment(module: Path, lock: str | None, python: str | None = None) -> None:
+    """A Python pin's virtualenv at the module, from its lock and nothing else.
+
+    `uv sync --frozen` refuses to re-resolve, so what installs is what the lock names; the
+    sidecar `lock` (an upstream with none of its own) IS the resolution and is copied in first.
+    `--no-install-project`: the upstream's own package is the thing Sextant reads, not
+    something to build. Idempotent and quick when current, so no skip logic. Offline first,
+    online once — this is the one step allowed to reach the network."""
+    if lock is not None:
+        shutil.copyfile(EXPECTATIONS_DIR / lock, module / "uv.lock")
+    sync = ["uv", "sync", "--frozen", "--no-install-project"]
+    if python is not None:
+        sync += ["--python", python]
+    if _run([*sync, "--offline"], cwd=module).returncode == 0:
+        return
+    online = _run(sync, cwd=module)
+    if online.returncode != 0:
+        raise FieldCheckFailure(
+            f"`uv sync --frozen` failed in {module} even with the network allowed:\n"
+            f"{online.stdout}\n{online.stderr}"
         )
 
 
@@ -578,7 +610,12 @@ def _check_one(name: str) -> list[str]:
     _ensure_repo_present(repo, expectation["remote"])
     maven = expectation.get("maven", _DEFAULT_MAVEN)
     moved_head = _checkout(repo, expectation["commit"])
-    _ensure_compiled(repo, force=moved_head, module=module, maven=maven, jdk=expectation.get("jdk"))
+    if expectation.get("build") == "uv":
+        _ensure_environment(module, expectation.get("lock"), expectation.get("python"))
+    else:
+        _ensure_compiled(
+            repo, force=moved_head, module=module, maven=maven, jdk=expectation.get("jdk")
+        )
     _analyze_and_render(module)
 
     metadata = json.loads((module / ".sextant" / "metadata.json").read_text(encoding="utf-8"))

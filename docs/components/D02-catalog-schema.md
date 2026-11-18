@@ -36,7 +36,7 @@ matches:
 | Field | Meaning |
 |---|---|
 | `id` | Stable. Appears in `evidence` and in skip reports. |
-| `style` | Which engine interprets `matches` |
+| `style` | Which engine interprets `matches`. Required with `matches`; a **declaration-only** file (amended 2026-11-17) carries neither and instead requires `id`, `detect` and a `config_model`, and no engine runs it |
 | `protocol`, `direction`, `format` | From [D00](D00-fact-schema.md)'s closed sets. **Defaults** — a match may resolve them differently, see §2c. Omitted only by a NON-WIRE style, below |
 | `detect` | Coordinates that make this catalog's framework rule applicable to a module, plus `required`, `satisfied_by` and `superseded_by`. **Read since Phase 2O Task 6 — by two styles, and by any catalog setting `detect.required`; `superseded_by` is read for every catalog that declares it** — see below |
 | `measured` | The artifact(s) and version(s) this catalog's rule was verified against, and the probe that verified it — §1a |
@@ -768,6 +768,11 @@ not, that it is genuinely a constructor rather than an ordinary void call.
 - **`result_calls: argN`** — calling the call's result runs the call's OWN argument N with the
   same arguments: a wrapper. `python-wrappers.yml` states `functools.cache` and `lru_cache`,
   `contextlib.contextmanager` and `asynccontextmanager`, and `tenacity.retry`.
+- **`returns_receiver: true`** — the call returns the object it is called on (ruling 4 of spec
+  2026-10-30, the `fluent` step's word, here in a value model; plan 3 R13).
+  `value-models/python-clients.yml` states httpx's `Client.__enter__` and
+  `AsyncClient.__aenter__` and requests' `Session.__enter__`, so `with … as c` binds `c` to
+  the client its construction built.
 
 `owner` is dotted as every catalog spells a type, a module included (`click.decorators` is the
 facts' `click/decorators#`). `by` is required, as `identified_by`'s is; a call stated in two
@@ -783,6 +788,22 @@ argument N where that is a function — the bare spelling `lru_cache(f)`, never 
 value whose type the facts name and whose `__call__` no body here has (typeshed types
 `@functools.cache`'s name as `_lru_cache_wrapper`), for the functions its receiver is, and the
 edge to each is drawn beside the library edge. A position counts positional arguments only.
+
+**`environment_reads` — a call that reads a deployment-set key by name** (plan 3 Task 3, N1,
+approved 2026-11-17). A `value-models/` file may declare `environment_reads: [{owner, method,
+key_arg, default_arg?, by}]`; each `*_arg` is an integer or `{keyword: name}` / `{arg: N,
+keyword: name}` as elsewhere. A call matching an entry is the expression `${KEY}`, KEY being the
+string its `key_arg` stands for; a key that is no string is `unresolved non_enumerable`. **A
+literal default the call carries renders into the expression** as `${KEY:-default}` (ruled
+2026-11-18): `default_arg` names it, the key is always kept, and `resolved_peers` uses the default
+only in an environment where nothing sets the key, the rule the JVM applies to Spring
+`${x:default}`. A default that is no literal renders nothing. `value-models/python-environment.yml` states `os.getenv` and `os._Environ`'s
+`__getitem__` and `get`, the typeshed symbols; `os.environ`'s owner is the class its header writes
+(`environ: _Environ[str]`, ruling R16: a library module's variable is typed from that module's
+own text, as plan 2's R17 types a project module's). The entries ride the stated-call table
+(`Catalog.returns_arguments`, form `environment_read`) to `values._Walk._environment_read`, which
+runs where `_stated_value` does. Refused naming the file: a missing `key_arg` or `by`, an
+unknown key, an argument that is no reference, and one call stated twice.
 
 An edit here moves `_catalog_hash` (`api._MODEL_DIRECTORIES`), like an edit to any of the
 other four directories: it is knowledge a run was produced with.
@@ -1969,6 +1990,7 @@ url_arg | channel_arg, body_arg?, response_arg?, record_arg?, direction?,
 path_from_argument_type?, channel_via?, address_arg_2?, lambda_arg?,
 lambda_steps?, request_url?, address_parts?}`, beside the catalog-level `default_address?` and
 `client_base?`, all described below.
+
 **`http_method` is a literal when the catalog already knows the verb** — `postForObject` is
 always a POST, so the catalog states it once. **`method_arg` is a position when the call
 site carries it instead** — `exchange`'s verb is its own `HttpMethod` argument, an
@@ -1976,6 +1998,15 @@ site carries it instead** — `exchange`'s verb is its own `HttpMethod` argument
 engine reads the resolved value per call rather than assuming one. When a `method_arg`
 slot cannot be resolved — the verb arrives in a parameter — the row still derives, with
 `method` NULL and `resolution` `unresolved`: the call was made, only its verb is unread.
+**A `method_arg` may read a string** (plan 3 R10: `requests.request("get", u)`,
+`client.stream("POST", u)`): a string literal is the verb, and a non-literal stays NULL
+`unresolved` as above. **`method_case: upper`** (plan 3 R15, a general row key) says the library
+upper-cases the string before it sends it (`prepare_method`, httpx's `Request.__init__`, probe
+"Verb case"), so `"get"` is a GET; absent, the string is read as written.
+**`body_arg` may be a LIST of slots** (plan 3 R11), `[{keyword: content}, {keyword: files}, …]`
+in the library's own precedence (probe "Several body keywords"): the first slot the call writes
+is the body. A call writing none of them has no body and the row stays resolvable, as one with
+no `body_arg` is; a slot written as `None` still counts as written (OI-426).
 `body_arg` and
 `response_arg` are optional: `getForObject` has no request body, and a `void`-returning
 call has no response to root.
@@ -2029,7 +2060,15 @@ record a destination nothing could send to plus a peer no messaging fact ever ca
 base** (spec 2026-10-26 §3d, §3g items 2 and 4). A `single_call` catalog may declare
 `matches.client_base` exactly as a `fluent` one does (§2's `fluent`, read by the same
 `shapes/client_base.client_base_of`, usually merged from a `client_model`, §1g), with
-`client_arg` the position of the client in the matched call itself. A relative address read
+`client_arg` the position of the client in the matched call itself, or `receiver` (plan 3 R8, the
+word `fluent` has): the object the call is made on. **A call whose facts name no owner is read
+as a call on the owner the receiver binding settled on** (plan 3 R9,
+`effective_calls.bound_positions`; `self.session.post(…)` on a field the scanner wrote no type
+for) — only where EVERY settled path names one and the same owner at `resolved`; a disagreeing
+or unsettled path leaves the site unowned, which is the true answer. **The map is `single_call`'s
+alone**: `fluent` and `combinator` read `effective_call_sites` as the facts wrote it, so a
+fluent or combinator chain on an untyped field is still not owned (OI-422). A JVM module's
+facts name every owner, so its map is empty. A relative address read
 in full then joins the base of the client at that position, by the one shared decision
 `fluent` makes too (`shapes/client_base.against_client_base`): an absolute address is the
 whole address, a relative one is joined, a configuration base is carried at `partial`, and
@@ -2699,6 +2738,39 @@ address with a scheme and no host (`gemini-pro:generateContent`) keeps its schem
 base's host (rows 81-82). That last case, an address `findScheme` refuses, and an authority with
 no host all DECLINE: `join_url` answers None and the caller keeps the address unresolved. An
 absolute address is returned as written, where Ktor re-renders it.
+
+**`append_to_base` is httpx 0.28.1's `Client._merge_url`** (plan 3 R8; probe
+`requests_httpx_rules.md`, "base_url", every row of its table): the base's path with a trailing
+`/`, then the address's path with its leading `/` removed, then dot segments removed — so
+`/users`, `users` and `./users` over `…/api` are all `…/api/users`, `../x` is `…/x`, an empty
+address is `…/api/`, and the address's query is kept. httpx joins a protocol-relative
+`//other.example/x` onto the base's host (`…/api/x`); the join states that, but
+`against_client_base` meets the address's host first and takes it as absolute, so such an
+address is published as written (OI-423). DECLINES what the probe did not measure: an address with a scheme and no host, a
+fragment, a `//` with no host, a base carrying a query or a fragment. It is declared by an
+argument ladder (above); `request_url` and `address_parts` beside it are refused at load.
+
+**`base_arg` — a base handed to the call that builds the client** (plan 3 R8). A `ladder` whose
+rungs read `{owner, method, base_arg}` instead of `block_arg` is an **argument ladder**:
+`base_arg` is an argument reference (`values.argument_slot`: an integer, `{keyword: name}` or
+`{arg: N, keyword: name}`) of the construction, and the base is that argument's value read by the
+value walk (so a literal, a field or a settings key all work). It has no block to hold a setter,
+so `setter` and `may_set_base` are not declared on it; a rung of each kind in one ladder is
+refused. `client_arg: receiver` — the word `fluent` already accepts — is also accepted by
+`single_call`: the client is the object the matched call is made on. `httpx.yml` states it:
+
+```yaml
+client_base:
+  client_arg: receiver
+  ladder:
+    - { owner: httpx._client.Client,      method: <init>, base_arg: { keyword: base_url } }
+    - { owner: httpx._client.AsyncClient, method: <init>, base_arg: { keyword: base_url } }
+  join: append_to_base
+```
+
+A relative address on a client no rung reaches (a module function; a client built without
+`base_url`) publishes `unresolved`: httpx refuses it (`UnsupportedProtocol`). Not read:
+`client.base_url = …` after construction, a property assignment and no call (OI-421).
 
 **How the base is read** (`shapes/client_base.client_base`, shared by every style declaring
 the key). The client at `client_arg` is walked by the value walk's producer reader
@@ -6056,6 +6128,16 @@ serialization:
   its request and writes its response, an outbound row the reverse, a `both` row each both
   ways), through the column's `item` chain and every field of a body assembled from several
   parameters (`fields`), and every payload a parse binds (`parse_calls`, read on input).
+- **`serializers: [<method>, …]` and `serializer_names_when: {keyword, value}`** (plan 3 N4,
+  approved 2026-11-17; R14): a body argument that is a call to one of these methods on a model
+  (`json=order.model_dump(by_alias=True)`) carries the RECEIVER's shape, the dict or text the
+  model's serialiser writes. `serializer_names_when` says when those calls write the shape's
+  WIRE names: the named keyword must be written with the literal value
+  (`model_dump()` without `by_alias=True` writes the fields' own names, measured on the fixture's
+  `OrderIn`, so naming the wire alias there would be a lie). Where it does not hold the body is
+  not described (no shape), never named by a guess. Both keys are optional;
+  `serializer_names_when` is refused without `serializers`. The receiver's written type is read
+  as a parameter's is (OI-428).
 - **`open_when: {arg: <argument>, values: [<literal>, ...]}`** (task 9c, approved 2026-11-09):
   the configuration argument (read off `name_generator`'s `config_call`s, merged as the
   generator is, the last class writing it winning) whose listed literal lets a model take keys
@@ -6329,6 +6411,56 @@ default all that follows; where the key resolves to nothing the default is resol
 through the same lookup, so `${a:${b}}` is `b`'s value — a cycle through it still a cycle. No
 escaping rules live here (CP-48 row 10 records Spring's, not modelled); delimiters and one
 separator are what every surveyed placeholder grammar reduces to.
+
+**`sources` may name a file the CODE names — `{from_argument: env_file}`** (plan 3 Task 4, N3).
+The entry is one unprofiled source whose file is the string (or tuple of strings, the later
+overriding the earlier) written as argument `env_file` of a config call whose RESULT a
+`model_config` class-body field holds (`settings_form`, below); its rows are the `default`
+environment. A new analyze step (`stages/named_config_files.py`, after the scan and before the
+read loop) reads only the files so named, inside the module and nowhere else; application code
+opens no file (ports). The file is read by a dotenv reader selected by name
+(`ingress/read/dotenv.py`, python-dotenv 1.2.4's syntax and `${NAME}` / `${NAME:-default}`
+expansion, probe `pydantic_settings_rules.md`). The built-in ignore rules still apply to a named
+file except the two dotenv patterns (`.env`, `.env.*`): `secrets/app.env` is refused, and a user
+`.sextantignore` is honoured (`IgnoreRules.matches_beyond_dotenv`). The file name is
+resolved against the module root (pydantic-settings resolves it against the process working
+directory, so the two agree only where the service runs from its module root). A name written through a
+variable is read by nobody; the field that reads it is `external` and `resolved_peers` names the
+expression in `unresolved_detail`. A file listed in `sources` by `from_argument` is the only
+source of a **declaration-only catalog** (§1): `pydantic-settings.yml` has no `style`.
+
+**`settings_form` — how a settings class names the key each field is read from** (plan 3 Task 5,
+N2, R24; one block, in `pydantic-settings.yml`, read by the value walk's settings rung,
+`resolve/settings_fields.py`). Five keys:
+
+```yaml
+settings_form:
+  config_field: model_config                    # the class-body field holding the config call
+  config_call:                                  # the calls that make it (a dict display is `dict(...)`)
+    - pydantic_settings.main.SettingsConfigDict.<init>
+    - builtins.dict.<init>
+  settings_base: pydantic_settings.main.BaseSettings   # a settings class has it in its lookup order
+  prefix_key:
+    keyword: env_prefix
+    target: { keyword: env_prefix_target, default: variable, name: [variable, all], alias: [alias, all] }
+  name_from: [validation_alias, alias, name]    # first present; `name` is the field's own name
+  case_insensitive: { default: true, unless: { keyword: case_sensitive, value: true } }
+```
+
+A class whose C3 lookup order reaches `settings_base` is a settings class; its configuration is the
+`config_call` held by `config_field`, merged over its bases with the class itself winning
+(pydantic's own merge). A field's key is the first name `name_from` finds (a keyword of the call
+that made the field's class-body value, or the reserved entry `name`), with the `prefix_key`
+prefix where `target` says the chosen name takes it (`target.name` lists the values under which
+the declared name is prefixed, `target.alias` those under which an alias is; the default
+`variable` prefixes names only, as the probe measured), upper-cased unless `case_insensitive`
+is switched off. **A rule written as no literal leaves the key unknown** (R4): the field is
+`unresolved`, never a guessed key. The field's class-body literal is rendered into the
+expression `${KEY:-default}` through the model's `placeholders.default_separator` (R25) and is
+the value only where nothing the deployment sets says otherwise: `resolved_peers` answers per
+environment. A Python instance field takes no class-body default in the plain value walk (OI-447);
+the rung is the only place a default is read. Read for a module whose config model carries a
+`settings_form`; cost measured 0.087 s per read (GUIDELINES section 8.7).
 
 **`key_matching` is a closed two-value set governing how a `config_entry`'s normalized
 `key_path` ([D00](D00-fact-schema.md) §5c) is compared against a catalog-declared key

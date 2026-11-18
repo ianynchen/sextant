@@ -1,8 +1,10 @@
 from typing import Annotated
 from uuid import UUID, uuid4
 
+import httpx
 from fastapi import Cookie, Depends, Header, Query, Response
 
+from app.clients import notifier, notify
 from app.deps import DbSession, Paging, Principal, audit
 from app.routing import APIRouter
 from app.schemas import OrderIn, OrderOut
@@ -14,8 +16,13 @@ STATS_VERSION = "/v2"
 
 
 @router.post("")
-def create(body: OrderIn, svc: OrderService = Depends(get_service)) -> OrderOut:  # noqa: B008
-    orders.create(body.customer_id, note=body.note)
+async def create(
+    body: OrderIn,
+    svc: OrderService = Depends(get_service),  # noqa: B008
+    events: httpx.AsyncClient = Depends(notifier),  # noqa: B008
+) -> OrderOut:
+    order_id = orders.create(body.customer_id, note=body.note)
+    await notify(events, str(order_id))
     return OrderOut.model_construct(order_id=uuid4(), status="new")
 
 

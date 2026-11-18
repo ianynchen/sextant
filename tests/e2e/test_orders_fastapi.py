@@ -16,7 +16,11 @@ from click.testing import CliRunner
 
 from fixture_build import FIXTURES
 from reason_guard import outside_the_list, stored_reason_tables, stored_reasons_outside_the_list
+from sextant.application.resolve.config import scope_config_models, with_config_model
+from sextant.application.resolve.resolved_peers import resolved_peers
 from sextant.cli.app import cli
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 ORACLE = Path(__file__).with_name("fastapi_oracle.py")
@@ -32,7 +36,7 @@ EXPECTED: dict[
     tuple[tuple[str, ...], str], tuple[str, str | None, set[tuple[str, str, bool]], list[str]]
 ] = {
     (("GET",), "/health"): ("health", "dict[str, str]", {REQUEST_ID}, []),
-    # Included only under `if flags.SUPPORT_ROUTES:`; the repository's value is True, so FastAPI
+    # Included only under `if settings.support_routes:`; the field's default is True, so FastAPI
     # run with it serves the route. Sextant publishes it "not evaluated" (OI-368).
     (("GET",), "/support/ping"): ("ping", "dict[str, str]", {REQUEST_ID}, []),
     (("GET",), "/api/v1/orders/{order_id}"): (
@@ -312,44 +316,136 @@ ORDER_OUT_BY_KEYWORD = (
 )
 
 PINNED: dict[str, list[tuple[object, ...]]] = {
-    # The one route included under a test (`if flags.SUPPORT_ROUTES:`): FastAPI run with the
-    # repository's value serves it, and Sextant says it exists "not evaluated" (OI-368).
+    # The one route included under a test (`if settings.support_routes:`), a settings field the
+    # deployment sets: FastAPI run with the default serves it, and Sextant says it exists "not
+    # evaluated" (OI-368), a property condition on the field's key, the default as evidence.
     "endpoint_existence": [
         (
             "GET",
             "/support/ping",
             0,
             "app/main#<clinit>",
-            "test",
-            '{"holds": true, "reads": ["flags.SUPPORT_ROUTES"], "test": "flags.SUPPORT_ROUTES"}',
+            "property",
+            (
+                '{"holds": true, "keys": ["ORDERS_SUPPORT_ROUTES"], '
+                '"reads": ["settings.support_routes"], "test": "settings.support_routes"}'
+            ),
             "default",
             "unresolved",
             "unresolved",
-            "a condition this analysis does not evaluate: `flags.SUPPORT_ROUTES`",
+            (
+                "`ORDERS_SUPPORT_ROUTES` is set by the deployment; this module's `default` "
+                "configuration sets nothing, its default is `True`"
+            ),
         ),
     ],
     "endpoints": [
-        ("DELETE", "/api/v1/admin/orders/{order_id}", "app/admin#purge", "resolved", None, None),
-        ("GET", "/api/v1/admin/users", "app/admin#users", "resolved", None, ARRAY_OF_STRING),
-        ("GET", "/api/v1/orders/a", "app/orders#either", "resolved", None, MAP_OF_STRING),
-        ("GET", "/api/v1/orders/b", "app/orders#either", "resolved", None, MAP_OF_STRING),
-        ("GET", "/api/v1/orders/export", "app/orders#export", "resolved", None, ARRAY_OF_STRING),
-        ("GET", "/api/v1/orders/paged", "app/orders#paged", "resolved", None, MAP_OF_INTEGER),
-        ("GET", "/api/v1/orders/raw", "app/orders#raw", "resolved", None, None),
-        ("GET", "/api/v1/orders/v2/stats", "app/orders#stats", "resolved", None, MAP_OF_INTEGER),
         (
+            "inbound",
+            "DELETE",
+            None,
+            "/api/v1/admin/orders/{order_id}",
+            "app/admin#purge",
+            "resolved",
+            None,
+            None,
+        ),
+        (
+            "inbound",
             "GET",
+            None,
+            "/api/v1/admin/users",
+            "app/admin#users",
+            "resolved",
+            None,
+            ARRAY_OF_STRING,
+        ),
+        (
+            "inbound",
+            "GET",
+            None,
+            "/api/v1/orders/a",
+            "app/orders#either",
+            "resolved",
+            None,
+            MAP_OF_STRING,
+        ),
+        (
+            "inbound",
+            "GET",
+            None,
+            "/api/v1/orders/b",
+            "app/orders#either",
+            "resolved",
+            None,
+            MAP_OF_STRING,
+        ),
+        (
+            "inbound",
+            "GET",
+            None,
+            "/api/v1/orders/export",
+            "app/orders#export",
+            "resolved",
+            None,
+            ARRAY_OF_STRING,
+        ),
+        (
+            "inbound",
+            "GET",
+            None,
+            "/api/v1/orders/paged",
+            "app/orders#paged",
+            "resolved",
+            None,
+            MAP_OF_INTEGER,
+        ),
+        ("inbound", "GET", None, "/api/v1/orders/raw", "app/orders#raw", "resolved", None, None),
+        (
+            "inbound",
+            "GET",
+            None,
+            "/api/v1/orders/v2/stats",
+            "app/orders#stats",
+            "resolved",
+            None,
+            MAP_OF_INTEGER,
+        ),
+        (
+            "inbound",
+            "GET",
+            None,
             "/api/v1/orders/{order_id}",
             "app/orders#get",
             "resolved",
             None,
             ORDER_OUT_BY_KEYWORD,
         ),
-        ("GET", "/health", "app/main#health", "resolved", None, MAP_OF_STRING),
-        ("GET", "/support/ping", "app/support#ping", "resolved", None, MAP_OF_STRING),
-        ("POST", "/api/v1/orders", "app/orders#create", "resolved", ORDER_IN, ORDER_OUT),
+        ("inbound", "GET", None, "/health", "app/main#health", "resolved", None, MAP_OF_STRING),
         (
+            "inbound",
+            "GET",
+            None,
+            "/support/ping",
+            "app/support#ping",
+            "resolved",
+            None,
+            MAP_OF_STRING,
+        ),
+        (
+            "inbound",
             "POST",
+            None,
+            "/api/v1/orders",
+            "app/orders#create",
+            "resolved",
+            ORDER_IN,
+            ORDER_OUT,
+        ),
+        (
+            "inbound",
+            "POST",
+            None,
             "/api/v1/orders/{order_id}/cancel",
             "app/orders#cancel",
             "resolved",
@@ -357,12 +453,141 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             MAP_OF_STRING,
         ),
         (
+            "inbound",
             "PUT",
+            None,
             "/api/v1/orders/{order_id}/cancel",
             "app/orders#cancel",
             "resolved",
             None,
             MAP_OF_STRING,
+        ),
+        # `app/clients.py`, the outbound calls (plan 3 Task 2): `requests` and `httpx`.
+        (
+            "outbound",
+            "GET",
+            "inventory.example",
+            "/stock/{sku}",
+            "app/clients#stock",
+            "resolved",
+            None,
+            None,
+        ),
+        # `json=order.model_dump(mode="json", by_alias=True)`: the model's shape (plan 3 N4).
+        (
+            "outbound",
+            "PUT",
+            "inventory.example",
+            "/reservations/{sku}",
+            "app/clients#reserve",
+            "resolved",
+            ORDER_IN,
+            None,
+        ),
+        (
+            "outbound",
+            "POST",
+            "billing.example",
+            "/charges",
+            "app/clients/Billing#charge",
+            "resolved",
+            ORDER_IN,
+            None,
+        ),
+        # A `dict` display as the body is not read: the row says so (`unresolved`), the address
+        # stays. The same for `ship` and `notify` below.
+        (
+            "outbound",
+            "POST",
+            "billing.example",
+            "/refunds",
+            "app/clients/Billing#refund",
+            "unresolved",
+            None,
+            None,
+        ),
+        (
+            "outbound",
+            "POST",
+            "shipping.example",
+            "/api/shipments",
+            "app/clients#ship",
+            "unresolved",
+            None,
+            None,
+        ),
+        (
+            "outbound",
+            "GET",
+            "shipping.example",
+            "/api/carriers",
+            "app/clients#carriers",
+            "resolved",
+            None,
+            None,
+        ),
+        # The verb is a parameter: NULL, the row unresolved (Review Focus 2).
+        (
+            "outbound",
+            None,
+            "shipping.example",
+            "/api/shipments/{order_id}",
+            "app/clients#track",
+            "unresolved",
+            None,
+            None,
+        ),
+        # A client built per call (`ledger_client()`, no annotation): the binding gives its
+        # owner, and the base is the factory's defaulted parameter.
+        (
+            "outbound",
+            "DELETE",
+            "ledger.example",
+            "/v2/entries/{order_id}",
+            "app/clients#record",
+            "resolved",
+            None,
+            None,
+        ),
+        # A client a `with` statement opens: `__enter__` returns it (plan 3 R13). Its base is a
+        # settings field: the key with its default (plan 3 Task 5, R24/R25), carried and never
+        # joined, as every configuration base is (`against_client_base`).
+        (
+            "outbound",
+            "GET",
+            None,
+            "${ORDERS_RATES_URL:-https://rates.example/v1}/rates/{currency}",
+            "app/clients#rates",
+            "partial",
+            None,
+            None,
+        ),
+        # A client handed in by a caller nothing reads: the path is kept, no peer (Review Focus 3).
+        ("outbound", "GET", None, "/status", "app/clients#status", "unresolved", None, None),
+        # A deployment-set address read by name: the expression, never the default the call
+        # carries as the value (plan 3 Task 3, rulings N1 and R17), which renders inside it
+        # (R25); the f-string keeps the whole address.
+        (
+            "outbound",
+            "GET",
+            None,
+            "http://${AUDIT_HOST:-audit.local}/audit",
+            "app/clients#audit",
+            "resolved",
+            None,
+            None,
+        ),
+        ("outbound", "POST", None, "${WEBHOOK_URL}", "app/clients#webhook", "resolved", None, None),
+        # The client a dependency yields (`Depends(notifier)` on `create`), its base joined.
+        (
+            "outbound",
+            "POST",
+            "notify.example",
+            "/v1/events",
+            "app/clients#notify",
+            "unresolved",
+            None,
+            None,
         ),
     ],
     "endpoint_metadata": [
@@ -512,6 +737,7 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
         ("GET", "/support/ping", "app/support#ping", "inbound_endpoint"),
         ("POST", "/api/v1/orders", "app/deps#audit", "inbound_endpoint"),
         ("POST", "/api/v1/orders", "app/orders#create", "inbound_endpoint"),
+        ("POST", "/api/v1/orders", "app/clients#notifier", "inbound_endpoint"),
         ("POST", "/api/v1/orders", "app/services#get_service", "inbound_endpoint"),
         ("POST", "/api/v1/orders/{order_id}/cancel", "app/deps#audit", "inbound_endpoint"),
         ("POST", "/api/v1/orders/{order_id}/cancel", "app/orders#cancel", "inbound_endpoint"),
@@ -527,6 +753,97 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
         ("app/admin#<clinit>", 2, "virtual", None, None, "unresolved"),
         ("app/admin#<clinit>", 3, "virtual", "fastapi/routing/APIRouter#delete", None, "resolved"),
         ("app/admin#<clinit>", 4, "virtual", None, None, "unresolved"),
+        (
+            "app/clients#<clinit>",
+            0,
+            "special",
+            "app/clients/Billing#<init>",
+            "app/clients/Billing#<init>",
+            "resolved",
+        ),
+        ("app/clients#<clinit>", 1, "special", "httpx/_client/Client#<init>", None, "resolved"),
+        ("app/clients#audit", 0, "virtual", "os/_Environ#get", None, "resolved"),
+        ("app/clients#audit", 2, "static", "requests/api#get", None, "resolved"),
+        ("app/clients#carriers", 0, "virtual", "httpx/_client/Client#request", None, "resolved"),
+        ("app/clients#webhook", 0, "virtual", "os/_Environ#__getitem__", None, "resolved"),
+        ("app/clients#webhook", 1, "static", "requests/api#post", None, "resolved"),
+        (
+            "app/clients#ledger_client",
+            0,
+            "special",
+            "httpx/_client/Client#<init>",
+            None,
+            "resolved",
+        ),
+        (
+            "app/clients#notifier",
+            0,
+            "special",
+            "httpx/_client/AsyncClient#<init>",
+            None,
+            "resolved",
+        ),
+        (
+            "app/clients#notifier",
+            1,
+            "virtual",
+            "httpx/_client/AsyncClient#aclose",
+            None,
+            "resolved",
+        ),
+        ("app/clients#notify", 0, "virtual", "httpx/_client/AsyncClient#post", None, "resolved"),
+        ("app/clients#rates", 0, "special", "httpx/_client/Client#<init>", None, "resolved"),
+        ("app/clients#rates", 1, "virtual", "httpx/_client/Client#__enter__", None, "resolved"),
+        ("app/clients#rates", 3, "virtual", "httpx/_client/Client#get", None, "resolved"),
+        (
+            "app/clients#record",
+            0,
+            "static",
+            "app/clients#ledger_client",
+            "app/clients#ledger_client",
+            "resolved",
+        ),
+        ("app/clients#record", 2, "virtual", "httpx/_client/Client#delete", None, "resolved"),
+        ("app/clients#reserve", 1, "virtual", "app/schemas/OrderIn#model_dump", None, "resolved"),
+        ("app/clients#reserve", 2, "static", "requests/api#put", None, "resolved"),
+        ("app/clients#ship", 0, "virtual", "httpx/_client/Client#post", None, "resolved"),
+        ("app/clients#status", 0, "virtual", "httpx/_client/Client#get", None, "resolved"),
+        ("app/clients#stock", 1, "static", "requests/api#get", None, "resolved"),
+        ("app/clients#stock", 2, "virtual", "requests/models/Response#json", None, "resolved"),
+        ("app/clients#stock", 3, "virtual", None, None, "unresolved"),
+        ("app/clients#track", 1, "virtual", "httpx/_client/Client#request", None, "resolved"),
+        (
+            "app/clients/Billing#<init>",
+            0,
+            "special",
+            "requests/sessions/Session#<init>",
+            None,
+            "resolved",
+        ),
+        (
+            "app/clients/Billing#charge",
+            0,
+            "virtual",
+            "app/schemas/OrderIn#model_dump",
+            None,
+            "resolved",
+        ),
+        (
+            "app/clients/Billing#charge",
+            1,
+            "virtual",
+            "requests/sessions/Session#post",
+            None,
+            "resolved",
+        ),
+        (
+            "app/clients/Billing#refund",
+            0,
+            "virtual",
+            "requests/sessions/Session#post",
+            None,
+            "resolved",
+        ),
         ("app/deps#<clinit>", 0, "static", "fastapi/param_functions#Depends", None, "resolved"),
         ("app/deps#<clinit>", 1, "static", "typing/Annotated#__class_getitem__", None, "resolved"),
         (
@@ -576,7 +893,6 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             "app/deps/User#<init>",
             "resolved",
         ),
-        ("app/flags#<clinit>", 0, "special", "app/flags/Flags#<init>", None, "resolved"),
         ("app/main#<clinit>", 0, "static", "fastapi/param_functions#Depends", None, "resolved"),
         (
             "app/main#<clinit>",
@@ -633,58 +949,59 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
         ),
         ("app/orders#<clinit>", 0, "static", "fastapi/param_functions#Depends", None, "resolved"),
         ("app/orders#<clinit>", 1, "virtual", "fastapi/routing/APIRouter#<init>", None, "resolved"),
-        ("app/orders#<clinit>", 10, "virtual", None, None, "unresolved"),
-        ("app/orders#<clinit>", 11, "virtual", "fastapi/routing/APIRouter#get", None, "resolved"),
-        ("app/orders#<clinit>", 12, "virtual", None, None, "unresolved"),
-        ("app/orders#<clinit>", 13, "virtual", "fastapi/routing/APIRouter#get", None, "resolved"),
+        ("app/orders#<clinit>", 10, "virtual", "fastapi/routing/APIRouter#get", None, "resolved"),
+        ("app/orders#<clinit>", 11, "virtual", None, None, "unresolved"),
+        ("app/orders#<clinit>", 12, "virtual", "fastapi/routing/APIRouter#get", None, "resolved"),
+        ("app/orders#<clinit>", 13, "virtual", None, None, "unresolved"),
         ("app/orders#<clinit>", 14, "virtual", "fastapi/routing/APIRouter#get", None, "resolved"),
-        ("app/orders#<clinit>", 15, "virtual", None, None, "unresolved"),
+        ("app/orders#<clinit>", 15, "virtual", "fastapi/routing/APIRouter#get", None, "resolved"),
         ("app/orders#<clinit>", 16, "virtual", None, None, "unresolved"),
-        ("app/orders#<clinit>", 17, "virtual", "fastapi/routing/APIRouter#get", None, "resolved"),
-        ("app/orders#<clinit>", 18, "static", "fastapi/param_functions#Depends", None, "resolved"),
-        ("app/orders#<clinit>", 19, "virtual", None, None, "unresolved"),
+        ("app/orders#<clinit>", 17, "virtual", None, None, "unresolved"),
+        ("app/orders#<clinit>", 18, "virtual", "fastapi/routing/APIRouter#get", None, "resolved"),
+        ("app/orders#<clinit>", 19, "static", "fastapi/param_functions#Depends", None, "resolved"),
         ("app/orders#<clinit>", 2, "virtual", "fastapi/routing/APIRouter#post", None, "resolved"),
-        ("app/orders#<clinit>", 20, "virtual", "fastapi/routing/APIRouter#get", None, "resolved"),
-        ("app/orders#<clinit>", 21, "static", "fastapi/param_functions#Query", None, "resolved"),
-        ("app/orders#<clinit>", 22, "static", "fastapi/param_functions#Cookie", None, "resolved"),
+        ("app/orders#<clinit>", 20, "virtual", None, None, "unresolved"),
+        ("app/orders#<clinit>", 21, "virtual", "fastapi/routing/APIRouter#get", None, "resolved"),
+        ("app/orders#<clinit>", 22, "static", "fastapi/param_functions#Query", None, "resolved"),
+        ("app/orders#<clinit>", 23, "static", "fastapi/param_functions#Cookie", None, "resolved"),
         (
             "app/orders#<clinit>",
-            23,
+            24,
             "static",
             "typing/Annotated#__class_getitem__",
             None,
             "resolved",
         ),
-        ("app/orders#<clinit>", 24, "static", "fastapi/param_functions#Header", None, "resolved"),
+        ("app/orders#<clinit>", 25, "static", "fastapi/param_functions#Header", None, "resolved"),
         (
             "app/orders#<clinit>",
-            25,
+            26,
             "static",
             "typing/Annotated#__class_getitem__",
             None,
             "resolved",
         ),
-        ("app/orders#<clinit>", 26, "virtual", None, None, "unresolved"),
+        ("app/orders#<clinit>", 27, "virtual", None, None, "unresolved"),
         ("app/orders#<clinit>", 3, "static", "fastapi/param_functions#Depends", None, "resolved"),
-        ("app/orders#<clinit>", 4, "virtual", None, None, "unresolved"),
+        ("app/orders#<clinit>", 4, "static", "fastapi/param_functions#Depends", None, "resolved"),
+        ("app/orders#<clinit>", 5, "virtual", None, None, "unresolved"),
         (
             "app/orders#<clinit>",
-            5,
+            6,
             "virtual",
             "fastapi/routing/APIRouter#api_route",
             None,
             "resolved",
         ),
-        ("app/orders#<clinit>", 6, "virtual", None, None, "unresolved"),
+        ("app/orders#<clinit>", 7, "virtual", None, None, "unresolved"),
         (
             "app/orders#<clinit>",
-            7,
+            8,
             "virtual",
             "fastapi/routing/APIRouter#add_api_route",
             None,
             "resolved",
         ),
-        ("app/orders#<clinit>", 9, "virtual", "fastapi/routing/APIRouter#get", None, "resolved"),
         (
             "app/orders#create",
             0,
@@ -693,10 +1010,12 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             "app/services/OrderService#create",
             "resolved",
         ),
-        ("app/orders#create", 1, "static", "uuid#uuid4", None, "resolved"),
+        ("app/orders#create", 1, "special", "builtins/str#<init>", None, "resolved"),
+        ("app/orders#create", 2, "static", "app/clients#notify", "app/clients#notify", "resolved"),
+        ("app/orders#create", 3, "static", "uuid#uuid4", None, "resolved"),
         (
             "app/orders#create",
-            2,
+            4,
             "virtual",
             "app/schemas/OrderOut#model_construct",
             None,
@@ -737,6 +1056,16 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             None,
             "resolved",
         ),
+        ("app/settings#<clinit>", 0, "special", "app/settings/Settings#<init>", None, "resolved"),
+        (
+            "app/settings/Settings#<clinit>",
+            0,
+            "special",
+            "pydantic_settings/main/SettingsConfigDict#<init>",
+            None,
+            "resolved",
+        ),
+        ("app/settings/Settings#<clinit>", 1, "static", "pydantic/fields#Field", None, "resolved"),
         ("app/schemas/OrderIn#<clinit>", 0, "static", "pydantic/fields#Field", None, "resolved"),
         ("app/schemas/OrderOut#<clinit>", 0, "static", "pydantic/fields#Field", None, "resolved"),
         (
@@ -770,23 +1099,33 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
     "bound_receivers": [
         ("app/admin#<clinit>", 2, None, "unresolved", "external"),
         ("app/admin#<clinit>", 4, None, "unresolved", "external"),
+        ("app/clients#rates", 3, "httpx/_client/Client#", "resolved", None),
+        ("app/clients#record", 2, "httpx/_client/Client#", "resolved", None),
+        ("app/clients#stock", 3, None, "unresolved", "external"),
+        ("app/clients/Billing#charge", 1, "requests/sessions/Session#", "resolved", None),
+        ("app/clients/Billing#refund", 0, "requests/sessions/Session#", "resolved", None),
         ("app/main#<clinit>", 11, None, "unresolved", "external"),
-        ("app/orders#<clinit>", 10, None, "unresolved", "external"),
-        ("app/orders#<clinit>", 12, None, "unresolved", "external"),
-        ("app/orders#<clinit>", 15, None, "unresolved", "external"),
+        ("app/orders#<clinit>", 11, None, "unresolved", "external"),
+        ("app/orders#<clinit>", 13, None, "unresolved", "external"),
         ("app/orders#<clinit>", 16, None, "unresolved", "external"),
-        ("app/orders#<clinit>", 19, None, "unresolved", "external"),
-        ("app/orders#<clinit>", 26, None, "unresolved", "external"),
-        ("app/orders#<clinit>", 4, None, "unresolved", "external"),
-        ("app/orders#<clinit>", 6, None, "unresolved", "external"),
+        ("app/orders#<clinit>", 17, None, "unresolved", "external"),
+        ("app/orders#<clinit>", 20, None, "unresolved", "external"),
+        ("app/orders#<clinit>", 27, None, "unresolved", "external"),
+        ("app/orders#<clinit>", 5, None, "unresolved", "external"),
+        ("app/orders#<clinit>", 7, None, "unresolved", "external"),
         ("app/orders#create", 0, "app/services/OrderService#", "resolved", None),
-        ("app/orders#create", 2, "app/schemas/OrderOut#", "resolved", None),
+        ("app/orders#create", 4, "app/schemas/OrderOut#", "resolved", None),
         ("app/orders#get", 0, "app/schemas/OrderOut#", "resolved", None),
         ("app/routing/router_class$Router#<init>", 0, None, "unresolved", "external"),
         ("app/support#<clinit>", 2, None, "unresolved", "external"),
     ],
     # No open question: a new refusal or question on the fixture fails here.
     "open_questions": [],
+    # The `.env` the settings class names (plan 3 Task 4), the one environment it gives.
+    "resolved_config": [
+        ("CARRIER_TOKEN", "dev-token", ".env", "default", None),
+        ("ORDERS_RATES_URL", "https://rates.internal/v1", ".env", "default", None),
+    ],
     "shapes": [
         ("app/schemas/OrderIn#", False),
         ("app/schemas/OrderOut#", False),
@@ -818,9 +1157,11 @@ def _pinned_rows(workspace) -> dict[str, list[tuple[object, ...]]]:
             r["evidence"],
         ),
         "endpoints": lambda r: (
+            r["direction"],
             r["method"],
+            r["peer"],
             r["path"],
-            _bare(r["handler"]),
+            _bare(r["handler"] or r["caller"]),
             r["resolution"],
             r["request_shape"],
             r["response_shape"],
@@ -851,6 +1192,13 @@ def _pinned_rows(workspace) -> dict[str, list[tuple[object, ...]]]:
             r["reason"],
         ),
         "open_questions": lambda r: (r["method"], r["path"], r["question"], r["evidence"]),
+        "resolved_config": lambda r: (
+            r["key"],
+            r["value"],
+            r["source"],
+            r["environment"],
+            r["unresolved_reason"],
+        ),
         "shapes": lambda r: (r["shape_id"], r["open"]),
         "shape_fields": lambda r: (
             r["shape_id"],
@@ -882,6 +1230,20 @@ def test_every_fixture_row_is_pinned(workspace):
     }
 
 
+def test_a_settings_base_is_filled_per_environment_from_the_named_file(workspace):
+    """`resolved_peers` fills the rates client's key from the `.env` the class names, over the
+    default the class writes (pydantic-settings' precedence, plan 3 Task 5)."""
+    catalogs = with_config_model(
+        scope_config_models(workspace, YamlCatalogSource(catalogs_dir()).load())
+    )
+    answers = [
+        (row["environment"], row["resolved_path"], row["unresolved_reason"])
+        for row in resolved_peers(workspace, catalogs)
+        if _bare(row["caller"]).startswith("app/clients#rates")
+    ]
+    assert answers == [("default", "https://rates.internal/v1/rates/{currency}", None)]
+
+
 def test_the_document_says_the_conditional_route_is_not_evaluated(
     orders_fastapi_env: Path, tmp_path: Path
 ):
@@ -895,6 +1257,7 @@ def test_the_document_says_the_conditional_route_is_not_evaluated(
     document = (out / "render" / "architecture.md").read_text(encoding="utf-8")
     block = document[document.index("- `GET /support/ping`") :].split("\n- ", 1)[0]
     assert (
-        "Exists only when: the code's test `flags.SUPPORT_ROUTES` is true, not evaluated" in block
+        "Exists only when: the code's test `settings.support_routes` is true, not evaluated"
+        in block
     )
     assert "not evaluated by this analysis in any of the 1 environments" in block

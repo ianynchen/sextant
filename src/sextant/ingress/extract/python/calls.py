@@ -597,7 +597,23 @@ class BodyReader:
         `call_site.guards`); None where the language decides the test (`_runs`)."""
         if self._runs(test, scope) is not None or _entry_point_test(test):
             return None
-        return CallGuard(test=ast.unparse(test), holds=holds, reads=_reads(test))
+        reads = _reads(test)
+        return CallGuard(
+            test=ast.unparse(test), holds=holds, reads=reads, fields=self._fields(reads, scope)
+        )
+
+    def _fields(self, reads: list[str], scope: Scope) -> dict[str, str]:
+        """Each dotted read of a test that is a read of a field, to that field's symbol, as the
+        same text would be as a call argument (`_value`, R23; ruling R27). A read it cannot type
+        is left out. A dotted name holds no call, so reading it writes none."""
+        found: dict[str, str] = {}
+        for text in reads:
+            node = ast.parse(text, mode="eval").body
+            if isinstance(node, ast.Attribute):
+                value = self._value(node, scope)
+                if value.kind == "field" and value.symbol:
+                    found[text] = value.symbol
+        return found
 
     def _guard_after(self, node: ast.stmt, scope: Scope) -> CallGuard | None:
         """The guard an `if` puts on the statements after it, where exactly one of its arms
@@ -1624,6 +1640,14 @@ class BodyReader:
         """The type a class of this file (or a base of this file, by C3) declares for the
         attribute `name` of a `receiver`, its type variables filled by the receiver's type
         arguments; None where no class of this file declares it, or it names no class."""
+        found = self._defining_field(receiver, name)
+        return None if found is None else found[1]
+
+    def _defining_field(self, receiver: TypeRef, name: str) -> tuple[str, TypeRef | None] | None:
+        """The field a class of the module declares (PEP 526) for the attribute `name` of a
+        `receiver`, the first class of its lookup order that does, with what
+        `_declared_field_on` answers for its type; None where no class of the module declares
+        it (R23: such a read is a read of that field)."""
         owner = receiver.symbol
         shape = self._project_shape(owner)
         if shape is None:
@@ -1636,12 +1660,13 @@ class BodyReader:
         defining_shape = None if defining is None else self._project_shape(defining.symbol)
         if defining is None or defining_shape is None:
             return None
-        written = self._project_field(f"{defining.symbol}{name}.")
+        field = f"{defining.symbol}{name}."
+        written = self._project_field(field)
         if written is None:
             return None
         instance = substitute(defining, parameter_mapping(receiver, shape)) or defining
         mapping = parameter_mapping(instance, defining_shape)
-        return self._read_through(_a_class(substitute(written, mapping)), receiver)
+        return field, self._read_through(_a_class(substitute(written, mapping)), receiver)
 
     def _read_through(self, declared: TypeRef | None, receiver: TypeRef) -> TypeRef | None:
         """What reading an attribute declared `declared` on a `receiver` gives: the declared
@@ -1830,8 +1855,14 @@ class BodyReader:
             # known; else a value this scanner does not follow.
             base = self._value(node.value, scope)
             held = self._typed(node.value, base, scope) or _hinted(base, scope)
-            declared = None if held is None else self._declared_field_on(held, node.attr)
-            return _UNKNOWN if declared is None else _part(declared)
+            defining = None if held is None else self._defining_field(held, node.attr)
+            if defining is None:
+                return _UNKNOWN
+            # A read of the field the class declares (R23), as a JVM GETFIELD names it; its
+            # declared type stays the scanner's, for the owner of a call on it.
+            field_read = _Part(kind="field", symbol=defining[0])
+            field_read._typed = defining[1]
+            return field_read
         if isinstance(node, ast.List | ast.Tuple):
             elements = [self._value(element, scope) for element in node.elts]
             typed = self._literal_type(node, node.elts, elements, scope)
@@ -2224,7 +2255,14 @@ class BodyReader:
                 typed = self._module_type(targets[0])
                 if isinstance(typed, TypeRef):
                     return typed
-                return TypeRef(symbol=typed) if isinstance(typed, str) else None
+                if isinstance(typed, str):
+                    return TypeRef(symbol=typed)
+                return self._project_variable(targets[0])
+        if isinstance(node, ast.Attribute) and _is_dotted(node):
+            # `os.environ[...]`: a variable of a library module, typed by its own file.
+            targets = self._targets(node, scope)
+            if targets is not None and len(targets) == 1 and targets[0].kind in (None, "variable"):
+                return self._library_variable(targets[0])
         return None
 
     def _typed(self, node: ast.expr, value: CallArgument, scope: Scope) -> TypeRef | None:
@@ -2385,6 +2423,8 @@ class BodyReader:
         """The class whose instance (or, for a class object, whose class) a module-level
         name of this file holds: the owner of a call made on the name."""
         typed = self._module_type(target)
+        if typed is None:
+            typed = self._library_variable(target)
         if isinstance(typed, TypeRef):
             return _class_of(typed)
         return typed if isinstance(typed, str) else None
@@ -2403,6 +2443,31 @@ class BodyReader:
         ):
             return None
         return headers.class_object(target.module, target.member)
+
+    def _library_variable(self, target: Target) -> TypeRef | None:
+        """The class a variable of a LIBRARY module is written to hold, as its own file writes
+        it (R16): the question `_module_type` answers for this file's names, answered for
+        another module's from that module's text."""
+        libraries = self._context.index.libraries
+        if libraries is None or self._context.index.owns(target.module):
+            return None
+        return libraries.variable_type(target)
+
+    def _project_variable(self, target: Target) -> TypeRef | None:
+        """The class a module-level name of ANOTHER file of the module holds, where that file
+        writes it from one construction of one class (`settings = Settings()`, ruling R23):
+        the question `_library_variable` answers for a library's names."""
+        headers = self._context.index.headers
+        if (
+            headers is None
+            or target.member is None
+            or "." in target.member
+            or target.module == self._context.here
+            or target.kind not in (None, "variable")
+        ):
+            return None
+        held = headers.variable_class(target.module, target.member)
+        return None if held is None else TypeRef(symbol=held)
 
     def _module_type(self, target: Target) -> "ModuleType | None":
         """The type every write in this file gives the module-level name `target`, where

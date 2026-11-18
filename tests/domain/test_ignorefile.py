@@ -193,3 +193,15 @@ def test_a_path_already_relative_to_the_repo_root_is_accepted_directly(tmp_path:
     _write_ignorefile(tmp_path, "*.tmp")
     rules = IgnoreRules.load(tmp_path)
     assert rules.matches(Path("scratch.tmp")) is True
+
+
+def test_matches_beyond_dotenv_leaves_out_exactly_the_two_dotenv_patterns(tmp_path):
+    from sextant.domain.ignorefile import IgnoreRules
+
+    (tmp_path / ".sextantignore").write_text("deploy/*.env\n", encoding="utf-8")
+    rules = IgnoreRules.load(tmp_path)
+    for name in (".env", ".env.local", "conf/.env", "conf/.env.prod"):
+        assert rules.matches(Path(name)) and not rules.matches_beyond_dotenv(Path(name))
+    for name in ("secrets/.env", "a/secrets/x.env", "deploy/prod.env", "k.pem", "id_rsa"):
+        assert rules.matches_beyond_dotenv(Path(name)), name
+    assert not rules.matches_beyond_dotenv(Path("conf/app.env"))

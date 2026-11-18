@@ -120,7 +120,7 @@ verdicts settle in rounds over (condition, environment) pairs.
 
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -1336,6 +1336,36 @@ def _holds(
     return UNRESOLVED, "unresolved"
 
 
+def property_evidence(
+    keys: Sequence[str],
+    environment: str,
+    config: Mapping[str, str | None],
+    defaults: Mapping[str, str] | None = None,
+) -> str:
+    """The evidence of a property condition in one environment: per key, what the module's
+    configuration for it sets (masked by the key, `_REDACTOR`) — nothing, a placeholder it does
+    not fill, or the value. Where it sets nothing and `defaults` holds the key's, the default is
+    said after it, masked the same way (a key's default is the repository's value for it)."""
+    return "; ".join(
+        f"`{key}{_SET_BY_THE_DEPLOYMENT}{environment}{_CONFIGURATION_SETS}"
+        + (
+            (
+                "nothing"
+                + (
+                    f", its default is `{_REDACTOR.redact_value(key, defaults[key])}`"
+                    if defaults and key in defaults
+                    else ""
+                )
+            )
+            if key not in config
+            else "a placeholder this module does not fill"
+            if config[key] is None
+            else f"`{_REDACTOR.redact_value(key, str(config[key]))}`"
+        )
+        for key in keys
+    )
+
+
 def _judged(
     model: ConditionModel,
     kind: str,
@@ -1371,17 +1401,7 @@ def _judged(
             return (
                 UNRESOLVED,
                 "unresolved",
-                "; ".join(
-                    f"`{key}{_SET_BY_THE_DEPLOYMENT}{environment}{_CONFIGURATION_SETS}"
-                    + (
-                        "nothing"
-                        if key not in config
-                        else "a placeholder this module does not fill"
-                        if config[key] is None
-                        else f"`{_REDACTOR.redact_value(key, str(config[key]))}`"
-                    )
-                    for key in expression["keys"]
-                ),
+                property_evidence(expression["keys"], environment, config),
             )
     if kind == PROFILE:
         return _profile_holds(expression, active)

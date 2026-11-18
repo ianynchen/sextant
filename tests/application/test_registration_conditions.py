@@ -2,14 +2,18 @@
 2): where a row cannot be tied to one call of a helper whose calls register different rows, the
 fallback never says "served" because some call of the helper is under no test."""
 
+import json
+
 from sextant.application.resolve.registration_conditions import (
     UNCONDITIONAL,
     Conditions,
     Existence,
+    SettingsReads,
     existence_rows,
 )
+from sextant.application.resolve.settings_fields import SettingsKey
 
-GUARD = ("main#<clinit>", "settings.DEBUG", True, ("settings.DEBUG",))
+GUARD = ("main#<clinit>", "settings.DEBUG", True, ("settings.DEBUG",), ())
 # `helper` is called at <clinit>@1 under no test and at <clinit>@2 under `settings.DEBUG`; the
 # route is registered at helper@0.
 CONDITIONS = Conditions(
@@ -61,3 +65,48 @@ def test_one_registration_giving_one_row_reads_it_tied():
     )
     row = _row("/same")
     assert existence_rows([(row, existence), (row, existence)], ["default"]) == []
+
+
+def _guarded(guard):
+    conditions = Conditions(guards={("main#<clinit>", 1): (guard,)}, callers={})
+    sites = [("main#<clinit>", 1)]
+    existence = Existence(conditions.of_sites(sites), conditions.of_sites(sites), tuple(sites))
+    return existence_rows([(_row("/s"), existence)], ["default"], SETTINGS)
+
+
+SETTINGS = SettingsReads(
+    keys={"app/conf/S#debug.": SettingsKey("APP_DEBUG", "False", None)},
+    config={"default": {}},
+)
+
+
+def test_a_guard_reading_only_a_settings_field_is_a_property_condition():
+    guard = (
+        "main#<clinit>",
+        "settings.debug",
+        True,
+        ("settings.debug",),
+        (("settings.debug", "app/conf/S#debug."),),
+    )
+    (row,) = _guarded(guard)
+    assert (row["kind"], row["holds"]) == ("property", "unresolved")
+    assert json.loads(row["expression"])["keys"] == ["APP_DEBUG"]
+    assert row["evidence"] == (
+        "`APP_DEBUG` is set by the deployment; this module's `default` configuration sets "
+        "nothing, its default is `False`"
+    )
+
+
+def test_a_guard_with_a_read_no_settings_field_explains_stays_a_test():
+    mixed = (
+        "main#<clinit>",
+        "settings.debug and ready",
+        True,
+        ("settings.debug", "ready"),
+        (("settings.debug", "app/conf/S#debug."),),
+    )
+    untyped = ("main#<clinit>", "x.y", True, ("x.y",), ())
+    for guard in (mixed, untyped):
+        (row,) = _guarded(guard)
+        assert row["kind"] == "test"
+        assert "keys" not in json.loads(row["expression"])

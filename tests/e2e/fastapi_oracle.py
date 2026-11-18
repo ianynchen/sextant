@@ -1,5 +1,10 @@
 """FastAPI's own answer to "what does this project serve?", printed as JSON.
 
+This is the spec section 7.3 oracle: it imports the corpus app and walks the REAL
+`app.router.routes` objects, with no registration logic of its own beyond the Mount recursion.
+One script serves every corpus: it also runs on FastAPI 0.115 (dispatch), where the 0.162-only
+helpers degrade as noted at the imports.
+
 Run with the FIXTURE's interpreter, never Sextant's: it imports the fixture's app and asks
 FastAPI itself. Sextant's answers are later compared against this one, so nothing here may
 come from Sextant. Published OpenAPI is not the oracle (it filters routes); the route table is.
@@ -13,9 +18,25 @@ import sys
 from pathlib import Path
 from typing import Any, get_origin
 
-from fastapi.dependencies.utils import _get_flat_fields_from_params
-from fastapi.routing import APIRoute, _iter_routes_with_context
+from fastapi.routing import APIRoute
 from starlette.routing import Mount
+
+# FastAPI 0.162 has these two helpers; 0.115 (dispatch) has neither, and there every route is
+# read straight off the table and a query model is not flattened (0.115 has no query models).
+try:
+    from fastapi.dependencies.utils import _get_flat_fields_from_params
+except ImportError:
+
+    def _get_flat_fields_from_params(fields: Any) -> Any:
+        return fields
+
+
+try:
+    from fastapi.routing import _iter_routes_with_context
+except ImportError:
+
+    def _iter_routes_with_context(routes: Any) -> Any:
+        return [(route, None) for route in routes]
 
 
 def _flatten(dependant: Any) -> dict[str, list[Any]]:

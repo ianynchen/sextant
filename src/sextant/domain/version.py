@@ -135,6 +135,20 @@ SEXTANT_VERSION = version("sextant")
 #             the user 2026-11-09). A fact set of the older vintage has none, so a reader would
 #             take every registration for one made wherever the module runs; it is refused and
 #             re-extracted.
+#     14      a Python call on a variable of a library module (`os.environ.get(...)`,
+#             `os.environ[...]`) carries the owner that module's header writes for the variable
+#             (`os/_Environ#`), where it carried none (plan 3 ruling R16). A fact set of the older
+#             vintage leaves the owner to a resolver that cannot name it; it is refused and
+#             re-extracted.
+#     15      a Python attribute read on a value of a known class (`s.url` with `s: Service`,
+#             `settings.url` with `settings = Settings()` in another file of the module) is a
+#             `field` argument naming the field the class declares, where it was `unresolved`
+#             (plan 3 ruling R23). A fact set of the older vintage gives the settings rung no
+#             field to read; it is refused and re-extracted.
+#     16      a Python `call_site.guards` entry gains `fields`: each read of its test the scanner
+#             can type, to the field symbol a call argument would name for it (plan 3 ruling
+#             R27). A fact set of the older vintage gives a guard no field to link to a
+#             configuration key; it is refused and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -279,6 +293,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 13
+FACT_SCHEMA_VERSION = 16
 GRAPH_SCHEMA_VERSION = 18
 BOUNDARY_VOCABULARY_VERSION = 5

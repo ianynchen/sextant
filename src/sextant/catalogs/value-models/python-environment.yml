@@ -1,0 +1,15 @@
+id: python-environment
+displayName: Reads of the process environment, which a deployment sets
+
+# WHAT THIS FILE IS (D02 §1f, `environment_reads`; plan 3 Task 3, approved N1). A call that
+# reads a key by name is the expression `${KEY}` — the deployment's to set, as a `${…}`
+# placeholder is. A literal default renders as `${KEY:-default}`, used only where nothing sets the key; a key that is no
+# literal is `non_enumerable`. The symbols are the ones typeshed declares: `os.getenv`, and
+# `__getitem__` and `get` on `os._Environ`, the class of `os.environ`.
+
+environment_reads:
+  - { owner: os, method: getenv, key_arg: { arg: 0, keyword: key },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environment_reads.md }
+  - { owner: os._Environ, method: __getitem__, key_arg: 0, by: scripts/probes/environment_reads.md }
+  - { owner: os._Environ, method: get, key_arg: { arg: 0, keyword: key },
+      default_arg: { arg: 1, keyword: default }, by: scripts/probes/environment_reads.md }

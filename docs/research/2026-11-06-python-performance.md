@@ -367,3 +367,25 @@ is the branch after the final review fixes. Test code is no longer read (final r
   values). Without them the scan reads fewer files and fewer library headers, and the resolve
   walks fewer paths.
 
+
+## End of the outbound and configuration plan (plan 3, Task 7, 2026-11-17)
+
+Same machine and command; one cold and one warm run each, machine load about 4. The pins
+(`scripts/field-expectations/py-*.json`) are checked by `scripts/field_check.py`, which syncs
+each environment with `uv sync --frozen --no-install-project` and then reads the tree.
+
+| Tree | Cold | Warm | Cold target 60 s / ceiling 300 s | Warm target 10 s / ceiling 30 s |
+|---|---|---|---|---|
+| polar `server/` | 38.5 s | 1.5 s | met | met |
+| mealie | 12.9 s | 0.9 s | met | met |
+| dispatch (Python 3.12 environment) | 15.0 s | 0.9 s | met | met |
+| Sextant reading itself | 13.7 s | 1.7 s | met | met |
+
+- **Against plan 2's end.** polar 36.9 s / 1.5 s and mealie 12.6 s / 1.2 s: the same within the
+  noise of the load. The first polar warm run in this session took 3.5 s with other work
+  running; the repeat took 1.5 s.
+- **GUIDELINES section 8.7.** This plan added no pass over the facts. The settings rule
+  (Task 5) costs 0.087 s per read, measured twice there; the outbound rows come from the
+  existing call walk.
+- **dispatch** is now measured: its environment comes from the sidecar lock
+  (`py-dispatch.uv.lock`), synced on Python 3.12 because `thinc` 8.3.4 has no wheel for 3.13.

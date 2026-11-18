@@ -47,3 +47,15 @@ def list_files(root: Path, repo_root: Path, ignore: IgnoreRules) -> tuple[Path, 
             key=lambda path: str(path.relative_to(root)),
         )
     )
+
+
+def named_file(root: Path, name: str) -> Path | None:
+    """The regular file `name` (relative to `root`) names, or `None` where there is none or it
+    lies outside `root`: code names a file as a string, and a `..` or an absolute path must not
+    take a read out of the module. No ignore rule is consulted — the caller reads a file the
+    code NAMED, deliberately, which the walk above never does for a built-in-ignored one."""
+    anchor = root.resolve()
+    path = (root / name).resolve()
+    if not path.is_file() or not path.is_relative_to(anchor):
+        return None
+    return root / path.relative_to(anchor)

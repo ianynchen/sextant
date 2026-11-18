@@ -327,3 +327,22 @@ def test_candidate_verdicts_name_a_site_and_group_each_candidates_environments_b
 
 _VERDICT_TRUE = {"holds": "true", "resolution": "resolved"}
 _VERDICT_FALSE = {"holds": "false", "resolution": "partial"}
+
+
+def test_ensure_environment_copies_the_sidecar_lock_and_syncs_frozen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A pin with no committed lock gets its sidecar copied in, and the sync never re-resolves."""
+    expectations = tmp_path / "expectations"
+    expectations.mkdir()
+    (expectations / "x.uv.lock").write_text("locked\n", encoding="utf-8")
+    module = tmp_path / "module"
+    module.mkdir()
+    calls: list[list[str]] = []
+    monkeypatch.setattr(field_check, "EXPECTATIONS_DIR", expectations)
+    monkeypatch.setattr(field_check, "_run", _stub_run(calls))
+
+    field_check._ensure_environment(module, "x.uv.lock")
+
+    assert (module / "uv.lock").read_text(encoding="utf-8") == "locked\n"
+    assert calls == [["uv", "sync", "--frozen", "--no-install-project", "--offline"]]
