@@ -53,7 +53,7 @@ and each protocol's own per-framework table opens its §5 section.
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
-| **Python** | ✅ `ast` | ◐ (3A 1B 1C) | ◐ (1A) | 1B | 2A | 2A 1B | 2B |
+| **Python** | ✅ `ast` | ◐ (3A 1B 1C) | ✅ | 1B | 2A | 2A 1B | 2B |
 | **Rust** | none | 1A 2B 1C | 1B | — | 1A | 1A 1B | 1B |
 | **Swift** | none | 1A | 1A 1B | — | 1A | 1B | — |
 | **C# / .NET** | none | · | · | · | · | · | · |
@@ -834,7 +834,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**123 of 137 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**124 of 138 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -1027,6 +1027,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `temporal-untyped` | `io.temporal:temporal-sdk` | 1.27.0 |
 | `temporal-workflow` | `io.temporal:temporal-sdk` | 1.27.0 |
 |  | `io.temporal:temporal-spring-boot-autoconfigure` | 1.27.0 |
+| `urllib3` | `urllib3` | 2.8.0 |
 | `vertx-eventbus-chain` | `io.vertx:vertx-core` | 4.5.10, 5.0.0 |
 | `vertx-eventbus-mutiny` | `io.smallrye.reactive:smallrye-mutiny-vertx-core` | 3.16.0 |
 | `vertx-eventbus` | `io.vertx:vertx-core` | 4.5.10, 5.0.0 |
@@ -2935,7 +2936,7 @@ or to MicroProfile's programmatic `RestClientBuilder.baseUri(URI)` (the step's a
 | TS | fetch, axios | `fetch(url, {method})`, `axios.get(url)` (+ instance `baseURL`) | `registration_call` | A |
 | Python | requests, httpx | `requests.get(url)`, `requests.request("get", url)`, `Session.post(url, json=…)`, `httpx.get(url)`, `httpx.Client(base_url=…)` and `AsyncClient`, with or without a `with` statement | `single_call` | ✅ **shipped** (`requests.yml`, `httpx.yml`; requests 2.34.2, httpx 0.28.1; OI-208 plan 3). A single call carries the verb (a string verb is upper-cased as the library does), the address, and a body from the library's own body keywords in its own precedence. An httpx `base_url=` joins as `Client._merge_url` does; a relative address on a client no construction reaches stays `unresolved`. An address read from `os.getenv` / `os.environ` is the expression `${KEY}` (`${KEY:-default}` where the call carries a literal default) and from a settings field the key `${PREFIX_FIELD:-default}`, filled per environment from the `.env` file the class names. A body is a pydantic model, or `model_dump(by_alias=True)` of one. Pinned on `fixtures/orders-fastapi` (`tests/e2e/test_orders_fastapi.py`); polar 33, mealie 16, dispatch 13 outbound rows, 15 of them hand-checked against the code. **Stated boundaries:** `client.base_url = …` after construction is not read (OI-421); a receiver whose binding is read only by `fluent` or `combinator` is not owned (OI-422); `data=None` counts as a written body (OI-426) |
 | Python | aiohttp | `aiohttp.ClientSession(base_url=…)` with `async with`, `session.get/post/put/patch/delete/head/options(url)`, `session.request(method, url)` and `aiohttp.request(method, url)` | `single_call` | ✅ **shipped** (`aiohttp.yml`; aiohttp 3.14.5; `scripts/probes/aiohttp_urllib3_rules.md`). A relative address joins the session's `base_url` (it ends in `/`, as aiohttp requires) by `replace_last_segment`; a session with no `base_url`, and `aiohttp.request`, leave a relative address `unresolved` with no peer. A body is `data=` or `json=`. Pinned on `fixtures/orders-fastapi` (`tests/e2e/test_orders_fastapi.py`) and `tests/application/test_python_outbound.py`. **Stated boundaries**: aiohttp removes dot segments where the join keeps them, so a published `./x` or `../x` spelling names the same target; aiohttp refuses `//host/x` where the engine publishes it as written; aiohttp drops a base's query where the join appends it; `data=` with `json=` raises in aiohttp, and the row still publishes the `data=` body |
-| Python | urllib3 | `urllib3.request("GET", url)`, `PoolManager().request(…)` | `single_call` | **A — not built; the same form as the shipped requests and httpx rows** (OI-454) |
+| Python | urllib3 | `urllib3.request("GET", url)`, `PoolManager().request(…)`, `with PoolManager() as pool` | `single_call` | ✅ **shipped** (`urllib3.yml`; urllib3 2.8.0; `scripts/probes/aiohttp_urllib3_rules.md`). urllib3 has no verb helpers and no base URL: the verb is `request`'s first argument (upper-cased), the address is absolute, the body is `body=` or `json=`. Pinned on `fixtures/orders-fastapi` and `tests/application/test_python_outbound.py`. **Stated boundaries**: `body=` with `json=` raises in urllib3 and the row still publishes the `body=` body; `fields=` (the URL query on GET/HEAD/DELETE/OPTIONS, a multipart body otherwise) is not read; `HTTPConnectionPool(host, port)` relative requests are not read |
 | Rust | reqwest, hyper | `reqwest` `client.get(u).send()`, `hyper` builder | `fluent_chain` | B |
 | Swift | Alamofire | Alamofire `AF.request(url, method: .get)` | `registration_call` | A |
 | Swift | URLSession | `URLSession` + `URLRequest.httpMethod = "POST"` — **verb is a property assignment** — a shape seen nowhere else | `fluent_chain` | B |

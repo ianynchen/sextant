@@ -613,6 +613,18 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             None,
             None,
         ),
+        # `urllib3.request` takes an absolute address (it has no base) and the body keyword
+        # `json=` (urllib3 probe).
+        (
+            "outbound",
+            "POST",
+            "courier.example",
+            "/pickups",
+            "app/clients#courier",
+            "resolved",
+            ORDER_IN,
+            None,
+        ),
     ],
     "endpoint_metadata": [
         (
@@ -821,6 +833,8 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
             "resolved",
         ),
         ("app/clients#parcel", 3, "virtual", "aiohttp/client/ClientSession#get", None, "resolved"),
+        ("app/clients#courier", 0, "virtual", "app/schemas/OrderIn#model_dump", None, "resolved"),
+        ("app/clients#courier", 1, "static", "urllib3#request", None, "resolved"),
         ("app/clients#audit", 0, "virtual", "os/_Environ#get", None, "resolved"),
         ("app/clients#audit", 2, "static", "requests/api#get", None, "resolved"),
         ("app/clients#carriers", 0, "virtual", "httpx/_client/Client#request", None, "resolved"),

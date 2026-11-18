@@ -88,6 +88,7 @@ def _outbound(tmp_path: Path, libraries, main: str) -> list[tuple[object, ...]]:
 @pytest.mark.declines("requests")
 @pytest.mark.declines("httpx")
 @pytest.mark.declines("aiohttp")
+@pytest.mark.declines("urllib3")
 @pytest.mark.pins("single_call.call-site-owner")
 def test_a_get_on_anything_but_requests_or_httpx_derives_nothing(tmp_path, libraries):
     """`get`, `post` and `request` are common names: a dict's `get` and a module class with
@@ -384,6 +385,70 @@ def test_aiohttp_data_with_json_publishes_no_body(tmp_path, libraries):
         "async def send(order: Order, raw: str) -> None:\n"
         "    async with aiohttp.ClientSession() as s:\n"
         "        await s.post('https://a.example/b', data=raw, json=order.model_dump(by_alias=True))\n",
+    ) == [("POST", "a.example", "/b", "app/main#send", "unresolved", None)]
+
+
+# --- urllib3 ---------------------------------------------------------------------------------
+# Every rule is urllib3's own, measured in `scripts/probes/aiohttp_urllib3_rules.md`. It has no
+# verb helpers and no base URL: every address is absolute.
+
+
+def test_urllib3_request_reads_the_verb_and_the_absolute_address(tmp_path, libraries):
+    """Probe "Verbs and positions": `request(method, url)`, on the module and on a
+    `PoolManager` (defined on `RequestMethods`); text is upper-cased, a variable claims no verb."""
+    assert _outbound(
+        tmp_path,
+        libraries,
+        "import urllib3\n"
+        "def run(method: str) -> None:\n"
+        "    urllib3.request('GET', 'https://a.example/x')\n"
+        "    urllib3.request(method, 'https://a.example/v')\n"
+        "    with urllib3.PoolManager() as pool:\n"
+        "        pool.request('delete', 'https://b.example/y')\n"
+        "    urllib3.PoolManager().request('POST', 'https://c.example/z')\n",
+    ) == [
+        ("DELETE", "b.example", "/y", "app/main#run", "resolved", None),
+        ("GET", "a.example", "/x", "app/main#run", "resolved", None),
+        ("POST", "c.example", "/z", "app/main#run", "resolved", None),
+        (None, "a.example", "/v", "app/main#run", "unresolved", None),
+    ]
+
+
+def test_urllib3_body_is_body_or_json_by_keyword(tmp_path, libraries):
+    """Probe "urllib3 bodies": `json=` and `body=` are sent on every verb; `fields=` is not a
+    model and is not read."""
+    assert _outbound(
+        tmp_path,
+        libraries,
+        "import urllib3\n"
+        "from app.models import Order\n"
+        "def send(order: Order) -> None:\n"
+        "    urllib3.request('POST', 'https://a.example/w', json=order.model_dump(by_alias=True))\n"
+        "    urllib3.request('PUT', 'https://a.example/o', json=order.model_dump())\n"
+        "    urllib3.request('GET', 'https://a.example/q', fields={'a': '1'})\n",
+    ) == [
+        ("GET", "a.example", "/q", "app/main#send", "resolved", None),
+        ("POST", "a.example", "/w", "app/main#send", "resolved", "app/models/Order#"),
+        ("PUT", "a.example", "/o", "app/main#send", "unresolved", None),
+    ]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="`body_arg` has no word for 'these keywords together are rejected'; the call, which "
+    "never runs (`TypeError`), publishes the `body=` body. Needs new vocabulary, so it is "
+    "logged, not built.",
+)
+def test_urllib3_body_with_json_publishes_no_body(tmp_path, libraries):
+    """Probe "urllib3 bodies": `body=` with `json=` raises `TypeError` on every verb, so no
+    body is claimed for it."""
+    assert _outbound(
+        tmp_path,
+        libraries,
+        "import urllib3\n"
+        "from app.models import Order\n"
+        "def send(order: Order, raw: dict[str, str]) -> None:\n"
+        "    urllib3.request('POST', 'https://a.example/b', body=order.model_dump(by_alias=True), json=raw)\n",
     ) == [("POST", "a.example", "/b", "app/main#send", "unresolved", None)]
 
 

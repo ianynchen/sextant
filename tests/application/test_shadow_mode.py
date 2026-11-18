@@ -445,6 +445,7 @@ _ASKS_PER_CATALOG = {
     "temporal-untyped": (3, 3),
     "requests": (16, 16),
     "aiohttp": (10, 10),
+    "urllib3": (4, 4),
     "httpx": (11, 11),
     "vertx-eventbus": (12, 20),
     "vertx-eventbus-chain": (7, 7),
@@ -511,7 +512,7 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # **+2 on 2026-11-09** (plan 2 final review, OI-368): the host mount's positions.
     # **+27 on 2026-11-17** (plan 3 Task 2): the new `requests` (16) and `httpx` (11) catalogs,
     # same comment.
-    assert sum(asks for asks, _ in counted.values()) == 1546
+    assert sum(asks for asks, _ in counted.values()) == 1550
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole
