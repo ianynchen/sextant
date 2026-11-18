@@ -199,6 +199,12 @@ class ProjectNames(Protocol):
         a written `type[X]` (ruling R17). None for any other name."""
         ...
 
+    def variable_class(self, module: str, name: str) -> str | None:
+        """The class whose instance `module.name` holds, where that file writes it from one
+        construction of one class (`settings = Settings()`, ruling R23). None for any other
+        name, and where its writes construct two classes."""
+        ...
+
 
 # The question a file asks for another file's header (`project.HEADER`).
 _HEADER_QUESTION = "header"

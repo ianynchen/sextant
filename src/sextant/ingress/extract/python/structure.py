@@ -926,10 +926,10 @@ def _without_function_bodies[N: ast.stmt](node: N) -> N:
 
 def factory_calls(tree: ast.Module, types: TypeScope) -> dict[str, tuple[Target, ...]]:
     """The function each module-level name is written from, where every write to it in the
-    file is a call of a named function (`APIRouter = get_api_router_class(APIRoute)`), by
-    name: the function's target, as the file binds it. What the call returns is read by
-    `project.ProjectHeaders.class_object`, which may read another file's header (ruling
-    R17). A name some statement binds in a way not read as a write (`_rebound_names`), that
+    file is a call of a named function or class (`APIRouter = get_api_router_class(APIRoute)`,
+    `settings = Settings()`), by name: the callee's target, as the file binds it. What the
+    call returns is read by `project.ProjectHeaders.class_object` and `variable_class`, which
+    may read another file's header (rulings R17, R23). A name some statement binds in a way not read as a write (`_rebound_names`), that
     the file also binds as a function, a class or an import, or that a write gives any other
     value, has none: the resolver follows its writes."""
     rebound = _rebound_names(tree, types.index, types.here)
@@ -962,15 +962,19 @@ def factory_calls(tree: ast.Module, types: TypeScope) -> dict[str, tuple[Target,
 
 
 def _called_function(value: ast.expr, types: TypeScope) -> Target | None:
-    """The one function a call written `f(...)` names, as the file binds `f`; None for any
-    other value."""
+    """The one function or class a call written `f(...)` names, as the file binds `f`; None
+    for any other value."""
     if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Name):
         return None
     binding = types.names.get(value.func.id)
     if binding is None or len(binding.targets) != 1:
         return None
     (target,) = binding.targets
-    if target.kind not in (None, "function") or target.member is None or "." in target.member:
+    if (
+        target.kind not in (None, "function", "class")
+        or target.member is None
+        or "." in target.member
+    ):
         return None
     return target
 

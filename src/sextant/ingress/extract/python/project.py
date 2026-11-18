@@ -304,6 +304,29 @@ class ProjectHeaders:
             return None
         return held.pop()
 
+    def variable_class(self, module: str, name: str) -> str | None:
+        """The class whose instance `module.name` holds, where every write to it in that file
+        constructs one and the same class (`settings = Settings()`, ruling R23), by its
+        defining symbol: a class of the module or of a library. None for any other name: two
+        classes, a call of a function, any other value."""
+        header = self.header(module)
+        called = None if header is None else header.factories.get(name)
+        if not called or len(called) != 1:
+            return None
+        (target,) = called
+        if target.member is None:
+            return None
+        defined = self.member(target.module, target.member) or (target,)
+        if len(defined) != 1 or defined[0].member is None:
+            return None
+        symbol = type_symbol(defined[0])
+        libraries = self._plain.libraries
+        if self.shape_of(symbol) is None and (
+            libraries is None or libraries.shape_of(symbol) is None
+        ):
+            return None
+        return symbol
+
     def _factory_class(self, target: Target) -> str | None:
         """The class `X` a call of the function `target` gives, where the `def` of the module
         that defines it declares `type[X]`; None for any other function."""
