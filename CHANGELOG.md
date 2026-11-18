@@ -74,7 +74,7 @@ here would restate those documents rather than add anything.
   attribute reads on a known class are `field` arguments and a module variable takes the class of
   its one construction (15), and `call_site.guards[].fields` links a guard's read to its field
   (16). The three catalog readers that keyed a construction's object by receiver now use
-  `values.object_of` (OI-341). 36 issues are logged, OI-418 to OI-454 (OI-439 was withdrawn before filing).
+  `values.object_of` (OI-341). 40 issues are logged, OI-418 to OI-458 (OI-439 was withdrawn before filing).
 
 - **FastAPI inbound is read, and checked against FastAPI itself** (OI-208 plan 2, plan
   `2026-11-08-python-fastapi-inbound.md`, spec `2026-11-06-python-reader-design.md` §3c as

@@ -7,13 +7,12 @@ by OI-208 plan 1 (`docs/superpowers/plans/2026-11-06-python-reader-foundation.md
 (`docs/superpowers/plans/2026-11-08-python-fastapi-inbound.md`) and proved against FastAPI's own
 route table (`tests/e2e/test_orders_fastapi.py`). Outbound HTTP clients, environment and settings
 configuration and the field pins were built by plan 3
-(`docs/superpowers/plans/2026-11-17-python-outbound-config-pins.md`). Flask is next, then
- then Django (ruled 2026-10-26). Detection shapes are defined in [COVERAGE.md](../COVERAGE.md) §1. The typing
+(`docs/superpowers/plans/2026-11-17-python-outbound-config-pins.md`). Flask is next, then Django (ruled 2026-10-26). Detection shapes are defined in [COVERAGE.md](../COVERAGE.md) §1. The typing
 problem this language creates is analysed in [COVERAGE.md](../COVERAGE.md) §10.
 
 > **Scope.** [COVERAGE.md](../COVERAGE.md) §5 is canonical for tier and status,
-> organised by protocol. The FastAPI REST-inbound row ships; every other Python cell there is
-> still a plan. This file holds what does not fit a protocol row: what the reader reads, what it
+> organised by protocol. The FastAPI REST-inbound row and the requests/httpx REST-out row ship; every
+> other Python cell there is still a plan. This file holds what does not fit a protocol row: what the reader reads, what it
 > does not, the toolchain verdict, the payload story, and the structural oddities of the
 > language.
 
@@ -447,8 +446,9 @@ deployment decides every key here, so a value found is the repository's value as
 (ruled 2026-10-23), never a fact about production.
 
 - **Environment reads.** `os.getenv("K")`, `os.environ["K"]` and `os.environ.get("K")` are the
-  expression `${K}` (`value-models/python-environment.yml`). A default the call carries is
-  recorded as declared and is never the value. A key that is not a literal is `non_enumerable`.
+  expression `${K}` (`value-models/python-environment.yml`). A literal default the call carries
+  renders as `${K:-default}`; the key is always kept, and `resolved_peers` uses the default only
+  where nothing sets the key. A key that is not a literal is `non_enumerable`.
   `getenv("K") or "d"` reads as a branch and publishes at `partial` without the default
   (OI-435). The read depends on the scanner naming `os.environ`'s type from `os`'s own header
   (fact schema 14).

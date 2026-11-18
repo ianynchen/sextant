@@ -204,9 +204,9 @@ union holding the unknown type or the root type is no closed list.
 
 **An environment read is a deployment-set key, and a settings field is its key** (plan 3
 Tasks 3 and 5; D02 §1f `environment_reads`, §2i `settings_form`). The walk reads a call matching
-an `environment_reads` entry as the expression `${KEY}`, the call's literal default declared and
-never the value (`values._Walk._environment_read`; `Answer.default`, where the answer side
-carries it, since `declares_default` on a fact is parameter-only). A `field` argument whose symbol
+an `environment_reads` entry as the expression `${KEY}`, or `${KEY:-default}` where the call
+carries a literal default (`values._Walk._environment_read`); `resolved_peers` fills the default
+only in an environment where nothing sets the key. A `field` argument whose symbol
 is a settings field answers `${KEY:-default}` (the settings rung, `resolve/settings_fields.py`),
 the key from the field's name or alias, the class's prefix and case rule; it runs before any write
 of the field is read, and a rule written as no literal answers `not_readable`. For a Python module,

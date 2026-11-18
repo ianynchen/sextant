@@ -793,10 +793,11 @@ edge to each is drawn beside the library edge. A position counts positional argu
 approved 2026-11-17). A `value-models/` file may declare `environment_reads: [{owner, method,
 key_arg, default_arg?, by}]`; each `*_arg` is an integer or `{keyword: name}` / `{arg: N,
 keyword: name}` as elsewhere. A call matching an entry is the expression `${KEY}`, KEY being the
-string its `key_arg` stands for; a key that is no string is `unresolved non_enumerable`. **The
-default the call carries is declared and never the value** (the `getenv(...) ?: default` default
-the JVM once published as resolved): `default_arg` names it so a reader can show it, and the walk
-never reads it. `value-models/python-environment.yml` states `os.getenv` and `os._Environ`'s
+string its `key_arg` stands for; a key that is no string is `unresolved non_enumerable`. **A
+literal default the call carries renders into the expression** as `${KEY:-default}` (ruled
+2026-11-18): `default_arg` names it, the key is always kept, and `resolved_peers` uses the default
+only in an environment where nothing sets the key, the rule the JVM applies to Spring
+`${x:default}`. A default that is no literal renders nothing. `value-models/python-environment.yml` states `os.getenv` and `os._Environ`'s
 `__getitem__` and `get`, the typeshed symbols; `os.environ`'s owner is the class its header writes
 (`environ: _Environ[str]`, ruling R16: a library module's variable is typed from that module's
 own text, as plan 2's R17 types a project module's). The entries ride the stated-call table
@@ -6421,7 +6422,9 @@ opens no file (ports). The file is read by a dotenv reader selected by name
 (`ingress/read/dotenv.py`, python-dotenv 1.2.4's syntax and `${NAME}` / `${NAME:-default}`
 expansion, probe `pydantic_settings_rules.md`). The built-in ignore rules still apply to a named
 file except the two dotenv patterns (`.env`, `.env.*`): `secrets/app.env` is refused, and a user
-`.sextantignore` is honoured (`IgnoreRules.matches_beyond_dotenv`). A name written through a
+`.sextantignore` is honoured (`IgnoreRules.matches_beyond_dotenv`). The file name is
+resolved against the module root (pydantic-settings resolves it against the process working
+directory, so the two agree only where the service runs from its module root). A name written through a
 variable is read by nobody; the field that reads it is `external` and `resolved_peers` names the
 expression in `unresolved_detail`. A file listed in `sources` by `from_argument` is the only
 source of a **declaration-only catalog** (§1): `pydantic-settings.yml` has no `style`.

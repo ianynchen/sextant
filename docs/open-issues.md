@@ -458,6 +458,10 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-452 | Plane: pending | A pin built from a modified pyproject lock (dispatch) freezes library-absent rows as normal, so a drift in a dependency that is absent from the lock is not visible |
 | OI-453 | Plane: pending | The field_check uv path has no test for its online fallback, --python or routing, and a drift between pyproject and the lock is invisible to a frozen sync |
 | OI-454 | Plane: pending | aiohttp and urllib3 outbound calls are not read (the REST-out Python cell is partial) |
+| OI-455 | Plane: pending | A settings field's alias written inside Annotated[..., Field(alias="X")] is not read by the settings key rule (name_from reads only the class-body value call's keywords), so the .env file's X is missed and the default fills the per-environment answer |
+| OI-456 | Plane: pending | The named env file resolves against the module root, while pydantic-settings resolves it against the process working directory |
+| OI-457 | Plane: pending | Placeholder substitution expands ${...} inside single-quoted dotenv values, which python-dotenv does not |
+| OI-458 | Plane: pending | settings_form has no loader validation: a misspelled key raises KeyError at resolve time instead of a CatalogError naming the file |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
