@@ -95,6 +95,26 @@ settings = get_settings()
 
 - [ ] **Step 9: Full gate green, JVM byte-identical. Commit** (`feat(python): a module variable from a typed-return call holds that class (OI-444, OI-445)`).
 
+### Task 1b: Star re-export member resolution (controller addition, ruling R4)
+
+**Added mid-plan 2026-11-18.** Task 1's rung is correct but mealie did not move: `from mealie.core.settings import AppSettings` resolves through the package's `__init__.py`, which binds `AppSettings` only via `from .settings import *` — and the scanner skips star imports (imports.py, both `alias.name == "*": continue` arms). This is a general name-resolution gap: every member imported from a package that re-exports it with a star is unresolved, for calls and shapes alike. OI-444's stated example (mealie) needs it, so it is in scope.
+
+**Files:**
+- Modify: `src/sextant/ingress/extract/python/imports.py` (record a module's star-import bases in its header; on a member lookup that finds no explicit binding, consult the star bases' headers, Python's own rules: explicit bindings win over star names; `__all__` restricts a star when the source module defines it, else public names only (no leading `_`); later star import wins over earlier; chains followed with a visited-set guard)
+- Modify: `src/sextant/domain/version.py` — NOT bumped again: Task 1's 17 is unreleased on this same branch; one bump per branch (controller ruling).
+- Test: `tests/ingress/extract/python/` (the file where import-resolution tests live; follow its style)
+- Expectations: regenerate the Python pins that truthfully move (mealie's 4 settings guards `test` → `property` is the expected headline); review every changed line.
+
+**Interfaces:**
+- Consumes: the headers/ModuleIndex lookup `member_of` already uses.
+- Produces: `member_of` resolves names through star re-exports; no signature changes.
+
+- [ ] **Step 1: Write failing tests**: a name star-re-exported through a package `__init__` resolves to its defining module's class (the mealie shape, as a tmp_path project); `__all__` excludes a name not listed; a leading-underscore name does not travel a star; an explicit binding in the `__init__` beats a star name; a two-step star chain resolves; a star cycle does not hang.
+- [ ] **Step 2: Verify they fail.**
+- [ ] **Step 3: Implement** (smallest change inside the existing lookup path).
+- [ ] **Step 4: Tests pass; full gate green; JVM byte-identical.**
+- [ ] **Step 5: Regenerate moved Python pins, review line by line, run `uv run python scripts/field_check.py` — 9 green. Commit.**
+
 ### Task 2: Wire probes for aiohttp and urllib3 (DR-6)
 
 **Files:**
