@@ -488,6 +488,11 @@ class Answer:
     # but no one of them is the value: `url_of_answer` publishes one at `narrowed`,
     # `channel_of_answer` refuses it, and `_joined` marks a template filled from one.
     narrowed: bool = False
+    # **The default an environment read carries, DECLARED and never the value** (plan 3 Task 3,
+    # N1): `os.getenv("K", "d")` is `${K}` with `"d"` here, the literal the call writes at its
+    # `default_arg` (a default that is no literal records nothing). Outside equality, as
+    # `parameter` is: the default is evidence about the read, not part of which value it is.
+    default: Any = dataclass_field(default=None, compare=False)
     # **The class the identifying call names beside this value** (spec 2026-11-05 §2): set only
     # by an identity entry declaring `class_arg`, from that SAME producing call's argument,
     # read on the same path in the same walk (`_Walk._with_class`), so a key and the class of
@@ -5297,30 +5302,38 @@ class _Walk:
                 bound = bound_owner(answer)
                 stated = None if bound is None else reads.get((bound, str(row["name"])))
                 if stated is not None:
-                    reached.extend(self._environment_key(site, row, stated[0], path, frames))
+                    reached.extend(self._environment_key(site, row, stated, path, frames))
             return tuple(reached) or None
         stated = reads.get((str(owner), str(row["name"])))
         if stated is None:
             return None
-        return self._environment_key(site, row, stated[0], trail, frames)
+        return self._environment_key(site, row, stated, trail, frames)
 
     def _environment_key(
         self,
         site: tuple[str, int],
         row: Mapping[str, Any],
-        key: Any,
+        stated: tuple[Any, Any],
         trail: _Trail,
         frames: "_Frames",
     ) -> tuple[_Reached, ...]:
-        """The expression of the key argument `key` names, or `non_enumerable` (see
-        `_environment_read`)."""
-        slot = argument_slot(row["arguments"] or [], key)
+        """The expression of the key argument `stated[0]` names, or `non_enumerable` (see
+        `_environment_read`), carrying the literal at `stated[1]` as its declared default."""
+        arguments = row["arguments"] or []
+        slot = argument_slot(arguments, stated[0])
         if slot is None or slot == UNPACKED_SLOT:
             return _only(trail, _unresolved(NON_ENUMERABLE))
+        given = None if stated[1] is None else argument_slot(arguments, stated[1])
+        written = None if given is None or given == UNPACKED_SLOT else arguments[given]
+        default = (
+            written.get("value")
+            if written is not None and written.get("kind") in _LITERAL_KINDS
+            else None
+        )
         return tuple(
             (
                 reached_trail,
-                Answer(kind=EXPRESSION, value="${" + str(answer.value) + "}")
+                Answer(kind=EXPRESSION, value="${" + str(answer.value) + "}", default=default)
                 if answer.kind == LITERAL and answer.literal_kind == STRING
                 else _unresolved(NON_ENUMERABLE),
             )

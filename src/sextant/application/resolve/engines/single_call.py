@@ -801,11 +801,14 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # DECLARATION** (spec 2026-10-18 §2, `OI-143`). Every branch above consults the
             # walk only where the row declares a hop — `channel_via` — and that gate is
             # right for a hop and wrong for a join: `channel_via` says the value lives on
-            # some OTHER call's argument, which a catalog must say because following a
-            # `source` to an undeclared producer is how a row publishes a destination its
-            # own form never reached. A `concat` is neither. The catalog already named THIS
-            # position and the operands are the concat site's own arguments, so there is
-            # nothing left for a declaration to permit.
+            # some OTHER call's argument, which a catalog must say because a hop moves the
+            # value to a position the row never named. A `concat` is neither. The catalog
+            # already named THIS position and the operands are the concat site's own
+            # arguments, so there is nothing left for a declaration to permit. **A call's
+            # result at the named position is read the same way** (rulings R17, R19, plan 3):
+            # the walk follows its `source` to the producing call, which an identity entry or
+            # a read body states or does not, and it answers `unresolved` where neither does.
+            # Url and channel rows alike; `test_call_result_arguments` pins both.
             #
             # **This was found and fixed in `fluent` on 2026-10-17 and never carried here**,
             # which is the whole of `OI-143`: `apolloconfig/apollo` funnels 64 calls into
