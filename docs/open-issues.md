@@ -442,7 +442,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-436 | Plane: pending | The pydantic placeholder rule's model choice is alphabetical when a module's dependencies are empty or unrecorded, so a bare JVM module could be given the pydantic model |
 | OI-437 | Plane: pending | Catalogs are loaded twice per analyze (about 55 ms), once for the models and once for the engines |
 | OI-438 | Plane: pending | A named-.env fact file stays in the workspace and keeps matching after the code stops naming it |
-| OI-439 | Plane: pending | A .env file a settings class names is read even when the class itself is in an unscanned (ignored) path |
+| OI-439 | withdrawn | Withdrawn before filing, no Plane item: a .env file named by a settings class in an ignored path is never read, because the file names come from facts (`read_fact_tree`) and facts exist only for scanned files (`stages/named_config_files.py`); the scenario cannot occur |
 | OI-440 | Plane: pending | Lower-case keys in a .env file are not matched to a settings field (python-dotenv keeps their case; pydantic-settings folds it) |
 | OI-441 | Plane: pending | Two settings classes naming different env_file values layer into one default environment, so a key from one file answers for a field of the other class |
 | OI-442 | Plane: pending | A value given at construction time (Settings(rates_url=…), _env_file=…) is not seen, so the field still reads as the environment's key |
