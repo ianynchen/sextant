@@ -20,11 +20,12 @@ import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
+from weakref import WeakKeyDictionary
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
-from sextant.application.resolve.effective_calls import effective_call_sites
+from sextant.application.resolve.effective_calls import bound_positions, effective_call_sites
 from sextant.application.resolve.parameter_markers import _site
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _Rules
@@ -1481,10 +1482,42 @@ class CallSiteIndex:
 
 def call_site_index(workspace: Workspace) -> CallSiteIndex:
     """`CallSiteIndex` over `call_sites` — the builder `Workspace.once` keys on."""
+    return _indexed(effective_call_sites(workspace))
+
+
+# The post-binding index, per workspace for one load: tied to the call-site list and to the
+# bound owners it was built from (`bound_positions` returns one object per load), as that map
+# is. Not a `Workspace.once` fold: it reads `bound_receivers`, which a fold may not.
+_BOUND_INDEX: "WeakKeyDictionary[Workspace, tuple[object, object, CallSiteIndex]]" = (
+    WeakKeyDictionary()
+)
+
+
+def bound_call_site_index(workspace: Workspace) -> CallSiteIndex:
+    """`call_site_index` read AFTER receiver binding: a call whose facts name no owner and
+    whose binding settled on one (`effective_calls.bound_positions`) is indexed as a call on
+    that owner. A chain's root is such a call where its receiver is another file's variable
+    (`@bp.route(...)` over `from app.base import bp`): the owner is the resolver's (spec
+    2026-11-06 §3b), so a reader of roots asks here, never before the binding has settled."""
+    sites = effective_call_sites(workspace)
+    bound = bound_positions(workspace)
+    held = _BOUND_INDEX.get(workspace)
+    if held is not None and held[0] is sites and held[1] is bound:
+        return held[2]
+    owned = list(sites)
+    for owner, positions in bound.items():
+        for position in positions:
+            owned[position] = {**sites[position], "owner": owner}
+    index = _indexed(owned)
+    _BOUND_INDEX[workspace] = (sites, bound, index)
+    return index
+
+
+def _indexed(sites: Sequence[dict[str, Any]]) -> CallSiteIndex:
     by_caller: dict[str, list[dict[str, Any]]] = {}
     bare_callers: dict[str, set[str]] = {}
     positions_by_owner: dict[str, list[int]] = {}
-    for position, site in enumerate(effective_call_sites(workspace)):
+    for position, site in enumerate(sites):
         caller = str(site["caller"])
         by_caller.setdefault(caller, []).append(site)
         bare_callers.setdefault(bare_descriptor(caller), set()).add(caller)

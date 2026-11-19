@@ -19,6 +19,10 @@ detect:
 measured:
   - { artifact: flask, versions: ["3.1.3"], identity: reported, by: scripts/probes/flask_rules.md }
   - { artifact: werkzeug, versions: ["3.1.9"], identity: reported, by: scripts/probes/flask_rules.md }
+  # Flask 2.1.3 (CTFd's lock) predates the sansio split; its owners are measured in the same probe,
+  # run in that environment ("Flask 2.1.3" section). Werkzeug 2.2.3 owns the same request surface.
+  - { artifact: flask, versions: ["2.1.3"], identity: reported, by: scripts/probes/flask_rules.md }
+  - { artifact: werkzeug, versions: ["2.2.3"], identity: reported, by: scripts/probes/flask_rules.md }
 
 matches:
   # THE REGISTRATIONS. `route` and the verb shortcuts are defined once, on `Scaffold` (probe:
@@ -35,19 +39,19 @@ matches:
   # is added to every rule, not only GET ones"). They are the framework's own answers, not a
   # route the program wrote, so only the methods written give a row.
   roots:
-    - { owner: flask.sansio.scaffold.Scaffold, method: route,
+    - { owner: [flask.sansio.scaffold.Scaffold, flask.scaffold.Scaffold], method: route,
         captures: { http_method: { keyword: methods, absent: GET, case: upper }, url: { arg: 0, keyword: rule } } }
-    - { owner: flask.sansio.scaffold.Scaffold, method: get,
+    - { owner: [flask.sansio.scaffold.Scaffold, flask.scaffold.Scaffold], method: get,
         captures: { http_method: GET, url: { arg: 0, keyword: rule } } }
-    - { owner: flask.sansio.scaffold.Scaffold, method: post,
+    - { owner: [flask.sansio.scaffold.Scaffold, flask.scaffold.Scaffold], method: post,
         captures: { http_method: POST, url: { arg: 0, keyword: rule } } }
-    - { owner: flask.sansio.scaffold.Scaffold, method: put,
+    - { owner: [flask.sansio.scaffold.Scaffold, flask.scaffold.Scaffold], method: put,
         captures: { http_method: PUT, url: { arg: 0, keyword: rule } } }
-    - { owner: flask.sansio.scaffold.Scaffold, method: patch,
+    - { owner: [flask.sansio.scaffold.Scaffold, flask.scaffold.Scaffold], method: patch,
         captures: { http_method: PATCH, url: { arg: 0, keyword: rule } } }
-    - { owner: flask.sansio.scaffold.Scaffold, method: delete,
+    - { owner: [flask.sansio.scaffold.Scaffold, flask.scaffold.Scaffold], method: delete,
         captures: { http_method: DELETE, url: { arg: 0, keyword: rule } } }
-    - { owner: [flask.sansio.app.App, flask.sansio.blueprints.Blueprint], method: add_url_rule,
+    - { owner: [flask.sansio.app.App, flask.sansio.blueprints.Blueprint, flask.app.Flask, flask.blueprints.Blueprint], method: add_url_rule,
         captures: { http_method: { keyword: methods, absent: GET, case: upper },
                     url: { arg: 0, keyword: rule }, handler: { arg: 2, keyword: view_func } } }
   # The decorator `route` returns, called with the function it registers: the handler is that
@@ -75,9 +79,9 @@ matches:
   # The blueprint's own prefix is `Blueprint(url_prefix=...)`, held from its construction (probe:
   # "own url_prefix joins the rule: /own + /x -> /own/x"). A blueprint nothing registers rows at
   # that prefix, as the route's own path is read where no registration is seen. The app has none.
-  router_type: [flask.sansio.app.App, flask.sansio.blueprints.Blueprint]
+  router_type: [flask.sansio.app.App, flask.sansio.blueprints.Blueprint, flask.app.Flask, flask.blueprints.Blueprint]
   router_holds:
-    - { owner: flask.sansio.blueprints.Blueprint, method: <init>, prefix_arg: { keyword: url_prefix },
+    - { owner: [flask.sansio.blueprints.Blueprint, flask.blueprints.Blueprint], method: <init>, prefix_arg: { keyword: url_prefix },
         refuses: [unrooted] }
   # A prefix not starting with `/`, own or given, makes werkzeug refuse the joined rule at
   # registration (probe: "a slash-less own/registration url_prefix ... refuses at registration"),
@@ -93,10 +97,10 @@ matches:
   # registered under two names serves under both (probe: "registering it again with name='bp2'
   # gives both prefixes").
   mount:
-    - { owner: flask.sansio.app.App, method: register_blueprint,
+    - { owner: [flask.sansio.app.App, flask.app.Flask], method: register_blueprint,
         router_arg: { arg: 0, keyword: blueprint }, prefix_arg: { keyword: url_prefix },
         prefix_replaces_own: true, refuses: [unrooted] }
-    - { owner: flask.sansio.blueprints.Blueprint, method: register_blueprint,
+    - { owner: [flask.sansio.blueprints.Blueprint, flask.blueprints.Blueprint], method: register_blueprint,
         router_arg: { arg: 0, keyword: blueprint }, prefix_arg: { keyword: url_prefix },
         prefix_replaces_own: true, refuses: [unrooted] }
 

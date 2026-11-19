@@ -47,23 +47,59 @@ def definer(cls: type, name: str) -> str:
 
 print("versions:", {d: importlib.metadata.version(d) for d in ("flask", "werkzeug")})
 
-# 1. Defining classes of the registration surface.
-for name in ("route", "get", "post", "put", "patch", "delete"):
-    assert definer(Flask, name) == definer(Blueprint, name) == "flask.sansio.scaffold.Scaffold", (
-        name
+# 0. Flask 2.x (CTFd locks 2.1.3) predates the `sansio` split: `route` and the verb shortcuts are
+# on `flask.scaffold.Scaffold`. The 3.x ownership assertions below do not hold there, so a 2.x run reports the
+# defining classes it measured, then runs the version-independent rules. Run it in that project's own environment, same flags.
+V2 = int(importlib.metadata.version("flask").split(".")[0]) < 3
+if V2:
+    for cls, names in (
+        (
+            Flask,
+            (
+                "route",
+                "get",
+                "post",
+                "put",
+                "patch",
+                "delete",
+                "add_url_rule",
+                "register_blueprint",
+            ),
+        ),
+        (Blueprint, ("route", "get", "add_url_rule", "register_blueprint", "__init__")),
+        (flask.Request, ("args", "cookies", "values")),
+    ):
+        for name in names:
+            print(f"OWNER: {cls.__name__}.{name} -> {definer(cls, name)}")
+    assert "self.headers =" in inspect.getsource(SansioRequest.__init__)
+    print(
+        "OWNER: headers is assigned by werkzeug.sansio.request.Request.__init__ (instance attribute)"
     )
-assert definer(Flask, "add_url_rule") == "flask.sansio.app.App"
-assert definer(Blueprint, "add_url_rule") == "flask.sansio.blueprints.Blueprint"
-assert definer(Flask, "register_blueprint") == "flask.sansio.app.App"
-assert definer(Blueprint, "register_blueprint") == "flask.sansio.blueprints.Blueprint"
-assert "route" not in Flask.__dict__ and "get" not in Flask.__dict__
-rule(
-    "route/get/post/put/patch/delete are defined on flask.sansio.scaffold.Scaffold (Flask and Blueprint inherit)"
-)
-rule("add_url_rule is defined on flask.sansio.app.App (app) and flask.sansio.blueprints.Blueprint")
-rule(
-    "register_blueprint is defined on flask.sansio.app.App (app) and flask.sansio.blueprints.Blueprint"
-)
+    print(f"OWNER: Blueprint is {Blueprint.__module__}.{Blueprint.__qualname__}")
+    print(f"OWNER: Flask is {Flask.__module__}.{Flask.__qualname__}")
+    ann = inspect.get_annotations(flask.globals, eval_str=False)
+    print(f"OWNER: flask.globals request annotation -> {ann.get('request')!r}")
+
+# 1. Defining classes of the registration surface.
+if not V2:
+    for name in ("route", "get", "post", "put", "patch", "delete"):
+        assert (
+            definer(Flask, name) == definer(Blueprint, name) == "flask.sansio.scaffold.Scaffold"
+        ), name
+    assert definer(Flask, "add_url_rule") == "flask.sansio.app.App"
+    assert definer(Blueprint, "add_url_rule") == "flask.sansio.blueprints.Blueprint"
+    assert definer(Flask, "register_blueprint") == "flask.sansio.app.App"
+    assert definer(Blueprint, "register_blueprint") == "flask.sansio.blueprints.Blueprint"
+    assert "route" not in Flask.__dict__ and "get" not in Flask.__dict__
+    rule(
+        "route/get/post/put/patch/delete are defined on flask.sansio.scaffold.Scaffold (Flask and Blueprint inherit)"
+    )
+    rule(
+        "add_url_rule is defined on flask.sansio.app.App (app) and flask.sansio.blueprints.Blueprint"
+    )
+    rule(
+        "register_blueprint is defined on flask.sansio.app.App (app) and flask.sansio.blueprints.Blueprint"
+    )
 
 # 2. Positions: the rule is index 0; the handler is `view_func`, index 2, on both add_url_rule's.
 for cls in (Flask, Blueprint):
@@ -158,7 +194,11 @@ app = Flask("p")
 try:
     app.add_url_rule("nolead", view_func=view, endpoint="n")
 except ValueError as e:
-    assert str(e) == "URL rule 'nolead' must start with a slash."
+    assert str(e) == (
+        "urls must start with a leading slash"
+        if V2
+        else "URL rule 'nolead' must start with a slash."
+    )
     rule(f"a rule without a leading slash raises ValueError({str(e)!r}) at registration")
 else:
     raise AssertionError("rule without slash accepted")

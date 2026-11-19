@@ -4561,7 +4561,7 @@ def test_the_reachability_table_is_written_by_the_pipeline(
 # `once` — or through a builder of its own — would build once per catalog again,
 # and this is the test that says so.
 _FOLDS_ONCE_PER_RESOLVE: dict[str, tuple[tuple[object, str], ...]] = {
-    "call_site_index": ((single_call, "call_site_index"), (fluent, "call_site_index")),
+    "call_site_index": ((single_call, "call_site_index"),),
     "declared_parameters_of": (
         (single_call, "declared_parameters_of"),
         (fluent, "declared_parameters_of"),

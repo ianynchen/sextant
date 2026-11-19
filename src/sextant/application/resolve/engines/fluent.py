@@ -65,7 +65,7 @@ from sextant.application.resolve.shapes.arguments import (
     _walked_channels,
     _walked_with,
     argument_descriptor,
-    call_site_index,
+    bound_call_site_index,
     carries_expression,
     channels_of,
     declared_parameters_of,
@@ -394,7 +394,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # None for a catalog declaring no `field_sources` block, which is exactly
     # what keeps such a catalog's rows what they were before 2F.
     field_sources = field_facts(workspace, catalog)
-    by_caller = workspace.once(call_site_index).by_caller
+    by_caller = bound_call_site_index(workspace).by_caller
     # The method symbols a `handler` capture joins a lambda's bare body name to
     # (spec 2026-09-21 §3c), read where the walk reads them (`chain_ends`) and
     # shared with it through `Workspace.once`.

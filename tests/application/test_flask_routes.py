@@ -249,3 +249,17 @@ def test_a_decorated_function_is_still_the_handler_by_name(tmp_path: Path, libra
         ("GET", "/b", _handler("b"), "resolved"),
         ("GET", "/d", _handler("b"), "resolved"),
     ]
+
+
+def test_a_blueprint_built_in_another_module_still_routes(tmp_path: Path, libraries):
+    """`bp` is made in one module and imported by the one that writes `@bp.route`."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "base.py": "from flask import Blueprint\nbp = Blueprint('bp', __name__)\n",
+            "views.py": "from app.base import bp\n@bp.route('/b')\ndef b():\n    return ''\n",
+        },
+    )
+
+    assert _rows(workspace) == [("GET", "/b", _handler("b", "app/views"), "resolved")]
