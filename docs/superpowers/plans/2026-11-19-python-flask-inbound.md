@@ -129,6 +129,23 @@
 - [ ] **Step 2: Attempt the oracle per corpus** (`flask_oracle.py` against the corpus app under its env). If the app cannot build its `url_map` without services (likely for redash; CTFd may boot with SQLite), record the truthful fallback in the pin's notes: hand-verified sample instead of a full oracle, saying so.
 - [ ] **Step 3: `field_check.py` green (all pins). Commit.**
 
+### Task 6b: The two corpus-measured gaps (controller addition, never-descope rule)
+
+**Added mid-plan 2026-11-19.** Task 6's pins measured two Majors in the cell this plan ships:
+1. **redash:** 21 of 28 core-Flask rules missed — a blueprint constructed in one module (`routes` in `redash/handlers/base.py`) and imported by the modules that write `@routes.route(...)` has an unknown receiver class at the root-matching step, so the catalog never matches (reproduced on a two-file scratch project). The FastAPI corpora never hit this because their routers add routes in the defining file and cross the module boundary via includes. The fix is general: a fluent root's receiver resolves through imported module variables with the same member machinery plan 4 built for attribute reads — no framework names, no Flask special case.
+2. **CTFd:** it locks Flask 2.1.3, where `route`/verb shortcuts/`add_url_rule` are defined on `flask.scaffold.Scaffold` (pre-sansio). The catalog names only the 3.x sansio classes, so ZERO of 80 core rules match — silently. Fix per DR-6: run the probe against Flask 2.1.3 (a scratch venv, or CTFd's own env), add the measured 2.x defining owners to `flask.yml` with a second `measured` entry (flask 2.1.3), and quote the 2.x rows in `flask_rules.md` beside the 3.1.3 ones.
+
+**Acceptance:** redash's pin moves from 11 toward ~28 core rows and CTFd's from 0 toward ~80 (the exact numbers are measured, reviewed line by line, and stated); both mechanisms carry unit tests (the two-file blueprint shape; a version-owner test if expressible). Pins re-recorded with updated gap statements; full gate + full field_check green (real exit codes).
+
+**Files:**
+- Modify: whatever the receiver-typing fix needs under `src/sextant/ingress/extract/python/` (general rule), `src/sextant/catalogs/flask.yml`, `scripts/probes/flask_rules.py` + `.md` (2.1.3 rows), `scripts/field-expectations/py-redash.json` + `py-ctfd.json`
+- Test: `tests/application/test_flask_routes.py` (two-file blueprint test), probe
+
+- [ ] **Step 1: Failing test** — a blueprint constructed in module A, imported by module B whose `@bp.route` registers a handler: the row derives. Verify RED.
+- [ ] **Step 2: Implement the general receiver resolution; GREEN.**
+- [ ] **Step 3: Probe Flask 2.1.3; catalog gains the measured 2.x owners + measured entry; CTFd rows match.**
+- [ ] **Step 4: Re-record both pins; review every changed line; full gate + full field_check green. Commit.**
+
 ### Task 7: Docs and close-out
 
 **Files:**
