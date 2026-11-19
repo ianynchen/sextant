@@ -62,9 +62,9 @@
 - Consumes: the fluent inbound engine as `fastapi.yml` does (roots, `steps: __call__` for the decorator, `terminal`, `path_join` validated by `validated_path_join`).
 - Produces: endpoint rows for `@app.route("/x", methods=[...])`, `@app.get/post/put/patch/delete`, `app.add_url_rule("/x", view_func=f)`, on `Flask` and `Blueprint` receivers (owners = the defining classes the probe names).
 
-- [ ] **Step 1: Write the failing tests**: bare `@app.route("/items")` → `GET /items` only; `methods=["post", "delete"]` → POST and DELETE rows; `@app.get("/x")` shortcut; `add_url_rule` with `view_func=`; `<int:id>` published as written; a blueprint-owned route with no registration still rows at its own path (probe says `url_map` only shows registered ones — mirror the framework: an unregistered blueprint's routes serve nowhere, so NO row; assert that).
+- [ ] **Step 1: Write the failing tests**: bare `@app.route("/items")` → `GET /items` only; `methods=["post", "delete"]` → POST and DELETE rows; `@app.get("/x")` shortcut; `add_url_rule` with `view_func=`; `<int:id>` published as written; a blueprint-owned route rows at the blueprint's own prefix even with no registration seen (pre-flight ruling: the FastAPI precedent — no new vocabulary; a never-registered blueprint is dead code, Minor by house rule).
 - [ ] **Step 2: Verify they fail.**
-- [ ] **Step 3: Write the catalog** — roots like `fastapi.yml`'s (`http_method: { keyword: methods, absent: GET, case: upper }` on `route`/`add_url_rule`; fixed verbs on shortcuts), `response_fallback: { from: handler_return }` only if the probe shows return annotations are real in Flask code (they are optional; absent annotation → the type the handler returns, same as FastAPI's fallback — keep identical semantics). Catalog comments state the automatic HEAD/OPTIONS boundary with the probe quote.
+- [ ] **Step 3: Write the catalog** — roots like `fastapi.yml`'s (`http_method: { keyword: methods, absent: GET, case: upper }` on `route`/`add_url_rule`; fixed verbs on shortcuts), `response_fallback: { from: handler_return }` with semantics identical to `fastapi.yml`'s (pre-flight ruling: it is the general fallback; absent annotation → the type the handler returns). Catalog comments state the automatic HEAD/OPTIONS boundary with the probe quote.
 - [ ] **Step 4: Tests pass; gate + pins green; JVM byte-identical. Commit.**
 
 ### Task 3: Blueprints and prefixes (uses the two approved words)
@@ -79,7 +79,7 @@
 - Consumes: Task 2's roots; the mount machinery `fastapi.yml` exercises.
 - Produces: `join_prefix(prefix, path, "single_slash")` → `prefix.rstrip("/") + "/" + path.lstrip("/")` when path is non-empty, the prefix verbatim when path is `""`; mounts whose `prefix_arg` is written ignore the mounted router's own held prefix.
 
-- [ ] **Step 1: Write the failing tests**: own `url_prefix` applies; registration `url_prefix` replaces it (Review Focus 2); trailing-slash prefix joins with one slash (Review Focus 1); nested blueprint = parent prefix then child; twice-registered blueprint rows under both prefixes (Review Focus 3); unregistered blueprint → no rows (already pinned in Task 2, keep it green).
+- [ ] **Step 1: Write the failing tests**: own `url_prefix` applies; registration `url_prefix` replaces it (Review Focus 2); trailing-slash prefix joins with one slash (Review Focus 1); nested blueprint = parent prefix then child; twice-registered blueprint rows under both prefixes (Review Focus 3); the Task 2 pin (a blueprint route with no registration rows at the blueprint's own prefix) stays green.
 - [ ] **Step 2: Verify they fail.**
 - [ ] **Step 3: Implement** — the smallest change inside `join_prefix`/`validated_path_join` and the mount prefix resolution; words and semantics exactly as the probe measured.
 - [ ] **Step 4: Tests pass; gate + pins green; JVM byte-identical (the new words are additive; no JVM catalog declares them). Commit.**
