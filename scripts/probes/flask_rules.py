@@ -292,8 +292,10 @@ for attr, owner in (
     ("values", "werkzeug.wrappers.request.Request"),
 ):
     assert definer(flask.Request, attr) == owner, attr
+    owner_class = {"werkzeug.sansio.request.Request": SansioRequest}.get(owner, WrapperRequest)
+    assert isinstance(owner_class.__dict__[attr], property), attr
 assert "headers" not in SansioRequest.__dict__ and "headers" not in WrapperRequest.__dict__
-assert "headers" in inspect.getsource(SansioRequest.__init__)
+assert "self.headers = headers" in inspect.getsource(SansioRequest.__init__)
 rule(
     "args and cookies are properties of werkzeug.sansio.request.Request; values is a property of werkzeug.wrappers.request.Request"
 )
@@ -328,11 +330,15 @@ with app.test_request_context(
         rule(
             "request.headers['H'] raises a plain KeyError (not BadRequestKeyError) when absent; .get is optional"
         )
+    else:
+        raise AssertionError("absent header did not raise")
     assert request.cookies["sid"] == "abc"
     try:
         request.cookies["nope"]
     except BadRequestKeyError:
         rule("request.cookies['c'] raises BadRequestKeyError when absent; .get is optional")
+    else:
+        raise AssertionError("absent cookie did not raise")
     assert "f" not in request.args and request.form["f"] == "2"
     assert request.values["q"] == "1" and request.values["f"] == "2"
     assert request.values["both"] == "fromquery"
@@ -345,7 +351,11 @@ with app.test_request_context(
         request.values["missing"]
     except BadRequestKeyError:
         rule("request.values['x'] on a missing key raises BadRequestKeyError: subscript = required")
+    else:
+        raise AssertionError("absent values key did not raise")
     assert request.args.get("q", type=int) == 1
+    assert request.args.get("both", type=int) is None
+    assert request.args.get("both", type=int, default=-1) == -1
     rule(
-        "args.get('q', type=int) converts, returns the default when conversion fails (typed optional read)"
+        "args.get('q', type=int) converts; a non-numeric value ('fromquery') returns None, or the default when one is given (typed optional read)"
     )

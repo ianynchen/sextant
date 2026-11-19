@@ -126,7 +126,7 @@ With `name="bp2"` both register: `/a/x` and `/b/x`, endpoints `bp.v` and `bp2.v`
 |---|---|---|
 | `request.args["q"]` | `BadRequestKeyError` (400) | required |
 | `request.args.get("q")` | `None` / the default | optional |
-| `request.args.get("q", type=int)` | converts; default when conversion fails | typed optional |
+| `request.args.get("q", type=int)` | converts; a non-numeric value gives `None`, or the `default=` when given | typed optional |
 | `request.headers["H"]` | plain `KeyError` (not `BadRequestKeyError`) | required |
 | `request.headers.get("H")` | `None` | optional |
 | `request.cookies["c"]` | `BadRequestKeyError` | required |
@@ -209,5 +209,5 @@ RULE: request.headers['H'] raises a plain KeyError (not BadRequestKeyError) when
 RULE: request.cookies['c'] raises BadRequestKeyError when absent; .get is optional
 RULE: request.values merges query (args) and form: both are readable by one name, and on a clash args come first. A `param` row therefore means 'query or form field'
 RULE: request.values['x'] on a missing key raises BadRequestKeyError: subscript = required
-RULE: args.get('q', type=int) converts, returns the default when conversion fails (typed optional read)
+RULE: args.get('q', type=int) converts; a non-numeric value ('fromquery') returns None, or the default when one is given (typed optional read)
 ```
