@@ -165,7 +165,7 @@ the run.
 | `register_blueprint(url_prefix=...)` | replaces the blueprint's own prefix (`prefix_replaces_own`) | same (asserted) |
 | nested blueprints | parent prefix, then child prefix, then rule | same (asserted) |
 | same blueprint twice, same name | `ValueError` ("Use 'name=' to provide a unique name.") | same (asserted) |
-| `request.args["q"]` absent | `BadRequestKeyError` (required); `.get` optional | same (asserted) |
+| `request.args["q"]` absent | `BadRequestKeyError` (required); `.get` no requirement | same (asserted) |
 | `request.values` | query and form merged, args first | same (asserted) |
 
 The full run output, verbatim:
@@ -213,12 +213,12 @@ RULE: flask.request is a werkzeug LocalProxy annotated `request: Request` in fla
 RULE: args and cookies are properties of werkzeug.sansio.request.Request; values is a property of werkzeug.wrappers.request.Request
 RULE: headers is not a property: werkzeug.sansio.request.Request.__init__ assigns self.headers (instance attribute)
 RULE: request.args['q'] on a missing key raises BadRequestKeyError (400): subscript = required
-RULE: request.args.get('q') on a missing key returns None / the default: optional
-RULE: request.headers['H'] raises a plain KeyError (not BadRequestKeyError) when absent; .get is optional
-RULE: request.cookies['c'] raises BadRequestKeyError when absent; .get is optional
+RULE: request.args.get('q') on a missing key returns None / the default: no requirement
+RULE: request.headers['H'] raises a plain KeyError (not BadRequestKeyError) when absent; .get makes no requirement
+RULE: request.cookies['c'] raises BadRequestKeyError when absent; .get makes no requirement
 RULE: request.values merges query (args) and form: both are readable by one name, and on a clash args come first. A `param` row therefore means 'query or form field'
 RULE: request.values['x'] on a missing key raises BadRequestKeyError: subscript = required
-RULE: args.get('q', type=int) converts; a non-numeric value ('fromquery') returns None, or the default when one is given (typed optional read)
+RULE: args.get('q', type=int) converts; a non-numeric value ('fromquery') returns None, or the default when one is given (typed read, no requirement)
 ```
 
 ## Flask 2.1.3 (task 6b)
@@ -295,10 +295,10 @@ RULE: flask.request is a werkzeug LocalProxy annotated `request: Request` in fla
 RULE: args and cookies are properties of werkzeug.sansio.request.Request; values is a property of werkzeug.wrappers.request.Request
 RULE: headers is not a property: werkzeug.sansio.request.Request.__init__ assigns self.headers (instance attribute)
 RULE: request.args['q'] on a missing key raises BadRequestKeyError (400): subscript = required
-RULE: request.args.get('q') on a missing key returns None / the default: optional
-RULE: request.headers['H'] raises a plain KeyError (not BadRequestKeyError) when absent; .get is optional
-RULE: request.cookies['c'] raises BadRequestKeyError when absent; .get is optional
+RULE: request.args.get('q') on a missing key returns None / the default: no requirement
+RULE: request.headers['H'] raises a plain KeyError (not BadRequestKeyError) when absent; .get makes no requirement
+RULE: request.cookies['c'] raises BadRequestKeyError when absent; .get makes no requirement
 RULE: request.values merges query (args) and form: both are readable by one name, and on a clash args come first. A `param` row therefore means 'query or form field'
 RULE: request.values['x'] on a missing key raises BadRequestKeyError: subscript = required
-RULE: args.get('q', type=int) converts; a non-numeric value ('fromquery') returns None, or the default when one is given (typed optional read)
+RULE: args.get('q', type=int) converts; a non-numeric value ('fromquery') returns None, or the default when one is given (typed read, no requirement)
 ```

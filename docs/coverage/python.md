@@ -429,7 +429,7 @@ Stated boundaries (each an open issue in Plane): MethodView and `as_view` class 
 92 of CTFd's 174 (OI-481); `subdomain=` (OI-482); `strict_slashes` and `merge_slashes`
 (OI-483); request body reads (OI-484); wrapper decorators that hide the handler (OI-485);
 prefix spellings `url_prefix=None` and a positional `url_prefix` (OI-486); `add_url_rule` on an
-untyped parameter (OI-487). Open: OI-479 to OI-487.
+untyped parameter (OI-487). Open: OI-479 to OI-490.
 
 ## Outbound HTTP
 

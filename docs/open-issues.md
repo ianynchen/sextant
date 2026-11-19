@@ -490,6 +490,9 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-485 | SEXTANT-478 | a route whose `def` sits under a conditional wrapper decorator publishes no handler (CTFd 74 of 95 rows, redash 16 of 37) |
 | OI-486 | SEXTANT-479 | prefix edge spellings: an explicit `url_prefix=None` and a positional `url_prefix` are not read |
 | OI-487 | SEXTANT-480 | `add_url_rule` on an untyped parameter is not read: CTFd's plugin assets, 3 of 98 pairs |
+| OI-488 | SEXTANT-481 | a prefixless blueprint's slash-less rule publishes a resolved row for code Flask refuses: the `fluent.py` suppression carries "" not None |
+| OI-489 | SEXTANT-482 | `register_blueprint(bp, **opts)` keeps the blueprint's own prefix behind the hole: `at.prefix is not None` does not count an unpacked `**` |
+| OI-490 | SEXTANT-483 | a nested child under `url_prefix=''` with an empty rule: `/p` against Flask's `/p/` |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

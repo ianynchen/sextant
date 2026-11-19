@@ -263,3 +263,11 @@ def test_a_blueprint_built_in_another_module_still_routes(tmp_path: Path, librar
     )
 
     assert _rows(workspace) == [("GET", "/b", _handler("b", "app/views"), "resolved")]
+
+
+def test_an_app_rule_with_no_leading_slash_and_no_prefix_derives_nothing(tmp_path: Path, libraries):
+    """Flask raises `ValueError` at registration for a rule with no leading slash, so no
+    route exists to publish (`refuses_unrooted_path`)."""
+    rows = _flask(tmp_path, libraries, "@app.route('x')\ndef x():\n    return ''\n")
+
+    assert rows == []

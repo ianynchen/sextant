@@ -529,8 +529,7 @@ def _zero_pre_outside_code_blocks(html_text: str) -> bool:
 def _first_diagram_parses(html_text: str) -> bool:
     """See the module docstring's own definition of "parses". `None` (no diagram found at
     all) is itself a failure, unless `## Structure` says out loud `None derived.` — a module
-    with no contracts and no inbound endpoints (`py-ctfd`, Flask 2.1.3 where the flask catalog
-    reads nothing) honestly has no diagram; its absence otherwise means something upstream
+    with no contracts and no inbound endpoints (whichever pin that is) honestly has no diagram; its absence otherwise means something upstream
     broke, not that there was nothing to check.
 
     `_BACKTICK_SPAN` (`` `[^`]*` ``) matches across newlines — mermaid identifiers are

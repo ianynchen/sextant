@@ -394,7 +394,7 @@ with app.test_request_context(
     else:
         raise AssertionError("missing arg did not raise")
     assert request.args.get("missing") is None and request.args.get("missing", "d") == "d"
-    rule("request.args.get('q') on a missing key returns None / the default: optional")
+    rule("request.args.get('q') on a missing key returns None / the default: no requirement")
     assert request.args["q"] == "1"
     assert request.headers["X-Token"] == "t" and request.headers.get("X-None") is None
     try:
@@ -402,7 +402,7 @@ with app.test_request_context(
     except KeyError as e:
         assert not isinstance(e, BadRequestKeyError)
         rule(
-            "request.headers['H'] raises a plain KeyError (not BadRequestKeyError) when absent; .get is optional"
+            "request.headers['H'] raises a plain KeyError (not BadRequestKeyError) when absent; .get makes no requirement"
         )
     else:
         raise AssertionError("absent header did not raise")
@@ -410,7 +410,9 @@ with app.test_request_context(
     try:
         request.cookies["nope"]
     except BadRequestKeyError:
-        rule("request.cookies['c'] raises BadRequestKeyError when absent; .get is optional")
+        rule(
+            "request.cookies['c'] raises BadRequestKeyError when absent; .get makes no requirement"
+        )
     else:
         raise AssertionError("absent cookie did not raise")
     assert "f" not in request.args and request.form["f"] == "2"
@@ -431,5 +433,5 @@ with app.test_request_context(
     assert request.args.get("both", type=int) is None
     assert request.args.get("both", type=int, default=-1) == -1
     rule(
-        "args.get('q', type=int) converts; a non-numeric value ('fromquery') returns None, or the default when one is given (typed optional read)"
+        "args.get('q', type=int) converts; a non-numeric value ('fromquery') returns None, or the default when one is given (typed read, no requirement)"
     )
