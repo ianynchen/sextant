@@ -1501,6 +1501,10 @@ def bound_call_site_index(workspace: Workspace) -> CallSiteIndex:
     2026-11-06 §3b), so a reader of roots asks here, never before the binding has settled."""
     sites = effective_call_sites(workspace)
     bound = bound_positions(workspace)
+    if not bound:
+        # Nothing bound (every JVM load): the shared build-once fold, which the pipeline test
+        # counts, is the answer.
+        return workspace.once(call_site_index)
     held = _BOUND_INDEX.get(workspace)
     if held is not None and held[0] is sites and held[1] is bound:
         return held[2]
