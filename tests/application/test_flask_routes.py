@@ -1,10 +1,10 @@
-"""FastAPI routes are `fluent` rows: verbs, paths, handlers and responses (plan
-2026-11-08-python-fastapi-inbound Task 5; N8, N9; rulings R1, R4).
+"""Flask routes are `fluent` rows: verbs, paths and handlers (plan
+2026-11-19-python-flask-inbound.md, Task 2).
 
-Each test writes a small FastAPI program, scans it with the real Python scanner against the
-FastAPI 0.162.0 that `fixtures/orders-flask` locks (its own environment is the library read),
+Each test writes a small Flask program, scans it with the real Python scanner against the
+Flask 3.1.3 that `fixtures/orders-flask` locks (its own environment is the library read),
 and runs the real pipeline with the shipped catalogs. It then reads `endpoints`. The rules are
-FastAPI's own, quoted in `scripts/probes/fastapi_rules.md`.
+Flask's own, measured in `scripts/probes/flask_rules.md`.
 """
 
 from pathlib import Path

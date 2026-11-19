@@ -91,6 +91,31 @@ rule(
     "app.get/post/put/patch/delete(rule) register exactly that method (plus the automatic ones); methods= on them raises TypeError"
 )
 
+# The verb shortcuts are `route`: `_method_route` hands off to `self.route`.
+for verb in ("get", "post", "put", "patch", "delete"):
+    assert "self._method_route(" in inspect.getsource(getattr(Flask, verb)), verb
+assert "self.route(rule, methods=[method]" in inspect.getsource(Flask._method_route)
+rule(
+    "get/post/put/patch/delete delegate to Scaffold._method_route, which calls self.route(rule, methods=[method])"
+)
+
+# A returned Response object is passed through, not built into a body.
+from flask import Response as FlaskResponse
+from werkzeug.wrappers import Response as WerkzeugResponse
+
+assert issubclass(FlaskResponse, WerkzeugResponse)
+_resp = Flask("r")
+_sent = FlaskResponse("raw", status=202)
+_resp.add_url_rule("/r", view_func=lambda: _sent, endpoint="r")
+_resp.add_url_rule("/s", view_func=lambda: WerkzeugResponse("w", status=203), endpoint="s")
+assert _resp.make_response(_sent) is _sent
+with _resp.test_client() as _c:
+    assert (_c.get("/r").status_code, _c.get("/r").get_data()) == (202, b"raw")
+    assert (_c.get("/s").status_code, _c.get("/s").get_data()) == (203, b"w")
+rule(
+    "a handler returning flask.Response (a subclass of werkzeug Response) or a werkzeug Response is the finished response: make_response returns it unchanged, so no body shape comes from its annotation"
+)
+
 # 3. methods=.
 app = Flask("m")
 app.add_url_rule("/default", view_func=view, endpoint="d")

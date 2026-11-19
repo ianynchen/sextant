@@ -151,6 +151,8 @@ the run.
 | defining class of `route/get/post/put/patch/delete` | `Scaffold` (`flask/sansio/scaffold.py`) |
 | defining class of `add_url_rule`, `register_blueprint` | `App` (app), `Blueprint` (blueprint) |
 | `add_url_rule` handler position | `view_func`, index 2 |
+| `get/post/put/patch/delete` | delegate to `Scaffold._method_route`, which calls `self.route(rule, methods=[method])` |
+| handler returns a `Response` | `flask.Response` (subclass of werkzeug `Response`) or werkzeug `Response` is the finished response; `make_response` returns it unchanged, so its annotation names no body shape |
 | `methods` absent | `GET, HEAD, OPTIONS` |
 | `methods=["post"]` | `POST, OPTIONS` (upper-cased) |
 | `provide_automatic_options=False` on GET | `GET, HEAD` |
@@ -172,6 +174,8 @@ RULE: register_blueprint is defined on flask.sansio.app.App (app) and flask.sans
 RULE: add_url_rule(rule, endpoint=None, view_func=None, ...): rule index 0, view_func index 2 (app and blueprint)
 RULE: route(rule, **options) is a decorator; the decorated function is the handler
 RULE: app.get/post/put/patch/delete(rule) register exactly that method (plus the automatic ones); methods= on them raises TypeError
+RULE: get/post/put/patch/delete delegate to Scaffold._method_route, which calls self.route(rule, methods=[method])
+RULE: a handler returning flask.Response (a subclass of werkzeug Response) or a werkzeug Response is the finished response: make_response returns it unchanged, so no body shape comes from its annotation
 RULE: methods absent -> GET, and url_map also lists HEAD and OPTIONS: {GET, HEAD, OPTIONS}
 RULE: methods are upper-cased on the wire (`post` -> POST); no HEAD is added without GET: {POST, PUT, OPTIONS}
 RULE: declared HEAD / OPTIONS collapse into the same set as the automatic ones

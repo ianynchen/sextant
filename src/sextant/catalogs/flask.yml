@@ -58,8 +58,9 @@ matches:
   terminal: [__call__, add_url_rule]
   # No response model exists in Flask: the response is the type the handler returns. A handler
   # that returns a `Response` object (flask's, or werkzeug's it extends) hands the framework a
-  # finished response, so its annotation names no body shape. NOT in the probe: this is read
-  # from the source of `flask/wrappers.py`, logged as a concern for Task 1's probe.
+  # finished response, so its annotation names no body shape (probe: "a handler returning
+  # flask.Response (a subclass of werkzeug Response) or a werkzeug Response is the finished
+  # response: make_response returns it unchanged").
   response_fallback: { from: handler_return,
                        none_types: [flask.wrappers.Response, werkzeug.wrappers.response.Response] }
   # A rule without a leading `/` raises ValueError at registration, so the program does not
