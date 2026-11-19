@@ -101,6 +101,12 @@ class LibraryNames(Protocol):
         _Environ[str]`), or None where the library writes no one class for it."""
         ...
 
+    def attribute_type(self, receiver: TypeRef, name: str) -> tuple[str, TypeRef] | None:
+        """The class that defines the attribute `name` of a library class, and the type its
+        file writes for it (a property's return, an annotation, an `__init__` parameter);
+        None where that is not one class."""
+        ...
+
     def call_returns(
         self,
         owner: str,

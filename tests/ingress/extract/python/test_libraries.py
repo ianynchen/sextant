@@ -1397,3 +1397,59 @@ def test_a_function_or_class_fits_only_an_open_callable_or_type(tmp_path: Path):
     assert returned("fx", fn) == ("narrowed", [("pick/X#", []), ("pick/Y#", [])])
     assert returned("anyc", fn) == ("resolved", [("pick/X#", [])])
     assert returned("anyt", cls) == ("resolved", [("pick/X#", [])])
+
+
+_WEB = {
+    "web/__init__.py": "from .globals import request as request\n",
+    "web/py.typed": "",
+    "web/globals.py": "from .req import Request\n\nrequest: Request\n",
+    "web/req.py": (
+        "from .maps import Bag, Names\n\n"
+        "class Base:\n"
+        "    names: Names\n"
+        "    def __init__(self, headers: Bag):\n"
+        "        self.headers = headers\n"
+        "    @property\n"
+        "    def args(self) -> Bag:\n"
+        "        ...\n"
+        "    def method(self) -> Bag:\n"
+        "        ...\n\n"
+        "class Request(Base):\n"
+        "    pass\n"
+    ),
+    "web/maps.py": "class Bag:\n    def get(self, key: str): ...\n\nclass Names(Bag): ...\n",
+}
+
+
+def test_an_attribute_of_a_library_variable_is_a_call_on_its_defining_class(tmp_path: Path):
+    """`request.args` (a property), `request.names` (a class-body annotation) and
+    `request.headers` (the annotated parameter `__init__` assigns) are each a call named for the
+    attribute on `Base`, the class whose file declares it, giving the type its file writes; the
+    `.get` on the result has that call's result as its receiver. A method is no attribute: no
+    producer."""
+    web = _install(tmp_path / "site", "web", "1.0.0", _WEB)
+
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/main.py": (
+                "from web import request\n"
+                "def handler():\n"
+                "    request.args.get('a')\n"
+                "    request.headers.get('h')\n"
+                "    request.names.get('n')\n"
+                "    request.method.get('m')\n"
+            )
+        },
+        (web,),
+    )
+
+    calls = [
+        (s.target.owner, s.target.name, s.receiver, s.result)
+        for s in _sites(tree, "app/main#handler")
+    ]
+    base = "web/req/Base#"
+    assert calls[:2] == [(base, "args", 0, 1), ("web/maps/Bag#", "get", 1, 2)]
+    assert calls[2:4] == [(base, "headers", 3, 4), ("web/maps/Bag#", "get", 4, 5)]
+    assert calls[4:6] == [(base, "names", 6, 7), ("web/maps/Names#", "get", 7, 8)]
+    assert all(name != "method" or owner != base for owner, name, _, _ in calls)

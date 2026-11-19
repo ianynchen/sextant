@@ -378,7 +378,7 @@ _ASKS_PER_CATALOG = {
     "cdi-events": (2, 2),
     "click": (3, 3),
     "fastapi": (19, 19),
-    "flask": (3, 3),
+    "flask": (19, 19),
     "google-pubsub-client": (1, 1),
     "google-pubsub-publisher": (2, 2),
     "google-pubsub-subscriber": (2, 3),

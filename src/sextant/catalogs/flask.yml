@@ -99,3 +99,38 @@ matches:
     - { owner: flask.sansio.blueprints.Blueprint, method: register_blueprint,
         router_arg: { arg: 0, keyword: blueprint }, prefix_arg: { keyword: url_prefix },
         prefix_replaces_own: true, refuses: [unrooted] }
+
+  # REQUEST READS (the handler body only, as on every catalog: a helper the handler calls is not
+  # read). `request` is `flask.globals.request: Request`, and each read below is a PROPERTY read
+  # on it, a call of the class that defines the property (probe, "Defining symbols": `args`,
+  # `cookies` on `werkzeug.sansio.request.Request`, `values` on `werkzeug.wrappers.request.Request`,
+  # `headers` an attribute `Request.__init__` sets on the sansio class), then `.get` or a subscript
+  # on what it gives. `.get(key, default=None, type=None)` takes one to three arguments, a keyword
+  # one counted: one entry per count. Probe, "Request reads":
+  #   - `.get` of a missing key gives `None` or the default, so it is `optional` on all four;
+  #   - `request.args[k]`, `request.cookies[k]`, `request.values[k]` raise `BadRequestKeyError`
+  #     (a 400), so they are `required`;
+  #   - `request.headers[k]` raises a plain `KeyError`: werkzeug does not refuse the request, the
+  #     handler fails with a 500. No word here says that, so the header subscript states only that
+  #     the handler reads the value (no `requirement`).
+  # `values` merges query and form (probe: "`values` merges query and form"), so its kind is
+  # `param`. THE BODY READS ARE A STATED BOUNDARY: `request.json`, `request.get_json()`,
+  # `request.form` and `request.data` read the body, a request model the overlay case of the
+  # coverage essay covers, not a named parameter; they give no row.
+  request_reads:
+    - { via: { owner: werkzeug.sansio.request.Request, method: args }, method: get, arity: 1, name_arg: 0, kind: query, requirement: optional }
+    - { via: { owner: werkzeug.sansio.request.Request, method: args }, method: get, arity: 2, name_arg: 0, kind: query, requirement: optional }
+    - { via: { owner: werkzeug.sansio.request.Request, method: args }, method: get, arity: 3, name_arg: 0, kind: query, requirement: optional }
+    - { via: { owner: werkzeug.sansio.request.Request, method: args }, method: __getitem__, arity: 1, name_arg: 0, kind: query, requirement: required }
+    - { via: { owner: werkzeug.sansio.request.Request, method: headers }, method: get, arity: 1, name_arg: 0, kind: header, requirement: optional }
+    - { via: { owner: werkzeug.sansio.request.Request, method: headers }, method: get, arity: 2, name_arg: 0, kind: header, requirement: optional }
+    - { via: { owner: werkzeug.sansio.request.Request, method: headers }, method: get, arity: 3, name_arg: 0, kind: header, requirement: optional }
+    - { via: { owner: werkzeug.sansio.request.Request, method: headers }, method: __getitem__, arity: 1, name_arg: 0, kind: header }
+    - { via: { owner: werkzeug.sansio.request.Request, method: cookies }, method: get, arity: 1, name_arg: 0, kind: cookie, requirement: optional }
+    - { via: { owner: werkzeug.sansio.request.Request, method: cookies }, method: get, arity: 2, name_arg: 0, kind: cookie, requirement: optional }
+    - { via: { owner: werkzeug.sansio.request.Request, method: cookies }, method: get, arity: 3, name_arg: 0, kind: cookie, requirement: optional }
+    - { via: { owner: werkzeug.sansio.request.Request, method: cookies }, method: __getitem__, arity: 1, name_arg: 0, kind: cookie, requirement: required }
+    - { via: { owner: werkzeug.wrappers.request.Request, method: values }, method: get, arity: 1, name_arg: 0, kind: param, requirement: optional }
+    - { via: { owner: werkzeug.wrappers.request.Request, method: values }, method: get, arity: 2, name_arg: 0, kind: param, requirement: optional }
+    - { via: { owner: werkzeug.wrappers.request.Request, method: values }, method: get, arity: 3, name_arg: 0, kind: param, requirement: optional }
+    - { via: { owner: werkzeug.wrappers.request.Request, method: values }, method: __getitem__, arity: 1, name_arg: 0, kind: param, requirement: required }

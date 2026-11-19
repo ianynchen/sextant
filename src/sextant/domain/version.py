@@ -154,6 +154,12 @@ SEXTANT_VERSION = version("sextant")
 #             `lru_cache`) holds X, so its attribute reads are `field` facts where they were
 #             `unresolved` (OI-444, OI-445). A fact set of the older vintage leaves them
 #             untyped; it is refused and re-extracted.
+#     18      a Python read of a property or attribute on a value of a known LIBRARY class
+#             (`request.args` with `request: Request` in the library's own file) is a call site
+#             named for the attribute on the class that defines it, giving the type its file
+#             writes, where it was a bare receiver field with no owner (plan 5, Task 4). A fact
+#             set of the older vintage leaves the calls made on it ownerless; it is refused and
+#             re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -298,6 +304,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 17
+FACT_SCHEMA_VERSION = 18
 GRAPH_SCHEMA_VERSION = 18
 BOUNDARY_VOCABULARY_VERSION = 5
