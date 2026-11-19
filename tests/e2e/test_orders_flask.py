@@ -32,6 +32,8 @@ EXPECTED: dict[tuple[str, str], str] = {
     ("GET", "/health"): "app.main.health",
     ("GET", "/files/<path:rest>"): "app.main.download",
     ("GET", "/ping"): "app.main.ping",
+    ("POST", "/webhooks/orders"): "app.main.order_webhook",
+    ("PUT", "/webhooks/orders"): "app.main.order_webhook",
     ("GET", "/orders/<int:order_id>"): "app.orders.get_order",
     ("POST", "/orders/"): "app.orders.create_order",
     ("POST", "/orders/<int:order_id>/cancel"): "app.orders.cancel_order",
@@ -49,6 +51,8 @@ EXPECTED: dict[tuple[str, str], str] = {
 READS = {
     ("GET", "/health", "header", "X-Request-Id", None),
     ("GET", "/files/<path:rest>", "query", "inline", None),
+    ("POST", "/webhooks/orders", "header", "X-Webhook-Source", None),
+    ("PUT", "/webhooks/orders", "header", "X-Webhook-Source", None),
     ("GET", "/orders/<int:order_id>", "query", "verbose", None),
     ("GET", "/orders/<int:order_id>", "header", "X-Api-Key", "required"),
     ("GET", "/orders/<int:order_id>", "cookie", "session_id", None),
@@ -64,10 +68,11 @@ READS = {
 def served(orders_flask_env: Path) -> dict[tuple[str, str], str]:
     done = subprocess.run(
         [str(orders_flask_env), str(ORACLE), str(ROOT)],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
+    assert done.returncode == 0, done.stderr
     return {
         (method, r["path"]): f"{r['handler_module']}.{r['handler']}"
         for r in json.loads(done.stdout)
@@ -79,6 +84,8 @@ def served(orders_flask_env: Path) -> dict[tuple[str, str], str]:
 
 @pytest.fixture(scope="module")
 def workspace(orders_flask_env: Path, tmp_path_factory: pytest.TempPathFactory):
+    # `orders_flask_env` is requested for ordering only: the venv must exist before analysis reads
+    # the fixture's libraries from it.
     out = tmp_path_factory.mktemp("orders-flask")
     result = CliRunner().invoke(cli, ["module", "analyze", str(ROOT), "--workspace", str(out)])
     assert result.exit_code == 0, result.output

@@ -13,6 +13,11 @@ def health() -> dict[str, str]:
     return {"status": "up", "request": request.headers.get("X-Request-Id", "none")}
 
 
+@app.route("/webhooks/orders", methods=["POST", "PUT"])
+def order_webhook() -> dict[str, str]:
+    return {"source": request.headers.get("X-Webhook-Source", "unknown"), "status": "accepted"}
+
+
 @app.get("/files/<path:rest>")
 def download(rest: str) -> dict[str, str]:
     return {"path": rest, "inline": request.args.get("inline", "0")}
