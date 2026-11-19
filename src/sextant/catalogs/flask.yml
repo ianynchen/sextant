@@ -1,0 +1,67 @@
+id: flask
+displayName: Flask (routes on an app or a blueprint)
+style: fluent
+protocol: http
+direction: inbound
+
+# Every decorator is the call it is (design 2026-11-06-reading-decorators §3a, ruled):
+# `@app.route("/x")` over `def f` is a call of `Scaffold.route` whose result is called with the
+# function (`__call__`). `app.add_url_rule("/x", view_func=f)` is the same registration made in
+# one call. Every rule below is Flask's own, measured in `scripts/probes/flask_rules.md`
+# (plan 5, Task 1; DR-6).
+#
+# A route's path is kept exactly as written, converters included (probe: "converters stay as
+# written in url_map: <id>, <int:id>, <path:rest>").
+
+detect:
+  coordinates: [flask]
+
+measured:
+  - { artifact: flask, versions: ["3.1.3"], identity: reported, by: scripts/probes/flask_rules.md }
+  - { artifact: werkzeug, versions: ["3.1.9"], identity: reported, by: scripts/probes/flask_rules.md }
+
+matches:
+  # THE REGISTRATIONS. `route` and the verb shortcuts are defined once, on `Scaffold` (probe:
+  # "route/get/post/put/patch/delete are defined on flask.sansio.scaffold.Scaffold"; `Flask` and
+  # `Blueprint` inherit them). `get/post/put/patch/delete` register exactly that method; `methods=`
+  # on them raises TypeError. `add_url_rule` is defined on `App` (an app) and on `Blueprint`
+  # (probe: "add_url_rule is defined on flask.sansio.app.App ... and flask.sansio.blueprints.
+  # Blueprint"), its handler `view_func`, index 2 (probe: "rule index 0, view_func index 2").
+  #
+  # `methods` (probe): absent is GET; each is upper-cased (`methods=["post"]` -> POST); a bare
+  # string raises TypeError. THE AUTOMATIC ROWS ARE A STATED BOUNDARY, never published: werkzeug
+  # adds HEAD to a rule with GET and Flask adds OPTIONS to every rule (probe: "methods absent ->
+  # GET, and url_map also lists HEAD and OPTIONS: {GET, HEAD, OPTIONS}"; "automatic OPTIONS row
+  # is added to every rule, not only GET ones"). They are the framework's own answers, not a
+  # route the program wrote, so only the methods written give a row.
+  roots:
+    - { owner: flask.sansio.scaffold.Scaffold, method: route,
+        captures: { http_method: { keyword: methods, absent: GET, case: upper }, url: { arg: 0, keyword: rule } } }
+    - { owner: flask.sansio.scaffold.Scaffold, method: get,
+        captures: { http_method: GET, url: { arg: 0, keyword: rule } } }
+    - { owner: flask.sansio.scaffold.Scaffold, method: post,
+        captures: { http_method: POST, url: { arg: 0, keyword: rule } } }
+    - { owner: flask.sansio.scaffold.Scaffold, method: put,
+        captures: { http_method: PUT, url: { arg: 0, keyword: rule } } }
+    - { owner: flask.sansio.scaffold.Scaffold, method: patch,
+        captures: { http_method: PATCH, url: { arg: 0, keyword: rule } } }
+    - { owner: flask.sansio.scaffold.Scaffold, method: delete,
+        captures: { http_method: DELETE, url: { arg: 0, keyword: rule } } }
+    - { owner: [flask.sansio.app.App, flask.sansio.blueprints.Blueprint], method: add_url_rule,
+        captures: { http_method: { keyword: methods, absent: GET, case: upper },
+                    url: { arg: 0, keyword: rule }, handler: { arg: 2, keyword: view_func } } }
+  # The decorator `route` returns, called with the function it registers: the handler is that
+  # argument, followed back through every decorator below it (probe: "route(rule, **options) is a
+  # decorator; the decorated function is the handler").
+  steps:
+    - { method: __call__, captures: { handler: arg0 } }
+  terminal: [__call__, add_url_rule]
+  # No response model exists in Flask: the response is the type the handler returns. A handler
+  # that returns a `Response` object (flask's, or werkzeug's it extends) hands the framework a
+  # finished response, so its annotation names no body shape. NOT in the probe: this is read
+  # from the source of `flask/wrappers.py`, logged as a concern for Task 1's probe.
+  response_fallback: { from: handler_return,
+                       none_types: [flask.wrappers.Response, werkzeug.wrappers.response.Response] }
+  # A rule without a leading `/` raises ValueError at registration, so the program does not
+  # start (probe: "a rule without a leading slash raises ValueError"); no row for it.
+  refuses_unrooted_path: true

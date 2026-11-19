@@ -836,7 +836,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**124 of 138 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**125 of 139 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -863,6 +863,8 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 | `click` | `click` | 8.5.0 |
 | `fastapi` | `fastapi` | 0.115.12, 0.162.0 |
 |  | `pydantic` | 2.14.3 |
+| `flask` | `flask` | 3.1.3 |
+|  | `werkzeug` | 3.1.9 |
 | `google-pubsub-client` | `com.google.cloud:google-cloud-pubsub` | 1.129.3 |
 | `google-pubsub-subscriber` | `com.google.cloud:google-cloud-pubsub` | 1.127.3 |
 | `grpc-java` | `io.grpc:protoc-gen-grpc-java` | 1.62.2, 1.81.0 |

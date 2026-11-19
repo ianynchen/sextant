@@ -1,0 +1,26 @@
+id: flask
+displayName: Flask's route decorators, which hand the function back
+
+# `Scaffold.route`'s inner `decorator(f)` registers the function and returns `f` (probe: "route(rule,
+# **options) is a decorator; the decorated function is the handler", `scripts/probes/flask_rules.md`),
+# so applied to a function its result IS that function; the verb shortcuts call `route`. A function
+# under two route decorators is registered by both, one row each (`catalogs/flask.yml`).
+#
+# The owners are the receiver's own types, `Flask` and `Blueprint`, not `Scaffold` where the
+# methods are defined (`catalogs/flask.yml`): `returns_argument` matches the receiver's type
+# exactly, measured 2026-11-19 (an entry owned by `Scaffold` left `view_func=f` of a decorated
+# `f` unresolved).
+
+returns_argument:
+  - { owner: flask.app.Flask, method: route, result_returns: arg0, by: scripts/probes/flask_rules.md }
+  - { owner: flask.app.Flask, method: get, result_returns: arg0, by: scripts/probes/flask_rules.md }
+  - { owner: flask.app.Flask, method: post, result_returns: arg0, by: scripts/probes/flask_rules.md }
+  - { owner: flask.app.Flask, method: put, result_returns: arg0, by: scripts/probes/flask_rules.md }
+  - { owner: flask.app.Flask, method: patch, result_returns: arg0, by: scripts/probes/flask_rules.md }
+  - { owner: flask.app.Flask, method: delete, result_returns: arg0, by: scripts/probes/flask_rules.md }
+  - { owner: flask.blueprints.Blueprint, method: route, result_returns: arg0, by: scripts/probes/flask_rules.md }
+  - { owner: flask.blueprints.Blueprint, method: get, result_returns: arg0, by: scripts/probes/flask_rules.md }
+  - { owner: flask.blueprints.Blueprint, method: post, result_returns: arg0, by: scripts/probes/flask_rules.md }
+  - { owner: flask.blueprints.Blueprint, method: put, result_returns: arg0, by: scripts/probes/flask_rules.md }
+  - { owner: flask.blueprints.Blueprint, method: patch, result_returns: arg0, by: scripts/probes/flask_rules.md }
+  - { owner: flask.blueprints.Blueprint, method: delete, result_returns: arg0, by: scripts/probes/flask_rules.md }

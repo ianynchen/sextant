@@ -162,6 +162,24 @@ _FRAMEWORK_DEFAULT_AT_THE_ROOT = {
         )
         for method in ("api_route", "add_api_route")
     },
+    **{
+        (
+            "flask",
+            "roots",
+            method,
+            "http_method",
+            "{'keyword': 'methods', 'absent': 'GET', 'case': 'upper'}",
+        ): (
+            "Flask's own default for a rule that names no methods: `methods` absent is GET "
+            '(`scripts/probes/flask_rules.md`, "methods absent -> GET"). The list is read off '
+            "this call's own `methods` argument; the GET stands only where that argument is "
+            "not written or is `None`. Admissible because the rule is made by this call and "
+            "nothing after it sets its methods: `add_url_rule` is the chain's terminal and "
+            "`route`'s one step is the `__call__` that registers the rule. It stops being "
+            "right the day Flask lets a rule's methods be set after it is made."
+        )
+        for method in ("route", "add_url_rule")
+    },
 }
 
 
