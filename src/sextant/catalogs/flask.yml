@@ -66,3 +66,31 @@ matches:
   # A rule without a leading `/` raises ValueError at registration, so the program does not
   # start (probe: "a rule without a leading slash raises ValueError"); no row for it.
   refuses_unrooted_path: true
+
+  # A BLUEPRINT'S PREFIX. The join (probe: "prefix.rstrip('/') + '/' + rule.lstrip('/'): trailing-
+  # slash prefix and slash-less rule both join with exactly one '/'"; "empty rule under a prefix
+  # serves the prefix itself, verbatim") is `path_join: single_slash`. It joins nested prefixes
+  # the same way (probe: "nesting joins a trailing-slash parent prefix with exactly one '/'").
+  path_join: single_slash
+  # The blueprint's own prefix is `Blueprint(url_prefix=...)`, held from its construction (probe:
+  # "own url_prefix joins the rule: /own + /x -> /own/x"). A blueprint nothing registers rows at
+  # that prefix, as the route's own path is read where no registration is seen. The app has none.
+  router_type: [flask.sansio.app.App, flask.sansio.blueprints.Blueprint]
+  router_holds:
+    - { owner: flask.sansio.blueprints.Blueprint, method: <init>, prefix_arg: { keyword: url_prefix } }
+  # `register_blueprint(bp, url_prefix=...)` is defined on `App` (an app) and on `Blueprint` (a
+  # blueprint; probe: "register_blueprint is defined on flask.sansio.app.App (app) and
+  # flask.sansio.blueprints.Blueprint"). The prefix it writes REPLACES the blueprint's own
+  # (`prefix_replaces_own`; probe: "register_blueprint(url_prefix=...) REPLACES the blueprint's own
+  # prefix", "url_prefix='' also REPLACES the own prefix (only None keeps it)"); written nowhere,
+  # the own one stays. A nested blueprint serves parent prefix, then child prefix (probe: "nested
+  # bp.register_blueprint(child): parent prefix, then child prefix, then rule"), and one blueprint
+  # registered under two names serves under both (probe: "registering it again with name='bp2'
+  # gives both prefixes").
+  mount:
+    - { owner: flask.sansio.app.App, method: register_blueprint,
+        router_arg: { arg: 0, keyword: blueprint }, prefix_arg: { keyword: url_prefix },
+        prefix_replaces_own: true }
+    - { owner: flask.sansio.blueprints.Blueprint, method: register_blueprint,
+        router_arg: { arg: 0, keyword: blueprint }, prefix_arg: { keyword: url_prefix },
+        prefix_replaces_own: true }

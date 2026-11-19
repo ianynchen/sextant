@@ -25,6 +25,9 @@ LEADING_SLASH = "leading_slash"
 # the join is verbatim, and the served path is never cleaned (`canonical_http_path`): `""`
 # stays `""`, `x` stays `x`, `//` stays `//`.
 CONCATENATE = "concatenate"
+# A `fluent` catalog's `path_join` for a framework that joins a prefix and a path with exactly
+# one `/` between them, the empty path serving the prefix itself (D02 `path_join`).
+SINGLE_SLASH = "single_slash"
 # How a `root_kind: entry_point` catalog joins its words: one space, as a command is typed
 # (design 2026-11-06-reading-decorators §4, ruled: a rule, not a catalog value).
 WORDS = "words"
@@ -73,9 +76,9 @@ def validated_path_join(matches: Mapping[str, Any], source: object, style: str) 
     """`matches.path_join`, checked at load so a typo is refused rather than read as
     verbatim, which would publish the glued address the word exists to prevent: absent, or
     `leading_slash`, the one rule; on a `fluent` catalog also `concatenate`, verbatim with
-    nothing cleaned (`CONCATENATE`), which only `fluent` applies. `style` names the D02 style
-    the refusal cites."""
-    allowed = (LEADING_SLASH, CONCATENATE) if style == "fluent" else (LEADING_SLASH,)
+    nothing cleaned (`CONCATENATE`), or `single_slash` (`SINGLE_SLASH`), which only `fluent`
+    applies. `style` names the D02 style the refusal cites."""
+    allowed = (LEADING_SLASH, CONCATENATE, SINGLE_SLASH) if style == "fluent" else (LEADING_SLASH,)
     if matches.get("path_join", LEADING_SLASH) not in allowed:
         raise CatalogError(
             f"loading catalog {source}: `path_join: "
@@ -112,9 +115,12 @@ def join_prefix(prefix: str | None, path: str, rule: str | None) -> str:
     other segment gains a leading `/`. Two spellings of one registration must be one row,
     and the join is what makes `path("api", …)` and `path("/api", …)` the same address here
     as they are in the framework. The prefix is already an address and is written as it
-    is."""
+    is. `single_slash` puts exactly one `/` between a prefix and a non-empty path, whatever
+    either side already has; an empty path is the prefix verbatim."""
     if rule == WORDS:
         return " ".join(word for word in (prefix, path) if word)
+    if rule == SINGLE_SLASH and path:
+        return (prefix or "").rstrip("/") + "/" + path.lstrip("/")
     segment = path
     if rule == LEADING_SLASH and path not in ("", "*") and not path.startswith("/"):
         segment = "/" + path
