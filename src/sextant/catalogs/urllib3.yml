@@ -27,7 +27,9 @@ matches:
   # NO `client_base` (probe "urllib3 module level"): urllib3 has no base URL, a relative
   # address raises `LocationValueError`, so every address is the whole address (a relative one
   # is a call that does not run). `HTTPConnectionPool(host, port)` takes its
-  # base from constructor arguments, not a URL; it is not read.
+  # base from constructor arguments, not a URL, and `client_base` cannot say that (OI-472): the
+  # owner also matches a request on such a pool, which RUNS, and its row carries the true verb,
+  # path and body at `resolved` with no peer.
   #
   # NO VERB HELPERS (probe "Verbs and positions"): only `request`. Its verb is its argument,
   # upper-cased by urllib3 (`RequestMethods.request`, probe "Verb case"); a variable verb

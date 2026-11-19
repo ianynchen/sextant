@@ -483,6 +483,9 @@ class ProjectHeaders:
         names = bind_names(tree.body, module, is_package=is_package, index=self._plain)
         types = TypeScope(names=names, here=module, index=self._plain)
         classes, returns, fields, aliases, factories = self._read(tree, module, types, is_package)
+        # Read before the digest: it strips the tree.
+        bases = star_bases(tree.body, module, is_package=is_package)
+        exports = star_exports(tree.body)
         return ModuleHeader(
             names,
             classes,
@@ -491,6 +494,6 @@ class ProjectHeaders:
             header_digest(tree),
             aliases,
             factories,
-            star_bases(tree.body, module, is_package=is_package),
-            star_exports(tree.body),
+            bases,
+            exports,
         )

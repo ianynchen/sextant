@@ -120,6 +120,20 @@ def test_a_class_returning_factory_is_not_an_instance(tmp_path: Path):
     assert _argument(tree, "app/run#f", "send").kind == "unresolved"
 
 
+def test_a_class_returning_factory_in_the_same_file_is_not_an_instance(tmp_path: Path):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/conf.py": _CLASSES
+            + "def get_settings() -> type[Service]:\n    return Service\n"
+            + "settings = get_settings()\n"
+            + "def f():\n    send(settings.url)\n",
+        },
+    )
+    assert _argument(tree, "app/conf#f", "send").kind == "unresolved"
+
+
 def test_a_reassigned_variable_stays_untyped(tmp_path: Path):
     tree = _typed_return(
         tmp_path,

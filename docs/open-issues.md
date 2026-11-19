@@ -463,7 +463,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-457 | SEXTANT-449 | Placeholder substitution expands ${...} inside single-quoted dotenv values, which python-dotenv does not |
 | OI-458 | SEXTANT-451 | settings_form has no loader validation: a misspelled key raises KeyError at resolve time instead of a CatalogError naming the file |
 | OI-459 | pending | a module variable from a def wrapped by a THIRD-PARTY call-through decorator (tenacity.retry) stays untyped: the scanner's call-through set is stdlib-only because extraction must not depend on catalog content |
-| OI-460 | pending | `@lru_cache` on an ASYNC def types its call as the annotation though the call gives a coroutine (the imports.py call-through set accepts AsyncFunctionDef) |
+| OI-460 | pending | a typed-return `async def` factory, decorated with `@lru_cache` or not, types its call as the annotation though the call gives a coroutine: `settings = get_s()` from an undecorated `async def get_s() -> Service` is typed too (the imports.py call-through set accepts AsyncFunctionDef). A module-level call without `await` cannot run, so this is logged, not code-fixed |
 | OI-461 | pending | a `@lru_cache` def CALLED in its own defining file stays untyped: calls.py:1366 treats the decorated name as a value and never reads its declared return |
 | OI-462 | pending | a star import inside `if` or `try` is not followed (top-level stars only; shortcut comment in star_bases) |
 | OI-463 | pending | a star whose source is a library is skipped, so an earlier in-module star can supply a name Python would take from the library (project.py star precedence) |
@@ -475,7 +475,9 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-469 | pending | a urllib3 call writing `body=` and `json=` together publishes the `body=` body though urllib3 raises TypeError: same gap; a strict xfail pins it |
 | OI-470 | pending | a relative address on urllib3.request / PoolManager.request publishes resolved-with-no-peer though urllib3 raises LocationValueError (requests.yml behaves the same today) |
 | OI-471 | pending | urllib3 `fields=` is not read: it is the URL query on GET/HEAD/DELETE/OPTIONS and a multipart body otherwise, which one `request` methods row cannot express |
-| OI-472 | pending | `HTTPConnectionPool(host, port)` relative requests are not read: the base is host and port constructor arguments, not a URL keyword the client_base ladder expresses; no corpus uses it |
+| OI-472 | pending | `pool.request('GET', '/stock')` on an `HTTPConnectionPool(host, port)` or `connection_from_url(...)` result matches the urllib3 owner (`RequestMethods`), so the row carries the true verb, path and body at status `resolved` with NO peer, though the pool knows its host. The base is host and port constructor arguments; `fill_authority` is accepted only for an options-object ladder (`client_base.py` rung check) and `base_arg` names one URL argument, so the catalog cannot express it; no corpus uses it |
+| OI-475 | pending | status `resolved` with no peer for a relative address on a constructed urllib3 pool (OI-472) and on `urllib3.request` / `PoolManager.request` (OI-470): the status should be below `resolved` while no peer is known |
+| OI-476 | pending | `from .b import X` written BEFORE `from .a import *`, where module a also exports X: Python binds a.X (the later statement wins) but the scanner takes b.X, since an explicit binding is checked before stars whatever the statement order (rare shape) |
 | OI-473 | pending | `PoolManager.urlopen`, `request_encode_url` and `request_encode_body` are real call surfaces the catalog does not read (probe rows 37-38) |
 | OI-474 | pending | no test pins the general unresolved REASON code on aiohttp/urllib3 rows (tests assert status and peer only) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |

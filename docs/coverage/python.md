@@ -416,7 +416,7 @@ The corpus has no real aiohttp or urllib3 outbound call site. Every urllib3 impo
 `examples/` is a utility (`parse_url`, `Retry`, a pool subclass). The evidence for both catalogs is
 the wire probe (`scripts/probes/aiohttp_urllib3_rules.py` and `.md`; aiohttp 3.14.5, urllib3 2.8.0)
 and the `orders-fastapi` fixture. The aiohttp catalog reuses `replace_last_segment`; where aiohttp
-differs from it, the divergence is stated in the catalog (OI-465 to OI-469). Open: OI-459 to OI-474.
+differs from it, the divergence is stated in the catalog (OI-465 to OI-468). Open: OI-459 to OI-474.
 
 **What the built rows read.**
 
