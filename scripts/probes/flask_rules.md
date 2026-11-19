@@ -93,6 +93,9 @@ Catalog words these ground:
   `url_prefix`: own `/own`, given `/given` -> `/given/x`. Only `None` keeps the own prefix.
   An empty string `''` is not `None`, so it replaces too: own `/own`, given `''` -> `/x`; and an
   empty rule under it is an empty URL rule, `ValueError` at registration.
+- **A slash-less prefix is refused.** `url_prefix='api'`, own or given, joins `/x` to `api/x`, which
+  werkzeug refuses at registration (`ValueError`); only the empty prefix `''` is accepted. A slash-less
+  rule behind a rooted prefix is accepted (above).
 - No own prefix and a given one: `/given` + `/x` -> `/given/x`. No prefix at all: the rule as written.
 
 ### Nesting
@@ -197,6 +200,7 @@ RULE: empty rule under a prefix serves the prefix itself, verbatim (/p -> /p, /p
 RULE: rule '/' under /p -> /p/ (the trailing slash is kept; '' and '/' differ)
 RULE: a blueprint rule without a leading slash and no prefix refuses at registration (ValueError)
 RULE: a slash-less blueprint rule under a prefix is accepted: the join supplies the slash (/p + nolead -> /p/nolead)
+RULE: a slash-less own or registration url_prefix ('api' + '/x' -> 'api/x') refuses at registration (ValueError)
 RULE: nested bp.register_blueprint(child): parent prefix, then child prefix, then rule -> /parent/child/x (endpoint parent.child.v)
 RULE: nesting with given prefixes: each level's given prefix replaces that level's own; then they compose: /top + /given + /x
 RULE: nesting joins a trailing-slash parent prefix with exactly one '/': /top/ + /child + /x -> /top/child/x
