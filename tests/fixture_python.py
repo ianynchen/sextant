@@ -23,7 +23,7 @@ from pathlib import Path
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 
 # The Python fixtures the suite runs code in. CI syncs these online first.
-PRIMED_PYTHON_FIXTURES = ("orders-fastapi",)
+PRIMED_PYTHON_FIXTURES = ("orders-fastapi", "orders-flask")
 
 
 def interpreter(root: Path) -> Path:
