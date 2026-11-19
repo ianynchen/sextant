@@ -1,0 +1,75 @@
+id: aiohttp
+displayName: aiohttp (the module function request and ClientSession)
+style: single_call
+protocol: http
+direction: outbound
+
+# Every rule below is aiohttp's own, measured on the wire by
+# `scripts/probes/aiohttp_urllib3_rules.py` (results and the quoted source in
+# `aiohttp_urllib3_rules.md`) against aiohttp 3.14.5 as the running process reported it.
+
+detect:
+  coordinates: [aiohttp]
+
+measured:
+  - { artifact: aiohttp, versions: ["3.14.5"], identity: reported,
+      by: scripts/probes/aiohttp_urllib3_rules.md }
+
+# A payload is a pydantic model, or a call that serialises one (`order.model_dump()`, the
+# shape model's `serializers`).
+shape_model: pydantic
+
+matches:
+  # The DEFINING symbols (probe "Defining symbols"): `aiohttp.ClientSession` and
+  # `aiohttp.request` are both defined in `aiohttp/client.py`.
+  owner: [aiohttp.client, aiohttp.client.ClientSession]
+  # THE BASE (probe "aiohttp `base_url`"): a session built with `base_url=` (positional 0 or
+  # keyword) sends a relative address to that base by RFC 3986 resolution, and the base's path
+  # always ends in `/` (the constructor raises otherwise). The word is `replace_last_segment`,
+  # which gives the probe's output on every realistic row, run against them (the table is in
+  # `.superpowers/sdd/2026-11-18-python-typed-returns-aiohttp-urllib3/task-3-report.md`,
+  # "Join equivalence run"): `users` appends, `/users` resets to the host root, an empty
+  # address is the base, `x?q=1` keeps its query, an absolute address ignores the base, a
+  # host-only base works as the root.
+  #
+  # Where they differ (each a shape real code does not write):
+  # - aiohttp removes dot segments (`../x` over `/api/` is `/x`); the word keeps them as
+  #   written, as Ktor does (`cp54_ktor_client_ws_sse.md` rows 135-136). The published spelling
+  #   may carry `./` or `../` and names the same target by RFC 3986.
+  # - `//other.example/x`: aiohttp does not join it and the request fails (probe, last row
+  #   of the base_url table). The engine takes an address with a host as absolute before the
+  #   join and publishes it as written (the OI-423 behaviour `D02` states for
+  #   `append_to_base`), so no joined URL is invented for it.
+  # - A base carrying a query: aiohttp drops it where the word appends it.
+  #
+  # A session without `base_url`, and `aiohttp.request` (it has no `base_url` parameter),
+  # raise `InvalidURL` on a relative address: the row is kept at `unresolved`, with no peer.
+  # Not read: a `base_url` that the constructor rejects (a path with no trailing `/`).
+  client_base:
+    client_arg: receiver
+    ladder:
+      - { owner: aiohttp.client.ClientSession, method: <init>,
+          base_arg: { arg: 0, keyword: base_url } }
+    join: replace_last_segment
+  # THE BODY (probe "aiohttp bodies"): `data=` or `json=`, both keyword-only; `get`, `head`,
+  # `options` and `delete` also carry them in `**kwargs`, but a body on those verbs is not
+  # declared. `data=` with `json=` raises `ValueError` (`is not None` on both), so a call
+  # writing both sends nothing. `body_arg` cannot say "rejected together" (no such word), so such a
+  # call publishes its `data=` body; the call never runs (ValueError at its first execution).
+  #
+  # THE VERB of `request(method, url)` is its argument, upper-cased by aiohttp
+  # (`ClientSession._request`, probe "Verb case"). `aiohttp.request` is the module function.
+  methods:
+    - { name: get,     http_method: GET,     url_arg: { arg: 0, keyword: url } }
+    - { name: options, http_method: OPTIONS, url_arg: { arg: 0, keyword: url } }
+    - { name: head,    http_method: HEAD,    url_arg: { arg: 0, keyword: url } }
+    - { name: delete,  http_method: DELETE,  url_arg: { arg: 0, keyword: url } }
+    - { name: post,    http_method: POST,    url_arg: { arg: 0, keyword: url },
+        body_arg: [{ keyword: data }, { keyword: json }] }
+    - { name: put,     http_method: PUT,     url_arg: { arg: 0, keyword: url },
+        body_arg: [{ keyword: data }, { keyword: json }] }
+    - { name: patch,   http_method: PATCH,   url_arg: { arg: 0, keyword: url },
+        body_arg: [{ keyword: data }, { keyword: json }] }
+    - { name: request, method_arg: { arg: 0, keyword: method }, method_case: upper,
+        url_arg: { arg: 1, keyword: url },
+        body_arg: [{ keyword: data }, { keyword: json }] }

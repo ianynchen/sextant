@@ -6,7 +6,8 @@ displayName: HTTP clients a `with` statement opens, which hand back the client i
 # call below returns the very object it is called on — measured (`entered is opened`) and
 # quoted (`return self`) in `scripts/probes/requests_httpx_rules.md`. So `c` is the client
 # its construction built, base address and all. `requests.sessions.Session` has no
-# `__aenter__`, so none is stated.
+# `__aenter__`, so none is stated. aiohttp's `ClientSession.__aenter__` is `return self` too
+# (`scripts/probes/aiohttp_urllib3_rules.md`, "`async with` (aiohttp)").
 
 returns_argument:
   - { owner: httpx._client.Client, method: __enter__, returns_receiver: true,
@@ -15,3 +16,5 @@ returns_argument:
       by: scripts/probes/requests_httpx_rules.md }
   - { owner: requests.sessions.Session, method: __enter__, returns_receiver: true,
       by: scripts/probes/requests_httpx_rules.md }
+  - { owner: aiohttp.client.ClientSession, method: __aenter__, returns_receiver: true,
+      by: scripts/probes/aiohttp_urllib3_rules.md }

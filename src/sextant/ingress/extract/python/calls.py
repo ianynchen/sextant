@@ -2498,6 +2498,9 @@ class BodyReader:
         read from another module-level name of this file (`alias = module`) has that name's
         type, settled by the same readings."""
         typed = _type_of(value, scope)
+        if typed is None and value.kind == "unresolved" and value.source is not None:
+            # A call of a `def` that declares `-> X` gives an `X` (OI-444).
+            typed = _class_of(scope.body.declared.get(value.source))
         if typed is None and value.kind == "field" and value.symbol is not None:
             read = str(value.symbol)
             if owner_of(read) == type_symbol(Target(self._context.here)):

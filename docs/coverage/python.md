@@ -214,9 +214,14 @@ without three Netflix-internal references (`py-dispatch.uv.lock`, on Python 3.12
   sets); an address that arrives in a parameter stays `unresolved` with the reason.
 - **polar's 385 guarded routes are no longer "test".** They are the routes under a
   `settings.<field>` test; each is now a `property` condition on the field's key (below).
-  mealie's 4 settings guards stay `test`: `get_app_settings()` returns its settings through
-  `@lru_cache`, a call with a declared return type, and a variable set from one is untyped
-  (OI-444).
+  mealie's settings guards moved after OI-444: a module variable set from a call with a
+  declared return type (`settings = get_settings()`, also through `@lru_cache`) is now typed.
+  mealie `endpoint_existence` went from 8 `test` / 0 `property` to 5 `test` / 3 `property`
+  (`settings.PRODUCTION and (not settings.TESTING)` on GET /manifest.webmanifest,
+  GET /g/{group_slug}/r/{recipe_slug} and GET /g/{group_slug}/shared/r/{token_id});
+  `not os.path.exists(__app_settings.STATIC_FILES)` stays `test` (a call, not a settings field).
+  Typed settings guards went from 6 to 24; 71 of 5266 guarded call sites gained typed
+  `AppSettings` and `AppLoggingSettings` fields.
 - **No oracle exists for outbound rows**: FastAPI cannot say what a service calls. The pin is
   the rows themselves, each from a read of the code.
 
@@ -404,8 +409,14 @@ how hard it is to read.
 |---|---|---|---|
 | `requests` | `requests.get(url)`, `requests.request("get", url)`, `session.post(url, json=…)` | `single_call` — the verb is the function name or a string argument, the URL the first argument | **Built** (`requests.yml`, 2.34.2) |
 | `httpx` | same shape, sync and async; `httpx.Client(base_url=…)` | `single_call` | **Built** (`httpx.yml`, 0.28.1) |
-| `aiohttp` | `session.get(url)` inside `async with` | `single_call` | Not built (OI-454) |
-| `urllib3` | `http.request("GET", url)` | `single_call` — verb is a string argument | Not built (OI-454) |
+| `aiohttp` | `session.get(url)` inside `async with` | `single_call` | **Built** (`aiohttp.yml`, 3.14.5) |
+| `urllib3` | `http.request("GET", url)` | `single_call` — verb is a string argument | **Built** (`urllib3.yml`, 2.8.0) |
+
+The corpus has no real aiohttp or urllib3 outbound call site. Every urllib3 import under
+`examples/` is a utility (`parse_url`, `Retry`, a pool subclass). The evidence for both catalogs is
+the wire probe (`scripts/probes/aiohttp_urllib3_rules.py` and `.md`; aiohttp 3.14.5, urllib3 2.8.0)
+and the `orders-fastapi` fixture. The aiohttp catalog reuses `replace_last_segment`; where aiohttp
+differs from it, the divergence is stated in the catalog (OI-465 to OI-468). Open: OI-459 to OI-476.
 
 **What the built rows read.**
 
@@ -475,12 +486,11 @@ deployment decides every key here, so a value found is the repository's value as
   the field's key as the condition (`ORDERS_SUPPORT_ROUTES`), the default as evidence. The
   scanner links each guard read it can type to its field symbol (fact schema 16,
   `call_site.guards[].fields`); a guard that also reads a call, or one that reads a field the
-  scanner cannot type, stays `test`. polar: 385 rows moved from `test` to `property`; mealie: 4
-  stay `test` (OI-444).
+  scanner cannot type, stays `test`. polar: 385 rows moved from `test` to `property`; mealie: 3
+  moved (OI-444, above). The fact schema is 17.
 - **Not read.** A value given at construction time (`Settings(rates_url=…)`, `_env_file=`;
   OI-442); lower-case keys in a `.env` file (OI-440); two settings classes naming different
-  files (all keys go to one `default` environment, OI-441); `env_file=None` (OI-443);
-  `@lru_cache`'d accessors of a settings object (OI-444).
+  files (all keys go to one `default` environment, OI-441); `env_file=None` (OI-443).
 
 ---
 

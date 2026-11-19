@@ -35,7 +35,14 @@ from sextant.domain.symbols import (
     without_type_marker,
 )
 from sextant.ingress.extract.python.calls import TYPE_OF
-from sextant.ingress.extract.python.imports import Binding, ModuleIndex, Target, bind_names
+from sextant.ingress.extract.python.imports import (
+    Binding,
+    ModuleIndex,
+    Target,
+    bind_names,
+    star_bases,
+    star_exports,
+)
 from sextant.ingress.extract.python.typing_rules import ClassShape, TypeScope, type_symbol
 
 # The question a file asks the module index for another file's header (`ModuleIndex.asked`).
@@ -60,6 +67,10 @@ class ModuleHeader:
     # The function each module-level name is written from, where every write to it in the
     # file is a call of a named function (ruling R17), by name, as the file binds it.
     factories: dict[str, tuple[Target, ...]]
+    # The modules its top-level `from m import *` statements read, in written order, and the
+    # names its `__all__` lists (None where it writes none): what a star import takes from it.
+    stars: tuple[str, ...] = ()
+    exports: tuple[str, ...] | None = None
 
 
 def header_digest(tree: ast.Module) -> str:
@@ -158,7 +169,7 @@ class ProjectHeaders:
             return None
         binding = header.names.get(name)
         if binding is None:
-            return None
+            return self._starred(module, header, name, seen)
         found: list[Target] = []
         for target in binding.targets:
             if target.module == module and target.member == name:
@@ -182,6 +193,25 @@ class ProjectHeaders:
                 kind = target.kind if target.kind in ("new_type", "new_class") else None
                 found.append(Target(target.module, target.member, kind))
         return tuple(dict.fromkeys(found))
+
+    def _starred(
+        self, module: str, header: ModuleHeader, name: str, seen: frozenset[tuple[str, str]]
+    ) -> tuple[Target, ...] | None:
+        """Where `module.name` is defined when `module` binds `name` by no statement of its own
+        but a `from m import *` may: Python's rule, the last star that takes the name winning.
+        A star takes a name its source lists in `__all__`, else any without a leading `_`. A
+        source that is no file of the module (a library) says nothing, so the name stays as
+        written."""
+        for base in reversed(header.stars):
+            source = self.header(base)
+            if source is None:
+                continue
+            if name not in source.exports if source.exports is not None else name.startswith("_"):
+                continue
+            found = self.member(base, name, seen | {(module, name)})
+            if found is not None:
+                return found
+        return None
 
     def names_a_value(self, module: str, name: str) -> bool:
         """Whether `module.name`, followed to where it is defined, is bound to a value, a
@@ -307,8 +337,9 @@ class ProjectHeaders:
     def variable_class(self, module: str, name: str) -> str | None:
         """The class whose instance `module.name` holds, where every write to it in that file
         constructs one and the same class (`settings = Settings()`, ruling R23), by its
-        defining symbol: a class of the module or of a library. None for any other name: two
-        classes, a call of a function, any other value."""
+        defining symbol: a class of the module or of a library. Likewise where the one write calls
+        a scanned `def` that declares `-> X` (OI-444). None for any other name: two classes, a
+        call of an unannotated function, any other value."""
         header = self.header(module)
         called = None if header is None else header.factories.get(name)
         if not called or len(called) != 1:
@@ -320,12 +351,32 @@ class ProjectHeaders:
         if len(defined) != 1 or defined[0].member is None:
             return None
         symbol = type_symbol(defined[0])
+        if self._has_shape(symbol):
+            return symbol
+        returned = self._returned_class(defined[0])
+        return returned if returned is not None and self._has_shape(returned) else None
+
+    def _has_shape(self, symbol: str) -> bool:
+        """Whether `symbol` is a class of the module or of a library with a known shape."""
         libraries = self._plain.libraries
-        if self.shape_of(symbol) is None and (
-            libraries is None or libraries.shape_of(symbol) is None
-        ):
+        return self.shape_of(symbol) is not None or (
+            libraries is not None and libraries.shape_of(symbol) is not None
+        )
+
+    def _returned_class(self, function: Target) -> str | None:
+        """The class `X` a call of the function `function` gives, where the `def` of the module
+        that defines it declares `-> X` (`settings = get_settings()`, OI-444); None for any
+        other function, and for `type[X]`, which is the class, not an instance."""
+        if function.module not in self._files:
             return None
-        return symbol
+        returned = self.returns(
+            method_descriptor(
+                type_symbol(Target(function.module)), str(function.member), PY_SIGNATURE
+            )
+        )
+        if returned is None or returned.symbol == TYPE_OF or not names_a_type(returned.symbol):
+            return None
+        return returned.symbol
 
     def _factory_class(self, target: Target) -> str | None:
         """The class `X` a call of the function `target` gives, where the `def` of the module
@@ -432,6 +483,17 @@ class ProjectHeaders:
         names = bind_names(tree.body, module, is_package=is_package, index=self._plain)
         types = TypeScope(names=names, here=module, index=self._plain)
         classes, returns, fields, aliases, factories = self._read(tree, module, types, is_package)
+        # Read before the digest: it strips the tree.
+        bases = star_bases(tree.body, module, is_package=is_package)
+        exports = star_exports(tree.body)
         return ModuleHeader(
-            names, classes, returns, fields, header_digest(tree), aliases, factories
+            names,
+            classes,
+            returns,
+            fields,
+            header_digest(tree),
+            aliases,
+            factories,
+            bases,
+            exports,
         )

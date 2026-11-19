@@ -1,0 +1,50 @@
+id: urllib3
+displayName: urllib3 (the module function request and PoolManager)
+style: single_call
+protocol: http
+direction: outbound
+
+# Every rule below is urllib3's own, measured on the wire by
+# `scripts/probes/aiohttp_urllib3_rules.py` (results and the quoted source in
+# `aiohttp_urllib3_rules.md`) against urllib3 2.8.0 as the running process reported it.
+
+detect:
+  coordinates: [urllib3]
+
+measured:
+  - { artifact: urllib3, versions: ["2.8.0"], identity: reported,
+      by: scripts/probes/aiohttp_urllib3_rules.md }
+
+# A payload is a pydantic model, or a call that serialises one (`order.model_dump()`, the
+# shape model's `serializers`).
+shape_model: pydantic
+
+matches:
+  # The DEFINING symbols (probe "Defining symbols"): the module function `urllib3.request` is
+  # defined in `urllib3/__init__.py`; `PoolManager.request` is not `PoolManager`'s but
+  # `urllib3._request_methods.RequestMethods`' (`PoolManager.__mro__[1]`).
+  owner: [urllib3, urllib3._request_methods.RequestMethods]
+  # NO `client_base` (probe "urllib3 module level"): urllib3 has no base URL, a relative
+  # address raises `LocationValueError`, so every address is the whole address (a relative one
+  # is a call that does not run). `HTTPConnectionPool(host, port)` takes its
+  # base from constructor arguments, not a URL, and `client_base` cannot say that (OI-472): the
+  # owner also matches a request on such a pool, which RUNS, and its row carries the true verb,
+  # path and body at `resolved` with no peer.
+  #
+  # NO VERB HELPERS (probe "Verbs and positions"): only `request`. Its verb is its argument,
+  # upper-cased by urllib3 (`RequestMethods.request`, probe "Verb case"); a variable verb
+  # claims none.
+  #
+  # THE BODY (probe "urllib3 bodies"): `body=` or `json=`, sent on every verb. The module
+  # function takes them keyword-only; `PoolManager.request` has `body` at 2 and `json` at 5, as
+  # written here. Not expressible, so not claimed:
+  # - `body=` with `json=` raises `TypeError` (and `fields=` with either on POST/PUT/PATCH);
+  #   `body_arg` has no word for "rejected together", so such a call (which never runs)
+  #   publishes its `body=` body.
+  # - `fields=` is the URL query on GET/HEAD/DELETE/OPTIONS and a multipart body on every other
+  #   verb; one `request` row cannot say which per verb, and a field dict is not a model, so
+  #   it is not declared a body.
+  methods:
+    - { name: request, method_arg: { arg: 0, keyword: method }, method_case: upper,
+        url_arg: { arg: 1, keyword: url },
+        body_arg: [{ arg: 2, keyword: body }, { arg: 5, keyword: json }] }

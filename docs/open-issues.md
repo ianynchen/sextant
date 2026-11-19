@@ -447,8 +447,8 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-441 | SEXTANT-434 | Two settings classes naming different env_file values layer into one default environment, so a key from one file answers for a field of the other class |
 | OI-442 | SEXTANT-435 | A value given at construction time (Settings(rates_url=…), _env_file=…) is not seen, so the field still reads as the environment's key |
 | OI-443 | SEXTANT-436 | env_file=None written as a literal is treated as a variable file name, so every key is external where the true answer is the class default |
-| OI-444 | SEXTANT-437 | A module variable set from a call with a declared return type (settings = get_settings() under @lru_cache, mealie's get_app_settings) is untyped, so its field reads stay unresolved and its guards stay test |
-| OI-445 | SEXTANT-438 | No scanner test pins a module variable reassigned to None or set from a function call, the shapes that must leave it untyped |
+| OI-444 | SEXTANT-437 | A module variable set from a call with a declared return type (settings = get_settings() under @lru_cache, mealie's get_app_settings) is untyped, so its field reads stay unresolved and its guards stay test — **closed 2026-11-18** (branch cov/python-outbound-gaps) |
+| OI-445 | SEXTANT-438 | No scanner test pins a module variable reassigned to None or set from a function call, the shapes that must leave it untyped — **closed 2026-11-18** (branch cov/python-outbound-gaps) |
 | OI-446 | SEXTANT-439 | The settings-rung text helper (_text) wraps a one-line call and its docstring was reflowed in the same change |
 | OI-447 | SEXTANT-440 | A Python instance-field read takes no class-body default anywhere in the plain walk: 6 polar edges went from partial to unresolved when R23 removed the default |
 | OI-448 | SEXTANT-441 | The evidence masking regex (_QUOTED_SETTING) misses ", its default is `X`", so a module's own rule text can re-show a masked value |
@@ -457,11 +457,29 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-451 | SEXTANT-444 | The /slack/* entry-point rows of dispatch are published with no condition, though a deployment decides whether they are mounted |
 | OI-452 | SEXTANT-445 | A pin built from a modified pyproject lock (dispatch) freezes library-absent rows as normal, so a drift in a dependency that is absent from the lock is not visible |
 | OI-453 | SEXTANT-446 | The field_check uv path has no test for its online fallback, --python or routing, and a drift between pyproject and the lock is invisible to a frozen sync |
-| OI-454 | SEXTANT-447 | aiohttp and urllib3 outbound calls are not read (the REST-out Python cell is partial) |
+| OI-454 | SEXTANT-447 | aiohttp and urllib3 outbound calls are not read (the REST-out Python cell is partial) — **closed 2026-11-18** (branch cov/python-outbound-gaps) |
 | OI-455 | SEXTANT-450 | A settings field's alias written inside Annotated[..., Field(alias="X")] is not read by the settings key rule (name_from reads only the class-body value call's keywords), so the .env file's X is missed and the default fills the per-environment answer |
 | OI-456 | SEXTANT-448 | The named env file resolves against the module root, while pydantic-settings resolves it against the process working directory |
 | OI-457 | SEXTANT-449 | Placeholder substitution expands ${...} inside single-quoted dotenv values, which python-dotenv does not |
 | OI-458 | SEXTANT-451 | settings_form has no loader validation: a misspelled key raises KeyError at resolve time instead of a CatalogError naming the file |
+| OI-459 | SEXTANT-452 | a module variable from a def wrapped by a THIRD-PARTY call-through decorator (tenacity.retry) stays untyped: the scanner's call-through set is stdlib-only because extraction must not depend on catalog content |
+| OI-460 | SEXTANT-453 | a typed-return `async def` factory, decorated with `@lru_cache` or not, types its call as the annotation though the call gives a coroutine: `settings = get_s()` from an undecorated `async def get_s() -> Service` is typed too (the imports.py call-through set accepts AsyncFunctionDef). A module-level call without `await` cannot run, so this is logged, not code-fixed |
+| OI-461 | SEXTANT-454 | a `@lru_cache` def CALLED in its own defining file stays untyped: calls.py:1366 treats the decorated name as a value and never reads its declared return |
+| OI-462 | SEXTANT-455 | a star import inside `if` or `try` is not followed (top-level stars only; shortcut comment in star_bases) |
+| OI-463 | SEXTANT-456 | a star whose source is a library is skipped, so an earlier in-module star can supply a name Python would take from the library (project.py star precedence) |
+| OI-464 | SEXTANT-457 | `__all__ +=` and `__all__.extend(...)` are ignored by the star filter (under-resolution) |
+| OI-465 | SEXTANT-458 | aiohttp rows with `./` or `../` segments publish the unnormalized spelling (`/api/../x`) where aiohttp sends the normalized one: same target by RFC 3986, and Ktor measured keeping them (CP-54 rows 135-136), so the shared join stays as written |
+| OI-466 | SEXTANT-459 | a `//host/x` address on a based aiohttp session is published as written though aiohttp itself fails the request (engine host-first, OI-423 family) |
+| OI-467 | SEXTANT-460 | a base URL carrying a query: aiohttp drops the query where replace_last_segment appends it (degenerate shape, unexpressed, the catalog comment states it) |
+| OI-468 | SEXTANT-461 | an aiohttp call writing `data=` and `json=` together publishes the `data=` body though aiohttp raises ValueError: `body_arg` has no word for "rejected together"; a strict xfail pins it |
+| OI-469 | SEXTANT-462 | a urllib3 call writing `body=` and `json=` together publishes the `body=` body though urllib3 raises TypeError: same gap; a strict xfail pins it |
+| OI-470 | SEXTANT-463 | a relative address on urllib3.request / PoolManager.request publishes resolved-with-no-peer though urllib3 raises LocationValueError (requests.yml behaves the same today) |
+| OI-471 | SEXTANT-464 | urllib3 `fields=` is not read: it is the URL query on GET/HEAD/DELETE/OPTIONS and a multipart body otherwise, which one `request` methods row cannot express |
+| OI-472 | SEXTANT-465 | `pool.request('GET', '/stock')` on an `HTTPConnectionPool(host, port)` or `connection_from_url(...)` result matches the urllib3 owner (`RequestMethods`), so the row carries the true verb, path and body at status `resolved` with NO peer, though the pool knows its host. The base is host and port constructor arguments; `fill_authority` is accepted only for an options-object ladder (`client_base.py` rung check) and `base_arg` names one URL argument, so the catalog cannot express it; no corpus uses it |
+| OI-475 | SEXTANT-468 | status `resolved` with no peer for a relative address on a constructed urllib3 pool (OI-472) and on `urllib3.request` / `PoolManager.request` (OI-470): the status should be below `resolved` while no peer is known |
+| OI-476 | SEXTANT-469 | `from .b import X` written BEFORE `from .a import *`, where module a also exports X: Python binds a.X (the later statement wins) but the scanner takes b.X, since an explicit binding is checked before stars whatever the statement order (rare shape) |
+| OI-473 | SEXTANT-466 | `PoolManager.urlopen`, `request_encode_url` and `request_encode_body` are real call surfaces the catalog does not read (probe rows 37-38) |
+| OI-474 | SEXTANT-467 | no test pins the general unresolved REASON code on aiohttp/urllib3 rows (tests assert status and peer only) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

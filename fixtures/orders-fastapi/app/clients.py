@@ -1,12 +1,15 @@
 """The services an order talks to, called the ways a service calls them: `requests` at module
 level and through a `Session`, `httpx` through clients holding a `base_url`, and one
-`AsyncClient` handed to a route by a dependency, and addresses a deployment sets."""
+`AsyncClient` handed to a route by a dependency, `aiohttp` sessions, `urllib3`, and addresses a deployment
+sets."""
 
 import os
 from collections.abc import AsyncIterator
 
+import aiohttp
 import httpx
 import requests
+import urllib3
 
 from app.schemas import OrderIn
 from app.settings import settings
@@ -83,6 +86,22 @@ async def notifier() -> AsyncIterator[httpx.AsyncClient]:
 
 async def notify(client: httpx.AsyncClient, order_id: str) -> None:
     await client.post("events", json={"order": order_id})
+
+
+async def label(order: OrderIn) -> None:
+    async with aiohttp.ClientSession(base_url="https://labels.example/v1/") as session:
+        await session.post("print", json=order.model_dump(mode="json", by_alias=True))
+
+
+async def parcel(parcel_id: str) -> None:
+    async with aiohttp.ClientSession() as session:
+        await session.get(f"/parcels/{parcel_id}")
+
+
+def courier(order: OrderIn) -> None:
+    urllib3.request(
+        "POST", "https://courier.example/pickups", json=order.model_dump(mode="json", by_alias=True)
+    )
 
 
 def audit() -> None:

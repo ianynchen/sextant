@@ -57,6 +57,7 @@ from sextant.ingress.extract.python.imports import (
     ProjectNames,
     Target,
     bind_names,
+    calls_through,
     every_statement,
     holds_decorated_value,
     is_typing,
@@ -933,6 +934,12 @@ def factory_calls(tree: ast.Module, types: TypeScope) -> dict[str, tuple[Target,
     the file also binds as a function, a class or an import, or that a write gives any other
     value, has none: the resolver follows its writes."""
     rebound = _rebound_names(tree, types.index, types.here)
+    through = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+        and calls_through(node, types.lookup)
+    }
     written: dict[str, list[Target | None]] = {}
     for node in _module_level(tree.body, types.index, types.here):
         if isinstance(node, ast.Assign):
@@ -941,7 +948,7 @@ def factory_calls(tree: ast.Module, types: TypeScope) -> dict[str, tuple[Target,
             targets, value = [node.target], node.value
         else:
             continue
-        called = _called_function(value, types)
+        called = _called_function(value, types, through)
         for target in targets:
             for name in _names(target):
                 written.setdefault(name, []).append(
@@ -961,9 +968,10 @@ def factory_calls(tree: ast.Module, types: TypeScope) -> dict[str, tuple[Target,
     return found
 
 
-def _called_function(value: ast.expr, types: TypeScope) -> Target | None:
-    """The one function or class a call written `f(...)` names, as the file binds `f`; None
-    for any other value."""
+def _called_function(value: ast.expr, types: TypeScope, through: set[str]) -> Target | None:
+    """The one function or class a call written `f(...)` names, as the file binds `f`, a
+    `def` of `through` (decorated by a call-through wrapper) included; None for any other
+    value."""
     if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Name):
         return None
     binding = types.names.get(value.func.id)
@@ -972,6 +980,7 @@ def _called_function(value: ast.expr, types: TypeScope) -> Target | None:
     (target,) = binding.targets
     if (
         target.kind not in (None, "function", "class")
+        and not (target.kind == "variable" and target.member in through)
         or target.member is None
         or "." in target.member
     ):
@@ -1027,7 +1036,10 @@ def declared_types(
                 continue
             # A decorated name holds what its decorators made (`f = dec(f)`), whose call
             # the function's own declaration does not describe.
-            decorated = holds_decorated_value(node, scope.lookup)
+            # A module-level call-through wrapper gives what the `def` declares (OI-444).
+            decorated = holds_decorated_value(node, scope.lookup) and not (
+                path is None and calls_through(node, scope.lookup)
+            )
             name = node.name
             if path is not None and name == "__init__":
                 name = INIT

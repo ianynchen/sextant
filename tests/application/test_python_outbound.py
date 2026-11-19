@@ -32,6 +32,14 @@ _CLIENTS = {
     "idna": "3.20",
     "urllib3": "2.8.0",
     "charset-normalizer": "3.5.2",
+    "aiohttp": "3.14.5",
+    "yarl": "1.25.1",
+    "multidict": "7.2.1",
+    "aiohappyeyeballs": "2.7.1",
+    "aiosignal": "1.4.0",
+    "attrs": "26.1.0",
+    "frozenlist": "1.8.0",
+    "propcache": "0.5.4",
 }
 
 _MODELS = (
@@ -79,18 +87,23 @@ def _outbound(tmp_path: Path, libraries, main: str) -> list[tuple[object, ...]]:
 
 @pytest.mark.declines("requests")
 @pytest.mark.declines("httpx")
+@pytest.mark.declines("aiohttp")
+@pytest.mark.declines("urllib3")
 @pytest.mark.pins("single_call.call-site-owner")
 def test_a_get_on_anything_but_requests_or_httpx_derives_nothing(tmp_path, libraries):
     """`get`, `post` and `request` are common names: a dict's `get` and a module class with
-    the libraries' own method names are calls on no `requests` or `httpx` owner."""
+    the libraries' own method names (`ClientSession` among them) are calls on no `requests` or `httpx` owner."""
     assert (
         _outbound(
             tmp_path,
             libraries,
+            "class ClientSession:\n"
+            "    def get(self, url: str) -> None: ...\n"
             "class Client:\n"
             "    def get(self, url: str) -> None: ...\n"
             "    def request(self, method: str, url: str) -> None: ...\n"
             "def send(cache: dict[str, str]) -> None:\n"
+            "    ClientSession().get('https://a.example/w')\n"
             "    Client().get('https://a.example/x')\n"
             "    Client().request('GET', 'https://a.example/y')\n"
             "    cache.get('https://a.example/z')\n",
@@ -275,6 +288,168 @@ def test_the_body_is_the_first_keyword_in_the_library_precedence(tmp_path, libra
         ("POST", "b.example", "/c", "app/main#form", "resolved", "string"),
         ("POST", "b.example", "/e", "app/main#empty", "resolved", None),
     ]
+
+
+# --- aiohttp ---------------------------------------------------------------------------------
+# Every rule is aiohttp's own, measured in `scripts/probes/aiohttp_urllib3_rules.md`.
+
+
+def test_aiohttp_relative_address_joins_the_session_base_by_rfc_3986(tmp_path, libraries):
+    """Probe "aiohttp `base_url`": a relative path appends to a base ending in `/`, a leading `/`
+    resets to the host root, and an absolute address ignores the base; `async with` binds the
+    session itself."""
+    assert _outbound(
+        tmp_path,
+        libraries,
+        "import aiohttp\n"
+        "async def run() -> None:\n"
+        "    async with aiohttp.ClientSession(base_url='https://api.example/v1/') as s:\n"
+        "        await s.get('orders')\n"
+        "        await s.get('/health')\n"
+        "        await s.get('https://other.example/x')\n",
+    ) == [
+        ("GET", "api.example", "/health", "app/main#run", "resolved", None),
+        ("GET", "api.example", "/v1/orders", "app/main#run", "resolved", None),
+        ("GET", "other.example", "/x", "app/main#run", "resolved", None),
+    ]
+
+
+def test_aiohttp_relative_address_without_a_base_names_no_peer(tmp_path, libraries):
+    """Probe "Without `base_url`": aiohttp raises `InvalidURL` on a relative address, from a
+    session with no base and from `aiohttp.request` (which has no base). The row keeps its path,
+    names no peer and stays unresolved."""
+    assert _outbound(
+        tmp_path,
+        libraries,
+        "import aiohttp\n"
+        "async def run() -> None:\n"
+        "    async with aiohttp.ClientSession() as s:\n"
+        "        await s.get('/health')\n"
+        "    await aiohttp.request('GET', '/ping')\n",
+    ) == [
+        ("GET", None, "/health", "app/main#run", "unresolved", None),
+        ("GET", None, "/ping", "app/main#run", "unresolved", None),
+    ]
+
+
+def test_aiohttp_verb_in_a_variable_is_null_and_text_is_upper_cased(tmp_path, libraries):
+    """Probe "Verb case": `request(method, url)` upper-cases the string; a variable claims no
+    verb."""
+    assert _outbound(
+        tmp_path,
+        libraries,
+        "import aiohttp\n"
+        "async def send(method: str) -> None:\n"
+        "    async with aiohttp.ClientSession() as s:\n"
+        "        await s.request(method, 'https://a.example/x')\n"
+        "        await s.request('patch', 'https://a.example/y')\n"
+        "    await aiohttp.request('delete', 'https://a.example/z')\n",
+    ) == [
+        ("DELETE", "a.example", "/z", "app/main#send", "resolved", None),
+        ("PATCH", "a.example", "/y", "app/main#send", "resolved", None),
+        (None, "a.example", "/x", "app/main#send", "unresolved", None),
+    ]
+
+
+def test_aiohttp_json_body_takes_its_fields_from_the_serialiser(tmp_path, libraries):
+    """The body is the pydantic serialiser's wire names (`by_alias=True`); `model_dump()` writes
+    the fields' own names, so that body is not described (N4)."""
+    assert _outbound(
+        tmp_path,
+        libraries,
+        "import aiohttp\n"
+        "from app.models import Order\n"
+        "async def send(order: Order) -> None:\n"
+        "    async with aiohttp.ClientSession() as s:\n"
+        "        await s.post('https://a.example/w', json=order.model_dump(by_alias=True))\n"
+        "        await s.post('https://a.example/o', json=order.model_dump())\n",
+    ) == [
+        ("POST", "a.example", "/o", "app/main#send", "unresolved", None),
+        ("POST", "a.example", "/w", "app/main#send", "resolved", "app/models/Order#"),
+    ]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="`body_arg` has no word for 'these keywords together are rejected'; the call, which "
+    "never runs, publishes the `data=` body. Needs new vocabulary, so it is logged, not built.",
+)
+def test_aiohttp_data_with_json_publishes_no_body(tmp_path, libraries):
+    """Probe "aiohttp bodies": `data=` with `json=` raises `ValueError` before anything is sent,
+    so no body is claimed for it."""
+    assert _outbound(
+        tmp_path,
+        libraries,
+        "import aiohttp\n"
+        "from app.models import Order\n"
+        "async def send(order: Order, raw: str) -> None:\n"
+        "    async with aiohttp.ClientSession() as s:\n"
+        "        await s.post('https://a.example/b', data=raw, json=order.model_dump(by_alias=True))\n",
+    ) == [("POST", "a.example", "/b", "app/main#send", "unresolved", None)]
+
+
+# --- urllib3 ---------------------------------------------------------------------------------
+# Every rule is urllib3's own, measured in `scripts/probes/aiohttp_urllib3_rules.md`. It has no
+# verb helpers and no base URL: every address is absolute.
+
+
+def test_urllib3_request_reads_the_verb_and_the_absolute_address(tmp_path, libraries):
+    """Probe "Verbs and positions": `request(method, url)`, on the module and on a
+    `PoolManager` (defined on `RequestMethods`); text is upper-cased, a variable claims no verb."""
+    assert _outbound(
+        tmp_path,
+        libraries,
+        "import urllib3\n"
+        "def run(method: str) -> None:\n"
+        "    urllib3.request('GET', 'https://a.example/x')\n"
+        "    urllib3.request(method, 'https://a.example/v')\n"
+        "    with urllib3.PoolManager() as pool:\n"
+        "        pool.request('delete', 'https://b.example/y')\n"
+        "    urllib3.PoolManager().request('POST', 'https://c.example/z')\n",
+    ) == [
+        ("DELETE", "b.example", "/y", "app/main#run", "resolved", None),
+        ("GET", "a.example", "/x", "app/main#run", "resolved", None),
+        ("POST", "c.example", "/z", "app/main#run", "resolved", None),
+        (None, "a.example", "/v", "app/main#run", "unresolved", None),
+    ]
+
+
+def test_urllib3_body_is_body_or_json_by_keyword(tmp_path, libraries):
+    """Probe "urllib3 bodies": `json=` and `body=` are sent on every verb; `fields=` is not a
+    model and is not read."""
+    assert _outbound(
+        tmp_path,
+        libraries,
+        "import urllib3\n"
+        "from app.models import Order\n"
+        "def send(order: Order) -> None:\n"
+        "    urllib3.request('POST', 'https://a.example/w', json=order.model_dump(by_alias=True))\n"
+        "    urllib3.request('PUT', 'https://a.example/o', json=order.model_dump())\n"
+        "    urllib3.request('GET', 'https://a.example/q', fields={'a': '1'})\n",
+    ) == [
+        ("GET", "a.example", "/q", "app/main#send", "resolved", None),
+        ("POST", "a.example", "/w", "app/main#send", "resolved", "app/models/Order#"),
+        ("PUT", "a.example", "/o", "app/main#send", "unresolved", None),
+    ]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="`body_arg` has no word for 'these keywords together are rejected'; the call, which "
+    "never runs (`TypeError`), publishes the `body=` body. Needs new vocabulary, so it is "
+    "logged, not built.",
+)
+def test_urllib3_body_with_json_publishes_no_body(tmp_path, libraries):
+    """Probe "urllib3 bodies": `body=` with `json=` raises `TypeError` on every verb, so no
+    body is claimed for it."""
+    assert _outbound(
+        tmp_path,
+        libraries,
+        "import urllib3\n"
+        "from app.models import Order\n"
+        "def send(order: Order, raw: dict[str, str]) -> None:\n"
+        "    urllib3.request('POST', 'https://a.example/b', body=order.model_dump(by_alias=True), json=raw)\n",
+    ) == [("POST", "a.example", "/b", "app/main#send", "unresolved", None)]
 
 
 # --- The owner a binding gives ----------------------------------------------------------------

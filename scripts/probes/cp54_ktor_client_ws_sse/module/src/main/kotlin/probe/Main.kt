@@ -504,4 +504,9 @@ fun main() {
     sseJoin("`sse(path = \"/parts\")`, the parts form, base with a query (o)", "$https?key=1", "/parts") {
         it.sse(path = "/parts") { }
     }
+
+    // Row group (p), after the other groups so the row numbers already cited stay: whether
+    // the join removes dot segments (aiohttp's does; Ktor's `mergeUrls` keeps them).
+    merge("dot segment (p)", "https://api.example.com/v1/", "./x")
+    merge("dotdot segment (p)", "https://api.example.com/v1/", "../x")
 }
