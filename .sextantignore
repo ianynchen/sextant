@@ -2,3 +2,4 @@
 # repository would find it as a second module. Sextant reads itself as one module; the
 # fixture is analysed on its own, by its own tests.
 fixtures/orders-fastapi/
+fixtures/orders-flask/
