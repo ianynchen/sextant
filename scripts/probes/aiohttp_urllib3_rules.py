@@ -4,7 +4,8 @@ Run it inside the orders-fastapi fixture's own environment, never Sextant's:
 
     fixtures/orders-fastapi/.venv/bin/python -I scripts/probes/aiohttp_urllib3_rules.py
 
-Every rule is asserted, then printed. Requests go to a local HTTP server so the path, method and
+Every wire rule is asserted, then printed; source quotes are printed for the .md, not asserted
+(the .md says which is which). Requests go to a local HTTP server so the path, method and
 body that reach the wire are what the library actually sends. The probe runs the libraries on
 purpose; Sextant itself never does (spec 7). Rules and quotes are in `aiohttp_urllib3_rules.md`.
 """
