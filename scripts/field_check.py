@@ -528,9 +528,10 @@ def _zero_pre_outside_code_blocks(html_text: str) -> bool:
 
 def _first_diagram_parses(html_text: str) -> bool:
     """See the module docstring's own definition of "parses". `None` (no diagram found at
-    all) is itself a failure — every rendered document carries a `## Structure` diagram
-    unconditionally, so its absence from the HTML means something upstream broke, not that
-    there was nothing to check.
+    all) is itself a failure, unless `## Structure` says out loud `None derived.` — a module
+    with no contracts and no inbound endpoints (`py-ctfd`, Flask 2.1.3 where the flask catalog
+    reads nothing) honestly has no diagram; its absence otherwise means something upstream
+    broke, not that there was nothing to check.
 
     `_BACKTICK_SPAN` (`` `[^`]*` ``) matches across newlines — mermaid identifiers are
     single-line, so this is deliberately loose, not tight, and the conservatism this check
@@ -543,7 +544,7 @@ def _first_diagram_parses(html_text: str) -> bool:
     malformed diagram source."""
     match = re.search(r'<pre class="mermaid">(.*?)</pre>', html_text, re.DOTALL)
     if match is None:
-        return False
+        return "<h2>Structure</h2>\n<p>None derived.</p>" in html_text
     source = html.unescape(match.group(1))
     without_quoted_spans = _BACKTICK_SPAN.sub("", source)
     return "$" not in without_quoted_spans
