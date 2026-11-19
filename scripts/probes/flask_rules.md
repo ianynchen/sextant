@@ -128,10 +128,10 @@ With `name="bp2"` both register: `/a/x` and `/b/x`, endpoints `bp.v` and `bp2.v`
 | Read | Absent key | Meaning |
 |---|---|---|
 | `request.args["q"]` | `BadRequestKeyError` (400) | required |
-| `request.args.get("q")` | `None` / the default | optional |
-| `request.args.get("q", type=int)` | converts; a non-numeric value gives `None`, or the `default=` when given | typed optional |
+| `request.args.get("q")` | `None` / the default | none: the framework makes no requirement statement |
+| `request.args.get("q", type=int)` | converts; a non-numeric value gives `None`, or the `default=` when given | none (as `.get`) |
 | `request.headers["H"]` | plain `KeyError` (not `BadRequestKeyError`) | required |
-| `request.headers.get("H")` | `None` | optional |
+| `request.headers.get("H")` | `None` | none: the framework makes no requirement statement |
 | `request.cookies["c"]` | `BadRequestKeyError` | required |
 | `request.values["x"]` | `BadRequestKeyError` | required |
 

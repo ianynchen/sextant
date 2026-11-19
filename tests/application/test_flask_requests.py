@@ -2,8 +2,9 @@
 2026-11-19-python-flask-inbound, Task 4).
 
 Each read is a property of the library class `request` is typed as (`flask.globals.request:
-Request`), then `.get` or a subscript on the result. `.get` is optional, a subscript required, but
-for `request.headers[k]`, which raises a plain `KeyError` (a 500, not a 400): it is a bare read. The
+Request`), then `.get` or a subscript on the result. `.get` states no requirement (A3: the framework says nothing
+about an absent key), a subscript is required (`request.headers[k]` too, though its plain `KeyError`
+is a 500, not a 400). The
 rules are measured in `scripts/probes/flask_rules.md`.
 """
 
@@ -32,28 +33,28 @@ def _handler(body: str) -> str:
     )
 
 
-def test_get_is_optional_on_each_of_the_four_sources(tmp_path, libraries):
+def test_get_states_no_requirement_on_each_of_the_four_sources(tmp_path, libraries):
     body = _handler(
         "request.args.get('q')\nrequest.headers.get('X-Token')\n"
         "request.cookies.get('sid')\nrequest.values.get('v')"
     )
 
     assert _reads(tmp_path, libraries, body) == [
-        ("cookie", "sid", "optional", "resolved"),
-        ("header", "X-Token", "optional", "resolved"),
-        ("param", "v", "optional", "resolved"),
-        ("query", "q", "optional", "resolved"),
+        ("cookie", "sid", None, "resolved"),
+        ("header", "X-Token", None, "resolved"),
+        ("param", "v", None, "resolved"),
+        ("query", "q", None, "resolved"),
     ]
 
 
-def test_a_subscript_is_required_but_a_header_subscript_is_a_bare_read(tmp_path, libraries):
+def test_a_subscript_is_required_the_header_subscript_too(tmp_path, libraries):
     body = _handler(
         "request.args['q']\nrequest.cookies['sid']\nrequest.values['v']\nrequest.headers['X-Token']"
     )
 
     assert _reads(tmp_path, libraries, body) == [
         ("cookie", "sid", "required", "resolved"),
-        ("header", "X-Token", None, "resolved"),
+        ("header", "X-Token", "required", "resolved"),
         ("param", "v", "required", "resolved"),
         ("query", "q", "required", "resolved"),
     ]
@@ -65,7 +66,7 @@ def test_get_with_a_default_or_a_type_is_the_same_read(tmp_path, libraries):
     )
 
     assert _reads(tmp_path, libraries, body) == [
-        ("query", name, "optional", "resolved") for name in "abc"
+        ("query", name, None, "resolved") for name in "abc"
     ]
 
 
@@ -73,8 +74,14 @@ def test_a_name_that_is_not_a_literal_is_an_unresolved_read(tmp_path, libraries)
     body = _handler("request.args.get(compute())")
 
     assert _reads(tmp_path, libraries, body, _HEAD + "def compute():\n    return 'q'\n") == [
-        ("query", None, "optional", "unresolved")
+        ("query", None, None, "unresolved")
     ]
+
+
+def test_a_read_through_an_unknown_receiver_gives_no_row(tmp_path, libraries):
+    body = "def get_req():\n    return request\n" + _handler("r = get_req()\nr.args.get('q')")
+
+    assert _reads(tmp_path, libraries, body) == []
 
 
 def test_the_same_calls_on_another_receiver_read_nothing(tmp_path, libraries):
