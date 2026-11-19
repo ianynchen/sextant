@@ -1,17 +1,18 @@
 # Coverage — Python
 
-**The Python reader's foundation ships, FastAPI inbound is read, and so are `requests` and `httpx` outbound with the configuration that fills their addresses.** The foundation was built
+**The Python reader's foundation ships, FastAPI and Flask inbound are read, and so are `requests` and `httpx` outbound with the configuration that fills their addresses.** The foundation was built
 by OI-208 plan 1 (`docs/superpowers/plans/2026-11-06-python-reader-foundation.md`, spec
 `docs/superpowers/specs/2026-11-06-python-reader-design.md`) and proved on Sextant's own code
 (`tests/e2e/test_sextant_reads_itself.py`). FastAPI inbound was built by plan 2
 (`docs/superpowers/plans/2026-11-08-python-fastapi-inbound.md`) and proved against FastAPI's own
 route table (`tests/e2e/test_orders_fastapi.py`). Outbound HTTP clients, environment and settings
 configuration and the field pins were built by plan 3
-(`docs/superpowers/plans/2026-11-17-python-outbound-config-pins.md`). Flask is next, then Django (ruled 2026-10-26). Detection shapes are defined in [COVERAGE.md](../COVERAGE.md) §1. The typing
+(`docs/superpowers/plans/2026-11-17-python-outbound-config-pins.md`). Flask inbound was built by plan 5
+(`docs/superpowers/plans/2026-11-19-python-flask-inbound.md`) and proved against Flask's own `url_map` (`tests/e2e/test_orders_flask.py`). Django is next (ruled 2026-10-26). Detection shapes are defined in [COVERAGE.md](../COVERAGE.md) §1. The typing
 problem this language creates is analysed in [COVERAGE.md](../COVERAGE.md) §10.
 
 > **Scope.** [COVERAGE.md](../COVERAGE.md) §5 is canonical for tier and status,
-> organised by protocol. The FastAPI REST-inbound row and the requests/httpx REST-out row ship; every
+> organised by protocol. The FastAPI and Flask REST-inbound rows and the requests/httpx REST-out row ship; every
 > other Python cell there is still a plan. This file holds what does not fit a protocol row: what the reader reads, what it
 > does not, the toolchain verdict, the payload story, and the structural oddities of the
 > language.
@@ -380,7 +381,7 @@ is `docs/research/2026-11-06-python-type-tools.md`.
 
 ---
 
-**The sections below are the inventory the framework plans start from.** Only FastAPI and
+**The sections below are the inventory the framework plans start from.** Only FastAPI, Flask and
 Pydantic are read today (above); the other rows say what each framework and library writes, and
 how hard it is to read.
 
@@ -390,8 +391,8 @@ how hard it is to read.
 |---|---|---|---|
 | **FastAPI** | `@app.get("/items/{id}")` on a function whose parameters and return are annotated; `response_model=` | `annotation` | **Yes, reliably** — FastAPI *cannot function* without them. It builds validation and OpenAPI from the annotations. |
 | **Litestar** | `@get("/items/{id:int}")`, typed handlers | `annotation` | Yes, same reason |
-| Flask | `@app.route("/items", methods=["GET"])`, or `@app.get(...)` | `annotation` | **No.** Body reached via `request.json[...]`, `request.form[...]` — untyped `dict` access |
-| Flask blueprints | `bp = Blueprint(...)`; `app.register_blueprint(bp, url_prefix="/api")` | `annotation` + `registration_call` | Prefix is joined at registration, in another module |
+| Flask | `@app.route("/items", methods=["GET"])`, or `@app.get(...)` | `annotation` | **No.** Body reached via `request.json[...]`, `request.form[...]` — untyped `dict` access. **Built** (`flask.yml`, Flask 3.1.3 and 2.1.3). Request reads (`request.args`, `request.headers`, ...) are read; body reads are not (OI-484) |
+| Flask blueprints | `bp = Blueprint(...)`; `app.register_blueprint(bp, url_prefix="/api")` | `annotation` + `registration_call` | Prefix is joined at registration, in another module. **Built**, including a blueprint built in one module and imported by another |
 | **Django** | `urlpatterns = [path("items/<int:id>/", views.item)]` in `urls.py`, nested with `include()` | `registration_call` | **The path and the view are in different files**, joined by a list of call results, often nested several levels. No annotation exists on the view at all. |
 | **Django REST Framework** | `router.register(r"users", UserViewSet)` | `runtime_dynamic` | **One line produces six or more endpoints** by convention (`list`, `create`, `retrieve`, `update`, `partial_update`, `destroy`), with paths and verbs generated at runtime from the ViewSet's class hierarchy and `@action` decorators. Nothing in the source states them. |
 | aiohttp | `app.router.add_get("/items", handler)` | `registration_call` | No |
@@ -402,6 +403,33 @@ how hard it is to read.
 **Django and DRF are the structural problem.** Every other framework in this table puts the path next to the handler. Django puts it in a separate routing module; DRF puts it nowhere.
 
 ---
+
+### Flask (plan 5)
+
+Measured on 2026-11-19 at the end of plan 5. Flask's own `url_map` is printed by
+`tests/e2e/flask_oracle.py`, run in each service's own environment. Sextant never runs the code it
+reads. The rules Flask follows are quoted with source lines in `scripts/probes/flask_rules.md`,
+measured on Flask 3.1.3 with werkzeug 3.1.9 and on Flask 2.1.3 with werkzeug 2.2.3 (the older
+owners live in `flask.scaffold.Scaffold`). The fact schema went from 17 to 18: a read of a library
+property (`request.args`) is now a call site on the class that defines it.
+
+- **The fixture equals Flask.** `tests/e2e/test_orders_flask.py` pins 16 (method, path) rows of
+  `fixtures/orders-flask` against Flask's `url_map` and reads 12 request reads.
+- **redash (09740ea).** The `url_map` holds 100 rules: 71 are Flask-RESTful resources, 1 is
+  `/static` and 28 are core Flask. Sextant reads all 34 core method pairs: 10 at an address the
+  oracle lists and 24 `(unresolved)` rows (the path comes from `org_scoped_rule(...)`, which
+  branches on a deployment value). It also holds 3 oidc rows the oracle run does not have.
+  Total 37 inbound rows. 16 of the 37 name no handler (OI-485).
+- **CTFd (a6a81dd).** The `url_map` holds 174 rules: 92 are Flask-RESTX, 2 are the framework's
+  and 80 are core Flask. Sextant reads 95 of the 98 core method pairs. The 3 it misses are the
+  plugin asset routes (OI-487). 74 of the 95 rows name no handler (OI-485).
+
+Stated boundaries (each an open issue in Plane): MethodView and `as_view` class handlers
+(OI-479); Flask-RESTful resources, 71 of redash's 100 rules (OI-480); Flask-RESTX namespaces,
+92 of CTFd's 174 (OI-481); `subdomain=` (OI-482); `strict_slashes` and `merge_slashes`
+(OI-483); request body reads (OI-484); wrapper decorators that hide the handler (OI-485);
+prefix spellings `url_prefix=None` and a positional `url_prefix` (OI-486); `add_url_rule` on an
+untyped parameter (OI-487). Open: OI-479 to OI-487.
 
 ## Outbound HTTP
 
