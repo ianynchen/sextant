@@ -112,3 +112,17 @@ def test_a_blueprint_registered_twice_serves_under_both_prefixes(tmp_path, libra
     )
 
     assert _paths(tmp_path, libraries, body) == [("GET", "/a/x"), ("GET", "/b/x")]
+
+
+def test_a_slashless_prefix_is_refused_and_serves_nothing(tmp_path, libraries):
+    """Probe: `url_prefix='api'` joins to `api/x`, which Flask refuses at registration, own
+    prefix or given, so no row is published."""
+    own = "bp = Blueprint('bp', __name__, url_prefix='api')\n" + _X + "app.register_blueprint(bp)\n"
+    given = (
+        "bp = Blueprint('bp', __name__)\n" + _X + "app.register_blueprint(bp, url_prefix='api')\n"
+    )
+    held = "bp = Blueprint('bp', __name__, url_prefix='api')\n" + _X
+
+    assert _paths(tmp_path / "a", libraries, own) == []
+    assert _paths(tmp_path / "b", libraries, given) == []
+    assert _paths(tmp_path / "c", libraries, held) == []

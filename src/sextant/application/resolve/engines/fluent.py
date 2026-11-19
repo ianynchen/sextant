@@ -1403,7 +1403,7 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                 )
                 continue
             # A framework joining by plain concatenation serves the path as written
-            # (`path_join: concatenate`, ruling R23): nothing is cleaned.
+            # (`path_join: concatenate`, ruling R23; `single_slash`, D02): nothing is cleaned.
             if context.catalog.matches.get("path_join") not in (CONCATENATE, SINGLE_SLASH):
                 path = canonical_http_path(path, path_kind)
         # A route the framework does not serve derives nothing — below a refusal, which the

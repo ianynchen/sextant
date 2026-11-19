@@ -77,7 +77,12 @@ matches:
   # that prefix, as the route's own path is read where no registration is seen. The app has none.
   router_type: [flask.sansio.app.App, flask.sansio.blueprints.Blueprint]
   router_holds:
-    - { owner: flask.sansio.blueprints.Blueprint, method: <init>, prefix_arg: { keyword: url_prefix } }
+    - { owner: flask.sansio.blueprints.Blueprint, method: <init>, prefix_arg: { keyword: url_prefix },
+        refuses: [unrooted] }
+  # A prefix not starting with `/`, own or given, makes werkzeug refuse the joined rule at
+  # registration (probe: "a slash-less own/registration url_prefix ... refuses at registration"),
+  # so `refuses: [unrooted]` on both; the empty prefix is accepted. A slash-less RULE behind a
+  # prefix is accepted.
   # `register_blueprint(bp, url_prefix=...)` is defined on `App` (an app) and on `Blueprint` (a
   # blueprint; probe: "register_blueprint is defined on flask.sansio.app.App (app) and
   # flask.sansio.blueprints.Blueprint"). The prefix it writes REPLACES the blueprint's own
@@ -90,7 +95,7 @@ matches:
   mount:
     - { owner: flask.sansio.app.App, method: register_blueprint,
         router_arg: { arg: 0, keyword: blueprint }, prefix_arg: { keyword: url_prefix },
-        prefix_replaces_own: true }
+        prefix_replaces_own: true, refuses: [unrooted] }
     - { owner: flask.sansio.blueprints.Blueprint, method: register_blueprint,
         router_arg: { arg: 0, keyword: blueprint }, prefix_arg: { keyword: url_prefix },
-        prefix_replaces_own: true }
+        prefix_replaces_own: true, refuses: [unrooted] }

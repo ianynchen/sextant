@@ -1119,7 +1119,8 @@ class MountReader:
         refuses = mount.rule.refuses
         if at.pattern:
             return PATTERN_MOUNT_PATH if "pattern" in refuses else None
-        # A join that supplies the slash (`single_slash`) takes any mount prefix.
+        # A join that supplies the slash (`single_slash`) takes the empty prefix; its `refuses`
+        # word `unrooted` still refuses a non-empty one without the `/`.
         if (
             self._refuses_unrooted
             and self._rules.path_join != SINGLE_SLASH

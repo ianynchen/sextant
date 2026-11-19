@@ -225,6 +225,15 @@ except ValueError:
     )
 else:
     raise AssertionError("blueprint rule without slash and prefix accepted")
+for own, given, label in (("api", None, "own"), (None, "api", "registration")):
+    try:
+        build(own, given, "/x", use_given=given is not None)
+    except ValueError:
+        rule(
+            f"a slash-less {label} url_prefix ('api' + '/x' -> 'api/x') refuses at registration (ValueError)"
+        )
+    else:
+        raise AssertionError(f"slash-less {label} prefix accepted")
 assert build("/p", None, "nolead", use_given=False) == ["/p/nolead"]
 rule(
     "a slash-less blueprint rule under a prefix is accepted: the join supplies the slash (/p + nolead -> /p/nolead)"
