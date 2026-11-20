@@ -1,0 +1,15 @@
+{
+  "repo": "py-home-assistant",
+  "remote": "https://github.com/home-assistant/core",
+  "commit": "cf84a2b2f3e16634a4b149b2ff8adfc835e8b843",
+  "build": "none",
+  "oracle": "none: the pin's job is not an address check. It is the biggest known real repository (about 31,000 files; `homeassistant/` and 11,336 analysed documents) and the claim that it completes, 2026-11-20: cold 521.8 s and 6.2 GB peak process-tree RSS (Apple Silicon), warm 8.8 s and 0.6 GB, 2.6 GB cache. Before the value-walk bounds (OI-491) the `homeassistant/components/template` subtree alone ran over 65 minutes. It is read with no installed environment (`build` is `none`): the repository commits no lock, so third-party imports are not followed.",
+  "endpoints": {
+    "inbound": {},
+    "outbound": {}
+  },
+  "routes": {
+    "inbound": [],
+    "outbound": []
+  }
+}
