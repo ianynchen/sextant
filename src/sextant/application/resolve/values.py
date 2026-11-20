@@ -352,6 +352,22 @@ _SEVERAL = "several"
 # worst window holds 5 paths.
 PATH_CAP = 256
 
+# The most position computes one root resolve (`_Walk.at`) makes. A strongly-connected region of
+# values has exponentially many distinct per-path answers, so no reuse bounds it (R39
+# amendment); past the budget every further compute answers `non_enumerable`, stated, never
+# dropped, and the walk unwinds by returning. It counts computes, never time, so the same input
+# gives the same rows. Sized at over 10x the
+# measured max computes per root (2026-11-20): polar 727, dispatch 162, mealie 261, redash 161,
+# ctfd 21, apollo-portal 2237, mall-admin 0 (its walks were all reused).
+WALK_BUDGET = 25_000
+
+# The most positions one resolve works out inside one another. Each costs about 8 Python frames,
+# and a chain of calls through parameters that is longer than the interpreter's stack allows was
+# `RecursionError`, failing the whole module (Home Assistant's `template`). Past it the position
+# answers `non_enumerable`, as past the budget. Measured max depth: polar 44, dispatch 34,
+# mealie 26, redash 22, apollo-portal 22, ctfd 14.
+DEPTH_CAP = 80
+
 # The types nothing can change through a reference to them (spec 2026-11-02 rule 3): the
 # primitives, `String` and the boxed primitives, as a descriptor spells a type. A property of
 # the TYPE, never of a method: read off the site's own descriptor for the parameter a value is
@@ -3731,6 +3747,11 @@ class _Walk:
             tuple[str, frozenset[tuple[str, tuple[str, int]]]], tuple[_SetterCall, ...]
         ] = Kept()
         self._memo: Kept[tuple[_Position, _Trail], tuple[_Reached, ...]] = Kept()
+        # The computes this root resolve has made (`WALK_BUDGET`), and the computes cut short
+        # (`DEPTH_CAP`, and every one past the budget). A cut answers `non_enumerable`, and no
+        # compute that had one below it is kept: a kept answer would carry the cut to another asker.
+        self._computes = 0
+        self._cuts = 0
         # The positions the current path is IN THE MIDDLE OF resolving. §1d's `cycle` is
         # exactly a return to one of them.
         self._pending: set[_Position] = set()
@@ -3756,6 +3777,7 @@ class _Walk:
 
     def at(self, site: Mapping[str, Any], slot: int | str) -> tuple[_Reached, ...]:
         """One slot of the site the caller handed in, on the empty path."""
+        self._computes = 0
         return self._of_site(site, slot, (), ())
 
     def _resolve(
@@ -3792,11 +3814,16 @@ class _Walk:
         current path is in the middle of is `cycle` (§1d); an answer resting on a position
         still being worked out is true of this path only, and is kept provisionally with the
         back edges it rests on and the positions it entered (`Kept`)."""
+        self._computes += 1
+        if self._computes > WALK_BUDGET or len(self._entered) >= DEPTH_CAP:
+            self._cuts += 1
+            return _only(trail, _unresolved(NON_ENUMERABLE)), False
         if position in self._pending:
             self._open.add(position)
             return _only(trail, _unresolved(CYCLE)), False
         self._pending.add(position)
         self._entered.append({position})
+        cuts = self._cuts
         outer, self._open = self._open, set()
         reached = self._compute(position, trail, frames)
         entered = self._entered.pop()
@@ -3807,6 +3834,8 @@ class _Walk:
         self._pending.discard(position)
         self._memo.release(position)
         self._suffixes.release(position)
+        if self._cuts != cuts:
+            return reached, False
         if unresolved_back_edges:
             return reached, (frozenset(unresolved_back_edges), frozenset(entered))
         return reached, True

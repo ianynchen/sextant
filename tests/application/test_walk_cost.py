@@ -11,6 +11,7 @@ is a Flask route whose path is parameter `d` of the first class's method, so the
 up through the ring's callers.
 """
 
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -150,3 +151,46 @@ def test_cycle_region_cost_is_bounded(tmp_path, monkeypatch, libraries):
     computes = count_computes(monkeypatch)
     analyze(module, libraries)
     assert computes() < 50_000
+
+
+def rows_of(source: Path) -> list[tuple]:
+    import duckdb
+
+    con = duckdb.connect(str(source.parent / "ws.duckdb"))
+    try:
+        tables = [t for (t,) in con.execute("show tables").fetchall()]
+        return [
+            (t, sorted(map(repr, con.execute(f"select * from {t}").fetchall())))
+            for t in sorted(tables)
+        ]
+    finally:
+        con.close()
+
+
+def test_budget_exhaustion_is_an_honest_unresolved(tmp_path, monkeypatch, libraries):
+    monkeypatch.setattr(values, "WALK_BUDGET", 20)
+    module = make_ring_module(tmp_path, classes=8, calls_per_method=3)
+    computes = count_computes(monkeypatch)
+    analyze(module, libraries)
+    assert computes() < 50_000
+    dump = repr(rows_of(module))
+    assert "non_enumerable" in dump
+
+
+def test_budget_is_deterministic(tmp_path, monkeypatch, libraries):
+    monkeypatch.setattr(values, "WALK_BUDGET", 20)
+    runs = []
+    for _ in range(2):
+        shutil.rmtree(tmp_path, ignore_errors=True)
+        tmp_path.mkdir()
+        module = make_ring_module(tmp_path, classes=8, calls_per_method=3)
+        analyze(module, libraries)
+        runs.append(rows_of(module))
+    assert runs[0] == runs[1]
+
+
+def test_depth_cap_is_an_honest_unresolved(tmp_path, monkeypatch, libraries):
+    monkeypatch.setattr(values, "DEPTH_CAP", 3)
+    module = make_ring_module(tmp_path, classes=8, calls_per_method=1)
+    analyze(module, libraries)
+    assert "non_enumerable" in repr(rows_of(module))
