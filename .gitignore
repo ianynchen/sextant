@@ -37,7 +37,7 @@ target/
 *.iml
 
 # Example projects cloned for testing — not ours, never committed
-examples/
+/examples
 
 # The pinned typeshed copy (spec 2026-11-06 §3e) ships whole: its `stdlib/venv` and a stub
 # package's `examples` folder are type files, not an environment or a clone. Only those two
