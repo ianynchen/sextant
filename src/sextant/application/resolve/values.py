@@ -167,8 +167,8 @@ from sextant.domain.symbols import (
 # whole point of having six words where today there is one: COVERAGE can say "we cannot
 # see the jar" or "the code branches", and a catalog author debugging a NULL address can
 # tell which they are looking at. `fan_out` and `depth` are absent by ruling, not by
-# oversight — §3a decides whether a cap exists at all, and a reason for one before the
-# measurement would be a cap smuggled in as vocabulary.
+# oversight. `DEPTH_CAP` and `WALK_BUDGET` reuse `non_enumerable` on `PATH_CAP`'s precedent
+# (no new word); the user's confirmation of that is flagged in the value-walk plan's final report.
 NOT_READABLE = "not_readable"
 NON_ENUMERABLE = "non_enumerable"
 ESCAPES = "escapes"
@@ -358,14 +358,16 @@ PATH_CAP = 256
 # dropped, and the walk unwinds by returning. It counts computes, never time, so the same input
 # gives the same rows. Sized at over 10x the
 # measured max computes per root (2026-11-20): polar 727, dispatch 162, mealie 261, redash 161,
-# ctfd 21, apollo-portal 2237, mall-admin 0 (its walks were all reused).
+# ctfd 21, apollo-portal 2237, mall-admin not
+# measured (the instrumentation did not cover its walk).
 WALK_BUDGET = 25_000
 
-# The most positions one resolve works out inside one another. Each costs about 8 Python frames,
-# and a chain of calls through parameters that is longer than the interpreter's stack allows was
-# `RecursionError`, failing the whole module (Home Assistant's `template`). Past it the position
-# answers `non_enumerable`, as past the budget. Measured max depth: polar 44, dispatch 34,
-# mealie 26, redash 22, apollo-portal 22, ctfd 14.
+# The most positions one resolve works out inside one another. The real limit is Python's
+# recursion limit (about 1000 frames): a position costs about 8 frames, so 80 keeps about 640 and
+# leaves room for the callers. A chain longer than the stack was `RecursionError`, failing the
+# whole module (Home Assistant's `template`). Past it the position answers `non_enumerable`, as
+# past the budget. Corpus max depth, well under the cap: polar 44, dispatch 34, mealie 26,
+# redash 22, apollo-portal 22, ctfd 14.
 DEPTH_CAP = 80
 
 # The types nothing can change through a reference to them (spec 2026-11-02 rule 3): the
@@ -3249,7 +3251,7 @@ def recipe_values(
     parameter writes none, or the call's argument may be in an unpacked one. Read once per
     call and parameter for as long as `index` lives; a recipe whose value is read through
     itself is a `cycle`."""
-    return _recipe_values(index, site, parameter, [])
+    return _recipe_values(index, site, parameter, [], None)
 
 
 def _recipe_values(
@@ -3257,8 +3259,9 @@ def _recipe_values(
     site: Mapping[str, Any],
     parameter: tuple[str, int] | None,
     deps: list[set[Any]],
+    asker: "_Walk | None",
 ) -> tuple["_Reached", ...]:
-    """`recipe_values`, read by the walk whose read stack is `deps` (`Kept`)."""
+    """`recipe_values`, read by the walk `asker` whose read stack is `deps` (`Kept`)."""
     key = (str(site["caller"]), int(str(site["ordinal"])), parameter)
     return index.recipes_read.get(
         key,
@@ -3268,6 +3271,7 @@ def _recipe_values(
         site,
         parameter,
         deps,
+        asker,
         cycle=((((), _unresolved(CYCLE)),),),
     )
 
@@ -3277,11 +3281,14 @@ def _read_recipe(
     site: Mapping[str, Any],
     parameter: tuple[str, int] | None,
     deps: list[set[Any]],
+    asker: "_Walk | None",
 ) -> tuple[tuple["_Reached", ...], bool]:
-    """`_recipe_values`' reading, worked out once per call and parameter."""
+    """`_recipe_values`' reading, worked out once per call and parameter. A reading the work
+    budget or the depth cap cut is kept by no one, and the asker is told of the cut (`_cuts`)."""
     reference = index.recipes.calls.get((str(site.get("owner")), str(site["name"])))
     slot = argument_slot(site["arguments"] or [], reference)
     found: list[_Reached] = []
+    cuts = 0
     if slot == UNPACKED_SLOT:
         found.append(((), _unresolved(NOT_READABLE)))
     elif slot is None:
@@ -3293,7 +3300,10 @@ def _read_recipe(
                 found.extend((path, one) for _, one in _parameter_type(index, parameter))
             else:
                 found.append((path, answer))
-    return tuple(found), True
+        cuts = walk._cuts
+        if asker is not None:
+            asker._cuts += cuts
+    return tuple(found), cuts == 0
 
 
 def _parameter_type(index: ValueIndex, parameter: tuple[str, int] | None) -> tuple["_Reached", ...]:
@@ -6281,7 +6291,9 @@ class _Walk:
             return ()
         reached: list[_Reached] = []
         for site in sites:
-            for path, answer in _recipe_values(self._index, site, (method, index), self._deps):
+            for path, answer in _recipe_values(
+                self._index, site, (method, index), self._deps, self
+            ):
                 merged = _combine(called, path)
                 if merged is not None:
                     reached.extend(self._recipe_runs(answer, method, index, merged, frames))
@@ -7184,7 +7196,10 @@ class _Walk:
                     built = (producer.caller, producer.ordinal)
                 subtype = producer.identity in subtypes
             ends.append((built, crossed, crossed if entered is None else entered, subtype))
-        return (frames, tuple(dict.fromkeys(walk._reads)), tuple(dict.fromkeys(ends))), True
+        return (
+            (frames, tuple(dict.fromkeys(walk._reads)), tuple(dict.fromkeys(ends))),
+            walk._cuts == 0,
+        )
 
     def _frame_in(self, frames: "_Frames", method: str) -> tuple[str, int] | None:
         """`_frame_of`, recording on an object walk which of the asker's frames it read."""

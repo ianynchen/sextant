@@ -168,13 +168,58 @@ def rows_of(source: Path) -> list[tuple]:
 
 
 def test_budget_exhaustion_is_an_honest_unresolved(tmp_path, monkeypatch, libraries):
-    monkeypatch.setattr(values, "WALK_BUDGET", 20)
-    module = make_ring_module(tmp_path, classes=8, calls_per_method=3)
-    computes = count_computes(monkeypatch)
+    module = make_ring_module(tmp_path / "real", classes=8, calls_per_method=3)
     analyze(module, libraries)
-    assert computes() < 50_000
-    dump = repr(rows_of(module))
-    assert "non_enumerable" in dump
+    uncut = repr(rows_of(module)).count("non_enumerable")
+    monkeypatch.setattr(values, "WALK_BUDGET", 20)
+    module = make_ring_module(tmp_path / "cut", classes=8, calls_per_method=3)
+    analyze(module, libraries)
+    assert repr(rows_of(module)).count("non_enumerable") > uncut
+
+
+def test_a_cut_answer_is_not_reused_by_another_root(monkeypatch):
+    """Roots A and B share position P. A's budget runs out inside P; B, with a fresh budget,
+    must get what a run of B alone gets."""
+    monkeypatch.setattr(values, "WALK_BUDGET", 5)
+    edges = {"A": ["x1", "P"], "B": ["P"], "P": ["y1", "y2", "S"]}
+
+    def fresh() -> values._Walk:
+        walk = values._Walk(
+            values.ValueIndex(
+                sites={},
+                receivers={},
+                producers={},
+                returns={},
+                callers={},
+                parameters={},
+                constants={},
+                produced={},
+                writers={},
+                returned_values={},
+                reached=frozenset(),
+            ),
+            deps=[],
+        )
+
+        def compute(position, trail, frames):  # type: ignore[no-untyped-def]
+            found = []
+            for child in edges.get(position[1], []):
+                found.extend(walk._resolve((values._SLOT, child, 0, 0), (), ()))
+            if position[1] == "S":
+                found.append(((), values.Answer(kind="literal", value="S")))
+            return tuple(found)
+
+        walk._compute = compute  # type: ignore[method-assign]
+        return walk
+
+    def ask(walk: values._Walk, root: str) -> list[str]:
+        walk._computes = 0
+        return [a.value or a.reason for _, a in walk._resolve((values._SLOT, root, 0, 0), (), ())]
+
+    alone = ask(fresh(), "B")
+    shared = fresh()
+    assert "non_enumerable" in ask(shared, "A")
+    assert ask(shared, "B") == alone == ["S"]
 
 
 def test_budget_is_deterministic(tmp_path, monkeypatch, libraries):
