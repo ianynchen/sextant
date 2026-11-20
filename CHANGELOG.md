@@ -52,6 +52,14 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Flask inbound is read, and checked against Flask itself** (OI-208 plan 5, OI-478). `flask.yml`
+  reads routes, blueprints (including one built in a module and imported by another, and
+  `register_blueprint` prefixes) and request reads, on Flask 3.1.3 and 2.1.3. `tests/e2e/test_orders_flask.py`
+  pins 16 (method, path) rows of `fixtures/orders-flask` against Flask's own `url_map`. Field pins:
+  redash reads all 34 core method pairs (37 inbound rows), CTFd 95 of 98 core pairs. The fact
+  schema is 18: a read of a library property is a call site on the class that defines it.
+  Flask-RESTful, Flask-RESTX, `MethodView`, `subdomain=` and body reads are stated boundaries
+  (OI-479 to OI-487).
 - **Python module variables take the class of a typed call, and aiohttp and urllib3 calls are
   read** (OI-444, OI-445, OI-454). `settings = get_settings()` is typed from the function's
   declared return, through `functools.cache` and `lru_cache` (bare form), a star re-export

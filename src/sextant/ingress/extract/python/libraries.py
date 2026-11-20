@@ -385,6 +385,40 @@ class Libraries:
             self._inside = inside
         return typed if names_a_type(typed.symbol) else None
 
+    def attribute_type(self, receiver: TypeRef, name: str) -> tuple[str, TypeRef] | None:
+        """The class that defines the attribute `name` of a library class `receiver`, by its
+        lookup order, and the type that class's file writes for it: a `@property` (or
+        `cached_property`) return, a class-body annotation, or a parameter of `__init__` the
+        attribute is assigned from. None where no class of the order declares it, the first
+        that does declares it another way (a method, a plain assignment), or the type names no
+        class. The read of an attribute is a producer of that type."""
+        order = self.hierarchy.order(receiver.symbol)
+        if order is None or self.shape_of(receiver.symbol) is None:
+            return None
+        for symbol in (receiver.symbol, *(entry.symbol for entry in order)):
+            target = self._target_of(symbol)
+            table = None if target is None else self._table(target.module)
+            node = None if table is None or target is None else self._class_node(table, target)
+            if table is None or node is None:
+                return None
+            inside, self._inside = self._inside, True
+            try:
+                scope = self._scope(table)
+                written = _written_attribute(list(_statements(node.body, table.versions)), name)
+                typed = None if written in (None, _OTHER) else written_type(written, scope)
+            finally:
+                self._inside = inside
+            if written is None:
+                continue
+            if (
+                typed is None
+                or not names_a_type(typed.symbol)
+                or self.shape_of(typed.symbol) is None
+            ):
+                return None
+            return symbol, typed
+        return None
+
     def call_returns(
         self,
         owner: str,
@@ -2150,3 +2184,60 @@ def _is_name(node: ast.expr) -> bool:
 
 def _text(annotation: ast.expr | None) -> str:
     return "" if annotation is None else ast.unparse(annotation)
+
+
+# What `_written_attribute` answers for a name a class declares in a way that gives it no type.
+_OTHER = ast.Constant(value=None)
+_PROPERTIES = frozenset({"property", "cached_property"})
+
+
+def _written_attribute(body: list[ast.stmt], name: str) -> ast.expr | None:
+    """The annotation a class body writes for the attribute `name`: a property's return, a
+    class-level annotation, or the annotated parameter `__init__` assigns to `self.<name>`.
+    None where the body does not declare it; `_OTHER` where it declares it without one."""
+    for node in body:
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            is_property = any(
+                (d.attr if isinstance(d, ast.Attribute) else getattr(d, "id", None)) in _PROPERTIES
+                for d in node.decorator_list
+            )
+            return (node.returns or _OTHER) if is_property else _OTHER
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.target.id == name:
+                return node.annotation
+        elif isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == name for t in node.targets
+        ):
+            return _OTHER
+    init = next((n for n in body if isinstance(n, ast.FunctionDef) and n.name == "__init__"), None)
+    if init is None or not init.args.args:
+        return None
+    this = init.args.args[0].arg
+    targets: list[ast.expr]
+    value: ast.expr | None
+    for inner in ast.walk(init):
+        if isinstance(inner, ast.Assign):
+            targets, value = inner.targets, inner.value
+        elif isinstance(inner, ast.AnnAssign):
+            targets, value = [inner.target], inner.value
+        else:
+            continue
+        if not any(
+            isinstance(t, ast.Attribute)
+            and t.attr == name
+            and isinstance(t.value, ast.Name)
+            and t.value.id == this
+            for t in targets
+        ):
+            continue
+        if isinstance(inner, ast.AnnAssign):
+            return inner.annotation
+        return next(
+            (
+                a.annotation
+                for a in init.args.args + init.args.kwonlyargs
+                if isinstance(value, ast.Name) and a.arg == value.id and a.annotation
+            ),
+            _OTHER,
+        )
+    return None

@@ -51,6 +51,14 @@ def orders_fastapi_env() -> Path:
 
 
 @pytest.fixture(scope="session")
+def orders_flask_env() -> Path:
+    """`fixtures/orders-flask`'s own interpreter, from its locked environment (as above)."""
+    root = FIXTURES / "orders-flask"
+    fixture_python.synced(root, offline=True)
+    return fixture_python.interpreter(root)
+
+
+@pytest.fixture(scope="session")
 def analyzed_orders_service(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """`orders-service`, analysed once, for tests that only READ the result.
 

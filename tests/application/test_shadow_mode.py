@@ -378,6 +378,7 @@ _ASKS_PER_CATALOG = {
     "cdi-events": (2, 2),
     "click": (3, 3),
     "fastapi": (19, 19),
+    "flask": (19, 19),
     "google-pubsub-client": (1, 1),
     "google-pubsub-publisher": (2, 2),
     "google-pubsub-subscriber": (2, 3),
@@ -512,7 +513,10 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # **+2 on 2026-11-09** (plan 2 final review, OI-368): the host mount's positions.
     # **+27 on 2026-11-17** (plan 3 Task 2): the new `requests` (16) and `httpx` (11) catalogs,
     # same comment.
-    assert sum(asks for asks, _ in counted.values()) == 1550
+    # **+1 on 2026-11-19** (plan 5 Task 2): the new `flask` catalog's `__call__` handler slot.
+    # **+2 on 2026-11-19** (plan 5 Task 3): its two `register_blueprint` prefix positions.
+    # **+16 on 2026-11-19** (plan 5 Task 4): its sixteen request-read entries' name positions.
+    assert sum(asks for asks, _ in counted.values()) == 1569
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

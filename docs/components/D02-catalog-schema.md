@@ -2508,8 +2508,8 @@ names its first. A malformed entry, or `framework_handlers`/`handler_methods` wi
 `passes_on`, is refused at load, as is an `order` capture that is neither `argN` nor `last`.
 
 **`matches.router_type: [<type>, …]` and `matches.mount: [{owner, method, descriptor?,
-router_arg, prefix_arg | prefix_from: receiver_path, wildcard?, strip_trailing?, refuses?,
-dependencies_arg?, host_arg?}, …]`** (Vert.x spec
+router_arg, prefix_arg | prefix_from: receiver_path, prefix_replaces_own?, wildcard?,
+strip_trailing?, refuses?, dependencies_arg?, host_arg?}, …]`** (Vert.x spec
 §3c) declare sub-router mounts: a route registered on a router serves under the prefix of every
 mount that received that same router — the object one producer made, reached along one call
 path. The producers are derived from the facts by type: every call returning a `router_type`
@@ -2527,9 +2527,19 @@ names one — part of plan 2026-11-08 N7: Starlette's `Mount` strips `path.rstri
 by **`matches.path_join`** (`leading_slash` or absent, as `combinator`'s; or, on a `fluent`
 catalog, **`concatenate`**, plan 2026-11-08 ruling R23: plain string concatenation with the
 served path published as written — never passed to `canonical_http_path`, so FastAPI's
-`"/orders" + ""` is `/orders` and a route `x` under `/r` is `/rx`). A `prefix_arg` the call does
+`"/orders" + ""` is `/orders` and a route `x` under `/r` is `/rx`; or **`single_slash`**, Flask's
+join, measured: exactly one `/` between a prefix and a non-empty path, `prefix.rstrip("/") + "/"
++ path.lstrip("/")`, and an empty path is the prefix verbatim, so `/p/` + `x` and `/p` + `/x` are
+`/p/x`, `/p` + `""` is `/p` and `/p` + `/` is `/p/`; the served path is published as written,
+and a path without a leading `/` behind a prefix is not refused, the join supplying the slash).
+A `prefix_arg` the call does
 not write is the empty prefix: the router mounts at the parent's root, as a route with no path
-does.
+does. **`prefix_replaces_own: true`** on a mount that names a `prefix_arg` says the framework
+REPLACES the prefix the mounted router holds (`router_holds`) with the one the call writes,
+the empty one included; only a call that writes none keeps the router's own. Flask's
+`register_blueprint(bp, url_prefix=...)`, measured: own `/own` and given `/given` serve
+`/given/x`, given `''` serves `/x`. The prefixes of the routers the mount is itself made on
+still go in front. Absent, the held prefix stays in front of every route (FastAPI).
 Nested mounts compose, one router mounted at several prefixes serves under each (`resolved`),
 and a router no mount received serves at its root, as read. A mount path not read whole gives
 the named hole `<prefix>` in front of the route's path, `partial`, which is never linked by

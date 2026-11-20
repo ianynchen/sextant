@@ -62,6 +62,7 @@ from sextant.application.resolve.shapes.inbound_routes import (
     EMPTY_PATH,
     EXACT_MOUNT_PATH,
     PATTERN_MOUNT_PATH,
+    SINGLE_SLASH,
     TRAILING_SLASH,
     UNROOTED_PATH,
     WILDCARD_MOUNT_POINT,
@@ -158,6 +159,9 @@ class MountRule:
     # approved 2026-11-09: Starlette's `Host`); None for a mount served on every host. A mount
     # with a host and no `prefix_arg` serves the router's routes at their own paths.
     host_arg: Any = None
+    # A prefix the call writes REPLACES the prefix the mounted router holds (`router_holds`),
+    # the empty one too; only a call that writes none keeps it (D02 `prefix_replaces_own`).
+    prefix_replaces_own: bool = False
 
     def matches(self, site: Mapping[str, Any]) -> bool:
         return (
@@ -470,7 +474,19 @@ def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> M
         strip_trailing=strip,
         dependencies_arg=_dependencies_arg(entry, where),
         host_arg=host_arg,
+        prefix_replaces_own=_replaces_own(entry, prefix_arg, where),
     )
+
+
+def _replaces_own(entry: Mapping[str, Any], prefix_arg: Any, where: str) -> bool:
+    """`prefix_replaces_own`, a flag on a mount that names a `prefix_arg`."""
+    declared = entry.get("prefix_replaces_own", False)
+    if not isinstance(declared, bool) or (declared and prefix_arg is None):
+        raise CatalogError(
+            f"{where} `{entry['method']}` `prefix_replaces_own` is `true` on a mount that "
+            f"names a `prefix_arg`, got {declared!r}"
+        )
+    return declared
 
 
 def router_producers(
@@ -891,6 +907,7 @@ class MountReader:
         if made is None:
             return [replace(ROOT, places=frozenset({ANY_ROUTER}))]
         found: list[Prefix] = []
+        replaced: list[Prefix] = []
         reached: list[Path] = []
         for mount in self._mounts:
             if mount.key in mounting:
@@ -915,7 +932,9 @@ class MountReader:
                                     prefix,
                                     empty_after=(*prefix.empty_after, len(prefix.text or "")),
                                 )
-                            found.append(prefix)
+                            # A prefix the mount writes leaves the router's own held one out.
+                            replaces = mount.rule.prefix_replaces_own and at.prefix is not None
+                            (replaced if replaces else found).append(prefix)
         if self._unmounted(path, made[1], reached, frozenset()):
             found.append(replace(ROOT, places=frozenset({((_router(made, path), None),)})))
         held = self._holds(made, path)
@@ -926,7 +945,7 @@ class MountReader:
                 for own in held
                 if (holding := self._holding(prefix, own)) is not None
             ]
-        return found
+        return [*found, *replaced]
 
     def _unmounted(
         self, path: Path, method: str, reached: list[Path], entered: frozenset[str]
@@ -1100,7 +1119,13 @@ class MountReader:
         refuses = mount.rule.refuses
         if at.pattern:
             return PATTERN_MOUNT_PATH if "pattern" in refuses else None
-        if self._refuses_unrooted and is_unrooted(text, whole):
+        # A join that supplies the slash (`single_slash`) takes the empty prefix; its `refuses`
+        # word `unrooted` still refuses a non-empty one without the `/`.
+        if (
+            self._refuses_unrooted
+            and self._rules.path_join != SINGLE_SLASH
+            and is_unrooted(text, whole)
+        ):
             return UNROOTED_PATH
         refused = _prefix_refusal(refuses, text, whole)
         if refused is not None:

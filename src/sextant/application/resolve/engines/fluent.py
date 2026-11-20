@@ -65,7 +65,7 @@ from sextant.application.resolve.shapes.arguments import (
     _walked_channels,
     _walked_with,
     argument_descriptor,
-    call_site_index,
+    bound_call_site_index,
     carries_expression,
     channels_of,
     declared_parameters_of,
@@ -125,6 +125,7 @@ from sextant.application.resolve.shapes.inbound_routes import (
     EMPTY_PATH,
     INVALID_RESPONSE_TYPE,
     NO_METHODS,
+    SINGLE_SLASH,
     UNROOTED_PATH,
     WORDS,
     fallback_word,
@@ -393,7 +394,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # None for a catalog declaring no `field_sources` block, which is exactly
     # what keeps such a catalog's rows what they were before 2F.
     field_sources = field_facts(workspace, catalog)
-    by_caller = workspace.once(call_site_index).by_caller
+    by_caller = bound_call_site_index(workspace).by_caller
     # The method symbols a `handler` capture joins a lambda's bare body name to
     # (spec 2026-09-21 §3c), read where the walk reads them (`chain_ends`) and
     # shared with it through `Workspace.once`.
@@ -1383,6 +1384,11 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                 and url_resolution in (str(Resolution.RESOLVED), str(Resolution.PARTIAL))
                 # A pattern is never checked: Vert.x skips `checkPath` for a regex route.
                 and path_kind != PATH_KIND_PATTERN
+                # A join that supplies the slash (`single_slash`) roots a path behind a prefix.
+                and not (
+                    prefix.text is not None
+                    and context.catalog.matches.get("path_join") == SINGLE_SLASH
+                )
                 and is_unrooted(path, url_resolution == str(Resolution.RESOLVED))
             ):
                 file_refusal(
@@ -1397,8 +1403,8 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                 )
                 continue
             # A framework joining by plain concatenation serves the path as written
-            # (`path_join: concatenate`, ruling R23): nothing is cleaned.
-            if context.catalog.matches.get("path_join") != CONCATENATE:
+            # (`path_join: concatenate`, ruling R23; `single_slash`, D02): nothing is cleaned.
+            if context.catalog.matches.get("path_join") not in (CONCATENATE, SINGLE_SLASH):
                 path = canonical_http_path(path, path_kind)
         # A route the framework does not serve derives nothing — below a refusal, which the
         # framework raises when the route is made, before any `disable()` could run.

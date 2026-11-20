@@ -1,0 +1,144 @@
+id: flask
+displayName: Flask (routes on an app or a blueprint)
+style: fluent
+protocol: http
+direction: inbound
+
+# Every decorator is the call it is (design 2026-11-06-reading-decorators §3a, ruled):
+# `@app.route("/x")` over `def f` is a call of `Scaffold.route` whose result is called with the
+# function (`__call__`). `app.add_url_rule("/x", view_func=f)` is the same registration made in
+# one call. Every rule below is Flask's own, measured in `scripts/probes/flask_rules.md`
+# (plan 5, Task 1; DR-6).
+#
+# A route's path is kept exactly as written, converters included (probe: "converters stay as
+# written in url_map: <id>, <int:id>, <path:rest>").
+
+detect:
+  coordinates: [flask]
+
+measured:
+  - { artifact: flask, versions: ["3.1.3"], identity: reported, by: scripts/probes/flask_rules.md }
+  - { artifact: werkzeug, versions: ["3.1.9"], identity: reported, by: scripts/probes/flask_rules.md }
+  # Flask 2.1.3 (CTFd's lock) predates the sansio split; its owners are measured in the same probe,
+  # run in that environment ("Flask 2.1.3" section). Werkzeug 2.2.3 owns the same request surface.
+  - { artifact: flask, versions: ["2.1.3"], identity: reported, by: scripts/probes/flask_rules.md }
+  - { artifact: werkzeug, versions: ["2.2.3"], identity: reported, by: scripts/probes/flask_rules.md }
+
+matches:
+  # THE REGISTRATIONS. `route` and the verb shortcuts are defined once, on `Scaffold` (probe:
+  # "route/get/post/put/patch/delete are defined on flask.sansio.scaffold.Scaffold"; `Flask` and
+  # `Blueprint` inherit them). `get/post/put/patch/delete` register exactly that method; `methods=`
+  # on them raises TypeError. `add_url_rule` is defined on `App` (an app) and on `Blueprint`
+  # (probe: "add_url_rule is defined on flask.sansio.app.App ... and flask.sansio.blueprints.
+  # Blueprint"), its handler `view_func`, index 2 (probe: "rule index 0, view_func index 2").
+  #
+  # `methods` (probe): absent is GET; each is upper-cased (`methods=["post"]` -> POST); a bare
+  # string raises TypeError. THE AUTOMATIC ROWS ARE A STATED BOUNDARY, never published: werkzeug
+  # adds HEAD to a rule with GET and Flask adds OPTIONS to every rule (probe: "methods absent ->
+  # GET, and url_map also lists HEAD and OPTIONS: {GET, HEAD, OPTIONS}"; "automatic OPTIONS row
+  # is added to every rule, not only GET ones"). They are the framework's own answers, not a
+  # route the program wrote, so only the methods written give a row.
+  roots:
+    - { owner: [flask.sansio.scaffold.Scaffold, flask.scaffold.Scaffold], method: route,
+        captures: { http_method: { keyword: methods, absent: GET, case: upper }, url: { arg: 0, keyword: rule } } }
+    - { owner: [flask.sansio.scaffold.Scaffold, flask.scaffold.Scaffold], method: get,
+        captures: { http_method: GET, url: { arg: 0, keyword: rule } } }
+    - { owner: [flask.sansio.scaffold.Scaffold, flask.scaffold.Scaffold], method: post,
+        captures: { http_method: POST, url: { arg: 0, keyword: rule } } }
+    - { owner: [flask.sansio.scaffold.Scaffold, flask.scaffold.Scaffold], method: put,
+        captures: { http_method: PUT, url: { arg: 0, keyword: rule } } }
+    - { owner: [flask.sansio.scaffold.Scaffold, flask.scaffold.Scaffold], method: patch,
+        captures: { http_method: PATCH, url: { arg: 0, keyword: rule } } }
+    - { owner: [flask.sansio.scaffold.Scaffold, flask.scaffold.Scaffold], method: delete,
+        captures: { http_method: DELETE, url: { arg: 0, keyword: rule } } }
+    - { owner: [flask.sansio.app.App, flask.sansio.blueprints.Blueprint, flask.app.Flask, flask.blueprints.Blueprint], method: add_url_rule,
+        captures: { http_method: { keyword: methods, absent: GET, case: upper },
+                    url: { arg: 0, keyword: rule }, handler: { arg: 2, keyword: view_func } } }
+  # The decorator `route` returns, called with the function it registers: the handler is that
+  # argument, followed back through every decorator below it (probe: "route(rule, **options) is a
+  # decorator; the decorated function is the handler").
+  steps:
+    - { method: __call__, captures: { handler: arg0 } }
+  terminal: [__call__, add_url_rule]
+  # No response model exists in Flask: the response is the type the handler returns. A handler
+  # that returns a `Response` object (flask's, or werkzeug's it extends) hands the framework a
+  # finished response, so its annotation names no body shape (probe: "a handler returning
+  # flask.Response (a subclass of werkzeug Response) or a werkzeug Response is the finished
+  # response: make_response returns it unchanged").
+  response_fallback: { from: handler_return,
+                       none_types: [flask.wrappers.Response, werkzeug.wrappers.response.Response] }
+  # A rule without a leading `/` raises ValueError at registration, so the program does not
+  # start (probe: "a rule without a leading slash raises ValueError"); no row for it.
+  refuses_unrooted_path: true
+
+  # A BLUEPRINT'S PREFIX. The join (probe: "prefix.rstrip('/') + '/' + rule.lstrip('/'): trailing-
+  # slash prefix and slash-less rule both join with exactly one '/'"; "empty rule under a prefix
+  # serves the prefix itself, verbatim") is `path_join: single_slash`. It joins nested prefixes
+  # the same way (probe: "nesting joins a trailing-slash parent prefix with exactly one '/'").
+  path_join: single_slash
+  # The blueprint's own prefix is `Blueprint(url_prefix=...)`, held from its construction (probe:
+  # "own url_prefix joins the rule: /own + /x -> /own/x"). A blueprint nothing registers rows at
+  # that prefix, as the route's own path is read where no registration is seen. The app has none.
+  router_type: [flask.sansio.app.App, flask.sansio.blueprints.Blueprint, flask.app.Flask, flask.blueprints.Blueprint]
+  router_holds:
+    - { owner: [flask.sansio.blueprints.Blueprint, flask.blueprints.Blueprint], method: <init>, prefix_arg: { keyword: url_prefix },
+        refuses: [unrooted] }
+  # A prefix not starting with `/`, own or given, makes werkzeug refuse the joined rule at
+  # registration (probe: "a slash-less own/registration url_prefix ... refuses at registration"),
+  # so `refuses: [unrooted]` on both; the empty prefix is accepted. A slash-less RULE behind a
+  # prefix is accepted.
+  # `register_blueprint(bp, url_prefix=...)` is defined on `App` (an app) and on `Blueprint` (a
+  # blueprint; probe: "register_blueprint is defined on flask.sansio.app.App (app) and
+  # flask.sansio.blueprints.Blueprint"). The prefix it writes REPLACES the blueprint's own
+  # (`prefix_replaces_own`; probe: "register_blueprint(url_prefix=...) REPLACES the blueprint's own
+  # prefix", "url_prefix='' also REPLACES the own prefix (only None keeps it)"); written nowhere,
+  # the own one stays. A nested blueprint serves parent prefix, then child prefix (probe: "nested
+  # bp.register_blueprint(child): parent prefix, then child prefix, then rule"), and one blueprint
+  # registered under two names serves under both (probe: "registering it again with name='bp2'
+  # gives both prefixes").
+  mount:
+    - { owner: [flask.sansio.app.App, flask.app.Flask], method: register_blueprint,
+        router_arg: { arg: 0, keyword: blueprint }, prefix_arg: { keyword: url_prefix },
+        prefix_replaces_own: true, refuses: [unrooted] }
+    - { owner: [flask.sansio.blueprints.Blueprint, flask.blueprints.Blueprint], method: register_blueprint,
+        router_arg: { arg: 0, keyword: blueprint }, prefix_arg: { keyword: url_prefix },
+        prefix_replaces_own: true, refuses: [unrooted] }
+
+  # REQUEST READS (the handler body only, as on every catalog: a helper the handler calls is not
+  # read). `request` is `flask.globals.request: Request`, and each read below is a PROPERTY read
+  # on it, a call of the class that defines the property (probe, "Defining symbols": `args`,
+  # `cookies` on `werkzeug.sansio.request.Request`, `values` on `werkzeug.wrappers.request.Request`,
+  # `headers` an attribute `Request.__init__` sets on the sansio class), then `.get` or a subscript
+  # on what it gives. `.get(key, default=None, type=None)` takes one to three arguments, a keyword
+  # one counted: one entry per count. Probe, "Request reads":
+  #   - `.get` of a missing key gives `None` or the default: the framework makes no statement, so
+  #     `.get` carries no `requirement` (the A3 ruling of ktor-routing.yml: a handler that
+  #     answers 400 after a bare `get` makes `optional` a lie);
+  #   - `request.args[k]`, `request.cookies[k]`, `request.values[k]` raise `BadRequestKeyError`
+  #     (a 400), so they are `required`;
+  #   - `request.headers[k]` raises a plain `KeyError`, which surfaces as a 500 and not as the 400
+  #     of the others; the request cannot succeed without the header either way, so it is
+  #     `required` too.
+  # `values` merges query and form (probe: "`values` merges query and form"), so its kind is
+  # `param`. THE BODY READS ARE A STATED BOUNDARY: `request.json`, `request.get_json()`,
+  # `request.form` and `request.data` read the body, a request model the overlay case of the
+  # coverage essay covers, not a named parameter; they give no row. A read through a receiver
+  # whose class is not known (an unannotated local, `r = get_req(); r.args.get(...)`) gives no
+  # row either: the scanner types only what a library file or an annotation writes.
+  request_reads:
+    - { via: { owner: werkzeug.sansio.request.Request, method: args }, method: get, arity: 1, name_arg: 0, kind: query }
+    - { via: { owner: werkzeug.sansio.request.Request, method: args }, method: get, arity: 2, name_arg: 0, kind: query }
+    - { via: { owner: werkzeug.sansio.request.Request, method: args }, method: get, arity: 3, name_arg: 0, kind: query }
+    - { via: { owner: werkzeug.sansio.request.Request, method: args }, method: __getitem__, arity: 1, name_arg: 0, kind: query, requirement: required }
+    - { via: { owner: werkzeug.sansio.request.Request, method: headers }, method: get, arity: 1, name_arg: 0, kind: header }
+    - { via: { owner: werkzeug.sansio.request.Request, method: headers }, method: get, arity: 2, name_arg: 0, kind: header }
+    - { via: { owner: werkzeug.sansio.request.Request, method: headers }, method: get, arity: 3, name_arg: 0, kind: header }
+    - { via: { owner: werkzeug.sansio.request.Request, method: headers }, method: __getitem__, arity: 1, name_arg: 0, kind: header, requirement: required }
+    - { via: { owner: werkzeug.sansio.request.Request, method: cookies }, method: get, arity: 1, name_arg: 0, kind: cookie }
+    - { via: { owner: werkzeug.sansio.request.Request, method: cookies }, method: get, arity: 2, name_arg: 0, kind: cookie }
+    - { via: { owner: werkzeug.sansio.request.Request, method: cookies }, method: get, arity: 3, name_arg: 0, kind: cookie }
+    - { via: { owner: werkzeug.sansio.request.Request, method: cookies }, method: __getitem__, arity: 1, name_arg: 0, kind: cookie, requirement: required }
+    - { via: { owner: werkzeug.wrappers.request.Request, method: values }, method: get, arity: 1, name_arg: 0, kind: param }
+    - { via: { owner: werkzeug.wrappers.request.Request, method: values }, method: get, arity: 2, name_arg: 0, kind: param }
+    - { via: { owner: werkzeug.wrappers.request.Request, method: values }, method: get, arity: 3, name_arg: 0, kind: param }
+    - { via: { owner: werkzeug.wrappers.request.Request, method: values }, method: __getitem__, arity: 1, name_arg: 0, kind: param, requirement: required }

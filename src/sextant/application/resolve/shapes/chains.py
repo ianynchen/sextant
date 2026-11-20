@@ -63,7 +63,7 @@ from sextant.application.resolve.shapes.arguments import (
     _arg_at,
     _string_value,
     _walked_channels,
-    call_site_index,
+    bound_call_site_index,
     channels_of,
     declared_parameters_of,
     field_facts,
@@ -323,7 +323,7 @@ def chain_ends(
     # `argument_descriptor`'s `call_wrappers` one-hop read the list, never text.
     # Indexed once per load, not once per catalog (`Workspace.once`, `CallSiteIndex`);
     # the shared lists are read, never written into.
-    site_index = workspace.once(call_site_index)
+    site_index = bound_call_site_index(workspace)
     by_caller = site_index.by_caller
     # The same index keyed by BARE descriptor, for following a `lambda` argument into its
     # own body (`OI-73`): a call argument names the synthetic method without the module

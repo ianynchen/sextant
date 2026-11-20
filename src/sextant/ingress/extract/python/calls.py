@@ -66,7 +66,7 @@ A call's owner is the type the code writes for its receiver (design
 import ast
 import builtins
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from pydantic import PrivateAttr
@@ -1298,6 +1298,10 @@ class BodyReader:
             attr = INIT if func.attr == "__init__" else func.attr
             if self._is_self(func.value, scope):
                 return Callee(_target(scope.owner, attr), "virtual")
+            if isinstance(func.value, ast.Attribute):
+                read = self._attribute_read(func.value, scope)
+                if read is not None:
+                    return self._on_value(read, attr, scope)
             owners = self._targets(func.value, scope) if _is_dotted(func.value) else None
             if owners is not None and len(owners) == 1:
                 owner = owners[0]
@@ -1412,6 +1416,32 @@ class BodyReader:
             return False
         targets = self._targets(func, scope)
         return bool(targets) and all(target.kind == "new_type" for target in targets or ())
+
+    def _attribute_read(self, node: ast.Attribute, scope: Scope) -> CallArgument | None:
+        """`request.args`: the attribute `args` of a value whose library class is known. A
+        class's file writes its type (`Libraries.attribute_type`); the read is a call on the
+        class that DEFINES the attribute, named as the attribute, which gives that type — as
+        a getter call is on the JVM, so a call made on the result has a receiver to follow.
+        None where the value's class or the attribute's type is not known."""
+        libraries = self._context.index.libraries
+        if libraries is None or not isinstance(node.value, ast.Name | ast.Attribute):
+            return None
+        held = self._declared(node.value, scope)
+        if held is None and _is_dotted(node.value):
+            targets = self._targets(node.value, scope)
+            if targets is not None and len(targets) == 1 and targets[0].kind in (None, "variable"):
+                held = self._library_variable(targets[0])
+        if held is None or _class_of(held) is None or held.symbol == UNION:
+            return None
+        found = libraries.attribute_type(held, node.attr)
+        if found is None:
+            return None
+        defining, typed = found
+        callee = self._on_value(self._value(node.value, scope), node.attr, scope, declared=held)
+        made = self._invoke(replace(callee, target=_target(defining, node.attr)), [], scope)
+        if made.source is not None:
+            scope.body.returned[made.source] = typed
+        return made
 
     def _library_member(self, owner: Target, name: str) -> Target | None:
         """`module.name` for a library module, as the library defines it: a re-export is
@@ -1843,6 +1873,10 @@ class BodyReader:
                 return self._local(node.id, scope.frame) or _UNKNOWN
         if isinstance(node, ast.Attribute) and self._is_self(node.value, scope):
             return CallArgument(kind="field", symbol=f"{scope.owner}{node.attr}.")
+        if isinstance(node, ast.Attribute):
+            attribute = self._attribute_read(node, scope)
+            if attribute is not None:
+                return attribute
         if isinstance(node, ast.Name | ast.Attribute) and _is_dotted(node):
             targets = self._targets(node, scope)
             if targets:
