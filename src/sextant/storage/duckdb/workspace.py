@@ -2614,19 +2614,27 @@ class DuckDbWorkspace:
             self._connection.execute("BEGIN")
             try:
                 for start in range(0, len(rows), _CHUNK_ROWS):
-                    self._derive_once(name, rows=rows[start : start + _CHUNK_ROWS])
+                    self._derive_once(name, False, rows=rows[start : start + _CHUNK_ROWS])
+            except duckdb.ConversionException:
+                # The per-value route (`_derive_once`) cannot run inside the aborted
+                # transaction, so the slices are undone and the whole list is redone
+                # unchunked, the way it was always written.
+                self._connection.execute("ROLLBACK")
             except BaseException:
                 self._connection.execute("ROLLBACK")
                 raise
-            self._connection.execute("COMMIT")
-            return
-        self._derive_once(name, **params)
+            else:
+                self._connection.execute("COMMIT")
+                return
+        self._derive_once(name, True, **params)
 
-    def _derive_once(self, name: str, **params: object) -> None:
+    def _derive_once(self, name: str, retry: bool, **params: object) -> None:
         sql = (_SQL_DIR / _NAMED_DERIVATIONS[name]).read_text(encoding="utf-8")
         try:
             self._connection.execute(sql, _bound(params) or None)
         except duckdb.ConversionException:
+            if not retry:
+                raise
             # Where the JSON route refuses and the Python route did not (`_bound`):
             # a struct key the statement declares and a bound row does not carry
             # (NULL by the Python route), a key the row carries and the struct does
