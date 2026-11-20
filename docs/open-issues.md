@@ -493,10 +493,10 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-488 | SEXTANT-481 | a prefixless blueprint's slash-less rule publishes a resolved row for code Flask refuses: the `fluent.py` suppression carries "" not None |
 | OI-489 | SEXTANT-482 | `register_blueprint(bp, **opts)` keeps the blueprint's own prefix behind the hole: `at.prefix is not None` does not count an unpacked `**` |
 | OI-490 | SEXTANT-483 | a nested child under `url_prefix=''` with an empty rule: `/p` against Flask's `/p/` |
-| OI-491 | SEXTANT-pending | the value walk explodes on strongly-connected regions (hass `components/template` ran over 65 minutes): provisional keeping, `WALK_BUDGET` and `DEPTH_CAP` · **FIXED, pending merge** |
-| OI-492 | SEXTANT-pending | cold-run memory peaks at the Python/DuckDB border: bulk writes now cross in chunks; the peak that remains is the library-AST parse-once cache (OI-493) · **FIXED, pending merge** |
-| OI-493 | SEXTANT-pending | a resource-cap flag: DuckDB `memory_limit` pragma, extractor `-Xmx` and a bounded library-AST cache · decision pending (open) |
-| OI-494 | SEXTANT-pending | cycle-region summary answers: one answer per region would amend ruling M-1 / §1c (answers are per path) · design decision pending (open) |
+| OI-491 | SEXTANT-484 | the value walk explodes on strongly-connected regions (hass `components/template` ran over 65 minutes): provisional keeping, `WALK_BUDGET` and `DEPTH_CAP` · **FIXED, pending merge** |
+| OI-492 | SEXTANT-485 | cold-run memory peaks at the Python/DuckDB border: bulk writes now cross in chunks; the peak that remains is the library-AST parse-once cache (OI-493) · **FIXED, pending merge** |
+| OI-493 | SEXTANT-486 | a resource-cap flag: DuckDB `memory_limit` pragma, extractor `-Xmx` and a bounded library-AST cache · decision pending (open) |
+| OI-494 | SEXTANT-487 | cycle-region summary answers: one answer per region would amend ruling M-1 / §1c (answers are per path) · design decision pending (open) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
