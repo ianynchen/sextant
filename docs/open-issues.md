@@ -497,6 +497,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-492 | SEXTANT-485 | cold-run memory peaks at the Python/DuckDB border: bulk writes now cross in chunks; the peak that remains is the library-AST parse-once cache (OI-493) · **FIXED, pending merge** |
 | OI-493 | SEXTANT-486 | a resource-cap flag: DuckDB `memory_limit` pragma, extractor `-Xmx` and a bounded library-AST cache · decision pending (open) |
 | OI-494 | SEXTANT-487 | cycle-region summary answers: one answer per region would amend ruling M-1 / §1c (answers are per path) · design decision pending (open) |
+| OI-495 | SEXTANT-488 | a marker walk drops a budget cut silently (`parameter_markers.py`) · logged, revisit before FastAPI/marker work (open) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

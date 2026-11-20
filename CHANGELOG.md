@@ -19,12 +19,15 @@ here would restate those documents rather than add anything.
 
 - **The value walk is bounded, and bulk writes cross to DuckDB in chunks** (OI-491, OI-492). A
   strongly-connected region of the value graph (a ring of mutually dependent values) used to
-  be re-walked from every entry; the walk now keeps a provisional answer for the region, stops
-  after `WALK_BUDGET` (25,000) steps per root resolve, and cuts at depth `DEPTH_CAP` (80). A
-  walk that runs out of budget answers `non_enumerable`, never a guess, and a cut answer is
-  kept by no cache. The ring fixture fell from over 2 million computes to 139;
-  `home-assistant/core` (`components/template` included) fell from over 65 minutes to a full
-  cold run of 522 s. Bulk parameters now cross to DuckDB in chunks, not one JSON string, with a
+  be re-walked from every entry; the walk now stops after `WALK_BUDGET` (25,000) steps per
+  root resolve and cuts at depth `DEPTH_CAP` (80), which is what bounds a region (provisional
+  answers inside one are kept, but rarely reused: 27 reuses in 1.1M entries). A walk that runs
+  out of budget answers `non_enumerable`, never a guess, and an object read whose walk was cut
+  before it placed the object answers the same. A walk's own cut answer is kept by no cache; an
+  answer resting on a nested walk (`_objects`, `markers_kept`) can hold that walk's cut, which
+  is safe because each nested walk starts with a fresh budget. The ring fixture fell from over
+  2 million computes to 139; `home-assistant/core` (`components/template` included) fell from
+  over 65 minutes to a full cold run of 522 s. Bulk parameters now cross to DuckDB in chunks, not one JSON string, with a
   fallback to the per-value route on a conversion error: py-polar-server cold max allocation
   fell from 537 MB to 34 MB and its memray peak from 2.72 to 2.21 GB. Measured 2026-11-20 with
   `scripts/profile_analyze.sh` (cold; wall seconds, process-tree peak MiB; before in

@@ -6993,9 +6993,12 @@ class _Walk:
             # receiver's frame): this walk's answer serves only the very same frames.
             self._reads.append((_WHOLE,))
         outer = frames[:-1]
-        read = self._objects(symbol, site, outer, asking)
+        read, cut = self._objects(symbol, site, outer, asking)
         if all(built is None for built, _, _, _ in read):
-            return None
+            # **A walk cut before it placed anything is no proof the object is unplaced**
+            # (final review, Important 1): the cut path may have led to one construction, so
+            # every writer's value would be a guess published `resolved`.
+            return _only(trail, _unresolved(NON_ENUMERABLE)) if cut else None
         receiver = self._receiver_of(self._index.sites[site], outer)
         groups = self._writes_by(symbol)
         calls = self._setter_calls_of(symbol, asking)
@@ -7130,9 +7133,11 @@ class _Walk:
         site: tuple[str, int],
         frames: "_Frames",
         asking: frozenset[tuple[str, tuple[str, int]]],
-    ) -> tuple["_End", ...]:
+    ) -> tuple[tuple["_End", ...], bool]:
         """Which constructions of the type declaring `symbol` the receiver of `site` can be:
-        one end per path, the construction or None where the path ends anywhere else.
+        one end per path, the construction or None where the path ends anywhere else; and
+        whether the work budget or the depth cap cut the walk (never kept, so only a fresh
+        walk says so).
 
         The receiver is followed in `frames`, so a receiver that is a parameter of a helper
         the walk descended into is the argument at the call it came through. Every call
@@ -7156,7 +7161,7 @@ class _Walk:
             asking,
             alike=lambda held: _reads_alike(frames, held[0], held[1]),
         )
-        return cast(tuple[_End, ...], held[2])
+        return cast(tuple[_End, ...], held[2]), bool(held[3])
 
     def _objects_walked(
         self,
@@ -7164,8 +7169,8 @@ class _Walk:
         site: tuple[str, int],
         frames: "_Frames",
         asking: frozenset[tuple[str, tuple[str, int]]],
-    ) -> tuple[tuple["_Frames", tuple[tuple[Any, ...], ...], tuple["_End", ...]], bool]:
-        """`_objects`' walk, kept with `frames` and what it read of them."""
+    ) -> tuple[tuple["_Frames", tuple[tuple[Any, ...], ...], tuple["_End", ...], bool], bool]:
+        """`_objects`' walk, kept with `frames`, what it read of them, and whether it was cut."""
         declared = (str(owner), "<init>")
         # A construction of a subtype built here ends the walk too, so that end is told from
         # one the walk cannot read (final review, Minor 5).
@@ -7197,7 +7202,12 @@ class _Walk:
                 subtype = producer.identity in subtypes
             ends.append((built, crossed, crossed if entered is None else entered, subtype))
         return (
-            (frames, tuple(dict.fromkeys(walk._reads)), tuple(dict.fromkeys(ends))),
+            (
+                frames,
+                tuple(dict.fromkeys(walk._reads)),
+                tuple(dict.fromkeys(ends)),
+                walk._cuts != 0,
+            ),
             walk._cuts == 0,
         )
 
@@ -7253,7 +7263,7 @@ class _Walk:
             self._depends((READ_CALLED_AT, writer))
             for call in self._index.called_at.get(writer, ()):
                 if call in self._index.sites:
-                    calls.append((writer, call, self._objects(symbol, call, (), asking)))
+                    calls.append((writer, call, self._objects(symbol, call, (), asking)[0]))
         return tuple(calls), True
 
 
