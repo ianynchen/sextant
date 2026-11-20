@@ -623,28 +623,73 @@ class Kept[K, V]:
     gives the answer and whether to keep it (an answer resting on a position still being
     worked out is true of one path only). Several answers can be kept under one key, each for
     the askers `alike` accepts (`_Walk._objects`). `cycle`, a one-tuple, is what a key asked
-    again while it is being worked out answers, unkept."""
+    again while it is being worked out answers, unkept.
 
-    __slots__ = ("held", "pending")
+    **An answer resting on a position still being worked out is kept provisionally** (the
+    R39 amendment, 2026-11-20). `compute` hands back `(B, D)` in place of a keep flag for it.
+    An answer computed for a key while back edges `B` were open, having entered positions `D`
+    (the pending-misses of that compute), MAY be kept and reused for a later ask of the same
+    key iff at that later ask `B ⊆ pending` and `pending ∩ D = ∅`. Under that condition a
+    fresh compute would retrace the identical walk (the walk is deterministic; every open
+    position answers the same CYCLE marker; every entered position is entered again), so
+    reuse changes nothing but the cost. The existing unconditional keep is the `B = ∅, D`
+    irrelevant case.
+
+    `pending` is the asker's pending set, and `rests(B, D)` hands a reused entry's `B` and
+    `D` to the position asking, as `deps` hands its reads: the asker rests on them as it
+    would had it computed the answer. `release(position)` drops the entries resting on
+    `position` once it completes, so within one walk every live entry's `B` is pending and the
+    `B` check matters only to another walk sharing the store (`ValueIndex.suffixes`). The
+    release is a cost choice: a released entry would still be exact if `B` were pending again.
+    Provisional entries are held apart from `held`, which a binding round reads
+    (`suffixes_kept`): every one is released before its walk ends.
+
+    **The limit, measured**: this bounds a region where one key is asked again under the same
+    pending ancestors (a ring fixture, from over 2,000,000 computes to 139). In a
+    strongly-connected region, sibling asks of one key differ in their pending ancestors, and
+    a fresh compute there enters the ancestor the first answered `cycle` at: a different
+    answer, so reuse is rare by design (home-assistant `components/template`: 27 reuses in
+    1.1 M provisional entries). The answers there are exponentially many per path (M-1), and
+    the walk's work budget (Task 3, `WALK_BUDGET`) is what bounds such a region."""
+
+    __slots__ = ("held", "pending", "provisional", "waiting")
 
     def __init__(self, held: dict[K, list[tuple[V, frozenset[Any]]]] | None = None) -> None:
         self.held: dict[K, list[tuple[V, frozenset[Any]]]] = {} if held is None else held
         self.pending: set[K] = set()
+        # key -> (answer, reads, B, D) per provisional entry; back edge -> the keys resting on it.
+        self.provisional: dict[
+            K, list[tuple[V, frozenset[Any], frozenset[Any], frozenset[Any]]]
+        ] = {}
+        self.waiting: dict[Any, list[K]] = {}
 
     def get(
         self,
         key: K,
         deps: list[set[Any]],
-        compute: Callable[..., tuple[V, bool]],
+        compute: Callable[..., tuple[V, Any]],
         *arguments: Any,
         alike: Callable[[V], bool] | None = None,
         cycle: tuple[V] | None = None,
+        pending: AbstractSet[Any] | None = None,
+        rests: Callable[[frozenset[Any], frozenset[Any]], None] | None = None,
     ) -> V:
         for value, reads in self.held.get(key, ()):
             if alike is None or alike(value):
                 if deps and reads:
                     deps[-1].update(reads)
                 return value
+        if pending is not None and rests is not None:
+            for value, reads, back, entered in self.provisional.get(key, ()):
+                if (
+                    (alike is None or alike(value))
+                    and back <= pending
+                    and pending.isdisjoint(entered)
+                ):
+                    if deps and reads:
+                        deps[-1].update(reads)
+                    rests(back, entered)
+                    return value
         if cycle is not None:
             if key in self.pending:
                 return cycle[0]
@@ -658,9 +703,23 @@ class Kept[K, V]:
                 self.pending.discard(key)
         if deps and reads:
             deps[-1].update(reads)
-        if keep:
+        if isinstance(keep, tuple):
+            back, entered = keep
+            self.provisional.setdefault(key, []).append((value, reads, back, entered))
+            for edge in back:
+                self.waiting.setdefault(edge, []).append(key)
+        elif keep:
             self.held.setdefault(key, []).append((value, reads))
         return value
+
+    def release(self, position: Any) -> None:
+        """Drop every provisional entry resting on `position`, which has just completed."""
+        for key in self.waiting.pop(position, ()):
+            alive = [entry for entry in self.provisional.get(key, ()) if position not in entry[2]]
+            if alive:
+                self.provisional[key] = alive
+            else:
+                self.provisional.pop(key, None)
 
 
 @dataclass(frozen=True)
@@ -3683,6 +3742,9 @@ class _Walk:
         # result that depends on one is true of THIS path and not of another that reaches
         # the same position by a different route, so it is not memoised.
         self._open: set[_Position] = set()
+        # The positions each compute in progress has entered, innermost last, its own first:
+        # the `D` an answer resting on `_open` is kept with (`Kept`).
+        self._entered: list[set[_Position]] = []
         # What a body does to the parameter a value was handed to (`_entered_window`), per
         # `(callee, parameter)`: entering one again while it is read is `cycle`. An answer
         # holding a `cycle` is not kept, for `_open`'s reason above.
@@ -3712,24 +3774,49 @@ class _Walk:
         """
         if self._upward(position):
             return self._joined_upward(position, trail, frames)
-        return self._memo.get((position, trail), self._deps, self._guarded, position, trail, frames)
+        return self._memo.get(
+            (position, trail),
+            self._deps,
+            self._guarded,
+            position,
+            trail,
+            frames,
+            pending=self._pending,
+            rests=self._rests,
+        )
 
     def _guarded(
         self, position: _Position, trail: _Trail, frames: "_Frames"
-    ) -> tuple[tuple[_Reached, ...], bool]:
+    ) -> tuple[tuple[_Reached, ...], Any]:
         """`position` worked out on `trail`, and whether its answer may be kept. A position the
         current path is in the middle of is `cycle` (§1d); an answer resting on a position
-        still being worked out is true of this path only, and is not kept."""
+        still being worked out is true of this path only, and is kept provisionally with the
+        back edges it rests on and the positions it entered (`Kept`)."""
         if position in self._pending:
             self._open.add(position)
             return _only(trail, _unresolved(CYCLE)), False
         self._pending.add(position)
+        self._entered.append({position})
         outer, self._open = self._open, set()
         reached = self._compute(position, trail, frames)
+        entered = self._entered.pop()
+        if self._entered:
+            self._entered[-1] |= entered
         unresolved_back_edges = self._open - {position}
         self._open = outer | unresolved_back_edges
         self._pending.discard(position)
-        return reached, not unresolved_back_edges
+        self._memo.release(position)
+        self._suffixes.release(position)
+        if unresolved_back_edges:
+            return reached, (frozenset(unresolved_back_edges), frozenset(entered))
+        return reached, True
+
+    def _rests(self, back: frozenset[_Position], entered: frozenset[_Position]) -> None:
+        """A provisional answer taken from `Kept`: the position asking rests on its back edges
+        and has entered what it entered, as if it had worked the answer out."""
+        self._open |= back
+        if self._entered:
+            self._entered[-1] |= entered
 
     def _depends(self, read: Any) -> None:
         """Record that the position being worked out read `read`, a part of the index a binding
@@ -3763,9 +3850,17 @@ class _Walk:
         on the empty path, which the prefix can change only through those refusals, so the
         work is bounded by the positions, not by the paths through them: polar's
         `self.session` was 833,097 paths over 4,655 parameters. An answer resting on a
-        position still being worked out (a cycle) is not kept, as before."""
+        position still being worked out (a cycle) is kept only for an asker that would work it
+        out the same (`Kept`)."""
         upward = self._suffixes.get(
-            (self._shared, position, frames), self._deps, self._guarded, position, (), frames
+            (self._shared, position, frames),
+            self._deps,
+            self._guarded,
+            position,
+            (),
+            frames,
+            pending=self._pending,
+            rests=self._rests,
         )
         found: list[_Reached] = []
         for path, answer in upward:

@@ -2,11 +2,13 @@
 
 A ring of classes, each in its own file, passes one dict to the next class's methods, and
 the last class calls back into the first. The positions form one strongly-connected region.
-The walk keeps no answer that rests on a position still being worked out (`_Walk._guarded`),
-so inside a region it recomputes per path. Measured 2026-11-20 on the code before the fix,
+A walk that keeps no answer resting on a position still being worked out (`_Walk._guarded`)
+recomputes per path inside a region. Measured 2026-11-20 on the code before the fix,
 classes=8 and calls_per_method=3: more than 2_000_000 computes (the ceiling below stops
-it after about 9 s; the true count is far larger). The question is a Flask route whose path is
-parameter `d` of the first class's method, so the walk goes up through the ring's callers.
+it after about 9 s; the true count is far larger). After the fix, which keeps such answers
+for an asker that would work them out the same (`values.Kept`): 139 computes. The question
+is a Flask route whose path is parameter `d` of the first class's method, so the walk goes
+up through the ring's callers.
 """
 
 from collections.abc import Callable
@@ -143,7 +145,6 @@ def analyze(source: Path, libraries: tuple[LibraryRoot, ...]) -> None:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="cycle-region answers are not kept yet — Task 2")
 def test_cycle_region_cost_is_bounded(tmp_path, monkeypatch, libraries):
     module = make_ring_module(tmp_path, classes=8, calls_per_method=3)
     computes = count_computes(monkeypatch)

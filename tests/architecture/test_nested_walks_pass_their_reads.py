@@ -52,6 +52,7 @@ _NOT_A_CACHE = {
     "_deps": "the read stack itself",
     "_pending": "the positions the current path is in the middle of: a cycle guard",
     "_open": "the pending positions a result below answered `cycle` about",
+    "_entered": "the positions each compute in progress entered: a stack, like `_deps`",
     "_reads": "what an object walk read of its asker's frames, kept with its answer",
     "markers": (
         "`parameter_markers`' whole answer, for readers outside a walk; a walk takes a "
@@ -303,7 +304,7 @@ def test_every_cache_a_walk_reads_keeps_its_answers_with_their_reads():
 
 def test_only_kept_reads_what_it_holds():
     """`Kept.held` is read and written by `Kept` alone, and by `suffixes_kept`, which keeps the
-    entries a round's edges cannot change with their reads."""
+    entries a round's edges cannot change with their reads. So are its provisional entries."""
     found = []
     for module, tree in _trees().items():
         for owner in tree.body:
@@ -312,7 +313,12 @@ def test_only_kept_reads_what_it_holds():
             if isinstance(owner, ast.FunctionDef) and owner.name == "suffixes_kept":
                 continue
             for node in ast.walk(owner):
-                if isinstance(node, ast.Attribute) and node.attr in ("held", "pending"):
+                if isinstance(node, ast.Attribute) and node.attr in (
+                    "held",
+                    "pending",
+                    "provisional",
+                    "waiting",
+                ):
                     found.append(f"{module} line {node.lineno}")
 
     assert found == []
