@@ -27,14 +27,14 @@ here would restate those documents rather than add anything.
   cold run of 522 s. Bulk parameters now cross to DuckDB in chunks, not one JSON string, with a
   fallback to the per-value route on a conversion error: py-polar-server cold max allocation
   fell from 537 MB to 34 MB and its memray peak from 2.72 to 2.21 GB. Measured 2026-11-20 with
-  `scripts/profile_analyze.sh` (cold / warm; wall seconds, process-tree peak MB; before in
+  `scripts/profile_analyze.sh` (cold; wall seconds, process-tree peak MiB; before in
   brackets): self 14.6 s / 980 (14.1 s / 1030); py-ctfd 6.1 / 753 (5.9 / 740); py-dispatch
   15.3 / 1496 (15.2 / 1580); py-mealie 13.0 / 1252 (12.9 / 1370); py-redash 7.8 / 941
   (7.7 / 970); py-polar-server 39.4 / 2462 (39.2 / 2870); spring-petclinic-rest 2.3 / 404
   (2.3 / 380); apollo-portal 5.6 / 701 (5.6 / 750); mall-admin 7.3 / 864 (7.1 / 900);
-  jhipster 2.2 / 350 (2.1 / 350); home-assistant 522 / 6184 (did not finish). Warm runs are
-  all 2.1 s or less and 0.6 GB or less. The two corpora a little above their old peak (ctfd
-  +13 MB, petclinic-rest +24 MB) are within the sampler's 0.3 s noise. The memory that remains
+  jhipster 2.2 / 350 (2.1 / 350); home-assistant 522 / 6184 (did not finish). Warm runs of the ten earlier
+  corpora are all 2.1 s or less and 586 MiB or less (home-assistant warm: 8.8 s, 587 MiB). The two corpora a little above their old peak (ctfd
+  +13 MiB, petclinic-rest +24 MiB) are within the sampler's 0.3 s noise. The memory that remains
   is the library-AST cache, which parses each library once per scan (an accepted design cost);
   bounding it, a DuckDB `memory_limit` and an extractor `-Xmx` are one open decision, a
   resource-cap flag (OI-493). Also open: one answer per cycle region instead of one per path

@@ -4,6 +4,8 @@
 #   scripts/profile_analyze.sh <module-path>...
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Relative module paths resolve against the repo root (the cd above). A cold run REMOVES the
+# module's .sextant and .sextant-enrichment.json first. Sizes are MiB (ps RSS / 1024).
 REPO=$PWD
 if [ -x "$REPO/.venv/bin/sextant" ]; then BIN=$REPO/.venv/bin/sextant; else BIN=sextant; fi
 
@@ -30,7 +32,7 @@ run() { # module -> "wall peakMB"
     rm -f "$out"
 }
 
-printf '%-34s %8s %8s %8s %8s %7s\n' module cold_s cold_MB warm_s warm_MB cache
+printf '%-34s %8s %8s %8s %8s %7s\n' module cold_s cold_MiB warm_s warm_MiB cache
 for m in "$@"; do
     rm -rf "$m/.sextant" "$m/.sextant-enrichment.json"
     read -r cw cp <<<"$(run "$m")"

@@ -3,7 +3,7 @@
   "remote": "https://github.com/home-assistant/core",
   "commit": "cf84a2b2f3e16634a4b149b2ff8adfc835e8b843",
   "build": "none",
-  "oracle": "none: the pin's job is not an address check. It is the biggest known real repository (about 31,000 files; `homeassistant/` and 11,336 analysed documents) and the claim that it completes, 2026-11-20: cold 521.8 s and 6.2 GB peak process-tree RSS (Apple Silicon), warm 8.8 s and 0.6 GB, 2.6 GB cache. Before the value-walk bounds (OI-491) the `homeassistant/components/template` subtree alone ran over 65 minutes. It is read with no installed environment (`build` is `none`): the repository commits no lock, so third-party imports are not followed.",
+  "oracle": "There is no oracle. This pin records that the biggest known real repository completes, and its numbers. Measured 2026-11-20 on Apple Silicon: a cold run takes 521.8 s and peaks at 6184 MiB (about 6.0 GiB) of process-tree memory. A warm run takes 8.8 s and 587 MiB. The cache is 2.6 GB. Before the value-walk bounds (OI-491), the `homeassistant/components/template` subtree alone ran for more than 65 minutes. The analysis reads 11,336 documents. The pin has zero inbound and zero outbound endpoints. The cause is that Home Assistant serves and calls HTTP through aiohttp, and Sextant has no aiohttp catalog. Zero is therefore the true count of what Sextant reads, not a count of what the code does. The repository declares its test paths upstream, so no `tests/` facts are expected, and none appear. The pin is read with no installed environment (`build` is `none`): the repository commits no lock, so third-party imports are not followed. No existing check key can pin a non-zero fact for this repository. `contracts` is also zero here (no shapes, no fields, no inheritance edges), and it is pinned so that a shape appearing is noticed. These claims are prose only and no check enforces them: the 11,336 document count, the no-tests claim, and the timing and memory figures. A run that does not finish, or that fails, does fail the pin.",
   "endpoints": {
     "inbound": {},
     "outbound": {}
@@ -11,5 +11,10 @@
   "routes": {
     "inbound": [],
     "outbound": []
+  },
+  "contracts": {
+    "shape_fields": 0,
+    "open_shapes": 0,
+    "inheritance_edges": 0
   }
 }
