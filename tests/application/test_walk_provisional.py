@@ -110,3 +110,25 @@ def test_provisional_entries_die_with_their_back_edges(kind):
         assert not [
             entry for entries in held.values() for entry in entries if graph.at("H") in entry[2]
         ]
+    graph.ask("P")
+    assert graph.computed.count("P") == 2
+
+
+def test_a_provisional_answer_is_reused_only_while_its_back_edges_are_pending():
+    # The `B` condition alone, on the store itself: no release runs here, as none would for a
+    # store another walk shares, or for a walk that stopped before X completed.
+    kept: values.Kept[str, str] = values.Kept()
+    computed: list[str] = []
+
+    def compute() -> tuple[str, tuple[frozenset[str], frozenset[str]]]:
+        computed.append("K")
+        return "cycle at X", (frozenset({"X"}), frozenset({"K"}))
+
+    def ask(pending: set[str]) -> str:
+        return kept.get("K", [], compute, pending=pending, rests=lambda back, entered: None)
+
+    ask({"X"})
+    ask(set())
+    assert len(computed) == 2
+    ask({"X"})
+    assert len(computed) == 2

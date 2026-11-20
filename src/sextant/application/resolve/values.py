@@ -642,7 +642,7 @@ class Kept[K, V]:
     `B` check matters only to another walk sharing the store (`ValueIndex.suffixes`). The
     release is a cost choice: a released entry would still be exact if `B` were pending again.
     Provisional entries are held apart from `held`, which a binding round reads
-    (`suffixes_kept`): every one is released before its walk ends.
+    (`suffixes_kept`): every one is released before its walk ends (on a normal return).
 
     **The limit, measured**: this bounds a region where one key is asked again under the same
     pending ancestors (a ring fixture, from over 2,000,000 computes to 139). In a
