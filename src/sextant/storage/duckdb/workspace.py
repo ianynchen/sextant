@@ -2148,6 +2148,16 @@ def _bound(params: dict[str, object]) -> dict[str, object]:
     }
 
 
+# Rows per execute for the derivations below. One JSON value for a whole list is a single
+# string allocation that grows with the list: memray on a cold py-polar analyze put
+# `call_edges_insert` (83k rows), `bound_receivers_insert` (163k) and `reachability` (42k)
+# among the allocations over 70MB, the largest 536MB, on a run whose peak was 2.7GB.
+# These three are plain row-by-row inserts (`UNNEST($rows)` into a table, no guard that
+# looks across rows), so the same statement run once per slice writes the same rows.
+_CHUNK_ROWS = 10_000
+_CHUNKED_DERIVATIONS = frozenset({"call_edges_insert", "bound_receivers_insert", "reachability"})
+
+
 def _run_named(
     connection: duckdb.DuckDBPyConnection, name: str, params: dict[str, object]
 ) -> list[dict[str, object]]:
@@ -2598,6 +2608,21 @@ class DuckDbWorkspace:
         ]
 
     def derive(self, name: str, **params: object) -> None:
+        rows = params.get("rows")
+        if name in _CHUNKED_DERIVATIONS and isinstance(rows, list) and len(rows) > _CHUNK_ROWS:
+            # One transaction, so a failed slice leaves the table as it was.
+            self._connection.execute("BEGIN")
+            try:
+                for start in range(0, len(rows), _CHUNK_ROWS):
+                    self._derive_once(name, rows=rows[start : start + _CHUNK_ROWS])
+            except BaseException:
+                self._connection.execute("ROLLBACK")
+                raise
+            self._connection.execute("COMMIT")
+            return
+        self._derive_once(name, **params)
+
+    def _derive_once(self, name: str, **params: object) -> None:
         sql = (_SQL_DIR / _NAMED_DERIVATIONS[name]).read_text(encoding="utf-8")
         try:
             self._connection.execute(sql, _bound(params) or None)
