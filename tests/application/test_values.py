@@ -4101,7 +4101,14 @@ def _object_facts() -> list[Fact]:
         _call(_READ_PROPS, 1, (_PREFIXED, "getPrefix", _GETS), 50, result=51),
         _call(_READ_PROPS, 2, _ONE_TARGET, None, arguments=_results(51)),
     ]
-    return facts + _cycle_facts() + _bound_props_facts() + _helper_read_facts() + _subtype_facts()
+    return (
+        facts
+        + _cycle_facts()
+        + _bound_props_facts()
+        + _helper_read_facts()
+        + _subtype_facts()
+        + _passed_facts()
+    )
 
 
 # Final review, Minor 5: `name` is declared on `BaseProps`, and `AdminProps extends
@@ -4165,6 +4172,52 @@ def _subtype_facts() -> list[Fact]:
         _call(_SUBTYPES, 4, (_ADMIN_PROPS, "setName", _SETS), 2, arguments=_string("A")),
         _site(_SUBTYPES, 5, (_OBJECTS, "readName", _TAKES_BASE_PROPS), arguments=_results(2)),
     ]
+    return facts
+
+
+# `static Row sameN(Row r) { return r; }` for N in 0..3, and `passed()`, which reads a row
+# handed through all four.
+_SAME = "(Lcom/acme/orders/values/Row;)Lcom/acme/orders/values/Row;"
+_PASSED = _symbol(_OBJECTS, "passed", "()V")
+
+
+def _passed_facts() -> list[Fact]:
+    """`passed() { Row a = new Row(); a.setCron("A"); Row b = new Row(); b.setCron("B");
+    one(same3(same2(same1(same0(a)))).getCron()); }`: the receiver reaches its construction
+    only through four calls, so a small depth cap cuts the object walk before it gets there,
+    while the read itself is reached in fewer steps."""
+    facts: list[Fact] = [
+        _declared(_OBJECTS, "passed", "()V"),
+        _void(_OBJECTS, "passed", "()V"),
+        _new(_PASSED, 0, _ROW, 1),
+        _call(_PASSED, 1, (_ROW, "setCron", _SETS), 1, arguments=_string("A")),
+        _new(_PASSED, 2, _ROW, 2),
+        _call(_PASSED, 3, (_ROW, "setCron", _SETS), 2, arguments=_string("B")),
+        _call(_PASSED, 8, (_ROW, "getCron", _GETS), 6, result=7),
+        _call(_PASSED, 9, _ONE_TARGET, None, arguments=_results(7)),
+    ]
+    for n, (given, result) in enumerate(((1, 3), (3, 4), (4, 5), (5, 6))):
+        facts += [
+            SymbolFact(
+                document_id="doc_values",
+                symbol=_symbol(_OBJECTS, f"same{n}", _SAME),
+                construct_kind=ConstructKind.METHOD,
+                enclosing=_MODULE + _OBJECTS,
+                signature=Signature(
+                    parameters=[Parameter(name="r", type=TypeRef(symbol=_ROW))],
+                    returns=TypeRef(symbol=_ROW),
+                ),
+                visibility="public",
+            ),
+            _returns(_OBJECTS, f"same{n}", _SAME, 0, CallArgument(kind="parameter", value=0)),
+            _site(
+                _PASSED,
+                4 + n,
+                (_OBJECTS, f"same{n}", _SAME),
+                arguments=_results(given),
+                result=result,
+            ),
+        ]
     return facts
 
 
@@ -4432,6 +4485,15 @@ def test_one_getter_in_a_helper_reads_each_callers_own_object_on_one_index(objec
     second = resolve_site(objects, _at(objects, _HELPER_B, 3), index)
     assert [binding.slots[0].value for binding in first] == ["A"]
     assert [binding.slots[0].value for binding in second] == ["B"]
+
+
+def test_an_object_walk_cut_before_any_construction_answers_non_enumerable(objects, monkeypatch):
+    """Final review, Important 1. `passed()` reads `a.getCron()` through four helpers. With a
+    depth cap the read itself fits in but the object walk does not, the walk is cut before it
+    reaches `new Row()`: the read answers `non_enumerable`, never every writer's `A` and `B`
+    at `resolved`."""
+    monkeypatch.setattr(values, "DEPTH_CAP", 8)
+    assert set(_values_and_reasons(objects, _PASSED, 9)) == {("None", "non_enumerable")}
 
 
 def test_a_setter_called_by_a_helper_on_the_object_counts_for_that_object_only(objects):

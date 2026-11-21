@@ -3125,6 +3125,60 @@ def test_a_list_parameter_binds_as_one_json_value_and_reads_back_verbatim(
     workspace.close()
 
 
+@pytest.mark.parametrize("count", [0, 7, 14, 23])
+def test_chunked_params_write_identical_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, count: int
+):
+    """A bulk list crosses to DuckDB in chunks, never as one giant JSON string, and the
+    table ends up with the rows one statement would have written: none, exactly one chunk,
+    several whole chunks, and a tail that is not a multiple."""
+    rows = [
+        {
+            "caller": f"c{index}#",
+            "ordinal": index,
+            "invoke_kind": "static",
+            "target": f"t{index}#",
+            "callee": None,
+            "result": None,
+            "resolution": "resolved",
+            "evidence": None,
+            "terminal_kind": None,
+            "target_kind": "method",
+        }
+        for index in range(count)
+    ]
+    whole = _loaded_workspace(tmp_path / "whole")
+    whole.derive("call_edges_insert", rows=rows)
+    expected = sorted(whole.query("call_edges"), key=lambda row: row["ordinal"])
+    whole.close()
+    monkeypatch.setattr(workspace_module, "_CHUNK_ROWS", 7)
+    chunked = _loaded_workspace(tmp_path / "chunked")
+    chunked.derive("call_edges_insert", rows=rows)
+    assert sorted(chunked.query("call_edges"), key=lambda row: row["ordinal"]) == expected
+    assert len(expected) == count
+    chunked.close()
+
+
+def test_an_undeclared_key_in_a_chunked_list_takes_the_unchunked_route(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A row with a key the statement does not declare fails the JSON cast in a later
+    chunk; the chunks already written are undone and the whole list is written by the
+    per-value route, the rows the unchunked path writes — none twice, none missing."""
+    rows = [
+        {"caller": f"c{index}#", "ordinal": index, "invoke_kind": "static", "target": "t#"}
+        for index in range(23)
+    ]
+    rows[20]["undeclared"] = 1
+    monkeypatch.setattr(workspace_module, "_CHUNK_ROWS", 7)
+    workspace = _loaded_workspace(tmp_path)
+    workspace.derive("call_edges_insert", rows=rows)
+    assert workspace._per_value_retries == ["call_edges_insert"]
+    read = workspace.query("call_edges")
+    assert sorted(row["ordinal"] for row in read) == list(range(23))
+    workspace.close()
+
+
 def _value_edge_facts(root: Path) -> None:
     """One method with three call sites.
 

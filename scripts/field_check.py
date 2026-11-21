@@ -33,6 +33,9 @@ the repository root (`mall-admin.json` is the first to need any of them):
   untracked `uv.lock`, which `_checkout`'s `--untracked-files=no` ignores. **`python`**
   is the interpreter series handed to `uv sync --python` where the machine default has no wheel
   for a locked package (`py-dispatch`: `thinc` has none for 3.13 and its source build fails).
+  `"none"` is a Python upstream read with no installed environment (`py-home-assistant`:
+  no lock to install from, and a full install is the project's own dev setup, not the thing
+  measured); neither a Maven build nor `uv sync` runs.
 - **`jdk`** — the MAJOR Java version the upstream's build requires, checked against the one
   Maven will actually use (its own `-v` banner) and REFUSED on a mismatch rather than left
   to fail somewhere inside the build. `macrozheng/mall` is why: on a JDK newer than 21 its
@@ -612,7 +615,7 @@ def _check_one(name: str) -> list[str]:
     moved_head = _checkout(repo, expectation["commit"])
     if expectation.get("build") == "uv":
         _ensure_environment(module, expectation.get("lock"), expectation.get("python"))
-    else:
+    elif expectation.get("build") != "none":
         _ensure_compiled(
             repo, force=moved_head, module=module, maven=maven, jdk=expectation.get("jdk")
         )

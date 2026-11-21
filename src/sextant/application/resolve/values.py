@@ -167,8 +167,8 @@ from sextant.domain.symbols import (
 # whole point of having six words where today there is one: COVERAGE can say "we cannot
 # see the jar" or "the code branches", and a catalog author debugging a NULL address can
 # tell which they are looking at. `fan_out` and `depth` are absent by ruling, not by
-# oversight — §3a decides whether a cap exists at all, and a reason for one before the
-# measurement would be a cap smuggled in as vocabulary.
+# oversight. `DEPTH_CAP` and `WALK_BUDGET` reuse `non_enumerable` on `PATH_CAP`'s precedent
+# (no new word); the user's confirmation of that is flagged in the value-walk plan's final report.
 NOT_READABLE = "not_readable"
 NON_ENUMERABLE = "non_enumerable"
 ESCAPES = "escapes"
@@ -351,6 +351,24 @@ _SEVERAL = "several"
 # is one path ending `non_enumerable`, stated, never dropped. Measured: the eleven corpora's
 # worst window holds 5 paths.
 PATH_CAP = 256
+
+# The most position computes one root resolve (`_Walk.at`) makes. A strongly-connected region of
+# values has exponentially many distinct per-path answers, so no reuse bounds it (R39
+# amendment); past the budget every further compute answers `non_enumerable`, stated, never
+# dropped, and the walk unwinds by returning. It counts computes, never time, so the same input
+# gives the same rows. Sized at over 10x the
+# measured max computes per root (2026-11-20): polar 727, dispatch 162, mealie 261, redash 161,
+# ctfd 21, apollo-portal 2237, mall-admin not
+# measured (the instrumentation did not cover its walk).
+WALK_BUDGET = 25_000
+
+# The most positions one resolve works out inside one another. The real limit is Python's
+# recursion limit (about 1000 frames): a position costs about 8 frames, so 80 keeps about 640 and
+# leaves room for the callers. A chain longer than the stack was `RecursionError`, failing the
+# whole module (Home Assistant's `template`). Past it the position answers `non_enumerable`, as
+# past the budget. Corpus max depth, well under the cap: polar 44, dispatch 34, mealie 26,
+# redash 22, apollo-portal 22, ctfd 14.
+DEPTH_CAP = 80
 
 # The types nothing can change through a reference to them (spec 2026-11-02 rule 3): the
 # primitives, `String` and the boxed primitives, as a descriptor spells a type. A property of
@@ -623,28 +641,73 @@ class Kept[K, V]:
     gives the answer and whether to keep it (an answer resting on a position still being
     worked out is true of one path only). Several answers can be kept under one key, each for
     the askers `alike` accepts (`_Walk._objects`). `cycle`, a one-tuple, is what a key asked
-    again while it is being worked out answers, unkept."""
+    again while it is being worked out answers, unkept.
 
-    __slots__ = ("held", "pending")
+    **An answer resting on a position still being worked out is kept provisionally** (the
+    R39 amendment, 2026-11-20). `compute` hands back `(B, D)` in place of a keep flag for it.
+    An answer computed for a key while back edges `B` were open, having entered positions `D`
+    (the pending-misses of that compute), MAY be kept and reused for a later ask of the same
+    key iff at that later ask `B ⊆ pending` and `pending ∩ D = ∅`. Under that condition a
+    fresh compute would retrace the identical walk (the walk is deterministic; every open
+    position answers the same CYCLE marker; every entered position is entered again), so
+    reuse changes nothing but the cost. The existing unconditional keep is the `B = ∅, D`
+    irrelevant case.
+
+    `pending` is the asker's pending set, and `rests(B, D)` hands a reused entry's `B` and
+    `D` to the position asking, as `deps` hands its reads: the asker rests on them as it
+    would had it computed the answer. `release(position)` drops the entries resting on
+    `position` once it completes, so within one walk every live entry's `B` is pending and the
+    `B` check matters only to another walk sharing the store (`ValueIndex.suffixes`). The
+    release is a cost choice: a released entry would still be exact if `B` were pending again.
+    Provisional entries are held apart from `held`, which a binding round reads
+    (`suffixes_kept`): every one is released before its walk ends (on a normal return).
+
+    **The limit, measured**: this bounds a region where one key is asked again under the same
+    pending ancestors (a ring fixture, from over 2,000,000 computes to 139). In a
+    strongly-connected region, sibling asks of one key differ in their pending ancestors, and
+    a fresh compute there enters the ancestor the first answered `cycle` at: a different
+    answer, so reuse is rare by design (home-assistant `components/template`: 27 reuses in
+    1.1 M provisional entries). The answers there are exponentially many per path (M-1), and
+    the walk's work budget (Task 3, `WALK_BUDGET`) is what bounds such a region."""
+
+    __slots__ = ("held", "pending", "provisional", "waiting")
 
     def __init__(self, held: dict[K, list[tuple[V, frozenset[Any]]]] | None = None) -> None:
         self.held: dict[K, list[tuple[V, frozenset[Any]]]] = {} if held is None else held
         self.pending: set[K] = set()
+        # key -> (answer, reads, B, D) per provisional entry; back edge -> the keys resting on it.
+        self.provisional: dict[
+            K, list[tuple[V, frozenset[Any], frozenset[Any], frozenset[Any]]]
+        ] = {}
+        self.waiting: dict[Any, list[K]] = {}
 
     def get(
         self,
         key: K,
         deps: list[set[Any]],
-        compute: Callable[..., tuple[V, bool]],
+        compute: Callable[..., tuple[V, Any]],
         *arguments: Any,
         alike: Callable[[V], bool] | None = None,
         cycle: tuple[V] | None = None,
+        pending: AbstractSet[Any] | None = None,
+        rests: Callable[[frozenset[Any], frozenset[Any]], None] | None = None,
     ) -> V:
         for value, reads in self.held.get(key, ()):
             if alike is None or alike(value):
                 if deps and reads:
                     deps[-1].update(reads)
                 return value
+        if pending is not None and rests is not None:
+            for value, reads, back, entered in self.provisional.get(key, ()):
+                if (
+                    (alike is None or alike(value))
+                    and back <= pending
+                    and pending.isdisjoint(entered)
+                ):
+                    if deps and reads:
+                        deps[-1].update(reads)
+                    rests(back, entered)
+                    return value
         if cycle is not None:
             if key in self.pending:
                 return cycle[0]
@@ -658,9 +721,23 @@ class Kept[K, V]:
                 self.pending.discard(key)
         if deps and reads:
             deps[-1].update(reads)
-        if keep:
+        if isinstance(keep, tuple):
+            back, entered = keep
+            self.provisional.setdefault(key, []).append((value, reads, back, entered))
+            for edge in back:
+                self.waiting.setdefault(edge, []).append(key)
+        elif keep:
             self.held.setdefault(key, []).append((value, reads))
         return value
+
+    def release(self, position: Any) -> None:
+        """Drop every provisional entry resting on `position`, which has just completed."""
+        for key in self.waiting.pop(position, ()):
+            alive = [entry for entry in self.provisional.get(key, ()) if position not in entry[2]]
+            if alive:
+                self.provisional[key] = alive
+            else:
+                self.provisional.pop(key, None)
 
 
 @dataclass(frozen=True)
@@ -3174,7 +3251,7 @@ def recipe_values(
     parameter writes none, or the call's argument may be in an unpacked one. Read once per
     call and parameter for as long as `index` lives; a recipe whose value is read through
     itself is a `cycle`."""
-    return _recipe_values(index, site, parameter, [])
+    return _recipe_values(index, site, parameter, [], None)
 
 
 def _recipe_values(
@@ -3182,8 +3259,9 @@ def _recipe_values(
     site: Mapping[str, Any],
     parameter: tuple[str, int] | None,
     deps: list[set[Any]],
+    asker: "_Walk | None",
 ) -> tuple["_Reached", ...]:
-    """`recipe_values`, read by the walk whose read stack is `deps` (`Kept`)."""
+    """`recipe_values`, read by the walk `asker` whose read stack is `deps` (`Kept`)."""
     key = (str(site["caller"]), int(str(site["ordinal"])), parameter)
     return index.recipes_read.get(
         key,
@@ -3193,6 +3271,7 @@ def _recipe_values(
         site,
         parameter,
         deps,
+        asker,
         cycle=((((), _unresolved(CYCLE)),),),
     )
 
@@ -3202,11 +3281,14 @@ def _read_recipe(
     site: Mapping[str, Any],
     parameter: tuple[str, int] | None,
     deps: list[set[Any]],
+    asker: "_Walk | None",
 ) -> tuple[tuple["_Reached", ...], bool]:
-    """`_recipe_values`' reading, worked out once per call and parameter."""
+    """`_recipe_values`' reading, worked out once per call and parameter. A reading the work
+    budget or the depth cap cut is kept by no one, and the asker is told of the cut (`_cuts`)."""
     reference = index.recipes.calls.get((str(site.get("owner")), str(site["name"])))
     slot = argument_slot(site["arguments"] or [], reference)
     found: list[_Reached] = []
+    cuts = 0
     if slot == UNPACKED_SLOT:
         found.append(((), _unresolved(NOT_READABLE)))
     elif slot is None:
@@ -3218,7 +3300,10 @@ def _read_recipe(
                 found.extend((path, one) for _, one in _parameter_type(index, parameter))
             else:
                 found.append((path, answer))
-    return tuple(found), True
+        cuts = walk._cuts
+        if asker is not None:
+            asker._cuts += cuts
+    return tuple(found), cuts == 0
 
 
 def _parameter_type(index: ValueIndex, parameter: tuple[str, int] | None) -> tuple["_Reached", ...]:
@@ -3672,6 +3757,11 @@ class _Walk:
             tuple[str, frozenset[tuple[str, tuple[str, int]]]], tuple[_SetterCall, ...]
         ] = Kept()
         self._memo: Kept[tuple[_Position, _Trail], tuple[_Reached, ...]] = Kept()
+        # The computes this root resolve has made (`WALK_BUDGET`), and the computes cut short
+        # (`DEPTH_CAP`, and every one past the budget). A cut answers `non_enumerable`, and no
+        # compute that had one below it is kept: a kept answer would carry the cut to another asker.
+        self._computes = 0
+        self._cuts = 0
         # The positions the current path is IN THE MIDDLE OF resolving. §1d's `cycle` is
         # exactly a return to one of them.
         self._pending: set[_Position] = set()
@@ -3683,6 +3773,9 @@ class _Walk:
         # result that depends on one is true of THIS path and not of another that reaches
         # the same position by a different route, so it is not memoised.
         self._open: set[_Position] = set()
+        # The positions each compute in progress has entered, innermost last, its own first:
+        # the `D` an answer resting on `_open` is kept with (`Kept`).
+        self._entered: list[set[_Position]] = []
         # What a body does to the parameter a value was handed to (`_entered_window`), per
         # `(callee, parameter)`: entering one again while it is read is `cycle`. An answer
         # holding a `cycle` is not kept, for `_open`'s reason above.
@@ -3694,6 +3787,7 @@ class _Walk:
 
     def at(self, site: Mapping[str, Any], slot: int | str) -> tuple[_Reached, ...]:
         """One slot of the site the caller handed in, on the empty path."""
+        self._computes = 0
         return self._of_site(site, slot, (), ())
 
     def _resolve(
@@ -3712,24 +3806,56 @@ class _Walk:
         """
         if self._upward(position):
             return self._joined_upward(position, trail, frames)
-        return self._memo.get((position, trail), self._deps, self._guarded, position, trail, frames)
+        return self._memo.get(
+            (position, trail),
+            self._deps,
+            self._guarded,
+            position,
+            trail,
+            frames,
+            pending=self._pending,
+            rests=self._rests,
+        )
 
     def _guarded(
         self, position: _Position, trail: _Trail, frames: "_Frames"
-    ) -> tuple[tuple[_Reached, ...], bool]:
+    ) -> tuple[tuple[_Reached, ...], Any]:
         """`position` worked out on `trail`, and whether its answer may be kept. A position the
         current path is in the middle of is `cycle` (§1d); an answer resting on a position
-        still being worked out is true of this path only, and is not kept."""
+        still being worked out is true of this path only, and is kept provisionally with the
+        back edges it rests on and the positions it entered (`Kept`)."""
+        self._computes += 1
+        if self._computes > WALK_BUDGET or len(self._entered) >= DEPTH_CAP:
+            self._cuts += 1
+            return _only(trail, _unresolved(NON_ENUMERABLE)), False
         if position in self._pending:
             self._open.add(position)
             return _only(trail, _unresolved(CYCLE)), False
         self._pending.add(position)
+        self._entered.append({position})
+        cuts = self._cuts
         outer, self._open = self._open, set()
         reached = self._compute(position, trail, frames)
+        entered = self._entered.pop()
+        if self._entered:
+            self._entered[-1] |= entered
         unresolved_back_edges = self._open - {position}
         self._open = outer | unresolved_back_edges
         self._pending.discard(position)
-        return reached, not unresolved_back_edges
+        self._memo.release(position)
+        self._suffixes.release(position)
+        if self._cuts != cuts:
+            return reached, False
+        if unresolved_back_edges:
+            return reached, (frozenset(unresolved_back_edges), frozenset(entered))
+        return reached, True
+
+    def _rests(self, back: frozenset[_Position], entered: frozenset[_Position]) -> None:
+        """A provisional answer taken from `Kept`: the position asking rests on its back edges
+        and has entered what it entered, as if it had worked the answer out."""
+        self._open |= back
+        if self._entered:
+            self._entered[-1] |= entered
 
     def _depends(self, read: Any) -> None:
         """Record that the position being worked out read `read`, a part of the index a binding
@@ -3763,9 +3889,17 @@ class _Walk:
         on the empty path, which the prefix can change only through those refusals, so the
         work is bounded by the positions, not by the paths through them: polar's
         `self.session` was 833,097 paths over 4,655 parameters. An answer resting on a
-        position still being worked out (a cycle) is not kept, as before."""
+        position still being worked out (a cycle) is kept only for an asker that would work it
+        out the same (`Kept`)."""
         upward = self._suffixes.get(
-            (self._shared, position, frames), self._deps, self._guarded, position, (), frames
+            (self._shared, position, frames),
+            self._deps,
+            self._guarded,
+            position,
+            (),
+            frames,
+            pending=self._pending,
+            rests=self._rests,
         )
         found: list[_Reached] = []
         for path, answer in upward:
@@ -6157,7 +6291,9 @@ class _Walk:
             return ()
         reached: list[_Reached] = []
         for site in sites:
-            for path, answer in _recipe_values(self._index, site, (method, index), self._deps):
+            for path, answer in _recipe_values(
+                self._index, site, (method, index), self._deps, self
+            ):
                 merged = _combine(called, path)
                 if merged is not None:
                     reached.extend(self._recipe_runs(answer, method, index, merged, frames))
@@ -6857,9 +6993,12 @@ class _Walk:
             # receiver's frame): this walk's answer serves only the very same frames.
             self._reads.append((_WHOLE,))
         outer = frames[:-1]
-        read = self._objects(symbol, site, outer, asking)
+        read, cut = self._objects(symbol, site, outer, asking)
         if all(built is None for built, _, _, _ in read):
-            return None
+            # **A walk cut before it placed anything is no proof the object is unplaced**
+            # (final review, Important 1): the cut path may have led to one construction, so
+            # every writer's value would be a guess published `resolved`.
+            return _only(trail, _unresolved(NON_ENUMERABLE)) if cut else None
         receiver = self._receiver_of(self._index.sites[site], outer)
         groups = self._writes_by(symbol)
         calls = self._setter_calls_of(symbol, asking)
@@ -6994,9 +7133,11 @@ class _Walk:
         site: tuple[str, int],
         frames: "_Frames",
         asking: frozenset[tuple[str, tuple[str, int]]],
-    ) -> tuple["_End", ...]:
+    ) -> tuple[tuple["_End", ...], bool]:
         """Which constructions of the type declaring `symbol` the receiver of `site` can be:
-        one end per path, the construction or None where the path ends anywhere else.
+        one end per path, the construction or None where the path ends anywhere else; and
+        whether the work budget or the depth cap cut the walk (never kept, so only a fresh
+        walk says so).
 
         The receiver is followed in `frames`, so a receiver that is a parameter of a helper
         the walk descended into is the argument at the call it came through. Every call
@@ -7020,7 +7161,7 @@ class _Walk:
             asking,
             alike=lambda held: _reads_alike(frames, held[0], held[1]),
         )
-        return cast(tuple[_End, ...], held[2])
+        return cast(tuple[_End, ...], held[2]), bool(held[3])
 
     def _objects_walked(
         self,
@@ -7028,8 +7169,8 @@ class _Walk:
         site: tuple[str, int],
         frames: "_Frames",
         asking: frozenset[tuple[str, tuple[str, int]]],
-    ) -> tuple[tuple["_Frames", tuple[tuple[Any, ...], ...], tuple["_End", ...]], bool]:
-        """`_objects`' walk, kept with `frames` and what it read of them."""
+    ) -> tuple[tuple["_Frames", tuple[tuple[Any, ...], ...], tuple["_End", ...], bool], bool]:
+        """`_objects`' walk, kept with `frames`, what it read of them, and whether it was cut."""
         declared = (str(owner), "<init>")
         # A construction of a subtype built here ends the walk too, so that end is told from
         # one the walk cannot read (final review, Minor 5).
@@ -7060,7 +7201,15 @@ class _Walk:
                     built = (producer.caller, producer.ordinal)
                 subtype = producer.identity in subtypes
             ends.append((built, crossed, crossed if entered is None else entered, subtype))
-        return (frames, tuple(dict.fromkeys(walk._reads)), tuple(dict.fromkeys(ends))), True
+        return (
+            (
+                frames,
+                tuple(dict.fromkeys(walk._reads)),
+                tuple(dict.fromkeys(ends)),
+                walk._cuts != 0,
+            ),
+            walk._cuts == 0,
+        )
 
     def _frame_in(self, frames: "_Frames", method: str) -> tuple[str, int] | None:
         """`_frame_of`, recording on an object walk which of the asker's frames it read."""
@@ -7114,7 +7263,7 @@ class _Walk:
             self._depends((READ_CALLED_AT, writer))
             for call in self._index.called_at.get(writer, ()):
                 if call in self._index.sites:
-                    calls.append((writer, call, self._objects(symbol, call, (), asking)))
+                    calls.append((writer, call, self._objects(symbol, call, (), asking)[0]))
         return tuple(calls), True
 
 
