@@ -207,6 +207,7 @@ from sextant.ingress.interpret.descriptors import interpret_descriptors
 from sextant.ingress.read.registry import READERS
 from sextant.resources import catalogs_dir, code_identity, extractor_jar, instructions_path
 from sextant.storage.duckdb.workspace import (
+    DuckDbOutOfMemory,
     DuckDbWorkspace,
     StaleParticipantError,
     open_read_only,
@@ -267,15 +268,17 @@ class DiffRefusedError(SextantError):
 
 @dataclass(frozen=True)
 class AnalyzeOptions:
-    """How `analyze` runs — the three knobs the CLI has (spec 2026-10-22 §5), and no
-    fourth. `allow_resolve` lets detection ask the build tool online once
-    (`--allow-resolve`); `shadow` records the candidate value conversions (`--shadow`);
+    """How `analyze` runs — the knobs the CLI has (spec 2026-10-22 §5), and a fourth,
+    `memory_limit_mb`, ordered by the user 2026-11-21 (spec
+    `docs/superpowers/specs/2026-11-21-memory-limit-flag-design.md`). `allow_resolve` lets
+    detection ask the build tool online once (`--allow-resolve`); `shadow` records the candidate value conversions (`--shadow`);
     `workspace_dir` puts a single module's workspace there instead of `<path>/.sextant`
     (`--workspace`), and is refused for a multi-module root as the CLI refuses it."""
 
     allow_resolve: bool = False
     shadow: bool = False
     workspace_dir: Path | None = None
+    memory_limit_mb: int | None = None
 
 
 @dataclass(frozen=True)
@@ -516,10 +519,23 @@ def _skip_reason(module: ModuleModel) -> str | None:
     return None
 
 
-def _scanners() -> list[Scanner]:
+# OI-493: the one split, measured 2026-11-20 — extraction (JVM) and the resolve peak do not
+# overlap; the AST-cache share converts at the measured ~0.5 MiB mean parsed module (not fed, see `_scanners`). DuckDB
+# gets at least 768 MiB: polar's `load_facts` fails below ~640 (608 fails, 640 completes,
+# 2026-11-21) and a capped run must complete, so a small limit overshoots rather than errors.
+def _memory_shares(limit_mb: int) -> tuple[int, int, int]:
+    """(jvm_xmx_mb, duckdb_mb, ast_cache_entries)"""
+    return limit_mb // 2, max(768, limit_mb // 4), max(32, (limit_mb // 4) * 2)
+
+
+def _scanners(memory_limit_mb: int | None = None) -> list[Scanner]:
     """The one scanner registry: what the scan stage chooses from, and what `_skip_reason`
     asks before a module is analysed, so the two can never disagree."""
-    return [AsmScanner(extractor_jar), PythonScanner()]
+    if memory_limit_mb is None:
+        return [AsmScanner(extractor_jar), PythonScanner()]
+    jvm_mb = _memory_shares(memory_limit_mb)[0]
+    # The cache share is not fed: it moved no peak on polar (2026-11-21, OI-493).
+    return [AsmScanner(extractor_jar, jvm_mb), PythonScanner()]
 
 
 def _module_json_row(outcome: ModuleOutcome) -> dict[str, object]:
@@ -913,6 +929,7 @@ def _run_analyze(
     progress_factory: Callable[[], AbstractContextManager[Progress]] | None,
     ignore_root: Path | None = None,
     shadow: bool = False,
+    memory_limit_mb: int | None = None,
 ) -> _StageAnalyzeResult:
     """One module, analyzed into one workspace, and its `metadata.json`
     written — the body every `analyze` invocation shares, whether `path` is
@@ -929,7 +946,10 @@ def _run_analyze(
     if render_dir.is_dir():
         shutil.rmtree(render_dir)
     factory = progress_factory or (lambda: nullcontext(NullProgress()))
-    workspace = DuckDbWorkspace(workspace_dir / "workspace.duckdb")
+    workspace = DuckDbWorkspace(
+        workspace_dir / "workspace.duckdb",
+        None if memory_limit_mb is None else _memory_shares(memory_limit_mb)[1],
+    )
     try:
         with factory() as progress, _fewer_collections():
             result = _analyzed(
@@ -941,6 +961,7 @@ def _run_analyze(
                 allow_resolve=allow_resolve,
                 ignore_root=ignore_root or path,
                 shadow=shadow,
+                memory_limit_mb=memory_limit_mb,
             )
         write_metadata(
             workspace_dir / "metadata.json",
@@ -971,6 +992,7 @@ def _analyzed(
     allow_resolve: bool = False,
     ignore_root: Path | None = None,
     shadow: bool = False,
+    memory_limit_mb: int | None = None,
 ) -> _StageAnalyzeResult:
     """`analyze`, with the one failure a USER caused turned into the message
     a user reads: a malformed `.sextant.yml` is Sextant's own input written
@@ -980,7 +1002,7 @@ def _analyzed(
             path=path,
             workspace=workspace,
             detectors=detectors,
-            scanners=_scanners(),
+            scanners=_scanners(memory_limit_mb),
             catalogs=YamlCatalogSource(catalogs_dir()),
             fact_root=workspace_dir / "facts",
             progress=progress,
@@ -995,6 +1017,13 @@ def _analyzed(
         )
     except SextantConfigError as refused:
         raise ConfigurationError(str(refused)) from refused
+    except DuckDbOutOfMemory as exhausted:
+        if memory_limit_mb is None:
+            raise
+        raise SextantError(
+            f"DuckDB ran out of memory under --memory-limit {memory_limit_mb} (its share is "
+            f"{_memory_shares(memory_limit_mb)[1]} MiB). A larger --memory-limit avoids this."
+        ) from exhausted
 
 
 def _analyze_reactor(
@@ -1004,6 +1033,7 @@ def _analyze_reactor(
     progress_factory: Callable[[], AbstractContextManager[Progress]] | None,
     on_module: Callable[[str], None] | None,
     shadow: bool = False,
+    memory_limit_mb: int | None = None,
 ) -> tuple[ModuleOutcome, ...]:
     """Every module a just-walked reactor named that is not KNOWN not to be
     a service, each analyzed into its own `<module-dir>/.sextant` workspace
@@ -1052,6 +1082,7 @@ def _analyze_reactor(
                 # reactor-root `.sextantignore` reached no submodule at all.
                 ignore_root=path,
                 shadow=shadow,
+                memory_limit_mb=memory_limit_mb,
             )
         except Exception as failure:  # deliberately broad, see below
             # A batch run's own failure must name WHICH module failed — left
@@ -1098,6 +1129,8 @@ def _analyze(
     # nowhere else. It adds one pass that writes one table nothing reads, and
     # moves no row in `endpoints`, `endpoint_metadata` or `shapes`.
     shadow: bool = False,
+    # OI-493: the CLI's `--memory-limit`, split once by `_memory_shares` where each lever is built.
+    memory_limit_mb: int | None = None,
 ) -> tuple[AnalyzeResult, bool]:
     """`analyze`'s own composition, shared by the public `analyze()` and
     `cli/app.py`'s `module_analyze`. Returns `(result, multi_module)` —
@@ -1128,7 +1161,13 @@ def _analyze(
                 "one module's workspace, and every module here gets its own"
             )
         modules = _analyze_reactor(
-            path, model, allow_resolve, progress_factory, on_module, shadow=shadow
+            path,
+            model,
+            allow_resolve,
+            progress_factory,
+            on_module,
+            shadow=shadow,
+            memory_limit_mb=memory_limit_mb,
         )
         return AnalyzeResult(modules=modules), True
 
@@ -1151,6 +1190,7 @@ def _analyze(
         allow_resolve,
         progress_factory,
         shadow=shadow,
+        memory_limit_mb=memory_limit_mb,
     )
     outcome = ModuleOutcome(
         dir=_root_relative(path, module.root),
@@ -1188,6 +1228,7 @@ def analyze(
         workspace_dir=options.workspace_dir,
         allow_resolve=options.allow_resolve,
         shadow=options.shadow,
+        memory_limit_mb=options.memory_limit_mb,
     )
     return result
 

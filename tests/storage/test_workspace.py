@@ -4040,3 +4040,31 @@ def test_a_workspace_whose_endpoints_predate_a_column_a_view_reads_still_opens(t
         }
     finally:
         workspace.close()
+
+
+def test_a_memory_limit_reaches_duckdb(tmp_path: Path):
+    workspace = DuckDbWorkspace(tmp_path / "w.duckdb", memory_limit_mb=512)
+    try:
+        value = workspace._connection.execute("SELECT current_setting('memory_limit')").fetchone()
+        assert value == ("512.0 MiB",)
+    finally:
+        workspace.close()
+
+
+def test_a_tiny_memory_limit_still_opens_and_answers_a_query(tmp_path: Path):
+    workspace = DuckDbWorkspace(tmp_path / "w.duckdb", memory_limit_mb=16)
+    try:
+        assert workspace._connection.execute("SELECT 1").fetchone() == (1,)
+        assert workspace.query("endpoint_conditions") == []
+    finally:
+        workspace.close()
+
+
+def test_no_memory_limit_leaves_the_duckdb_default(tmp_path: Path):
+    workspace = DuckDbWorkspace(tmp_path / "w.duckdb")
+    try:
+        value = workspace._connection.execute("SELECT current_setting('memory_limit')").fetchone()
+        assert value != ("512.0 MiB",)
+        assert value != ("16.0 MiB",)
+    finally:
+        workspace.close()
