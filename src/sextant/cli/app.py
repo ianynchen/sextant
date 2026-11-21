@@ -79,8 +79,19 @@ def _truncated(text: str, width: int) -> str:
         "Publishes nothing: every other table is what it would be without this flag."
     ),
 )
+@click.option(
+    "--memory-limit",
+    "memory_limit_mb",
+    type=click.IntRange(min=64),
+    default=None,
+    help="Cap the analysis near this many MiB, split across the JVM extractor, DuckDB and the AST cache.",
+)
 def module_analyze(
-    path: Path, workspace_dir: Path | None, allow_resolve: bool, shadow: bool
+    path: Path,
+    workspace_dir: Path | None,
+    allow_resolve: bool,
+    shadow: bool,
+    memory_limit_mb: int | None,
 ) -> None:
     try:
         result, multi_module = api._analyze(
@@ -90,6 +101,7 @@ def module_analyze(
             progress_factory=_rich_progress,
             on_module=click.echo,
             shadow=shadow,
+            memory_limit_mb=memory_limit_mb,
         )
     except api.SextantError as refused:
         raise click.ClickException(str(refused)) from refused

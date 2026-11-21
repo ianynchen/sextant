@@ -230,3 +230,36 @@ def test_a_python_module_fact_names_its_entry_points(tmp_path: Path):
 
     module = (tmp_path / ".sextant" / "facts" / "module.jsonl").read_text(encoding="utf-8")
     assert '"entry_points":{"shop":"shop.cli:main"}' in module
+
+
+def test_memory_shares_split():
+    assert api._memory_shares(2048) == (1024, 512, 1024)
+    assert api._memory_shares(256) == (128, 64, 128)
+    assert api._memory_shares(64) == (32, 16, 32)  # the floor keeps the cache usable
+
+
+def test_memory_limit_on_a_python_module_caps_the_live_duckdb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """OI-493: the limit reaches the real workspace — read back from DuckDB itself."""
+    seen: list[object] = []
+
+    class Spy(api.DuckDbWorkspace):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            seen.append(
+                self._connection.execute("SELECT current_setting('memory_limit')").fetchone()
+            )
+
+    monkeypatch.setattr(api, "DuckDbWorkspace", Spy)
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "shop"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    package = tmp_path / "src" / "shop"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "orders.py").write_text("def create(): pass\n", encoding="utf-8")
+
+    api.analyze(tmp_path, options=api.AnalyzeOptions(memory_limit_mb=1024))
+
+    assert seen == [("256.0 MiB",)]
