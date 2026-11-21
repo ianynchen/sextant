@@ -609,6 +609,11 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **An inexact answer is no longer published as `resolved` by the fluent url readers.** The text
+  reader and the composed-url reader published a value the walk had read inexactly (rule 9) at
+  `resolved`; they now publish `partial`. The expression kind is also kept for `${...}` text
+  without holes, instead of being re-kinded to a string. No row in the 12 pinned corpora
+  changes; the behavior is pinned by unit tests.
 - **A catalog's argument position counts positional arguments only** (OI-208 plan 1 task 9b,
   design `2026-11-06-reading-decorators-design.md` §3a). The facts write a Python call's keyword
   arguments after its positional ones, and a position counted all of them, so `arg1` of
