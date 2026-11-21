@@ -519,7 +519,7 @@ def _skip_reason(module: ModuleModel) -> str | None:
 
 
 # OI-493: the one split, measured 2026-11-20 — extraction (JVM) and the resolve peak do not
-# overlap; the AST-cache share converts at the measured ~0.5 MiB mean parsed module. DuckDB
+# overlap; the AST-cache share converts at the measured ~0.5 MiB mean parsed module (not fed, see `_scanners`). DuckDB
 # gets at least 768 MiB: polar's `load_facts` fails below ~640 (608 fails, 640 completes,
 # 2026-11-21) and a capped run must complete, so a small limit overshoots rather than errors.
 def _memory_shares(limit_mb: int) -> tuple[int, int, int]:

@@ -353,7 +353,7 @@ The comparison with a type checker, which solves the first four exactly, is
 | a folder named `site-packages` or `.mypy_cache` that is not an environment | read: only a folder holding `pyvenv.cfg` is an environment | Task 4, deferred |
 | an opted-in library sharing a `pypi` folder name with a Maven group | its fact folder can collide | Task 7, logged (real input cannot trigger it) |
 | a `RECORD` path written with a backslash | not refused | Task 7, parked (harmless off Windows) |
-| a cold run's memory on a very large repository (home-assistant: 6184 MiB) | the library-AST cache parses each library once per scan; `--memory-limit` caps the JVM and DuckDB and completes on polar at 256 and 2048 MiB, but the Python peak (~2.6 GB) does not move; the bounded AST cache raised it, so it is not fed | OI-493, built, peak not lowered |
+| a cold run's memory on a very large repository (home-assistant: 6184 MiB) | the library-AST cache parses each library once per scan; `--memory-limit` replaces DuckDB's 80%-of-host and the JVM's 25%-of-host defaults with a ceiling, and completes on polar at 256 and 2048 MiB, but the Python peak (~2.6 GB) does not move; the bounded AST cache raised it, so it is not fed | OI-493, built, peak not lowered |
 | a strongly-connected region of the value graph | the walk is bounded (`WALK_BUDGET`, `DEPTH_CAP`); an exhausted walk answers `non_enumerable`, and one answer per region would amend ruling M-1 | OI-494, open (template-shaped code) |
 
 **Out of this essay's scope**, though in the ledger: items that change no answer a user reads.

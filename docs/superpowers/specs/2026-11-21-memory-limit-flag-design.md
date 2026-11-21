@@ -35,7 +35,7 @@ Three levers, split by measured need (my call; the split is a constant, stated i
 | Consumer | Share | Mechanism |
 |---|---|---|
 | JVM extractor | 1/2 | `-Xmx<n>m` inserted in the extractor argv (`ingress/extract/jvm/scanner.py:84`); `AsmScanner` gains an optional `max_heap_mb`, passed from `_scanners()` (`api.py:519`). Extraction is the JVM-heavy phase and does not overlap the resolve peak. |
-| DuckDB | 1/4 | `duckdb.connect(path, config={"memory_limit": "<n>MiB"})` in `DuckDbWorkspace.__init__` (`storage/duckdb/workspace.py:2401`), optional parameter, passed only by the analyze construction site (`api.py:932`). DuckDB spills to disk past its limit — slower, never dead. |
+| DuckDB | 1/4 | `duckdb.connect(path, config={"memory_limit": "<n>MiB"})` in `DuckDbWorkspace.__init__` (`storage/duckdb/workspace.py:2401`), optional parameter, passed only by the analyze construction site (`api.py:932`). DuckDB is floored at 768 MiB: polar's `load_facts` fails at 608 MiB and completes at 640 (measured 2026-11-21), so a lower share would die, not spill. |
 | Library-AST cache | 1/4 | `Libraries._tables` becomes bounded ONLY when the flag is set: entry cap = share ÷ 0.5 MiB (the measured mean parsed-module size on py-polar: ~2,000 modules ≈ 1 GB), least-recently-used eviction, re-parse on miss. Unbounded (today's dict) when the flag is absent — the 2026-11-20 measurement showed an always-on LRU would thrash. |
 
 **Known limit, stated up front:** sibling caches in `libraries.py` (`_shapes`, `_answers`,

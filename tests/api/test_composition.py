@@ -235,7 +235,11 @@ def test_a_python_module_fact_names_its_entry_points(tmp_path: Path):
 def test_memory_shares_split():
     assert api._memory_shares(2048) == (1024, 768, 1024)
     assert api._memory_shares(256) == (128, 768, 128)
-    assert api._memory_shares(64) == (32, 768, 32)  # the floor keeps the cache usable
+    assert api._memory_shares(64) == (
+        32,
+        768,
+        32,
+    )  # DuckDB is floored at 768; the cache share keeps its own 32 floor
 
 
 def test_memory_limit_on_a_python_module_caps_the_live_duckdb(

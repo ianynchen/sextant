@@ -84,7 +84,7 @@ def _truncated(text: str, width: int) -> str:
     "memory_limit_mb",
     type=click.IntRange(min=64),
     default=None,
-    help="Cap the analysis near this many MiB, split across the extractor, DuckDB and the AST cache.",
+    help="Cap the analysis near this many MiB, split across the extractor and DuckDB (DuckDB is floored at 768 MiB; the AST cache is not capped).",
 )
 def module_analyze(
     path: Path,

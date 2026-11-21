@@ -80,8 +80,8 @@ here would restate those documents rather than add anything.
 
 - **`--memory-limit <MiB>` on `module analyze`** (OI-493, minimum 64): caps the extractor JVM
   (`-Xmx` half the limit) and DuckDB (`memory_limit`, a quarter of the limit but never under
-  768 MiB: polar's fact load fails at 608 and completes at 640). A capped run completes; it does
-  not yet lower the Python peak. Measured 2026-11-21 on py-polar-server, cold, `/usr/bin/time -l`
+  768 MiB: polar's fact load fails at 608 and completes at 640). The flag's value is the ceiling it puts on those two, whose defaults are 80% of the host's
+  memory (DuckDB) and 25% (JVM); a capped run completes, but it does not yet lower the Python peak. Measured 2026-11-21 on py-polar-server, cold, `/usr/bin/time -l`
   peak RSS: uncapped 2613 MB (39.3 s); `--memory-limit 2048` 2621 MB (39.1 s); `--memory-limit
   256` 2625 MB (38.9 s). The bounded library-AST cache was built and measured, then left
   unplugged: fed at 2048 it raised the peak to 2847 MB (46.4 s), so `_scanners` does not feed
