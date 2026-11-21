@@ -3791,3 +3791,35 @@ def test_a_partly_read_placeholder_text_stays_an_expression():
     into `peer`."""
     assert fluent._partly_read("${host}/x")["kind"] == "expression"
     assert fluent._partly_read("/x") == {"kind": "string", "value": "/x", "inexact": True}
+
+
+def test_two_assembled_addresses_one_inexact_are_two_addresses_not_one():
+    """The inexact `/b` is a second address, so no one answer; the SAME text exact on one path
+    and inexact on another stays the resolved answer (the exact path proves it)."""
+    assert fluent._one_assembled([(None, "/a", "resolved"), (None, "/b", "partial")]) is None
+    assert fluent._one_assembled([(None, "/a", "resolved"), (None, "/a", "partial")]) == {
+        "kind": "string",
+        "value": "/a",
+    }
+
+
+def test_an_inexact_relative_url_is_joined_to_the_client_base_and_stays_partial(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(fluent, "_client_of", lambda captures, context: None)
+    monkeypatch.setattr(
+        fluent, "against_client_base", lambda *args: ("http://svc.example/x", "resolved")
+    )
+    context = SimpleNamespace(client_base={"join": "base"}, workspace=None, values=None)
+    relative = (None, "/x", "resolved")
+    assert fluent._against_client_base(relative, {}, context) == ("svc.example", "/x", "resolved")
+    assert fluent._against_client_base((None, "/x", "partial"), {}, context, inexact=True) == (
+        "svc.example",
+        "/x",
+        "partial",
+    )
+    assert fluent._against_client_base((None, "/x", "partial"), {}, context) == (
+        None,
+        "/x",
+        "partial",
+    )

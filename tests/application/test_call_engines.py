@@ -14581,3 +14581,83 @@ def test_url_of_reads_an_inexact_string_as_partial():
 
     assert url_of({"kind": "string", "value": "/x"}) == (None, "/x", "resolved")
     assert url_of({"kind": "string", "value": "/x", "inexact": True}) == (None, "/x", "partial")
+
+
+def test_an_inexact_template_answer_publishes_partial_and_the_exact_one_resolved(monkeypatch):
+    from sextant.application.resolve.shapes import arguments
+    from sextant.application.resolve.shapes.arguments import with_authority
+
+    exact = Answer(kind=EXPRESSION, value="/owners/{ownerId}/pets")
+    inexact = Answer(kind=EXPRESSION, value="/owners/{ownerId}/pets", inexact=True)
+    assert url_of_answer(exact) == (None, "/owners/{ownerId}/pets", "resolved")
+    assert url_of_answer(inexact) == (None, "/owners/{ownerId}/pets", "partial")
+    # `with_authority` keeps `partial` for an inexact input where it would otherwise raise it.
+    monkeypatch.setattr(arguments, "authority_of", lambda *args: "svc")
+    host = (None, "<host>/owners/{ownerId}", "partial")
+    assert with_authority(host, None, None, None, None, ()) == (
+        "svc",
+        "/owners/{ownerId}",
+        "resolved",
+    )
+    assert with_authority(host, None, None, None, None, (), inexact=True) == (
+        "svc",
+        "/owners/{ownerId}",
+        "partial",
+    )
+
+
+def test_one_identity_read_twice_keeps_the_strongest_word(tmp_path: Path):
+    """The same call twice, the first read less well (its response type unread): the row is
+    one, and the exact read proves it, whatever the order the calls came in."""
+    caller = "com/acme/http/Client#getBalanceTwice()."
+
+    def _call(ordinal: int, response: CallArgument) -> CallSiteFact:
+        return CallSiteFact(
+            document_id="doc_1",
+            caller=caller,
+            target=CallTarget(
+                owner=RESTTEMPLATE,
+                name="getForObject",
+                descriptor="(Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Object;)Ljava/lang/Object;",
+            ),
+            invoke_kind="virtual",
+            ordinal=ordinal,
+            receiver=3,
+            result=12 + ordinal,
+            arguments=[
+                CallArgument(kind="string", value="/billing/strongest"),
+                response,
+                CallArgument(kind="unresolved"),
+            ],
+        )
+
+    facts = [
+        _call(0, CallArgument(kind="unresolved")),
+        _call(1, CallArgument(kind="class", symbol=ORDER_VIEW)),
+    ]
+    workspace = _resolve(tmp_path, facts)
+    rows = [e for e in workspace.query("endpoints") if e["path"] == "/billing/strongest"]
+    workspace.close()
+
+    assert [row["resolution"] for row in rows] == ["resolved"]
+
+
+def test_an_inexact_relative_address_is_joined_to_the_client_base_and_stays_partial(monkeypatch):
+    monkeypatch.setattr(
+        sc_engine, "against_client_base", lambda *args: ("http://d.example/x", "resolved")
+    )
+    site = {"arguments": [], "caller": "c", "ordinal": 0, "invoke_kind": "virtual"}
+    declared = {"client_arg": sc_engine.CLIENT_IS_RECEIVER}
+    relative = (None, "/x", "partial")
+    assert sc_engine._sent_to(relative, site, {}, declared, None, None, True) == (
+        "d.example",
+        "/x",
+        "partial",
+    )
+    # Not inexact: a partial address is never joined; an exact one is, at resolved.
+    assert sc_engine._sent_to(relative, site, {}, declared, None, None) == relative
+    assert sc_engine._sent_to((None, "/x", "resolved"), site, {}, declared, None, None) == (
+        "d.example",
+        "/x",
+        "resolved",
+    )
