@@ -23,6 +23,7 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.effective_calls import bound_positions, effective_call_sites
 from sextant.application.resolve.shapes.arguments import (
+    _UNREADABLE_HOST,
     QUERY_KIND,
     CallFacts,
     CarrierRules,
@@ -1088,6 +1089,25 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # to `verb` and this change a no-op for those catalogs; likewise
             # no shipped row declares its own `direction`, so `row_direction`
             # is always `catalog.direction` there too.
+            row = {
+                "protocol": catalog.protocol,
+                "direction": row_direction,
+                "method": row_verb,
+                "path": path,
+                "handler": caller if inbound else None,
+                "caller": None if inbound else caller,
+                "peer": peer,
+                "handler_signature": None,
+                "resolution": resolution,
+                "evidence": "compiler",
+                "catalog_id": catalog.id,
+                "request_shape": request_shape,
+                "response_shape": response_shape,
+                "consumes": None,
+                "produces": None,
+                "path_kind": None,
+                "method_kind": None,
+            }
             if path is not None and (verb is not None or verbless):
                 # F5 §6.1 rule 1 (W27 fix): `caller` and `peer` are IN the key. Without
                 # them `seen` spans the whole module, so a second caller reaching one
@@ -1107,8 +1127,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     # path proves the value; a path read on routes not told apart (or less)
                     # approximates the same value and adds nothing.
                     kept = seen[key]
-                    if weaker(kept["resolution"], resolution) == kept["resolution"]:
-                        kept["resolution"] = resolution
+                    if weaker(kept["resolution"], resolution) != resolution:
+                        # The stronger row's CONTENTS, so its word never sits over columns the
+                        # other site left unread; the kept row keeps its place in the output.
+                        kept.clear()
+                        kept.update(row)
                     continue
             # Below the dedup `continue`: a row the key already saw writes no second copy
             # of its own query parameters either. **Masked HERE, where the value is read**,
@@ -1141,25 +1164,6 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                         "requirement": None,
                     }
                 )
-            row = {
-                "protocol": catalog.protocol,
-                "direction": row_direction,
-                "method": row_verb,
-                "path": path,
-                "handler": caller if inbound else None,
-                "caller": None if inbound else caller,
-                "peer": peer,
-                "handler_signature": None,
-                "resolution": resolution,
-                "evidence": "compiler",
-                "catalog_id": catalog.id,
-                "request_shape": request_shape,
-                "response_shape": response_shape,
-                "consumes": None,
-                "produces": None,
-                "path_kind": None,
-                "method_kind": None,
-            }
             rows.append(row)
             if path is not None and (verb is not None or verbless):
                 seen[key] = row
@@ -1230,9 +1234,13 @@ def _sent_to(
     elif (
         peer is not None
         or path is None
-        # A relative text the walk read INEXACTLY (rule 9) is whole and is joined, staying `partial`.
+        # A relative text the walk read INEXACTLY (rule 9) is joined, staying `partial`; one whose
+        # host went unread (the `<host>` marker) has no relative path to join and joins nothing.
         or resolution
-        not in (str(Resolution.RESOLVED), str(Resolution.PARTIAL) if inexact else None)
+        not in (
+            str(Resolution.RESOLVED),
+            str(Resolution.PARTIAL) if inexact and _UNREADABLE_HOST not in path else None,
+        )
         or carries_expression(path)
     ):
         return destination

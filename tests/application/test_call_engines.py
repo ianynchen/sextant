@@ -245,7 +245,7 @@ def _declared_method(owner: str, name: str, jvm: str) -> SymbolFact:
 
 @pytest.mark.pins("single_call.the-VERB-rides-the-same-binding-as-the-path")
 def test_a_wrapper_handing_both_verb_and_path_through_publishes_each_callers_pair(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch
 ):
     """`OI-143`'s shape through the engine (spec 2026-10-21 merged values, §3b and its last
     paragraph). `Wrapper#send(method, path)` does `if (path.startsWith("/")) path =
@@ -350,6 +350,17 @@ def test_a_wrapper_handing_both_verb_and_path_through_publishes_each_callers_pai
             ],
         ),
     ]
+    # Force the client-base join to run so the per-binding `inexact` flag reaches `_sent_to`.
+    flags = []
+
+    def _record(destination, *args):
+        flags.append(args[-1])
+        return destination
+
+    monkeypatch.setattr(sc_engine, "client_base_of", lambda *args: {})
+    monkeypatch.setattr(sc_engine, "_refuse_options_rung", lambda *args: None)
+    monkeypatch.setattr(sc_engine, "_validate_client_rows", lambda *args: None)
+    monkeypatch.setattr(sc_engine, "_sent_to", _record)
     workspace = _resolve_walked(tmp_path, facts)
     rows = sorted(
         (e["method"], e["path"], e["resolution"])
@@ -358,6 +369,7 @@ def test_a_wrapper_handing_both_verb_and_path_through_publishes_each_callers_pai
     )
     workspace.close()
     assert rows == [("GET", "<host>/a", "partial"), ("POST", "<host>b", "partial")]
+    assert flags == [True, True]
 
 
 def _branched_exchange(url_operand: CallArgument, verb: CallArgument) -> tuple[str, list]:
@@ -14606,7 +14618,8 @@ def test_an_inexact_template_answer_publishes_partial_and_the_exact_one_resolved
     )
 
 
-def test_one_identity_read_twice_keeps_the_strongest_word(tmp_path: Path):
+@pytest.mark.parametrize("unread_first", [True, False])
+def test_one_identity_read_twice_keeps_the_strongest_row(tmp_path: Path, unread_first: bool):
     """The same call twice, the first read less well (its response type unread): the row is
     one, and the exact read proves it, whatever the order the calls came in."""
     caller = "com/acme/http/Client#getBalanceTwice()."
@@ -14631,15 +14644,35 @@ def test_one_identity_read_twice_keeps_the_strongest_word(tmp_path: Path):
             ],
         )
 
-    facts = [
-        _call(0, CallArgument(kind="unresolved")),
-        _call(1, CallArgument(kind="class", symbol=ORDER_VIEW)),
-    ]
+    unread, read = CallArgument(kind="unresolved"), CallArgument(kind="class", symbol=ORDER_VIEW)
+    facts = (
+        [_call(0, unread), _call(1, read)] if unread_first else [_call(0, read), _call(1, unread)]
+    )
     workspace = _resolve(tmp_path, facts)
     rows = [e for e in workspace.query("endpoints") if e["path"] == "/billing/strongest"]
     workspace.close()
 
     assert [row["resolution"] for row in rows] == ["resolved"]
+    # The stronger row's own columns come with its word, whichever site was read first.
+    assert rows[0]["response_shape"] is not None
+
+
+def test_an_inexact_template_is_never_joined_to_the_client_base(monkeypatch):
+    monkeypatch.setattr(
+        sc_engine, "against_client_base", lambda *args: ("http://api.x/v1/<host>/users", "resolved")
+    )
+    site = {"arguments": [], "caller": "c", "ordinal": 0, "invoke_kind": "virtual"}
+    declared = {"client_arg": sc_engine.CLIENT_IS_RECEIVER}
+    destination = (None, "<host>/users", "partial")
+    assert sc_engine._sent_to(destination, site, {}, declared, None, None, True) == destination
+    # A template whose holes are interior (the route's own variables) is a relative path.
+    assert sc_engine._sent_to(
+        (None, "/u/{id}", "partial"), site, {}, declared, None, None, True
+    ) == (
+        "api.x",
+        "/v1/<host>/users",
+        "partial",
+    )
 
 
 def test_an_inexact_relative_address_is_joined_to_the_client_base_and_stays_partial(monkeypatch):
@@ -14660,4 +14693,14 @@ def test_an_inexact_relative_address_is_joined_to_the_client_base_and_stays_part
         "d.example",
         "/x",
         "resolved",
+    )
+
+
+def test_an_inexact_configuration_template_publishes_partial_and_the_exact_one_resolved():
+    exact = Answer(kind=EXPRESSION, value="${HOST}/x")
+    assert url_of_answer(exact) == (None, "${HOST}/x", "resolved")
+    assert url_of_answer(Answer(kind=EXPRESSION, value="${HOST}/x", inexact=True)) == (
+        None,
+        "${HOST}/x",
+        "partial",
     )
