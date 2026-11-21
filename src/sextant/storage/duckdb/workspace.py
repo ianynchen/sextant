@@ -2398,9 +2398,15 @@ class DuckDbWorkspace:
     """The Workspace port over DuckDB. Owns SQL and D01; knows nothing about
     frameworks, languages or protocols (ARCHITECTURE §10)."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, memory_limit_mb: int | None = None) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._connection = duckdb.connect(str(path))
+        # None keeps DuckDB's own default, so an unset limit changes nothing.
+        if memory_limit_mb is None:
+            self._connection = duckdb.connect(str(path))
+        else:
+            self._connection = duckdb.connect(
+                str(path), config={"memory_limit": f"{memory_limit_mb}MiB"}
+            )
         schema = (_SQL_DIR / "schema.sql").read_text(encoding="utf-8")
         self._drop_tables_the_schema_made_views()
         # BEFORE the schema runs, not after: the schema's views select the tables'
