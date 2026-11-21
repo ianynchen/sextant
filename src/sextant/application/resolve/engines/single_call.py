@@ -14,7 +14,7 @@ catalog data; this module never names a framework.
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import chain
 from typing import Any, cast
 
@@ -23,7 +23,6 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import dispatch_of
 from sextant.application.resolve.effective_calls import bound_positions, effective_call_sites
 from sextant.application.resolve.shapes.arguments import (
-    _UNREADABLE_HOST,
     QUERY_KIND,
     CallFacts,
     CarrierRules,
@@ -909,7 +908,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                             or (
                                 verb_slot is not None and _is_narrowed(binding.slots.get(verb_slot))
                             ),
-                            bool(getattr(binding.slots.get(url_slot), "inexact", False)),
+                            _inexact_but_whole(binding.slots.get(url_slot), read_answer),
                         )
                         for binding in resolve_site(workspace, site, values, ())
                     )
@@ -1234,12 +1233,12 @@ def _sent_to(
     elif (
         peer is not None
         or path is None
-        # A relative text the walk read INEXACTLY (rule 9) is joined, staying `partial`; one whose
-        # host went unread (the `<host>` marker) has no relative path to join and joins nothing.
+        # An address the walk read INEXACTLY (rule 9) that an exact read would have called
+        # `resolved` (`_inexact_but_whole`) is joined, staying `partial`.
         or resolution
         not in (
             str(Resolution.RESOLVED),
-            str(Resolution.PARTIAL) if inexact and _UNREADABLE_HOST not in path else None,
+            str(Resolution.PARTIAL) if inexact else None,
         )
         or carries_expression(path)
     ):
@@ -2269,6 +2268,18 @@ def _record_arguments(
     else:
         payload_argument = _arg_at(ctor_arguments, payload_index)
     return channel_argument, payload_argument
+
+
+def _inexact_but_whole(answer: Any, read_answer: Any) -> bool:
+    """Whether a walked url answer is inexact (rule 9) and would be `resolved` were it exact: a
+    relative path whose every hole is a named one. The decision is the answer's own, never the
+    path text's: an unread authority (`http://{host}/x`) leaves a clean path and an anonymous
+    hole or `<host>` marker is no relative path, and none of those is joined to a client base."""
+    return (
+        answer is not None
+        and bool(answer.inexact)
+        and read_answer(replace(answer, inexact=False))[2] == str(Resolution.RESOLVED)
+    )
 
 
 def _is_narrowed(answer: Any) -> bool:

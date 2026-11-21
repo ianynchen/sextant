@@ -361,6 +361,9 @@ def test_a_wrapper_handing_both_verb_and_path_through_publishes_each_callers_pai
     monkeypatch.setattr(sc_engine, "_refuse_options_rung", lambda *args: None)
     monkeypatch.setattr(sc_engine, "_validate_client_rows", lambda *args: None)
     monkeypatch.setattr(sc_engine, "_sent_to", _record)
+    # The decision itself is `_inexact_but_whole`'s (these `<host>` rows would say False); the
+    # flag the walk answers is what must reach `_sent_to`, per binding.
+    monkeypatch.setattr(sc_engine, "_inexact_but_whole", lambda answer, read: True)
     workspace = _resolve_walked(tmp_path, facts)
     rows = sorted(
         (e["method"], e["path"], e["resolution"])
@@ -14657,22 +14660,40 @@ def test_one_identity_read_twice_keeps_the_strongest_row(tmp_path: Path, unread_
     assert rows[0]["response_shape"] is not None
 
 
-def test_an_inexact_template_is_never_joined_to_the_client_base(monkeypatch):
+def test_only_an_inexact_answer_an_exact_read_would_resolve_is_joinable():
+    """Decided from the ANSWER: a named-hole relative path joins; an unread host or authority
+    (which leaves a clean path behind) and an anonymous hole do not."""
+    read = url_of_answer
+
+    def inexact(value, kind=EXPRESSION):
+        return Answer(kind=kind, value=value, inexact=True, literal_kind=STRING)
+
+    assert sc_engine._inexact_but_whole(inexact("/guilds/{guild_id}/roles/{role_id}"), read)
+    assert sc_engine._inexact_but_whole(inexact("/x", LITERAL), read)
+    for refused in ("{}/users", "http://{}/x", "http://{host}:8080/x", "<host>/users"):
+        assert not sc_engine._inexact_but_whole(inexact(refused), read), refused
+    assert not sc_engine._inexact_but_whole(Answer(kind=EXPRESSION, value="/u/{id}"), read)
+    assert not sc_engine._inexact_but_whole(None, read)
+
+
+def test_the_joinable_flag_decides_the_client_base_join(monkeypatch):
     monkeypatch.setattr(
-        sc_engine, "against_client_base", lambda *args: ("http://api.x/v1/<host>/users", "resolved")
+        sc_engine,
+        "against_client_base",
+        lambda workspace, values, client, declared, path, *rest: (
+            "http://api.x/v1" + path,
+            "resolved",
+        ),
     )
     site = {"arguments": [], "caller": "c", "ordinal": 0, "invoke_kind": "virtual"}
     declared = {"client_arg": sc_engine.CLIENT_IS_RECEIVER}
-    destination = (None, "<host>/users", "partial")
-    assert sc_engine._sent_to(destination, site, {}, declared, None, None, True) == destination
-    # A template whose holes are interior (the route's own variables) is a relative path.
-    assert sc_engine._sent_to(
-        (None, "/u/{id}", "partial"), site, {}, declared, None, None, True
-    ) == (
+    destination = (None, "/u/{id}", "partial")
+    assert sc_engine._sent_to(destination, site, {}, declared, None, None, True) == (
         "api.x",
-        "/v1/<host>/users",
+        "/v1/u/{id}",
         "partial",
     )
+    assert sc_engine._sent_to(destination, site, {}, declared, None, None, False) == destination
 
 
 def test_an_inexact_relative_address_is_joined_to_the_client_base_and_stays_partial(monkeypatch):
