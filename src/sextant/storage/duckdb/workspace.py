@@ -2362,6 +2362,10 @@ def _open_bundle(bundle: Path) -> ReadOnlyGraph:
     )
 
 
+# Re-exported so the layers above can name DuckDB's out-of-memory failure without importing duckdb.
+DuckDbOutOfMemory = duckdb.OutOfMemoryException
+
+
 class StaleParticipantError(RuntimeError):
     """`federate` was handed a participant workspace lacking a table the system views read:
     derived by an older Sextant, before that table existed. Named, with the command to run,

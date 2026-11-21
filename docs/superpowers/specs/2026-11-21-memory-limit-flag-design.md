@@ -1,5 +1,7 @@
 # A `--memory-limit` Flag for Limited-Memory Machines (OI-493)
 
+**Outcome (2026-11-21):** the escape hatch fired (the AST cache is built but not fed), DuckDB is floored at 768 MiB, and the Python peak is unchanged (py-polar 2613 MB uncapped, 2625 MB at 256): the three-lever goal below was not met as written.
+
 **Status:** approved by the user 2026-11-21 ("Do 493 and 494 now"). This is the short design
 for a small change.
 

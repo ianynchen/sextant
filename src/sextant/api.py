@@ -207,6 +207,7 @@ from sextant.ingress.interpret.descriptors import interpret_descriptors
 from sextant.ingress.read.registry import READERS
 from sextant.resources import catalogs_dir, code_identity, extractor_jar, instructions_path
 from sextant.storage.duckdb.workspace import (
+    DuckDbOutOfMemory,
     DuckDbWorkspace,
     StaleParticipantError,
     open_read_only,
@@ -269,8 +270,8 @@ class DiffRefusedError(SextantError):
 class AnalyzeOptions:
     """How `analyze` runs — the knobs the CLI has (spec 2026-10-22 §5), and a fourth,
     `memory_limit_mb`, ordered by the user 2026-11-21 (spec
-    `docs/superpowers/specs/2026-11-21-memory-limit-flag-design.md`). `allow_resolve` lets detection ask the build tool online once
-    (`--allow-resolve`); `shadow` records the candidate value conversions (`--shadow`);
+    `docs/superpowers/specs/2026-11-21-memory-limit-flag-design.md`). `allow_resolve` lets
+    detection ask the build tool online once (`--allow-resolve`); `shadow` records the candidate value conversions (`--shadow`);
     `workspace_dir` puts a single module's workspace there instead of `<path>/.sextant`
     (`--workspace`), and is refused for a multi-module root as the CLI refuses it."""
 
@@ -1016,6 +1017,13 @@ def _analyzed(
         )
     except SextantConfigError as refused:
         raise ConfigurationError(str(refused)) from refused
+    except DuckDbOutOfMemory as exhausted:
+        if memory_limit_mb is None:
+            raise
+        raise SextantError(
+            f"DuckDB ran out of memory under --memory-limit {memory_limit_mb} (its share is "
+            f"{_memory_shares(memory_limit_mb)[1]} MiB). A larger --memory-limit avoids this."
+        ) from exhausted
 
 
 def _analyze_reactor(

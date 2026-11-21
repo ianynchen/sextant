@@ -267,3 +267,25 @@ def test_memory_limit_on_a_python_module_caps_the_live_duckdb(
     api.analyze(tmp_path, options=api.AnalyzeOptions(memory_limit_mb=1024))
 
     assert seen == [("768.0 MiB",)]
+
+
+def test_a_duckdb_out_of_memory_under_the_cap_names_the_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """OI-493: a capped run's DuckDB failure says which flag to raise; uncapped, it is unchanged."""
+
+    def exhausted(**_kwargs):
+        raise api.DuckDbOutOfMemory("Out of Memory Error")
+
+    monkeypatch.setattr(api, "_analyze_stage", exhausted)
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "shop"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    package = tmp_path / "src" / "shop"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(api.SextantError, match="--memory-limit 64.*768 MiB.*larger"):
+        api.analyze(tmp_path, options=api.AnalyzeOptions(memory_limit_mb=64))
+    with pytest.raises(api.DuckDbOutOfMemory):
+        api.analyze(tmp_path, options=api.AnalyzeOptions())

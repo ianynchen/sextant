@@ -80,12 +80,18 @@ here would restate those documents rather than add anything.
 
 - **`--memory-limit <MiB>` on `module analyze`** (OI-493, minimum 64): caps the extractor JVM
   (`-Xmx` half the limit) and DuckDB (`memory_limit`, a quarter of the limit but never under
-  768 MiB: polar's fact load fails at 608 and completes at 640). The flag's value is the ceiling it puts on those two, whose defaults are 80% of the host's
-  memory (DuckDB) and 25% (JVM); a capped run completes, but it does not yet lower the Python peak. Measured 2026-11-21 on py-polar-server, cold, `/usr/bin/time -l`
-  peak RSS: uncapped 2613 MB (39.3 s); `--memory-limit 2048` 2621 MB (39.1 s); `--memory-limit
-  256` 2625 MB (38.9 s). The bounded library-AST cache was built and measured, then left
-  unplugged: fed at 2048 it raised the peak to 2847 MB (46.4 s), so `_scanners` does not feed
-  it. The peak sits in the Python scan and resolve, which no lever here reaches.
+  768 MiB: polar's fact load fails at 608 and completes at 640). The flag's value is the
+  ceiling it puts on those two, whose defaults are 80% of the host's memory (DuckDB) and 25%
+  (JVM). It does not lower the Python peak. Measured 2026-11-21, cold, largest-process RSS
+  (`/usr/bin/time -l`): py-polar-server uncapped 2613 MB (39.3 s), `--memory-limit 2048`
+  2621 MB (39.1 s), `--memory-limit 256` 2625 MB (38.9 s). On the JVM corpora the runs
+  complete at `--memory-limit` 64 (`-Xmx32m`) and 256 and write fact files byte-identical to
+  the uncapped run: spring-petclinic-rest 426 MB uncapped, 416 MB at 64, 414 MB at 256;
+  apollo-portal 737 MB uncapped, 692 MB at 64, 704 MB at 256. A DuckDB out-of-memory under
+  the flag is reported as an error naming `--memory-limit`.
+  The bounded library-AST cache was built and measured, then left unplugged: fed at 2048 it
+  raised the peak to 2847 MB (46.4 s), so `_scanners` does not feed it. The peak sits in the
+  Python scan and resolve, which no lever here reaches.
 
 - **Flask inbound is read, and checked against Flask itself** (OI-208 plan 5, OI-478). `flask.yml`
   reads routes, blueprints (including one built in a module and imported by another, and
