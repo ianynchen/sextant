@@ -168,7 +168,7 @@ from sextant.domain.symbols import (
 # see the jar" or "the code branches", and a catalog author debugging a NULL address can
 # tell which they are looking at. `fan_out` and `depth` are absent by ruling, not by
 # oversight. `DEPTH_CAP` and `WALK_BUDGET` reuse `non_enumerable` on `PATH_CAP`'s precedent
-# (no new word); the user's confirmation of that is flagged in the value-walk plan's final report.
+# (no new word): a walk cut short by either cap has not enumerated, which is what the word says.
 NOT_READABLE = "not_readable"
 NON_ENUMERABLE = "non_enumerable"
 ESCAPES = "escapes"

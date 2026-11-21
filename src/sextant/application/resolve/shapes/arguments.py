@@ -133,7 +133,12 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
     text = str(argument["value"])
     if argument.get("kind") == "string":
         peer, path = split_url(text)
-        return peer, path, str(Resolution.RESOLVED)
+        # A whole text the walk read on routes not told apart (`_one_assembled`).
+        return (
+            peer,
+            path,
+            str(Resolution.PARTIAL if argument.get("inexact") else Resolution.RESOLVED),
+        )
     if argument.get("kind") == EXPRESSION and _holes(text) and _without_holes(text):
         peer, path = split_url(text)
         # **Whether the AUTHORITY went unread**, which is the first of `partial`'s two

@@ -3751,3 +3751,43 @@ def test_a_void_call_that_sets_nothing_on_a_branch_is_no_split(tmp_path: Path):
         (SUBSCRIPTION, True, "resolved"),
     ]
     assert unstated == {False}
+
+
+class _NoFields:
+    """The context `_composed_address` reads a literal base through: no field facts."""
+
+    field_sources = None
+    facts = None
+
+
+def test_a_base_composed_with_an_inexact_url_publishes_partial_never_resolved():
+    """A url the walk read on routes not told apart (rule 9) is no surer than `partial`
+    once a base is joined to it, and the same pair with an exact url stays `resolved`."""
+    captures = {"base": {"kind": "string", "value": "http://a.example"}, "url": {}}
+    exact = {"kind": "string", "value": "/seed-a"}
+    inexact = {**exact, "inexact": True}
+    assert fluent._composed_address(captures, _NoFields(), exact) == [
+        ("a.example", "/seed-a", "resolved")
+    ]
+    assert fluent._composed_address(captures, _NoFields(), inexact) == [
+        ("a.example", "/seed-a", "partial")
+    ]
+
+
+def test_an_inexact_literal_is_assembled_at_partial():
+    from sextant.application.resolve.values import LITERAL, STRING, Answer
+
+    answer = Answer(kind=LITERAL, literal_kind=STRING, value="/x", inexact=True)
+    assert fluent._assembled_text(answer) == (None, "/x", "partial")
+    assert fluent._assembled_text(Answer(kind=LITERAL, literal_kind=STRING, value="/x")) == (
+        None,
+        "/x",
+        "resolved",
+    )
+
+
+def test_a_partly_read_placeholder_text_stays_an_expression():
+    """`${host}` carries a deployment-set value: re-kinded a string, `split_url` would write it
+    into `peer`."""
+    assert fluent._partly_read("${host}/x")["kind"] == "expression"
+    assert fluent._partly_read("/x") == {"kind": "string", "value": "/x", "inexact": True}

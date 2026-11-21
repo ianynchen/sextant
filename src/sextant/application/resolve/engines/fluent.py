@@ -2773,8 +2773,16 @@ def _one_assembled(
         literal for _, literal, resolution in assembled if resolution == "partial" and literal
     }
     if not whole and len(partly) == 1:
-        return {"kind": EXPRESSION, "value": partly.pop()}
+        return _partly_read(partly.pop())
     return None
+
+
+def _partly_read(text: str) -> dict[str, Any]:
+    """A `partial` text as the argument `url_of` reads: a template with holes is an expression;
+    a text with none is a whole literal read inexactly, which `url_of` reads off the flag."""
+    if _holes(text) or carries_expression(text):
+        return {"kind": EXPRESSION, "value": text}
+    return {"kind": "string", "value": text, "inexact": True}
 
 
 def _assembled_text(answer: "Answer | None") -> tuple[str | None, str | None, str]:
@@ -2800,7 +2808,10 @@ def _assembled_text(answer: "Answer | None") -> tuple[str | None, str | None, st
     ):
         return None, str(answer.value), str(Resolution.NARROWED)
     if answer.kind == LITERAL and answer.literal_kind == STRING:
-        return None, str(answer.value), str(Resolution.RESOLVED)
+        # An INEXACT literal (rule 9) is a whole text read on routes not
+        # told apart: `partial`, the word `url_of_answer` gives it.
+        resolution = Resolution.PARTIAL if answer.inexact else Resolution.RESOLVED
+        return None, str(answer.value), str(resolution)
     if answer.kind == EXPRESSION:
         return None, str(answer.value), str(Resolution.PARTIAL)
     return None, None, str(Resolution.UNRESOLVED)
@@ -2880,7 +2891,11 @@ def _composed_address(
     path = _string_value(url_argument)
     if path is None:
         return [(None, None, "unresolved")]
-    return [_address_of(base + path)]
+    peer, address, resolution = _address_of(base + path)
+    # A url the walk read on routes not told apart (`_partly_read`) is no surer than `partial`.
+    if url_argument is not None and url_argument.get("inexact"):
+        resolution = weaker(resolution, str(Resolution.PARTIAL))
+    return [(peer, address, resolution)]
 
 
 def _with_stated_authority(
@@ -3290,7 +3305,7 @@ def _each_callers_url(
         if resolution == str(Resolution.RESOLVED) and literal:
             found.append({"kind": "string", "value": literal})
         elif resolution == str(Resolution.PARTIAL) and literal:
-            found.append({"kind": EXPRESSION, "value": literal})
+            found.append(_partly_read(literal))
         else:
             found.append(argument)
     distinct = list(

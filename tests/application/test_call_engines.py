@@ -14574,3 +14574,10 @@ def test_a_hand_off_after_the_first_execute_leaves_that_request_as_built(tmp_pat
         *_apache_same_method("twice", [(1, _HANDED_TO_JDK)], executes=2),
     ]
     assert _apache_rows_by_caller(tmp_path, facts) == [("twice", "GET", "/twice", "resolved")]
+
+
+def test_url_of_reads_an_inexact_string_as_partial():
+    from sextant.application.resolve.shapes.arguments import url_of
+
+    assert url_of({"kind": "string", "value": "/x"}) == (None, "/x", "resolved")
+    assert url_of({"kind": "string", "value": "/x", "inexact": True}) == (None, "/x", "partial")
