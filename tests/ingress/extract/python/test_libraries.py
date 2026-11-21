@@ -1453,3 +1453,61 @@ def test_an_attribute_of_a_library_variable_is_a_call_on_its_defining_class(tmp_
     assert calls[2:4] == [(base, "headers", 3, 4), ("web/maps/Bag#", "get", 4, 5)]
     assert calls[4:6] == [(base, "names", 6, 7), ("web/maps/Names#", "get", 7, 8)]
     assert all(name != "method" or owner != base for owner, name, _, _ in calls)
+
+
+def _bad_library(tmp_path: Path, table_cap: int | None = None) -> Libraries:
+    broken = _install(tmp_path / "site", "broken", "1.0", {"broken/__init__.py": "def (:\n"})
+    return Libraries((broken,), typeshed_dir(), tmp_path / "site", table_cap=table_cap)
+
+
+def test_the_table_cache_evicts_past_the_cap():
+    libraries = Libraries((), typeshed_dir(), table_cap=2)
+
+    for module in ("subprocess", "os", "json"):
+        libraries._table(module)
+
+    assert len(libraries._tables) == 2
+    assert "subprocess" not in libraries._tables
+
+
+def test_eviction_then_reparse_answers_identically():
+    libraries = Libraries((), typeshed_dir(), table_cap=1)
+    command = CallArgument(kind="array", elements=[_argument("string", "ls")])
+
+    first = _returns(libraries.call_returns("subprocess#", "run", [command]))
+    libraries._table("os")
+    assert "subprocess" not in libraries._tables
+    again = _returns(libraries.call_returns("subprocess#", "run", [command]))
+
+    assert first is not None
+    assert again == first
+
+
+def test_a_failed_parse_stays_failed_after_eviction(tmp_path: Path):
+    libraries = _bad_library(tmp_path, table_cap=1)
+
+    assert libraries._table("broken") is None
+    libraries._table("os")
+    assert "broken" not in libraries._tables
+    assert libraries._table("broken") is None
+
+
+def test_no_cap_means_no_eviction():
+    libraries = Libraries((), typeshed_dir())
+
+    for module in ("subprocess", "os", "json"):
+        libraries._table(module)
+
+    assert len(libraries._tables) == 3
+
+
+def test_the_version_tests_of_an_evicted_module_are_read_again():
+    capped = Libraries((), typeshed_dir(), table_cap=1)
+    plain = Libraries((), typeshed_dir())
+    capped._table("subprocess")
+    plain._table("subprocess")
+    capped._table("os")
+    assert "subprocess" not in capped._tables
+
+    assert capped._version_tests("subprocess") == plain._version_tests("subprocess")
+    assert capped._version_tests("subprocess") is not None

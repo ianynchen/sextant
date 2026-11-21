@@ -1,5 +1,6 @@
 import json
 import shutil
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -1842,3 +1843,50 @@ def test_a_one_module_folder_keeps_the_old_file_name(tmp_path: Path):
     assert enriched.exit_code == 0, enriched.output
     assert (core / ".sextant-enrichment.json").is_file()
     assert list(core.glob(".sextant-enrichment-*.json")) == []
+
+
+def test_memory_limit_reaches_the_extractor_and_duckdb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """OI-493: `--memory-limit 1024` is `-Xmx512m` on the real extraction command and a
+    256 MiB DuckDB — recorded where each lever is applied, not read off the exit status."""
+    compile_fixture(FIXTURE)
+    argvs: list[list[str]] = []
+    settings: list[object] = []
+    real_run = subprocess.run
+
+    def recording_run(argv, *args, **kwargs):
+        argvs.append(list(argv))
+        return real_run(argv, *args, **kwargs)
+
+    class Spy(DuckDbWorkspace):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            settings.append(
+                self._connection.execute("SELECT current_setting('memory_limit')").fetchone()
+            )
+
+    monkeypatch.setattr(subprocess, "run", recording_run)
+    monkeypatch.setattr(api, "DuckDbWorkspace", Spy)
+
+    result = CliRunner().invoke(
+        cli,
+        ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path), "--memory-limit", "1024"],
+    )
+
+    assert result.exit_code == 0, result.output
+    scans = [a for a in argvs if a[:1] == ["java"] and "--module-id" in a]
+    assert scans
+    assert all(a[1] == "-Xmx512m" for a in scans)
+    assert settings == [("768.0 MiB",)]
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "63", "abc"])
+def test_a_memory_limit_below_the_floor_is_refused_at_the_flag(tmp_path: Path, value: str):
+    result = CliRunner().invoke(
+        cli,
+        ["module", "analyze", str(FIXTURE), "--workspace", str(tmp_path), "--memory-limit", value],
+    )
+
+    assert result.exit_code == 2
+    assert not (tmp_path / "workspace.duckdb").exists()

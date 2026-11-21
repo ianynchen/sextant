@@ -45,6 +45,7 @@ _PARAMS = sorted(
     [
         ("sextant module analyze", "argument", "path", "required"),
         ("sextant module analyze", "option", "--workspace", "optional"),
+        ("sextant module analyze", "option", "--memory-limit", "optional"),
         ("sextant module analyze", "flag", "--allow-resolve", "optional"),
         ("sextant module analyze", "flag", "--shadow", "optional"),
         ("sextant system analyze", "argument", "path", "required"),

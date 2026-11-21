@@ -230,3 +230,62 @@ def test_a_python_module_fact_names_its_entry_points(tmp_path: Path):
 
     module = (tmp_path / ".sextant" / "facts" / "module.jsonl").read_text(encoding="utf-8")
     assert '"entry_points":{"shop":"shop.cli:main"}' in module
+
+
+def test_memory_shares_split():
+    assert api._memory_shares(2048) == (1024, 768, 1024)
+    assert api._memory_shares(256) == (128, 768, 128)
+    assert api._memory_shares(64) == (
+        32,
+        768,
+        32,
+    )  # DuckDB is floored at 768; the cache share keeps its own 32 floor
+
+
+def test_memory_limit_on_a_python_module_caps_the_live_duckdb(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """OI-493: the limit reaches the real workspace — read back from DuckDB itself."""
+    seen: list[object] = []
+
+    class Spy(api.DuckDbWorkspace):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            seen.append(
+                self._connection.execute("SELECT current_setting('memory_limit')").fetchone()
+            )
+
+    monkeypatch.setattr(api, "DuckDbWorkspace", Spy)
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "shop"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    package = tmp_path / "src" / "shop"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "orders.py").write_text("def create(): pass\n", encoding="utf-8")
+
+    api.analyze(tmp_path, options=api.AnalyzeOptions(memory_limit_mb=1024))
+
+    assert seen == [("768.0 MiB",)]
+
+
+def test_a_duckdb_out_of_memory_under_the_cap_names_the_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """OI-493: a capped run's DuckDB failure says which flag to raise; uncapped, it is unchanged."""
+
+    def exhausted(**_kwargs):
+        raise api.DuckDbOutOfMemory("Out of Memory Error")
+
+    monkeypatch.setattr(api, "_analyze_stage", exhausted)
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "shop"\nversion = "1.0.0"\n', encoding="utf-8"
+    )
+    package = tmp_path / "src" / "shop"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+
+    with pytest.raises(api.SextantError, match="--memory-limit 64.*768 MiB.*larger"):
+        api.analyze(tmp_path, options=api.AnalyzeOptions(memory_limit_mb=64))
+    with pytest.raises(api.DuckDbOutOfMemory):
+        api.analyze(tmp_path, options=api.AnalyzeOptions())

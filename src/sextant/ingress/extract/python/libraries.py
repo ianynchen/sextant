@@ -56,6 +56,7 @@ import posixpath
 import re
 import sys
 import tomllib
+from collections import OrderedDict
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -253,6 +254,7 @@ class Libraries:
         archives: Sequence[LibraryRoot],
         typeshed: Path,
         environment: Path | None = None,
+        table_cap: int | None = None,
     ) -> None:
         self._typeshed = typeshed
         self._commit = (typeshed / "COMMIT").read_text(encoding="utf-8").strip()
@@ -281,7 +283,12 @@ class Libraries:
         self._inside = False
         self._providers: dict[str, _Provider | None] = {}
         self._sources: dict[str, _Source | None] = {}
-        self._tables: dict[str, _Table | None] = {}
+        # Past `table_cap` entries the least recently asked module is dropped and re-parsed
+        # on its next ask; the other caches are not bounded.
+        self._table_cap = table_cap
+        # The modules whose names are being bound: not in `_tables` yet, and not read again.
+        self._binding: set[str] = set()
+        self._tables: OrderedDict[str, _Table | None] = OrderedDict()
         # The file names in each folder a module was looked for in, read once.
         self._listings: dict[Path, frozenset[str]] = {}
         # A library's own files are read for the environment's Python (ruling R22).
@@ -336,6 +343,9 @@ class Libraries:
         """How the library module `module`'s version tests are decided: read with its tree
         (`_table`), which every read of the module starts from."""
         table = self._tables.get(module)
+        if table is None and module not in self._tables and module not in self._binding:
+            # Evicted since its read (`table_cap`): read again, so the answer is the same.
+            table = self._table(module)
         return None if table is None else table.versions
 
     # -- the scanner's questions (`imports.LibraryNames`) ------------------------------
@@ -1460,6 +1470,8 @@ class Libraries:
 
     def _table(self, module: str) -> _Table | None:
         if module in self._tables:
+            if self._table_cap is not None:
+                self._tables.move_to_end(module)
             return self._tables[module]
         source = self._source(module)
         table = None
@@ -1473,8 +1485,14 @@ class Libraries:
                     source, tree, versions=version_tests(tree, self._python, self._release)
                 )
                 package = module if source.is_package else module.rpartition("/")[0]
-                _bind(tree.body, table, package)
+                self._binding.add(module)
+                try:
+                    _bind(tree.body, table, package)
+                finally:
+                    self._binding.discard(module)
         self._tables[module] = table
+        if self._table_cap is not None and len(self._tables) > self._table_cap:
+            self._tables.popitem(last=False)
         return table
 
     def _source(self, module: str) -> _Source | None:

@@ -52,6 +52,9 @@ class PythonScanner:
     """One backend for Python source. The import roots arrive as `classes_dir` and
     `more_classes_dirs`: Python runs from source, so the source is what is read."""
 
+    def __init__(self, table_cap: int | None = None) -> None:
+        self._table_cap = table_cap
+
     def accepts(self, languages: set[str]) -> bool:
         return _LANGUAGE in languages
 
@@ -79,7 +82,12 @@ class PythonScanner:
         # The libraries are read from the module's own scan only: an opted-in library's
         # scan reads that library's files whole (D04 §2a).
         libraries = (
-            Libraries(request.dependency_archives, typeshed_dir(), request.environment)
+            Libraries(
+                request.dependency_archives,
+                typeshed_dir(),
+                request.environment,
+                table_cap=self._table_cap,
+            )
             if request.origin is None
             else None
         )
