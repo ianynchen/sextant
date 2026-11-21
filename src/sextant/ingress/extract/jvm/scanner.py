@@ -28,10 +28,11 @@ class AsmScanner:
     could resolve.
     """
 
-    def __init__(self, jar: Path | Callable[[], Path]) -> None:
+    def __init__(self, jar: Path | Callable[[], Path], max_heap_mb: int | None = None) -> None:
         # The jar may be handed in as a lookup, asked only when a JVM module is read: choosing
         # a scanner for a Python module must not need the JVM extractor to be built.
         self._jar_or_lookup = jar
+        self._max_heap_mb = max_heap_mb
         self._capabilities: frozenset[str] | None = None
 
     @property
@@ -81,9 +82,11 @@ class AsmScanner:
                 encoding="utf-8",
             )
             classpath = ["--classpath-file", str(classpath_file)]
+        heap = [] if self._max_heap_mb is None else [f"-Xmx{self._max_heap_mb}m"]
         completed = subprocess.run(
             [
                 "java",
+                *heap,
                 "-jar",
                 str(self._jar),
                 "--module-id",

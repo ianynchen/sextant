@@ -1,5 +1,6 @@
 import json
 import re
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -1482,6 +1483,45 @@ def test_a_module_descriptor_is_not_scanned_at_all(tmp_path: Path):
     assert all('"kind":"document"' in line for line in written), (
         f"a module descriptor produced a symbol: {written}"
     )
+
+
+def test_max_heap_mb_puts_xmx_before_jar_on_the_extraction_argv_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """OI-493: a heap cap reaches the extraction child as `-Xmx<n>m` between `java` and
+    `-jar`, and an unset cap leaves that argv as it was. The `--capabilities` probe reads
+    help text, not a repo, so it takes no heap flag either way."""
+    argvs: list[list[str]] = []
+
+    def fake_run(argv, **_kwargs):
+        argvs.append(list(argv))
+        report = {
+            "documents": 0,
+            "facts": 0,
+            "scanner_id": "sextant-jvm",
+            "scanner_libraries": [],
+            "capabilities": [],
+            "uncovered": [],
+        }
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(report), stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    request = ScanRequest(
+        module_id="com.acme:orders",
+        coordinates="com.acme/orders",
+        version="1.0.0",
+        classes_dir=CLASSES,
+        out_dir=tmp_path,
+    )
+    AsmScanner(JAR, max_heap_mb=1024).scan(request)
+    AsmScanner(JAR).scan(request)
+    capped, uncapped = argvs
+    assert capped[:3] == ["java", "-Xmx1024m", "-jar"]
+    assert capped[:1] + capped[2:] == uncapped
+    assert uncapped[:2] == ["java", "-jar"]
+
+    AsmScanner(JAR, max_heap_mb=1024).capabilities()
+    assert argvs[-1] == ["java", "-jar", str(JAR), "--capabilities"]
 
 
 def _module_info_bytes() -> bytes:
