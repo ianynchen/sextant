@@ -519,10 +519,12 @@ def _skip_reason(module: ModuleModel) -> str | None:
 
 
 # OI-493: the one split, measured 2026-11-20 — extraction (JVM) and the resolve peak do not
-# overlap; the AST-cache share converts at the measured ~0.5 MiB mean parsed module.
+# overlap; the AST-cache share converts at the measured ~0.5 MiB mean parsed module. DuckDB
+# gets at least 768 MiB: polar's `load_facts` fails below ~640 (608 fails, 640 completes,
+# 2026-11-21) and a capped run must complete, so a small limit overshoots rather than errors.
 def _memory_shares(limit_mb: int) -> tuple[int, int, int]:
     """(jvm_xmx_mb, duckdb_mb, ast_cache_entries)"""
-    return limit_mb // 2, limit_mb // 4, max(32, (limit_mb // 4) * 2)
+    return limit_mb // 2, max(768, limit_mb // 4), max(32, (limit_mb // 4) * 2)
 
 
 def _scanners(memory_limit_mb: int | None = None) -> list[Scanner]:
@@ -530,8 +532,9 @@ def _scanners(memory_limit_mb: int | None = None) -> list[Scanner]:
     asks before a module is analysed, so the two can never disagree."""
     if memory_limit_mb is None:
         return [AsmScanner(extractor_jar), PythonScanner()]
-    jvm_mb, _duckdb_mb, cache_entries = _memory_shares(memory_limit_mb)
-    return [AsmScanner(extractor_jar, jvm_mb), PythonScanner(cache_entries)]
+    jvm_mb = _memory_shares(memory_limit_mb)[0]
+    # The cache share is not fed: it moved no peak on polar (2026-11-21, OI-493).
+    return [AsmScanner(extractor_jar, jvm_mb), PythonScanner()]
 
 
 def _module_json_row(outcome: ModuleOutcome) -> dict[str, object]:

@@ -1878,7 +1878,7 @@ def test_memory_limit_reaches_the_extractor_and_duckdb(
     scans = [a for a in argvs if a[:1] == ["java"] and "--module-id" in a]
     assert scans
     assert all(a[1] == "-Xmx512m" for a in scans)
-    assert settings == [("256.0 MiB",)]
+    assert settings == [("768.0 MiB",)]
 
 
 @pytest.mark.parametrize("value", ["0", "-5", "63", "abc"])
