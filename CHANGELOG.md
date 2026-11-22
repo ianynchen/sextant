@@ -15,6 +15,27 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ten hardening fixes from the 2026-11-21 whole-repo audit.** A re-analyze killed mid-run
+  (Ctrl-C, a CI timeout) no longer leaves the previous run's `metadata.json` vouching for a
+  half-rewritten workspace — the stamp is removed before the first write, so `render`,
+  `export` and `query` refuse the survivor. One too deeply nested Python file (a generated
+  `if/elif` ladder) costs that file as an uncovered note instead of the whole module's scan.
+  `system analyze` accepts a quote in a participant's path or name (`O'Brien/`). The JVM
+  extractor is launched as `$JAVA_HOME/bin/java` when set, with a timeout, and a missing
+  binary, a hang or unreadable extractor output each fail as a `ScanError` naming the cause,
+  with the temp classpath file removed even then. A machine without `git` records `unknown`
+  instead of crashing after the slow stages. `reachability.depth` is the true shortest
+  distance below shared helpers too (breadth-first over the trace's own edges; the step-depth
+  minimum corrected a revisited symbol but not its skipped children). A configured path
+  prefix now moves the `handler_pass_through`/`mount_prefix` questions filed against the
+  old address along with the rows. One oversized or malformed diagram no longer leaves every
+  later diagram as raw text in `architecture.html` (`suppressErrors`, raised `maxTextSize`).
+  A non-UTF-8 `.sextantignore` loads with bad bytes replaced, as `.gitignore` already did.
+  The clear-scan-insert order that keeps a killed scan from poisoning per-file reuse is now
+  pinned by a test.
+
 ### Changed
 
 - **The value walk is bounded, and bulk writes cross to DuckDB in chunks** (OI-491, OI-492). A

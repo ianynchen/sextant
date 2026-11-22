@@ -20,7 +20,7 @@ from sextant.domain.version import FACT_SCHEMA_VERSION, GRAPH_SCHEMA_VERSION, SE
 from sextant.egress.render.metadata import write_metadata
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.detect.maven import MavenDetector
-from sextant.ingress.extract.jvm.scanner import AsmScanner
+from sextant.ingress.extract.jvm.scanner import AsmScanner, _java
 from sextant.resources import catalogs_dir, extractor_jar
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -1875,7 +1875,9 @@ def test_memory_limit_reaches_the_extractor_and_duckdb(
     )
 
     assert result.exit_code == 0, result.output
-    scans = [a for a in argvs if a[:1] == ["java"] and "--module-id" in a]
+    # The launcher is $JAVA_HOME/bin/java when set (audit item 4), so the filter
+    # asks the scanner for the name instead of assuming the bare one.
+    scans = [a for a in argvs if a[:1] == [_java()] and "--module-id" in a]
     assert scans
     assert all(a[1] == "-Xmx512m" for a in scans)
     assert settings == [("768.0 MiB",)]
