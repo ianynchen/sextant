@@ -107,10 +107,10 @@ variables, not functions). `as_view` is a `classonlymethod`, so the scanner must
 - One list included at two prefixes mounts at both (`/twice1/leaf` and `/twice2/leaf` are 200).
 - `ROOT_URLCONF` is the setting `get_resolver()` reads, a dotted module path; the root list is
   that module's `urlpatterns`.
-- `BaseHandler.resolve_request` reads `request.urlconf`. A middleware that sets it swaps the root
-  for that request only: `/b` is 200 under `request.urlconf = 'probe_alt'` and 404 under
+- `BaseHandler.resolve_request` reads `request.urlconf`. Setting it on a request (the probe
+  does so by hand) swaps the root for that request only: `/b` is 200 under `request.urlconf = 'probe_alt'` and 404 under
   `ROOT_URLCONF`. This is the boundary §5d states, measured: `ROOT_URLCONF` is the root only when
-  no middleware sets `request.urlconf`.
+  `request.urlconf` is unset; a middleware that sets it is the case, not measured as such.
 
 ## Function views
 

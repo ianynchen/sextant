@@ -150,9 +150,17 @@ print(
 init_src = inspect.getsource(HttpRequest.__init__)
 assert "self.GET = QueryDict(mutable=True)" in init_src
 assert "self.COOKIES = {}" in init_src and "self.META = {}" in init_src
-assert isinstance(
-    HttpRequest.__dict__["headers"], type(HttpRequest.__dict__["headers"])
-) and hasattr(HttpRequest.__dict__["headers"], "func")  # cached_property
+assert HttpRequest.__init__.__qualname__ == "HttpRequest.__init__"
+assert HttpRequest.__module__ == "django.http.request"
+assert not {"GET", "COOKIES", "META"} & set(HttpRequest.__dict__)
+assert type(HttpRequest.__dict__["headers"]).__module__ == "django.utils.functional"
+assert type(HttpRequest.__dict__["headers"]).__name__ == "cached_property"
+assert register_converter.__module__ == "django.urls.converters"
+assert django.urls.register_converter is register_converter
+assert URLResolver._join_route.__qualname__ == "URLResolver._join_route"
+assert URLResolver.__module__ == "django.urls.resolvers"
+assert MultiValueDictKeyError.__module__ == "django.utils.datastructures"
+assert inspect.isfunction(include)
 rule(
     "HttpRequest.GET, .COOKIES, .META are instance attributes assigned in django.http.request.HttpRequest.__init__ "
     "(GET a QueryDict); HttpRequest.headers is a cached_property of the same class"
@@ -314,9 +322,14 @@ else:
 rule(
     "the variable Django reads from an included module is `urlpatterns`; a module naming the list anything else raises ImproperlyConfigured when the patterns are first needed"
 )
-assert settings.ROOT_URLCONF.startswith("probe_urls_")
+c_a, mod_a = mount([path("only-a", ok)])
+assert c_a.get("/only-a").status_code == 200
+c_b, mod_b = mount([path("only-b", ok)])
+assert c_b.get("/only-b").status_code == 200 and c_b.get("/only-a").status_code == 404
+settings.ROOT_URLCONF = mod_a.__name__
+assert c_b.get("/only-a").status_code == 200 and c_b.get("/only-b").status_code == 404
 rule(
-    "ROOT_URLCONF is the setting get_resolver() reads (a dotted module path); the root urlconf is that module's `urlpatterns`"
+    "changing settings.ROOT_URLCONF to another module's dotted path changes which `urlpatterns` list the resolver serves ('/only-a' and '/only-b' swap between 200 and 404); every mount() above is this same assertion"
 )
 
 
@@ -388,6 +401,10 @@ rule(
     "a function view has no automatic OPTIONS: an OPTIONS request reaches a plain view (200) and is 405 on a require_GET view"
 )
 # The allowed set is read from the decorator argument; the 405 carries it.
+assert c.head("/rhm").status_code == 405 and c.options("/rhm").status_code == 405
+rule(
+    "require_http_methods(['GET','PUT']) adds no automatic HEAD or OPTIONS: HEAD and OPTIONS requests are both 405"
+)
 resp = c.post("/rhm")
 assert set(resp.headers["Allow"].split(", ")) == {"GET", "PUT"}
 assert c.post("/get").headers["Allow"] == "GET" and set(
@@ -528,8 +545,26 @@ rule(
 )
 assert c.head("/items").status_code == 200 and c.head("/noverbs").status_code == 405
 assert c.head("/ownhead").status_code == 203 and c.head("/items").content == b""
+_req = RequestFactory().head("/x")
+_inst = Items()
+assert not hasattr(_inst, "head")
+_inst.setup(_req)
+assert _inst.head == _inst.get
+assert "head" not in inspect.getsource(View.dispatch)
+assert "self.head = self.get" in inspect.getsource(View.setup)
+
+
+class NoSuperSetup(Items):
+    def setup(self, request, *a, **k):
+        self.request, self.args, self.kwargs = request, a, k
+
+
+_ns = NoSuperSetup()
+_ns.setup(_req)
+assert not hasattr(_ns, "head")
+assert NoSuperSetup.as_view()(_req).status_code == 405
 rule(
-    "View.setup assigns self.head = self.get when the class has get and no head: HEAD is 200 on Items; a class with its own head keeps it (203); a class with no get has no HEAD (405)"
+    "View.setup assigns self.head = self.get when the class has get and no head: HEAD is 200 on Items; a class with its own head keeps it (203); a class with no get has no HEAD (405); an instance has no head before setup() and head == get after; View.dispatch never mentions head; a subclass whose setup does not call super has no head (HEAD 405)"
 )
 assert c.options("/ownopt").status_code == 204
 rule("an options method on the subclass replaces View.options")
@@ -669,12 +704,14 @@ except MultiValueDictKeyError:
     pass
 else:
     raise AssertionError
+assert RequestFactory().get("/r").GET.get("k") is None
 assert c.get("/rg").json() == {"v": "dflt"} and c.get("/rg", {"k": "x"}).json() == {"v": "x"}
 rule(
     "request.GET.get('k', default) never raises: absent -> the default (None without one), status 200"
 )
 c.cookies["ck"] = "cv"
 j = c.get("/ra", headers={"X-Thing": "tv"}).json()
+assert RequestFactory().get("/", headers={"X-Thing": "tv"}).headers.get("x-thing") == "tv"
 assert j["cookie"] == "cv" and j["hdr"] == "tv" and j["meta"] == "tv"
 rule(
     "request.COOKIES['ck'], request.headers['X-Thing'] and request.META['HTTP_X_THING'] read the same cookie / header; headers keys are case-insensitive and META keys are HTTP_ + upper-cased with '-' as '_'"
@@ -689,7 +726,7 @@ from django.core.handlers.base import BaseHandler
 
 assert "request.urlconf" in inspect.getsource(BaseHandler.resolve_request)
 rule(
-    "BaseHandler.resolve_request reads request.urlconf at request time, so a middleware may swap the root urlconf per request: ROOT_URLCONF is the root only when no middleware sets request.urlconf (the boundary §5d states)"
+    "BaseHandler.resolve_request reads request.urlconf at request time, so a request whose `urlconf` attribute is set is resolved against that list instead: ROOT_URLCONF is the root only when request.urlconf is unset (the boundary §5d states)"
 )
 c2, mod2 = mount([path("a", ok)])
 alt = types.ModuleType("probe_alt")
@@ -703,7 +740,7 @@ h.load_middleware()
 assert h.get_response(req).status_code == 200
 assert h.get_response(RequestFactory().get("/b")).status_code == 404
 rule(
-    "setting request.urlconf (for example in middleware) swaps the root for that request only: '/b' is 200 under request.urlconf='probe_alt' and 404 under ROOT_URLCONF"
+    "a request with request.urlconf set (the probe sets it by hand, as middleware would) swaps the root for that request only: '/b' is 200 under request.urlconf='probe_alt' and 404 under ROOT_URLCONF"
 )
 
 print("OK")
