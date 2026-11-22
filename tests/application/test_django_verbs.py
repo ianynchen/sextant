@@ -10,6 +10,7 @@ per method (`narrowed_by`). The rules are Django's own, measured in
 import json
 from pathlib import Path
 
+import pytest
 import test_django_routes
 from test_django_routes import _handler, _resolved, _rows
 
@@ -73,7 +74,8 @@ def test_require_http_methods_with_a_list_held_in_a_module_name_guesses_no_metho
     tmp_path: Path, libraries
 ):
     """R12: the list is read by the value walk, which never reads a container a module name
-    holds (it may be changed after the write, `test_fastapi_routes`: "a verb list held in a\n    module name is never read as its first value"): one row, method NULL, `unresolved`."""
+    holds (it may be changed after the write, `test_fastapi_routes`: "a verb list held in a
+    module name is never read as its first value"): one row, method NULL, `unresolved`."""
     rows = _view(
         tmp_path,
         libraries,
@@ -325,3 +327,98 @@ def test_require_http_methods_publishes_its_list_as_written(tmp_path: Path, libr
     rows = _view(tmp_path, libraries, "@require_http_methods(['get'])\n" + _DEF)
 
     assert rows == [("get", None, "/x/", _handler("v"), "resolved")]
+
+
+_KEYWORD_ONLY = [
+    "@login_required(login_url='/l')\n",
+    "@login_required()\n",
+    (
+        "from django.contrib.admin.views.decorators import staff_member_required\n"
+        "@staff_member_required(login_url='/l')\n"
+    ),
+]
+
+
+@pytest.mark.parametrize("decorator", _KEYWORD_ONLY)
+def test_a_stated_decorator_called_without_the_view_ends_the_handler_walk(
+    tmp_path: Path, libraries, decorator: str
+):
+    """Fix round 2: `login_required(login_url=...)` writes no argument 0, so the value model's
+    `result_calls: arg0` (the `d(view)` spelling) states nothing for it, and one entry per call
+    cannot state the other spelling too. It ends the handler walk like any unstated decorator:
+    `partial`, handler NULL, one question; never `resolved` with no handler."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {"urls.py": _HTTP + decorator + _DEF + "urlpatterns = [path('x/', v)]\n"},
+    )
+
+    assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
+    assert len(_questions(workspace)) == 1
+
+
+@pytest.mark.parametrize("decorator", _KEYWORD_ONLY)
+def test_a_stated_decorator_called_without_the_view_still_lets_require_post_narrow(
+    tmp_path: Path, libraries, decorator: str
+):
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + decorator
+            + "@require_POST\n"
+            + _DEF
+            + "urlpatterns = [path('x/', v)]\n"
+        },
+    )
+
+    assert _rows(workspace) == [("POST", None, "/x/", None, "partial")]
+    assert len(_questions(workspace)) == 1
+
+
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        "login_required(login_url='/l')",
+        "login_required()",
+        "staff_member_required(login_url='/l')",
+    ],
+)
+def test_the_registration_spelling_of_a_decorator_without_the_view_gives_the_same_row(
+    tmp_path: Path, libraries, wrapper: str
+):
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "from django.contrib.admin.views.decorators import staff_member_required\n"
+            + _DEF
+            + f"urlpatterns = [path('x/', {wrapper}(v))]\n"
+        },
+    )
+
+    assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
+    assert len(_questions(workspace)) == 1
+
+
+def test_any_stated_decorator_called_without_its_function_is_never_resolved_without_a_handler(
+    tmp_path: Path, libraries
+):
+    """The safety net, on a value model that is not Django's: `functools.lru_cache` is stated
+    `result_calls: arg0` (`value-models/python-wrappers.yml`); `lru_cache(maxsize=8)` writes no
+    argument 0 and returns a decorator, which states nothing."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "import functools\n@functools.lru_cache(maxsize=8)\n"
+            + _DEF
+            + "urlpatterns = [path('x/', v)]\n"
+        },
+    )
+
+    assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
+    assert len(_questions(workspace)) == 1

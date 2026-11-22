@@ -3829,23 +3829,33 @@ def _decorator_stack(
         row = index.sites.get((method, min(made))) if made else None
         if row is None:
             return _Stack(tuple(calls), blocked)
-        if blocked is None and not _hands_back(index, method, row):
+        position = _handed_back(index, method, row)
+        if blocked is None and position is None:
             blocked = (method, row)
         calls.append((method, row))
         arguments = row["arguments"] or []
-        slot = argument_slot(arguments, 0)
+        slot = argument_slot(arguments, 0 if position is None else position)
         if slot is None or slot == UNPACKED_SLOT:
             return _Stack(tuple(calls), blocked)
         held = arguments[slot]
 
 
-def _hands_back(index: "ValueIndex", method: str, row: Mapping[str, Any]) -> bool:
-    """Whether a value model states what `row` hands back (`returns_argument`): the call
-    itself, or, for a `__call__`, the call that made what it is called on."""
-    maker = _maker(index, method, row) if row["name"] == "__call__" else row
-    return maker is not None and (str(maker.get("owner")), str(maker["name"])) in (
-        index.stated_returns
-    )
+def _handed_back(index: "ValueIndex", method: str, row: Mapping[str, Any]) -> int | None:
+    """The position of the argument a value model states `row` hands on (`returns_argument`),
+    in the spelling the call is written in: a `__call__` whose receiver a `result_returns`
+    call made, or a call stated `returns` or `result_calls` itself. None for any other call,
+    a stated one written in the other spelling among them (`login_required(login_url=...)`,
+    stated for `login_required(view)`, makes a decorator nothing states)."""
+    if row["name"] == "__call__":
+        maker = _maker(index, method, row)
+        stated = (
+            None
+            if maker is None
+            else index.stated_returns.get((str(maker.get("owner")), str(maker["name"])))
+        )
+        return stated[1] if stated is not None and stated[0] == "result_returns" else None
+    stated = index.stated_returns.get((str(row.get("owner")), str(row["name"])))
+    return stated[1] if stated is not None and stated[0] in ("returns", "result_calls") else None
 
 
 def _maker(index: "ValueIndex", method: str, row: Mapping[str, Any]) -> Mapping[str, Any] | None:
