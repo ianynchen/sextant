@@ -480,3 +480,107 @@ def test_include_of_a_function_result_is_behind_an_unread_prefix(tmp_path, libra
     assert _rows(workspace) == [_row("/<prefix>e/", "partial")]
     assert _questions(workspace, "mount_prefix") == ["/<prefix>e/"]
     assert _questions(workspace, "mounted_router") == ["/api/"]
+
+
+# -- fix round 2 (ruling R9) ------------------------------------------------------------------------
+
+_INCLUDED = {"urls.py": "urlpatterns = [path('api/', include('app.api_urls'))]\n"}
+
+
+def test_an_aliased_list_is_mounted(tmp_path, libraries):
+    """R9 part 1: `urlpatterns = base` is the list `base`; the mount follows the name."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {**_INCLUDED, "api_urls.py": "base = [path('x/', v)]\nurlpatterns = base\n"},
+    )
+
+    assert _rows(workspace) == [_row("/api/x/")]
+    assert _questions(workspace, "mounted_router") == []
+    assert _questions(workspace, "mount_prefix") == []
+
+
+def test_a_re_exported_list_is_mounted(tmp_path, libraries):
+    """R9 part 1: `from app.other import urlpatterns` binds the name to the other module's
+    list, any number of steps."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            **_INCLUDED,
+            "other.py": "urlpatterns = [path('x/', v)]\n",
+            "middle.py": "from app.other import urlpatterns\n",
+            "api_urls.py": "from app.middle import urlpatterns\n",
+        },
+    )
+
+    assert _rows(workspace) == [_row("/api/x/")]
+    assert _questions(workspace, "mounted_router") == []
+
+
+def test_an_aliased_or_re_exported_list_in_a_root_module_stays_at_the_root(tmp_path, libraries):
+    """R9 part 1, unchanged: the same modules used as roots serve `/x/` at `resolved`."""
+    alias = _served(
+        tmp_path / "alias",
+        libraries,
+        {"api_urls.py": "base = [path('x/', v)]\nurlpatterns = base\n"},
+    )
+    reexport = _served(
+        tmp_path / "reexport",
+        libraries,
+        {
+            "other.py": "urlpatterns = [path('x/', v)]\n",
+            "api_urls.py": "from app.other import urlpatterns\n",
+        },
+    )
+
+    assert alias == reexport == [_row("/x/")]
+
+
+def test_a_list_handed_to_a_call_no_catalog_reads_is_behind_an_unread_prefix(tmp_path, libraries):
+    """R9 part 2: `urlpatterns = list(base)` included at `api/`: `base` is handed to a call no
+    catalog reads, so it cannot be placed; nothing is `resolved` at the root."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {**_INCLUDED, "api_urls.py": "base = [path('x/', v)]\nurlpatterns = list(base)\n"},
+    )
+
+    assert _rows(workspace) == [_row("/<prefix>x/", "partial")]
+    assert _questions(workspace, "mount_prefix") == ["/<prefix>x/"]
+
+
+def test_a_list_unpacked_into_a_call_no_catalog_reads_is_behind_an_unread_prefix(
+    tmp_path, libraries
+):
+    """R9 part 2, the starred form: `wrap(*base)`."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            **_INCLUDED,
+            "api_urls.py": "def wrap(*items):\n    return list(items)\n"
+            "base = [path('x/', v)]\nurlpatterns = wrap(*base)\n",
+        },
+    )
+
+    assert [row[2:] for row in _rows(workspace)] == [("/<prefix>x/", _V, "partial")]
+
+
+def test_a_root_list_passed_nowhere_stays_at_the_root(tmp_path, libraries):
+    """R9 part 2 leaves design §5d: a module-level list nothing unread uses is the root."""
+    rows = _served(tmp_path, libraries, {"urls.py": "urlpatterns = [path('x/', v)]\n"})
+
+    assert rows == [_row("/x/")]
+
+
+def test_a_named_list_extended_into_an_included_list_is_mounted(tmp_path, libraries):
+    """R9 with the rule `_held_by` states: a call made on a field's value holds its arguments,
+    so `urlpatterns.extend(other)` puts `other`'s routes in `urlpatterns`: mounted with it, and
+    at the root where it is the root."""
+    body = "other = [path('o/', v)]\nurlpatterns = [path('x/', v)]\nurlpatterns.extend(other)\n"
+    included = _served(tmp_path / "included", libraries, {**_INCLUDED, "api_urls.py": body})
+    root = _served(tmp_path / "root", libraries, {"api_urls.py": body})
+
+    assert included == [_row("/api/o/"), _row("/api/x/")]
+    assert root == [_row("/o/"), _row("/x/")]

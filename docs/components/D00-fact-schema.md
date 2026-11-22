@@ -1383,7 +1383,9 @@ knows of the callee (ruling R27, 2026-11-06, which amends R2): argument position
 order the call is written in, and the resolver binds every call's arguments to parameters by
 one calling rule (`values.parameter_slots`, over each parameter's `kind`). `**` marks keyword
 arguments unpacked from a mapping (`f(**options)`), whose names are not written, and `*` a
-positional argument unpacked from a sequence (`f(*items)`), whose entry is `unresolved` and
+positional argument unpacked from a sequence (`f(*items)`), whose entry is `unresolved` (a
+`field` where the sequence is one, a module-level name or an attribute, fact schema 19: which
+value is unpacked) and
 stands in its place among the positional entries: after it, no later positional argument's
 parameter is known (user ruling A, 2026-11-06). Entries with no `keyword`, and `*` entries,
 are positional, in order, before the keyword entries; a parameter the call leaves out has no

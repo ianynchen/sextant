@@ -173,6 +173,10 @@ class ProjectNames(Protocol):
         """A class another file of the module defines, by its header."""
         ...
 
+    def names_a_variable(self, module: str, name: str) -> bool:
+        """Whether `module.name`, where it is defined, is bound to a variable alone."""
+        ...
+
     def names_a_value(self, module: str, name: str) -> bool:
         """Whether `module.name` is bound, where it is defined, to a value, not a class."""
         ...

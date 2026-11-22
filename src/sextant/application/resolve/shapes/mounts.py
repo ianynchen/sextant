@@ -689,6 +689,8 @@ class MountReader:
         self._held: dict[tuple[tuple[str, int], Path], tuple[Prefix, ...] | None] = {}
         # The lists holding each value, `(method, value id)` -> list identities (`_lists`).
         self._holders: dict[tuple[str, int], tuple[tuple[str, str, int], ...]] | None = None
+        self._handed: frozenset[str] | None = None
+        self._on_fields: dict[str, list[Mapping[str, Any]]] | None = None
         self._reached: dict[
             tuple[str, int], tuple[tuple[tuple[str, str, int], ...], tuple[str, ...]]
         ] = {}
@@ -1449,11 +1451,59 @@ class MountReader:
         variable (a module-level name, or a class attribute: the facts write both the same)."""
         if made[0] not in ("field", "array", "returned"):
             return True
-        return made[0] == "field" and any(
-            writer is not None and CLASS_BODY in writer
-            for writer, written in self._index.constants.get(made[1], ())
-            if written.get("kind") == "array"
+        return (
+            made[0] == "field"
+            and made[1] not in self._handed_lists()
+            and any(
+                writer is not None and CLASS_BODY in writer
+                for writer, written in self._index.constants.get(made[1], ())
+                if written.get("kind") == "array"
+            )
         )
+
+    def _calls_on(self) -> dict[str, list[Mapping[str, Any]]]:
+        """The calls made on each field's value, grouped once per reader."""
+        if self._on_fields is None:
+            grouped: dict[str, list[Mapping[str, Any]]] = {}
+            for site in self._index.sites.values():
+                if site.get("receiver_field") is not None:
+                    grouped.setdefault(str(site["receiver_field"]), []).append(site)
+            self._on_fields = grouped
+        return self._on_fields
+
+    def _handed_lists(self) -> frozenset[str]:
+        """The fields handed as an argument, plain, unpacked or as an element of a list or
+        tuple written there, to a call this reader does not read (ruling R9): any call but a
+        mount and the call a mount reads its router through. What such a call makes of the
+        list is not read, so the list cannot be placed. Built once per reader."""
+        if self._handed is not None:
+            return self._handed
+        known: set[tuple[str, int]] = set()
+        for mount in self._mounts:
+            known.add(mount.key)
+            read = (
+                None
+                if mount.rule.router_arg == CHAIN_RESULT
+                else through_site(self._index, mount.site, mount.rule)
+            )
+            if read is not None:
+                known.add((str(read[0]["caller"]), int(str(read[0]["ordinal"]))))
+        handed: set[str] = set()
+
+        def hand(entry: Mapping[str, Any]) -> None:
+            if entry.get("kind") == "field" and entry.get("symbol") is not None:
+                handed.add(str(entry["symbol"]))
+            elif entry.get("kind") == "array":
+                for element in entry.get("elements") or []:
+                    hand(element)
+
+        for key, site in self._index.sites.items():
+            # A call made on a field's value holds its arguments (`_held_by`, `_reach`).
+            if key not in known and site.get("receiver_field") is None:
+                for argument in site["arguments"] or []:
+                    hand(argument)
+        self._handed = frozenset(handed)
+        return self._handed
 
     def _unplaced(self, made: tuple[str, str, int]) -> Prefix:
         """The named hole a list this reader cannot place serves behind, with the call that
@@ -1586,9 +1636,16 @@ class MountReader:
             unread[f"`{symbol}`, written nowhere in the scanned code"] = None
         if self._index.produced.get(symbol) or self._index.writers.get(symbol):
             unread[f"`{symbol}`, written from a value not read as a list"] = None
+        # A call made on the field's value holds its arguments (`_held_by`): the lists among
+        # them are this list's too (`urlpatterns.extend(other)`).
+        for site in self._calls_on().get(symbol, ()):
+            for argument in site["arguments"] or []:
+                self._reach(str(site["caller"]), argument, named, None, found, unread, False)
         for writer, written in writes:
             if written.get("kind") != "array":
-                unread[f"`{symbol}`, written from a value not read as a list"] = None
+                # An alias (`urlpatterns = base`) or an import (`from m import urlpatterns`,
+                # ruling R9) is the value it names, followed to the list.
+                self._reach(writer or caller, written, named, None, found, unread, True)
                 continue
             for element in written.get("elements") or []:
                 if element.get("keyword") == "*":

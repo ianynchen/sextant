@@ -809,7 +809,9 @@ class BodyReader:
         """An import inside a function binds a local name. A module-level name that
         branches bind to several things (`try: import ujson as json` / `except
         ImportError: import json`) is read as a static field, one write per binding, so a
-        call on it names the field as its receiver and the resolver follows each write."""
+        call on it names the field as its receiver and the resolver follows each write. So is
+        a module-level import of one variable another file of the module defines (`from
+        app.other import urlpatterns`): the name is that value, written once (ruling R9)."""
         context = self._context
         bound = bind_names([node], context.here, is_package=context.is_package, index=context.index)
         if scope.frame is not None:
@@ -825,7 +827,7 @@ class BodyReader:
             return
         for name, binding in bound.items():
             final = scope.types.names.get(name)
-            if final is None or len(final.targets) < 2:
+            if final is None or (len(final.targets) < 2 and not self._a_variable(final.targets)):
                 continue
             descriptor = f"{scope.owner}{name}."
             if descriptor not in scope.fields:
@@ -839,6 +841,18 @@ class BodyReader:
                     modifiers={"static": True},
                 )
             self._write_field(descriptor, _reference(binding.targets[0]), scope)
+
+    def _a_variable(self, targets: tuple[Target, ...] | list[Target]) -> bool:
+        """Whether one import target is a variable another file of this module defines."""
+        if len(targets) != 1:
+            return False
+        index, target = self._context.index, targets[0]
+        return (
+            target.member is not None
+            and index.headers is not None
+            and index.owns(target.module)
+            and index.headers.names_a_variable(target.module, target.member)
+        )
 
     def _branches(
         self,
@@ -1200,9 +1214,14 @@ class BodyReader:
                 types.append(None)
             elif isinstance(argument, ast.Starred):
                 # Unpacked into the positional arguments (D00 §5 `keyword: "*"`): how many it
-                # fills, and so where every later one lands, is not known.
-                self._value(argument.value, scope)
-                positional.append(_UNKNOWN.model_copy(update={"keyword": _UNPACKED_POSITIONAL}))
+                # fills, and so where every later one lands, is not known. A name keeps its
+                # `field` (which value is unpacked, ruling R9); anything else is `unresolved`.
+                unpacked = self._value(argument.value, scope)
+                positional.append(
+                    (unpacked if unpacked.kind == "field" else _UNKNOWN).model_copy(
+                        update={"keyword": _UNPACKED_POSITIONAL}
+                    )
+                )
                 types.append(None)
             else:
                 positional.append(self._value(argument, scope))
