@@ -86,6 +86,20 @@ def test_scanner_declares_what_it_reads_and_accepts_python():
     }
 
 
+def test_a_too_deeply_nested_file_is_an_uncovered_note_not_a_dead_scan(tmp_path: Path):
+    """A generated file whose tree PARSES but blows the recursion limit inside
+    `file_facts` costs that one file as an uncovered note — never the whole
+    module. The parse guard above it already works this way; the walk must
+    not be the one unguarded recursion left."""
+    ladder = "def f(x):\n" + "".join(
+        f"    {'if' if n == 0 else 'elif'} x == {n}:\n        return {n}\n" for n in range(600)
+    )
+    report, tree = _scan(tmp_path, {"app/generated.py": ladder, "app/ok.py": "def ping(): pass\n"})
+
+    assert any("too deeply nested" in note for note in report.uncovered)
+    assert "app/ok#" in _symbols(tree)
+
+
 def test_a_module_is_a_type_and_its_top_level_function_is_its_method(tmp_path: Path):
     report, tree = _scan(
         tmp_path,
