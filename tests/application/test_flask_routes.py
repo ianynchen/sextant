@@ -271,3 +271,20 @@ def test_an_app_rule_with_no_leading_slash_and_no_prefix_derives_nothing(tmp_pat
     rows = _flask(tmp_path, libraries, "@app.route('x')\ndef x():\n    return ''\n")
 
     assert rows == []
+
+
+def test_a_module_import_rebound_as_the_app_keeps_its_routes(tmp_path: Path, libraries):
+    """Plan 6 Task 3 fix round 3: `import app.c` binds the name `app` to the package, and the
+    file then rebinds `app` as its own variable. The import is no project variable, so it
+    writes no field, and the route on the file's own `app` stays."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "c.py": "X = 1\n",
+            "main.py": "from flask import Flask\nimport app.c\napp = Flask(__name__)\n"
+            "@app.route('/z')\ndef z():\n    return ''\n",
+        },
+    )
+
+    assert _rows(workspace) == [("GET", "/z", _handler("z"), "resolved")]

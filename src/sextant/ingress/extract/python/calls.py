@@ -827,7 +827,12 @@ class BodyReader:
             return
         for name, binding in bound.items():
             final = scope.types.names.get(name)
-            if final is None or (len(final.targets) < 2 and not self._a_variable(final.targets)):
+            # An import of one project variable is that value, decided by the import's own
+            # targets; a name the file rebinds is the file's own variable (fix round 3).
+            if final is None or (
+                len(final.targets) < 2
+                and not (final.targets == binding.targets and self._a_variable(binding.targets))
+            ):
                 continue
             descriptor = f"{scope.owner}{name}."
             if descriptor not in scope.fields:

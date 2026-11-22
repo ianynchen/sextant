@@ -584,3 +584,37 @@ def test_a_named_list_extended_into_an_included_list_is_mounted(tmp_path, librar
 
     assert included == [_row("/api/o/"), _row("/api/x/")]
     assert root == [_row("/o/"), _row("/x/")]
+
+
+def test_a_re_export_beside_an_own_variable_is_mounted(tmp_path, libraries):
+    """Fix round 3: the importing file also has a variable of its own."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            **_INCLUDED,
+            "other.py": "urlpatterns = [path('x/', v)]\n",
+            "api_urls.py": "from app.other import urlpatterns\napp_name = 'api'\n",
+        },
+    )
+
+    assert _rows(workspace) == [_row("/api/x/")]
+    assert _questions(workspace, "mounted_router") == []
+
+
+def test_an_imported_list_the_file_extends(tmp_path, libraries):
+    """Fix round 3, the mirror case: `from app.other import urlpatterns` then
+    `urlpatterns += [...]`. The file rebinds the name, so the import writes no field; but the
+    `+=` reads the name where it runs, as the imported list, so the sum unpacks it: both
+    routes are served under the prefix, as Django serves them."""
+    rows = _served(
+        tmp_path,
+        libraries,
+        {
+            **_INCLUDED,
+            "other.py": "urlpatterns = [path('x/', v)]\n",
+            "api_urls.py": "from app.other import urlpatterns\nurlpatterns += [path('y/', v)]\n",
+        },
+    )
+
+    assert rows == [_row("/api/x/"), _row("/api/y/")]
