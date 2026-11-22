@@ -181,6 +181,7 @@ from sextant.application.resolve.shapes.pass_through import (
     unread_rows,
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
+from sextant.application.resolve.shapes.route_expression import URL_IS_EXPRESSION, paths_of
 from sextant.application.resolve.values import (
     ABSENT,
     EXPRESSION,
@@ -277,7 +278,9 @@ _UNREAD_DESTINATION = "unread"
 # What a captured address IS (`url_is`, Vert.x spec §3a), a literal capture beside `url`, last
 # wins: a regular expression the framework matches (`pattern`, the row's `path_kind`), or an
 # address (`address`, the default), which a later step declares to undo an earlier pattern.
-_URL_IS = {PATH_KIND_PATTERN: PATH_KIND_PATTERN, "address": None}
+# A route expression (`expression`, D02) is read by its structural reads (`paths_of`) per
+# destination: its exact paths are addresses, anything else the text as a pattern.
+_URL_IS = {PATH_KIND_PATTERN: PATH_KIND_PATTERN, "address": None, URL_IS_EXPRESSION: None}
 # A literal capture saying whether the chain serves at all (`serves`, Vert.x spec §3a): a
 # step declaring `serves: false` (`disable()`) makes the chain derive nothing until a later
 # step declares `serves: true`. A `poisons: [serves]` step ends it for good.
@@ -1247,7 +1250,7 @@ def _derive_captured(
     # read the verb".
     method_kind = context.verbless_serves if verbless and direction == "inbound" else None
     # What the address is (`url_is`): a pattern is published verbatim and linked by nothing.
-    path_kind = _URL_IS.get(str(captures.get("url_is")))
+    declared_path_kind = _URL_IS.get(str(captures.get("url_is")))
     # `disable()` without a later `enable()`, or `remove()`: the framework serves nothing.
     serving = captures.get(_SERVES, True) is True
     body_argument = captures.get("body")
@@ -1322,6 +1325,10 @@ def _derive_captured(
                 for destination in _composed_address(captures, context, url_argument)
             )
         )
+    # A route expression's destinations are the paths its reads give (`url_is: expression`).
+    expression_kinds: dict[tuple[str | None, str | None, str], str] = {}
+    if captures.get("url_is") == URL_IS_EXPRESSION:
+        destinations, expression_kinds = _expression_destinations(destinations)
     # Computed once, outside the destinations loop — the same
     # `single_call` reasoning: neither depends on peer/path/resolution, and
     # `argument_descriptor` appends to the shared `referenced` accumulator,
@@ -1417,6 +1424,7 @@ def _derive_captured(
     # served through), read once per prefix.
     existing: dict[int, Existence | None] = {}
     for verb, (peer, path, url_resolution), prefix in product(verbs, destinations, prefixes):
+        path_kind = expression_kinds.get((peer, path, url_resolution), declared_path_kind)
         # An address nobody read takes no prefix: one row for it, not one per prefix.
         if path is None and prefix is not prefixes[0]:
             continue
@@ -2934,6 +2942,29 @@ def _assembled_text(answer: "Answer | None") -> tuple[str | None, str | None, st
             _INEXACT_TEMPLATE if answer.inexact else str(Resolution.PARTIAL),
         )
     return None, None, str(Resolution.UNRESOLVED)
+
+
+def _expression_destinations(
+    destinations: Sequence[tuple[str | None, str | None, str]],
+) -> tuple[list[tuple[str | None, str | None, str]], dict[tuple[str | None, str | None, str], str]]:
+    """Each destination whose path is a route expression read whole, as the paths its
+    structural reads give (`paths_of`): exact, one destination per path at its own word; not
+    exact, or not read whole, the text as written at `partial`, marked as a pattern (D02
+    `url_is: expression`). With the marker of each destination that is a pattern."""
+    found: list[tuple[str | None, str | None, str]] = []
+    kinds: dict[tuple[str | None, str | None, str], str] = {}
+    for peer, path, resolution in destinations:
+        if path is None:
+            found.append((peer, path, resolution))
+            continue
+        paths, exact = paths_of(path) if resolution == str(Resolution.RESOLVED) else ((), False)
+        if exact:
+            found.extend((peer, served, resolution) for served in paths)
+            continue
+        pattern = (peer, path, weaker(resolution, str(Resolution.PARTIAL)))
+        kinds[pattern] = PATH_KIND_PATTERN
+        found.append(pattern)
+    return list(dict.fromkeys(found)), kinds
 
 
 def _composed_address(

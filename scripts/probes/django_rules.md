@@ -185,6 +185,24 @@ variables, not functions). `as_view` is a `classonlymethod`, so the scanner must
   `^pre/in$`.
 - A route starting with `/` (see "Differs from the design" item 3) is `urls.W002`.
 
+Optional pieces, alternation and mixed joins (section 7b of the script, plan 6, Task 6):
+
+| Expression | Serves |
+|---|---|
+| `^r/(?P<id>\d+)(\.json)?/?$` | `/r/5`, `/r/5/`, `/r/5.json`, `/r/5.json/`; `/r/5.jsonx` is 404; view called with `id='5'` only |
+| `^u/(?P<a>\d+)/(?P<b>\d+)?$` | `/u/1/` (no `b=` passed) and `/u/1/2`; `/u/1` is 404 |
+| `^deactivate?$` | `/deactivat` and `/deactivate` |
+| `^m/(?P<x>\d+)?/end/$` | `/m/5/end/` and `/m//end/`; `/m/end/` is 404 |
+| `^s/(?P<status>(local\|federated))/$` | `/s/local/` and `/s/federated/`, `status=` the matched text |
+| `re_path(r"^opt2/?", include([path("x/", v)]))` | `/opt2/x/` and `/opt2x/` (both prefixes) |
+| `path("api/", include([re_path(r"^x/$", v)]))` | `/api/x/` (`ResolverMatch.route` is `api/x/$`) |
+| `re_path(r"^rx/", include([path("x/", v)]))` | `/rx/x/` |
+
+- A `?` after one literal character or one group makes that piece optional: the path is served
+  with and without it. A group that did not match passes no argument.
+- Alternation inside a named group is one argument whose value is the matched text.
+- `path` and `re_path` mix under `include` by plain concatenation of the read paths.
+
 ## Request reads
 
 - `request.GET["k"]` with `k` absent raises `MultiValueDictKeyError` (a `KeyError`); the client
@@ -234,10 +252,9 @@ variable that holds a decorator, not a `def` of that name.
 
 ## Not measured
 
-- `re_path` optional pieces other than `/?` (`(\.json)?`, `(?P<id>\d+)?`, `deactivate?`) and
-  alternation groups: the design's §5c reads 2 and 3 are Sextant's own structural reads of the
-  expression text, not a Django behaviour. Django's regex engine is Python `re`; the probe measures
-  only the shapes named in the table.
+- `re_path` with more than two optional pieces, an unnamed group that is not optional, or `|`
+  outside a named group: the design's §5c read 3 publishes these as written. That is Sextant's
+  own structural read of the text, not a Django behaviour; Django's regex engine is Python `re`.
 - Async views (`async def` verb methods, `view_is_async`): not in the brief.
 - `decorator_from_middleware`-style decorators and `method_decorator` on class methods: not in the
   brief.
@@ -247,7 +264,7 @@ variable that holds a decorator, not a `def` of that name.
 | Check | 5.2.8 |
 |---|---|
 | Assertions in `scripts/probes/django_rules.py` | all pass; the run prints `OK` |
-| `RULE:` lines printed | 62 |
+| `RULE:` lines printed | 69 |
 
 The `5.2.8` column is the version the process under test printed on its first line
 (`importlib.metadata.version("django")`, run by `scripts/probes/django_rules.py` inside

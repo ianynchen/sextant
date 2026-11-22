@@ -2478,7 +2478,18 @@ leading-slash repair applies as before. A value that is not a boolean is refused
   verbatim with `path_kind = pattern`, never refused as unrooted, canonicalised or linked by
   path, and a mount prefix goes in front of it as written, with no `path_join`; `address`, the
   default, lets a later step undo an earlier pattern. (`annotation_driven` spells the same marker `pattern_from`, an attribute list; the
-  column is `path_kind`.) Any other value is refused at load.
+  column is `path_kind`.) `expression` (plan 2026-11-22 Task 6, ruling R15; Django's `re_path`)
+  says the text is a route expression read by the three structural reads of
+  `shapes/route_expression.paths_of` (design 2026-11-22 §5c): `^` and a final `$` dropped, a
+  named group `(?P<name>...)` as `<name>`, and an optional piece (`X?`, one literal character or
+  one group) as the path with and without it, two such pieces at most. Each exact path is a row
+  at the read's own word, the catalog's `path_prefix` in front; anything else (an unnamed group
+  not optional, `|` outside a named group, a class, a quantifier, a backslash other than `\.`,
+  `\-`, `\/`, a `^` not first, a text not read whole) is one row of the expression as written
+  at `partial`, marked `path_kind = pattern`. The anchors are the framework's match, measured
+  (`scripts/probes/django_rules.md`, "`re_path`"): a route is exact only where it ends in `$`
+  (`fullmatch`; without it `search` serves longer paths too). Any other value is refused at
+  load.
 - **`serves: true | false`**, a literal capture, says whether the chain derives a row. On an
   inbound route it is whether the framework serves it: `serves: false` (`disable()`) derives
   nothing until a later `serves: true` (`enable()`), and a `poisons: [serves]` step ends it for
@@ -2514,7 +2525,7 @@ names its first. A malformed entry, or `framework_handlers`/`handler_methods` wi
 
 **`matches.router_type: [<type>, …]` and `matches.mount: [{owner, method, descriptor?,
 router_arg, prefix_arg | prefix_from: receiver_path, prefix_replaces_own?, wildcard?,
-strip_trailing?, refuses?, dependencies_arg?, host_arg?, router_named?}, …]`** (Vert.x spec
+strip_trailing?, refuses?, dependencies_arg?, host_arg?, router_named?, url_is?}, …]`** (Vert.x spec
 §3c) declare sub-router mounts: a route registered on a router serves under the prefix of every
 mount that received that same router — the object one producer made, reached along one call
 path. The producers are derived from the facts by type: every call returning a `router_type`
@@ -2690,6 +2701,13 @@ names a module — a string read as its dotted name (`include("shop.api_urls")`)
 object itself (`include(api_urls)`) — is that module's variable `name`, read as any list field
 is. Django's `router_named: { variable: urlpatterns }` (probe: the variable Django reads from an
 included module is `urlpatterns`). Absent, a string or a module mounts nothing.
+
+**`mount[].url_is: expression`** (plan 2026-11-22 Task 6, ruling R15): the mount's `prefix_arg`
+is a route expression, read by `paths_of` as a PREFIX, matched at the start of what is left of
+the path: exact where it starts with `^` and has no final `$`, one prefix per path its reads
+give (`^opt/?` mounts under `opt` and `opt/`), and the named hole `<prefix>` at `partial` with
+its `mount_prefix` question where the reads do not make it exact. Only `expression`, beside a
+`prefix_arg`, loads.
 
 **`roots[].captures.handler.narrowed_by: [{owner, method, http_method}]`** (plan
 2026-11-22-python-django-core-inbound Task 4, ruling R10; the plan's third new word): a

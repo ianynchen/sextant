@@ -677,6 +677,56 @@ rule(
     "RegexPattern.match uses fullmatch when the pattern is an endpoint (no include below it) and ends with '$', otherwise search; the remainder after the match goes to the child patterns"
 )
 
+# 7b. re_path optional pieces, alternation, and joins with path (plan 6, Task 6).
+kw = lambda r, *a, **k: JsonResponse({"a": a, "k": k})
+c, mod = mount(
+    [
+        re_path(r"^r/(?P<id>\d+)(\.json)?/?$", kw),
+        re_path(r"^u/(?P<a>\d+)/(?P<b>\d+)?$", kw),
+        re_path(r"^deactivate?$", ok),
+        re_path(r"^m/(?P<x>\d+)?/end/$", kw),
+        re_path(r"^s/(?P<status>(local|federated))/$", kw),
+        re_path(r"^opt2/?", include([path("x/", ok)])),
+        path("api/", include([re_path(r"^x/$", ok)])),
+        re_path(r"^rx/", include([path("x/", ok)])),
+    ]
+)
+g = lambda u: c.get(u).status_code
+assert [g(u) for u in ("/r/5", "/r/5/", "/r/5.json", "/r/5.json/")] == [200] * 4
+assert (g("/r/5.jsonx"), g("/r/5json")) == (404, 404)
+assert c.get("/r/5.json").json() == {"a": [], "k": {"id": "5"}}
+rule(
+    "an optional unnamed group of literal text '(\\.json)?' serves the path with and without the text: '^r/(?P<id>\\d+)(\\.json)?/?$' answers /r/5, /r/5/, /r/5.json and /r/5.json/ (four paths); the unnamed group adds no argument beside a named one"
+)
+assert (g("/u/1/"), g("/u/1/2"), g("/u/1")) == (200, 200, 404)
+assert c.get("/u/1/").json() == {"a": [], "k": {"a": "1"}}
+assert c.get("/u/1/2").json() == {"a": [], "k": {"a": "1", "b": "2"}}
+rule(
+    "an optional named group '(?P<b>\\d+)?' serves the path with and without the group: '^u/(?P<a>\\d+)/(?P<b>\\d+)?$' answers /u/1/ and /u/1/2; a group that did not match is not passed (no b= on /u/1/)"
+)
+assert (g("/deactivat"), g("/deactivate"), g("/deactivatee")) == (200, 200, 404)
+rule(
+    "a '?' after one literal character makes that character optional: '^deactivate?$' answers /deactivat and /deactivate"
+)
+assert (g("/m/5/end/"), g("/m//end/"), g("/m/end/")) == (200, 200, 404)
+rule(
+    "an optional group in the middle drops only the group: '^m/(?P<x>\\d+)?/end/$' answers /m/5/end/ and /m//end/, not /m/end/"
+)
+assert (g("/s/local/"), g("/s/federated/"), g("/s/x/")) == (200, 200, 404)
+assert c.get("/s/local/").json() == {"a": [], "k": {"status": "local"}}
+rule(
+    "alternation inside a named group is one argument: '^s/(?P<status>(local|federated))/$' answers /s/local/ and /s/federated/ with status= the matched text"
+)
+assert (g("/opt2/x/"), g("/opt2x/"), g("/opt2//x/")) == (200, 200, 404)
+rule(
+    "an include prefix with an optional piece mounts under both prefixes: re_path('^opt2/?', include([path('x/', v)])) serves /opt2/x/ and /opt2x/"
+)
+assert (g("/api/x/"), g("/rx/x/")) == (200, 200)
+assert str(resolve("/api/x/").route) == "api/x/$" and str(resolve("/rx/x/").route) == "^rx/x/"
+rule(
+    "path and re_path mix under include by concatenating the read paths: path('api/', include([re_path('^x/$', v)])) serves /api/x/ (route 'api/x/$', the child's '^' dropped); re_path('^rx/', include([path('x/', v)])) serves /rx/x/"
+)
+
 
 # 8. Request reads.
 def reads(request):

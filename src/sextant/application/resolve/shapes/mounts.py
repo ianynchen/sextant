@@ -83,6 +83,7 @@ from sextant.application.resolve.shapes.inbound_routes import (
     validated_path_join,
 )
 from sextant.application.resolve.shapes.rooting import catalog_symbols
+from sextant.application.resolve.shapes.route_expression import URL_IS_EXPRESSION, paths_of
 from sextant.application.resolve.values import (
     CLASS_BODY,
     EXPRESSION,
@@ -182,6 +183,9 @@ class MountRule:
     # The variable of a module a router argument names, by its dotted name or as the module
     # object (`router_named`, D02); None where an argument names no module.
     router_named: str | None = None
+    # The prefix is a route expression (`url_is: expression`, D02), read by its structural
+    # reads as a prefix (`route_expression.paths_of`).
+    expression: bool = False
 
     def matches(self, site: Mapping[str, Any]) -> bool:
         return (
@@ -514,6 +518,7 @@ def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> M
         prefix_replaces_own=_replaces_own(entry, prefix_arg, where),
         through=through,
         router_named=_router_named(entry, where),
+        expression=_expression(entry, prefix_arg, where),
     )
 
 
@@ -538,6 +543,17 @@ def _through(declared: Any, where: str) -> Through:
         declared["method"],
         declared["read"],
     )
+
+
+def _expression(entry: Mapping[str, Any], prefix_arg: Any, where: str) -> bool:
+    """`url_is: expression` on a mount with a `prefix_arg`: its prefix is a route expression."""
+    declared = entry.get("url_is")
+    if declared is not None and (declared != URL_IS_EXPRESSION or prefix_arg is None):
+        raise CatalogError(
+            f"{where} `{entry['method']}` `url_is` is `{URL_IS_EXPRESSION}` beside a `prefix_arg`, "
+            f"got {declared!r}"
+        )
+    return declared is not None
 
 
 def _router_named(entry: Mapping[str, Any], where: str) -> str | None:
@@ -1136,9 +1152,10 @@ class MountReader:
                 self._workspace, {"prefix": at.prefix}, self._index, within=path
             )
             for on, answers in read:
-                prefix = self._prefix_of(mount, at, answers["prefix"])
-                if prefix is not None:
-                    found.append(replace(prefix, chosen_on=frozenset({on})))
+                found.extend(
+                    replace(prefix, chosen_on=frozenset({on}))
+                    for prefix in self._prefixes_of(mount, at, answers["prefix"])
+                )
             if not read:
                 found.append(self._hole(mount, at, "nothing on this path"))
         if at.host is not None:
@@ -1209,6 +1226,18 @@ class MountReader:
                 ),
             ),
         )
+
+    def _prefixes_of(self, mount: Mount, at: MountPath, answer: Answer) -> list[Prefix]:
+        """The prefixes one read of a mount path gives: a route expression's exact paths each
+        (`url_is: expression`), the named hole where the reads do not make it exact; any other
+        mount path one prefix, or none where it is refused."""
+        prefix = self._prefix_of(mount, at, answer)
+        if prefix is None or not mount.rule.expression or prefix.text == UNREAD_PREFIX:
+            return [] if prefix is None else [prefix]
+        paths, exact = paths_of(prefix.text or "", prefix=True)
+        if not exact:
+            return [self._hole(mount, at, f"a route expression not read exactly: {prefix.text}")]
+        return [replace(prefix, text=path) for path in paths]
 
     def _prefix_of(self, mount: Mount, at: MountPath, answer: Answer) -> Prefix | None:
         text = _text_of(answer)

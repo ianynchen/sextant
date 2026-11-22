@@ -85,7 +85,28 @@ matches:
                       { owner: django.views.decorators.http, method: require_safe, http_method: [GET, HEAD] },
                       { owner: django.views.decorators.http, method: require_http_methods,
                         http_method: { arg: 0, keyword: request_method_list } } ] } } }
-  terminal: [path]
+    # `re_path` is `functools.partial(_path, Pattern=RegexPattern)`, the same `_path(route, view,
+    # ...)` (probe, "Defining symbols"), so the same captures; its route is a regular expression
+    # (`url_is: expression`, ruling R15), read by the three structural reads of design §5c with
+    # Django's match (probe, "`re_path`"): "RegexPattern.match uses fullmatch when the pattern
+    # is an endpoint ... and ends with '$', otherwise search", so a `$`-ended route is exact with
+    # or without `^` ("'mid/x$' without ^ still answers '/mid/x' only"), one without `$` also
+    # serves longer paths ("'^noend' serves /noend, /noendx, /noend/deeper") and is published
+    # as written; "a named group is passed as a keyword argument" (`<name>`); an optional piece
+    # serves the path with and without it ("'^r/(?P<id>\\d+)(\\.json)?/?$' answers /r/5, /r/5/,
+    # /r/5.json and /r/5.json/", "'^deactivate?$' answers /deactivat and /deactivate"); and
+    # "alternation inside a named group is one argument".
+    - { owner: django.urls.conf, method: re_path,
+        captures: { url: { arg: 0, keyword: route }, url_is: expression,
+                    handler: { arg: 1, keyword: view,
+                      through: { owner: django.views.generic.base.View, method: as_view, read: receiver },
+                      narrowed_by: [
+                      { owner: django.views.decorators.http, method: require_GET, http_method: GET },
+                      { owner: django.views.decorators.http, method: require_POST, http_method: POST },
+                      { owner: django.views.decorators.http, method: require_safe, http_method: [GET, HEAD] },
+                      { owner: django.views.decorators.http, method: require_http_methods,
+                        http_method: { arg: 0, keyword: request_method_list } } ] } } }
+  terminal: [path, re_path]
   # THE VERBS A CLASS VIEW SERVES (probe, "Class views"). "as_view() dispatches only methods
   # the class defines: Items(get, post) answers GET and POST 200, PUT and DELETE 405", looked up
   # by name in `View.http_method_names`, "['get','post','put','patch','delete','head','options',
@@ -151,4 +172,15 @@ matches:
         router_arg: { arg: 1, keyword: view,
                       through: { owner: django.urls.conf, method: include, read: { arg: 0, keyword: arg } } },
         prefix_arg: { arg: 0, keyword: route },
+        router_named: { variable: urlpatterns } }
+    # `re_path(prefix, include(x))`: the same mount (probe, "`re_path`": "re_path('^rx/',
+    # include([path('x/', v)])) serves /rx/x/"). Its prefix is a route expression matched at
+    # the start of the remainder ("a re_path prefix and child are matched in turn against the
+    # remainder"): exact where it starts with `^` and has no final `$`, under both prefixes
+    # where it has an optional piece ("re_path('^opt2/?', include([path('x/', v)])) serves
+    # /opt2/x/ and /opt2x/"), and the unread `<prefix>` where the reads do not make it exact.
+    - { owner: django.urls.conf, method: re_path,
+        router_arg: { arg: 1, keyword: view,
+                      through: { owner: django.urls.conf, method: include, read: { arg: 0, keyword: arg } } },
+        prefix_arg: { arg: 0, keyword: route }, url_is: expression,
         router_named: { variable: urlpatterns } }

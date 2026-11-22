@@ -7,6 +7,7 @@ and runs the real pipeline with the shipped catalogs. It then reads `endpoints`.
 Django's own, measured in `scripts/probes/django_rules.md`.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -202,3 +203,205 @@ def test_a_stray_path_call_rows_at_its_own_path(tmp_path: Path, libraries):
     rows = _django(tmp_path, libraries, "stray = path('stray/', v)\n")
 
     assert rows == [(None, "any", "/stray/", _handler("v"), "resolved")]
+
+
+# -- `re_path` (plan 6, Task 6; design §5c; rulings R15, R16) ---------------------------------
+
+_RE_HEAD = "from django.urls import include, path, re_path\n\ndef v(request):\n    return None\n\n"
+
+
+def _expression_rows(tmp_path: Path, libraries, body: str, head: str = _RE_HEAD):
+    """Every Django row as (method, method_kind, path, path_kind, handler, resolution), and
+    each row's own id distinct, with the workspace."""
+    workspace = _resolved(tmp_path, libraries, {"urls.py": head + body})
+    found = [row for row in workspace.query("endpoints") if row["catalog_id"] == "django"]
+    assert len({row["row_id"] for row in found}) == len(found)
+    rows = [
+        (
+            row["method"],
+            row["method_kind"],
+            row["path"],
+            row["path_kind"],
+            _bare(row["handler"]),
+            row["resolution"],
+        )
+        for row in found
+    ]
+    return sorted(rows, key=lambda row: tuple("" if part is None else str(part) for part in row))
+
+
+def test_a_named_group_is_a_path_parameter(tmp_path: Path, libraries):
+    """Read 1: `^` and `$` dropped, `(?P<item_id>...)` becomes `<item_id>`, behind the
+    catalog's `/` (probe, "`re_path`": `^named/(?P<id>\\d+)/$` calls the view with `id=`)."""
+    rows = _expression_rows(
+        tmp_path, libraries, "urlpatterns = [re_path(r'^old/(?P<item_id>\\d+)/$', v)]\n"
+    )
+
+    assert rows == [(None, "any", "/old/<item_id>/", None, _handler("v"), "resolved")]
+
+
+def test_an_optional_slash_gives_two_rows(tmp_path: Path, libraries):
+    """Read 2: `^inbox/?$` serves `/inbox` and `/inbox/` (probe: `^opt/?$` answers both)."""
+    rows = _expression_rows(tmp_path, libraries, "urlpatterns = [re_path(r'^inbox/?$', v)]\n")
+
+    assert rows == [
+        (None, "any", "/inbox", None, _handler("v"), "resolved"),
+        (None, "any", "/inbox/", None, _handler("v"), "resolved"),
+    ]
+
+
+def test_an_expression_not_read_exactly_is_published_as_written(tmp_path: Path, libraries):
+    """Read 3: an unnamed group that is not optional is published as written, marked as a
+    pattern, at `partial`, with no leading `/`."""
+    rows = _expression_rows(
+        tmp_path, libraries, "urlpatterns = [re_path(r'^(shelf|books)/$', v)]\n"
+    )
+
+    assert rows == [(None, "any", "^(shelf|books)/$", "pattern", _handler("v"), "partial")]
+
+
+def test_an_endpoint_without_a_final_dollar_is_published_as_written(tmp_path: Path, libraries):
+    """Ruling R16: `^noend` as an endpoint also serves `/noendx` and `/noend/deeper` (probe,
+    "`re_path`"), so its path is not the only one served: one row as written, `partial`."""
+    rows = _expression_rows(tmp_path, libraries, "urlpatterns = [re_path(r'^directory/?', v)]\n")
+
+    assert rows == [(None, "any", "^directory/?", "pattern", _handler("v"), "partial")]
+
+
+def test_a_final_dollar_without_a_caret_is_exact(tmp_path: Path, libraries):
+    """Probe: `mid/x$` is matched with `fullmatch` and serves `/mid/x` only."""
+    rows = _expression_rows(tmp_path, libraries, "urlpatterns = [re_path(r'mid/x$', v)]\n")
+
+    assert rows == [(None, "any", "/mid/x", None, _handler("v"), "resolved")]
+
+
+def test_a_re_path_prefix_mounts_its_list(tmp_path: Path, libraries):
+    """`re_path(r'^api/v1/', include(x))`: a prefix match, exact as a mount prefix (probe:
+    `re_path('^rx/', include([path('x/', v)]))` serves `/rx/x/`)."""
+    rows = _expression_rows(
+        tmp_path,
+        libraries,
+        "items = [path('x/', v)]\nurlpatterns = [re_path(r'^api/v1/', include(items))]\n",
+    )
+
+    assert rows == [(None, "any", "/api/v1/x/", None, _handler("v"), "resolved")]
+
+
+def test_a_re_path_prefix_with_an_optional_piece_mounts_under_both(tmp_path: Path, libraries):
+    """Probe: `re_path('^opt2/?', include([path('x/', v)]))` serves `/opt2/x/` and `/opt2x/`."""
+    rows = _expression_rows(
+        tmp_path,
+        libraries,
+        "items = [path('x/', v)]\nurlpatterns = [re_path(r'^opt2/?', include(items))]\n",
+    )
+
+    assert rows == [
+        (None, "any", "/opt2/x/", None, _handler("v"), "resolved"),
+        (None, "any", "/opt2x/", None, _handler("v"), "resolved"),
+    ]
+
+
+def test_a_re_path_prefix_not_read_exactly_is_the_unread_prefix(tmp_path: Path, libraries):
+    """A mount prefix the reads do not make exact is never guessed: the existing `<prefix>`
+    hole at `partial`, and the `mount_prefix` question."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _RE_HEAD
+            + "items = [path('x/', v)]\nurlpatterns = [re_path(r'^(a|b)/', include(items))]\n"
+        },
+    )
+
+    assert _rows(workspace) == [(None, "any", "/<prefix>x/", _handler("v"), "partial")]
+    questions = [
+        (row["question"], row["path"])
+        for row in workspace.query("open_questions")
+        if row["question"] == "mount_prefix"
+    ]
+    assert questions == [("mount_prefix", "/<prefix>x/")]
+    (question,) = [r for r in workspace.query("open_questions") if r["question"] == "mount_prefix"]
+    (candidate,) = json.loads(str(question["candidates"]))
+    assert candidate["read"] == "a route expression not read exactly: ^(a|b)/"
+
+
+def test_a_path_prefix_over_a_re_path_child_concatenates(tmp_path: Path, libraries):
+    """Probe: `path('api/', include([re_path('^x/$', v)]))` serves `/api/x/`."""
+    rows = _expression_rows(
+        tmp_path,
+        libraries,
+        "items = [re_path(r'^x/$', v)]\nurlpatterns = [path('api/', include(items))]\n",
+    )
+
+    assert rows == [(None, "any", "/api/x/", None, _handler("v"), "resolved")]
+
+
+def test_a_class_view_behind_an_optional_piece_is_verbs_times_paths(tmp_path: Path, libraries):
+    """Each path of read 2 carries the class's verbs (Task 5): two verbs by two paths, four
+    rows, each its own id."""
+    rows = _expression_rows(
+        tmp_path,
+        libraries,
+        "class Items(View):\n"
+        "    def get(self, request):\n        return None\n"
+        "    def delete(self, request):\n        return None\n"
+        "urlpatterns = [re_path(r'^x/?$', Items.as_view())]\n",
+        head=_RE_HEAD + "from django.views import View\n",
+    )
+
+    get, delete = _handler("get", "app/urls/Items"), _handler("delete", "app/urls/Items")
+    assert rows == [
+        ("DELETE", None, "/x", None, delete, "resolved"),
+        ("DELETE", None, "/x/", None, delete, "resolved"),
+        ("GET", None, "/x", None, get, "resolved"),
+        ("GET", None, "/x/", None, get, "resolved"),
+    ]
+
+
+def test_an_f_string_of_constants_is_read_assembled(tmp_path: Path, libraries):
+    """Brief step 3: the value walk assembles the text, then the reads apply to it."""
+    rows = _expression_rows(
+        tmp_path,
+        libraries,
+        "ID = r'(?P<id>\\d+)'\nurlpatterns = [re_path(rf'^b/{ID}/?$', v)]\n",
+    )
+
+    assert rows == [
+        (None, "any", "/b/<id>", None, _handler("v"), "resolved"),
+        (None, "any", "/b/<id>/", None, _handler("v"), "resolved"),
+    ]
+
+
+def test_bookwyrms_user_path_is_published_as_written(tmp_path: Path, libraries):
+    """bookwyrm: `USER_PATH = rf"^user/(?P<username>{regex.USERNAME})"` and
+    `rf"^user/{USER_PATH}/?$"`. The assembled text has a `^` that is not first: not exact."""
+    rows = _expression_rows(
+        tmp_path,
+        libraries,
+        "USERNAME = r'[\\w\\-_\\.@]+'\n"
+        "USER_PATH = rf'^user/(?P<username>{USERNAME})'\n"
+        "urlpatterns = [re_path(rf'^{USER_PATH}/?$', v)]\n",
+    )
+
+    assert rows == [
+        (
+            None,
+            "any",
+            "^^user/(?P<username>[\\w\\-_\\.@]+)/?$",
+            "pattern",
+            _handler("v"),
+            "partial",
+        )
+    ]
+
+
+def test_an_f_string_piece_not_read_is_partial(tmp_path: Path, libraries):
+    """A piece the value walk does not read is never guessed: the text with the piece's hole,
+    as written, `partial` (the reads never see a whole text)."""
+    rows = _expression_rows(
+        tmp_path,
+        libraries,
+        "from elsewhere import X\nurlpatterns = [re_path(rf'^b/{X}/$', v)]\n",
+    )
+
+    assert rows == [(None, "any", "^b/{}/$", "pattern", _handler("v"), "partial")]
