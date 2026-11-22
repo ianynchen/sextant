@@ -160,6 +160,11 @@ SEXTANT_VERSION = version("sextant")
 #             writes, where it was a bare receiver field with no owner (plan 5, Task 4). A fact
 #             set of the older vintage leaves the calls made on it ownerless; it is refused and
 #             re-extracted.
+#     19      a Python `a + b` with no text in it, where one operand is known to be a list, is
+#             the `array` it makes: a written list's elements in place, every other operand an
+#             element marked `keyword: "*"`, unpacked there (plan 6, Task 3), where it was
+#             `unresolved`. `x += [...]` is the same sum. A fact set of the older vintage holds
+#             no element of such a list; it is refused and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -304,6 +309,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 18
+FACT_SCHEMA_VERSION = 19
 GRAPH_SCHEMA_VERSION = 18
 BOUNDARY_VOCABULARY_VERSION = 5

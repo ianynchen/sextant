@@ -1352,6 +1352,17 @@ identically**, deliberately: javac erases the sugar at the call site and the cal
 does not consult `array` treats it exactly as it always treated `unresolved`, which is
 what every varargs slot read as before 9.15.
 
+**An element marked `keyword: "*"` is every element of its own value, unpacked in its
+place** (fact schema 19, plan 2026-11-22-python-django-core-inbound Task 3). The Python
+scanner writes it for a list sum: `a + b` with no text in it, where one operand is known to
+be a list (written as one, or a module-level name of the file every write of which is one),
+is the `array` it makes — a written list's elements in place, every other operand its own
+entry (a `field`, an `unresolved` with its `source`, …) marked `*`. `x += [...]` is the same
+sum. `urlpatterns = core + [path("a/", v)]` is
+`{kind: array, elements: [{kind: field, symbol: …#core., keyword: "*"}, {kind: unresolved,
+source: 3}]}`. Any other sum stays `unresolved`. An engine that does not read the mark reads
+the entry as the one value it holds.
+
 **`merge` is the canonical cross-language kind for "this argument came from one of several
 places"** (capability 9.19) — a value a branch reassigned, a conditional expression, any
 join of control flow where two producers meet. `candidates` carries each producer in this

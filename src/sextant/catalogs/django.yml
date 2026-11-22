@@ -59,3 +59,21 @@ matches:
   # Django refuses no route at registration: a route starting with `/` draws the system check
   # `urls.W002` and still loads (probe, "Differs from the design" item 3).
   refuses_unrooted_path: false
+
+  # THE MOUNT (probe, "`include`"): `path(prefix, include(x))` serves `x`'s patterns under the
+  # prefix. `include(arg, namespace=None)` is a plain function of `django.urls.conf`; its `arg`
+  # is a dotted string, a module object, a list, or a `(list, app_name)` tuple, and the
+  # variable Django reads from a module is `urlpatterns` (a module naming its list anything
+  # else raises `ImproperlyConfigured`). `namespace` and `app_name` change no path. One list
+  # included at two prefixes is served at both. The router is the list itself, so a
+  # registration's router is the list it is an element of (probe: `urlpatterns` is a list of
+  # `path` results), and a list no `include` names is served at the root (design §5d:
+  # `ROOT_URLCONF` is not needed to find it). The prefix is the `path` call's own route, kept
+  # as written: the join is the concatenation above, so nothing is stripped from it.
+  router_type: [builtins.list]
+  mount:
+    - { owner: django.urls.conf, method: path,
+        router_arg: { arg: 1, keyword: view,
+                      through: { owner: django.urls.conf, method: include, read: { arg: 0, keyword: arg } } },
+        prefix_arg: { arg: 0, keyword: route },
+        router_named: { variable: urlpatterns } }

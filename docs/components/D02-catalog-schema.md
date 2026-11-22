@@ -2514,7 +2514,7 @@ names its first. A malformed entry, or `framework_handlers`/`handler_methods` wi
 
 **`matches.router_type: [<type>, …]` and `matches.mount: [{owner, method, descriptor?,
 router_arg, prefix_arg | prefix_from: receiver_path, prefix_replaces_own?, wildcard?,
-strip_trailing?, refuses?, dependencies_arg?, host_arg?}, …]`** (Vert.x spec
+strip_trailing?, refuses?, dependencies_arg?, host_arg?, router_named?}, …]`** (Vert.x spec
 §3c) declare sub-router mounts: a route registered on a router serves under the prefix of every
 mount that received that same router — the object one producer made, reached along one call
 path. The producers are derived from the facts by type: every call returning a `router_type`
@@ -2528,7 +2528,8 @@ of the route the mount call is made on (`prefix_from: receiver_path`, which must
 declared `terminal`), or the string argument `prefix_arg` — less a trailing `wildcard` and the
 `/` before it (every trailing copy of the one character **`strip_trailing`** names, where it
 names one — part of plan 2026-11-08 N7: Starlette's `Mount` strips `path.rstrip("/")`, so
-`/api//` mounts at `/api`), joined
+`/api//` mounts at `/api`; under `concatenate`, which supplies no separator, nothing is
+removed: Django's `path("api/", include(x))` mounts at `api/`), joined
 by **`matches.path_join`** (`leading_slash` or absent, as `combinator`'s; or, on a `fluent`
 catalog, **`concatenate`**, plan 2026-11-08 ruling R23: plain string concatenation with the
 served path published as written — never passed to `canonical_http_path`, so FastAPI's
@@ -2659,6 +2660,29 @@ mount entry's ROOT starts returns — `@cli.group() def module` makes the `Group
 root (refused otherwise) and `prefix_from: receiver_path`: its prefix is that chain's own word.
 The chain's terminal is the router's producer (the producer reader stops there), and like every
 mount chain it derives no row of its own.
+
+**`mount[].router_arg.through: {owner, method, read}`** (plan 2026-11-22-python-django-core-inbound
+Task 3, design §5b capability 2): the router is an argument of a call that is itself the
+argument `router_arg` names. Where the argument written there is the result of a call of
+`owner.method`, the router is what `read` reads off that call (any argument-reference form, or
+`receiver`); where it is anything else the call mounts nothing and is no mount at all, so a
+route root that is also the mount call stays a route. Django's `path("api/", include(x))`:
+`router_arg: { arg: 1, keyword: view, through: { owner: django.urls.conf, method: include,
+read: { arg: 0, keyword: arg } } }`, and `path("x/", view)` is a route. A mount read through a
+call derives no row of its own: its route's handler capture is the router. A router a call
+MADE ON NOTHING (`invoke_kind: static`) registers on is the list value its result is an element
+of (capability 1, no word): an element of a list written to a field, an argument of a call
+made on a field's value (`urls.append(r)`, `urls.extend([r])`), or an element of a list
+written as a call's argument; a list sum unpacks its operands (D00 §5's `*` element). The
+mount's router is every list its argument reaches: a list written there, a field and the
+lists its writes unpack, a tuple's elements. A list no mount reaches serves at its root
+(design §5d).
+
+**`mount[].router_named: {variable: name}`** (same task, capability 3): a router argument that
+names a module — a string read as its dotted name (`include("shop.api_urls")`), or the module
+object itself (`include(api_urls)`) — is that module's variable `name`, read as any list field
+is. Django's `router_named: { variable: urlpatterns }` (probe: the variable Django reads from an
+included module is `urlpatterns`). Absent, a string or a module mounts nothing.
 
 **A step may declare `receiver_arg: N`** (spec 2026-10-26 §3c): the step joins the chain
 through argument N's value id instead of through its own `receiver`. A Kotlin extension

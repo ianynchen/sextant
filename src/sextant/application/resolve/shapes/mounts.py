@@ -40,13 +40,23 @@ It is read on the producer the route's receiver reached, within the same path, s
 helper's routers each hold their own caller's prefix. A held prefix the framework refuses
 (`refuses`) gives the router no serving place at all.
 
+**A list is a router** (plan 2026-11-22-python-django-core-inbound Task 3): a route made by a
+call on nothing is on the list its result is an element of (`_held_by`), and a mount's router
+argument, read through an inner call where the catalog says so (`through`), reaches lists as
+values (`_lists`): one written there, a field and the lists its writes unpack, a module's
+variable (`router_named`). A list is one object wherever it is read: its identity is the
+field that holds it, or the call it is written in.
+
 **Cost** (spec §5): one producer read per route-root receiver and one per mount argument and
 mount receiver, each cached here and run on the resolve's shared index; one `within=` read of
 the mount path per (mount, path) pair actually joined, cached; one read of each mount path on
 every path, for its refusals. Nested mounts recurse once per level. A module with no mount
 reads nothing: every route serves at its root. Which executions reach no mount is decided
 from the mount paths already read and the callers that take a helper's router back
-(`ValueIndex.returns`, turned round once per reader): no read of its own.
+(`ValueIndex.returns`, turned round once per reader): no read of its own. The lists holding
+each value are one pass over the index's field constants and sites, once per reader; then a
+route made on nothing asks one dict lookup, and a mount one producers lookup for its inner call
+and one walk of the field writes its argument reaches, cached per mount. No query.
 """
 
 import json
@@ -59,6 +69,7 @@ from sextant.application.ports.catalogs import CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import Dispatch
 from sextant.application.resolve.shapes.inbound_routes import (
+    CONCATENATE,
     EMPTY_PATH,
     EXACT_MOUNT_PATH,
     PATTERN_MOUNT_PATH,
@@ -162,6 +173,12 @@ class MountRule:
     # A prefix the call writes REPLACES the prefix the mounted router holds (`router_holds`),
     # the empty one too; only a call that writes none keeps it (D02 `prefix_replaces_own`).
     prefix_replaces_own: bool = False
+    # The inner call the router argument is (`router_arg.through`, D02): the router is what
+    # `read` reads off that call. None where the router is the argument itself.
+    through: "Through | None" = None
+    # The variable of a module a router argument names, by its dotted name or as the module
+    # object (`router_named`, D02); None where an argument names no module.
+    router_named: str | None = None
 
     def matches(self, site: Mapping[str, Any]) -> bool:
         return (
@@ -175,6 +192,19 @@ class MountRule:
         """A mount made by a call of its own (`prefix_arg` or `host_arg`), found in one pass
         over the sites, not a chain end whose route path is the prefix (`prefix_from`)."""
         return self.prefix_arg is not None or self.host_arg is not None
+
+
+@dataclass(frozen=True)
+class Through:
+    """`router_arg.through` (D02): the call the router argument must be, and the argument
+    reference read off it for the router."""
+
+    owners: tuple[str, ...]
+    method: str
+    read: Any
+
+    def matches(self, site: Mapping[str, Any]) -> bool:
+        return str(site.get("owner")) in self.owners and site["name"] == self.method
 
 
 @dataclass(frozen=True)
@@ -403,6 +433,10 @@ def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> M
     if not isinstance(entry, dict) or not isinstance(entry.get("method"), str):
         raise CatalogError(f"{where} must be a mapping naming `owner` and `method`")
     router_arg = entry.get("router_arg")
+    through = None
+    if isinstance(router_arg, dict) and "through" in router_arg:
+        through = _through(router_arg["through"], f"{where} `{entry['method']}` router_arg")
+        router_arg = {key: value for key, value in router_arg.items() if key != "through"}
     if router_arg != CHAIN_RESULT and argument_reference(router_arg, spelled=False) is None:
         raise CatalogError(
             f"{where} `{entry['method']}` must name its `router_arg`: a position, "
@@ -475,7 +509,74 @@ def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> M
         dependencies_arg=_dependencies_arg(entry, where),
         host_arg=host_arg,
         prefix_replaces_own=_replaces_own(entry, prefix_arg, where),
+        through=through,
+        router_named=_router_named(entry, where),
     )
+
+
+def _through(declared: Any, where: str) -> Through:
+    """`router_arg.through`: `{owner, method, read}`, `read` any argument reference or
+    `receiver`."""
+    if (
+        not isinstance(declared, dict)
+        or set(declared) != {"owner", "method", "read"}
+        or not isinstance(declared["method"], str)
+        or (
+            declared["read"] != RECEIVER
+            and argument_reference(declared["read"], spelled=False) is None
+        )
+    ):
+        raise CatalogError(
+            f"{where} `through` must be `{{owner, method, read}}`, `read` a position, "
+            f"`{{keyword: name}}`, `{{arg: N, keyword: name}}` or `{RECEIVER}`"
+        )
+    return Through(
+        catalog_symbols(declared["owner"], f"{where} through owner"),
+        declared["method"],
+        declared["read"],
+    )
+
+
+def _router_named(entry: Mapping[str, Any], where: str) -> str | None:
+    """`router_named: {variable: name}`, the module variable a router argument naming a
+    module is."""
+    declared = entry.get("router_named")
+    if declared is None:
+        return None
+    variable = declared.get("variable") if isinstance(declared, dict) else None
+    if (
+        set(declared) != {"variable"}
+        or not isinstance(variable, str)
+        or not variable.isidentifier()
+    ):
+        raise CatalogError(
+            f"{where} `{entry['method']}` `router_named` must be `{{variable: name}}`"
+        )
+    return variable
+
+
+def through_site(
+    index: ValueIndex, site: Mapping[str, Any], rule: MountRule
+) -> tuple[Mapping[str, Any], Any] | None:
+    """Where a mount call's router is read: `(site, router_arg)`, or, for a rule reading it
+    through an inner call (`through`), that call and the reference read off it. None where
+    the argument is not a call `through` names: the call mounts nothing (a view, not an
+    include, in the position)."""
+    if rule.through is None:
+        return site, rule.router_arg
+    arguments = site["arguments"] or []
+    slot = argument_slot(arguments, rule.router_arg)
+    if slot is None or slot == UNPACKED_SLOT:
+        return None
+    source = arguments[slot].get("source")
+    if arguments[slot].get("kind") != "unresolved" or source is None:
+        return None
+    caller = str(site["caller"])
+    for ordinal in index.producers.get((caller, int(source)), ()):
+        inner = index.sites.get((caller, ordinal))
+        if inner is not None and rule.through.matches(inner):
+            return inner, rule.through.read
+    return None
 
 
 def _replaces_own(entry: Mapping[str, Any], prefix_arg: Any, where: str) -> bool:
@@ -583,6 +684,9 @@ class MountReader:
         self._refused: dict[tuple[str, int], tuple[tuple[int, str, str], ...]] = {}
         self._called_by: dict[str, tuple[tuple[str, int], ...]] | None = None
         self._held: dict[tuple[tuple[str, int], Path], tuple[Prefix, ...] | None] = {}
+        # The lists holding each value, `(method, value id)` -> list identities (`_lists`).
+        self._holders: dict[tuple[str, int], tuple[tuple[str, str, int], ...]] | None = None
+        self._reached: dict[tuple[str, int], tuple[tuple[str, str, int], ...]] = {}
 
     def of_route(self, root: Mapping[str, Any], within: Path | None) -> tuple[Prefix, ...]:
         """The prefixes a route whose root call is `root` serves under, each once: its
@@ -593,11 +697,11 @@ class MountReader:
         reached several ways is one, holding every way's `places`."""
         found: dict[Prefix, Prefix] = {}
         ended = False
-        for producer, path in self._producers_of(root, RECEIVER):
+        for made, path in self._routers_of(root):
             joined = path if within is None else path.joined(within)
             if joined is not None:
                 ended = True
-                for prefix in self._served(producer, joined, frozenset()):
+                for prefix in self._served(made, joined, frozenset()):
                     kept = found.get(prefix)
                     found[prefix] = (
                         prefix
@@ -892,8 +996,11 @@ class MountReader:
             places=places,
         )
 
-    def _served(self, producer: Producer, path: Path, mounting: frozenset[Any]) -> list[Prefix]:
-        """The prefixes of the router `producer` made, as reached on `path`: one per mount
+    def _served(
+        self, made: tuple[str, str, int] | None, path: Path, mounting: frozenset[Any]
+    ) -> list[Prefix]:
+        """The prefixes of the router `made` (`_identity`, or a list `_lists` names), as
+        reached on `path`: one per mount
         that received the same router on a path agreeing with it, behind that mount's own
         router's prefixes; and the root wherever an execution `path` allows reaches no mount
         (`_unmounted`). A mount the framework refuses gives no prefix, and the executions it
@@ -903,7 +1010,6 @@ class MountReader:
         The same router is the same producer — or, for a router handed in from outside, the
         same parameter it arrived at (`_identity`): two ends there on agreeing paths are one
         object."""
-        made = _identity(producer)
         if made is None:
             return [replace(ROOT, places=frozenset({ANY_ROUTER}))]
         found: list[Prefix] = []
@@ -913,7 +1019,7 @@ class MountReader:
             if mount.key in mounting:
                 continue
             for mounted, mount_path, ways in self._mounted(mount):
-                if _identity(mounted) != made:
+                if mounted != made:
                     continue
                 for way, at in ways:
                     joined = path.joined(mount_path)
@@ -989,11 +1095,11 @@ class MountReader:
             return [ROOT]
         found: list[Prefix] = []
         ended = False
-        for producer, parent_path in self._producers_of(at.parent, RECEIVER):
+        for made, parent_path in self._routers_of(at.parent):
             joined = path.joined(parent_path)
             if joined is not None:
                 ended = True
-                found.extend(self._served(producer, joined, mounting))
+                found.extend(self._served(made, joined, mounting))
         return found if ended else [ROOT]
 
     def _prefixes(self, mount: Mount, way: int, path: Path) -> tuple[Prefix, ...]:
@@ -1106,8 +1212,12 @@ class MountReader:
         # The `/` before the wildcard, or ending a mount point, is the separator the join
         # supplies: `/api/*`, `/api*` and `/api/` all mount at `/api`. A framework that strips
         # every trailing copy says so (`strip_trailing`): `/api//` mounts at `/api` too.
+        # A join of plain concatenation supplies no separator, so nothing is removed.
         strip = mount.rule.strip_trailing
-        mounted = mounted.rstrip(strip) if strip is not None else mounted.removesuffix("/")
+        if strip is not None:
+            mounted = mounted.rstrip(strip)
+        elif self._rules.path_join != CONCATENATE:
+            mounted = mounted.removesuffix("/")
         resolution = Resolution.NARROWED if answer.narrowed else Resolution.RESOLVED
         return Prefix(mounted, str(resolution))
 
@@ -1220,25 +1330,133 @@ class MountReader:
 
     def _mounted(
         self, mount: Mount
-    ) -> tuple[tuple[Producer, Path, tuple[tuple[int, MountPath], ...]], ...]:
-        """Each router `mount` mounts, with the path it was reached on and the ways to the
-        mount it is mounted by: the producers of its router argument, by every way; or, for a
-        `chain_result` mount, the call that ends each way's chain, by that way alone."""
+    ) -> tuple[tuple[tuple[str, str, int] | None, Path, tuple[tuple[int, MountPath], ...]], ...]:
+        """Each router `mount` mounts (`_identity`), with the path it was reached on and the
+        ways to the mount it is mounted by: the producers of its router argument, read
+        through the inner call `through` names, and the lists that argument reaches
+        (`_lists`), by every way; or, for a `chain_result` mount, the call that ends each
+        way's chain, by that way alone."""
         ways = tuple(enumerate(mount.paths))
         if mount.rule.router_arg != CHAIN_RESULT:
-            return tuple(
-                (producer, path, ways)
-                for producer, path in self._producers_of(mount.site, mount.rule.router_arg)
+            read = through_site(self._index, mount.site, mount.rule)
+            if read is None:
+                return ()
+            site, reference = read
+            return (
+                *(
+                    (_identity(producer), path, ways)
+                    for producer, path in self._producers_of(site, reference)
+                ),
+                *((made, Path(), ways) for made in self._lists(site, reference, mount.rule)),
             )
         return tuple(
             (
-                Producer(caller=str(at.made["caller"]), ordinal=int(str(at.made["ordinal"]))),
+                ("call", str(at.made["caller"]), int(str(at.made["ordinal"]))),
                 Path(),
                 ((way, at),),
             )
             for way, at in ways
             if at.made is not None
         )
+
+    def _routers_of(
+        self, site: Mapping[str, Any]
+    ) -> tuple[tuple[tuple[str, str, int] | None, Path], ...]:
+        """The routers the call `site` is made on, each with the path it was reached on: its
+        receiver followed to its producers; for a call made on nothing whose result a list
+        holds, each such list (capability 1: a registration belongs to the list value it is
+        an element of)."""
+        if site.get("invoke_kind") == "static" and site.get("result") is not None:
+            held = self._held_by().get((str(site["caller"]), int(str(site["result"]))), ())
+            if held:
+                return tuple((made, Path()) for made in held)
+        return tuple((_identity(p), path) for p, path in self._producers_of(site, RECEIVER))
+
+    def _held_by(self) -> dict[tuple[str, int], tuple[tuple[str, str, int], ...]]:
+        """`(method, value id)` -> each list holding the value, built once per reader from
+        the shared index: an element of a list written to a field (`("field", symbol, 0)`);
+        an argument of a call made on a field's value, or an element of a list that argument
+        is (`urls.append(x)`, `urls.extend([x])`); an element of a list written as an
+        argument of a call made on nothing, at any depth (`("array", method, ordinal)`). An
+        element marked `*` is another list's elements, not a value the list holds."""
+        if self._holders is not None:
+            return self._holders
+        held: dict[tuple[str, int], dict[tuple[str, str, int], None]] = {}
+
+        def hold(caller: str, entry: Mapping[str, Any], made: tuple[str, str, int]) -> None:
+            if entry.get("keyword") == "*":
+                return
+            source = entry.get("source")
+            if entry.get("kind") == "unresolved" and source is not None:
+                held.setdefault((caller, int(source)), {})[made] = None
+            if entry.get("kind") == "array":
+                for element in entry.get("elements") or []:
+                    hold(caller, element, made)
+
+        for field_symbol, writes in self._index.constants.items():
+            for writer, written in writes:
+                if writer is not None and written.get("kind") == "array":
+                    hold(writer, written, ("field", field_symbol, 0))
+        for site in self._index.sites.values():
+            caller, on = str(site["caller"]), site.get("receiver_field")
+            for argument in site["arguments"] or []:
+                if on is not None:
+                    hold(caller, argument, ("field", str(on), 0))
+                elif site.get("invoke_kind") == "static" and argument.get("kind") == "array":
+                    hold(caller, argument, ("array", caller, int(str(site["ordinal"]))))
+        self._holders = {key: tuple(lists) for key, lists in held.items()}
+        return self._holders
+
+    def _lists(
+        self, site: Mapping[str, Any], reference: Any, rule: MountRule
+    ) -> tuple[tuple[str, str, int], ...]:
+        """The lists the argument `reference` of `site` reaches, cached per call: a list
+        written there; a field, with every list its writes unpack (`*`, `a + b`); a module,
+        named by its dotted name or as the module object, where the rule says which of its
+        variables is the router (`router_named`); and, through a list or tuple written there,
+        whatever its elements reach."""
+        key = (str(site["caller"]), int(str(site["ordinal"])))
+        if key in self._reached:
+            return self._reached[key]
+        arguments = site["arguments"] or []
+        slot = None if reference == RECEIVER else argument_slot(arguments, reference)
+        found: dict[tuple[str, str, int], None] = {}
+        if slot is not None and slot != UNPACKED_SLOT:
+            self._reach(key[0], arguments[slot], rule.router_named, ("array", *key), found)
+        self._reached[key] = tuple(found)
+        return self._reached[key]
+
+    def _reach(
+        self,
+        caller: str,
+        entry: Mapping[str, Any],
+        named: str | None,
+        here: tuple[str, str, int] | None,
+        found: dict[tuple[str, str, int], None],
+    ) -> None:
+        kind = entry.get("kind")
+        if kind == "array":
+            if here is not None:
+                found[here] = None
+            for element in entry.get("elements") or []:
+                self._reach(caller, element, named, None, found)
+            return
+        symbol = None
+        if kind == "field" and entry.get("symbol") is not None:
+            symbol = str(entry["symbol"])
+        elif named is not None and kind == "string" and isinstance(entry.get("value"), str):
+            symbol = type_descriptor(entry["value"]) + named + "."
+        elif named is not None and kind == "class" and entry.get("symbol") is not None:
+            symbol = str(entry["symbol"]) + named + "."
+        if symbol is None or ("field", symbol, 0) in found:
+            return
+        found[("field", symbol, 0)] = None
+        for writer, written in self._index.constants.get(symbol, ()):
+            if written.get("kind") != "array":
+                continue
+            for element in written.get("elements") or []:
+                if element.get("keyword") == "*":
+                    self._reach(writer or caller, element, named, None, found)
 
     def _producers_of(
         self, site: Mapping[str, Any], slot: Any

@@ -1859,6 +1859,7 @@ class BodyReader:
             parts = _added(node)
             if any(_is_text(part) for part in parts):
                 return self._concat(parts, scope)
+            return self._sum(parts, scope)
         if (
             isinstance(node, ast.UnaryOp)
             and isinstance(node.op, ast.USub)
@@ -2041,6 +2042,33 @@ class BodyReader:
         site = Callee(_target(_STRING, _FORMAT), "dynamic")
         produced = self._invoke(site, operands, scope)
         return CallArgument(kind="concat", value=text, source=produced.source)
+
+    def _sum(self, parts: list[ast.expr], scope: Scope) -> CallArgument:
+        """`a + b` with no text in it. Where one operand is known to be a list (written as
+        one, or a module-level name of this file every write of which is one), every operand
+        is: `list.__add__` takes a list alone, so code where one is not raises. The value is
+        then the list it makes (D00 §5 `array`): a written list's elements in place, each
+        other operand as its own entry marked `*`, unpacked there. Any other sum is unread."""
+        values = [self._value(part, scope) for part in parts]
+        if not any(self._is_list(value, scope) for value in values):
+            return _UNKNOWN
+        elements: list[CallArgument] = []
+        for part, value in zip(parts, values, strict=True):
+            if isinstance(part, ast.List) and value.kind == "array":
+                elements.extend(value.elements or [])
+            else:
+                elements.append(value.model_copy(update={"keyword": _UNPACKED_POSITIONAL}))
+        found = _Part(kind="array", elements=elements)
+        found._typed = TypeRef(symbol=_LITERAL_CLASSES[ast.List])
+        return found
+
+    def _is_list(self, value: CallArgument, scope: Scope) -> bool:
+        typed = _type_of(value, scope)
+        if typed is None and value.kind == "field" and value.symbol is not None:
+            read = str(value.symbol)
+            if owner_of(read) == type_symbol(Target(self._context.here)):
+                typed = self._module_answer(member_name(read))
+        return typed == _LITERAL_CLASSES[ast.List]
 
     def _lambda(self, node: ast.Lambda, scope: Scope) -> CallArgument:
         """A `lambda` is a method of its own, named as javac names a lambda body

@@ -159,6 +159,7 @@ from sextant.application.resolve.shapes.mounts import (
     programs_of,
     router_producers,
     same_router,
+    through_site,
     unread_prefix_rows,
     weaker,
     with_heirs,
@@ -576,7 +577,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     caller=end.caller,
                     handler=None,
                 )
-            if "handler" not in end.captures:
+            # A mount read through an inner call (`through`) holds its router where a route
+            # holds its handler: the capture names the router, never a handler.
+            if "handler" not in end.captures or mount.rule.through is not None:
                 continue
         # A chain walked back across methods is read on the path it took (ruling 5), and a
         # client sitting at the root's receiver is read off that root.
@@ -1452,14 +1455,20 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                 continue
             url_resolution = weaker(url_resolution, prefix.resolution)
             # A prefix not read whole says where it was not read (`mount_prefix`), filed for
-            # the rows the run keeps.
+            # the rows the run keeps, by the path the row publishes (`path_prefix` included).
             if prefix.unread and context.unread_prefixes is not None:
                 file_unread_prefix(
                     context.unread_prefixes,
                     protocol=context.catalog.protocol,
                     method=verb,
                     method_kind=method_kind,
-                    path=path,
+                    path=(
+                        path
+                        if context.path_prefix is None
+                        or direction != "inbound"
+                        or path_kind == PATH_KIND_PATTERN
+                        else context.path_prefix + path
+                    ),
                     path_kind=path_kind,
                     prefix=prefix,
                     caller=context.caller,
@@ -2052,7 +2061,7 @@ def _mounts(
         ways[id(end)] = paths.index(way)
     for site in index.sites.values():
         for rule in rules.mounts:
-            if rule.by_call and rule.matches(site):
+            if rule.by_call and rule.matches(site) and through_site(index, site, rule) is not None:
                 slot = (
                     None
                     if rule.prefix_arg is None

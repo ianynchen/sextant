@@ -197,8 +197,8 @@ def test_a_stray_path_call_rows_at_its_own_path(tmp_path: Path, libraries):
     """A `path` call in no list that reaches a `urlpatterns` is published at its own path, as
     Flask's blueprint that nothing registers is (`test_flask_routes`: "A blueprint's route with
     no prefix and no registration seen rows at its own path"). Django serves no such route;
-    this pins today's reading until the list-is-a-router rule (design §5b capability 1) and
-    its roots (§5d) decide it."""
+    the list-is-a-router rule (design §5b capability 1, Task 3) finds no list holding it, so
+    this reading stands."""
     rows = _django(tmp_path, libraries, "stray = path('stray/', v)\n")
 
     assert rows == [(None, "any", "/stray/", _handler("v"), "resolved")]
