@@ -200,6 +200,27 @@ def test_a_refused_detection_raises_a_sextanterror_not_systemexit_with_the_cli_m
     assert cli_result.output == f"Error: {excinfo.value}\n"
 
 
+def test_a_reanalyze_that_dies_midway_is_refused_as_unanalyzed(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A second `analyze` killed mid-run (Ctrl-C, a CI timeout, an OOM kill)
+    must not leave the FIRST run's `metadata.json` vouching for a half-rewritten
+    workspace: the stamp goes before the first write, so what survives a kill
+    is refused as unanalyzed rather than read as a mix of two commits."""
+    api.analyze(module_root)
+
+    def dies(*args: object, **kwargs: object) -> object:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(api, "_analyzed", dies)
+    with pytest.raises(KeyboardInterrupt):
+        api.analyze(module_root)
+
+    assert not (module_root / ".sextant" / "metadata.json").exists()
+    with pytest.raises(api.NotAnalyzedError):
+        api.render(module_root)
+
+
 # --------------------------------------------------------------------------
 # render
 # --------------------------------------------------------------------------

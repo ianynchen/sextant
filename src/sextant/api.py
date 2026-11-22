@@ -945,6 +945,10 @@ def _run_analyze(
     render_dir = workspace_dir / "render"
     if render_dir.is_dir():
         shutil.rmtree(render_dir)
+    # The stamp vouches for a COMPLETE analysis, so it goes before the first write: a
+    # re-analyze killed mid-run must leave a workspace the read gate refuses, never a
+    # half-rewritten one the first run's surviving stamp would pass off as current.
+    (workspace_dir / "metadata.json").unlink(missing_ok=True)
     factory = progress_factory or (lambda: nullcontext(NullProgress()))
     workspace = DuckDbWorkspace(
         workspace_dir / "workspace.duckdb",
