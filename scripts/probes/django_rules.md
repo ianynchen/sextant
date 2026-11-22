@@ -197,11 +197,17 @@ Optional pieces, alternation and mixed joins (section 7b of the script, plan 6, 
 | `re_path(r"^opt2/?", include([path("x/", v)]))` | `/opt2/x/` and `/opt2x/` (both prefixes) |
 | `path("api/", include([re_path(r"^x/$", v)]))` | `/api/x/` (`ResolverMatch.route` is `api/x/$`) |
 | `re_path(r"^rx/", include([path("x/", v)]))` | `/rx/x/` |
+| `re_path(r"^g1/(?P<lang>[a-z]{2})?/?", include([path("ab/", v)]))` | `/g1/frab/`; `/g1/ab/` is 404 (`lang` takes `ab`) |
+| `re_path(r"^g2/(?P<slug>[\w-]+)", include([path("x/", v)]))` | `/g2/ax/`, `/g2/a/x/`, `/g2/x/` all 404 (`slug` takes `ax`) |
+| `re_path(r"^g3/(?P<lang>[a-z]{2})/", include([path("ab/", v)]))` | `/g3/fr/ab/` |
 
 - A `?` after one literal character or one group makes that piece optional: the path is served
   with and without it. A group that did not match passes no argument.
 - Alternation inside a named group is one argument whose value is the matched text.
 - `path` and `re_path` mix under `include` by plain concatenation of the read paths.
+- A mount prefix's match is not backtracked across the include boundary: a named group that
+  can end the prefix (the last piece, or followed only by optional pieces) takes all it can,
+  and the child may never match. A named group followed by a required literal mounts as read.
 
 ## Request reads
 
@@ -264,7 +270,7 @@ variable that holds a decorator, not a `def` of that name.
 | Check | 5.2.8 |
 |---|---|
 | Assertions in `scripts/probes/django_rules.py` | all pass; the run prints `OK` |
-| `RULE:` lines printed | 69 |
+| `RULE:` lines printed | 70 |
 
 The `5.2.8` column is the version the process under test printed on its first line
 (`importlib.metadata.version("django")`, run by `scripts/probes/django_rules.py` inside

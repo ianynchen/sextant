@@ -34,22 +34,35 @@ def paths_of(expression: str, *, prefix: bool = False) -> tuple[tuple[str, ...],
     if not (anchored and not ended if prefix else ended):
         return (expression,), False
     pieces = _pieces(expression[int(anchored) : len(expression) - int(ended)])
-    optional = [index for index, (_, may_drop) in enumerate(pieces or ()) if may_drop]
-    if pieces is None or len(optional) > _MOST_OPTIONAL:
+    optional = [index for index, (_, may_drop, _) in enumerate(pieces or ()) if may_drop]
+    if pieces is None or len(optional) > _MOST_OPTIONAL or (prefix and _greedy_end(pieces)):
         return (expression,), False
     paths = []
     for kept in product((False, True), repeat=len(optional)):
         dropped = {index for index, keep in zip(optional, kept, strict=True) if not keep}
         paths.append(
-            "".join(text for index, (text, _) in enumerate(pieces) if index not in dropped)
+            "".join(text for index, (text, _, _) in enumerate(pieces) if index not in dropped)
         )
     return tuple(paths), True
 
 
-def _pieces(body: str) -> list[tuple[str, bool]] | None:
-    """`body` as pieces `(text, optional)` in one left-to-right scan; None where any part of it
-    is not one of the three reads."""
-    pieces: list[tuple[str, bool]] = []
+def _greedy_end(pieces: list[tuple[str, bool, bool]]) -> bool:
+    """A named group can end the prefix: the last piece, or followed by optional pieces alone.
+    The framework does not backtrack across the mount boundary, so the group takes what the
+    child would match (probe, "`re_path`": `^(?P<lang>[a-z]{2})?/?` over `ab/` is 404 on
+    `/ab/`)."""
+    for _, may_drop, named in reversed(pieces):
+        if named:
+            return True
+        if not may_drop:
+            return False
+    return False
+
+
+def _pieces(body: str) -> list[tuple[str, bool, bool]] | None:
+    """`body` as pieces `(text, optional, named)` in one left-to-right scan; None where any
+    part of it is not one of the three reads."""
+    pieces: list[tuple[str, bool, bool]] = []
     at = 0
     while at < len(body):
         char = body[at]
@@ -57,12 +70,12 @@ def _pieces(body: str) -> list[tuple[str, bool]] | None:
             # Optional: the piece just read, once.
             if not pieces or pieces[-1][1]:
                 return None
-            pieces[-1] = (pieces[-1][0], True)
+            pieces[-1] = (pieces[-1][0], True, pieces[-1][2])
             at += 1
         elif char == "\\":
             if body[at + 1 : at + 2] not in _ESCAPED:
                 return None
-            pieces.append((body[at + 1], False))
+            pieces.append((body[at + 1], False, False))
             at += 2
         elif char == "(":
             end = _closing(body, at)
@@ -71,12 +84,12 @@ def _pieces(body: str) -> list[tuple[str, bool]] | None:
             group = _group(body[at + 1 : end], body[end + 1 : end + 2] == "?")
             if group is None:
                 return None
-            pieces.append((group, False))
+            pieces.append((group, False, body.startswith("?P<", at + 1)))
             at = end + 1
         elif char in _SYNTAX:
             return None
         else:
-            pieces.append((char, False))
+            pieces.append((char, False, False))
             at += 1
     return pieces
 
@@ -87,9 +100,9 @@ def _group(inner: str, optional: bool) -> str | None:
         name, closed, _ = inner[3:].partition(">")
         return f"<{name}>" if closed and name.isidentifier() else None
     literal = _pieces(inner) if optional and not inner.startswith("?") else None
-    if literal is None or any(may_drop for _, may_drop in literal):
+    if literal is None or any(may_drop for _, may_drop, _ in literal):
         return None
-    return "".join(text for text, _ in literal)
+    return "".join(text for text, _, _ in literal)
 
 
 def _closing(body: str, start: int) -> int | None:

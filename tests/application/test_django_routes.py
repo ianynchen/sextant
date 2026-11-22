@@ -405,3 +405,52 @@ def test_an_f_string_piece_not_read_is_partial(tmp_path: Path, libraries):
     )
 
     assert rows == [(None, "any", "^b/{}/$", "pattern", _handler("v"), "partial")]
+
+
+def test_a_prefix_ending_in_a_named_group_is_the_unread_prefix(tmp_path: Path, libraries):
+    """Fix round 1, probe: Django does not backtrack across the include boundary, so
+    `re_path(r'^(?P<lang>[a-z]{2})?/?', include([path('ab/', v)]))` answers 404 on `/ab/`
+    (`lang` takes `ab`): never `/ab/` at `resolved`, the `<prefix>` hole and its question."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _RE_HEAD + "items = [path('ab/', v)]\n"
+            "urlpatterns = [re_path(r'^(?P<lang>[a-z]{2})?/?', include(items))]\n"
+        },
+    )
+
+    assert _rows(workspace) == [(None, "any", "/<prefix>ab/", _handler("v"), "partial")]
+    questions = [
+        row["path"]
+        for row in workspace.query("open_questions")
+        if row["question"] == "mount_prefix"
+    ]
+    assert questions == ["/<prefix>ab/"]
+
+
+def test_a_pattern_child_under_a_prefix_drops_its_caret(tmp_path: Path, libraries):
+    """Probe: `URLResolver._join_route` drops the child's leading `^` (`a/` + `^in$` is
+    `a/in$`), so the row is Django's own route text."""
+    rows = _expression_rows(
+        tmp_path,
+        libraries,
+        "items = [re_path(r'^(a|b)/$', v)]\nurlpatterns = [path('api/', include(items))]\n",
+    )
+
+    assert rows == [(None, "any", "api/(a|b)/$", "pattern", _handler("v"), "partial")]
+
+
+def test_an_f_string_piece_from_another_module_is_read(tmp_path: Path, libraries):
+    """Brief step 3: the value walk reads a constant imported from another module."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "consts.py": "ID = r'(?P<id>\\d+)'\n",
+            "urls.py": _RE_HEAD
+            + "from app.consts import ID\nurlpatterns = [re_path(rf'^b/{ID}/$', v)]\n",
+        },
+    )
+
+    assert _rows(workspace) == [(None, "any", "/b/<id>/", _handler("v"), "resolved")]

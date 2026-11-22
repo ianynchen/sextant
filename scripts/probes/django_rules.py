@@ -689,6 +689,9 @@ c, mod = mount(
         re_path(r"^opt2/?", include([path("x/", ok)])),
         path("api/", include([re_path(r"^x/$", ok)])),
         re_path(r"^rx/", include([path("x/", ok)])),
+        re_path(r"^g1/(?P<lang>[a-z]{2})?/?", include([path("ab/", ok)])),
+        re_path(r"^g2/(?P<slug>[\w-]+)", include([path("x/", ok)])),
+        re_path(r"^g3/(?P<lang>[a-z]{2})/", include([path("ab/", ok)])),
     ]
 )
 g = lambda u: c.get(u).status_code
@@ -725,6 +728,12 @@ assert (g("/api/x/"), g("/rx/x/")) == (200, 200)
 assert str(resolve("/api/x/").route) == "api/x/$" and str(resolve("/rx/x/").route) == "^rx/x/"
 rule(
     "path and re_path mix under include by concatenating the read paths: path('api/', include([re_path('^x/$', v)])) serves /api/x/ (route 'api/x/$', the child's '^' dropped); re_path('^rx/', include([path('x/', v)])) serves /rx/x/"
+)
+assert (g("/g1/ab/"), g("/g1/ab"), g("/g1/frab/")) == (404, 404, 200)
+assert (g("/g2/ax/"), g("/g2/a/x/"), g("/g2/x/")) == (404, 404, 404)
+assert (g("/g3/fr/ab/"), g("/g3/ab/")) == (200, 404)
+rule(
+    "a mount prefix's match is not backtracked across the include boundary: a named group that can end the prefix takes all it can, so re_path('^g1/(?P<lang>[a-z]{2})?/?', include([path('ab/', v)])) answers 404 on /g1/ab/ (lang takes 'ab') and re_path('^g2/(?P<slug>[\\w-]+)', include([path('x/', v)])) 404 on /g2/ax/ (slug takes 'ax'), /g2/a/x/ and /g2/x/; a named group followed by a required literal ('^g3/(?P<lang>[a-z]{2})/') mounts as read (/g3/fr/ab/ 200)"
 )
 
 

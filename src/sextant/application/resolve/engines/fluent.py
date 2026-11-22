@@ -1493,6 +1493,10 @@ def _derive_captured(
         # The mount's prefix goes in front of the address the route itself named and the
         # framework accepted (spec §3c), at the weaker of the two words.
         if context.mounts is not None and path is not None:
+            # A route expression's own text behind a prefix drops its leading `^`, as the
+            # framework's route text does (probe: `_join_route('a/', '^in$')` is `a/in$`).
+            if prefix.text and (peer, path, url_resolution) in expression_kinds:
+                path = path.removeprefix("^")
             path = context.mounts.joined(prefix, path, path_kind == PATH_KIND_PATTERN)
             # A mount with an empty prefix of a route whose path below it is empty too is one
             # the framework refuses (`empty_path`, plan 2026-11-08 N7): no row, the refusal

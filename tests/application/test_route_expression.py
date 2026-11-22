@@ -48,6 +48,15 @@ from sextant.application.resolve.shapes.route_expression import paths_of
         ("^(?P<a>x)+/$", False, ("^(?P<a>x)+/$",), False),
         ("^a??$", False, ("^a??$",), False),
         ("^.$", False, ("^.$",), False),
+        # A real route's unescaped dot is any character: not exact.
+        ("^robots.txt$", False, ("^robots.txt$",), False),
+        # Fix round 1 (probe: a mount prefix is not backtracked across the include boundary):
+        # a named group that can end the prefix takes all it can, so not exact; one followed by
+        # a required literal stays exact. An endpoint is matched whole and is not affected.
+        ("^(?P<lang>[a-z]{2})?/?", True, ("^(?P<lang>[a-z]{2})?/?",), False),
+        ("^(?P<slug>[\\w-]+)", True, ("^(?P<slug>[\\w-]+)",), False),
+        ("^(?P<lang>[a-z]{2})/", True, ("<lang>/",), True),
+        ("^x/(?P<a>\\d+)$", False, ("x/<a>",), True),
     ],
 )
 def test_paths_of(expression: str, prefix: bool, paths: tuple[str, ...], exact: bool) -> None:
