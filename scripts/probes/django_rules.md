@@ -206,4 +206,5 @@ variables, not functions). `as_view` is a `classonlymethod`, so the scanner must
 The `5.2.8` column is the version the process under test printed on its first line
 (`importlib.metadata.version("django")`, run by `scripts/probes/django_rules.py` inside
 `fixtures/orders-django/.venv`), not the version the fixture's `pyproject.toml` asked for.
-Every rule in this file is one of those printed `RULE:` lines.
+Every rule in this file is one of those printed `RULE:` lines; each row of the defining-symbol
+table is an assertion the probe makes before it prints them.
