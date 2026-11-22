@@ -1,0 +1,11 @@
+[project]
+name = "orders-django"
+version = "0.1.0"
+description = "Sextant's own Django test project. Every row of the Python reader's Django catalog is written here as real code."
+requires-python = ">=3.12"
+dependencies = [
+    "django==5.2.8",
+]
+
+[tool.uv]
+package = false
