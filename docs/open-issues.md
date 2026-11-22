@@ -500,6 +500,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-495 | SEXTANT-488 | a marker walk drops a budget cut silently (`parameter_markers.py`) · logged, revisit before FastAPI/marker work (open) |
 | OI-497 | SEXTANT-490 | an untyped value handed to a call before its use answers `escapes`, though an immutable value (a string) cannot be changed by the call — reproduced on main 2026-11-22, cause found: the window rule, not the second route (open, a yield rule to rule on) |
 | OI-498 | SEXTANT-491 | the fluent reader tuple cannot carry the inexact flag, so an inexact template publishes resolved on the fluent path (fixed on `fix/inexact-template-fluent`) |
+| OI-499 | SEXTANT-492 | the fluent concat arm carries one address, so a second path's address is dropped or the first one is lost (open) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
