@@ -130,6 +130,18 @@ def test_the_title_escapes_the_module_id():
     assert "<title>Sextant — &lt;script&gt;alert(1)&lt;/script&gt;</title>" in document
 
 
+def test_one_failed_diagram_cannot_stop_the_rest_from_rendering():
+    """mermaid.run() rethrows the FIRST failure and stops unless suppressErrors
+    is set, and its default maxTextSize (50k chars) is smaller than one full
+    trace of a large repo — so one oversized or malformed diagram left every
+    diagram after it as raw text. Both knobs are pinned here because nothing
+    else executes this script block in CI."""
+    sections = assemble_module_document(MODULE, REPORT, "a3f91c")
+    document = _html(sections, module_id="com.acme:orders-service")
+    assert '"maxTextSize": 5000000' in document
+    assert "suppressErrors: true" in document
+
+
 # --- diagrams, wrapped alike -------------------------------------------
 
 
