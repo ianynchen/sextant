@@ -391,6 +391,51 @@ def test_a_header_written_at_mint_time_follows_its_row_through_the_prefix(tmp_pa
     assert metadata == [("/shop/x", endpoint_id)]
 
 
+def test_a_question_filed_before_the_prefix_follows_its_row(tmp_path):
+    """The engines file `handler_pass_through` and `mount_prefix` questions while
+    deriving endpoints — BEFORE this pass runs — against the unprefixed address.
+    The question is the row's stated reason for being partial, so it moves with
+    the row: left at `GET /x` while the row says `GET /shop/x`, the document
+    shows a question for an address no row has."""
+    workspace = _module_workspace(tmp_path, ["org.springframework:spring-webmvc"])
+    handler = "sextant-jvm maven com.acme/shop 1.0.0 com/acme/Shop#x(sig_00000001)."
+    workspace._connection.execute(
+        "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, catalog_id) "
+        "VALUES (1, 'http', 'inbound', 'GET', '/x', ?, 'invented')",
+        [handler],
+    )
+    workspace._connection.execute(
+        "INSERT INTO open_questions (protocol, method, path, question, candidates, evidence) "
+        "VALUES ('http', 'GET', '/x', 'handler_pass_through', '[]', 'compiler')"
+    )
+    workspace._connection.execute(
+        "INSERT INTO resolved_config (key, value, source, environment) "
+        "VALUES ('server.servlet.context-path', '/shop', 'application.properties', 'default')"
+    )
+    catalog = Catalog(
+        id="invented",
+        style="annotation",
+        protocol="http",
+        direction="inbound",
+        requires=(),
+        matches={},
+        source=Path("tests/invented.yml"),
+        wrappers=[],
+        nullability={},
+        serialization={},
+        known_types=[],
+        dispatcher="spring",
+        server_model=YamlCatalogSource(catalogs_dir()).server_model(),
+    )
+    apply_path_prefixes(workspace, [catalog])
+    questions = workspace._connection.execute(
+        "SELECT path FROM open_questions WHERE question = 'handler_pass_through'"
+    ).fetchall()
+    workspace.close()
+
+    assert questions == [("/shop/x",)]
+
+
 @pytest.mark.pins("path_prefix.a-pattern-row-is-not-canonicalised-by-the-prefix")
 def test_a_pattern_row_is_prefixed_but_never_canonicalised(tmp_path):
     """A row marked `path_kind = pattern` is a regular expression, not an address: the

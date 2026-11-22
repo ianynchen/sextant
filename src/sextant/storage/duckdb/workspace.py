@@ -1956,6 +1956,9 @@ _NAMED_DERIVATIONS = {
     "endpoints_reset": "reset_endpoints.sql",
     "endpoint_contracts": "derive_endpoint_contracts.sql",
     "prefix_endpoint_paths": "prefix_endpoint_paths.sql",
+    # Run BEFORE prefix_endpoint_paths with the same rows: the questions are matched by
+    # the identity that statement is about to change (the file says why).
+    "prefix_question_paths": "prefix_question_paths.sql",
     # Follow-the-object, Ruling 7: the entries bound to a row's `row_id` brought back into
     # line with the row, after each pass that moves or removes rows (the file says which).
     "endpoint_rows_follow": "follow_endpoint_rows.sql",
