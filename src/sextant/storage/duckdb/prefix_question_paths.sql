@@ -19,16 +19,28 @@
 -- question moves too. The same stated limitation as the reclassify pair, and the same
 -- right side to err on.
 --
+-- **Only an identity every matching row agrees about moves.** Two installed prefixes can
+-- move two rows of one `(protocol, method, path)` to DIFFERENT addresses (`/v1` and `/v2`
+-- controllers both mapping `GET /users`); a bare join would hand the question whichever
+-- value DuckDB reads first — a different published path run to run (NFR-1), possibly the
+-- other controller's. An ambiguous identity keeps its old path, which is the stated
+-- wider-match limitation erring on the side that changes nothing.
+--
 -- Parameters:
 --   $rows -- {row_id, prefixed}, exactly the rows `prefix_endpoint_paths.sql` is about to
 --            move. `prefixed` replaces the path of every question matching the row's
 --            CURRENT identity.
 UPDATE open_questions q
-SET path = h.prefixed
-FROM (SELECT UNNEST(
-    $rows::STRUCT(row_id BIGINT, prefixed VARCHAR)[]
-) AS h), endpoints e
-WHERE e.row_id = h.row_id
-  AND q.protocol IS NOT DISTINCT FROM e.protocol
-  AND q.method   IS NOT DISTINCT FROM e.method
-  AND q.path     = e.path;
+SET path = m.prefixed
+FROM (
+    SELECT e.protocol, e.method, e.path, min(h.prefixed) AS prefixed
+    FROM (SELECT UNNEST(
+        $rows::STRUCT(row_id BIGINT, prefixed VARCHAR)[]
+    ) AS h), endpoints e
+    WHERE e.row_id = h.row_id
+    GROUP BY e.protocol, e.method, e.path
+    HAVING count(DISTINCT h.prefixed) = 1
+) m
+WHERE q.protocol IS NOT DISTINCT FROM m.protocol
+  AND q.method   IS NOT DISTINCT FROM m.method
+  AND q.path     = m.path;

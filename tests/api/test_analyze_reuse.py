@@ -673,6 +673,12 @@ def test_a_scan_that_dies_leaves_no_reuse_record_and_the_next_run_rereads_everyt
 
     warm = tmp_path / "warm"
     _analyze(project, warm)
+    connection = duckdb.connect(str(warm / "workspace.duckdb"), read_only=True)
+    try:
+        (recorded,) = connection.execute("SELECT count(*) FROM scan_reuse").fetchone()
+    finally:
+        connection.close()
+    assert recorded > 0, "the first run must record something, or the emptiness below is vacuous"
 
     def dies(*_args: object, **_kwargs: object) -> object:
         raise RuntimeError("killed mid-scan")

@@ -80,7 +80,7 @@ class AsmScanner:
                 raise ScanError(f"extractor failed: {completed.stderr.strip()}")
             try:
                 self._capabilities = frozenset(json.loads(completed.stdout)["capabilities"])
-            except (ValueError, KeyError) as malformed:
+            except (ValueError, KeyError, TypeError) as malformed:
                 raise ScanError(
                     f"extractor wrote no readable capabilities report: {malformed}"
                 ) from malformed

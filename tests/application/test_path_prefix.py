@@ -436,6 +436,43 @@ def test_a_question_filed_before_the_prefix_follows_its_row(tmp_path):
     assert questions == [("/shop/x",)]
 
 
+def test_a_question_whose_identity_two_prefixes_disagree_about_stays_put(tmp_path):
+    """Two installed prefixes can move two rows of one `(protocol, method, path)` to
+    DIFFERENT addresses (`/v1` and `/v2` controllers both mapping `GET /x`). The
+    question ledger cannot tell whose question it holds, and a bare join would hand
+    it whichever value the engine read first — a different published path run to
+    run. An ambiguous identity keeps its old path; an agreed one moves."""
+    workspace = _module_workspace(tmp_path, ["org.springframework:spring-webmvc"])
+    for row_id, handler in (
+        (1, "com/acme/v1/Shop#x(sig_00000001)."),
+        (2, "com/acme/v2/Shop#x(sig_00000002)."),
+    ):
+        workspace._connection.execute(
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler, catalog_id) "
+            "VALUES (?, 'http', 'inbound', 'GET', '/x', ?, 'invented')",
+            [row_id, handler],
+        )
+    workspace._connection.execute(
+        "INSERT INTO open_questions (protocol, method, path, question, candidates, evidence) "
+        "VALUES ('http', 'GET', '/x', 'handler_pass_through', '[]', 'compiler')"
+    )
+    workspace.derive(
+        "prefix_question_paths",
+        rows=[{"row_id": 1, "prefixed": "/v1/x"}, {"row_id": 2, "prefixed": "/v2/x"}],
+    )
+    (disagreeing,) = workspace._connection.execute("SELECT path FROM open_questions").fetchone()
+
+    workspace.derive(
+        "prefix_question_paths",
+        rows=[{"row_id": 1, "prefixed": "/shop/x"}, {"row_id": 2, "prefixed": "/shop/x"}],
+    )
+    (agreeing,) = workspace._connection.execute("SELECT path FROM open_questions").fetchone()
+    workspace.close()
+
+    assert disagreeing == "/x", "a disagreed identity keeps its old path"
+    assert agreeing == "/shop/x", "an agreed identity moves"
+
+
 @pytest.mark.pins("path_prefix.a-pattern-row-is-not-canonicalised-by-the-prefix")
 def test_a_pattern_row_is_prefixed_but_never_canonicalised(tmp_path):
     """A row marked `path_kind = pattern` is a regular expression, not an address: the
