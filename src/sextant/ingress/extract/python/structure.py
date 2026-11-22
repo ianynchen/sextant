@@ -57,6 +57,7 @@ from sextant.ingress.extract.python.imports import (
     ProjectNames,
     Target,
     bind_names,
+    binds_as,
     calls_through,
     every_statement,
     holds_decorated_value,
@@ -494,7 +495,9 @@ class _Writer(BodyReader):
         nested = scope.frame is not None
         in_class = scope.class_path is not None and not nested
         decorators = [
-            target for decorator in node.decorator_list for target in scope.types.lookup(decorator)
+            binds_as(target, self._context.index)
+            for decorator in node.decorator_list
+            for target in scope.types.lookup(decorator)
         ]
         is_static = any(t == Target(BUILTINS, "staticmethod") for t in decorators)
         # A classmethod is bound to the class, not to an instance (D00 §5a `static`): `cls`
@@ -521,7 +524,7 @@ class _Writer(BodyReader):
             callees, CallArgument(kind="lambda", symbol=descriptor, captures=0), scope
         )
         self._bind_nested(node.name, applied, scope)
-        if not nested and holds_decorated_value(node, scope.types.lookup):
+        if not nested and holds_decorated_value(node, scope.types.lookup, self._context.index):
             # `f = dec(f)` (design 2026-11-06-reading-decorators §3e): the name is a field of
             # the module or the class, written from the outermost decorator's result.
             self._decorated_name(node, applied, scope)
@@ -1037,7 +1040,7 @@ def declared_types(
             # A decorated name holds what its decorators made (`f = dec(f)`), whose call
             # the function's own declaration does not describe.
             # A module-level call-through wrapper gives what the `def` declares (OI-444).
-            decorated = holds_decorated_value(node, scope.lookup) and not (
+            decorated = holds_decorated_value(node, scope.lookup, index) and not (
                 path is None and calls_through(node, scope.lookup)
             )
             name = node.name

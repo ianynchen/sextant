@@ -269,6 +269,21 @@ class Dispatch:
         end = self._order(owner)[1]
         return None if end == self.root else end
 
+    def order_through_headers(self, owner: str) -> tuple[list[str], str | None]:
+        """`owner`'s C3 order with the types known by a header placed too (their parents are
+        read), `owner` first and the root type left out, and the first type whose parents
+        were not read (None where every one was). Which of them had their methods read is
+        the caller's question."""
+        linear = self._linear(owner, set())
+        if linear is None:
+            return [owner], None
+        order: list[str] = []
+        for type_ in linear:
+            if not isinstance(type_, str):
+                return order, type_[0]
+            order.append(type_)
+        return order, None
+
     def _order(self, owner: str) -> tuple[list[str], str | None]:
         """`lookup_order`, and the type the order left the workspace at (None where it
         read every type it reached)."""

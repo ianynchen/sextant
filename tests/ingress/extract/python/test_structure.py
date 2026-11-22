@@ -659,6 +659,32 @@ def test_the_languages_own_descriptors_keep_the_method_model(tmp_path: Path):
     assert fields == {"app/k/K#h.", "app/k/K#i."}
 
 
+def test_a_decorator_class_extending_classmethod_binds_as_classmethod(tmp_path: Path):
+    """A decorator whose class extends `classmethod` or `staticmethod` binds the function as
+    that builtin does (Django's `classonlymethod(classmethod)`, probe
+    `scripts/probes/django_rules.md`): the def keeps the method model and writes no field, and
+    a call through the class names the class as `@classmethod`'s does."""
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/kinds.py": (
+                "class onlycls(classmethod):\n    pass\nclass onlystatic(staticmethod):\n    pass\n"
+            ),
+            "app/k.py": (
+                "from app.kinds import onlycls, onlystatic\n"
+                "class K:\n"
+                "    @onlycls\n    def make(cls): pass\n"
+                "    @onlystatic\n    def tool(): pass\n"
+                "K.make()\n"
+            ),
+        },
+    )
+
+    assert not {w.field for w in _facts(tree, FieldWriteFact) if w.field.startswith("app/k/")}
+    (call,) = [c for c in _facts(tree, CallSiteFact) if c.target.name == "make"]
+    assert (call.target.owner, call.invoke_kind) == ("app/k/K#", "static")
+
+
 def test_a_name_written_from_another_module_name_takes_its_type(tmp_path: Path):
     """`alias = shop` writes `alias` from the field `shop`, so `alias` has `shop`'s type."""
     _, tree = _scan(

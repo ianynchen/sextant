@@ -565,7 +565,9 @@ class _Binder:
         elif isinstance(node, ast.ClassDef):
             names[node.name] = self._own(node.name, "class")
         elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            decorated = holds_decorated_value(node, lambda written: self._lookup(written, names))
+            decorated = holds_decorated_value(
+                node, lambda written: self._lookup(written, names), self._index
+            )
             kind: Kind = "variable" if decorated else "function"
             names[node.name] = self._own(node.name, kind)
         elif isinstance(node, ast.TypeAlias) and isinstance(node.name, ast.Name):
@@ -769,12 +771,45 @@ _BUILTIN_NAMES = frozenset(dir(builtins))
 _PROPERTY_PARTS = frozenset({"setter", "getter", "deleter"})
 
 
+# The builtin method kinds a decorator's class may extend (`classonlymethod(classmethod)`,
+# probe `scripts/probes/django_rules.md`, "Defining symbols"): the subclass binds the function
+# as the builtin does.
+_BOUND_KINDS = (Target(_BUILTINS, "classmethod"), Target(_BUILTINS, "staticmethod"))
+
+
+def binds_as(target: Target, index: ModuleIndex | None) -> Target:
+    """The builtin `classmethod` or `staticmethod` whose binding `target` has: the builtin
+    its class extends, through the written bases of the module's and the libraries' classes;
+    `target` itself otherwise."""
+    if index is None or target.member is None or target in _BOUND_KINDS:
+        return target
+    kinds = {f"{kind.module}/{kind.member}#": kind for kind in _BOUND_KINDS}
+    pending = [f"{target.module}/{target.member.replace('.', '$')}#"]
+    seen: set[str] = set()
+    while pending:
+        symbol = pending.pop()
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        shape = None if index.headers is None else index.headers.shape_of(symbol)
+        if shape is None and index.libraries is not None:
+            shape = index.libraries.shape_of(symbol)
+        for base in (shape.bases if shape is not None else None) or ():
+            if base.symbol in kinds:
+                return kinds[base.symbol]
+            pending.append(base.symbol)
+    return target
+
+
 def is_descriptor(
-    decorator: ast.expr, name: str, lookup: Callable[[ast.expr], tuple[Target, ...]]
+    decorator: ast.expr,
+    name: str,
+    lookup: Callable[[ast.expr], tuple[Target, ...]],
+    index: ModuleIndex | None = None,
 ) -> bool:
     """Whether `decorator`, on the `def` named `name`, is one of the language's own method
-    kinds: a name bound to one of `DESCRIPTORS`, or `@name.setter` (`getter`, `deleter`) of
-    the property of that name."""
+    kinds: a name bound to one of `DESCRIPTORS` or to a class extending one of them
+    (`binds_as`), or `@name.setter` (`getter`, `deleter`) of the property of that name."""
     if (
         isinstance(decorator, ast.Attribute)
         and decorator.attr in _PROPERTY_PARTS
@@ -785,16 +820,21 @@ def is_descriptor(
     if not isinstance(decorator, ast.Name | ast.Attribute):
         return False
     targets = lookup(decorator)
-    return len(targets) == 1 and (targets[0].module, targets[0].member) in DESCRIPTORS
+    if len(targets) != 1:
+        return False
+    kind = binds_as(targets[0], index)
+    return (kind.module, kind.member) in DESCRIPTORS
 
 
 def holds_decorated_value(
-    node: ast.FunctionDef | ast.AsyncFunctionDef, lookup: Callable[[ast.expr], tuple[Target, ...]]
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    lookup: Callable[[ast.expr], tuple[Target, ...]],
+    index: ModuleIndex | None = None,
 ) -> bool:
     """Whether the name of `node` holds its decorators' result rather than the function:
     it carries a decorator that is not one of the language's own method kinds. With both
     kinds, the name holds the outermost decorator's result (design §3e)."""
-    return any(not is_descriptor(d, node.name, lookup) for d in node.decorator_list)
+    return any(not is_descriptor(d, node.name, lookup, index) for d in node.decorator_list)
 
 
 def calls_through(

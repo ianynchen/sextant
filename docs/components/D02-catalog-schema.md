@@ -2709,6 +2709,29 @@ question, and its methods are still narrowed.
 Django: `require_GET`, `require_POST`, `require_safe`, `require_http_methods` (probe
 `scripts/probes/django_rules.md`, "Function views").
 
+**`roots[].captures.handler.through: {owner, method, read: receiver}`, with `matches.dispatch:
+[{name, method}]` and `matches.bypassed_by: [{name}]`** (plan 2026-11-22-python-django-core-inbound
+Task 5, ruling R3; the `through` word of `mount[].router_arg` and the two `supertype_dispatch`
+words, no new word): a handler argument made by a call of `owner.method` on `owner` or a type
+below it (its read ancestors) is that call's receiver, a class, and the route serves the class's
+dispatch table. Each `dispatch` member is looked up by name in the class's C3 order through the
+types whose methods were read (the module's, and the library class bodies a header lists); the
+route gets one row per member found, its `method` the verb and its handler that member, on the
+type that defines it. A member `owner` itself defines is the framework's own answer and never a
+row. A `bypassed_by` method the class defines replaces the dispatch unless its body calls the
+method it overrides on its parent (`special`, the servlet rule): one row serving any method
+(`verbless_serves`), that method the handler. A `bypassed_by` name the class writes as a value,
+or the call passes as a keyword, changes the table in a way not read: every row is `partial`.
+So is every row where the order meets a type whose methods were not read, or a bypass whose
+body was not read; such a class with no member found is one row naming no method,
+`unresolved`. The call is read as `narrowed_by` reads its calls, through calls a value model
+states hand the value on; one no value model states gives that convention's `partial` row with
+no handler and a `handler_pass_through` question. `narrowed_by` does not apply to the class's
+rows. Python names a member by name alone, so an entry has no `parameters`. Django:
+`through: { owner: django.views.generic.base.View, method: as_view, read: receiver }`,
+`dispatch` the eight names of `View.http_method_names`, `bypassed_by: [dispatch,
+http_method_names]` (probe `scripts/probes/django_rules.md`, "Class views").
+
 **A step may declare `receiver_arg: N`** (spec 2026-10-26 §3c): the step joins the chain
 through argument N's value id instead of through its own `receiver`. A Kotlin extension
 function compiles to a STATIC method whose argument 0 is the receiver, so the call's own

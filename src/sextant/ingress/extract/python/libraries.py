@@ -80,6 +80,7 @@ from sextant.domain.symbols import (
     PY_SIGNATURE,
     PYTHON_SCHEME,
     bare_descriptor,
+    field_type,
     is_type_descriptor,
     member_type,
     method_descriptor,
@@ -1632,18 +1633,25 @@ def called_types(facts: Iterable[Fact]) -> set[str]:
     """The class each static call of the module's own facts may name: `fastapi/applications#`
     called `FastAPI` names `fastapi/applications/FastAPI#` where that is a class (ruling R17).
     A file writes the call on the module, as it cannot see what the name is, and calling a
-    class constructs it: the class gets a header so the resolver can read the construction."""
+    class constructs it: the class gets a header so the resolver can read the construction.
+    So does the class a module name a call is made on may hold (`TemplateView.as_view()`,
+    written on the field `django/views/generic/base#TemplateView.`), so the resolver can bind
+    the call to it."""
     found: set[str] = set()
     for fact in facts:
+        if not isinstance(fact, CallSiteFact):
+            continue
+        named = None
         if (
-            isinstance(fact, CallSiteFact)
-            and fact.invoke_kind == "static"
+            fact.invoke_kind == "static"
             and fact.target.owner is not None
             and fact.target.name is not None
         ):
             named = member_type(fact.target.owner, fact.target.name)
-            if named is not None:
-                found.add(bare_descriptor(named))
+        elif fact.receiver_field is not None:
+            named = field_type(fact.receiver_field)
+        if named is not None:
+            found.add(bare_descriptor(named))
     return found
 
 

@@ -493,9 +493,18 @@ class Dispatcher(View):
         return HttpResponse("g")
 
 
+class Delegating(View):
+    def dispatch(self, request, *a, **k):
+        return super().dispatch(request, *a, **k)
+
+    def get(self, request):
+        return HttpResponse("g")
+
+
 c, mod = mount(
     [
         path("items", Items.as_view()),
+        path("delegating", Delegating.as_view()),
         path("child", Child.as_view()),
         path("narrow", Narrow.as_view()),
         path("wide", Widened.as_view()),
@@ -578,6 +587,10 @@ rule(
 assert codes(c, "/disp")["get"] == 200 and c.post("/disp").content == b"custom dispatch"
 rule(
     "a class that overrides dispatch answers every method itself (POST 200 with no post method): the verb set is then unknowable from the class body"
+)
+assert codes(c, "/delegating") == {"get": 200, "post": 405, "put": 405, "delete": 405}
+rule(
+    "a dispatch override that calls super().dispatch keeps View.dispatch's verb lookup: Delegating(get) answers GET 200 and POST, PUT, DELETE 405"
 )
 # initkwargs
 assert codes(c, "/init") == {"get": 405, "post": 200, "put": 405, "delete": 405}

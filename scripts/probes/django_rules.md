@@ -146,6 +146,8 @@ variables, not functions). `as_view` is a `classonlymethod`, so the scanner must
   on `Items` and has no body; an own `head` is kept (203 in the probe); no `get` means HEAD is 405.
 - A `View` subclass with no verb methods answers 405 to every method except OPTIONS (200).
 - A class overriding `dispatch` answers every method itself (POST 200 with no `post` method).
+- A `dispatch` override that calls `super().dispatch(...)` keeps `View.dispatch`'s verb lookup:
+  `Delegating(get)` answers GET 200 and POST, PUT, DELETE 405 (plan 6, Task 5).
 - `as_view(**initkwargs)` sets instance attributes. `as_view(http_method_names=['post'])` on a class
   that defines `get` and `post` answers POST 200 and GET 405; `['get','post','delete']` on `Items`
   still answers only GET and POST. A verb name as a keyword (`get=...`) or an attribute the class
@@ -238,7 +240,7 @@ variable that holds a decorator, not a `def` of that name.
 | Check | 5.2.8 |
 |---|---|
 | Assertions in `scripts/probes/django_rules.py` | all pass; the run prints `OK` |
-| `RULE:` lines printed | 58 |
+| `RULE:` lines printed | 61 |
 
 The `5.2.8` column is the version the process under test printed on its first line
 (`importlib.metadata.version("django")`, run by `scripts/probes/django_rules.py` inside

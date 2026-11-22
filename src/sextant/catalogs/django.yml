@@ -67,16 +67,59 @@ matches:
   # `handler_pass_through` question. Its methods are still narrowed by a `require_*` on the
   # same path: Django routes every method to the callable, and each `require_*` on the way
   # answers 405 to the methods it does not list.
+  #
+  # A CLASS VIEW (plan 6, Task 5, ruling R3; probe, "Class views"): `path("x/", Items.as_view())`
+  # hands Django the closure `view`, whose `view_class` is the class the `as_view` call is made
+  # on (probe: "the class must be read from view_class / the as_view receiver, never the
+  # name"), so the handler is read `through` `View.as_view` (a `classonlymethod`, which binds
+  # as a `classmethod`: probe, "Defining symbols") off its receiver. The rows are the class's
+  # dispatch table, `dispatch` and `bypassed_by` below.
   roots:
     - { owner: django.urls.conf, method: path,
         captures: { url: { arg: 0, keyword: route },
-                    handler: { arg: 1, keyword: view, narrowed_by: [
+                    handler: { arg: 1, keyword: view,
+                      through: { owner: django.views.generic.base.View, method: as_view, read: receiver },
+                      narrowed_by: [
                       { owner: django.views.decorators.http, method: require_GET, http_method: GET },
                       { owner: django.views.decorators.http, method: require_POST, http_method: POST },
                       { owner: django.views.decorators.http, method: require_safe, http_method: [GET, HEAD] },
                       { owner: django.views.decorators.http, method: require_http_methods,
                         http_method: { arg: 0, keyword: request_method_list } } ] } } }
   terminal: [path]
+  # THE VERBS A CLASS VIEW SERVES (probe, "Class views"). "as_view() dispatches only methods
+  # the class defines: Items(get, post) answers GET and POST 200, PUT and DELETE 405", looked up
+  # by name in `View.http_method_names`, "['get','post','put','patch','delete','head','options',
+  # 'trace']", and "verb methods are inherited through the MRO: Child(Base) answers Base's get
+  # and delete and its own post" — a library base's too (`TemplateView.get`). One row per
+  # method the class defines, own or inherited, the method its handler; a method `View` itself
+  # defines is Django's own answer and never a row: "View defines options: an OPTIONS request
+  # is 200 on every class view", and the automatic `head` is no method at all ("View.setup
+  # assigns self.head = self.get when the class has get and no head"). A `head` or an `options`
+  # the class defines is a row: "a class with its own head keeps it (203)", "an options method
+  # on the subclass replaces View.options". `http_method_names` "can add a non-HTTP-standard
+  # name" (`custom`): such a method is not listed here, a stated under-report.
+  dispatch:
+    - { name: get, method: GET }
+    - { name: post, method: POST }
+    - { name: put, method: PUT }
+    - { name: patch, method: PATCH }
+    - { name: delete, method: DELETE }
+    - { name: head, method: HEAD }
+    - { name: options, method: OPTIONS }
+    - { name: trace, method: TRACE }
+  # WHAT REPLACES OR CHANGES THAT TABLE. "A class that overrides dispatch answers every method
+  # itself (POST 200 with no post method)": one any-method row (`verbless_serves`), `dispatch`
+  # the handler. "A dispatch override that calls super().dispatch keeps View.dispatch's verb
+  # lookup", the servlet catalog's delegating `service()`: the table's rows. `http_method_names`
+  # changes the table ("a class-level http_method_names overrides the dispatch list:
+  # Narrow(['get']) over a class with post leaves POST 405"; "as_view(http_method_names=[...])
+  # replaces the dispatch list for that route") and is written as a value, which is not read
+  # here: a STATED BOUNDARY, every row of a class that writes it, or of a call that passes it,
+  # is `partial`, never a `resolved` verb Django may refuse. Other initkwargs
+  # (`as_view(template_name=...)`) change no verb.
+  bypassed_by:
+    - { name: dispatch }
+    - { name: http_method_names }
   # A FUNCTION VIEW SERVES EVERY METHOD (probe, "Function views": a plain function answers
   # GET, POST, PUT and DELETE 200, and OPTIONS 200, the request reaching the view): one row,
   # method NULL, marked as serving any method. No automatic OPTIONS or HEAD row is the

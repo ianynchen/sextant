@@ -22,7 +22,7 @@ from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.dispatch import dispatch_of
+from sextant.application.resolve.dispatch import Dispatch, dispatch_of
 from sextant.application.resolve.open_questions import record_open_questions
 from sextant.application.resolve.parameter_markers import (
     parameter_markers,
@@ -86,6 +86,7 @@ from sextant.application.resolve.shapes.chains import (
     _LINK_SENDER,
     _READS_LINK,
     _UNRESOLVED_ARGUMENT,
+    HANDLER_THROUGH,
     NARROWED_BY,
     VERBS_TO_READ,
     ChainEnd,
@@ -214,9 +215,11 @@ from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import REDACTED, Redactor
 from sextant.domain.symbols import (
     ANY_TYPE,
+    PY_SIGNATURE,
     UNION_TYPE,
     bare_descriptor,
     member_name,
+    method_descriptor,
     method_name,
     names_a_type,
     owner_of,
@@ -377,6 +380,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     verbless_serves = validated_verbless_serves(matches, catalog.source, "fluent")
     pathless_serves = _pathless_serves(matches, catalog)
     path_prefix = _path_prefix(matches, catalog)
+    class_dispatch = _class_dispatch(matches, catalog, roots)
     _validate_route_captures([*roots, *bean_roots, *steps], catalog)
     pass_through = pass_through_of(matches, catalog.source)
     mount_rules = mount_rules_of(matches, catalog.source, words=catalog.root_kind is not None)
@@ -546,6 +550,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 verbless_serves=verbless_serves,
                 pathless_serves=pathless_serves,
                 path_prefix=path_prefix,
+                class_dispatch=class_dispatch,
                 judged=judged,
                 candidates=candidates,
                 unread=unread,
@@ -1014,6 +1019,10 @@ class _DeriveContext:
     # in front of every inbound address, outermost mount prefix included, joined by the
     # catalog's `path_join`. None for every catalog not declaring it.
     path_prefix: str | None = None
+    # `matches.dispatch` and `matches.bypassed_by` (the `supertype_dispatch` words, plan
+    # 2026-11-22 Task 5), for a root whose handler is a class given through a call
+    # (`HANDLER_THROUGH`). None for every catalog declaring no such root.
+    class_dispatch: "_ClassDispatch | None" = None
     # The workspace and the walk's index, for the hop ladders (Task 9), shared with the
     # walk (`values.cached_value_index`).
     workspace: "Workspace | None" = None
@@ -1116,12 +1125,31 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
         _derive_captured(end if exact else replace(end, inexact=True), filled, context)
 
 
-def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveContext") -> None:
-    """`_derive`'s row for one reading of the chain's captures."""
+def _derive_captured(
+    end: ChainEnd,
+    captures: dict[str, Any],
+    context: "_DeriveContext",
+    answered: "_Judged | None" = None,
+) -> None:
+    """`_derive`'s row for one reading of the chain's captures; `answered`, the handler where
+    the captures were read for one method of a class (`_class_view`)."""
     # Spec 2026-09-21 §4: the root's own direction where it declared one,
     # the catalog's otherwise — read once, because every column and key
     # below that names a direction names this one.
     direction = captures.get(_DIRECTION, context.catalog.direction)
+    # A handler given as a class through a call (`HANDLER_THROUGH`): one row per method of the
+    # class's dispatch table, or the judgement of a wrapper that hides it.
+    view = (
+        _class_view(captures, context)
+        if HANDLER_THROUGH in captures and direction == "inbound" and answered is None
+        else None
+    )
+    if isinstance(view, list):
+        for filled, handled, inexact in view:
+            _derive_captured(
+                replace(end, inexact=True) if inexact else end, filled, context, handled
+            )
+        return
     # The consumer the chain captured, whatever the direction (read on the row
     # for an inbound one alone, below); and — fix round 1, finding 4 — a
     # channel-sourced chain (`from("ch")…`, spec §5), whose row is decided by
@@ -1146,7 +1174,13 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
     # branch's own edge written here too.
     # Spec §3b: the chain's handlers run in order until one does not pass the request on; that
     # one names the row. None where every one passes on: middleware, no row.
-    answering = _answering(captures.get("handler"), context)
+    answering = (
+        answered
+        if answered is not None
+        else view
+        if view is not None
+        else _answering(captures.get("handler"), context)
+    )
     last_handler = answering.symbol if answering is not None else None
     reads_link = _READS_LINK in captures
     read = _string_value(captures[_READS_LINK]) if reads_link else None
@@ -3889,6 +3923,225 @@ def _blocked(stack: _Stack, context: "_DeriveContext") -> "_Judged | None":
                 ),
             ),
         ),
+    )
+
+
+@dataclass(frozen=True)
+class _ClassDispatch:
+    """`matches.dispatch` (`{name, method}`, a method of the class and the verb it serves) and
+    `matches.bypassed_by` (`{name}`), read for a handler given as a class through a call."""
+
+    verbs: tuple[tuple[str, str], ...]
+    bypassed: tuple[str, ...]
+
+
+def _class_dispatch(
+    matches: dict[str, Any], catalog: Catalog, roots: Sequence[dict[str, Any]]
+) -> _ClassDispatch | None:
+    """The dispatch table a root's class handler is read by: required where a root's handler
+    is given through a call, and refused where none is (it would be read by nothing). Python
+    has no overloads, so an entry names its method by name alone (no `parameters`)."""
+    through = any(HANDLER_THROUGH in root["captures"] for root in roots)
+    if not through:
+        if "dispatch" in matches or "bypassed_by" in matches:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `dispatch` and `bypassed_by` are read for a "
+                f"root whose handler capture declares `through` (D02 §2's `fluent` style)"
+            )
+        return None
+    verbs = matches.get("dispatch")
+    bypassed = matches.get("bypassed_by")
+    if not (
+        isinstance(verbs, list)
+        and verbs
+        and all(
+            isinstance(entry, dict)
+            and set(entry) == {"name", "method"}
+            and all(isinstance(entry[key], str) and entry[key] for key in entry)
+            for entry in verbs
+        )
+        and isinstance(bypassed, list)
+        and all(
+            isinstance(entry, dict)
+            and set(entry) == {"name"}
+            and isinstance(entry["name"], str)
+            and entry["name"]
+            for entry in bypassed
+        )
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: a root whose handler is given `through` a call "
+            f"needs `dispatch`, a non-empty list of `{{name, method}}`, and `bypassed_by`, a "
+            f"list of `{{name}}` (D02 §2's `fluent` style)"
+        )
+    return _ClassDispatch(
+        tuple((entry["name"], entry["method"]) for entry in verbs),
+        tuple(entry["name"] for entry in bypassed),
+    )
+
+
+def _class_view(
+    captures: dict[str, Any], context: "_DeriveContext"
+) -> list[tuple[dict[str, Any], "_Judged | None", bool]] | _Judged | None:
+    """A handler given as a class through a call (`HANDLER_THROUGH`): where the handler
+    argument was made by a call of `through.owner.method` on that owner or a class below it,
+    read as decorators are (`_decorator_stack`) through calls a value model states hand it on,
+    the captures of each row the class serves (`_class_rows`). Where a call no value model
+    states lies between, which function runs is not read here (`_blocked`). None where the
+    argument was made by no such call: the handler reads as it always has."""
+    rule = captures[HANDLER_THROUGH]
+    argument = captures.get("handler")
+    if not isinstance(argument, dict):
+        return None
+    at = argument.get(_CAPTURED_AT)
+    index = context.values
+    if at is None or index is None or context.workspace is None or context.class_dispatch is None:
+        return None
+    dispatch = context.workspace.once(dispatch_of)
+    stack = _decorator_stack(index, str(at[0]), argument, context.method_symbols)
+    for position, (method, row) in enumerate(stack.calls):
+        owner = _bound_owner(method, row, context)
+        if owner is None or row["name"] != rule.method or not _below(owner, rule.owners, dispatch):
+            continue
+        outer = stack.calls[:position]
+        unstated = next(
+            (call for call in outer if _handed_back(index, call[0], call[1]) is None), None
+        )
+        if unstated is not None:
+            return _blocked(_Stack(outer, unstated, True), context)
+        return _class_rows(owner, row, captures, rule.owners, context)
+    return None
+
+
+def _below(owner: str, owners: Sequence[str], dispatch: Dispatch) -> bool:
+    """Whether the type `owner` is one of `owners` or has one among its read ancestors."""
+    pending, seen = [owner], set()
+    while pending:
+        type_ = pending.pop()
+        if type_ in owners:
+            return True
+        if type_ not in seen:
+            seen.add(type_)
+            pending.extend(str(ancestor) for ancestor, _, _ in dispatch.ancestors.get(type_, ()))
+    return False
+
+
+def _bound_owner(method: str, row: Mapping[str, Any], context: "_DeriveContext") -> str | None:
+    """The type a call is made on: its own owner, else the one receiver binding settled on
+    (`bound_call_site_index`, which `context.facts` holds)."""
+    if row.get("owner") is not None:
+        return str(row["owner"])
+    ordinal = row["ordinal"]
+    for site in context.facts.sites_by_caller.get(method, ()):
+        if site["ordinal"] == ordinal:
+            return None if site["owner"] is None else str(site["owner"])
+    return None
+
+
+def _class_rows(
+    owner: str,
+    row: Mapping[str, Any],
+    captures: dict[str, Any],
+    framework: Sequence[str],
+    context: "_DeriveContext",
+) -> list[tuple[dict[str, Any], _Judged | None, bool]]:
+    """The rows the class `owner` serves through the call `row` (D02 §2's `fluent` style), each
+    as its captures, its handler and whether it is no surer than `partial`. Each member is
+    looked up in the class's lookup order (`Dispatch.order_through_headers`), on the types whose
+    methods were read, the module's and the libraries' class bodies; one the `through` owner
+    itself defines is the framework's own answer and never a row. A `bypassed_by` method the
+    class defines replaces the dispatch unless it calls the method it overrides on its parent
+    (`special`, the servlet precedent): one row serving any method, that method the handler.
+    Otherwise one row per `dispatch` method the class defines, that method the handler. Every
+    row is `partial` where the order meets a type whose methods were not read (it may define
+    more), where a bypass is a library's whose body was not read, or where the class writes a
+    `bypassed_by` member as a value or the call passes one as a keyword (the table is changed
+    in a way not read here). A class read of no row past such a type is one row naming no
+    method."""
+    assert context.workspace is not None and context.class_dispatch is not None
+    assert context.values is not None
+    dispatch = context.workspace.once(dispatch_of)
+    members, read, fields = context.workspace.once(_class_members)
+    table = context.class_dispatch
+    order, unread = dispatch.order_through_headers(owner)
+    if unread is None:
+        unread = next((type_ for type_ in order if type_ not in read), None)
+        order = order if unread is None else order[: order.index(unread)]
+    inexact = (unread is not None and unread not in framework) or any(
+        name in {argument.get("keyword") for argument in row["arguments"] or ()}
+        or any(f"{type_}{name}." in fields for type_ in order if type_ not in framework)
+        for name in table.bypassed
+    )
+
+    def defined(name: str) -> str | None:
+        for type_ in order:
+            if (type_, name) in members:
+                return None if type_ in framework else members[(type_, name)]
+        return None
+
+    base = {
+        key: value for key, value in captures.items() if key not in (HANDLER_THROUGH, NARROWED_BY)
+    }
+    for name in table.bypassed:
+        symbol = defined(name)
+        if symbol is None:
+            continue
+        if owner_of(bare_descriptor(symbol)) not in dispatch.scanned:
+            # A library's, whose body was not read: whether it hands the request back to the
+            # dispatch is not known.
+            inexact = True
+            continue
+        if not any(
+            site["invoke_kind"] == "special" and site["name"] == name
+            for site in context.facts.sites_by_caller.get(symbol, ())
+        ):
+            return [(base, _Judged(symbol, ANSWERS), inexact)]
+    rows: list[tuple[dict[str, Any], _Judged | None, bool]] = [
+        ({**base, "http_method": verb}, _Judged(symbol, ANSWERS), inexact)
+        for name, verb in table.verbs
+        for symbol in [defined(name)]
+        if symbol is not None
+    ]
+    if not rows and unread is not None and unread not in framework:
+        return [({**base, "http_method": None}, _Judged(None, ANSWERS), False)]
+    return rows
+
+
+def _class_members(
+    workspace: "Workspace",
+) -> tuple[dict[tuple[str, str], str], frozenset[str], frozenset[str]]:
+    """Each method whose body or header was read, by its bare type and name, as its full symbol
+    (one of that name on that type alone); the types whose methods were read: the module's
+    (`Dispatch.declared`) and the libraries' class bodies a header lists (`type_header_bodies`);
+    and every field declared, bare. Read once per workspace."""
+    dispatch = workspace.once(dispatch_of)
+    symbols = workspace.once(_method_symbols)
+    found: dict[tuple[str, str], str | None] = {}
+    read: set[str] = set(dispatch.scanned)
+
+    def add(type_: str, name: str, symbol: str) -> None:
+        key = (type_, name)
+        found[key] = symbol if found.get(key, symbol) == symbol else None
+
+    for bare in dispatch.declared:
+        type_ = owner_of(bare)
+        if type_ is not None and bare in symbols:
+            add(type_, method_name(bare), symbols[bare])
+    for header in workspace.query("type_header_bodies"):
+        full = str(header["symbol"])
+        type_ = bare_descriptor(full)
+        prefix = full[: len(full) - len(type_)]
+        listed = header["methods"]
+        listed = json.loads(listed) if isinstance(listed, str) else listed
+        read.add(type_)
+        for entry in listed if isinstance(listed, list) else ():
+            name = str(entry["name"])
+            add(type_, name, prefix + method_descriptor(type_, name, PY_SIGNATURE))
+    fields = frozenset(bare_descriptor(str(row["symbol"])) for row in workspace.query("fields"))
+    return (
+        {key: symbol for key, symbol in found.items() if symbol is not None},
+        frozenset(read),
+        fields,
     )
 
 

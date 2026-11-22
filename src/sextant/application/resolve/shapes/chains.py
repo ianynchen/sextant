@@ -70,6 +70,7 @@ from sextant.application.resolve.shapes.arguments import (
     supertypes_of,
     valid_via_arity,
 )
+from sextant.application.resolve.shapes.mounts import _through
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
 from sextant.application.resolve.values import (
     CYCLE,
@@ -197,6 +198,11 @@ _CONTINUE = "\x00continue"
 # `fluent` style): the entries ride with the chain under this key, each owner a symbol tuple,
 # and the handler capture is the reference alone.
 NARROWED_BY = "\x00narrowed_by"
+# A root's handler capture may name the call a handler is given as a class through
+# (`handler: {arg: N, keyword: name, through: {owner, method, read: receiver}}`, D02 §2's
+# `fluent` style): the rule (`mounts.Through`) rides with the chain under this key, and the
+# handler capture is the reference alone.
+HANDLER_THROUGH = "\x00handler_through"
 _READS_LINK = "\x00reads_link"
 # The handler a `channel_link` was captured AFTER (fix round 1, finding 3) —
 # present exactly when the link sits after a handler step, holding that
@@ -736,7 +742,9 @@ def _root_entry(root: dict[str, Any], catalog: Catalog, where: str) -> dict[str,
         # slots (CP-27 row 6), and one name matching all ten would read one slot
         # for each; None for the root that matches by owner and name alone.
         "descriptor": _validated_descriptor(root, catalog, where),
-        "captures": _with_narrowing(_merged_captures(root), catalog, where),
+        "captures": _with_handler_through(
+            _with_narrowing(_merged_captures(root), catalog, where), catalog, where
+        ),
         # Carried forward (never a root's own field, D02 §2's `fluent`
         # style) purely so `_validate_captures` can see and refuse it,
         # exactly as an unchecked value must not silently survive the file.
@@ -2763,6 +2771,24 @@ def _with_narrowing(captures: dict[str, Any], catalog: Catalog, where: str) -> d
         )
     reference = {key: value for key, value in handler.items() if key != "narrowed_by"}
     return {**captures, "handler": reference, NARROWED_BY: tuple(narrowing)}
+
+
+def _with_handler_through(captures: dict[str, Any], catalog: Catalog, where: str) -> dict[str, Any]:
+    """`captures` with a handler capture's `through` moved under `HANDLER_THROUGH`, checked as
+    a mount's `router_arg.through` is, its `read` the call's `receiver` (the class the call is
+    made on). Unchanged where the handler names none."""
+    handler = captures.get("handler")
+    if not isinstance(handler, Mapping) or "through" not in handler:
+        return captures
+    where = f"{catalog.source}: {where}[].captures.handler"
+    through = _through(handler["through"], where)
+    if through.read != RECEIVER:
+        raise CatalogError(
+            f"loading catalog {where}: `through.read` is `{RECEIVER}`, the class the call is "
+            f"made on, got {through.read!r} (D02 §2's `fluent` style)"
+        )
+    reference = {key: value for key, value in handler.items() if key != "through"}
+    return {**captures, "handler": reference, HANDLER_THROUGH: through}
 
 
 def _validate_channel_via_entries(entries: list[dict[str, Any]], catalog: Catalog) -> None:
