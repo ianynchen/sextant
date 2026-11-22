@@ -363,3 +363,120 @@ def test_a_path_whose_view_is_not_an_include_is_a_route_not_a_mount(tmp_path, li
     rows = _served(tmp_path, libraries, {"urls.py": "urlpatterns = [path('x/', v)]\n"})
 
     assert rows == [_row("/x/")]
+
+
+# -- fix round 1 (Task 3 review) -----------------------------------------------------------------
+
+
+def _questions(workspace, kind: str) -> list[object]:
+    return sorted(
+        row["path"] for row in workspace.query("open_questions") if row["question"] == kind
+    )
+
+
+def test_include_of_a_list_sum_mounts_every_operand(tmp_path, libraries):
+    """Critical 1: `include(a + b)` mounts both lists; nothing of either serves at the root."""
+    rows = _served(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": "a = [path('a/', v)]\nb = [path('b/', v)]\n"
+            "urlpatterns = [path('api/', include(a + b))]\n"
+        },
+    )
+
+    assert rows == [_row("/api/a/"), _row("/api/b/")]
+
+
+def test_include_of_a_module_outside_the_scan_files_the_question(tmp_path, libraries):
+    """Ruling R6 (a): `include("allauth.urls")` names a module the scan does not hold, so its
+    routes are not read: no row, one `mounted_router` question at the prefix."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {"urls.py": "urlpatterns = [path('accounts/', include('allauth.urls'))]\n"},
+    )
+
+    assert _rows(workspace) == []
+    assert _questions(workspace, "mounted_router") == ["/accounts/"]
+
+
+def test_a_list_extended_by_an_unread_value_publishes_what_is_read_and_asks(tmp_path, libraries):
+    """Ruling R6 (b): `urlpatterns += router.urls` on an unknown object: the routes read are
+    published under the prefix, and the part not read is asked about."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            "api_urls.py": "class Router:\n    urls = []\nrouter = Router()\n"
+            "urlpatterns = [path('x/', v)]\nurlpatterns += router.urls\n",
+            "urls.py": "urlpatterns = [path('api/', include('app.api_urls'))]\n",
+        },
+    )
+
+    assert _rows(workspace) == [_row("/api/x/")]
+    assert _questions(workspace, "mounted_router") == ["/api/"]
+
+
+def test_include_of_an_unread_value_plus_a_list_publishes_the_list_and_asks(tmp_path, libraries):
+    """Ruling R6 (c): `include(router.urls + extra)`."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": "class Router:\n    urls = []\nrouter = Router()\n"
+            "extra = [path('e/', v)]\n"
+            "urlpatterns = [path('api/', include(router.urls + extra))]\n"
+        },
+    )
+
+    assert _rows(workspace) == [_row("/api/e/")]
+    assert _questions(workspace, "mounted_router") == ["/api/"]
+
+
+def test_a_list_display_unpacking_a_list_holds_both(tmp_path, libraries):
+    """Ruling R8: `[*base, path(...)]` is one list holding `base`'s routes and its own."""
+    rows = _served(
+        tmp_path,
+        libraries,
+        {
+            "api_urls.py": "base = [path('b/', v)]\nurlpatterns = [*base, path('x/', v)]\n",
+            "urls.py": "urlpatterns = [path('api/', include('app.api_urls'))]\n",
+        },
+    )
+
+    assert rows == [_row("/api/b/"), _row("/api/x/")]
+
+
+def test_a_list_a_library_call_holds_is_behind_an_unread_prefix(tmp_path, libraries):
+    """Ruling R8: a list a call the catalog does not know holds (`format_suffix_patterns`)
+    cannot be placed: its route publishes behind `<prefix>` at `partial`, with the
+    `mount_prefix` question; never at the root as `resolved`."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": "from django.urls import get_resolver\n"
+            "urlpatterns = get_resolver([path('x/', v)])\n"
+        },
+    )
+
+    assert _rows(workspace) == [_row("/<prefix>x/", "partial")]
+    assert _questions(workspace, "mount_prefix") == ["/<prefix>x/"]
+
+
+def test_include_of_a_function_result_is_behind_an_unread_prefix(tmp_path, libraries):
+    """Ruling R8: `include(extra())` where `extra()` returns a list holding a route: the route
+    is `partial` behind `<prefix>`, and the mount asks `mounted_router`."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": "def extra():\n    return [path('e/', v)]\n"
+            "urlpatterns = [path('api/', include(extra()))]\n"
+        },
+    )
+
+    assert _rows(workspace) == [_row("/<prefix>e/", "partial")]
+    assert _questions(workspace, "mount_prefix") == ["/<prefix>e/"]
+    assert _questions(workspace, "mounted_router") == ["/api/"]

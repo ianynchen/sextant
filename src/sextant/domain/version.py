@@ -163,7 +163,8 @@ SEXTANT_VERSION = version("sextant")
 #     19      a Python `a + b` with no text in it, where one operand is known to be a list, is
 #             the `array` it makes: a written list's elements in place, every other operand an
 #             element marked `keyword: "*"`, unpacked there (plan 6, Task 3), where it was
-#             `unresolved`. `x += [...]` is the same sum. A fact set of the older vintage holds
+#             `unresolved`. `x += [...]` is the same sum, and a list display's `*x` element is
+#             written the same way. A fact set of the older vintage holds
 #             no element of such a list; it is refused and re-extracted.
 #
 #   graph schema

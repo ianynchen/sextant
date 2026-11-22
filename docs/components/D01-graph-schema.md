@@ -1160,8 +1160,10 @@ the call holding it, what that argument read as, and the method that registered 
 on ONE row per `(protocol, method, path)` of the rows it explains; a `mounted_router` candidate
 holds the same seven — `mount_prefix`'s mirror (plan 2026-11-22-python-django-core-inbound
 Task 3): a mount whose prefix is read and whose router argument reaches no router or list the
-module holds (Django's `include(router.urls)`), so the routes it mounts are not read and no
-row stands for them: the mount call, the call its router is read off (`at`, `at_ordinal`; the
+module holds (Django's `include(router.urls)`), or reaches part of one not read (a module
+outside the scan, `urlpatterns += router.urls`), so the routes it mounts, or some of them, are
+not read and no row stands for them; filed only for a mount declaring `through` or
+`router_named` (D02): the mount call, the call its router is read off (`at`, `at_ordinal`; the
 mount call itself where it reads none) and the argument read there, what that argument read
 as, and the method that made the mount — on ONE row per prefix the mount is served at,
 `method` NULL and `path` that prefix as a row under it would be published; a `prefix_not_measured` candidate

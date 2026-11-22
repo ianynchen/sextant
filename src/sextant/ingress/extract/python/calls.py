@@ -1899,9 +1899,19 @@ class BodyReader:
             field_read._typed = defining[1]
             return field_read
         if isinstance(node, ast.List | ast.Tuple):
-            elements = [self._value(element, scope) for element in node.elts]
+            # A list's `*x` element is every element of `x`, unpacked there (D00 §5 `array`).
+            elements = [
+                self._value(element.value, scope).model_copy(
+                    update={"keyword": _UNPACKED_POSITIONAL}
+                )
+                if isinstance(element, ast.Starred) and isinstance(node, ast.List)
+                else self._value(element, scope)
+                for element in node.elts
+            ]
             typed = self._literal_type(node, node.elts, elements, scope)
-            if any(isinstance(element, ast.Starred) for element in node.elts):
+            if isinstance(node, ast.Tuple) and any(
+                isinstance(element, ast.Starred) for element in node.elts
+            ):
                 return _part(typed)
             found = _Part(kind="array", elements=elements)
             found._typed = typed

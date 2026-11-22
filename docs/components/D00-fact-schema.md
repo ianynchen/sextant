@@ -1358,7 +1358,8 @@ scanner writes it for a list sum: `a + b` with no text in it, where one operand 
 be a list (written as one, or a module-level name of the file every write of which is one),
 is the `array` it makes — a written list's elements in place, every other operand its own
 entry (a `field`, an `unresolved` with its `source`, …) marked `*`. `x += [...]` is the same
-sum. `urlpatterns = core + [path("a/", v)]` is
+sum, and a list display's `*x` element is written the same way (`[*core, path("a/", v)]`;
+a tuple's is not). `urlpatterns = core + [path("a/", v)]` is
 `{kind: array, elements: [{kind: field, symbol: …#core., keyword: "*"}, {kind: unresolved,
 source: 3}]}`. Any other sum stays `unresolved`. An engine that does not read the mark reads
 the entry as the one value it holds.

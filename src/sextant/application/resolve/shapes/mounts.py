@@ -84,6 +84,7 @@ from sextant.application.resolve.shapes.inbound_routes import (
 )
 from sextant.application.resolve.shapes.rooting import catalog_symbols
 from sextant.application.resolve.values import (
+    CLASS_BODY,
     EXPRESSION,
     EXTERNAL,
     LITERAL,
@@ -688,7 +689,9 @@ class MountReader:
         self._held: dict[tuple[tuple[str, int], Path], tuple[Prefix, ...] | None] = {}
         # The lists holding each value, `(method, value id)` -> list identities (`_lists`).
         self._holders: dict[tuple[str, int], tuple[tuple[str, str, int], ...]] | None = None
-        self._reached: dict[tuple[str, int], tuple[tuple[str, str, int], ...]] = {}
+        self._reached: dict[
+            tuple[str, int], tuple[tuple[tuple[str, str, int], ...], tuple[str, ...]]
+        ] = {}
 
     def of_route(self, root: Mapping[str, Any], within: Path | None) -> tuple[Prefix, ...]:
         """The prefixes a route whose root call is `root` serves under, each once: its
@@ -1044,7 +1047,11 @@ class MountReader:
                             replaces = mount.rule.prefix_replaces_own and at.prefix is not None
                             (replaced if replaces else found).append(prefix)
         if self._unmounted(path, made[1], reached, frozenset()):
-            found.append(replace(ROOT, places=frozenset({((_router(made, path), None),)})))
+            # Ruling R8: only a list a static initializer writes to a variable is served at
+            # the root as read; any other list no mount reaches is one this reader cannot
+            # place, so its routes are behind the named hole.
+            served = ROOT if self._placed(made) else self._unplaced(made)
+            found.append(replace(served, places=frozenset({((_router(made, path), None),)})))
         held = self._holds(made, path)
         if held is not None:
             found = [
@@ -1377,19 +1384,18 @@ class MountReader:
                 if mount.rule.router_arg == CHAIN_RESULT
                 else through_site(self._index, mount.site, mount.rule)
             )
-            if read is None or any(made is not None for made, _, _ in self._mounted(mount)):
+            # Ruling R7: only a rule that reads its router through a call or a module name.
+            if read is None or (mount.rule.through is None and mount.rule.router_named is None):
                 continue
             site, reference = read
+            _, unread = self._reached_at(site, reference, mount.rule)
+            mounted = any(made is not None for made, _, _ in self._mounted(mount))
+            if mounted and not unread:
+                continue
             arguments = site["arguments"] or []
             slot = None if reference == RECEIVER else argument_slot(arguments, reference)
-            if slot is None or slot == UNPACKED_SLOT:
-                argument, said = -1, "no argument read"
-            else:
-                argument = slot
-                answers = resolve_positions(self._workspace, {"router": (site, slot)}, self._index)
-                said = "; ".join(dict.fromkeys(_read_as(a["router"]) for a in answers)) or (
-                    "nothing on any path"
-                )
+            argument = -1 if slot is None or slot == UNPACKED_SLOT else slot
+            said = "; ".join(unread) or "no router this module holds"
             candidate = {
                 "mount": str(mount.site["caller"]),
                 "mount_ordinal": int(str(mount.site["ordinal"])),
@@ -1437,6 +1443,34 @@ class MountReader:
                 return tuple((made, Path()) for made in held)
         return tuple((_identity(p), path) for p, path in self._producers_of(site, RECEIVER))
 
+    def _placed(self, made: tuple[str, str, int]) -> bool:
+        """Whether a router no mount reaches is served at its root as read: any router but a
+        list (`_held_by`), and a list that is the value a static initializer writes to a
+        variable (a module-level name, or a class attribute: the facts write both the same)."""
+        if made[0] not in ("field", "array", "returned"):
+            return True
+        return made[0] == "field" and any(
+            writer is not None and CLASS_BODY in writer
+            for writer, written in self._index.constants.get(made[1], ())
+            if written.get("kind") == "array"
+        )
+
+    def _unplaced(self, made: tuple[str, str, int]) -> Prefix:
+        """The named hole a list this reader cannot place serves behind, with the call that
+        holds it (a library call, a method returning it) as the `mount_prefix` question's."""
+        if made[0] == "array":
+            site = self._index.sites.get((made[1], made[2]))
+            call: Mapping[str, Any] = site or {"caller": made[1], "ordinal": made[2]}
+            said = "a list a call holds, which no mount here is read for"
+        else:
+            call = {"caller": made[1], "ordinal": -1}
+            said = (
+                "a list a method returns, which no mount here is read for"
+                if made[0] == "returned"
+                else "a list not written by a static initializer, which no mount reaches"
+            )
+        return self._hole_at(call, MountPath(call, None), said)
+
     def _held_by(self) -> dict[tuple[str, int], tuple[tuple[str, str, int], ...]]:
         """`(method, value id)` -> each list holding the value, built once per reader from
         the shared index: an element of a list written to a field (`("field", symbol, 0)`);
@@ -1462,6 +1496,10 @@ class MountReader:
             for writer, written in writes:
                 if writer is not None and written.get("kind") == "array":
                     hold(writer, written, ("field", field_symbol, 0))
+        for method, returned in self._index.returned_values.items():
+            for _, written in returned:
+                if written.get("kind") == "array":
+                    hold(method, written, ("returned", method, 0))
         for site in self._index.sites.values():
             caller, on = str(site["caller"]), site.get("receiver_field")
             for argument in site["arguments"] or []:
@@ -1475,20 +1513,34 @@ class MountReader:
     def _lists(
         self, site: Mapping[str, Any], reference: Any, rule: MountRule
     ) -> tuple[tuple[str, str, int], ...]:
-        """The lists the argument `reference` of `site` reaches, cached per call: a list
-        written there; a field, with every list its writes unpack (`*`, `a + b`); a module,
-        named by its dotted name or as the module object, where the rule says which of its
-        variables is the router (`router_named`); and, through a list or tuple written there,
-        whatever its first element reaches."""
+        """The lists the argument `reference` of `site` reaches (`_reached_at`)."""
+        return self._reached_at(site, reference, rule)[0]
+
+    def _reached_at(
+        self, site: Mapping[str, Any], reference: Any, rule: MountRule
+    ) -> tuple[tuple[tuple[str, str, int], ...], tuple[str, ...]]:
+        """The lists the argument `reference` of `site` reaches, and what on the way was not
+        read, cached per call: a list written there; a field, with every list its writes
+        unpack (`*`, `a + b`); a module, named by its dotted name or as the module object,
+        where the rule says which of its variables is the router (`router_named`); and,
+        through a list or tuple written there, every element it unpacks and the first one it
+        does not (`(urlconf, app_name)`: the rest names no router, though a module may share
+        its name). Not read: an argument or an unpacked value that is none of these, and a
+        field no write here holds as a list (a module outside the scan, `x += router.urls`)."""
         key = (str(site["caller"]), int(str(site["ordinal"])))
         if key in self._reached:
             return self._reached[key]
         arguments = site["arguments"] or []
         slot = None if reference == RECEIVER else argument_slot(arguments, reference)
         found: dict[tuple[str, str, int], None] = {}
-        if slot is not None and slot != UNPACKED_SLOT:
-            self._reach(key[0], arguments[slot], rule.router_named, ("array", *key), found)
-        self._reached[key] = tuple(found)
+        unread: dict[str, None] = {}
+        if slot is None or slot == UNPACKED_SLOT:
+            unread["no argument read"] = None
+        else:
+            self._reach(
+                key[0], arguments[slot], rule.router_named, ("array", *key), found, unread, True
+            )
+        self._reached[key] = (tuple(found), tuple(unread))
         return self._reached[key]
 
     def _reach(
@@ -1498,15 +1550,22 @@ class MountReader:
         named: str | None,
         here: tuple[str, str, int] | None,
         found: dict[tuple[str, str, int], None],
+        unread: dict[str, None],
+        strict: bool,
     ) -> None:
+        """`_reached_at`'s walk of one entry; `strict` where the entry must name a router (the
+        argument itself, an unpacked value), so one that names none is not read."""
         kind = entry.get("kind")
         if kind == "array":
             if here is not None:
                 found[here] = None
-            # A sequence's first element is what it hands on (`(urlconf, app_name)`): the
-            # rest names no router, though a module may share its name.
-            for element in (entry.get("elements") or [])[:1]:
-                self._reach(caller, element, named, None, found)
+            first = True
+            for element in entry.get("elements") or []:
+                if element.get("keyword") == "*":
+                    self._reach(caller, element, named, None, found, unread, True)
+                elif first:
+                    first = False
+                    self._reach(caller, element, named, None, found, unread, False)
             return
         symbol = None
         if kind == "field" and entry.get("symbol") is not None:
@@ -1515,15 +1574,25 @@ class MountReader:
             symbol = type_descriptor(entry["value"]) + named + "."
         elif named is not None and kind == "class" and entry.get("symbol") is not None:
             symbol = str(entry["symbol"]) + named + "."
-        if symbol is None or ("field", symbol, 0) in found:
+        if symbol is None:
+            if strict:
+                unread[f"no value ({kind})"] = None
+            return
+        if ("field", symbol, 0) in found:
             return
         found[("field", symbol, 0)] = None
-        for writer, written in self._index.constants.get(symbol, ()):
+        writes = self._index.constants.get(symbol, ())
+        if not writes and not self._index.produced.get(symbol):
+            unread[f"`{symbol}`, written nowhere in the scanned code"] = None
+        if self._index.produced.get(symbol) or self._index.writers.get(symbol):
+            unread[f"`{symbol}`, written from a value not read as a list"] = None
+        for writer, written in writes:
             if written.get("kind") != "array":
+                unread[f"`{symbol}`, written from a value not read as a list"] = None
                 continue
             for element in written.get("elements") or []:
                 if element.get("keyword") == "*":
-                    self._reach(writer or caller, element, named, None, found)
+                    self._reach(writer or caller, element, named, None, found, unread, True)
 
     def _producers_of(
         self, site: Mapping[str, Any], slot: Any

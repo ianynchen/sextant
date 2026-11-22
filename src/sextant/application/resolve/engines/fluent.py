@@ -2098,8 +2098,12 @@ def _mounts(
                     ),
                 )
     # A catalog whose routers hold a prefix of their own (`router_holds`) reads it even where
-    # the module mounts nothing.
-    if not found and not rules.holds:
+    # the module mounts nothing; so does one whose routes are made on nothing, whose router is
+    # the list holding them (ruling R8: a list no reader can place is behind `<prefix>`).
+    made_on_nothing = entry_points is None and any(
+        end.root and end.root.get("invoke_kind") == "static" for end in ends
+    )
+    if not found and not rules.holds and not made_on_nothing:
         return None, {}, {}
     mounts = {key: Mount(rule, site, tuple(paths)) for key, (rule, site, paths) in found.items()}
     reader = _router_reader(

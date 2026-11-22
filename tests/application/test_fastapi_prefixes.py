@@ -278,6 +278,9 @@ def test_static_files_mount_adds_no_rows(tmp_path: Path, libraries):
 
     assert _paths(workspace) == [("GET", "/h")]
     assert _refusals(workspace) == []
+    # Ruling R7: a mount rule declaring neither `through` nor `router_named` files no
+    # `mounted_router` question, so the output is what it was before plan 6 Task 3.
+    assert _questions(workspace, "mounted_router") == []
 
 
 @pytest.mark.parametrize(

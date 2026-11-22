@@ -2675,8 +2675,15 @@ of (capability 1, no word): an element of a list written to a field, an argument
 made on a field's value (`urls.append(r)`, `urls.extend([r])`), or an element of a list
 written as a call's argument; a list sum unpacks its operands (D00 §5's `*` element). The
 mount's router is every list its argument reaches: a list written there, a field and the
-lists its writes unpack, what a tuple's first element reaches (`(list, app_name)`: the rest names no router). A list no mount reaches serves at its root
-(design §5d).
+lists its writes unpack, and through a list or tuple written there every element it unpacks
+(`*`) and the first one it does not (`(list, app_name)`: the rest names no router). A list no
+mount reaches serves at its root (design §5d) only where a static initializer writes it to a
+variable (ruling R8); any other (one a library call holds, one a method returns) cannot be
+placed, so its routes publish behind the named hole `<prefix>` at `partial`, with the
+`mount_prefix` question. Where the argument, an unpacked value or a field it reaches is not
+read (no write in the scan, a value not read as a list), the routes read are published and
+one `mounted_router` question (D01) is filed at the mount's prefix; this is filed only for a
+mount declaring `through` or `router_named` (ruling R7).
 
 **`mount[].router_named: {variable: name}`** (same task, capability 3): a router argument that
 names a module — a string read as its dotted name (`include("shop.api_urls")`), or the module
