@@ -183,11 +183,10 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
         # the destination. Measured: 3 rows on real code and 4 on the fixtures move to
         # `resolved`; nothing moves the other way, and every `<host>` row stays `partial`.
         unread_piece = _HOLE in (path or "")
-        return (
-            peer,
-            path,
-            str(Resolution.PARTIAL if authority_unread or unread_piece else Resolution.RESOLVED),
-        )
+        # And a template the walk read INEXACTLY (rule 9, OI-498) is no surer than `partial`,
+        # as a whole text read so is above.
+        unsure = authority_unread or unread_piece or bool(argument.get("inexact"))
+        return peer, path, str(Resolution.PARTIAL if unsure else Resolution.RESOLVED)
     return None, None, str(Resolution.UNRESOLVED)
 
 

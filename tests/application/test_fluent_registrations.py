@@ -3823,3 +3823,49 @@ def test_an_inexact_relative_url_is_joined_to_the_client_base_and_stays_partial(
         "/x",
         "partial",
     )
+
+
+def test_an_inexact_template_never_publishes_resolved_on_the_fluent_path():
+    """OI-498. The reader's `(peer, text, resolution)` tuple gave every template `partial`,
+    so a template the walk read INEXACTLY (rule 9) lost its flag there, and `url_of` then
+    published one with only named holes at `resolved`. The flag now travels to `url_of`; the
+    SAME template read exactly on another path stays `resolved` (the exact path proves it)."""
+    from sextant.application.resolve.shapes.arguments import url_of
+    from sextant.application.resolve.values import EXPRESSION, Answer
+
+    exact = fluent._assembled_text(Answer(kind=EXPRESSION, value="/owners/{ownerId}/pets"))
+    inexact = fluent._assembled_text(
+        Answer(kind=EXPRESSION, value="/owners/{ownerId}/pets", inexact=True)
+    )
+    assert url_of(fluent._one_assembled([exact])) == (None, "/owners/{ownerId}/pets", "resolved")
+    assert url_of(fluent._one_assembled([inexact])) == (None, "/owners/{ownerId}/pets", "partial")
+    assert url_of(fluent._one_assembled([exact, inexact]))[2] == "resolved"
+
+    several = fluent._each_callers_url([(None, "/a", "resolved"), inexact], {"kind": "parameter"})
+    assert several is not None
+    assert [url_of(each)[2] for each in several] == ["resolved", "partial"]
+
+
+def test_a_whole_address_and_a_different_template_are_two_addresses_not_one():
+    """One literal and a DIFFERENT template are two addresses, exactly as one literal and a
+    different inexact literal are: this arm carries one, so it answers none rather than
+    publishing the literal as the whole answer."""
+    assert fluent._one_assembled([(None, "/a", "resolved"), (None, "/x/{id}", "partial")]) is None
+
+
+def test_only_an_inexact_url_an_exact_read_would_resolve_joins_the_client_base():
+    """`single_call._inexact_but_whole`'s rule, for this engine's argument: an inexact literal
+    or named-hole template is whole and joins; an unread host or an anonymous hole would hand
+    the row a peer the call does not use."""
+    assert fluent._inexact_but_whole({"kind": "string", "value": "/x", "inexact": True})
+    assert fluent._inexact_but_whole(
+        {"kind": "expression", "value": "/owners/{ownerId}", "inexact": True}
+    )
+    assert not fluent._inexact_but_whole(
+        {"kind": "expression", "value": "{}/users", "inexact": True}
+    )
+    assert not fluent._inexact_but_whole(
+        {"kind": "expression", "value": "/a/{}/b", "inexact": True}
+    )
+    assert not fluent._inexact_but_whole({"kind": "string", "value": "/x"})
+    assert not fluent._inexact_but_whole(None)
