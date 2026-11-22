@@ -645,6 +645,15 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A template the walk read inexactly no longer publishes `resolved` on the fluent path**
+  (OI-498). The fluent url reader gave every template `partial` in its `(peer, text,
+  resolution)` tuple, so the walk's `inexact` flag (rule 9) was lost for a template and
+  `url_of` then published one with only named holes (`/owners/{ownerId}/pets`) at `resolved`.
+  The flag now reaches `url_of`, which answers `partial`; the same template read exactly on
+  another path stays `resolved`. An inexact address joins the client base only where its
+  exact reading would be `resolved` (a named-hole template or a whole text), never with an
+  unread host or an anonymous hole.
+
 - **An inexact answer is no longer published as `resolved` by the url readers it reaches.** A
   value the walk read inexactly (rule 9) was published at `resolved`. Inexact literals now publish
   `partial` in the fluent text, composed-url and client-base arms, and an inexact literal or

@@ -2780,19 +2780,45 @@ def _one_assembled(
     # answers are several rows, which this engine's one-argument return cannot carry
     # (`OI-134`'s shape), so it leaves the capture as it was rather than choosing.
     partly = {
-        literal for _, literal, resolution in assembled if resolution == "partial" and literal
+        literal
+        for _, literal, resolution in assembled
+        if resolution in ("partial", _INEXACT_TEMPLATE) and literal
     }
     if not whole and len(partly) == 1:
-        return _partly_read(partly.pop())
+        text = partly.pop()
+        # The SAME template read exactly on another path stays exact: that path proves it.
+        read_exactly = any(
+            literal == text and resolution == "partial" for _, literal, resolution in assembled
+        )
+        return _partly_read(text, inexact=not read_exactly)
     return None
 
 
-def _partly_read(text: str) -> dict[str, Any]:
-    """A `partial` text as the argument `url_of` reads: a template with holes is an expression;
-    a text with none is a whole literal read inexactly, which `url_of` reads off the flag."""
+# `_assembled_text`'s word for a TEMPLATE the walk read inexactly (rule 9, OI-498). Never
+# published: the reader's tuple gives every template `partial`, which cannot say "and this
+# one was read on routes not told apart", so this arm tells it apart the way it tells
+# `NARROWED` apart, and `_partly_read` writes it onto the argument as the `inexact` flag
+# `url_of` reads.
+_INEXACT_TEMPLATE = "inexact-template"
+
+
+def _partly_read(text: str, inexact: bool = False) -> dict[str, Any]:
+    """A `partial` text as the argument `url_of` reads: a template with holes is an expression
+    (`inexact` where the walk read it so, and no exact path read the same text); a text with
+    none is a whole literal read inexactly, which `url_of` reads off the flag."""
     if _holes(text) or carries_expression(text):
-        return {"kind": EXPRESSION, "value": text}
+        return {"kind": EXPRESSION, "value": text, **({"inexact": True} if inexact else {})}
     return {"kind": "string", "value": text, "inexact": True}
+
+
+def _inexact_but_whole(url_argument: dict[str, Any] | None) -> bool:
+    """Whether `url_argument` is an address read INEXACTLY whose exact reading would be
+    `resolved` — `single_call._inexact_but_whole`'s rule, asked of this engine's argument. Only
+    such an address may join the client base: one with an unread host or an anonymous hole
+    would take a peer from a base the call does not use."""
+    if not url_argument or not url_argument.get("inexact"):
+        return False
+    return url_of({**url_argument, "inexact": False})[2] == str(Resolution.RESOLVED)
 
 
 def _assembled_text(answer: "Answer | None") -> tuple[str | None, str | None, str]:
@@ -2823,7 +2849,12 @@ def _assembled_text(answer: "Answer | None") -> tuple[str | None, str | None, st
         resolution = Resolution.PARTIAL if answer.inexact else Resolution.RESOLVED
         return None, str(answer.value), str(resolution)
     if answer.kind == EXPRESSION:
-        return None, str(answer.value), str(Resolution.PARTIAL)
+        # A template read inexactly is told apart from one read exactly (`_INEXACT_TEMPLATE`).
+        return (
+            None,
+            str(answer.value),
+            _INEXACT_TEMPLATE if answer.inexact else str(Resolution.PARTIAL),
+        )
     return None, None, str(Resolution.UNRESOLVED)
 
 
@@ -2868,6 +2899,7 @@ def _composed_address(
                 context.workspace,
                 context.values,
                 context.catalog.value_model or (),
+                bool(url_argument and url_argument.get("inexact")),
             )
         # A chain whose destination the framework takes from somewhere this analysis does not
         # read (`destination: unread`, a root's word: Vert.x's `SocketAddress` forms, CP-56
@@ -2895,7 +2927,7 @@ def _composed_address(
                 _with_stated_authority(read, captures, context),
                 captures,
                 context,
-                bool(url_argument and url_argument.get("inexact")),
+                _inexact_but_whole(url_argument),
             )
         ]
     base = _string_value(_address_read(captures.get("base"), context))
@@ -3325,8 +3357,8 @@ def _each_callers_url(
     for _, literal, resolution in assembled:
         if resolution == str(Resolution.RESOLVED) and literal:
             found.append({"kind": "string", "value": literal})
-        elif resolution == str(Resolution.PARTIAL) and literal:
-            found.append(_partly_read(literal))
+        elif resolution in (str(Resolution.PARTIAL), _INEXACT_TEMPLATE) and literal:
+            found.append(_partly_read(literal, inexact=resolution == _INEXACT_TEMPLATE))
         else:
             found.append(argument)
     distinct = list(

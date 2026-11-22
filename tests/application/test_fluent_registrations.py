@@ -3823,3 +3823,81 @@ def test_an_inexact_relative_url_is_joined_to_the_client_base_and_stays_partial(
         "/x",
         "partial",
     )
+
+
+def test_an_inexact_template_never_publishes_resolved_on_the_fluent_path():
+    """OI-498. The reader's `(peer, text, resolution)` tuple gave every template `partial`,
+    so a template the walk read INEXACTLY (rule 9) lost its flag there, and `url_of` then
+    published one with only named holes at `resolved`. The flag now travels to `url_of`; the
+    SAME template read exactly on another path stays `resolved` (the exact path proves it)."""
+    from sextant.application.resolve.shapes.arguments import url_of
+    from sextant.application.resolve.values import EXPRESSION, Answer
+
+    exact = fluent._assembled_text(Answer(kind=EXPRESSION, value="/owners/{ownerId}/pets"))
+    inexact = fluent._assembled_text(
+        Answer(kind=EXPRESSION, value="/owners/{ownerId}/pets", inexact=True)
+    )
+    assert url_of(fluent._one_assembled([exact])) == (None, "/owners/{ownerId}/pets", "resolved")
+    assert url_of(fluent._one_assembled([inexact])) == (None, "/owners/{ownerId}/pets", "partial")
+    assert url_of(fluent._one_assembled([exact, inexact]))[2] == "resolved"
+
+    several = fluent._each_callers_url([(None, "/a", "resolved"), inexact], {"kind": "parameter"})
+    assert several is not None
+    assert [url_of(each)[2] for each in several] == ["resolved", "partial"]
+
+
+def test_only_an_inexact_url_an_exact_read_would_resolve_joins_the_client_base():
+    """`single_call._inexact_but_whole`'s rule, for this engine's argument: an inexact literal
+    or named-hole template is whole and joins; an unread host or an anonymous hole would hand
+    the row a peer the call does not use."""
+    assert fluent._inexact_but_whole({"kind": "string", "value": "/x", "inexact": True})
+    assert fluent._inexact_but_whole(
+        {"kind": "expression", "value": "/owners/{ownerId}", "inexact": True}
+    )
+    assert not fluent._inexact_but_whole(
+        {"kind": "expression", "value": "{}/users", "inexact": True}
+    )
+    assert not fluent._inexact_but_whole(
+        {"kind": "expression", "value": "/a/{}/b", "inexact": True}
+    )
+    assert not fluent._inexact_but_whole({"kind": "string", "value": "/x"})
+    assert not fluent._inexact_but_whole(None)
+
+
+def test_an_inexact_template_with_an_unread_host_takes_no_peer_from_the_client_base(monkeypatch):
+    """The join decision on the real call path: `{}/x` read inexactly is `<host>/x` at
+    `partial`, and the bare inexact flag would let that `partial` through to the client base,
+    handing the row a peer the call does not use."""
+    from types import SimpleNamespace
+
+    from sextant.application.resolve.shapes.arguments import url_of
+
+    monkeypatch.setattr(fluent, "_client_of", lambda captures, context: None)
+    monkeypatch.setattr(
+        fluent, "against_client_base", lambda *args: ("http://svc.example/x", "resolved")
+    )
+    context = SimpleNamespace(client_base={"join": "base"}, workspace=None, values=None)
+    unread_host = {"kind": "expression", "value": "{}/x", "inexact": True}
+    named_hole = {"kind": "expression", "value": "/owners/{ownerId}", "inexact": True}
+
+    def joined(argument):
+        return fluent._against_client_base(
+            url_of(argument), {}, context, fluent._inexact_but_whole(argument)
+        )
+
+    assert joined(unread_host) == (None, "<host>/x", "partial")
+    assert joined(named_hole) == ("svc.example", "/x", "partial")
+
+
+def test_a_host_read_later_does_not_raise_an_inexact_template_to_resolved(monkeypatch):
+    """`with_authority` fills a peer the join could not render and then says `resolved`,
+    because the unread half has been read. A template the walk read inexactly stays
+    `partial` there: the peer is read, the text it came with was not read in full."""
+    from sextant.application.resolve.shapes import arguments
+
+    monkeypatch.setattr(arguments, "authority_of", lambda *args: "customers-service")
+    address = (None, "<host>/owners/{ownerId}", "partial")
+    exact = arguments.with_authority(address, {}, None, None, None, ())
+    inexact = arguments.with_authority(address, {}, None, None, None, (), True)
+    assert exact == ("customers-service", "/owners/{ownerId}", "resolved")
+    assert inexact == ("customers-service", "/owners/{ownerId}", "partial")
