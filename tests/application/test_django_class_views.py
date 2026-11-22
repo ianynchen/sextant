@@ -15,6 +15,8 @@ from pathlib import Path
 import test_django_routes
 from test_django_routes import _handler, _resolved, _rows
 
+from sextant.application.ports.detector import LibraryRoot
+
 libraries = test_django_routes.libraries
 orders_django_env = test_django_routes.orders_django_env
 
@@ -289,3 +291,168 @@ def test_a_function_view_beside_a_class_view_keeps_its_row(tmp_path: Path, libra
         ("GET", None, "/x/", _handler("get", "app/urls/Items"), "resolved"),
         ("POST", None, "/buy/", _handler("buy"), "resolved"),
     ]
+
+
+# Fix round 1 (ruling R14): the auth mixins, every `dispatch` override on the chain read.
+
+_MIXINS = "from django.contrib.auth.mixins import "
+
+
+def test_login_required_mixin_keeps_the_verbs(tmp_path: Path, libraries):
+    """Probe, "Class views": a `LoginRequiredMixin` view answers its verbs for a user that
+    passes. `LoginRequiredMixin.dispatch` (a library body) calls `super().dispatch` on the
+    passing path; the redirect on the other is the handler's own answer."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        _MIXINS + "LoginRequiredMixin\n"
+        "class Items(LoginRequiredMixin, View):\n"
+        "    def get(self, request):\n        return None\n"
+        "    def post(self, request):\n        return None\n",
+    )
+
+    assert rows == [
+        ("GET", None, "/x/", _handler("get", "app/urls/Items"), "resolved"),
+        ("POST", None, "/x/", _handler("post", "app/urls/Items"), "resolved"),
+    ]
+
+
+def test_login_required_mixin_over_a_list_view(tmp_path: Path, libraries):
+    rows = _views(
+        tmp_path,
+        libraries,
+        _MIXINS + "LoginRequiredMixin\nfrom django.views.generic import ListView\n"
+        "class Items(LoginRequiredMixin, ListView):\n    model = None\n",
+    )
+
+    assert rows == [
+        (
+            "GET",
+            None,
+            "/x/",
+            "sextant-python pypi django 5.2.8 django/views/generic/list/BaseListView#get(sig_",
+            "resolved",
+        )
+    ]
+
+
+def test_permission_and_test_mixins_keep_the_verbs(tmp_path: Path, libraries):
+    rows = _views(
+        tmp_path,
+        libraries,
+        _MIXINS + "PermissionRequiredMixin, UserPassesTestMixin\n"
+        "class Perm(PermissionRequiredMixin, View):\n"
+        "    permission_required = 'app.perm'\n"
+        "    def get(self, request):\n        return None\n"
+        "class Passes(UserPassesTestMixin, View):\n"
+        "    def test_func(self):\n        return True\n"
+        "    def post(self, request):\n        return None\n",
+        "path('p/', Perm.as_view()), path('t/', Passes.as_view())",
+    )
+
+    assert rows == [
+        ("GET", None, "/p/", _handler("get", "app/urls/Perm"), "resolved"),
+        ("POST", None, "/t/", _handler("post", "app/urls/Passes"), "resolved"),
+    ]
+
+
+def test_an_own_dispatch_over_login_required_mixin_reads_alike(tmp_path: Path, libraries):
+    """The same class with an own `dispatch` calling super: every override on the chain is
+    read and hands the request back, so the resolution is the one without it."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        _MIXINS + "LoginRequiredMixin\n"
+        "class Items(LoginRequiredMixin, View):\n"
+        "    def dispatch(self, request, *a, **k):\n"
+        "        return super().dispatch(request, *a, **k)\n"
+        "    def get(self, request):\n        return None\n",
+    )
+
+    assert rows == [("GET", None, "/x/", _handler("get", "app/urls/Items"), "resolved")]
+
+
+def test_a_project_mixin_that_returns_early_on_one_branch_delegates(tmp_path: Path, libraries):
+    """A `dispatch` that answers on one branch and calls `super().dispatch` on the other hands
+    the request back, as Django's own mixins do: the class's verbs, `resolved`."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        "class Guard:\n"
+        "    def dispatch(self, request, *a, **k):\n"
+        "        if request.user is None:\n            return None\n"
+        "        return super().dispatch(request, *a, **k)\n"
+        "class Items(Guard, View):\n    def get(self, request):\n        return None\n",
+    )
+
+    assert rows == [("GET", None, "/x/", _handler("get", "app/urls/Items"), "resolved")]
+
+
+def test_a_library_base_whose_dispatch_does_not_hand_back_serves_every_method(
+    tmp_path: Path, libraries
+):
+    """A library class whose `dispatch` answers itself (a stub distribution beside Django):
+    the any-method row, the library's `dispatch` the handler."""
+    site = tmp_path / "stub-site"
+    (site / "stubviews").mkdir(parents=True)
+    (site / "stubviews" / "__init__.py").write_text(
+        "from django.views import View\n"
+        "class Answering(View):\n"
+        "    def dispatch(self, request, *a, **k):\n        return None\n"
+        "    def get(self, request):\n        return None\n",
+        encoding="utf-8",
+    )
+    info = site / "stubviews-1.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text("Name: stubviews\nVersion: 1\n", encoding="utf-8")
+    (info / "RECORD").write_text("stubviews/__init__.py,,\n", encoding="utf-8")
+    stub = LibraryRoot("stubviews", "1", site)
+    rows = _rows(
+        _resolved(
+            tmp_path,
+            (*libraries, stub),
+            {
+                "urls.py": _HEAD + "from stubviews import Answering\n"
+                "class Items(Answering):\n    pass\n"
+                "urlpatterns = [path('x/', Items.as_view())]\n"
+            },
+        )
+    )
+
+    assert rows == [
+        (
+            None,
+            "any",
+            "/x/",
+            "sextant-python pypi stubviews 1 stubviews/Answering#dispatch(sig_",
+            "resolved",
+        )
+    ]
+
+
+def test_a_narrowing_wrapper_narrows_the_class_rows(tmp_path: Path, libraries):
+    """`require_POST(V.as_view())`: Django answers 405 to every method but POST before the view
+    runs (probe, "Function views"), so only the class's POST row stays."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        "from django.views.decorators.http import require_POST\n"
+        "class Items(View):\n"
+        "    def get(self, request):\n        return None\n"
+        "    def post(self, request):\n        return None\n",
+        "path('x/', require_POST(Items.as_view()))",
+    )
+
+    assert rows == [("POST", None, "/x/", _handler("post", "app/urls/Items"), "resolved")]
+
+
+def test_no_member_found_past_a_base_not_read_names_no_method(tmp_path: Path, libraries):
+    """A class with no verb method of its own, below a base not read, may serve anything that
+    base defines: one row naming no method, `unresolved`."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        "from not_installed import Mixin\nclass Items(Mixin, View):\n    pass\n",
+    )
+
+    assert rows == [(None, None, "/x/", None, "unresolved")]

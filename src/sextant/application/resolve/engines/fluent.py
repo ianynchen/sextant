@@ -4009,7 +4009,12 @@ def _class_view(
         )
         if unstated is not None:
             return _blocked(_Stack(outer, unstated, True), context)
-        return _class_rows(owner, row, captures, rule.owners, context)
+        narrowed = (
+            _narrowed_verbs(argument, captures[NARROWED_BY], context)
+            if NARROWED_BY in captures
+            else None
+        )
+        return _class_rows(owner, row, captures, rule.owners, context, narrowed)
     return None
 
 
@@ -4044,14 +4049,19 @@ def _class_rows(
     captures: dict[str, Any],
     framework: Sequence[str],
     context: "_DeriveContext",
+    narrowed: tuple[str | None, ...] | None = None,
 ) -> list[tuple[dict[str, Any], _Judged | None, bool]]:
     """The rows the class `owner` serves through the call `row` (D02 §2's `fluent` style), each
     as its captures, its handler and whether it is no surer than `partial`. Each member is
     looked up in the class's lookup order (`Dispatch.order_through_headers`), on the types whose
     methods were read, the module's and the libraries' class bodies; one the `through` owner
     itself defines is the framework's own answer and never a row. A `bypassed_by` method the
-    class defines replaces the dispatch unless it calls the method it overrides on its parent
-    (`special`, the servlet precedent): one row serving any method, that method the handler.
+    class's chain defines, down to the `through` owner's own, replaces the dispatch unless it
+    calls the method it overrides on its parent on some path (`special` in a module body,
+    `calls_super` in a library one; the servlet precedent): the first that does not is one
+    row serving any method, that method the handler. One whose body was not read leaves the
+    rows `partial`. A `narrowed_by` call wrapping the registration narrows the rows
+    (`_narrowed_rows`).
     Otherwise one row per `dispatch` method the class defines, that method the handler. Every
     row is `partial` where the order meets a type whose methods were not read (it may define
     more), where a bypass is a library's whose body was not read, or where the class writes a
@@ -4061,7 +4071,7 @@ def _class_rows(
     assert context.workspace is not None and context.class_dispatch is not None
     assert context.values is not None
     dispatch = context.workspace.once(dispatch_of)
-    members, read, fields = context.workspace.once(_class_members)
+    members, read, fields, delegating = context.workspace.once(_class_members)
     table = context.class_dispatch
     order, unread = dispatch.order_through_headers(owner)
     if unread is None:
@@ -4083,19 +4093,28 @@ def _class_rows(
         key: value for key, value in captures.items() if key not in (HANDLER_THROUGH, NARROWED_BY)
     }
     for name in table.bypassed:
-        symbol = defined(name)
-        if symbol is None:
-            continue
-        if owner_of(bare_descriptor(symbol)) not in dispatch.scanned:
-            # A library's, whose body was not read: whether it hands the request back to the
-            # dispatch is not known.
-            inexact = True
-            continue
-        if not any(
-            site["invoke_kind"] == "special" and site["name"] == name
-            for site in context.facts.sites_by_caller.get(symbol, ())
-        ):
-            return [(base, _Judged(symbol, ANSWERS), inexact)]
+        # Every override on the chain, in lookup order, down to the `through` owner's own: each
+        # one that hands the request back (`super().<name>(...)` on some path; what it answers
+        # on another is the handler's own behaviour, as a pass-through decorator's) lets the
+        # next one run; the first one read that does not is the one that answers.
+        for type_ in order:
+            if type_ in framework:
+                break
+            symbol = members.get((type_, name))
+            if symbol is None:
+                continue
+            if type_ in dispatch.scanned:
+                delegates = any(
+                    site["invoke_kind"] == "special" and site["name"] == name
+                    for site in context.facts.sites_by_caller.get(symbol, ())
+                )
+            elif type_ in read:
+                delegates = symbol in delegating
+            else:
+                inexact = True
+                continue
+            if not delegates:
+                return _narrowed_rows([(base, _Judged(symbol, ANSWERS), inexact)], narrowed)
     rows: list[tuple[dict[str, Any], _Judged | None, bool]] = [
         ({**base, "http_method": verb}, _Judged(symbol, ANSWERS), inexact)
         for name, verb in table.verbs
@@ -4104,16 +4123,40 @@ def _class_rows(
     ]
     if not rows and unread is not None and unread not in framework:
         return [({**base, "http_method": None}, _Judged(None, ANSWERS), False)]
-    return rows
+    return _narrowed_rows(rows, narrowed)
+
+
+def _narrowed_rows(
+    rows: list[tuple[dict[str, Any], _Judged | None, bool]], narrowed: tuple[str | None, ...] | None
+) -> list[tuple[dict[str, Any], _Judged | None, bool]]:
+    """A class's rows where a call `narrowed_by` names wraps the registration (`_narrowed_verbs`):
+    each verb row the narrowing allows, and an any-method row as one row per allowed method.
+    Unchanged where no such call wraps it."""
+    if narrowed is None:
+        return rows
+    kept: list[tuple[dict[str, Any], _Judged | None, bool]] = []
+    for captures, handled, inexact in rows:
+        if "http_method" not in captures:
+            kept.extend(({**captures, "http_method": verb}, handled, inexact) for verb in narrowed)
+        elif captures["http_method"] in narrowed or None in narrowed:
+            kept.append(
+                (
+                    captures if None not in narrowed else {**captures, "http_method": None},
+                    handled,
+                    inexact,
+                )
+            )
+    return kept
 
 
 def _class_members(
     workspace: "Workspace",
-) -> tuple[dict[tuple[str, str], str], frozenset[str], frozenset[str]]:
+) -> tuple[dict[tuple[str, str], str], frozenset[str], frozenset[str], frozenset[str]]:
     """Each method whose body or header was read, by its bare type and name, as its full symbol
     (one of that name on that type alone); the types whose methods were read: the module's
     (`Dispatch.declared`) and the libraries' class bodies a header lists (`type_header_bodies`);
-    and every field declared, bare. Read once per workspace."""
+    every field declared, bare; and the header methods whose body calls `super()` on their own
+    name (`calls_super`). Read once per workspace."""
     dispatch = workspace.once(dispatch_of)
     symbols = workspace.once(_method_symbols)
     found: dict[tuple[str, str], str | None] = {}
@@ -4127,6 +4170,7 @@ def _class_members(
         type_ = owner_of(bare)
         if type_ is not None and bare in symbols:
             add(type_, method_name(bare), symbols[bare])
+    delegating: set[str] = set()
     for header in workspace.query("type_header_bodies"):
         full = str(header["symbol"])
         type_ = bare_descriptor(full)
@@ -4136,12 +4180,17 @@ def _class_members(
         read.add(type_)
         for entry in listed if isinstance(listed, list) else ():
             name = str(entry["name"])
-            add(type_, name, prefix + method_descriptor(type_, name, PY_SIGNATURE))
+            # Python's one method descriptor: a header lists its methods by name alone.
+            symbol = prefix + method_descriptor(type_, name, PY_SIGNATURE)
+            add(type_, name, symbol)
+            if entry.get("calls_super"):
+                delegating.add(symbol)
     fields = frozenset(bare_descriptor(str(row["symbol"])) for row in workspace.query("fields"))
     return (
         {key: symbol for key, symbol in found.items() if symbol is not None},
         frozenset(read),
         fields,
+        frozenset(delegating),
     )
 
 

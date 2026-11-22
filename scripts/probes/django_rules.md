@@ -148,6 +148,13 @@ variables, not functions). `as_view` is a `classonlymethod`, so the scanner must
 - A class overriding `dispatch` answers every method itself (POST 200 with no `post` method).
 - A `dispatch` override that calls `super().dispatch(...)` keeps `View.dispatch`'s verb lookup:
   `Delegating(get)` answers GET 200 and POST, PUT, DELETE 405 (plan 6, Task 5).
+- `LoginRequiredMixin`, `PermissionRequiredMixin` and `UserPassesTestMixin`
+  (`django.contrib.auth.mixins`) each define `dispatch`, which returns `handle_no_permission()`
+  when the test fails and else calls `super().dispatch`. With a user that passes (a stub
+  `request.user`, no database), a view defining `get` and `post` answers GET and POST 200 and
+  PUT, DELETE 405: the class's verbs are kept (plan 6, Task 5 fix round 1). The probe's settings
+  install `django.contrib.contenttypes` and `django.contrib.auth` so the mixins import; no
+  database is configured.
 - `as_view(**initkwargs)` sets instance attributes. `as_view(http_method_names=['post'])` on a class
   that defines `get` and `post` answers POST 200 and GET 405; `['get','post','delete']` on `Items`
   still answers only GET and POST. A verb name as a keyword (`get=...`) or an attribute the class
@@ -240,7 +247,7 @@ variable that holds a decorator, not a `def` of that name.
 | Check | 5.2.8 |
 |---|---|
 | Assertions in `scripts/probes/django_rules.py` | all pass; the run prints `OK` |
-| `RULE:` lines printed | 61 |
+| `RULE:` lines printed | 62 |
 
 The `5.2.8` column is the version the process under test printed on its first line
 (`importlib.metadata.version("django")`, run by `scripts/probes/django_rules.py` inside

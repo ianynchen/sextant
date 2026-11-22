@@ -891,6 +891,9 @@ class HeaderMethod(BaseModel):
     name: str
     returns: TypeRef | None = None
     parameters: list[TypeRef | None] = Field(default_factory=list)
+    # Whether the function's written body calls `super().<its own name>(...)`: the one thing
+    # read of a header method's body (plan 2026-11-22 Task 5 fix round 1, ruling R14).
+    calls_super: bool = False
 
 
 class TypeHeaderFact(BaseModel):

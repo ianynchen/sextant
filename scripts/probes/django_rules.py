@@ -25,7 +25,9 @@ settings.configure(
     SECRET_KEY="probe",
     ALLOWED_HOSTS=["*"],
     ROOT_URLCONF="probe_urls",
-    INSTALLED_APPS=[],
+    # The auth and content-type apps, so `django.contrib.auth.mixins` imports (section 10);
+    # no database is configured and none is opened.
+    INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth"],
     USE_TZ=True,
 )
 django.setup()
@@ -832,6 +834,69 @@ assert callable(admin_decorators.staff_member_required(login_url="/l"))
 rule(
     "login_required and staff_member_required are decorators that also take keyword arguments "
     "alone (login_required(login_url=...)), which returns the decorator instead"
+)
+
+# 10. The auth mixins over a class view (plan 6, Task 5 fix round 1, ruling R14).
+from django.contrib.auth.mixins import (
+    LoginRequiredMixin,
+    PermissionRequiredMixin,
+    UserPassesTestMixin,
+)
+
+
+class _LoginItems(LoginRequiredMixin, View):
+    def get(self, request):
+        return HttpResponse("g")
+
+    def post(self, request):
+        return HttpResponse("p")
+
+
+class _PermItems(PermissionRequiredMixin, View):
+    permission_required = "app.perm"
+
+    def get(self, request):
+        return HttpResponse("g")
+
+    def post(self, request):
+        return HttpResponse("p")
+
+
+class _TestItems(UserPassesTestMixin, View):
+    def test_func(self):
+        return True
+
+    def get(self, request):
+        return HttpResponse("g")
+
+    def post(self, request):
+        return HttpResponse("p")
+
+
+def _mixin_codes(view_class) -> dict[str, int]:
+    """Each method's status through `view_class.as_view()`, a signed-in user passing every test."""
+    view = view_class.as_view()
+    out = {}
+    for method in ("get", "post", "put", "delete"):
+        request = getattr(RequestFactory(), method)("/m")
+        request.user = _Staff()
+        out[method] = view(request).status_code
+    return out
+
+
+for _mixin_view in (_LoginItems, _PermItems, _TestItems):
+    assert _mixin_codes(_mixin_view) == {"get": 200, "post": 200, "put": 405, "delete": 405}, (
+        _mixin_view,
+        _mixin_codes(_mixin_view),
+    )
+for _mixin in (LoginRequiredMixin, PermissionRequiredMixin, UserPassesTestMixin):
+    assert "super().dispatch(request, *args, **kwargs)" in inspect.getsource(_mixin.dispatch)
+    assert "return self.handle_no_permission()" in inspect.getsource(_mixin.dispatch)
+rule(
+    "LoginRequiredMixin, PermissionRequiredMixin and UserPassesTestMixin (django.contrib.auth.mixins) "
+    "each define dispatch, which returns handle_no_permission() when the test fails and else calls "
+    "super().dispatch: with a user that passes, a view(get, post) answers GET and POST 200 and PUT, "
+    "DELETE 405, the verbs of the class kept"
 )
 
 print("OK")

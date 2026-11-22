@@ -1271,6 +1271,16 @@ class Libraries:
             self._inside = inside
         bodies = {method_descriptor(owner, CLINIT, PY_SIGNATURE) for owner in owners}
         module_body = method_descriptor(module_type, CLINIT, PY_SIGNATURE)
+        # The functions whose written body calls `super().<own name>(...)`, by class and name.
+        delegating = {
+            (type_symbol(Target(here, path)), function.name)
+            for path in paths
+            for node in [self._class_node(table, Target(here, path))]
+            if node is not None
+            for function in node.body
+            if isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef)
+            and _calls_super(function)
+        }
         kept: list[Fact] = []
         methods: dict[str, list[HeaderMethod]] = {}
         keywords: dict[str, list[CallArgument] | None] = {}
@@ -1295,6 +1305,7 @@ class Libraries:
                     methods.setdefault(holder, []).append(
                         HeaderMethod(
                             name=name,
+                            calls_super=(holder, name) in delegating,
                             returns=None if fact.signature is None else fact.signature.returns,
                             parameters=[]
                             if fact.signature is None
@@ -2062,6 +2073,19 @@ _RECEIVER = -1
 _INSTANCE = "instance"
 # What calling a value runs: `type(value).__call__`.
 _CALL = "__call__"
+
+
+def _calls_super(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Whether `function`'s body calls `super().<its own name>(...)` on some path."""
+    return any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == function.name
+        and isinstance(node.func.value, ast.Call)
+        and isinstance(node.func.value.func, ast.Name)
+        and node.func.value.func.id == "super"
+        for node in ast.walk(function)
+    )
 
 
 def _makes_type_variable(value: ast.expr) -> bool:

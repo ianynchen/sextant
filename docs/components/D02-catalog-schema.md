@@ -2718,9 +2718,13 @@ dispatch table. Each `dispatch` member is looked up by name in the class's C3 or
 types whose methods were read (the module's, and the library class bodies a header lists); the
 route gets one row per member found, its `method` the verb and its handler that member, on the
 type that defines it. A member `owner` itself defines is the framework's own answer and never a
-row. A `bypassed_by` method the class defines replaces the dispatch unless its body calls the
-method it overrides on its parent (`special`, the servlet rule): one row serving any method
-(`verbless_serves`), that method the handler. A `bypassed_by` name the class writes as a value,
+row. Every `bypassed_by` method on the class's chain, down to `owner`'s own, is asked whether
+its body calls the method it overrides on its parent on some path (`special` in a module body,
+the header's `calls_super` in a library one, D00 §5 `type_header`; the servlet rule): the first
+that does not replaces the dispatch, one row serving any method (`verbless_serves`), that
+method the handler; one whose body was not read leaves the rows `partial`. A `narrowed_by` call
+wrapping the registration narrows the rows, an any-method row becoming one row per method it
+allows. A `bypassed_by` name the class writes as a value,
 or the call passes as a keyword, changes the table in a way not read: every row is `partial`.
 So is every row where the order meets a type whose methods were not read, or a bypass whose
 body was not read; such a class with no member found is one row naming no method,
@@ -4918,7 +4922,11 @@ supertype's own dispatch ENTRY POINT has replaced the lookup the table describes
 every operation alike (CP-9 rows 14-15). Deriving the table's entries anyway would publish the
 ones it names and withhold the ones it does not — a wrong answer, not a partial one. The key is
 REQUIRED and may be empty: a supertype with no bypass says so, because an omitted bypass is
-indistinguishable from a forgotten one and the forgotten one publishes wrong verbs.
+indistinguishable from a forgotten one and the forgotten one publishes wrong verbs. **A second reading, in the `fluent` style only** (plan
+2026-11-22-python-django-core-inbound Task 5): there a `bypassed_by` name the class writes as a
+value (a class attribute, not a method), or the `through` call passes as a keyword, changes the
+dispatch table in a way not read, and every row the table gives is `partial` rather than
+discarded (Django's `http_method_names`).
 
 **One row per handler the MODULE DECLARES.** A dispatch supertype may also serve operations
 IMPLICITLY, off a member the module never overrode — measured, it does (CP-9 rows 7-9 and 32).
