@@ -2762,6 +2762,18 @@ def _one_assembled(
     whole = {
         literal for _, literal, resolution in assembled if resolution == "resolved" and literal
     }
+    # An inexact LITERAL is a whole text too: a different one from the exact text is a second
+    # address (the SAME text stays resolved: the exact path proves it).
+    inexact_texts = {
+        literal
+        for _, literal, resolution in assembled
+        if resolution == "partial"
+        and literal
+        and not _holes(literal)
+        and not carries_expression(literal)
+    }
+    if len(whole) == 1 and not inexact_texts - whole:
+        return {"kind": "string", "value": whole.pop()}
     # A partly-known address, published as the EXPRESSION kind `url_of` reads: the
     # text is the template with its holes, and `url_of` decides peer and path from
     # it exactly as it does for `single_call`. Only where there is one — several
@@ -2772,10 +2784,6 @@ def _one_assembled(
         for _, literal, resolution in assembled
         if resolution in ("partial", _INEXACT_TEMPLATE) and literal
     }
-    # Any OTHER text — an inexact literal or a template — is a second address beside the
-    # whole one (the SAME text read inexactly stays resolved: the exact path proves it).
-    if len(whole) == 1 and not partly - whole:
-        return {"kind": "string", "value": whole.pop()}
     if not whole and len(partly) == 1:
         text = partly.pop()
         # The SAME template read exactly on another path stays exact: that path proves it.

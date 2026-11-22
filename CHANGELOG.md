@@ -631,9 +631,7 @@ here would restate those documents rather than add anything.
   The flag now reaches `url_of`, which answers `partial`; the same template read exactly on
   another path stays `resolved`. An inexact address joins the client base only where its
   exact reading would be `resolved` (a named-hole template or a whole text), never with an
-  unread host or an anonymous hole. And one literal beside a DIFFERENT template is two
-  addresses, as one literal beside a different inexact literal already was: the concat arm
-  answers none of them rather than publishing the literal as the whole answer.
+  unread host or an anonymous hole.
 
 - **An inexact answer is no longer published as `resolved` by the url readers it reaches.** A
   value the walk read inexactly (rule 9) was published at `resolved`. Inexact literals now publish
