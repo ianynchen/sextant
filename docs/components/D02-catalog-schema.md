@@ -2468,6 +2468,11 @@ leading-slash repair applies as before. A value that is not a boolean is refused
 - **`matches.pathless_serves: <path>`** is the path, in the framework's own spelling, that an
   inbound chain naming no address serves (Vert.x's `/*`), `resolved`: the framework stores no
   path, and that is exact. Anything but a non-empty string is refused at load.
+- **`matches.path_prefix: <literal>`** is the `annotation_driven` word of the same name (plan
+  2026-11-22 Task 2, `django.yml`): the literal goes in front of every inbound address the
+  catalog serves, the outermost mount prefix included, as written: Django's served path is `/`
+  + the joined routes. A pattern (`url_is: pattern`) is published without it. It needs
+  `path_join: concatenate`; anything but a non-empty string beside that join is refused at load.
 - **`url_is: pattern | address`**, a literal capture beside `url`, says what the captured
   address IS, last wins: `pattern` is a regular expression the framework matches, published
   verbatim with `path_kind = pattern`, never refused as unrooted, canonicalised or linked by

@@ -836,7 +836,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 
 <!-- BEGIN GENERATED: coverage_versions -->
 
-**125 of 139 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
+**126 of 140 catalogs name the artifact and versions their rules were read from. 14 record none.** The second number is a statement about our RECORD, not about the knowledge: a bound usually exists and is findable, it has simply never been written down here.
 
 | Catalog | Artifact | Versions read |
 |---|---|---|
@@ -861,6 +861,7 @@ Stating a range would be a prediction about bytecode nobody opened, which is the
 |  | `jakarta.enterprise:jakarta.enterprise.cdi-api` | 4.1.0 |
 |  | `javax.enterprise:cdi-api` | 1.0.0, 2.0.0 |
 | `click` | `click` | 8.5.0 |
+| `django` | `django` | 5.2.8 |
 | `fastapi` | `fastapi` | 0.115.12, 0.162.0 |
 |  | `pydantic` | 2.14.3 |
 | `flask` | `flask` | 2.1.3, 3.1.3 |

@@ -373,6 +373,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     refuses_unrooted = _refuses_unrooted_path(matches, catalog)
     verbless_serves = validated_verbless_serves(matches, catalog.source, "fluent")
     pathless_serves = _pathless_serves(matches, catalog)
+    path_prefix = _path_prefix(matches, catalog)
     _validate_route_captures([*roots, *bean_roots, *steps], catalog)
     pass_through = pass_through_of(matches, catalog.source)
     mount_rules = mount_rules_of(matches, catalog.source, words=catalog.root_kind is not None)
@@ -541,6 +542,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 roots=roots,
                 verbless_serves=verbless_serves,
                 pathless_serves=pathless_serves,
+                path_prefix=path_prefix,
                 judged=judged,
                 candidates=candidates,
                 unread=unread,
@@ -998,6 +1000,10 @@ class _DeriveContext:
     # the framework's own spelling (`/*`). None for every catalog not declaring it, whose
     # address-less chain reads as an unread address.
     pathless_serves: str | None = None
+    # `matches.path_prefix` (the `annotation_driven` word, plan 2026-11-22 Task 2): a literal
+    # in front of every inbound address, outermost mount prefix included, joined by the
+    # catalog's `path_join`. None for every catalog not declaring it.
+    path_prefix: str | None = None
     # The workspace and the walk's index, for the hop ladders (Task 9), shared with the
     # walk (`values.cached_value_index`).
     workspace: "Workspace | None" = None
@@ -1458,6 +1464,15 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                     prefix=prefix,
                     caller=context.caller,
                 )
+        # The catalog's own literal goes in front of everything, mounts included; a pattern
+        # is published verbatim (`url_is: pattern`).
+        if (
+            context.path_prefix is not None
+            and path is not None
+            and direction == "inbound"
+            and path_kind != PATH_KIND_PATTERN
+        ):
+            path = context.path_prefix + path
         # Checkpoint ruling I1, folded in from single_call: a capture that
         # WAS reached but which the scanner could not read drops the row's
         # resolution; a capture never reached at all is simply not part of
@@ -3923,6 +3938,21 @@ def _pathless_serves(matches: dict[str, Any], catalog: Catalog) -> str | None:
         raise CatalogError(
             f"loading catalog {catalog.source}: `pathless_serves` is a path, got {declared!r} "
             f"(D02 §2's `fluent` style)"
+        )
+    return declared
+
+
+def _path_prefix(matches: dict[str, Any], catalog: Catalog) -> str | None:
+    """`matches.path_prefix`: the literal every inbound address is served behind (Django's
+    leading `/`). Only a `concatenate` join composes it as written: anything but a non-empty
+    string, or a prefix under another join, is a broken file, never read as absent."""
+    declared = matches.get("path_prefix")
+    if declared is not None and not (
+        isinstance(declared, str) and declared and matches.get("path_join") == CONCATENATE
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `path_prefix` is a non-empty string beside "
+            f"`path_join: concatenate`, got {declared!r} (D02 §2's `fluent` style)"
         )
     return declared
 

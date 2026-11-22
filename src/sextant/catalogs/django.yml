@@ -1,0 +1,61 @@
+id: django
+displayName: Django (urlpatterns, function views behind path)
+style: fluent
+protocol: http
+direction: inbound
+
+# Every rule below is Django's own, measured in `scripts/probes/django_rules.md` (plan 6,
+# Task 1; DR-6) against Django 5.2.8 as the running process reported it.
+#
+# THE VOCABULARY OF THIS CATALOG (plan 6, Task 2; the user's ruling 2026-11-22: reuse an
+# existing word wherever one states the rule, a new word only where none fits). The later
+# tasks write exactly these spellings:
+# - A mount whose router is an argument of an inner call, `path(prefix, include(x))`
+#   (design §5b capability 2): NEW key `through`, on an argument reference:
+#   `router_arg: { arg: 1, keyword: view, through: { owner: django.urls.conf, method: include,
+#   read: { arg: 0, keyword: arg } } }` — where the argument written there is a call of
+#   `owner.method`, the value is what `read` reads off that call; else the argument itself.
+#   `read` takes every argument-reference form, `receiver` included (`client_arg: receiver`).
+# - A router named by a module-name string, `include("pkg.urls")` (capability 3): NEW key
+#   `router_named: { variable: urlpatterns }` on a mount: a router argument that reads as a
+#   string names a module, and the router is that module's variable of the given name.
+# - Verbs from the methods a class defines, `View.as_view()` (capability 5): REUSED
+#   `dispatch: [{ name, method }]` and `bypassed_by: [{ name }]` (`jakarta-servlet.yml`), the
+#   handler reached by `through` with `read: receiver` on `View.as_view`. Python has no
+#   overloads, so an entry names a method by name alone, with no `parameters`.
+# - The any-method row: REUSED `verbless_serves: any` (`vertx-web.yml`; the fluent spelling
+#   of the null method `spring-webflux-router.yml` publishes as `verb: null`).
+# - The join: REUSED `path_join: concatenate` (`fastapi.yml`) and `path_prefix: /`
+#   (`spring-actuator.yml`'s literal in front of every path).
+
+detect:
+  coordinates: [django]
+
+measured:
+  - { artifact: django, versions: ["5.2.8"], identity: reported, by: scripts/probes/django_rules.md }
+
+matches:
+  # THE REGISTRATION. `path` is `functools.partial(_path, Pattern=RoutePattern)`, a variable
+  # of `django.urls.conf`, so a call of it names that module (probe, "Defining symbols":
+  # "calls of `path`, `re_path`, `include` carry owner `django/urls/conf#`"). `_path(route,
+  # view, kwargs=None, name=None, Pattern=None)`: route index 0, view index 1 (probe, "Paths").
+  # The route is kept as written, converters included (probe: "`ResolverMatch.route` keeps
+  # converters as written: `c/<id>`, `i/<int:id>`").
+  roots:
+    - { owner: django.urls.conf, method: path,
+        captures: { url: { arg: 0, keyword: route }, handler: { arg: 1, keyword: view } } }
+  terminal: [path]
+  # A FUNCTION VIEW SERVES EVERY METHOD (probe, "Function views": a plain function answers
+  # GET, POST, PUT and DELETE 200, and OPTIONS 200, the request reaching the view): one row,
+  # method NULL, marked as serving any method. No automatic OPTIONS or HEAD row is the
+  # framework's own: the view itself answers them.
+  verbless_serves: any
+  # THE PATH (probe, "Paths"): prefix and child route concatenate with nothing between
+  # (`'api/'` + `'/lead'` is `api//lead`), an empty route adds nothing, and the served path is
+  # that string with a leading `/`. Nothing is stripped or added between routes (probe,
+  # "Differs from the design" item 3: a child route starting with `/` serves `//`).
+  path_join: concatenate
+  path_prefix: /
+  # Django refuses no route at registration: a route starting with `/` draws the system check
+  # `urls.W002` and still loads (probe, "Differs from the design" item 3).
+  refuses_unrooted_path: false

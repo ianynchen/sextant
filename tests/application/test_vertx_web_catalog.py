@@ -559,8 +559,10 @@ def _with(**matches: object) -> Catalog:
     [
         ({"verbless_serves": "all"}, "vertx-web.*verbless_serves"),
         ({"pathless_serves": 7}, "vertx-web.*pathless_serves"),
+        ({"path_prefix": "", "path_join": "concatenate"}, "vertx-web.*path_prefix"),
+        ({"path_prefix": "/"}, "vertx-web.*path_prefix"),
     ],
-    ids=["verbless-not-any", "pathless-not-a-path"],
+    ids=["verbless-not-any", "pathless-not-a-path", "prefix-empty", "prefix-without-concatenate"],
 )
 def test_a_malformed_route_word_is_refused_naming_the_file(
     tmp_path: Path, matches: dict, fragment: str
