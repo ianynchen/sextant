@@ -585,34 +585,32 @@ class _JvmDescriptorInterpreter:
         return interpret_descriptors(descriptors, self._naming)
 
 
-def _commit_of(path: Path) -> str:
-    result = subprocess.run(
-        ["git", "-C", str(path), "rev-parse", "--short", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+def _git(path: Path, *args: str) -> str:
+    """One git query, or `"unknown"` — also when no `git` binary exists at all
+    (a slim CI container), which `subprocess.run` raises as `OSError` rather
+    than reporting as a non-zero exit."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return "unknown"
     return result.stdout.strip() or "unknown"
+
+
+def _commit_of(path: Path) -> str:
+    return _git(path, "rev-parse", "--short", "HEAD")
 
 
 def _remote_of(path: Path) -> str:
-    result = subprocess.run(
-        ["git", "-C", str(path), "remote", "get-url", "origin"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.stdout.strip() or "unknown"
+    return _git(path, "remote", "get-url", "origin")
 
 
 def _module_commit_of(path: Path) -> str:
-    result = subprocess.run(
-        ["git", "-C", str(path), "log", "-1", "--format=%H", "--", "."],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.stdout.strip() or "unknown"
+    return _git(path, "log", "-1", "--format=%H", "--", ".")
 
 
 def _catalog_hash(catalogs: Path) -> str:
