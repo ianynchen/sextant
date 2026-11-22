@@ -152,13 +152,17 @@ def html_document(sections: AssembledDocument, module_id: str) -> str:
         f"{body}\n"
         f"<script>{mermaid_js}</script>\n"
         "<script>\n"
-        'mermaid.initialize({"startOnLoad": false, "securityLevel": "strict"});\n'
+        # maxTextSize: mermaid's 50k default is smaller than one full trace of a large
+        # repo; suppressErrors: run() otherwise rethrows the FIRST failure and leaves
+        # every diagram after it as raw text, with no sign in the page of why.
+        'mermaid.initialize({"startOnLoad": false, "securityLevel": "strict", '
+        '"maxTextSize": 5000000});\n'
         'document.addEventListener("DOMContentLoaded", function () {\n'
         "  // run() resolves once every diagram is rendered SVG; the event\n"
         "  // tells panzoom.js to fit each diagram to its viewport, which\n"
         "  // needs the real rendered geometry rather than the placeholder\n"
         "  // the browser sizes before mermaid replaces it.\n"
-        '  mermaid.run({ querySelector: ".mermaid" }).then(function () {\n'
+        '  mermaid.run({ querySelector: ".mermaid", suppressErrors: true }).then(function () {\n'
         "    // Flag AND event: panzoom.js may register its listener before or\n"
         "    // after this resolves (promise microtasks can run between two\n"
         "    // DOMContentLoaded handlers), so it checks the flag when it sets\n"

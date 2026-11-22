@@ -184,6 +184,10 @@ def apply_path_prefixes(workspace: Workspace, catalogs: list[Catalog]) -> None:
             }
         )
     if rows:
+        # The question ledger first: it is matched by the identity the next statement
+        # changes (the engines file handler_pass_through/mount_prefix questions before
+        # this pass runs, against the unprefixed address).
+        workspace.derive("prefix_question_paths", rows=rows)
         workspace.derive("prefix_endpoint_paths", rows=rows)
         # The entries bound to a moved row move with it (Ruling 7).
         workspace.derive("endpoint_rows_follow")

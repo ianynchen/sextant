@@ -200,6 +200,44 @@ def test_a_refused_detection_raises_a_sextanterror_not_systemexit_with_the_cli_m
     assert cli_result.output == f"Error: {excinfo.value}\n"
 
 
+def test_git_queries_fall_back_to_unknown_when_git_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A slim CI container has no `git` binary at all, which `subprocess.run`
+    reports as `FileNotFoundError` rather than a non-zero exit — the same
+    `"unknown"` the existing fallback gives must come back, not a crash at
+    the very end of a finished analysis."""
+
+    def missing(*args: object, **kwargs: object) -> object:
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(api.subprocess, "run", missing)
+    assert api._commit_of(tmp_path) == "unknown"
+    assert api._remote_of(tmp_path) == "unknown"
+    assert api._module_commit_of(tmp_path) == "unknown"
+
+
+def test_a_reanalyze_that_dies_midway_is_refused_as_unanalyzed(
+    module_root: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A second `analyze` killed mid-run (Ctrl-C, a CI timeout, an OOM kill)
+    must not leave the FIRST run's `metadata.json` vouching for a half-rewritten
+    workspace: the stamp goes before the first write, so what survives a kill
+    is refused as unanalyzed rather than read as a mix of two commits."""
+    api.analyze(module_root)
+
+    def dies(*args: object, **kwargs: object) -> object:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(api, "_analyzed", dies)
+    with pytest.raises(KeyboardInterrupt):
+        api.analyze(module_root)
+
+    assert not (module_root / ".sextant" / "metadata.json").exists()
+    with pytest.raises(api.NotAnalyzedError):
+        api.render(module_root)
+
+
 # --------------------------------------------------------------------------
 # render
 # --------------------------------------------------------------------------

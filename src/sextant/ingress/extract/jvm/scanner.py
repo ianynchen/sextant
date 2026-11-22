@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -7,6 +8,31 @@ from sextant.application.ports.scanner import ScanError, ScanReport, ScanRequest
 from sextant.domain.version import FACT_SCHEMA_VERSION, SEXTANT_VERSION
 
 _LANGUAGES = {"java", "kotlin"}
+
+# A wedged extractor must fail the scan with a message, never hang the job: the
+# largest measured module extracts in minutes, so half an hour is headroom, not
+# tuning. The capabilities probe starts no extraction and answers in seconds.
+_SCAN_TIMEOUT_S = 1800
+_CAPABILITIES_TIMEOUT_S = 120
+
+
+def _java() -> str:
+    """The launcher the build itself used: Maven and Gradle need only JAVA_HOME,
+    so on a machine where `java` is not on PATH the build succeeds — the scan
+    must not then fail on the bare name."""
+    home = os.environ.get("JAVA_HOME")
+    return str(Path(home) / "bin" / "java") if home else "java"
+
+
+def _run_extractor(arguments: list[str], timeout: int) -> "subprocess.CompletedProcess[str]":
+    try:
+        return subprocess.run(
+            arguments, capture_output=True, text=True, check=False, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as expired:
+        raise ScanError(f"extractor did not finish within {timeout}s") from expired
+    except OSError as failure:
+        raise ScanError(f"could not run {arguments[0]}: {failure}") from failure
 
 
 class AsmScanner:
@@ -47,15 +73,17 @@ class AsmScanner:
         """Asked once per instance, before any scan — catalogs are gated on the
         answer, so it must be available without paying for an extraction."""
         if self._capabilities is None:
-            completed = subprocess.run(
-                ["java", "-jar", str(self._jar), "--capabilities"],
-                capture_output=True,
-                text=True,
-                check=False,
+            completed = _run_extractor(
+                [_java(), "-jar", str(self._jar), "--capabilities"], _CAPABILITIES_TIMEOUT_S
             )
             if completed.returncode != 0:
                 raise ScanError(f"extractor failed: {completed.stderr.strip()}")
-            self._capabilities = frozenset(json.loads(completed.stdout)["capabilities"])
+            try:
+                self._capabilities = frozenset(json.loads(completed.stdout)["capabilities"])
+            except (ValueError, KeyError, TypeError) as malformed:
+                raise ScanError(
+                    f"extractor wrote no readable capabilities report: {malformed}"
+                ) from malformed
         return set(self._capabilities)
 
     def rank(self) -> int:
@@ -83,65 +111,73 @@ class AsmScanner:
             )
             classpath = ["--classpath-file", str(classpath_file)]
         heap = [] if self._max_heap_mb is None else [f"-Xmx{self._max_heap_mb}m"]
-        completed = subprocess.run(
-            [
-                "java",
-                *heap,
-                "-jar",
-                str(self._jar),
-                "--module-id",
-                request.module_id,
-                "--coordinates",
-                request.coordinates,
-                "--version",
-                request.version,
-                "--classes",
-                str(request.classes_dir),
-                *(
-                    argument
-                    for more in request.more_classes_dirs
-                    for argument in ("--classes", str(more))
-                ),
-                "--out",
-                str(request.out_dir),
-                # Handed over rather than held in Java (Step 0). The extractor
-                # used to carry its own literal for the fact-schema stamp and a
-                # default for this one, so both were copies of a Python
-                # constant nothing in that repository can see — which is how
-                # four producers of one stamp came to hold two values. Both are
-                # required there now: absent is a refusal, never a default.
-                "--fact-schema-version",
-                str(FACT_SCHEMA_VERSION),
-                "--sextant-version",
-                SEXTANT_VERSION,
-                *origin,
-                *classpath,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if classpath_file is not None:
-            classpath_file.unlink(missing_ok=True)
+        try:
+            completed = _run_extractor(
+                [
+                    _java(),
+                    *heap,
+                    "-jar",
+                    str(self._jar),
+                    "--module-id",
+                    request.module_id,
+                    "--coordinates",
+                    request.coordinates,
+                    "--version",
+                    request.version,
+                    "--classes",
+                    str(request.classes_dir),
+                    *(
+                        argument
+                        for more in request.more_classes_dirs
+                        for argument in ("--classes", str(more))
+                    ),
+                    "--out",
+                    str(request.out_dir),
+                    # Handed over rather than held in Java (Step 0). The extractor
+                    # used to carry its own literal for the fact-schema stamp and a
+                    # default for this one, so both were copies of a Python
+                    # constant nothing in that repository can see — which is how
+                    # four producers of one stamp came to hold two values. Both are
+                    # required there now: absent is a refusal, never a default.
+                    "--fact-schema-version",
+                    str(FACT_SCHEMA_VERSION),
+                    "--sextant-version",
+                    SEXTANT_VERSION,
+                    *origin,
+                    *classpath,
+                ],
+                _SCAN_TIMEOUT_S,
+            )
+        finally:
+            # Also on a launch that raised: the file sits beside the facts and a
+            # survivor would be read back as one.
+            if classpath_file is not None:
+                classpath_file.unlink(missing_ok=True)
         if completed.returncode != 0:
             raise ScanError(f"extractor failed: {completed.stderr.strip()}")
-        report = json.loads(completed.stdout)
-        # The scan's own answer becomes the cache. Two consequences, both
-        # wanted: a later `capabilities()` needs no second subprocess, and the
-        # two answers cannot drift apart — a jar replaced mid-run is refused
-        # rather than silently gating catalogs on a set it no longer reports.
-        reported = tuple(report["capabilities"])
-        if self._capabilities is not None and self._capabilities != frozenset(reported):
-            raise ScanError(
-                f"the extractor reported {sorted(reported)} on this scan but "
-                f"{sorted(self._capabilities)} when asked — the jar changed mid-run"
+        try:
+            report = json.loads(completed.stdout)
+            # The scan's own answer becomes the cache. Two consequences, both
+            # wanted: a later `capabilities()` needs no second subprocess, and the
+            # two answers cannot drift apart — a jar replaced mid-run is refused
+            # rather than silently gating catalogs on a set it no longer reports.
+            reported = tuple(report["capabilities"])
+            if self._capabilities is not None and self._capabilities != frozenset(reported):
+                raise ScanError(
+                    f"the extractor reported {sorted(reported)} on this scan but "
+                    f"{sorted(self._capabilities)} when asked — the jar changed mid-run"
+                )
+            self._capabilities = frozenset(reported)
+            return ScanReport(
+                documents=report["documents"],
+                facts=report["facts"],
+                scanner_id=report["scanner_id"],
+                scanner_libraries=tuple(report["scanner_libraries"]),
+                capabilities=reported,
+                uncovered=tuple(report["uncovered"]),
             )
-        self._capabilities = frozenset(reported)
-        return ScanReport(
-            documents=report["documents"],
-            facts=report["facts"],
-            scanner_id=report["scanner_id"],
-            scanner_libraries=tuple(report["scanner_libraries"]),
-            capabilities=reported,
-            uncovered=tuple(report["uncovered"]),
-        )
+        except (ValueError, KeyError, TypeError) as malformed:
+            raise ScanError(
+                f"extractor wrote no readable report: {malformed}; stdout began "
+                f"{completed.stdout[:200]!r}"
+            ) from malformed

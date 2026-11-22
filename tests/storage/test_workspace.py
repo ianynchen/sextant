@@ -3674,6 +3674,28 @@ def test_the_endpoint_conditions_view_answers_through_a_read_only_federation(tmp
     ]
 
 
+def test_federate_accepts_a_quote_in_the_path_and_in_the_name(tmp_path: Path):
+    """A module under a directory like `O'Brien/` is an ordinary macOS home path,
+    and a participant name is an artifactId the caller controls: both travel into
+    SQL, so a quote in either must not break the ATTACH or the views."""
+    home = tmp_path / "O'Brien"
+    home.mkdir()
+    participant = home / "billing.duckdb"
+    DuckDbWorkspace(participant).close()
+    with duckdb.connect(str(participant)) as connection:
+        connection.execute(
+            "INSERT INTO endpoints (row_id, protocol, direction, method, path, handler) "
+            "VALUES (1, 'http', 'inbound', 'GET', '/balances', 'b/B#m()')"
+        )
+    system = DuckDbWorkspace(tmp_path / "system.duckdb")
+    try:
+        system.federate({"o'brien-api": participant})
+        rows = system.query("system_endpoints")
+    finally:
+        system.close()
+    assert [(row["participant"], row["path"]) for row in rows] == [("o'brien-api", "/balances")]
+
+
 def test_reopening_a_workspace_holding_the_pre_view_table_replaces_it_with_the_view(
     tmp_path: Path,
 ):

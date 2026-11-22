@@ -12,9 +12,11 @@ the document and the table would both be defensible and one of them wrong.
 
 ## What a row means
 
-One per `(root, symbol)`, carrying the SHALLOWEST depth any route to it reached. The walk
-expands a method once per trace (`expanded`) but still emits a step for every route, so
-every distance is seen here and the minimum over them is the true distance from the root.
+One per `(root, symbol)`, carrying the TRUE distance from the root. The walk expands a
+method once per trace (`expanded`) but still emits a step for every route, so every edge
+is seen here, and a breadth-first search over those edges gives the shortest distance —
+the step depths alone cannot, because a symbol revisited by a shorter route gets a step
+while its children keep the deep route's numbers.
 
 *W37 recorded the first depth the depth-first walk happened to see, which is not the
 shortest: 51 rows on `mall-admin` came out deeper than the truth, 26 of them symbols the
@@ -60,7 +62,15 @@ def record_reachability(workspace: Workspace) -> None:
         # distance within what the walk reached.
         #
         # The fixture has zero instances of this, which is why the tests passed.
+        #
+        # **And the minimum over STEP depths is still not enough** (audit 2026-11-21,
+        # item 6): the walk expands a method once, so a symbol revisited by a shorter
+        # route gets its own step — the minimum fixes IT — but its children are skipped
+        # and keep the deep route's numbers. Distance is therefore computed by breadth-
+        # first search over the caller→symbol edges the steps already carry, where every
+        # route's edge is present whichever route the walk expanded.
         shallowest: dict[str, tuple[int, bool]] = {trace.root.handler: (0, False)}
+        edges: dict[str, set[str]] = {}
         for step in trace.steps:
             # The callee where a body was read, the call TARGET where none was: a terminal
             # is a thing the root reaches, and omitting it would make a root that only
@@ -72,18 +82,38 @@ def record_reachability(workspace: Workspace) -> None:
             # trace's step row; this table is what a root REACHES.
             if symbol is None:
                 continue
+            edges.setdefault(step.caller, set()).add(symbol)
             found = shallowest.get(symbol)
             # Strictly shallower, so a tie keeps the walk's own first answer and two runs
-            # over one graph record one thing (NFR-1). `terminal` travels with the depth
-            # it was observed at rather than being merged: it says what happened on the
-            # route being recorded, and a symbol reached as a boundary by one route and
-            # expanded by another has no single answer — measured, no corpus has one.
+            # over one graph record one thing (NFR-1). `terminal` travels with the step
+            # it was observed shallowest at rather than being merged: it says what
+            # happened on the route being recorded, and a symbol reached as a boundary by
+            # one route and expanded by another has no single answer — measured, no
+            # corpus has one.
             if found is None or step.depth < found[0]:
                 shallowest[symbol] = (step.depth, step.callee is None)
+        # Every step's caller was itself expanded from the root (or is the root), so the
+        # search reaches every recorded symbol; its distance is route-order-independent,
+        # which the step minimum never was (NFR-1 holds without a tie rule).
+        distance: dict[str, int] = {trace.root.handler: 0}
+        frontier = [trace.root.handler]
+        while frontier:
+            following: list[str] = []
+            for caller in frontier:
+                for symbol in edges.get(caller, ()):
+                    if symbol not in distance:
+                        distance[symbol] = distance[caller] + 1
+                        following.append(symbol)
+            frontier = following
         rows.extend(
-            {"root": trace.root.handler, "symbol": symbol, "depth": depth, "terminal": terminal}
+            {
+                "root": trace.root.handler,
+                "symbol": symbol,
+                "depth": distance[symbol],
+                "terminal": terminal,
+            }
             # Sorted so two runs write one order whatever the walk's own was (NFR-1).
-            for symbol, (depth, terminal) in sorted(shallowest.items())
+            for symbol, (_, terminal) in sorted(shallowest.items())
         )
     workspace.derive("reachability", rows=rows)
 

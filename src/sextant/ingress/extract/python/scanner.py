@@ -184,7 +184,14 @@ class PythonScanner:
             if libraries is not None:
                 libraries.notes = []
             context = FileContext(here, is_package, index, prefix, document.document_id)
-            read = file_facts(tree, context, len(content.splitlines()) or 1)
+            try:
+                read = file_facts(tree, context, len(content.splitlines()) or 1)
+            except RecursionError:
+                # The parse above survives what the recursive fact walk cannot: a tree
+                # (a generated if/elif ladder, a long builder chain) costs one file,
+                # never the module.
+                uncovered.append(f"{relative}: too deeply nested to read")
+                continue
             notes = [f"{relative}: {note}" for note in read.notes]
             uncovered.extend(notes)
             file_library_notes = list(libraries.notes) if libraries is not None else []

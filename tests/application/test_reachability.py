@@ -201,6 +201,39 @@ def test_depth_is_the_shortest_route_not_the_first_one_the_walk_saw(tmp_path: Pa
     assert depths[_SERVICE] == 1
 
 
+def test_depth_below_a_shared_helper_is_the_shortest_route_too(tmp_path: Path):
+    """The expand-once walk emits a step for a REVISITED symbol but skips its
+    children — so when a shared helper is reached deep first and directly
+    later, the helper's own depth was corrected but everything below it kept
+    the deep route's numbers. Distance is from the root for descendants too:
+    Helper is at 1 (the direct call), so Deep below it is at 2, not 5."""
+    c = _MODULE + "com/acme/C#c()."
+    d = _MODULE + "com/acme/D#d()."
+    helper = _MODULE + "com/acme/Helper#help()."
+    deep = _MODULE + "com/acme/Deep#x()."
+    workspace = _workspace(
+        tmp_path,
+        [(_API, "/orders")],
+        [
+            (_API, 0, "com/acme/Service#run().", _SERVICE),
+            (_SERVICE, 0, "com/acme/C#c().", c),
+            (c, 0, "com/acme/D#d().", d),
+            (d, 0, "com/acme/Helper#help().", helper),
+            (helper, 0, "com/acme/Deep#x().", deep),
+            # The root's OWN direct call to the helper, at a later ordinal so the
+            # depth-first walk reads the deep route first and expands Helper there.
+            (_API, 1, "com/acme/Helper#help().", helper),
+        ],
+    )
+
+    record_reachability(workspace)
+    depths = {row[1]: row[2] for row in _rows(workspace)}
+    workspace.close()
+
+    assert depths[helper] == 1
+    assert depths[deep] == 2, "below the shared helper, depth is still distance from the root"
+
+
 def test_a_second_analyze_over_one_workspace_does_not_double_the_table(tmp_path: Path):
     """The pass clears before it writes, which every other derived table's writer does and
     this one did not.
