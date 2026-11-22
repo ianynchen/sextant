@@ -170,6 +170,19 @@ QUESTIONS = (
     # The row's own reason, for `handler_pass_through`'s reason: the hole says WHAT is
     # missing, and only this says where to look for it.
     "mount_prefix",
+    # Plan 2026-11-22-python-django-core-inbound Task 3, `mount_prefix`'s mirror. A mount
+    # whose prefix is read and whose router is not: its argument reaches no router or list
+    # this module holds (Django's `include(router.urls)` on an object another library builds),
+    # so its routes are not read and no row is published for them. Identity: the protocol,
+    # `method` NULL and the mount's prefix as served. Candidates: one per mount at that
+    # prefix, the mount call (`mount`, `mount_ordinal`), the inner call its router is read
+    # off (`at`, `at_ordinal`; the mount call itself where it reads none), the argument read
+    # there (`argument`), what that argument read as (`read`) and the method that made the
+    # mount (`caller`).
+    #
+    # A question rather than a silent drop, and rather than a row: a row at the prefix would
+    # claim an address nobody read, and silence would read as a mount that serves nothing.
+    "mounted_router",
 )
 
 

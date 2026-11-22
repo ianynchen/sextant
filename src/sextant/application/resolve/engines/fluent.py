@@ -667,6 +667,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             *refusal_rows(refusals),
             *unread_rows(unread),
             *unread_prefix_rows(unread_prefixes, rows),
+            *(
+                mounts.unread_routers(catalog.protocol, verbless_serves, path_prefix)
+                if mounts is not None and catalog.direction == "inbound"
+                else []
+            ),
         ],
     )
 

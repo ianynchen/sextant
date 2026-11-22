@@ -2675,7 +2675,7 @@ of (capability 1, no word): an element of a list written to a field, an argument
 made on a field's value (`urls.append(r)`, `urls.extend([r])`), or an element of a list
 written as a call's argument; a list sum unpacks its operands (D00 §5's `*` element). The
 mount's router is every list its argument reaches: a list written there, a field and the
-lists its writes unpack, a tuple's elements. A list no mount reaches serves at its root
+lists its writes unpack, what a tuple's first element reaches (`(list, app_name)`: the rest names no router). A list no mount reaches serves at its root
 (design §5d).
 
 **`mount[].router_named: {variable: name}`** (same task, capability 3): a router argument that

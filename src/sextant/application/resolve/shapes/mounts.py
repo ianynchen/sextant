@@ -135,6 +135,8 @@ _UNREAD_END = re.compile(r"\{[^{}]*\}$")
 # The `open_questions` kind that says why a row's path holds it (`resolve/open_questions.py`
 # owns the closed set).
 MOUNT_PREFIX = "mount_prefix"
+# Its mirror: a mount whose prefix is read and whose router is not (`unread_routers`).
+MOUNTED_ROUTER = "mounted_router"
 
 _STRENGTH = (
     str(Resolution.RESOLVED),
@@ -1359,6 +1361,69 @@ class MountReader:
             if at.made is not None
         )
 
+    def unread_routers(
+        self, protocol: str, method_kind: str | None, path_prefix: str | None
+    ) -> list[dict[str, Any]]:
+        """The `mounted_router` questions (`mount_prefix`'s mirror, D01): one per prefix a
+        mount is served at whose router argument reaches no router or list here, so the routes
+        it mounts are not read and no row stands for them. The prefix is the mount's own behind
+        its parents', as a row under it would be published (`path_prefix` in front); the
+        candidates name the mount call, the call the router is read off, the argument and what
+        it read as. In a stable order."""
+        found: dict[str, list[dict[str, Any]]] = {}
+        for mount in self._mounts:
+            read = (
+                None
+                if mount.rule.router_arg == CHAIN_RESULT
+                else through_site(self._index, mount.site, mount.rule)
+            )
+            if read is None or any(made is not None for made, _, _ in self._mounted(mount)):
+                continue
+            site, reference = read
+            arguments = site["arguments"] or []
+            slot = None if reference == RECEIVER else argument_slot(arguments, reference)
+            if slot is None or slot == UNPACKED_SLOT:
+                argument, said = -1, "no argument read"
+            else:
+                argument = slot
+                answers = resolve_positions(self._workspace, {"router": (site, slot)}, self._index)
+                said = "; ".join(dict.fromkeys(_read_as(a["router"]) for a in answers)) or (
+                    "nothing on any path"
+                )
+            candidate = {
+                "mount": str(mount.site["caller"]),
+                "mount_ordinal": int(str(mount.site["ordinal"])),
+                "at": str(site["caller"]),
+                "at_ordinal": int(str(site["ordinal"])),
+                "argument": argument,
+                "read": said,
+                "caller": str(mount.site["caller"]),
+            }
+            for way, at in enumerate(mount.paths):
+                for own in self._prefixes(mount, way, Path()):
+                    for parent in self._parents(at, Path(), frozenset({mount.key})):
+                        text = self._behind(parent, own, at, None).text or ""
+                        path = text if path_prefix is None else path_prefix + text
+                        if candidate not in found.setdefault(path, []):
+                            found[path].append(candidate)
+        return [
+            {
+                "protocol": protocol,
+                "method": None,
+                "path": path,
+                "method_kind": method_kind,
+                "path_kind": None,
+                "question": MOUNTED_ROUTER,
+                "candidates": json.dumps(
+                    sorted(found[path], key=lambda c: json.dumps(c, sort_keys=True)),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "evidence": "; and ".join(sorted({str(c["mount"]) for c in found[path]})),
+            }
+            for path in sorted(found)
+        ]
+
     def _routers_of(
         self, site: Mapping[str, Any]
     ) -> tuple[tuple[tuple[str, str, int] | None, Path], ...]:
@@ -1414,7 +1479,7 @@ class MountReader:
         written there; a field, with every list its writes unpack (`*`, `a + b`); a module,
         named by its dotted name or as the module object, where the rule says which of its
         variables is the router (`router_named`); and, through a list or tuple written there,
-        whatever its elements reach."""
+        whatever its first element reaches."""
         key = (str(site["caller"]), int(str(site["ordinal"])))
         if key in self._reached:
             return self._reached[key]
@@ -1438,7 +1503,9 @@ class MountReader:
         if kind == "array":
             if here is not None:
                 found[here] = None
-            for element in entry.get("elements") or []:
+            # A sequence's first element is what it hands on (`(urlconf, app_name)`): the
+            # rest names no router, though a module may share its name.
+            for element in (entry.get("elements") or [])[:1]:
                 self._reach(caller, element, named, None, found)
             return
         symbol = None

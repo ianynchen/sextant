@@ -16,7 +16,6 @@ shipped catalogs (`test_django_routes._resolved`).
 import json
 from pathlib import Path
 
-import pytest
 import test_django_routes
 from test_django_routes import _handler, _resolved, _rows
 
@@ -309,31 +308,54 @@ def test_an_unread_prefix_row_and_its_question_carry_the_leading_slash(tmp_path,
     assert questions == [("mount_prefix", "/<prefix>e/")]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="No `open_questions` kind says 'a mount whose router is not read' (`mount_prefix` "
-    "asks about a prefix, of a row that exists). A new kind is a D01 closed-set change that "
-    "needs approval, so it is asked, not built: the row is gone, the question is not filed.",
-)
 def test_include_of_an_object_the_catalog_does_not_know_gives_no_row_and_one_question(
     tmp_path, libraries
 ):
     """`include(router.urls)` on an object no catalog reads (Django REST Framework's router,
-    plan 7): its routes are not read, so no row; and never silent, one open question naming
-    the include."""
+    plan 7): its routes are not read, so no row, the mount's own included; and never silent,
+    one `mounted_router` question at the prefix as served, naming the mount, the inner call
+    and what its argument read as."""
     workspace = _program(
         tmp_path,
         libraries,
         {
             "urls.py": "class Router:\n    urls = []\n"
             "router = Router()\n"
-            "urlpatterns = [path('api/', include(router.urls))]\n"
+            "urlpatterns = [path('home/', v), path('api/', include(router.urls))]\n"
         },
     )
 
-    assert _rows(workspace) == []
-    questions = [row for row in workspace.query("open_questions") if "api/" in str(row)]
-    assert len(questions) == 1, questions
+    assert _rows(workspace) == [_row("/home/")]
+    questions = [
+        (row["protocol"], row["method"], row["path"], row["question"])
+        for row in workspace.query("open_questions")
+    ]
+    assert questions == [("http", None, "/api/", "mounted_router")]
+    (row,) = workspace.query("open_questions")
+    (candidate,) = json.loads(str(row["candidates"]))
+    assert candidate["mount"] == candidate["caller"] == candidate["at"]
+    assert candidate["mount"].endswith("app/urls#<clinit>(sig_dd69782a).")
+    assert candidate["at_ordinal"] != candidate["mount_ordinal"]
+    assert candidate["argument"] == 0
+    assert candidate["read"].startswith("no value")
+
+
+def test_the_app_name_of_a_tuple_is_no_module(tmp_path, libraries):
+    """`include((patterns, "app"))`: only the tuple's first element is the router (probe,
+    "`include`": the tuple is `(list, app_name)`). A package named like the app name, with a
+    `urlpatterns` of its own, is not mounted there: it serves at the root, as a list no
+    `include` names does."""
+    rows = _served(
+        tmp_path,
+        libraries,
+        {
+            "__init__.py": "urlpatterns = [path('own/', v)]\n",
+            "urls.py": "extra = [path('e/', v)]\n"
+            "urlpatterns = [path('t/', include((extra, 'app')))]\n",
+        },
+    )
+
+    assert rows == [_row("/own/"), _row("/t/e/")]
 
 
 def test_a_path_whose_view_is_not_an_include_is_a_route_not_a_mount(tmp_path, libraries):

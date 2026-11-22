@@ -1081,6 +1081,41 @@ def test_a_mount_prefix_question_names_the_mount_and_the_unread_argument():
     ) in text
 
 
+def test_a_mounted_router_question_names_the_mount_and_the_unread_router():
+    """`mount_prefix`'s mirror (plan 2026-11-22-python-django-core-inbound Task 3). Candidate
+    shape matches what `MountReader.unread_routers` writes: the mount call, the call its router
+    is read off, the argument read there, what it read as, and the method that made the mount."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": None,
+            "path": "/api/",
+            "question": "mounted_router",
+            "candidates": json.dumps(
+                [
+                    {
+                        "argument": 0,
+                        "at": "app/urls#<clinit>().",
+                        "at_ordinal": 2,
+                        "caller": "app/urls#<clinit>().",
+                        "mount": "app/urls#<clinit>().",
+                        "mount_ordinal": 3,
+                        "read": "no value (not_readable)",
+                    }
+                ]
+            ),
+            "evidence": "app/urls#<clinit>().",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "mounted_router: registered by app/urls#<clinit>().; the mount at app/urls#<clinit>(). "
+        "(call 3) reads its router from argument 0 of call 2 in app/urls#<clinit>()., which "
+        "reads as no value (not_readable), so the routes it mounts are not known"
+    ) in text
+
+
 def test_a_handler_pass_through_question_names_the_handler_and_the_unread_code():
     """Vert.x spec §3b's arm. Candidate shape (`handler`, `caller`, `unread` entries of `how`
     and `name`) matches what `pass_through.file_unread` writes: a context handed to an
