@@ -133,7 +133,12 @@ def url_of(argument: dict[str, Any] | None) -> tuple[str | None, str | None, str
     text = str(argument["value"])
     if argument.get("kind") == "string":
         peer, path = split_url(text)
-        return peer, path, str(Resolution.RESOLVED)
+        # A whole text the walk read on routes not told apart (`_one_assembled`).
+        return (
+            peer,
+            path,
+            str(Resolution.PARTIAL if argument.get("inexact") else Resolution.RESOLVED),
+        )
     if argument.get("kind") == EXPRESSION and _holes(text) and _without_holes(text):
         peer, path = split_url(text)
         # **Whether the AUTHORITY went unread**, which is the first of `partial`'s two
@@ -383,6 +388,7 @@ def with_authority(
     workspace: "Workspace",
     index: "ValueIndex",
     identities: "Sequence[Mapping[str, Any]]",
+    inexact: bool = False,
 ) -> tuple[str | None, str | None, str]:
     """`address` with its PEER filled where the host this analysis could not render names a
     service (`OI-138` cause 3).
@@ -408,8 +414,9 @@ def with_authority(
     # for an authority nobody read or a PIECE of the path nobody read — asked once more here,
     # because this is the one place an authority becomes known after `url_of` has spoken.
     # A remaining anonymous hole still answers `partial`: `{}/services/{}` names its peer
-    # and still does not state what it asks for.
-    return named, read, (resolution if _HOLE in read else str(Resolution.RESOLVED))
+    # and still does not state what it asks for. So does a template the walk read INEXACTLY
+    # (rule 9): the peer is read, the text it came with was not read in full.
+    return named, read, (resolution if _HOLE in read or inexact else str(Resolution.RESOLVED))
 
 
 # A hole the walk left in a template: anonymous (`{}`) or NAMED after the parameter that
@@ -477,8 +484,12 @@ def url_of_answer(answer: "Answer | None") -> tuple[str | None, str | None, str]
             # as a `${…}` literal does (`test_an_absolute_base_with_an_embedded_placeholder_is_
             # never_split`), for the per-environment join to fill. Only a walked answer is
             # read so: `url_of`'s own `${…}` expression stays unresolved.
-            return None, text, str(Resolution.RESOLVED)
-        return url_of({"kind": EXPRESSION, "value": text})
+            return None, text, str(Resolution.PARTIAL if answer.inexact else Resolution.RESOLVED)
+        peer, path, resolution = url_of({"kind": EXPRESSION, "value": text})
+        # An INEXACT template is no surer than `partial`, as the literal arm above says.
+        if resolution == str(Resolution.RESOLVED) and answer.inexact:
+            resolution = str(Resolution.PARTIAL)
+        return peer, path, resolution
     return None, None, str(Resolution.UNRESOLVED)
 
 

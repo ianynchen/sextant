@@ -498,6 +498,8 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-493 | SEXTANT-486 | a resource-cap flag: DuckDB `memory_limit` pragma, extractor `-Xmx` and a bounded library-AST cache · **BUILT, pending merge** (`--memory-limit` replaces DuckDB's 80%-of-host and the JVM's 25%-of-host defaults with a ceiling; polar completes at 256 and 2048 MiB with DuckDB floored at 768; peak unchanged ~2.6 GB, the AST-cache feed unplugged because it raised the peak; the Python scan/resolve peak is still open) |
 | OI-494 | SEXTANT-487 | cycle-region summary answers: one answer per region would amend ruling M-1 / §1c (answers are per path) · design decision pending (open) |
 | OI-495 | SEXTANT-488 | a marker walk drops a budget cut silently (`parameter_markers.py`) · logged, revisit before FastAPI/marker work (open) |
+| OI-497 | SEXTANT-490 | a second route in the same module resolves unresolved even unbudgeted (cause unfound) (open) |
+| OI-498 | SEXTANT-491 | the fluent reader tuple cannot carry the inexact flag, so an inexact template publishes resolved on the fluent path (open) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

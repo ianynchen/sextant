@@ -14,7 +14,7 @@ catalog data; this module never names a framework.
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import chain
 from typing import Any, cast
 
@@ -57,6 +57,7 @@ from sextant.application.resolve.shapes.client_base import (
 )
 from sextant.application.resolve.shapes.contracts import _payload_descriptor
 from sextant.application.resolve.shapes.expansion import _enum_symbols, _rules_of
+from sextant.application.resolve.shapes.mounts import weaker
 from sextant.application.resolve.shapes.rooting import (
     _catalog_symbol,
     catalog_symbols,
@@ -458,7 +459,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # unresolved-is-an-answer). The key is the identity columns, never the
     # `resolution` column — a row can be `unresolved` because some OTHER
     # declared capture failed (I1) and still dedup on the path it did read.
-    seen: set[tuple[str, str, str, str, str | None, str | None]] = set()
+    seen: dict[tuple[str, str, str, str, str | None, str | None], dict[str, Any]] = {}
     # The sites on this catalog's owners, in `call_sites`' own order — the order
     # the rows are written in (NFR-1) — rather than a test of every site against
     # the owners. Deduplicated: a catalog naming one owner twice visits a site once.
@@ -656,6 +657,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # `post()`/`put()`/`delete()` handed in, on the same calling path as the path. None
         # here means the loop below mints `(verb, destination)` pairs as it always has.
         walked_pairs: list[tuple[str | None, tuple[str | None, str | None, str]]] | None = None
+        # Whether each walked pair's path was read inexactly (rule 9), in `walked_pairs`' order.
+        walked_inexact: list[bool] = []
         read_destination = channel_of if _channel_declared(method) else url_of
         # 2I design §4, form 1: THE IDENTITY IS NOT AT THE CALL. Some
         # protocols name the operation on the payload rather than in the
@@ -905,6 +908,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                             or (
                                 verb_slot is not None and _is_narrowed(binding.slots.get(verb_slot))
                             ),
+                            _inexact_but_whole(binding.slots.get(url_slot), read_answer),
                         )
                         for binding in resolve_site(workspace, site, values, ())
                     )
@@ -913,8 +917,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 # literal read above stands, which for a `concat` is the addressless row
                 # this engine has always derived.
                 answered = [
-                    (row_verb, found, narrowed)
-                    for row_verb, found, narrowed in walked
+                    (row_verb, found, narrowed, inexact)
+                    for row_verb, found, narrowed, inexact in walked
                     if found[1] is not None
                 ]
                 if answered:
@@ -935,13 +939,15 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                                     workspace,
                                     values,
                                     catalog.value_model or (),
+                                    inexact,
                                 ),
                                 narrowed,
                             ),
                         )
-                        for row_verb, found, narrowed in answered
+                        for row_verb, found, narrowed, inexact in answered
                     ]
                     destinations = [destination for _, destination in walked_pairs]
+                    walked_inexact = [inexact for *_, inexact in answered]
         response_argument = _arg_at(arguments, method.get("response_arg"))
         # `direction` on a row overrides the catalog's own declared
         # direction (D02 §2) — Pub/Sub's `subscribe` is inbound even inside
@@ -999,8 +1005,13 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     returns_arguments=catalog.returns_arguments,
                 )
             minted = [
-                (row_verb, _sent_to(destination, site, method, client_base, workspace, values))
-                for row_verb, destination in minted
+                (
+                    row_verb,
+                    _sent_to(destination, site, method, client_base, workspace, values, inexact),
+                )
+                for (row_verb, destination), inexact in zip(
+                    minted, walked_inexact or [False] * len(minted), strict=True
+                )
             ]
         for row_verb, (peer, path, url_resolution) in minted:
             # 2O design §8: identity is the URL the framework serves, so the
@@ -1077,6 +1088,25 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             # to `verb` and this change a no-op for those catalogs; likewise
             # no shipped row declares its own `direction`, so `row_direction`
             # is always `catalog.direction` there too.
+            row = {
+                "protocol": catalog.protocol,
+                "direction": row_direction,
+                "method": row_verb,
+                "path": path,
+                "handler": caller if inbound else None,
+                "caller": None if inbound else caller,
+                "peer": peer,
+                "handler_signature": None,
+                "resolution": resolution,
+                "evidence": "compiler",
+                "catalog_id": catalog.id,
+                "request_shape": request_shape,
+                "response_shape": response_shape,
+                "consumes": None,
+                "produces": None,
+                "path_kind": None,
+                "method_kind": None,
+            }
             if path is not None and (verb is not None or verbless):
                 # F5 §6.1 rule 1 (W27 fix): `caller` and `peer` are IN the key. Without
                 # them `seen` spans the whole module, so a second caller reaching one
@@ -1092,8 +1122,16 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 # the caller and the peer are equal there.
                 key = (catalog.protocol, row_direction, row_verb or "", path, caller, peer)
                 if key in seen:
+                    # One identity read on several paths: the strongest word stands. An exact
+                    # path proves the value; a path read on routes not told apart (or less)
+                    # approximates the same value and adds nothing.
+                    kept = seen[key]
+                    if weaker(kept["resolution"], resolution) != resolution:
+                        # The stronger row's CONTENTS, so its word never sits over columns the
+                        # other site left unread; the kept row keeps its place in the output.
+                        kept.clear()
+                        kept.update(row)
                     continue
-                seen.add(key)
             # Below the dedup `continue`: a row the key already saw writes no second copy
             # of its own query parameters either. **Masked HERE, where the value is read**,
             # which is `schema.sql`'s invariant and the reason `query_entries` hands back
@@ -1125,27 +1163,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                         "requirement": None,
                     }
                 )
-            rows.append(
-                {
-                    "protocol": catalog.protocol,
-                    "direction": row_direction,
-                    "method": row_verb,
-                    "path": path,
-                    "handler": caller if inbound else None,
-                    "caller": None if inbound else caller,
-                    "peer": peer,
-                    "handler_signature": None,
-                    "resolution": resolution,
-                    "evidence": "compiler",
-                    "catalog_id": catalog.id,
-                    "request_shape": request_shape,
-                    "response_shape": response_shape,
-                    "consumes": None,
-                    "produces": None,
-                    "path_kind": None,
-                    "method_kind": None,
-                }
-            )
+            rows.append(row)
+            if path is not None and (verb is not None or verbless):
+                seen[key] = row
 
     workspace.derive("call_endpoints", rows=rows)
     # After the endpoints, never before, and empty writes nothing — `fluent`'s rule and
@@ -1163,6 +1183,7 @@ def _sent_to(
     declared: Any,
     workspace: Workspace,
     values: ValueIndex | None,
+    inexact: bool = False,
 ) -> tuple[str | None, str | None, str]:
     """Where a call whose catalog declares `client_base` sends `destination`, the address
     its own position states (spec 2026-10-26 §3g items 2 and 4).
@@ -1212,7 +1233,13 @@ def _sent_to(
     elif (
         peer is not None
         or path is None
-        or resolution != str(Resolution.RESOLVED)
+        # An address the walk read INEXACTLY (rule 9) that an exact read would have called
+        # `resolved` (`_inexact_but_whole`) is joined, staying `partial`.
+        or resolution
+        not in (
+            str(Resolution.RESOLVED),
+            str(Resolution.PARTIAL) if inexact else None,
+        )
         or carries_expression(path)
     ):
         return destination
@@ -1239,8 +1266,10 @@ def _sent_to(
         workspace, values, client, declared, path, method.get(_REQUEST_URL), path_only
     )
     if resolution == str(Resolution.RESOLVED) and not _channel_declared(method):
-        return url_of({"kind": "string", "value": address})
-    return None, address, resolution
+        peer, path, resolution = url_of({"kind": "string", "value": address})
+    else:
+        peer, path = None, address
+    return peer, path, weaker(resolution, str(Resolution.PARTIAL)) if inexact else resolution
 
 
 def _given(argument: dict[str, Any] | None) -> bool:
@@ -2239,6 +2268,18 @@ def _record_arguments(
     else:
         payload_argument = _arg_at(ctor_arguments, payload_index)
     return channel_argument, payload_argument
+
+
+def _inexact_but_whole(answer: Any, read_answer: Any) -> bool:
+    """Whether a walked url answer is inexact (rule 9) and would be `resolved` were it exact: a
+    relative path whose every hole is a named one. The decision is the answer's own, never the
+    path text's: an unread authority (`http://{host}/x`) leaves a clean path and an anonymous
+    hole or `<host>` marker is no relative path, and none of those is joined to a client base."""
+    return (
+        answer is not None
+        and bool(answer.inexact)
+        and read_answer(replace(answer, inexact=False))[2] == str(Resolution.RESOLVED)
+    )
 
 
 def _is_narrowed(answer: Any) -> bool:

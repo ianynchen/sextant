@@ -2762,7 +2762,17 @@ def _one_assembled(
     whole = {
         literal for _, literal, resolution in assembled if resolution == "resolved" and literal
     }
-    if len(whole) == 1:
+    # An inexact LITERAL is a whole text too: a different one from the exact text is a second
+    # address (the SAME text stays resolved: the exact path proves it).
+    inexact_texts = {
+        literal
+        for _, literal, resolution in assembled
+        if resolution == "partial"
+        and literal
+        and not _holes(literal)
+        and not carries_expression(literal)
+    }
+    if len(whole) == 1 and not inexact_texts - whole:
         return {"kind": "string", "value": whole.pop()}
     # A partly-known address, published as the EXPRESSION kind `url_of` reads: the
     # text is the template with its holes, and `url_of` decides peer and path from
@@ -2773,8 +2783,16 @@ def _one_assembled(
         literal for _, literal, resolution in assembled if resolution == "partial" and literal
     }
     if not whole and len(partly) == 1:
-        return {"kind": EXPRESSION, "value": partly.pop()}
+        return _partly_read(partly.pop())
     return None
+
+
+def _partly_read(text: str) -> dict[str, Any]:
+    """A `partial` text as the argument `url_of` reads: a template with holes is an expression;
+    a text with none is a whole literal read inexactly, which `url_of` reads off the flag."""
+    if _holes(text) or carries_expression(text):
+        return {"kind": EXPRESSION, "value": text}
+    return {"kind": "string", "value": text, "inexact": True}
 
 
 def _assembled_text(answer: "Answer | None") -> tuple[str | None, str | None, str]:
@@ -2800,7 +2818,10 @@ def _assembled_text(answer: "Answer | None") -> tuple[str | None, str | None, st
     ):
         return None, str(answer.value), str(Resolution.NARROWED)
     if answer.kind == LITERAL and answer.literal_kind == STRING:
-        return None, str(answer.value), str(Resolution.RESOLVED)
+        # An INEXACT literal (rule 9) is a whole text read on routes not
+        # told apart: `partial`, the word `url_of_answer` gives it.
+        resolution = Resolution.PARTIAL if answer.inexact else Resolution.RESOLVED
+        return None, str(answer.value), str(resolution)
     if answer.kind == EXPRESSION:
         return None, str(answer.value), str(Resolution.PARTIAL)
     return None, None, str(Resolution.UNRESOLVED)
@@ -2870,7 +2891,12 @@ def _composed_address(
                 found.append((peer, path, resolution))
             return found
         return [
-            _against_client_base(_with_stated_authority(read, captures, context), captures, context)
+            _against_client_base(
+                _with_stated_authority(read, captures, context),
+                captures,
+                context,
+                bool(url_argument and url_argument.get("inexact")),
+            )
         ]
     base = _string_value(_address_read(captures.get("base"), context))
     if base is None:
@@ -2880,7 +2906,11 @@ def _composed_address(
     path = _string_value(url_argument)
     if path is None:
         return [(None, None, "unresolved")]
-    return [_address_of(base + path)]
+    peer, address, resolution = _address_of(base + path)
+    # A url the walk read on routes not told apart (`_partly_read`) is no surer than `partial`.
+    if url_argument is not None and url_argument.get("inexact"):
+        resolution = weaker(resolution, str(Resolution.PARTIAL))
+    return [(peer, address, resolution)]
 
 
 def _with_stated_authority(
@@ -3086,6 +3116,7 @@ def _against_client_base(
     address: tuple[str | None, str | None, str],
     captures: dict[str, Any],
     context: _DeriveContext,
+    inexact: bool = False,
 ) -> tuple[str | None, str | None, str]:
     """`address` where the catalog says a relative address is relative to a base the
     executing CLIENT holds (`client_base`, spec 2026-10-26 §3c): Ktor joins
@@ -3110,7 +3141,9 @@ def _against_client_base(
         context.client_base is None
         or peer is not None
         or path is None
-        or resolution != str(Resolution.RESOLVED)
+        # A relative text the walk read INEXACTLY (rule 9) is whole and is joined, staying `partial`.
+        or resolution
+        not in (str(Resolution.RESOLVED), str(Resolution.PARTIAL) if inexact else None)
         or carries_expression(path)
     ):
         return address
@@ -3125,7 +3158,10 @@ def _against_client_base(
     )
     if resolution != str(Resolution.RESOLVED):
         return None, joined, resolution
-    return _address_of(joined)
+    peer, joined_path, joined_resolution = _address_of(joined)
+    if inexact:
+        joined_resolution = weaker(joined_resolution, str(Resolution.PARTIAL))
+    return peer, joined_path, joined_resolution
 
 
 def _client_of(captures: dict[str, Any], context: _DeriveContext) -> dict[str, Any] | None:
@@ -3290,7 +3326,7 @@ def _each_callers_url(
         if resolution == str(Resolution.RESOLVED) and literal:
             found.append({"kind": "string", "value": literal})
         elif resolution == str(Resolution.PARTIAL) and literal:
-            found.append({"kind": EXPRESSION, "value": literal})
+            found.append(_partly_read(literal))
         else:
             found.append(argument)
     distinct = list(

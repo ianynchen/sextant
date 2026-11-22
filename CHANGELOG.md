@@ -624,6 +624,14 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **An inexact answer is no longer published as `resolved` by the url readers it reaches.** A
+  value the walk read inexactly (rule 9) was published at `resolved`. Inexact literals now publish
+  `partial` in the fluent text, composed-url and client-base arms, and an inexact literal or
+  template now publishes `partial` in the single-call url arm and its authority fill. An inexact
+  relative url is joined to the client base and stays `partial`, in both engines. Not covered: the
+  fluent template path, whose reader tuple cannot carry the flag (OI-498). One call read on several
+  paths now publishes the strongest word of them (an exact path proves the value). No row in the
+  12 pinned corpora changes; the behavior is pinned by unit tests.
 - **A catalog's argument position counts positional arguments only** (OI-208 plan 1 task 9b,
   design `2026-11-06-reading-decorators-design.md` §3a). The facts write a Python call's keyword
   arguments after its positional ones, and a position counted all of them, so `arg1` of
