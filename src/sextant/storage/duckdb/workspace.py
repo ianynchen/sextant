@@ -3115,7 +3115,7 @@ class DuckDbWorkspace:
             # READ_ONLY because this workspace is the only one being written: a system run
             # must not be able to touch a participant's graph, and the flag is the
             # enforcement rather than a convention.
-            self._connection.execute(f"ATTACH '{location}' AS {alias} (READ_ONLY)")
+            self._connection.execute(f"ATTACH {_sql_string(str(location))} AS {alias} (READ_ONLY)")
             aliases.append((alias, name))
             # A view binds at creation, so a participant lacking one of the federated tables
             # — a workspace an OLDER Sextant derived, before that table existed — would make
@@ -3151,7 +3151,7 @@ class DuckDbWorkspace:
                 )
                 continue
             union = " UNION ALL ".join(
-                f"SELECT '{name}' AS participant, {columns} FROM {alias}.{table}"
+                f"SELECT {_sql_string(name)} AS participant, {columns} FROM {alias}.{table}"
                 for alias, name in aliases
             )
             self._connection.execute(f"CREATE OR REPLACE VIEW {view} AS {union}")
