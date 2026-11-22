@@ -1,21 +1,39 @@
 id: django
-displayName: Django's view decorators, which hand the function on
+displayName: Django's view decorators, which hand the view on
 
-# Each decorator below wraps a view and runs it with the request, and the wrapped view keeps the
-# function's name and module (`functools.wraps`), so the decorated function is still the handler
-# (probe, "Function views": "A `require_*` decorated view keeps its name and module"; "`csrf_exempt`
-# and `cache_page` keep the inner function's allowed set, as a decorator or as a call";
-# `scripts/probes/django_rules.md`). Owners are the defining modules (probe, "Defining symbols").
+# Each decorator below wraps a view and calls it with the request. The wrapped view keeps the
+# function's allowed methods, so the decorated function is still the handler. Measured in
+# `scripts/probes/django_rules.md`: "Function views" for the `require_*` decorators, `csrf_exempt`
+# and `cache_page`, and "View decorators that hand the view on" for every entry. Each owner is
+# the module that binds the name, as that section's table records it. A name that is a module
+# variable (`csrf_protect`, `gzip_page`) names that module too, as `path` does.
 #
-# - `require_GET`, `require_POST`, `require_safe` and `csrf_exempt` are applied to the view
-#   itself (`require_POST(f)`): `result_calls: arg0`, calling the result runs `f`.
-# - `require_http_methods([...])` and `cache_page(n)` make the decorator that is applied to the
-#   view (`cache_page(60)(f)`): `result_returns: arg0`, the decorator's result stands for `f`.
+# - Applied to the view (`d(view)`, the table's "decorator"): `result_calls: arg0`, calling the
+#   result runs the view. `login_required(login_url=...)` and `staff_member_required(...)` with
+#   keyword arguments alone write no argument 0, so they state nothing here and end the walk.
+# - Called first, the result applied to the view (`d(args)(view)`, the table's "factory"):
+#   `result_returns: arg0`, the decorator's result stands for the view.
 
 returns_argument:
   - { owner: django.views.decorators.http, method: require_GET, result_calls: arg0, by: scripts/probes/django_rules.md }
   - { owner: django.views.decorators.http, method: require_POST, result_calls: arg0, by: scripts/probes/django_rules.md }
   - { owner: django.views.decorators.http, method: require_safe, result_calls: arg0, by: scripts/probes/django_rules.md }
   - { owner: django.views.decorators.http, method: require_http_methods, result_returns: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.http, method: condition, result_returns: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.http, method: etag, result_returns: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.http, method: last_modified, result_returns: arg0, by: scripts/probes/django_rules.md }
   - { owner: django.views.decorators.csrf, method: csrf_exempt, result_calls: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.csrf, method: csrf_protect, result_calls: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.csrf, method: ensure_csrf_cookie, result_calls: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.cache, method: never_cache, result_calls: arg0, by: scripts/probes/django_rules.md }
   - { owner: django.views.decorators.cache, method: cache_page, result_returns: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.cache, method: cache_control, result_returns: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.vary, method: vary_on_cookie, result_calls: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.vary, method: vary_on_headers, result_returns: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.clickjacking, method: xframe_options_exempt, result_calls: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.debug, method: sensitive_post_parameters, result_returns: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.gzip, method: gzip_page, result_calls: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.contrib.auth.decorators, method: login_required, result_calls: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.contrib.auth.decorators, method: permission_required, result_returns: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.contrib.auth.decorators, method: user_passes_test, result_returns: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.contrib.admin.views.decorators, method: staff_member_required, result_calls: arg0, by: scripts/probes/django_rules.md }

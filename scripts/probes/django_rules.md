@@ -186,6 +186,43 @@ variables, not functions). `as_view` is a `classonlymethod`, so the scanner must
 - Parameter 0 of a function view, and parameter 1 (after `self`) of a class verb method, is the
   `HttpRequest`; it is the same object as `self.request`.
 
+## View decorators that hand the view on
+
+Measured in section 9 of the script (plan 6, Task 4 fix round 1, ruling R13). Each decorator
+below was applied over `require_POST(ok)`. The view was then called with a signed-in staff user
+that has every permission, and with CSRF checks off. For every decorator, GET gave the inner
+view's 405 and POST the inner view's 200. So the decorator wraps the view, calls it, and keeps
+its allowed set. "Decorator" means it is applied to the view (`d(view)`). "Factory" means it is
+called first and its result is applied (`d(args)(view)`). "Variable" means the name is a module
+variable that holds a decorator, not a `def` of that name.
+
+| Name | Form | Bound in |
+|---|---|---|
+| `login_required` | decorator | `django.contrib.auth.decorators` (function) |
+| `permission_required` | factory | `django.contrib.auth.decorators` (function) |
+| `user_passes_test` | factory | `django.contrib.auth.decorators` (function) |
+| `staff_member_required` | decorator | `django.contrib.admin.views.decorators` (function) |
+| `csrf_exempt` | decorator | `django.views.decorators.csrf` (function) |
+| `csrf_protect` | decorator | `django.views.decorators.csrf` (variable) |
+| `ensure_csrf_cookie` | decorator | `django.views.decorators.csrf` (variable) |
+| `never_cache` | decorator | `django.views.decorators.cache` (function) |
+| `cache_page` | factory | `django.views.decorators.cache` (function) |
+| `cache_control` | factory | `django.views.decorators.cache` (function) |
+| `vary_on_cookie` | decorator | `django.views.decorators.vary` (variable) |
+| `vary_on_headers` | factory | `django.views.decorators.vary` (function) |
+| `xframe_options_exempt` | decorator | `django.views.decorators.clickjacking` (function) |
+| `sensitive_post_parameters` | factory | `django.views.decorators.debug` (function) |
+| `gzip_page` | decorator | `django.views.decorators.gzip` (variable) |
+| `condition` | factory | `django.views.decorators.http` (function) |
+| `etag` | factory | `django.views.decorators.http` (function) |
+| `last_modified` | factory | `django.views.decorators.http` (function) |
+
+- `login_required` and `staff_member_required` also accept keyword arguments alone
+  (`login_required(login_url=...)`). That call returns the decorator, not a wrapped view.
+- What each decorator answers when its own check fails (a redirect to the login page, 403 on
+  a missing CSRF token, 304 on a matching ETag) was not measured. That is the view's own
+  behaviour, not a route.
+
 ## Not measured
 
 - `re_path` optional pieces other than `/?` (`(\.json)?`, `(?P<id>\d+)?`, `deactivate?`) and

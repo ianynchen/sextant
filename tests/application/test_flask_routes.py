@@ -288,3 +288,28 @@ def test_a_module_import_rebound_as_the_app_keeps_its_routes(tmp_path: Path, lib
     )
 
     assert _rows(workspace) == [("GET", "/z", _handler("z"), "resolved")]
+
+
+@pytest.mark.parametrize(
+    "registration", ["app.add_url_rule('/x', view_func=f)", "app.add_url_rule('/x', 'f', f)"]
+)
+def test_a_function_named_after_an_unstated_decorator_is_partial(
+    tmp_path: Path, libraries, registration: str
+):
+    """Ruling R13: a decorator no value model states ends the handler walk, by name as under
+    the route: `partial`, no handler, one `handler_pass_through` question — never `resolved`
+    with no handler, nor the function the decorator wraps."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + "from flask import stream_with_context\n"
+            + "@stream_with_context\ndef f():\n    return ''\n"
+            + registration
+            + "\n"
+        },
+    )
+
+    assert _rows(workspace) == [("GET", "/x", None, "partial")]
+    assert len(_questions(workspace, "handler_pass_through")) == 1

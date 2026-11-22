@@ -3707,8 +3707,12 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
     decorator a value model states hands the function back and into module code, to each
     function a path reaches — one answering handler, or one alternative each. Where no path
     reaches a function because a library call no value model states made the value, the
-    handler is not read here (`external`, the call named). None otherwise, and for an
-    argument the walk cannot be asked about, which reads as it always has."""
+    handler is not read here (`external`, the call named). The same where the argument is
+    made through calls (`_decorator_stack`, a name a decorated `def` binds entered once) of
+    which one no value model states, down to a function the module defines, whether that call
+    is a decorator on the def or a wrapper the registration writes (ruling R13): `_blocked`,
+    `external` or `not_readable`. None otherwise, and for an argument the walk cannot be asked
+    about, which reads as it always has."""
     if not isinstance(argument, dict) or argument.get("kind") == "lambda" or context.values is None:
         return None
     at = argument.get(_CAPTURED_AT)
@@ -3722,13 +3726,7 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
     if handlers:
         alternatives = tuple(_Judged(symbol, ANSWERS) for symbol in handlers)
         return _Judged(handlers[0], ANSWERS, (), alternatives if len(handlers) > 1 else ())
-    # A name a decorated `def` binds is that function, through every decorator on the def,
-    # stated or not: the framework calls what the name holds, and what a wrapper answers is
-    # the function's own behaviour (plan 2026-11-22-python-django-core-inbound, ruling R11).
-    stack = _decorator_stack(context.values, str(at[0]), argument)
-    function = None if stack.function is None else context.method_symbols.get(stack.function)
-    if function is not None:
-        return _Judged(function, ANSWERS)
+    stack = _decorator_stack(context.values, str(at[0]), argument, context.method_symbols)
     # Only a value a library call made OF a function the module defines (a decorator applied to
     # it, a wrapper handed it): any other object a library builds is no function at all, and
     # its handler reads as it always has.
@@ -3786,55 +3784,58 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
 @dataclass(frozen=True)
 class _Stack:
     """The calls a handler argument was made through, outermost first (`_decorator_stack`),
-    each with the method it is in; the function a decorated `def` the walk entered binds,
-    None where it entered none; and the call a registration wrapped the handler in that hands
-    back no function anything states, which hides which function runs."""
+    each with the method it is in; the first of them no value model states, None where every
+    one is stated; and whether the walk ended at a function the module defines."""
 
     calls: tuple[tuple[str, Mapping[str, Any]], ...] = ()
-    function: str | None = None
     blocked: tuple[str, Mapping[str, Any]] | None = None
+    reaches_function: bool = False
 
 
-def _decorator_stack(index: "ValueIndex", method: str, held: Mapping[str, Any]) -> _Stack:
+def _names_function(name: str, symbol: str) -> bool:
+    """Whether the method `symbol` is the function a module name `name` (`pkg/m#f.`) names:
+    the same owner and name, any signature."""
+    return symbol.startswith(name.removesuffix(".") + "(")
+
+
+def _decorator_stack(
+    index: "ValueIndex", method: str, held: Mapping[str, Any], functions: Iterable[str]
+) -> _Stack:
     """The calls between a handler argument and the function it names, read as decorators
-    are applied: each call's first positional argument is what it wraps. In the registration,
-    a call goes on only where a value model states it hands its argument back or runs it
-    (`returns_argument`); one that is not stated stops the walk as `blocked`. A name read
-    there is entered once, where one written value binds it: a decorated `def`'s name holds
-    what its decorators made, and every decorator on the def is passed, stated or not, down
-    to the def itself, which is the function only where it has the name's own owner and
-    name."""
+    are applied: each call's first positional argument is what it wraps, stated or not. A name
+    read on the way is entered once, where one written value binds it (a decorated `def`'s name
+    holds what its decorators made), down to the def itself, which is the function only where
+    it has the name's own owner and name. A name no value binds is the function `functions`
+    (the module's methods) names, if any."""
     calls: list[tuple[str, Mapping[str, Any]]] = []
+    blocked: tuple[str, Mapping[str, Any]] | None = None
     bound: str | None = None
     while True:
         kind = held.get("kind")
+        symbol = held.get("symbol")
         if kind == "lambda":
-            symbol = held.get("symbol")
-            named = (
-                bound is not None
-                and symbol is not None
-                and str(symbol).startswith(bound.removesuffix(".") + "(")
-            )
-            return _Stack(tuple(calls), str(symbol) if named else None)
-        if kind == "field" and bound is None:
-            writes = index.produced.get(str(held.get("symbol")), ())
+            reaches = symbol is not None and (bound is None or _names_function(bound, str(symbol)))
+            return _Stack(tuple(calls), blocked, reaches)
+        if kind == "field" and bound is None and symbol is not None:
+            writes = index.produced.get(str(symbol), ())
             if len(writes) != 1:
-                return _Stack(tuple(calls))
-            bound = str(held.get("symbol"))
+                reaches = not writes and any(_names_function(str(symbol), f) for f in functions)
+                return _Stack(tuple(calls), blocked, reaches)
+            bound = str(symbol)
             method, held = writes[0]
             continue
         source = held.get("source")
         made = index.producers.get((method, int(str(source)))) if source is not None else None
         row = index.sites.get((method, min(made))) if made else None
         if row is None:
-            return _Stack(tuple(calls))
-        if bound is None and not _hands_back(index, method, row):
-            return _Stack(tuple(calls), None, (method, row))
+            return _Stack(tuple(calls), blocked)
+        if blocked is None and not _hands_back(index, method, row):
+            blocked = (method, row)
         calls.append((method, row))
         arguments = row["arguments"] or []
         slot = argument_slot(arguments, 0)
         if slot is None or slot == UNPACKED_SLOT:
-            return _Stack(tuple(calls))
+            return _Stack(tuple(calls), blocked)
         held = arguments[slot]
 
 
@@ -3855,32 +3856,16 @@ def _maker(index: "ValueIndex", method: str, row: Mapping[str, Any]) -> Mapping[
 
 
 def _blocked(stack: _Stack, context: "_DeriveContext") -> "_Judged | None":
-    """The handler of a registration that wraps a module function in a call nothing states
-    (`_Stack.blocked`): which function runs is not read here, `external` where the call's body
-    is not in the scanned code and `not_readable` where it is. None where nothing blocked the
-    walk, or the call wraps no function the module defines (a spec object, a value of its
-    own): that argument reads as it always has."""
+    """The handler of a function the module defines, reached through a call no value model
+    states (`_Stack.blocked`): which function runs is not read here, `external` where the
+    call's body is not in the scanned code and `not_readable` where it is. None where nothing
+    blocked the walk, or it reached no function the module defines (a spec object, a value of
+    its own): that argument reads as it always has."""
     index = context.values
-    if stack.blocked is None or index is None:
+    if stack.blocked is None or not stack.reaches_function or index is None:
         return None
     method, row = stack.blocked
-    arguments = row["arguments"] or []
-    slot = argument_slot(arguments, 0)
-    wrapped = None if slot is None or slot == UNPACKED_SLOT else arguments[slot]
-    named = None if wrapped is None else wrapped.get("symbol")
-    if wrapped is None or not (
-        (wrapped.get("kind") == "lambda" and named is not None)
-        or (
-            wrapped.get("kind") == "field"
-            and named is not None
-            and any(
-                symbol.startswith(str(named).removesuffix(".") + "(")
-                for symbol in context.method_symbols
-            )
-        )
-    ):
-        return None
-    named = row if row["name"] != "__call__" else (_maker(index, method, row) or row)
+    call = row if row["name"] != "__call__" else (_maker(index, method, row) or row)
     outside = (method, int(str(row["ordinal"]))) not in index.reached
     return _Judged(
         None,
@@ -3889,8 +3874,8 @@ def _blocked(stack: _Stack, context: "_DeriveContext") -> "_Judged | None":
             (
                 EXTERNAL if outside else NOT_READABLE,
                 (
-                    f"the function is what the call {named.get('owner') or ''}{named['name']} "
-                    "returns, which is not followed back to a function"
+                    f"the function is what the call {call.get('owner') or ''}{call['name']} "
+                    "returns, which no value model states"
                 ),
             ),
         ),
@@ -3910,7 +3895,8 @@ def _narrowed_verbs(
     if at is None or context.values is None:
         return None
     sets: list[tuple[str | None, ...]] = []
-    for method, row in _decorator_stack(context.values, str(at[0]), argument).calls:
+    stack = _decorator_stack(context.values, str(at[0]), argument, context.method_symbols)
+    for method, row in stack.calls:
         named = _maker(context.values, method, row) if row["name"] == "__call__" else row
         entry = (
             None

@@ -73,8 +73,7 @@ def test_require_http_methods_with_a_list_held_in_a_module_name_guesses_no_metho
     tmp_path: Path, libraries
 ):
     """R12: the list is read by the value walk, which never reads a container a module name
-    holds (it may be changed after the write, `test_fastapi_routes`: "a verb list held in a
-    module name is never read as its first value"): one row, method NULL, `unresolved`."""
+    holds (it may be changed after the write, `test_fastapi_routes`: "a verb list held in a\n    module name is never read as its first value"): one row, method NULL, `unresolved`."""
     rows = _view(
         tmp_path,
         libraries,
@@ -103,8 +102,9 @@ def test_no_decorator_is_the_any_method_row(tmp_path: Path, libraries):
 
 
 def test_login_required_above_require_post_still_narrows(tmp_path: Path, libraries):
-    """R11: a decorator the catalog does not know neither blocks nor narrows; the
-    `require_POST` below it is found."""
+    """`login_required` hands the view on (probe, "View decorators that hand the view on";
+    `value-models/django.yml`): the handler is the function, and the `require_POST` below it
+    narrows the row."""
     rows = _view(tmp_path, libraries, "@login_required\n@require_POST\n" + _DEF)
 
     assert rows == [("POST", None, "/x/", _handler("v"), "resolved")]
@@ -117,24 +117,61 @@ def test_login_required_below_require_post_still_narrows(tmp_path: Path, librari
 
 
 def test_login_required_alone_keeps_the_handler_and_every_method(tmp_path: Path, libraries):
-    """R11: Django routes every method to the callable; what a wrapper answers is the
-    handler's own behaviour, so the row is the any-method row with the function named."""
+    """R13: `login_required` is a stated pass-through, so the function is the handler; it
+    narrows nothing, so the row is the any-method row."""
     rows = _view(tmp_path, libraries, "@login_required\n" + _DEF)
 
     assert rows == [(None, "any", "/x/", _handler("v"), "resolved")]
 
 
-def test_a_project_decorator_on_the_def_keeps_the_handler(tmp_path: Path, libraries):
-    rows = _view(
+def _questions(workspace) -> list[dict]:
+    return [
+        row
+        for row in workspace.query("open_questions")
+        if row["question"] == "handler_pass_through"
+    ]
+
+
+def test_a_project_decorator_on_the_def_ends_the_handler_walk(tmp_path: Path, libraries):
+    """R13: a decorator no value model states (here the module's own, through
+    `functools.wraps`) ends the handler walk: the row names no handler, is `partial`, and files
+    one `handler_pass_through` question. The `require_POST` on the same def still narrows it."""
+    workspace = _resolved(
         tmp_path,
         libraries,
-        "import functools\n"
-        "def audited(f):\n    @functools.wraps(f)\n    def inner(*a):\n        return f(*a)\n"
-        "    return inner\n"
-        "@audited\n@require_POST\n" + _DEF,
+        {
+            "urls.py": _HTTP
+            + "import functools\n"
+            + "def audited(f):\n    @functools.wraps(f)\n    def inner(*a):\n        return f(*a)\n"
+            + "    return inner\n"
+            + "@audited\n@require_POST\n"
+            + _DEF
+            + "urlpatterns = [path('x/', v)]\n"
+        },
     )
 
-    assert rows == [("POST", None, "/x/", _handler("v"), "resolved")]
+    assert _rows(workspace) == [("POST", None, "/x/", None, "partial")]
+    assert len(_questions(workspace)) == 1
+
+
+def test_an_unknown_library_decorator_on_the_def_ends_the_handler_walk(tmp_path: Path, libraries):
+    """R13, the same for a library decorator no value model states."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "from functools import singledispatch\n@singledispatch\n"
+            + _DEF
+            + "urlpatterns = [path('x/', v)]\n"
+        },
+    )
+
+    assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
+    (question,) = _questions(workspace)
+    ((unread,),) = [json.loads(question["candidates"])[0]["unread"]]
+    assert unread["reason"] == "external"
+    assert "singledispatch" in unread["detail"]
 
 
 def test_a_view_imported_from_another_module_is_narrowed(tmp_path: Path, libraries):
@@ -186,7 +223,7 @@ def test_a_narrowing_call_written_in_the_registration_narrows(tmp_path: Path, li
 def test_an_unknown_wrapper_in_the_registration_is_partial_with_a_question(
     tmp_path: Path, libraries
 ):
-    """R11: a library wrapper call nothing states hides which function runs: the row keeps its
+    """R13: a library wrapper call nothing states hides which function runs: the row keeps its
     path, names no handler, is `partial`, and a `handler_pass_through` question names the call.
     Never a `resolved` any-method row with no handler."""
     workspace = _resolved(
@@ -237,3 +274,54 @@ def test_a_project_wrapper_in_the_registration_is_followed_into(tmp_path: Path, 
     )
 
     assert rows == [(None, "any", "/x/", _handler("own_wrapper$inner"), "resolved")]
+
+
+def test_an_unknown_wrapper_over_a_narrowing_call_is_partial_and_narrowed(
+    tmp_path: Path, libraries
+):
+    """Review item 2: the unstated wrapper is found over a call, not only over the name; the
+    `require_POST` under it still narrows the row."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "from functools import singledispatch\n"
+            + _DEF
+            + "urlpatterns = [path('x/', singledispatch(require_POST(v)))]\n"
+        },
+    )
+
+    assert _rows(workspace) == [("POST", None, "/x/", None, "partial")]
+    assert len(_questions(workspace)) == 1
+
+
+def test_an_unknown_wrapper_over_a_stated_wrapper_is_partial(tmp_path: Path, libraries):
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "from functools import singledispatch\n"
+            + "from django.views.decorators.csrf import csrf_exempt\n"
+            + _DEF
+            + "urlpatterns = [path('x/', singledispatch(csrf_exempt(v)))]\n"
+        },
+    )
+
+    assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
+    assert len(_questions(workspace)) == 1
+
+
+def test_login_required_over_a_narrowing_call_in_the_registration(tmp_path: Path, libraries):
+    rows = _view(tmp_path, libraries, _DEF, "path('x/', login_required(require_POST(v)))")
+
+    assert rows == [("POST", None, "/x/", _handler("v"), "resolved")]
+
+
+def test_require_http_methods_publishes_its_list_as_written(tmp_path: Path, libraries):
+    """R12: Django compares the list unchanged (probe, "Function views"), so `'get'` is
+    published as written, never respelled."""
+    rows = _view(tmp_path, libraries, "@require_http_methods(['get'])\n" + _DEF)
+
+    assert rows == [("get", None, "/x/", _handler("v"), "resolved")]

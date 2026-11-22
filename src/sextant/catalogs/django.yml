@@ -57,15 +57,16 @@ matches:
   # walk cannot read names no method: one row, method NULL, `unresolved`. Two of them on one
   # view each refuse what they do not list, so the row is their intersection.
   # A narrowing decorator is found anywhere on the def, above or below any other, and in a
-  # wrapper call the registration writes. `csrf_exempt(view)` and `cache_page(n)(view)` keep the
-  # inner function's set (probe: "keep the inner function's allowed set, as a decorator or as a
-  # call"); they hand the function on (`value-models/django.yml`).
-  # THE BOUNDARY: a decorator this catalog does not know (`login_required`, a project's own)
-  # neither narrows nor hides the function: Django routes every method to the callable the name
-  # holds, and what a wrapper answers is the handler's own behaviour, so the row keeps the
-  # function and its methods. A wrapper call written IN the registration that nothing states
-  # (`path("x", own_wrapper(view))`) hides which function runs: the row names no handler, is
-  # `partial`, and files a `handler_pass_through` question.
+  # wrapper call the registration writes.
+  # WHICH FUNCTION RUNS (ruling R13): the handler is followed through the decorators and wrapper
+  # calls that a value model states hand the view on (`value-models/django.yml`, each measured:
+  # probe, "View decorators that hand the view on": `login_required`, `csrf_exempt`, `cache_page`
+  # and the rest keep the inner view's allowed set). A decorator or wrapper that no value model
+  # states (a project's own, a library's not listed) ends that walk, whether it sits on the def
+  # or in the registration. The row then names no handler, is `partial`, and files a
+  # `handler_pass_through` question. Its methods are still narrowed by a `require_*` on the
+  # same path: Django routes every method to the callable, and each `require_*` on the way
+  # answers 405 to the methods it does not list.
   roots:
     - { owner: django.urls.conf, method: path,
         captures: { url: { arg: 0, keyword: route },

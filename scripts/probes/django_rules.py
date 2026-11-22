@@ -743,4 +743,82 @@ rule(
     "a request with request.urlconf set (the probe sets it by hand, as middleware would) swaps the root for that request only: '/b' is 200 under request.urlconf='probe_alt' and 404 under ROOT_URLCONF"
 )
 
+# 9. View decorators that hand the view on (plan 6, Task 4 fix round 1, ruling R13).
+import django.contrib.admin.views.decorators as admin_decorators
+import django.contrib.auth.decorators as auth_decorators
+import django.views.decorators.cache as cache_decorators
+import django.views.decorators.clickjacking as clickjacking_decorators
+import django.views.decorators.csrf as csrf_decorators
+import django.views.decorators.debug as debug_decorators
+import django.views.decorators.gzip as gzip_decorators
+import django.views.decorators.http as http_decorators
+import django.views.decorators.vary as vary_decorators
+
+
+class _Staff:
+    """A signed-in staff user with every permission: what each auth decorator lets through."""
+
+    is_authenticated = True
+    is_active = True
+    is_staff = True
+
+    def has_perms(self, perms) -> bool:
+        return True
+
+
+def _reached(view) -> tuple[int, int]:
+    """(GET, POST) status of `view` called with a signed-in user and CSRF checks off."""
+    out = []
+    for method in ("get", "post"):
+        request = getattr(RequestFactory(), method)("/d")
+        request.user = _Staff()
+        request._dont_enforce_csrf_checks = True
+        out.append(view(request).status_code)
+    return out[0], out[1]
+
+
+# (module, name, how it is applied): "decorator" is applied to the view itself, `d(view)`;
+# "factory" is called first and its result is applied, `d(args)(view)`.
+_PASS_ON = [
+    (auth_decorators, "login_required", "decorator", ()),
+    (auth_decorators, "permission_required", "factory", ("app.perm",)),
+    (auth_decorators, "user_passes_test", "factory", (lambda u: True,)),
+    (admin_decorators, "staff_member_required", "decorator", ()),
+    (csrf_decorators, "csrf_exempt", "decorator", ()),
+    (csrf_decorators, "csrf_protect", "decorator", ()),
+    (csrf_decorators, "ensure_csrf_cookie", "decorator", ()),
+    (cache_decorators, "never_cache", "decorator", ()),
+    (cache_decorators, "cache_page", "factory", (60,)),
+    (cache_decorators, "cache_control", "factory", ()),
+    (vary_decorators, "vary_on_cookie", "decorator", ()),
+    (vary_decorators, "vary_on_headers", "factory", ("Accept",)),
+    (clickjacking_decorators, "xframe_options_exempt", "decorator", ()),
+    (debug_decorators, "sensitive_post_parameters", "factory", ()),
+    (gzip_decorators, "gzip_page", "decorator", ()),
+    (http_decorators, "condition", "factory", ()),
+    (http_decorators, "etag", "factory", (lambda r: "e",)),
+    (http_decorators, "last_modified", "factory", (lambda r: None,)),
+]
+for module, name, form, args in _PASS_ON:
+    decorator = getattr(module, name)
+    inner = require_POST(ok)
+    wrapped = decorator(*args)(inner) if form == "factory" else decorator(inner)
+    assert callable(wrapped) and wrapped is not inner
+    assert _reached(wrapped) == (405, 200), (name, _reached(wrapped))
+    defined_here = getattr(decorator, "__module__", None) == module.__name__
+    bound = "function" if defined_here and decorator.__name__ == name else "variable"
+    print(f"PASS_ON: {module.__name__}.{name} {form} ({bound} bound in {module.__name__})")
+rule(
+    "each listed decorator wraps the view and calls it: over require_POST(ok), with a signed-in "
+    "user and CSRF checks off, GET is the inner view's 405 and POST the inner view's 200"
+)
+assert auth_decorators.login_required(inner) is not inner and callable(
+    auth_decorators.login_required(login_url="/l")
+)
+assert callable(admin_decorators.staff_member_required(login_url="/l"))
+rule(
+    "login_required and staff_member_required are decorators that also take keyword arguments "
+    "alone (login_required(login_url=...)), which returns the decorator instead"
+)
+
 print("OK")

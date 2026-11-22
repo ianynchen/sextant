@@ -2699,12 +2699,13 @@ verb, a list of verbs, or an argument reference `{arg: N, keyword: name}` read a
 verbs as written (the list form's read; a list the value walk does not read is one row with
 method NULL at `unresolved`). The calls are read as decorators are applied, each one's first
 positional argument being what it wraps (`__call__` matched by the call that made its
-receiver): in the registration, through calls a value model states hand the function on
-(`returns_argument`); then through the one value a name a decorated `def` binds, past every
-decorator on it, stated or not. Several matching calls give the intersection of their sets.
-The same reading names the handler (ruling R11): a name a decorated `def` binds is that
-function, whatever its decorators; a registration wrapper call no value model states and the
-walk does not follow is `partial` with handler NULL and a `handler_pass_through` question.
+receiver), stated or not, in the registration and then through the one value a name a
+decorated `def` binds, down to the def. Several matching calls give the intersection of their
+sets. The handler is a separate question (ruling R13): it is followed only through calls a
+value model states hand the function on (`returns_argument`); where a call no value model
+states lies between the registration and a function the module defines, on the def or in the
+registration, the row names no handler, is `partial`, and files a `handler_pass_through`
+question, and its methods are still narrowed.
 Django: `require_GET`, `require_POST`, `require_safe`, `require_http_methods` (probe
 `scripts/probes/django_rules.md`, "Function views").
 

@@ -715,3 +715,36 @@ def test_every_jvm_catalog_derives_the_same_rows(tmp_path: Path, fixture_facts: 
         }
 
     assert tables(catalogs_dir(), "with") == tables(without, "without")
+
+
+@pytest.mark.parametrize(
+    "decorator",
+    [
+        "from functools import singledispatch as deco\n",
+        (
+            "import functools\n"
+            "def deco(f):\n    @functools.wraps(f)\n    def inner(*a):\n        return f(*a)\n"
+            "    return inner\n"
+        ),
+    ],
+)
+def test_a_function_named_after_an_unstated_decorator_is_partial_like_the_stacked_one(
+    tmp_path: Path, libraries, decorator: str
+):
+    """Ruling R13: a decorator no value model states ends the handler walk whether the function
+    reaches the registration under it or by name, so `add_api_route('/x', f)` with `@deco` on
+    `f` gives the stacked spelling's row and question
+    (`test_a_library_wrapper_under_the_route_is_partial_external`)."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _ROUTER
+            + decorator
+            + "@deco\nasync def f() -> str:\n    return ''\n"
+            + "router.add_api_route('/x', f)\n"
+        },
+    )
+
+    assert _rows(workspace) == [("GET", "/x", None, "partial", None)]
+    assert len(_questions(workspace, "handler_pass_through")) == 1
