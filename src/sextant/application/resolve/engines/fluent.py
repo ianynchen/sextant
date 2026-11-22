@@ -3756,12 +3756,12 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
         )
     made = undecorated_maker(context.values, site, slot)
     if made is None:
-        return _blocked(stack, context.values)
+        return _blocked(stack, context)
     made_with, maker = made
     if maker.get("owner") is None or not any(
         argument.get("kind") == "lambda" for argument in made_with["arguments"] or ()
     ):
-        return _blocked(stack, context.values)
+        return _blocked(stack, context)
     ended = {
         producer.reason
         for producer, _ in producer_paths(context.values, site, slot, frozenset(), functions=True)
@@ -3854,13 +3854,32 @@ def _maker(index: "ValueIndex", method: str, row: Mapping[str, Any]) -> Mapping[
     return index.sites.get((method, min(made))) if made else None
 
 
-def _blocked(stack: _Stack, index: "ValueIndex") -> "_Judged | None":
-    """The handler of a registration that wraps it in a call nothing states (`_Stack.blocked`):
-    which function runs is not read here, `external` where the call's body is not in the
-    scanned code and `not_readable` where it is. None where nothing blocked the walk."""
-    if stack.blocked is None:
+def _blocked(stack: _Stack, context: "_DeriveContext") -> "_Judged | None":
+    """The handler of a registration that wraps a module function in a call nothing states
+    (`_Stack.blocked`): which function runs is not read here, `external` where the call's body
+    is not in the scanned code and `not_readable` where it is. None where nothing blocked the
+    walk, or the call wraps no function the module defines (a spec object, a value of its
+    own): that argument reads as it always has."""
+    index = context.values
+    if stack.blocked is None or index is None:
         return None
     method, row = stack.blocked
+    arguments = row["arguments"] or []
+    slot = argument_slot(arguments, 0)
+    wrapped = None if slot is None or slot == UNPACKED_SLOT else arguments[slot]
+    named = None if wrapped is None else wrapped.get("symbol")
+    if wrapped is None or not (
+        (wrapped.get("kind") == "lambda" and named is not None)
+        or (
+            wrapped.get("kind") == "field"
+            and named is not None
+            and any(
+                symbol.startswith(str(named).removesuffix(".") + "(")
+                for symbol in context.method_symbols
+            )
+        )
+    ):
+        return None
     named = row if row["name"] != "__call__" else (_maker(index, method, row) or row)
     outside = (method, int(str(row["ordinal"]))) not in index.reached
     return _Judged(
