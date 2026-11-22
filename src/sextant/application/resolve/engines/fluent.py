@@ -1250,7 +1250,9 @@ def _derive_captured(
     # read the verb".
     method_kind = context.verbless_serves if verbless and direction == "inbound" else None
     # What the address is (`url_is`): a pattern is published verbatim and linked by nothing.
-    declared_path_kind = _URL_IS.get(str(captures.get("url_is")))
+    path_kind = _URL_IS.get(str(captures.get("url_is")))
+    # Per destination below: a route expression decides each one's own.
+    declared_path_kind = path_kind
     # `disable()` without a later `enable()`, or `remove()`: the framework serves nothing.
     serving = captures.get(_SERVES, True) is True
     body_argument = captures.get("body")
