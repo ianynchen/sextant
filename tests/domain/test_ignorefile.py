@@ -205,3 +205,13 @@ def test_matches_beyond_dotenv_leaves_out_exactly_the_two_dotenv_patterns(tmp_pa
     for name in ("secrets/.env", "a/secrets/x.env", "deploy/prod.env", "k.pem", "id_rsa"):
         assert rules.matches_beyond_dotenv(Path(name)), name
     assert not rules.matches_beyond_dotenv(Path("conf/app.env"))
+
+
+def test_a_non_utf8_ignorefile_still_loads_its_readable_patterns(tmp_path: Path):
+    """A `.sextantignore` saved as cp1252 (a `# café` comment is enough) raised
+    `UnicodeDecodeError` — for a Maven or Gradle module that happened AFTER the
+    build, minutes into the run. Read like the `.gitignore` reader reads: bad
+    bytes replaced, patterns kept."""
+    (tmp_path / ".sextantignore").write_bytes("# caf\xe9\ngenerated/\n".encode("cp1252"))
+    rules = IgnoreRules.load(tmp_path)
+    assert rules.matches(tmp_path / "generated" / "x.py") is True

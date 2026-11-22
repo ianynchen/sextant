@@ -101,7 +101,13 @@ class IgnoreRules:
         reading of a malformed line than git's own would give it.
         """
         path = repo_root / IGNORE_FILE
-        lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+        # `errors="replace"`, exactly as the `.gitignore` reader reads (detect/python.py):
+        # a cp1252 comment must not crash a JVM module minutes in, after the build.
+        lines = (
+            path.read_text(encoding="utf-8", errors="replace").splitlines()
+            if path.is_file()
+            else []
+        )
         return cls(repo_root, pathspec.PathSpec.from_lines("gitwildmatch", lines))
 
     @property
