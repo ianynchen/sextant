@@ -6,9 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from sextant.application.ports.scanner import ScanRequest
+from sextant.application.ports.detector import LibraryRoot
+from sextant.application.ports.scanner import ScanError, ScanRequest
 from sextant.domain.factfile import read_fact_file
-from sextant.ingress.extract.jvm.scanner import AsmScanner
+from sextant.ingress.extract.jvm.scanner import AsmScanner, _java
 from sextant.resources import extractor_jar
 
 REPO = Path(__file__).parents[2]
@@ -1506,6 +1507,7 @@ def test_max_heap_mb_puts_xmx_before_jar_on_the_extraction_argv_only(
         return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(report), stderr="")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.delenv("JAVA_HOME", raising=False)
     request = ScanRequest(
         module_id="com.acme:orders",
         coordinates="com.acme/orders",
@@ -1541,3 +1543,87 @@ def _module_info_bytes() -> bytes:
             continue
     pytest.skip("no cached jar carries a module-info.class")
     raise AssertionError("unreachable")  # pragma: no cover - satisfies the type checker
+
+
+def test_a_missing_java_binary_is_a_scanerror_not_a_raw_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A CI image with only JAVA_HOME set builds fine, then the scan launched by
+    bare name raised FileNotFoundError — not a ScanError, so the module failed
+    with a traceback after the full build."""
+
+    def missing(*_args: object, **_kwargs: object) -> object:
+        raise FileNotFoundError("java")
+
+    monkeypatch.setattr(subprocess, "run", missing)
+    scanner = AsmScanner(JAR)
+    with pytest.raises(ScanError):
+        scanner.capabilities()
+    with pytest.raises(ScanError):
+        scanner.scan(
+            ScanRequest(
+                module_id="com.acme:orders",
+                coordinates="com.acme/orders",
+                version="1.0.0",
+                classes_dir=CLASSES,
+                out_dir=tmp_path,
+            )
+        )
+
+
+def test_unreadable_extractor_output_is_a_scanerror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Truncated or non-JSON stdout was an uncaught JSONDecodeError / KeyError."""
+
+    def truncated(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, 0, stdout='{"documents": 1', stderr="")
+
+    monkeypatch.setattr(subprocess, "run", truncated)
+    with pytest.raises(ScanError):
+        AsmScanner(JAR).scan(
+            ScanRequest(
+                module_id="com.acme:orders",
+                coordinates="com.acme/orders",
+                version="1.0.0",
+                classes_dir=CLASSES,
+                out_dir=tmp_path,
+            )
+        )
+
+
+def test_java_home_names_the_launcher_and_its_absence_keeps_the_bare_name(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("JAVA_HOME", "/opt/jdk")
+    assert _java() == str(Path("/opt/jdk") / "bin" / "java")
+    monkeypatch.delenv("JAVA_HOME")
+    assert _java() == "java"
+
+
+def test_the_classpath_file_is_removed_when_the_extractor_cannot_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A launch that raises must not leave `.<out>.classpath.tsv` beside the
+    facts, where the next read would take it for one."""
+
+    def missing(*_args: object, **_kwargs: object) -> object:
+        raise FileNotFoundError("java")
+
+    monkeypatch.setattr(subprocess, "run", missing)
+    out = tmp_path / "facts"
+    out.mkdir()
+    with pytest.raises(ScanError):
+        AsmScanner(JAR).scan(
+            ScanRequest(
+                module_id="com.acme:orders",
+                coordinates="com.acme/orders",
+                version="1.0.0",
+                classes_dir=CLASSES,
+                out_dir=out,
+                dependency_archives=(
+                    LibraryRoot(coordinate="g:a", version="1", archive=tmp_path / "a.jar"),
+                ),
+            )
+        )
+    assert list(tmp_path.glob(".*classpath*")) == []
