@@ -192,6 +192,11 @@ _COMPOSE = "\x00compose"
 # says the handler reads a channel nobody can name — no edge, and never the
 # source or the wire in its place.
 _CONTINUE = "\x00continue"
+# A root's handler capture may name the calls on the handler that narrow the methods it serves
+# (`handler: {arg: N, keyword: name, narrowed_by: [{owner, method, http_method}]}`, D02 §2's
+# `fluent` style): the entries ride with the chain under this key, each owner a symbol tuple,
+# and the handler capture is the reference alone.
+NARROWED_BY = "\x00narrowed_by"
 _READS_LINK = "\x00reads_link"
 # The handler a `channel_link` was captured AFTER (fix round 1, finding 3) —
 # present exactly when the link sits after a handler step, holding that
@@ -731,7 +736,7 @@ def _root_entry(root: dict[str, Any], catalog: Catalog, where: str) -> dict[str,
         # slots (CP-27 row 6), and one name matching all ten would read one slot
         # for each; None for the root that matches by owner and name alone.
         "descriptor": _validated_descriptor(root, catalog, where),
-        "captures": _merged_captures(root),
+        "captures": _with_narrowing(_merged_captures(root), catalog, where),
         # Carried forward (never a root's own field, D02 §2's `fluent`
         # style) purely so `_validate_captures` can see and refuse it,
         # exactly as an unchecked value must not silently survive the file.
@@ -2713,6 +2718,51 @@ def _merged_captures(entry: dict[str, Any]) -> dict[str, Any]:
         if key in entry:
             captures[key] = _channel_via_forms(entry, key)
     return captures
+
+
+def _with_narrowing(captures: dict[str, Any], catalog: Catalog, where: str) -> dict[str, Any]:
+    """`captures` with a handler capture's `narrowed_by` moved under `NARROWED_BY`, each entry
+    checked: an `owner` and a `method`, and an `http_method` that is a verb, a list of verbs,
+    or an argument reference read as a list of verbs (the list form, as written). Unchanged
+    where the handler names none."""
+    handler = captures.get("handler")
+    if not isinstance(handler, Mapping) or "narrowed_by" not in handler:
+        return captures
+    entries = handler["narrowed_by"]
+    where = f"{catalog.source}: {where}[].captures.handler.narrowed_by"
+    if not isinstance(entries, list) or not entries:
+        raise CatalogError(f"loading catalog {where}: a non-empty list of entries is required")
+    narrowing = []
+    for entry in entries:
+        verbs = entry.get("http_method") if isinstance(entry, Mapping) else None
+        if (
+            not isinstance(entry, Mapping)
+            or set(entry) != {"owner", "method", "http_method"}
+            or not isinstance(entry["method"], str)
+            or not (
+                (isinstance(verbs, str) and verbs)
+                or (
+                    isinstance(verbs, list)
+                    and verbs
+                    and all(isinstance(v, str) and v for v in verbs)
+                )
+                or (isinstance(verbs, Mapping) and _capture_reference(dict(verbs)) is not None)
+            )
+        ):
+            raise CatalogError(
+                f"loading catalog {where}: `{entry!r}` — an entry is `{{owner, method, "
+                f"http_method}}`, `http_method` a verb, a list of verbs or `{{arg: N, keyword: "
+                f"name}}` (D02 §2's `fluent` style)"
+            )
+        narrowing.append(
+            {
+                "owners": catalog_symbols(entry["owner"], where),
+                "method": entry["method"],
+                "http_method": verbs,
+            }
+        )
+    reference = {key: value for key, value in handler.items() if key != "narrowed_by"}
+    return {**captures, "handler": reference, NARROWED_BY: tuple(narrowing)}
 
 
 def _validate_channel_via_entries(entries: list[dict[str, Any]], catalog: Catalog) -> None:

@@ -23,6 +23,10 @@ direction: inbound
 #   `dispatch: [{ name, method }]` and `bypassed_by: [{ name }]` (`jakarta-servlet.yml`), the
 #   handler reached by `through` with `read: receiver` on `View.as_view`. Python has no
 #   overloads, so an entry names a method by name alone, with no `parameters`.
+# - The methods a decorator narrows a function view to (capability 4): NEW key `narrowed_by`
+#   on the root's handler capture (ruling R10, the plan's third and last new word):
+#   `handler: { arg: 1, keyword: view, narrowed_by: [{ owner, method, http_method }] }`, the
+#   `http_method` forms reused inside it.
 # - The any-method row: REUSED `verbless_serves: any` (`vertx-web.yml`; the fluent spelling
 #   of the null method `spring-webflux-router.yml` publishes as `verb: null`).
 # - The join: REUSED `path_join: concatenate` (`fastapi.yml`) and `path_prefix: /`
@@ -41,9 +45,36 @@ matches:
   # view, kwargs=None, name=None, Pattern=None)`: route index 0, view index 1 (probe, "Paths").
   # The route is kept as written, converters included (probe: "`ResolverMatch.route` keeps
   # converters as written: `c/<id>`, `i/<int:id>`").
+  #
+  # THE METHODS A FUNCTION VIEW SERVES (probe, "Function views"; plan 6, Task 4, rulings
+  # R10-R12). A plain function serves every method: the any-method row below. Each decorator of
+  # `django.views.decorators.http` (probe, "Defining symbols") narrows it to exactly its set, one
+  # row per method (`narrowed_by`): `require_GET` serves GET alone (HEAD and OPTIONS 405),
+  # `require_POST` POST alone, `require_safe` GET and HEAD, both rows because the program wrote
+  # them; `require_http_methods(request_method_list)` exactly its parameter 0, as written —
+  # Django compares the request's upper-cased method against the list unchanged (`if
+  # request.method not in request_method_list`), so nothing is respelled. A list the value
+  # walk cannot read names no method: one row, method NULL, `unresolved`. Two of them on one
+  # view each refuse what they do not list, so the row is their intersection.
+  # A narrowing decorator is found anywhere on the def, above or below any other, and in a
+  # wrapper call the registration writes. `csrf_exempt(view)` and `cache_page(n)(view)` keep the
+  # inner function's set (probe: "keep the inner function's allowed set, as a decorator or as a
+  # call"); they hand the function on (`value-models/django.yml`).
+  # THE BOUNDARY: a decorator this catalog does not know (`login_required`, a project's own)
+  # neither narrows nor hides the function: Django routes every method to the callable the name
+  # holds, and what a wrapper answers is the handler's own behaviour, so the row keeps the
+  # function and its methods. A wrapper call written IN the registration that nothing states
+  # (`path("x", own_wrapper(view))`) hides which function runs: the row names no handler, is
+  # `partial`, and files a `handler_pass_through` question.
   roots:
     - { owner: django.urls.conf, method: path,
-        captures: { url: { arg: 0, keyword: route }, handler: { arg: 1, keyword: view } } }
+        captures: { url: { arg: 0, keyword: route },
+                    handler: { arg: 1, keyword: view, narrowed_by: [
+                      { owner: django.views.decorators.http, method: require_GET, http_method: GET },
+                      { owner: django.views.decorators.http, method: require_POST, http_method: POST },
+                      { owner: django.views.decorators.http, method: require_safe, http_method: [GET, HEAD] },
+                      { owner: django.views.decorators.http, method: require_http_methods,
+                        http_method: { arg: 0, keyword: request_method_list } } ] } } }
   terminal: [path]
   # A FUNCTION VIEW SERVES EVERY METHOD (probe, "Function views": a plain function answers
   # GET, POST, PUT and DELETE 200, and OPTIONS 200, the request reaching the view): one row,

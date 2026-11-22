@@ -1,0 +1,21 @@
+id: django
+displayName: Django's view decorators, which hand the function on
+
+# Each decorator below wraps a view and runs it with the request, and the wrapped view keeps the
+# function's name and module (`functools.wraps`), so the decorated function is still the handler
+# (probe, "Function views": "A `require_*` decorated view keeps its name and module"; "`csrf_exempt`
+# and `cache_page` keep the inner function's allowed set, as a decorator or as a call";
+# `scripts/probes/django_rules.md`). Owners are the defining modules (probe, "Defining symbols").
+#
+# - `require_GET`, `require_POST`, `require_safe` and `csrf_exempt` are applied to the view
+#   itself (`require_POST(f)`): `result_calls: arg0`, calling the result runs `f`.
+# - `require_http_methods([...])` and `cache_page(n)` make the decorator that is applied to the
+#   view (`cache_page(60)(f)`): `result_returns: arg0`, the decorator's result stands for `f`.
+
+returns_argument:
+  - { owner: django.views.decorators.http, method: require_GET, result_calls: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.http, method: require_POST, result_calls: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.http, method: require_safe, result_calls: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.http, method: require_http_methods, result_returns: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.csrf, method: csrf_exempt, result_calls: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.views.decorators.cache, method: cache_page, result_returns: arg0, by: scripts/probes/django_rules.md }

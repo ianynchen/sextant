@@ -86,10 +86,12 @@ from sextant.application.resolve.shapes.chains import (
     _LINK_SENDER,
     _READS_LINK,
     _UNRESOLVED_ARGUMENT,
+    NARROWED_BY,
     VERBS_TO_READ,
     ChainEnd,
     _captured_at,
     _declared_entries,
+    _listed_verbs,
     _matching_root,
     _method_symbols,
     _resolve_captures,
@@ -1197,6 +1199,15 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
     # the row below is then `unresolved` with `method` NULL rather than
     # carrying whichever literal an earlier step happened to seed.
     verbless = "http_method" not in captures
+    # A verbless route whose handler passed a call the catalog says narrows its methods
+    # (`narrowed_by`) serves exactly those methods, one row each.
+    narrowed = (
+        _narrowed_verbs(captures.get("handler"), captures[NARROWED_BY], context)
+        if verbless and NARROWED_BY in captures and direction == "inbound"
+        else None
+    )
+    if narrowed is not None:
+        verbs, verbless = list(narrowed), False
     # A verbless route of a framework that serves it for every verb says so on the row
     # (`method_kind`, Vert.x spec §3a), never by the NULL method alone, which reads as "nobody
     # read the verb".
@@ -3711,6 +3722,13 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
     if handlers:
         alternatives = tuple(_Judged(symbol, ANSWERS) for symbol in handlers)
         return _Judged(handlers[0], ANSWERS, (), alternatives if len(handlers) > 1 else ())
+    # A name a decorated `def` binds is that function, through every decorator on the def,
+    # stated or not: the framework calls what the name holds, and what a wrapper answers is
+    # the function's own behaviour (plan 2026-11-22-python-django-core-inbound, ruling R11).
+    stack = _decorator_stack(context.values, str(at[0]), argument)
+    function = None if stack.function is None else context.method_symbols.get(stack.function)
+    if function is not None:
+        return _Judged(function, ANSWERS)
     # Only a value a library call made OF a function the module defines (a decorator applied to
     # it, a wrapper handed it): any other object a library builds is no function at all, and
     # its handler reads as it always has.
@@ -3738,12 +3756,12 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
         )
     made = undecorated_maker(context.values, site, slot)
     if made is None:
-        return None
+        return _blocked(stack, context.values)
     made_with, maker = made
     if maker.get("owner") is None or not any(
         argument.get("kind") == "lambda" for argument in made_with["arguments"] or ()
     ):
-        return None
+        return _blocked(stack, context.values)
     ended = {
         producer.reason
         for producer, _ in producer_paths(context.values, site, slot, frozenset(), functions=True)
@@ -3763,6 +3781,153 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
             ),
         ),
     )
+
+
+@dataclass(frozen=True)
+class _Stack:
+    """The calls a handler argument was made through, outermost first (`_decorator_stack`),
+    each with the method it is in; the function a decorated `def` the walk entered binds,
+    None where it entered none; and the call a registration wrapped the handler in that hands
+    back no function anything states, which hides which function runs."""
+
+    calls: tuple[tuple[str, Mapping[str, Any]], ...] = ()
+    function: str | None = None
+    blocked: tuple[str, Mapping[str, Any]] | None = None
+
+
+def _decorator_stack(index: "ValueIndex", method: str, held: Mapping[str, Any]) -> _Stack:
+    """The calls between a handler argument and the function it names, read as decorators
+    are applied: each call's first positional argument is what it wraps. In the registration,
+    a call goes on only where a value model states it hands its argument back or runs it
+    (`returns_argument`); one that is not stated stops the walk as `blocked`. A name read
+    there is entered once, where one written value binds it: a decorated `def`'s name holds
+    what its decorators made, and every decorator on the def is passed, stated or not, down
+    to the def itself, which is the function only where it has the name's own owner and
+    name."""
+    calls: list[tuple[str, Mapping[str, Any]]] = []
+    bound: str | None = None
+    while True:
+        kind = held.get("kind")
+        if kind == "lambda":
+            symbol = held.get("symbol")
+            named = (
+                bound is not None
+                and symbol is not None
+                and str(symbol).startswith(bound.removesuffix(".") + "(")
+            )
+            return _Stack(tuple(calls), str(symbol) if named else None)
+        if kind == "field" and bound is None:
+            writes = index.produced.get(str(held.get("symbol")), ())
+            if len(writes) != 1:
+                return _Stack(tuple(calls))
+            bound = str(held.get("symbol"))
+            method, held = writes[0]
+            continue
+        source = held.get("source")
+        made = index.producers.get((method, int(str(source)))) if source is not None else None
+        row = index.sites.get((method, min(made))) if made else None
+        if row is None:
+            return _Stack(tuple(calls))
+        if bound is None and not _hands_back(index, method, row):
+            return _Stack(tuple(calls), None, (method, row))
+        calls.append((method, row))
+        arguments = row["arguments"] or []
+        slot = argument_slot(arguments, 0)
+        if slot is None or slot == UNPACKED_SLOT:
+            return _Stack(tuple(calls))
+        held = arguments[slot]
+
+
+def _hands_back(index: "ValueIndex", method: str, row: Mapping[str, Any]) -> bool:
+    """Whether a value model states what `row` hands back (`returns_argument`): the call
+    itself, or, for a `__call__`, the call that made what it is called on."""
+    maker = _maker(index, method, row) if row["name"] == "__call__" else row
+    return maker is not None and (str(maker.get("owner")), str(maker["name"])) in (
+        index.stated_returns
+    )
+
+
+def _maker(index: "ValueIndex", method: str, row: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The call in `method` that made what `row` is called on; None where none did."""
+    receiver = row.get("receiver")
+    made = index.producers.get((method, int(str(receiver)))) if receiver is not None else None
+    return index.sites.get((method, min(made))) if made else None
+
+
+def _blocked(stack: _Stack, index: "ValueIndex") -> "_Judged | None":
+    """The handler of a registration that wraps it in a call nothing states (`_Stack.blocked`):
+    which function runs is not read here, `external` where the call's body is not in the
+    scanned code and `not_readable` where it is. None where nothing blocked the walk."""
+    if stack.blocked is None:
+        return None
+    method, row = stack.blocked
+    named = row if row["name"] != "__call__" else (_maker(index, method, row) or row)
+    outside = (method, int(str(row["ordinal"]))) not in index.reached
+    return _Judged(
+        None,
+        UNREADABLE,
+        (
+            (
+                EXTERNAL if outside else NOT_READABLE,
+                (
+                    f"the function is what the call {named.get('owner') or ''}{named['name']} "
+                    "returns, which is not followed back to a function"
+                ),
+            ),
+        ),
+    )
+
+
+def _narrowed_verbs(
+    handler: Any, narrowing: Sequence[Mapping[str, Any]], context: "_DeriveContext"
+) -> tuple[str | None, ...] | None:
+    """The methods a handler serves where it passed a call `narrowed_by` names (D02 §2's
+    `fluent` style): each such call's methods, intersected where several apply (each allows a
+    method or refuses it), in the order of the outermost; an unread method list is no method
+    at all (one row, `unresolved`). None where it passed no such call: the route stays as its
+    root declared it."""
+    argument = handler[0] if isinstance(handler, tuple) and handler else handler
+    at = argument.get(_CAPTURED_AT) if isinstance(argument, dict) else None
+    if at is None or context.values is None:
+        return None
+    sets: list[tuple[str | None, ...]] = []
+    for method, row in _decorator_stack(context.values, str(at[0]), argument).calls:
+        named = _maker(context.values, method, row) if row["name"] == "__call__" else row
+        entry = (
+            None
+            if named is None
+            else next(
+                (
+                    one
+                    for one in narrowing
+                    if one["method"] == named["name"] and named.get("owner") in one["owners"]
+                ),
+                None,
+            )
+        )
+        if entry is not None and named is not None:
+            sets.append(_narrowing_verbs(entry["http_method"], named, context))
+    if not sets:
+        return None
+    if any(None in one for one in sets):
+        return (None,)
+    return tuple(verb for verb in sets[0] if all(verb in one for one in sets[1:]))
+
+
+def _narrowing_verbs(
+    declared: Any, row: Mapping[str, Any], context: "_DeriveContext"
+) -> tuple[str | None, ...]:
+    """One `narrowed_by` entry's methods on the call `row`: its literal verb or verbs, or the
+    list its argument reference reads, as written (the list form's read, `_listed_verbs`)."""
+    if isinstance(declared, str):
+        return (declared,)
+    if isinstance(declared, list):
+        return tuple(declared)
+    listed = _listed_verbs(declared, dict(row))
+    if _unread_verbs(listed):
+        listed = _walked_verbs(listed, replace(context, path=None))
+    values = listed if isinstance(listed, tuple) else (listed,)
+    return tuple(dict.fromkeys(_verb_of(each, context) for each in values)) or (None,)
 
 
 def _written(argument: Mapping[str, Any], index: "ValueIndex") -> bool:

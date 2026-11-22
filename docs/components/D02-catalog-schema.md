@@ -2691,6 +2691,23 @@ object itself (`include(api_urls)`) — is that module's variable `name`, read a
 is. Django's `router_named: { variable: urlpatterns }` (probe: the variable Django reads from an
 included module is `urlpatterns`). Absent, a string or a module mounts nothing.
 
+**`roots[].captures.handler.narrowed_by: [{owner, method, http_method}]`** (plan
+2026-11-22-python-django-core-inbound Task 4, ruling R10; the plan's third new word): a
+verbless route whose handler argument was made through a call of `owner.method` serves exactly
+that entry's methods, one row each, instead of the `verbless_serves` row. `http_method` is a
+verb, a list of verbs, or an argument reference `{arg: N, keyword: name}` read as a list of
+verbs as written (the list form's read; a list the value walk does not read is one row with
+method NULL at `unresolved`). The calls are read as decorators are applied, each one's first
+positional argument being what it wraps (`__call__` matched by the call that made its
+receiver): in the registration, through calls a value model states hand the function on
+(`returns_argument`); then through the one value a name a decorated `def` binds, past every
+decorator on it, stated or not. Several matching calls give the intersection of their sets.
+The same reading names the handler (ruling R11): a name a decorated `def` binds is that
+function, whatever its decorators; a registration wrapper call no value model states and the
+walk does not follow is `partial` with handler NULL and a `handler_pass_through` question.
+Django: `require_GET`, `require_POST`, `require_safe`, `require_http_methods` (probe
+`scripts/probes/django_rules.md`, "Function views").
+
 **A step may declare `receiver_arg: N`** (spec 2026-10-26 §3c): the step joins the chain
 through argument N's value id instead of through its own `receiver`. A Kotlin extension
 function compiles to a STATIC method whose argument 0 is the receiver, so the call's own
