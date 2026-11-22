@@ -201,7 +201,7 @@ variables, not functions). `as_view` is a `classonlymethod`, so the scanner must
 | Check | 5.2.8 |
 |---|---|
 | Assertions in `scripts/probes/django_rules.py` | all pass; the run prints `OK` |
-| `RULE:` lines printed | 57 |
+| `RULE:` lines printed | 58 |
 
 The `5.2.8` column is the version the process under test printed on its first line
 (`importlib.metadata.version("django")`, run by `scripts/probes/django_rules.py` inside
