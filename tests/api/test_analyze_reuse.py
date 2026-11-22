@@ -660,3 +660,35 @@ def test_an_edit_that_stops_naming_a_type_rereads_the_headers(typed: Path, tmp_p
     assert _HEADERS in _rewritten(before, _modified(warm))
     assert not any("Greeter" in symbol for symbol in _header_symbols(warm))
     _assert_same_as_fresh(typed, warm, tmp_path)
+
+
+def test_a_scan_that_dies_leaves_no_reuse_record_and_the_next_run_rereads_everything(
+    project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The crash-safety of reuse rests on an ORDER nothing else pins: records
+    cleared before the scan, written back after it. Reversed, a killed scan
+    would keep stale records vouching for fact files it never finished, and
+    the next run would silently keep them."""
+    from sextant.ingress.extract.python.scanner import PythonScanner
+
+    warm = tmp_path / "warm"
+    _analyze(project, warm)
+
+    def dies(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("killed mid-scan")
+
+    monkeypatch.setattr(PythonScanner, "scan", dies)
+    with pytest.raises(RuntimeError):
+        _analyze(project, warm)
+    monkeypatch.undo()
+
+    connection = duckdb.connect(str(warm / "workspace.duckdb"), read_only=True)
+    try:
+        assert connection.execute("SELECT count(*) FROM scan_reuse").fetchone() == (0,)
+    finally:
+        connection.close()
+
+    before = _modified(warm)
+    _analyze(project, warm)
+    assert _rewritten(before, _modified(warm)) == set(_modified(warm))
+    _assert_same_as_fresh(project, warm, tmp_path)
