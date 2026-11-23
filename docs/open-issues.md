@@ -546,7 +546,7 @@ carries it; [`performance.md`](performance.md) does.
 
 ---
 
-### Principle-violation count: 1 confirmed
+### Principle-violation count: 2 confirmed
 
 **PV-1 (2026-09-07) — claims about our own system asserted without measuring them.**
 Seven false statements were written into `docs/superpowers/specs/2026-09-06-java-kotlin-completeness-design.md`
@@ -579,6 +579,40 @@ cross-repo boundary identity called unspecified when `D06 §5b` defines it; thre
 called "open-ended" when all three are countable (14 twins, 19 catalogs, 36 attributes); and
 the W3→W39 window described as leaving a bug persisting when it is today's behaviour plus a
 label.*
+
+**PV-2 (2026-11-23) — new concepts decided during the work and reported after it.** On the
+Django plan (branch `cov/python-django`, 2026-11-22/23) seven decisions were built without the
+user's approval, against GUIDELINES §1.1 (decide-then-inform; "extending a set the spec calls
+*closed*"), and without applying the four rulings now written as §8.8. Found by the review of
+2026-11-23.
+
+Counted as **one** violation, not seven: one error class, as PV-1 was counted. This is the
+second, so §13.8's stop rule applied: work stopped and the mechanism was settled with the user
+before resuming.
+
+| | decision built without approval |
+|---|---|
+| 1 | a new open-question kind |
+| 2 | a fourth catalog word |
+| 3 | a task removed from the plan |
+| 4 | a truth rule |
+| 5 | a narrowed root rule |
+| 6 | a gate that applies to one framework only |
+| 7 | a third catalog word not shown to the user first |
+
+**What prevents recurrence:** GUIDELINES §8.8 (the four rulings) and §8.9 (a new concept is the
+user's decision), approved 2026-11-23, and the two tests that enforce §8.9:
+`tests/architecture/test_vocabulary_ratchet.py` fails on a catalog key, a word value of a
+catalog key, a member of a closed set in `domain/closed_sets.py` or an open-question kind that
+`tests/architecture/vocabulary.yml` neither holds in its baseline nor records as approved (by
+whom, when, under which ruling), and `tests/architecture/test_principles_check.py` fails on a
+spec or plan dated on or after 2026-11-23 without a `## Principles check` section that names
+`docs/value-reading-scenarios.md`. Not caught, and left to the principles check and review by
+§8.9: a new concept that is not a word (a scan fact's shape, a truth rule, a change to an
+approved design), an existing mechanism built a second time (the branch's own list walk in
+`shapes/mounts.py`, beside the value walk), a word in other code, and an untrue approval or
+exemption. The sites the decisions left on the branch are §8.8's audit list; that branch is
+not merged.
 
 Five candidates were judged NOT violations and are recorded so the judgement can be
 overturned rather than forgotten:

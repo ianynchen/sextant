@@ -354,6 +354,114 @@ grew by more than noise names it there before approving. The order of work stays
 gaps first, then gains — but *new* work does not get to add a gap of this kind: it arrives with
 its cost already known.  
 
+### 8.8 How a value is read: four rulings that bind every reader  
+
+These were ruled by the user between 2026-09-22 and 2026-11-05 and lived only in an agent's
+notes until 2026-11-23. On the Django plan they were not applied, and seven mechanisms were
+built that the review of 2026-11-23 found to be patches around them. They are design rules.  
+
+1. **Follow the value through the code we have.** A value that looks opaque at the call site
+   almost always comes from somewhere we can read: an assignment, an alias, an import, a
+   function's return, a wrapper that calls what it wraps, a configuration key. Follow it until
+   the chain leaves what Sextant parses, and publish the key or the open question at THAT
+   point. "Unknown" is a statement about the code being absent, never about how far the
+   reader looked. *(Ruled 2026-09-22, 2026-10-18, 2026-11-02: "tell the truth, follow the
+   code".)*  
+2. **One structural rule, not one entry per library function.** When a walk stops at a call,
+   ask what the FACTS say the call does to the value (it returns its argument, it calls what
+   it wraps, it holds its receiver), and write that rule once. A list of named functions is an
+   open set, and each entry is an interpreter in disguise; it also can never hold a project's
+   own code. A catalog states what a FRAMEWORK defines (its registration calls, its dispatch
+   table), not what ordinary code does. *(Ruled 2026-10-21.)*  
+3. **Name the general concept before building the case.** Before a mechanism is designed for
+   the shape in front of you, state what that shape is an instance of, find where Sextant
+   already handles that concept, and design for the concept. A second mechanism for a concept
+   that already has one is a defect, even when both are correct. *(Ruled repeatedly, last
+   2026-10-22.)*  
+4. **A closed set of values is an exact answer.** Several values that can each be read are
+   several true rows, each at `resolved`, each with the condition that selects it where one
+   exists. Only an open set is unresolved. *(Ruled 2026-10-18.)*  
+
+**Its §8.3 audit list, as found on 2026-11-23 (branch `cov/python-django`, not merged).** Each
+site is a known violation that must be removed or justified before that branch merges:  
+
+| Rule | Site | What it is |
+|---|---|---|
+| 1, 3 | `resolve/shapes/mounts.py`: list placement by "a list no mount reaches", aliases, handed lists | a second, weaker value walk beside `resolve/values.py` |
+| 1 | the route tree's root defined by absence | the framework names its root; the reader did not follow it |
+| 2 | `catalogs/value-models/django.yml`: 22 pass-through decorators stated by name | a list where the wrapper's own code says it calls what it wraps |
+| 3 | open-question kinds `mount_prefix` and `mounted_router` | two kinds for the two halves of one concept, a mount that is not read |
+| 3 | `mounted_router` filed only for catalogs that declare two Django words | a general mechanism with a framework-shaped condition |
+| 3 | `url_is: pattern` (regex published as written) beside `url_is: expression` (regex reduced to paths) | one concept, a regex route, with two treatments |
+
+### 8.9 A new concept is the last resort, and it is the user's decision  
+
+A **new concept** is anything that extends what Sextant can say or record: a catalog key or a
+value in a closed set, an open-question kind, a reason or resolution word, a scan fact, a
+truth rule (what makes a row `resolved`, `partial` or absent), or a change to an approved
+design.  
+
+**Before proposing one, the agent checks it against the principles, in this order, and writes
+the check down:**  
+
+1. **What is this an instance of?** Name the general concept (§8.8 rule 3).  
+2. **Where does Sextant already handle that concept?** Name the mechanism, the catalog that
+   uses it, and why it does or does not state this case. "No existing word fits" is a claim
+   that needs the closest word and the reason it fails.  
+3. **Does following the value remove the need?** (§8.8 rule 1.) Most new words stand in for a
+   value the reader stopped following.  
+4. **Is it one structural rule, or the first entry of a list?** (§8.8 rule 2.)  
+5. **Was it measured on real projects against the framework's own answer?** (§5.4, §8.1.)  
+
+**If the check shows the concept is not needed, it is not introduced, and no question is
+asked.** Only where steps 1–5 show it has to exist does the agent STOP and ask the user, with
+the written check as the request (§1.1). It is never built first and reported after, and never
+built "provisionally". A sub-agent that needs one stops and reports; the agent that briefed it
+does not answer in the user's place.  
+
+**Every design and plan carries the check.** A document under `docs/superpowers/specs/` or
+`docs/superpowers/plans/` has a section `## Principles check`: each rule of §8, §8.1, §8.2 and
+§8.8 that applies, how the design follows it, the existing mechanism each part reuses, and one
+row per new concept with steps 1–5. It also names, for each code shape the design reads, the
+row of `docs/value-reading-scenarios.md` that already covers it — the design then uses that
+mechanism and builds no second one — or says "not in the reference". A shape that is not in the
+reference is brought to the user with a count from real projects before it is designed for;
+the user may rule it unsupported. A design without the check is not ready for review.  
+
+**Real projects are measured before the design is written**, with a throwaway read compared
+against the framework's own answer (its resolver, its route table), not as the last task of
+the plan. A fixture shows that a rule works; only a real project shows which rules are needed.  
+
+**How it is enforced** *(approved by the user 2026-11-23, and enforced since then, because §8
+says an untested rule is already being violated)*:  
+
+- **A vocabulary ratchet** (`tests/architecture/test_vocabulary_ratchet.py`; its one data
+  file, `tests/architecture/vocabulary.yml`, holds the baseline, the approvals and the
+  exemptions). It guards the places where a word becomes visible to a user, as they were on
+  2026-11-23: every key name a shipped catalog uses; the string values of every catalog key,
+  each key declared closed (all values pinned), mixed (its lower-case identifier values
+  pinned) or open (with a reason); every closed set in `domain/closed_sets.py`; and the
+  open-question kinds. A word added to any of these fails the suite until the same change adds
+  an approval entry naming who approved it, when, and the ruling; a word removed fails until
+  the file drops it.  
+- **The rest of the code is not scanned, by the user's ruling of 2026-11-23.** A word can be
+  written in code in too many forms, and a scan that chases every form grows without end.
+  **A closed set of published words belongs in `domain/closed_sets.py`**, where the ratchet
+  sees it; a set of published words found elsewhere is moved there when it is next touched.  
+- **A document check** (`tests/architecture/test_principles_check.py`). A spec or plan dated on
+  or after 2026-11-23, or undated, fails the suite without a `## Principles check` heading
+  outside a code fence, and where that section does not name
+  `docs/value-reading-scenarios.md`.  
+- **What the tests cannot catch, and review must:** a new concept that is not a word — a scan
+  fact's shape, a truth rule (what makes a row `resolved`, `partial` or absent), a change to an
+  approved design; an existing mechanism built a second time; a word in code outside the
+  catalogs, `domain/closed_sets.py` and the question kinds; an approval or exemption that is
+  not true; and a `## Principles check` section that is empty or wrong. For these the control
+  is the principles check and review: a diff of `vocabulary.yml` — baseline, approvals or
+  exemptions — is reviewed as an approval.  
+- **Reviewer briefs carry §8.8 and §8.9.** A violation is graded Important, never Minor, and
+  two fix rounds on one task are reported to the user as "the concept may be wrong" (§13.8).  
+
 ## 9. Coding Standards  
 
 ### Documentation  
