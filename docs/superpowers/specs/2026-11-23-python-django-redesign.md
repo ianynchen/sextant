@@ -171,55 +171,82 @@ annotations:
 | M10 22 named library decorators | a library is code we have; one structural rule | The common decorator returns an inner function that calls the wrapped one (`@wraps(f) def inner(...): ... f(...)`). Today the walk reads only a decorator that returns its function, which is why it stops on zulip's own decorators 290 times. The rule: a returned function that calls the decorator's parameter stands for that parameter — the meaning of the existing `result_calls`, read from the code. It applies to project decorators and, through the targeted read of row 11, to library decorators. A value-model entry stays only where the body cannot be read. Earlier measurement: handlers readable 747 → 1,937; 1,212 of 1,222 agree with Django. |
 | M11 the `PATH_CAP` exemption was undefined | ruling 5 | The reader resolves each member of a list as its own read, with its own limit. Nothing inside the limit changes; alternatives (branches, callers, several writes of one value) are counted as before. |
 
-## 4d. What "any method" means (ruled 2026-11-23: option B)
+## 4d. What "any method" means (ruled 2026-11-23: option B, then option 2)
 
 An "any method" row means **the endpoint answers every method**, not "the router sends every
-method to the handler". So a function view's any-method row is `resolved` only when its body
+method to the handler". A function view's any-method row is `resolved` only when its body
 gives no reason to doubt it.
 
-- **A view that hands its request to another view** (bookwyrm
-  `unsafe_embed_list(request)` calls `EmbedList.as_view()(request, ...)`): this is the
-  existing rule "which handler answers" (`shapes/pass_through.py`, Vert.x `passes_on`): a
-  handler that hands the request it received to another handler passes on, and the row is
-  the answering handler's — here the rows of `EmbedList` (GET). Handed to code that is not
-  read: "not readable here", the row is `partial`.
-- **A view that tests `request.method` in its body:** not read in this plan (the next design).
-  Until then its row is `partial`, method not read, never a `resolved` any-method row.
+**What is a reason to doubt** (ruled, option 2):
+
+- the view reads `request.method`, in its own body or in **project code that it gives the
+  request to**, followed as far as the project's code goes. Zulip's `rest_dispatch` gives the
+  request to `get_target_view_function_or_response`, which selects by `request.method`;
+- the view gives its request to another view (`EmbedList.as_view()(request, ...)`).
+
+Such a row is `partial`, method not read. This plan does not read HOW the body limits the
+methods; that is the next design.
+
+**What is not a reason to doubt:** the request given to a library function
+(`render(request, "x.html")`, `messages.success(request, ...)`). A library function that
+answers 405 for some methods when a function view calls it is possible and improbable;
+libraries limit methods with decorators and class views, which are read. Recorded as an
+issue with the count, not designed for.
+
+**Correction.** An earlier version of this section said the Vert.x pass-through rule gives a
+delegating view the rows of the view it calls. That was a misreading: in Vert.x a handler
+passes on by calling `next()`, and a handler that calls a helper with the request still
+answers (`test_a_handler_that_replies_through_a_module_helper_answers`). The handler of a
+delegating view stays that view.
+
 - **A view object** (`path("rss", RssFeed())`): calling an object runs its class's
   `__call__`; that method is the handler, found by the class lookup.
 
-Measured in the engine on the four trees (Task 1, first run): 2 rows of the first kind and 14
-of the third were `resolved` and wrong.
+Counted in the four projects (1,285 function views): 124 read `request.method` in their own
+body; 957 give the request to project code; more than 300 give it to a library function; 264
+give it to no other code and read no method; 7 give it to another view.
 
-## 4e. A wrapper that calls what it wraps: corrected (Task 1 finding, 2026-11-23)
+## 4e. A wrapper that calls what it wraps (Task 1 finding, 2026-11-23)
 
-§4c M10 stated a rule of its own ("a returned function that calls the decorator's parameter
-stands for that parameter"). The lookup in `docs/value-reading-scenarios.md` shows that two
-existing Java rules have this role together, so M10's rule is withdrawn:
+The common Python decorator returns an inner function that calls the wrapped one:
 
-- **"Lambda body reads a captured value → the captured value"** (`values.py`, "the seventh
-  edge: a lambda's CAPTURE"; `tests/application/test_values.py:2247`). The wrapper's inner
-  function reads `view_func`, a value of the outer function.
-- **"Which handler answers"** (`shapes/pass_through.py`): the inner function receives the
-  request and hands it to another handler (`view_func(request, ...)`), so it passes on, and
-  the row is the answering handler's.
+```python
+def add_google_analytics(view_func):
+    @wraps(view_func)
+    def _wrapped_view_func(request, /, *args, **kwargs):
+        response = view_func(request, *args, **kwargs)
+        ...
+    return _wrapped_view_func
+```
 
-**The real gap is in the Python scanner.** It records no capture: a nested function is
-written with `captures=0` (`ingress/extract/python/calls.py:2157`, `:2789`), and a name of
-the enclosing function read inside it is `unresolved` (`calls.py:2298`, "its value ids are
-another method's"). On the JVM the facts carry the capture (D00 `captures`: the capture site's
-last N arguments bind the body's N leading parameters). Zulip's own decorators stop the walk
-290 times for this reason.
+**The Java construct with the same role is a lambda that captured a value** ("Lambda body
+reads a captured value → the captured value", `values.py` "the seventh edge",
+`tests/application/test_values.py:2247`). The inner function reads `view_func`, a value of
+the outer function.
+
+**The gap is in the Python scanner: it records no capture.** A nested function is written
+with `captures=0` (`ingress/extract/python/calls.py:2157`, `structure.py:524`), and a name of
+the enclosing function read inside it is `unresolved` (`calls.py:2298`). On the JVM the facts
+carry the capture (D00 `captures`: the capture site's last N arguments bind the body's N
+leading parameters).
+
+**The handler is the wrapped function**, as it is for a library wrapper a value model states
+with `result_calls` ("calling the result runs the argument"): for a project wrapper the same
+meaning is read from the code, once the capture is in the facts — the inner function calls a
+captured function with the request it received. Django's own answer names the wrapped
+function too.
+
+Measured with a throwaway version on zulip: the `handler_pass_through` questions fall from
+437 to 5.
 
 A second defect found on the way: `functools.wraps(f)(inner)` is stated `result_returns:
 arg0`, but `_stated_value` applies that form only where the applying `__call__` has no owner;
 here the scanner types it `functools/_Wrapper#`, so the statement never fires.
 
-**To design before Task 9 is built** (it is a fact-format question, Python calls an inner
-function directly and binds its arguments by its written signature, which a JVM lambda body
-never is): where the captured values sit among the body's parameters, so that the written
-parameters keep their positions. The format follows D00's `captures`; nothing is decided
-here beyond "reuse the capture edge and the pass-through rule".
+**To design before Task 9 is built:** where the captured values sit among the body's
+parameters. A JVM lambda body is never called directly; a Python inner function is, and its
+arguments are bound by its written signature, so the written parameters must keep their
+positions. The format follows D00's `captures`.
 
 ## 5. Every concept the branch added, and its state
 
