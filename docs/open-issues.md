@@ -603,12 +603,14 @@ before resuming.
 **What prevents recurrence:** GUIDELINES §8.8 (the four rulings) and §8.9 (a new concept is the
 user's decision), approved 2026-11-23, and the two tests that enforce §8.9:
 `tests/architecture/test_vocabulary_ratchet.py` fails on a catalog key, a word value of a
-catalog key, or a member of a closed set in the scanned code that
+catalog key, a member of a closed set in `domain/closed_sets.py` or an open-question kind that
 `tests/architecture/vocabulary.yml` neither holds in its baseline nor records as approved (by
 whom, when, under which ruling), and `tests/architecture/test_principles_check.py` fails on a
-spec or plan dated on or after 2026-11-23 without a `## Principles check` section. Not caught,
-and left to review by §8.9: a new concept that is not a word (a scan fact's shape, a truth
-rule, a change to an approved design), a word checked only inline in code, a word outside the scanned trees, and an untrue approval or
+spec or plan dated on or after 2026-11-23 without a `## Principles check` section that names
+`docs/value-reading-scenarios.md`. Not caught, and left to the principles check and review by
+§8.9: a new concept that is not a word (a scan fact's shape, a truth rule, a change to an
+approved design), an existing mechanism built a second time (the branch's own list walk in
+`shapes/mounts.py`, beside the value walk), a word in other code, and an untrue approval or
 exemption. The sites the decisions left on the branch are §8.8's audit list; that branch is
 not merged.
 

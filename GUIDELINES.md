@@ -422,7 +422,11 @@ does not answer in the user's place.
 **Every design and plan carries the check.** A document under `docs/superpowers/specs/` or
 `docs/superpowers/plans/` has a section `## Principles check`: each rule of §8, §8.1, §8.2 and
 §8.8 that applies, how the design follows it, the existing mechanism each part reuses, and one
-row per new concept with steps 1–5. A design without it is not ready for review.  
+row per new concept with steps 1–5. It also names, for each code shape the design reads, the
+row of `docs/value-reading-scenarios.md` that already covers it — the design then uses that
+mechanism and builds no second one — or says "not in the reference". A shape that is not in the
+reference is brought to the user with a count from real projects before it is designed for;
+the user may rule it unsupported. A design without the check is not ready for review.  
 
 **Real projects are measured before the design is written**, with a throwaway read compared
 against the framework's own answer (its resolver, its route table), not as the last task of
@@ -433,28 +437,28 @@ says an untested rule is already being violated)*:
 
 - **A vocabulary ratchet** (`tests/architecture/test_vocabulary_ratchet.py`; its one data
   file, `tests/architecture/vocabulary.yml`, holds the baseline, the approvals and the
-  exemptions). It pins, as they were on 2026-11-23: every key name a shipped catalog uses; the
-  string values of every catalog key, each key declared closed (all values pinned), mixed (its
-  lower-case identifier values pinned) or open (with a reason); and every closed set of strings
-  in code under `src/sextant/application/`, `domain/`, `egress/` and `storage/` and in the
-  catalog loader — module-level and class-level, any spelling, `Literal[...]` aliases and
-  enums, which hold the open-question kinds, the reason and resolution words and the published
-  question and table words. A word added to any of these fails the suite until the same change
-  adds an approval entry naming who approved it, when, and the ruling; a word removed fails
-  until the file drops it.  
+  exemptions). It guards the places where a word becomes visible to a user, as they were on
+  2026-11-23: every key name a shipped catalog uses; the string values of every catalog key,
+  each key declared closed (all values pinned), mixed (its lower-case identifier values
+  pinned) or open (with a reason); every closed set in `domain/closed_sets.py`; and the
+  open-question kinds. A word added to any of these fails the suite until the same change adds
+  an approval entry naming who approved it, when, and the ruling; a word removed fails until
+  the file drops it.  
+- **The rest of the code is not scanned, by the user's ruling of 2026-11-23.** A word can be
+  written in code in too many forms, and a scan that chases every form grows without end.
+  **A closed set of published words belongs in `domain/closed_sets.py`**, where the ratchet
+  sees it; a set of published words found elsewhere is moved there when it is next touched.  
 - **A document check** (`tests/architecture/test_principles_check.py`). A spec or plan dated on
-  or after 2026-11-23, or undated, without a `## Principles check` heading outside a code fence
-  fails the suite.  
+  or after 2026-11-23, or undated, fails the suite without a `## Principles check` heading
+  outside a code fence, and where that section does not name
+  `docs/value-reading-scenarios.md`.  
 - **What the tests cannot catch, and review must:** a new concept that is not a word — a scan
   fact's shape, a truth rule (what makes a row `resolved`, `partial` or absent), a change to an
-  approved design; a word checked only by an inline comparison in code and not yet written in
-  a shipped catalog; a word in code outside the scanned trees — all of `ingress/` but the
-  catalog loader, `cli/`, `agents/`, `enrich/`, `api.py`, the JVM extractor — or in the
-  storage schema's SQL, which is where the scan-capability words, `ingress/interpret/wire.py`'s
-  `Origin`, Sextant's own config keys and the table columns live; an approval or
-  exemption that is not true; an approval dated in the future; and a `## Principles check`
-  section that is empty or wrong. For these the control is review: a diff of `vocabulary.yml` —
-  baseline, approvals or exemptions — is reviewed as an approval.  
+  approved design; an existing mechanism built a second time; a word in code outside the
+  catalogs, `domain/closed_sets.py` and the question kinds; an approval or exemption that is
+  not true; and a `## Principles check` section that is empty or wrong. For these the control
+  is the principles check and review: a diff of `vocabulary.yml` — baseline, approvals or
+  exemptions — is reviewed as an approval.  
 - **Reviewer briefs carry §8.8 and §8.9.** A violation is graded Important, never Minor, and
   two fix rounds on one task are reported to the user as "the concept may be wrong" (§13.8).  
 

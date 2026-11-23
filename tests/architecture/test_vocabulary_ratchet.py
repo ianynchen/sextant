@@ -20,9 +20,9 @@ approval (§8.9):
   (a date after 2026-11-23) and `reference`;
 - `exemptions` — what is NOT a Sextant word, each with its reason: catalog mappings whose keys
   are data (`data_keyed_mappings`), catalog keys whose values are the framework's or the
-  user's names (`open_value_keys`), and code sets or names whose strings are not words
-  (`not_vocabulary`, `not_vocabulary_names`). Kept beside the approvals, not in this file, so
-  an exemption is as visible as an approval.
+  user's names (`open_value_keys`), and sets in a pinned module whose strings are not words
+  (`not_vocabulary`). Kept beside the approvals, not in this file, so an exemption is as
+  visible as an approval.
 
 ## What counts as a word
 
@@ -37,20 +37,27 @@ approval (§8.9):
    upper-case HTTP verb — are skipped by that stated rule), or `exemptions.open_value_keys`.
    `arg<N>` is an argument position and is never recorded. A value under a data-keyed mapping
    counts under the mapping's own key (`repositories` -> `save`).
-3. **The members of every closed set in code** in `_scanned_modules()`: every module under
-   `application/`, `domain/`, `egress/` and `storage/`, and the catalog loader. A closed set is
-   a module-level name, or a name in the body of a module-level class, whose value is a
-   non-empty tuple, list, set or frozenset of strings, a dict whose keys are strings (its
-   members are the keys and the string values without whitespace — a sentence is prose, not
-   a word), a `Literal[...]` alias, or an `Enum` (its values). Any spelling of the name
-   counts; a dunder name is skipped (Python's export and slot protocol). Found by reading the
-   module, so a NEW set is caught on the day it appears.
+3. **The members of the closed sets in the two places that hold them** (`_PINNED`): every
+   closed set in `domain/closed_sets.py`, the file the project names as the home of its closed
+   sets (`test_source_rules.py` keeps the schema's sets there), and the open-question kinds,
+   `QUESTIONS` in `application/resolve/open_questions.py`. A closed set is a module-level
+   name, or a name in the body of a module-level class, whose value is a non-empty tuple,
+   list, set or frozenset of strings, a dict whose keys are strings (its members are the keys
+   and the string values without whitespace — a sentence is prose, not a word), a
+   `Literal[...]` alias, or an `Enum` (its values). A dunder name is skipped.
 
-When in doubt a set or a key is vocabulary: a false exemption hides a word, a false pin costs
-one approval. The baseline is compared with the live words in both directions: a word removed
+**The rest of the code is NOT scanned, on purpose** (ruled by the user 2026-11-23). A word can
+be written in code in too many forms — a single constant, a tuple of pairs, an inline
+comparison — and three review rounds each found new ones; a scan that chases them all grows
+without end and makes an approval of every new table. A word in other code is controlled by
+the principles check and by review (§8.9). A closed set of PUBLISHED words belongs in
+`domain/closed_sets.py`, where this test sees it.
+
+When in doubt a key is vocabulary: a false exemption hides a word, a false pin costs one
+approval. The baseline is compared with the live words in both directions: a word removed
 from the code fails until the file drops it, and a set that MOVES says so.
 
-It is OFFLINE and deterministic: it reads the shipped catalogs and imports the scanned modules.
+It is OFFLINE and deterministic: it reads the shipped catalogs and imports the pinned modules.
 """
 
 import ast
@@ -75,13 +82,11 @@ CATALOG_KEY = "catalog key"
 CATALOG_VALUE = "catalog value: "
 RULE_DATE = datetime.date(2026, 11, 23)
 
-_SCANNED_TREES = (
-    "sextant/application",
-    "sextant/domain",
-    "sextant/egress",
-    "sextant/storage",
-)
-_SCANNED_FILES = ("sextant/ingress/catalogs/yaml_source.py",)
+# Module -> the names pinned in it; None is every closed set the module defines.
+_PINNED: Mapping[str, frozenset[str] | None] = {
+    "sextant.domain.closed_sets": None,
+    "sextant.application.resolve.open_questions": frozenset({"QUESTIONS"}),
+}
 
 _POSITION = re.compile(r"arg\d+")
 _WORD = re.compile(r"[a-z][a-z0-9_]*")
@@ -96,13 +101,6 @@ _ASK = (
 
 def _file() -> dict[str, Any]:
     return yaml.safe_load(VOCABULARY.read_text(encoding="utf-8"))
-
-
-def _scanned_modules() -> list[str]:
-    files = [*(path for tree in _SCANNED_TREES for path in (SRC / tree).rglob("*.py"))]
-    files += [SRC / one for one in _SCANNED_FILES]
-    names = {".".join(path.relative_to(SRC).with_suffix("").parts) for path in files}
-    return sorted(name.removesuffix(".__init__") for name in names)
 
 
 def _data_keyed(exemptions: Mapping[str, Any]) -> set[tuple[str, ...]]:
@@ -173,14 +171,15 @@ def _assigned(body: list[ast.stmt]) -> list[str]:
 
 
 def _closed_sets(
-    modules: list[str] | None = None, exemptions: Mapping[str, Any] | None = None
+    modules: Mapping[str, frozenset[str] | None] | None = None,
+    exemptions: Mapping[str, Any] | None = None,
 ) -> dict[str, set[str]]:
-    """Every closed set each module DEFINES (an import is the defining module's), by `where`."""
+    """Every pinned closed set each module DEFINES (an import is the defining module's), by
+    `where`."""
     exemptions = _file()["exemptions"] if exemptions is None else exemptions
     excluded = exemptions.get("not_vocabulary") or {}
-    excluded_names = exemptions.get("not_vocabulary_names") or {}
     found: dict[str, set[str]] = {}
-    for name in _scanned_modules() if modules is None else modules:
+    for name, pinned in (_PINNED if modules is None else modules).items():
         module = importlib.import_module(name)
         path = Path(module.__file__)
         prefix = path.relative_to(REPO).as_posix() if path.is_relative_to(REPO) else path.name
@@ -200,7 +199,7 @@ def _closed_sets(
         for one, value in candidates:
             members = _members(value)
             where = f"{prefix}::{one}"
-            if members and where not in excluded and one.split(".")[-1] not in excluded_names:
+            if members and where not in excluded and (pinned is None or one in pinned):
                 found[where] = members
     return found
 
@@ -214,7 +213,7 @@ def _live(document: dict[str, Any], root: Path = CATALOGS) -> dict[str, set[str]
         live[CATALOG_VALUE + key] = values.get(key, set())
     for key in baseline.get("mixed_value_keys") or {}:
         live[CATALOG_VALUE + key] = {one for one in values.get(key, set()) if _WORD.fullmatch(one)}
-    return {**live, **_closed_sets(None if root == CATALOGS else [], exemptions)}
+    return {**live, **_closed_sets(None if root == CATALOGS else {}, exemptions)}
 
 
 def _unlisted_value_keys(document: dict[str, Any], root: Path = CATALOGS) -> list[str]:
@@ -348,13 +347,9 @@ def stale_exemptions(document: dict[str, Any], root: Path = CATALOGS) -> list[st
     for where in sorted(exemptions.get("not_vocabulary") or {}):
         if where not in every:
             found.append(
-                f"exemptions.not_vocabulary lists {where}, which is no longer a closed set in a "
-                f"scanned module: if it moved, move the entry to the new place in {FILE}; if it "
-                "is gone, delete the entry"
+                f"exemptions.not_vocabulary lists {where}, which is not a closed set in a pinned "
+                f"module: delete the entry from {FILE}"
             )
-    names = {where.split("::")[-1].split(".")[-1] for where in every}
-    for name in sorted(set(exemptions.get("not_vocabulary_names") or {}) - names):
-        found.append(f"exemptions.not_vocabulary_names lists {name!r}, which no set has: delete it")
     return found
 
 
@@ -581,12 +576,12 @@ def test_a_module_scan_sees_class_body_sets_literal_aliases_and_lower_case_names
         "__all__ = ['Kind']\n"
         "class Holder:\n"
         "    WORDS = ('held', 'pending')\n"
-        "    model_config = {'frozen': True}\n"
         "    __slots__ = ('a',)\n",
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
-    found = _closed_sets(["fake_words"], {"not_vocabulary_names": {"model_config": "pydantic"}})
+    assert _closed_sets({"fake_words": frozenset({"kinds"})}, {}) == {"fake_words.py::kinds": {"x"}}
+    found = _closed_sets({"fake_words": None}, {})
     assert found == {
         "fake_words.py::Kind": {"one", "two"},
         "fake_words.py::Mode": {"fast"},
@@ -605,36 +600,23 @@ def test_each_exemption_list_fails_when_stale(tmp_path: Path):
             f"delete it from {FILE}"
         )
     ]
-    document = {
-        "exemptions": {
-            "not_vocabulary": {"src/sextant/domain/gone.py::_X": "a reason"},
-            "not_vocabulary_names": {"no_such_name": "a reason"},
-        }
-    }
+    document = {"exemptions": {"not_vocabulary": {"src/sextant/domain/gone.py::_X": "a reason"}}}
     assert stale_exemptions(document) == [
         (
-            "exemptions.not_vocabulary lists src/sextant/domain/gone.py::_X, which is no longer a "
-            f"closed set in a scanned module: if it moved, move the entry to the new place in {FILE}; "
-            "if it is gone, delete the entry"
-        ),
-        "exemptions.not_vocabulary_names lists 'no_such_name', which no set has: delete it",
+            "exemptions.not_vocabulary lists src/sextant/domain/gone.py::_X, which is not a closed "
+            f"set in a pinned module: delete the entry from {FILE}"
+        )
     ]
 
 
-def test_the_scan_reaches_every_tree_it_claims():
+def test_the_pinned_places_are_the_closed_sets_file_and_the_question_kinds():
     found = _closed_sets()
-    resolve = "src/sextant/application/resolve/"
-    assert "unrooted" in found[f"{resolve}shapes/mounts.py::_REFUSES"]
-    assert "exact" in found[f"{resolve}engines/config_join.py::_NAME_MATCHING"]
-    assert "payload_binding" in found[f"{resolve}open_questions.py::QUESTIONS"]
-    assert "cycle" in found[f"{resolve}values.py::_REASONS"]
-    assert "pattern" in found[f"{resolve}engines/fluent.py::_URL_IS"]
+    places = {where.split("::")[0] for where in found}
+    assert places == {
+        "src/sextant/domain/closed_sets.py",
+        "src/sextant/application/resolve/open_questions.py",
+    }
     assert "resolved" in found["src/sextant/domain/closed_sets.py::Resolution"]
-    assert "positional" in found["src/sextant/domain/facts.py::ParameterKind"]
-    assert "callers" in found["src/sextant/application/query/questions.py::QUESTIONS"]
-    assert "superseded" in found["src/sextant/application/boundary/observability.py::SKIP_CAUSES"]
-    assert "grpc" in found["src/sextant/egress/render/document.py::_VERBED_PROTOCOLS"]
-    assert "endpoints" in found["src/sextant/storage/duckdb/workspace.py::READ_ONLY_TABLES"]
-    assert (
-        "returns_receiver" in found["src/sextant/ingress/catalogs/yaml_source.py::_RETURNS_FORMS"]
-    )
+    questions = "src/sextant/application/resolve/open_questions.py"
+    assert [where for where in found if where.startswith(questions)] == [f"{questions}::QUESTIONS"]
+    assert "payload_binding" in found[f"{questions}::QUESTIONS"]
