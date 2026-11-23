@@ -9,58 +9,46 @@ closed"). The rule was written, agreed and broken; §13.8 says such a rule needs
 because prose has already been tried and lost. This is that enforcement for the words it can
 see; §8.9 names what it cannot see, and review is the control there.
 
+## One file holds the truth
+
+`vocabulary.yml` beside this file has three sections, and ANY diff of it is reviewed as an
+approval (§8.9):
+
+- `baseline` — the words on `main` on 2026-11-23, generated once by `_document()` and never
+  regenerated, because regenerating is how a word would slip in;
+- `approvals` — one entry per word added since: `word`, `where`, `approved_by`, `approved_on`
+  (a date after 2026-11-23) and `reference`;
+- `exemptions` — what is NOT a Sextant word, each with its reason: catalog mappings whose keys
+  are data (`data_keyed_mappings`), catalog keys whose values are the framework's or the
+  user's names (`open_value_keys`), and code sets or names whose strings are not words
+  (`not_vocabulary`, `not_vocabulary_names`). Kept beside the approvals, not in this file, so
+  an exemption is as visible as an approval.
+
 ## What counts as a word
 
-Three kinds, compared against `vocabulary.yml` beside this file:
-
 1. **Every mapping KEY used in a shipped catalog** (`src/sextant/catalogs/**/*.yml`), found by
-   walking the parsed documents. The loader refuses a key it does not read, so the keys the
-   shipped catalogs use are the catalog words in real use. Recorded by NAME, not by where
-   the key sits: a known word reused in a new block (`{arg, keyword}` in a fortieth place) is
-   the reuse §8.8 rule 3 asks for, and a ratchet that fired on it would punish exactly that.
-   A new BLOCK still needs its own key name, and that name is caught.
-2. **The VALUES of the closed-value keys** listed in `vocabulary.yml` (`closed_value_keys`):
-   every string a shipped catalog writes under such a key (in a list too, and under a
-   data-keyed mapping, where the mapping's own key is the one that counts). `arg<N>` is an
-   argument position, not a word, and is not recorded, so a key whose values are all
-   positions is listed with no words and any WORD written there fails. The list is data in
-   the file, not chosen at test time. It was made on 2026-11-23 by the rule "every string
-   value of this key in every shipped catalog is a lower-case identifier", minus
-   `_OPEN_VALUE_KEYS` below, whose values are the framework's or the user's names. A NEW key
-   that takes word values is caught as a new key; its approval says whether it is
-   closed-valued, and if so it is added to the list in the same change.
+   walking the parsed documents, except the keys of a data-keyed mapping (whose VALUES are
+   still walked). Recorded by NAME, not by where the key sits: a known word reused in a new
+   block is the reuse §8.8 rule 3 asks for. A new block still needs its own key name.
+2. **The string VALUES of catalog keys.** Every key that takes a string value anywhere is in
+   exactly ONE of three lists, and a key in none of them fails, so no key falls between them:
+   `baseline.closed_value_keys` (every value pinned), `baseline.mixed_value_keys` (the values
+   that are lower-case identifiers are pinned; the others — a separator, a config key, an
+   upper-case HTTP verb — are skipped by that stated rule), or `exemptions.open_value_keys`.
+   `arg<N>` is an argument position and is never recorded. A value under a data-keyed mapping
+   counts under the mapping's own key (`repositories` -> `save`).
 3. **The members of every closed set in code** in `_scanned_modules()`: every module under
-   `src/sextant/application/resolve/`, the catalog loader, and the domain's closed sets.
-   A closed set is a module-level name, or a name in the body of a module-level class, whose
-   value is a non-empty tuple, list, set or frozenset of strings, a dict whose keys are
-   strings (its members are the keys and the string values), a `Literal[...]` alias, or an
-   `Enum` (its values). Found by reading the module, not by a list typed here, so a NEW set
-   is caught on the day it appears: it is in neither the baseline nor `_NOT_VOCABULARY`, and
-   every member reads as a new word. Any spelling of the name counts, lower case too; only a
-   dunder name (`__all__`, `__slots__`) is skipped, because its strings are Python's export
-   and attribute protocol.
+   `application/`, `domain/`, `egress/` and `storage/`, and the catalog loader. A closed set is
+   a module-level name, or a name in the body of a module-level class, whose value is a
+   non-empty tuple, list, set or frozenset of strings, a dict whose keys are strings (its
+   members are the keys and the string values without whitespace — a sentence is prose, not
+   a word), a `Literal[...]` alias, or an `Enum` (its values). Any spelling of the name
+   counts; a dunder name is skipped (Python's export and slot protocol). Found by reading the
+   module, so a NEW set is caught on the day it appears.
 
-## What is data, not vocabulary
-
-A catalog mapping whose keys are the FRAMEWORK's or the USER's names (a class, an annotation
-attribute, a configured value, an argument position, a character) holds no Sextant word in
-its keys: adding `org.example.NewRepository` to `repositories` is a catalog fact, not a new
-concept. `_DATA_KEYED_MAPPINGS` lists each such mapping by its exact path, with the D02
-statement that makes its keys data. Its VALUES are still walked, so a word nested under a
-data key (`requirements.Header.kind`) is still a word. Exact paths, not a pattern: a new data
-map elsewhere fails until someone adds it here with its reason. `_OPEN_VALUE_KEYS` and
-`_NOT_VOCABULARY` do the same for values and code sets; when in doubt a set is vocabulary.
-
-## The baseline and the approvals
-
-`vocabulary.yml` holds `baseline` — the words on `main` on 2026-11-23, generated once by
-`_document()` and never regenerated, because regenerating is how a word would slip in — and
-`approvals`, one entry per word added since, each naming `word`, `where`, `approved_by`,
-`approved_on` (a date after 2026-11-23) and `reference`. The test compares the live words with
-baseline + approvals in both directions: a new word with no entry fails, and an entry for a
-word that is gone fails, so the file stays the truth. A word removed from the code is removed
-from the file by hand; a set that MOVES to another module has its baseline entry moved, and
-the failure says so. Any diff of `vocabulary.yml` is reviewed as an approval.
+When in doubt a set or a key is vocabulary: a false exemption hides a word, a false pin costs
+one approval. The baseline is compared with the live words in both directions: a word removed
+from the code fails until the file drops it, and a set that MOVES says so.
 
 It is OFFLINE and deterministic: it reads the shipped catalogs and imports the scanned modules.
 """
@@ -81,13 +69,33 @@ REPO = Path(__file__).parents[2]
 SRC = REPO / "src"
 CATALOGS = SRC / "sextant" / "catalogs"
 VOCABULARY = Path(__file__).parent / "vocabulary.yml"
+FILE = "tests/architecture/vocabulary.yml"
 
 CATALOG_KEY = "catalog key"
 CATALOG_VALUE = "catalog value: "
 RULE_DATE = datetime.date(2026, 11, 23)
 
-_SCANNED_TREES = ("sextant/application/resolve",)
-_SCANNED_FILES = ("sextant/ingress/catalogs/yaml_source.py", "sextant/domain/closed_sets.py")
+_SCANNED_TREES = (
+    "sextant/application",
+    "sextant/domain",
+    "sextant/egress",
+    "sextant/storage",
+)
+_SCANNED_FILES = ("sextant/ingress/catalogs/yaml_source.py",)
+
+_POSITION = re.compile(r"arg\d+")
+_WORD = re.compile(r"[a-z][a-z0-9_]*")
+_APPROVAL_FIELDS = ("word", "where", "approved_by", "approved_on", "reference")
+_ASK = (
+    "GUIDELINES §8.9 requires the principles check and the user's approval; add an approval "
+    "entry with approved_by/approved_on/reference to tests/architecture/vocabulary.yml, or — "
+    "only for something that is not a Sextant word — an exemption with its reason; either is "
+    "reviewed as an approval (GUIDELINES §8.9)"
+)
+
+
+def _file() -> dict[str, Any]:
+    return yaml.safe_load(VOCABULARY.read_text(encoding="utf-8"))
 
 
 def _scanned_modules() -> list[str]:
@@ -97,166 +105,23 @@ def _scanned_modules() -> list[str]:
     return sorted(name.removesuffix(".__init__") for name in names)
 
 
-_R = "src/sextant/application/resolve/"
-_COLUMNS = "names of workspace table columns, not words a catalog writes or a row publishes"
-_LANGUAGE = "the language's or the platform's own spellings"
-# Each is `where` (see `_closed_sets`) -> why its members are not Sextant words.
-_NOT_VOCABULARY = {
-    f"{_R}dispatch_hops.py::_KEPT_COLUMNS": _COLUMNS,
-    f"{_R}engines/combinator.py::_GROUPED_FIELDS": _COLUMNS,
-    f"{_R}format.py::_PAYLOAD_COLUMNS": _COLUMNS,
-    f"{_R}format.py::_MEDIA_COLUMNS": _COLUMNS,
-    f"{_R}format.py::_MATCH_COLUMNS": _COLUMNS,
-    f"{_R}path_prefix.py::_MATCH_COLUMNS": _COLUMNS,
-    f"{_R}protocol_hint.py::_MEDIA_COLUMNS": _COLUMNS,
-    f"{_R}protocol_hint.py::_MATCH_COLUMNS": _COLUMNS,
-    f"{_R}self_calls.py::_ROW_COLUMNS": _COLUMNS,
-    f"{_R}shapes/parse_binding.py::_MATCH_COLUMNS": _COLUMNS,
-    f"{_R}values.py::_UNCHANGEABLE": f"{_LANGUAGE}: JVM descriptors of immutable types",
-    f"{_R}values.py::_CALLABLES": f"{_LANGUAGE}: Python's symbols for a callable type",
-    f"{_R}effective_calls.py::_BOXING": f"{_LANGUAGE}: JVM boxing descriptors",
-    f"{_R}dispatch.py::_NOT_INHERITED": f"{_LANGUAGE}: JVM initializer names",
-    f"{_R}receiver_binding.py::_PROTOCOL": f"{_LANGUAGE}: Python dunder protocol methods",
-    f"{_R}receiver_binding.py::_SYNTAX": f"{_LANGUAGE}: Python dunder protocol methods",
-    f"{_R}bean_conditions.py::_COMPOSITION": f"{_LANGUAGE}: Spring condition operators `&|()`",
-    f"{_R}self_calls.py::_LOOPBACK": "a standard's spellings: loopback host names and addresses",
-    f"{_R}request_requirements.py::_NEGOTIATION_HEADERS": "a standard's spellings: HTTP header names",
-    f"{_R}shapes/made_by.py::_SCHEMES": "a standard's spellings: URL schemes",
-    f"{_R}engines/fluent.py::_DIRECTIONS": "computed from `Direction`, which is recorded itself",
-    f"{_R}engines/single_call.py::_DIRECTIONS": "computed from `Direction`, which is recorded itself",
-    "src/sextant/domain/closed_sets.py::_RANKS": "a rank per `Evidence` member, recorded there",
-    f"{_R}shapes/chains.py::_RULE_9": "internal NUL-prefixed keys, never written nor published",
-    f"{_R}request_requirements.py::BOUND": "a value (a pair of empty strings), not a set of words",
-}
-
-_POSITION = re.compile(r"arg\d+")
-_WORD = re.compile(r"[a-z][a-z0-9_]*")
-_ATTRIBUTE = "an annotation's or a connector's attribute name"
-# Keys whose every value is a lower-case identifier but names the framework's or the user's own
-# things, so a new value is a catalog fact, not a word; excluded from `closed_value_keys`.
-_OPEN_VALUE_KEYS = {
-    **dict.fromkeys(
-        (
-            "annotation_attrs",
-            "connector_attribute",
-            "consumes_from",
-            "destination_from",
-            "discriminators",
-            "exported_attribute",
-            "expressions",
-            "method_from",
-            "name_attrs",
-            "names",
-            "packages_from",
-            "path_attribute",
-            "produces_from",
-            "required_attr",
-            "status_from",
-            "stereotype_name_attrs",
-            "type_attrs",
-        ),
-        _ATTRIBUTE,
-    ),
-    "absent_value": "the framework's value for an absent attribute (`true`)",
-    "config_field": "a field name in the framework's settings class",
-    "delegate_field": "a field name in the framework's class",
-    "field": "a field name in the framework's configuration",
-    "keyword": "a keyword argument name of the framework's function",
-    "from_argument": "a keyword argument name of the framework's function",
-    "name_from": "a keyword argument or attribute name of the framework",
-    "getter_prefixes": "a prefix of the framework's accessor names (`get`, `is`)",
-    "drop_suffixes": "a suffix of the user's class names",
-    "handler_methods": "a method name of the framework",
-    "serializers": "a method name of the framework",
-    "search_segment": "a path segment the framework serves",
-    "scheme": "a URL scheme",
-    "default_profile": "the framework's default profile name",
-}
-
-# Catalog mappings whose KEYS are framework or user data, by exact path from the document root
-# (list items do not add a step), each with the D02 statement that makes them data.
-_DATA_KEYED_MAPPINGS = {
-    (
-        "stereotype_name_attrs",
-    ): "D02 §1c: stereotype annotation name -> the attribute naming the bean",
-    ("matches", "entries", "arg_types"): "D02 §2: argument position -> parameter type",
-    (
-        "matches",
-        "vocabulary",
-        "prefixes",
-        "arg_types",
-    ): "D02 §2: argument position -> parameter type",
-    ("matches", "vocabulary", "verbs", "arg_types"): "D02 §2: argument position -> parameter type",
-    ("matches", "vocabulary", "request_requirement", "arg_types"): (
-        "D02 §2: argument position -> parameter type"
-    ),
-    ("matches", "indexed", "item", "requirements"): (
-        "D02 `config_join` indexed: the gateway's predicate factory name (`Header`) -> its reader"
-    ),
-    ("matches", "kinds"): "D02 Quartz: schedule builder type -> the framework's kind word",
-    ("matches", "media_from_config", "format_from"): "D02 §2d: serializer class -> format",
-    ("matches", "media_from_config", "values"): "D02 §2d: serializer class -> media",
-    ("matches", "path_fallback", "replace"): "D02: a character of the name -> its replacement",
-    ("matches", "request_params", "spelling", "replace"): (
-        "D02 `spelling: {replace: {<from>: <to>}}`: a character -> its replacement"
-    ),
-    (
-        "matches",
-        "repositories",
-    ): "D02 Spring Data REST: contract fqn -> the CRUD operations it licenses",
-    (
-        "matches",
-        "triggers",
-    ): "D02 scheduled: annotation attribute -> the framework's word for the kind",
-    (
-        "matches",
-        "disabled",
-    ): "D02 scheduled: annotation attribute -> the value the framework reads as never",
-    ("matches", "verb_values", "fields"): 'D02: `"<owner>#<field>"` -> verb',
-    (
-        "matches",
-        "vocabulary",
-        "verb_values",
-        "fields",
-    ): 'D02 `combinator`: `"<owner>#<field>"` -> verb',
-    (
-        "matches",
-        "vocabulary",
-        "verb_values",
-        "getters",
-    ): 'D02 `combinator`: `"<owner>#<method>"` -> verb',
-    ("matches", "vocabulary", "media_values", "getters"): (
-        'D02 `combinator`: `"<owner>#<method>"` -> media value'
-    ),
-    ("matches", "vocabulary", "media_values", "values"): (
-        "D02 `combinator`: a constant of `media_values.owner` -> media value"
-    ),
-    ("media_formats",): "D02 format ladder rung 2: media type -> format",
-    ("matches", "address_from_config", "binder_protocols"): (
-        "D02 `config_join`: a configured binder name -> protocol"
-    ),
-    ("matches", "detection_strategy", "strategies"): (
-        "D02 Spring Data REST: a value of the configured key -> flags"
-    ),
-    ("matches", "mapping", "request_requirement_attrs"): (
-        "D02 `annotation_driven`: mapping annotation attribute -> requirement kind"
-    ),
-    ("client_base", "default_ports"): "D02 client model: `{scheme: port}`",
-}
-
-_APPROVAL_FIELDS = ("word", "where", "approved_by", "approved_on", "reference")
+def _data_keyed(exemptions: Mapping[str, Any]) -> set[tuple[str, ...]]:
+    return {tuple(path.split(".")) for path in exemptions.get("data_keyed_mappings") or {}}
 
 
-def _catalog_words(root: Path) -> tuple[set[str], dict[str, set[str]], set[tuple[str, ...]]]:
-    """Every key name under `root`, every word value by the key that holds it, and the
-    data-keyed paths that were seen."""
+def _catalog_words(
+    root: Path, exemptions: Mapping[str, Any]
+) -> tuple[set[str], dict[str, set[str]], set[tuple[str, ...]]]:
+    """Every key name under `root`, every string value by the key that holds it (positions
+    left out), and the data-keyed paths that were seen."""
+    data_keyed = _data_keyed(exemptions)
     keys: set[str] = set()
     values: dict[str, set[str]] = {}
     seen: set[tuple[str, ...]] = set()
 
     def walk(node: Any, path: tuple[str, ...], holder: str | None) -> None:
         if isinstance(node, dict):
-            data = path in _DATA_KEYED_MAPPINGS
+            data = path in data_keyed
             if data:
                 seen.add(path)
             for key, value in node.items():
@@ -290,7 +155,8 @@ def _members(value: Any) -> set[str] | None:
     if isinstance(value, tuple | list | set | frozenset) and value:
         return {str(one) for one in value} if all(isinstance(one, str) for one in value) else None
     if isinstance(value, Mapping) and value and all(isinstance(one, str) for one in value):
-        return {str(one) for one in value} | {one for one in value.values() if isinstance(one, str)}
+        words = {one for one in value.values() if isinstance(one, str) and not one.split()[1:]}
+        return {str(one) for one in value} | words
     return _literal(value)
 
 
@@ -307,9 +173,12 @@ def _assigned(body: list[ast.stmt]) -> list[str]:
 
 
 def _closed_sets(
-    modules: list[str] | None = None, exclude: Mapping[str, str] = _NOT_VOCABULARY
+    modules: list[str] | None = None, exemptions: Mapping[str, Any] | None = None
 ) -> dict[str, set[str]]:
     """Every closed set each module DEFINES (an import is the defining module's), by `where`."""
+    exemptions = _file()["exemptions"] if exemptions is None else exemptions
+    excluded = exemptions.get("not_vocabulary") or {}
+    excluded_names = exemptions.get("not_vocabulary_names") or {}
     found: dict[str, set[str]] = {}
     for name in _scanned_modules() if modules is None else modules:
         module = importlib.import_module(name)
@@ -331,44 +200,78 @@ def _closed_sets(
         for one, value in candidates:
             members = _members(value)
             where = f"{prefix}::{one}"
-            if members is not None and where not in exclude:
+            if members and where not in excluded and one.split(".")[-1] not in excluded_names:
                 found[where] = members
     return found
 
 
-def _live(baseline: dict[str, Any]) -> dict[str, set[str]]:
-    keys, values, _ = _catalog_words(CATALOGS)
-    listed = baseline.get("closed_value_keys") or {}
-    return {
-        CATALOG_KEY: keys,
-        **{CATALOG_VALUE + key: values.get(key, set()) for key in listed},
-        **_closed_sets(),
+def _live(document: dict[str, Any], root: Path = CATALOGS) -> dict[str, set[str]]:
+    """The live words, by `where`, for the keys and sets `document` declares."""
+    baseline, exemptions = document.get("baseline") or {}, document.get("exemptions") or {}
+    keys, values, _ = _catalog_words(root, exemptions)
+    live: dict[str, set[str]] = {CATALOG_KEY: keys}
+    for key in baseline.get("closed_value_keys") or {}:
+        live[CATALOG_VALUE + key] = values.get(key, set())
+    for key in baseline.get("mixed_value_keys") or {}:
+        live[CATALOG_VALUE + key] = {one for one in values.get(key, set()) if _WORD.fullmatch(one)}
+    return {**live, **_closed_sets(None if root == CATALOGS else [], exemptions)}
+
+
+def _unlisted_value_keys(document: dict[str, Any], root: Path = CATALOGS) -> list[str]:
+    """A key that takes string values and is in none, or more than one, of the three lists."""
+    baseline, exemptions = document.get("baseline") or {}, document.get("exemptions") or {}
+    _, values, _ = _catalog_words(root, exemptions)
+    lists = {
+        "baseline.closed_value_keys": set(baseline.get("closed_value_keys") or {}),
+        "baseline.mixed_value_keys": set(baseline.get("mixed_value_keys") or {}),
+        "exemptions.open_value_keys": set(exemptions.get("open_value_keys") or {}),
     }
+    found = []
+    for key in sorted(values):
+        holding = [name for name, keys in lists.items() if key in keys]
+        if len(holding) != 1:
+            found.append(
+                f"catalog key {key!r} takes string values and is in {holding or 'none'} of "
+                f"{', '.join(lists)} in {FILE}: put it in exactly one — closed or mixed pins its "
+                "words, open needs a reason; " + _ASK.split("; ", 1)[0]
+            )
+    for name, keys in lists.items():
+        for key in sorted(keys - set(values)):
+            found.append(
+                f"{name} lists {key!r}, which no shipped catalog uses: delete it from {FILE}"
+            )
+    return found
 
 
 def _document() -> dict[str, Any]:
-    """The file's content as the baseline, with no approvals — run once, 2026-11-23."""
-    keys, values, _ = _catalog_words(CATALOGS)
-    closed = {
-        key: sorted(words)
-        for key, words in sorted(values.items())
-        if all(_WORD.fullmatch(one) for one in words) and key not in _OPEN_VALUE_KEYS
-    }
-    sets = _closed_sets()
+    """The baseline for the words on `main`, with no approvals — run once, 2026-11-23."""
+    file = _file()
+    exemptions = file["exemptions"]
+    keys, values, _ = _catalog_words(CATALOGS, exemptions)
+    declared = file["baseline"]
+    sets = _closed_sets(None, exemptions)
     return {
         "baseline": {
             "catalog_keys": sorted(keys),
-            "closed_value_keys": closed,
+            "closed_value_keys": {
+                key: sorted(values[key]) for key in sorted(declared["closed_value_keys"])
+            },
+            "mixed_value_keys": {
+                key: sorted(one for one in values[key] if _WORD.fullmatch(one))
+                for key in sorted(declared["mixed_value_keys"])
+            },
             "closed_sets": {where: sorted(sets[where]) for where in sorted(sets)},
         },
         "approvals": [],
+        "exemptions": exemptions,
     }
 
 
 def _expected_baseline(baseline: dict[str, Any]) -> dict[str, set[str]]:
     expected = {CATALOG_KEY: set(baseline.get("catalog_keys") or [])}
-    for key, words in (baseline.get("closed_value_keys") or {}).items():
-        expected[CATALOG_VALUE + key] = set(words or [])
+    for section in ("closed_value_keys", "mixed_value_keys"):
+        for key, words in (baseline.get(section) or {}).items():
+            expected[CATALOG_VALUE + key] = set(words or [])
     for where, words in (baseline.get("closed_sets") or {}).items():
         expected[where] = set(words)
     return expected
@@ -415,68 +318,57 @@ def problems(live: dict[str, set[str]], document: dict[str, Any]) -> list[str]:
         if where in moves:
             found.append(
                 f"closed set moved from {moves[where]} to {where}: move its entry under "
-                "baseline.closed_sets in tests/architecture/vocabulary.yml to the new place"
+                f"baseline.closed_sets in {FILE} to the new place"
             )
             continue
         here, wanted = live.get(where, set()), expected.get(where, set())
-        new_set = where.startswith("src/") and where not in recorded
         for word in sorted(here - wanted):
-            hint = (
-                f"; if {where} holds no Sextant word, list it in _NOT_VOCABULARY in "
-                "tests/architecture/test_vocabulary_ratchet.py with the reason"
-                if new_set
-                else ""
-            )
-            found.append(
-                f"new word {word!r} in {where}: GUIDELINES §8.9 requires the principles check and "
-                "the user's approval; add an approval entry with approved_by/approved_on/reference "
-                f"to tests/architecture/vocabulary.yml{hint}"
-            )
+            found.append(f"new word {word!r} in {where}: {_ASK}")
         for word in sorted(wanted - here):
             source = "approvals" if (where, word) in approved else "baseline"
             found.append(
                 f"stale word {word!r} in {where}: it is no longer in the code; remove it from the "
-                f"{source} in tests/architecture/vocabulary.yml"
+                f"{source} in {FILE}"
             )
     return found
 
 
+def stale_exemptions(document: dict[str, Any], root: Path = CATALOGS) -> list[str]:
+    """An exemption that no longer matches anything, so it cannot hide a later word."""
+    exemptions = document.get("exemptions") or {}
+    _, _values, seen = _catalog_words(root, exemptions)
+    found = [
+        f"exemptions.data_keyed_mappings lists {'.'.join(path)}, which no shipped catalog "
+        f"has: delete it from {FILE}"
+        for path in sorted(_data_keyed(exemptions) - seen)
+    ]
+    if root != CATALOGS:
+        return found
+    every = _closed_sets(None, {})
+    for where in sorted(exemptions.get("not_vocabulary") or {}):
+        if where not in every:
+            found.append(
+                f"exemptions.not_vocabulary lists {where}, which is no longer a closed set in a "
+                f"scanned module: if it moved, move the entry to the new place in {FILE}; if it "
+                "is gone, delete the entry"
+            )
+    names = {where.split("::")[-1].split(".")[-1] for where in every}
+    for name in sorted(set(exemptions.get("not_vocabulary_names") or {}) - names):
+        found.append(f"exemptions.not_vocabulary_names lists {name!r}, which no set has: delete it")
+    return found
+
+
 def test_every_word_is_in_the_baseline_or_approved():
-    document = yaml.safe_load(VOCABULARY.read_text(encoding="utf-8"))
-    assert problems(_live(document["baseline"]), document) == []
+    document = _file()
+    assert problems(_live(document), document) == []
 
 
-def test_every_data_keyed_mapping_still_ships():
-    _, _, seen = _catalog_words(CATALOGS)
-    unused = sorted(set(_DATA_KEYED_MAPPINGS) - seen)
-    assert unused == [], (
-        f"{unused} no longer appear in any shipped catalog: delete them from "
-        "_DATA_KEYED_MAPPINGS, so the list cannot hide a later word"
-    )
+def test_every_catalog_key_with_string_values_is_in_exactly_one_list():
+    assert _unlisted_value_keys(_file()) == []
 
 
-def test_every_open_value_key_still_ships():
-    _, values, _ = _catalog_words(CATALOGS)
-    unused = sorted(set(_OPEN_VALUE_KEYS) - set(values))
-    assert unused == [], (
-        f"{unused} no longer appear in any shipped catalog: delete them from _OPEN_VALUE_KEYS"
-    )
-
-
-def test_every_not_vocabulary_set_still_exists():
-    scanned = {name.replace(".", "/") for name in _scanned_modules()}
-    for where in _NOT_VOCABULARY:
-        path = where.split("::")[0].removeprefix("src/").removesuffix(".py")
-        assert path in scanned and where in _closed_sets_including_excluded(), (
-            f"{where} is no longer a closed set in a scanned module: if it moved, move its "
-            "_NOT_VOCABULARY entry to the new place; if it is gone, delete the entry"
-        )
-
-
-def _closed_sets_including_excluded() -> set[str]:
-    paths = {where.split("::")[0] for where in _NOT_VOCABULARY}
-    names = [path.removeprefix("src/").removesuffix(".py").replace("/", ".") for path in paths]
-    return set(_closed_sets(names, exclude={}))
+def test_every_exemption_still_matches_something():
+    assert stale_exemptions(_file()) == []
 
 
 # --- tests of the test: each failure it exists for, shown to happen ---------------------------
@@ -497,7 +389,7 @@ def _baseline_of(
         },
         "closed_sets": {where: sorted(words) for where, words in live.items() if "::" in where},
     }
-    return {"baseline": baseline, "approvals": approvals or []}
+    return {"baseline": baseline, "approvals": approvals or [], "exemptions": {}}
 
 
 def _approval(word: str, where: str, **override: Any) -> dict[str, Any]:
@@ -511,27 +403,77 @@ def _approval(word: str, where: str, **override: Any) -> dict[str, Any]:
     return {key: value for key, value in {**entry, **override}.items() if value is not None}
 
 
+def _edited_catalogs(tmp_path: Path, relative: str, old: str, new: str) -> Path:
+    root = tmp_path / "catalogs"
+    for path in CATALOGS.rglob("*.yml"):
+        target = root / path.relative_to(CATALOGS)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    edited = root / relative
+    text = edited.read_text(encoding="utf-8")
+    assert old in text
+    edited.write_text(text.replace(old, new, 1), encoding="utf-8")
+    return root
+
+
 def test_the_baseline_alone_passes():
     assert problems(_FAKE, _baseline_of(_FAKE)) == []
 
 
 def test_a_new_catalog_key_fails_with_the_instruction():
     live = {**_FAKE, CATALOG_KEY: {"owner", "method", "mount_kind"}}
-    assert problems(live, _baseline_of(_FAKE)) == [
-        (
-            "new word 'mount_kind' in catalog key: GUIDELINES §8.9 requires the principles check "
-            "and the user's approval; add an approval entry with approved_by/approved_on/reference "
-            "to tests/architecture/vocabulary.yml"
-        )
-    ]
+    assert problems(live, _baseline_of(_FAKE)) == [f"new word 'mount_kind' in catalog key: {_ASK}"]
+    assert "either is reviewed as an approval (GUIDELINES §8.9)" in _ASK
 
 
 def test_a_new_value_of_a_closed_value_key_fails_and_its_approval_passes():
     live = {**_FAKE, CATALOG_VALUE + "url_is": {"pattern", "expression"}}
-    (only,) = problems(live, _baseline_of(_FAKE))
-    assert only.startswith("new word 'expression' in catalog value: url_is: GUIDELINES §8.9")
+    assert problems(live, _baseline_of(_FAKE)) == [
+        f"new word 'expression' in catalog value: url_is: {_ASK}"
+    ]
     approval = _approval("expression", CATALOG_VALUE + "url_is")
     assert problems(live, _baseline_of(_FAKE, [approval])) == []
+
+
+def test_a_new_join_word_in_a_mixed_key_fails_on_the_real_catalogs(tmp_path: Path):
+    root = _edited_catalogs(
+        tmp_path, "client-models/vertx-web.yml", "join: fill_authority", "join: brand_new_join"
+    )
+    document = _file()
+    found = problems(_live(document, root), document)
+    assert f"new word 'brand_new_join' in catalog value: join: {_ASK}" in found
+
+
+def test_a_new_wire_word_fails_on_the_real_catalogs(tmp_path: Path):
+    root = _edited_catalogs(
+        tmp_path, "shape-models/json.yml", "wire: boolean }", "wire: flagword }"
+    )
+    document = _file()
+    found = problems(_live(document, root), document)
+    assert f"new word 'flagword' in catalog value: wire: {_ASK}" in found
+
+
+def test_a_mixed_key_pins_its_words_and_skips_the_rest(tmp_path: Path):
+    (tmp_path / "c.yml").write_text("join: [append_to_base, /, GET]\n", encoding="utf-8")
+    document = {"baseline": {"mixed_value_keys": {"join": ["append_to_base"]}}, "exemptions": {}}
+    assert _live(document, tmp_path)[CATALOG_VALUE + "join"] == {"append_to_base"}
+
+
+def test_a_key_with_string_values_in_no_list_fails_and_in_two_lists_fails(tmp_path: Path):
+    (tmp_path / "c.yml").write_text("join: fill_authority\nstyle: fluent\n", encoding="utf-8")
+    document = {
+        "baseline": {"closed_value_keys": {"style": []}, "mixed_value_keys": {"style": []}},
+        "exemptions": {"open_value_keys": {"gone": "a reason"}},
+    }
+    found = _unlisted_value_keys(document, tmp_path)
+    assert found[0].startswith("catalog key 'join' takes string values and is in none of")
+    assert found[1].startswith(
+        "catalog key 'style' takes string values and is in "
+        "['baseline.closed_value_keys', 'baseline.mixed_value_keys'] of"
+    )
+    assert found[2] == (
+        f"exemptions.open_value_keys lists 'gone', which no shipped catalog uses: delete it from {FILE}"
+    )
 
 
 def test_a_catalog_value_is_recorded_under_its_key_and_a_position_is_not_a_word(tmp_path: Path):
@@ -540,7 +482,8 @@ def test_a_catalog_value_is_recorded_under_its_key_and_a_position_is_not_a_word(
         "  roots:\n    - { captures: { url_is: expression, url: arg0 } }\n",
         encoding="utf-8",
     )
-    keys, values, _ = _catalog_words(tmp_path)
+    exemptions = {"data_keyed_mappings": {"matches.repositories": "fqn -> operations"}}
+    keys, values, _ = _catalog_words(tmp_path, exemptions)
     assert values["url_is"] == {"expression"}
     assert values["url"] == set()
     assert values["repositories"] == {"save"}
@@ -549,16 +492,16 @@ def test_a_catalog_value_is_recorded_under_its_key_and_a_position_is_not_a_word(
 
 def test_a_new_closed_value_fails_and_its_approval_passes():
     live = {**_FAKE, _SET: {"a", "b", "c"}}
-    (only,) = problems(live, _baseline_of(_FAKE))
-    assert only.startswith(f"new word 'c' in {_SET}")
+    assert problems(live, _baseline_of(_FAKE)) == [f"new word 'c' in {_SET}: {_ASK}"]
     assert problems(live, _baseline_of(_FAKE, [_approval("c", _SET)])) == []
 
 
-def test_a_new_closed_set_fails_for_each_member_and_names_the_exemption():
-    live = {**_FAKE, "src/m.py::_NEW": {"x"}}
-    (only,) = problems(live, _baseline_of(_FAKE))
-    assert only.startswith("new word 'x' in src/m.py::_NEW")
-    assert "list it in _NOT_VOCABULARY" in only
+def test_a_new_closed_set_fails_for_each_member():
+    live = {**_FAKE, "src/m.py::_NEW": {"x", "y"}}
+    assert problems(live, _baseline_of(_FAKE)) == [
+        f"new word 'x' in src/m.py::_NEW: {_ASK}",
+        f"new word 'y' in src/m.py::_NEW: {_ASK}",
+    ]
 
 
 def test_a_moved_closed_set_says_to_move_its_entry():
@@ -567,7 +510,7 @@ def test_a_moved_closed_set_says_to_move_its_entry():
     assert problems(live, _baseline_of(_FAKE)) == [
         (
             f"closed set moved from {_SET} to src/n.py::_KINDS: move its entry under "
-            "baseline.closed_sets in tests/architecture/vocabulary.yml to the new place"
+            f"baseline.closed_sets in {FILE} to the new place"
         )
     ]
 
@@ -576,8 +519,8 @@ def test_a_word_removed_from_the_code_fails_until_removed_from_the_file():
     live = {**_FAKE, CATALOG_KEY: {"owner"}}
     assert problems(live, _baseline_of(_FAKE)) == [
         (
-            "stale word 'method' in catalog key: it is no longer in the code; remove it from the "
-            "baseline in tests/architecture/vocabulary.yml"
+            f"stale word 'method' in catalog key: it is no longer in the code; remove it from the "
+            f"baseline in {FILE}"
         )
     ]
 
@@ -585,8 +528,8 @@ def test_a_word_removed_from_the_code_fails_until_removed_from_the_file():
 def test_a_stale_approval_entry_fails():
     assert problems(_FAKE, _baseline_of(_FAKE, [_approval("gone", CATALOG_KEY)])) == [
         (
-            "stale word 'gone' in catalog key: it is no longer in the code; remove it from the "
-            "approvals in tests/architecture/vocabulary.yml"
+            f"stale word 'gone' in catalog key: it is no longer in the code; remove it from the "
+            f"approvals in {FILE}"
         )
     ]
 
@@ -616,7 +559,13 @@ def test_a_key_under_a_data_keyed_mapping_is_not_a_word_but_its_value_keys_are(t
         "  indexed:\n    item:\n      requirements:\n        Header: { kind: header }\n",
         encoding="utf-8",
     )
-    keys, _, _ = _catalog_words(tmp_path)
+    exemptions = {
+        "data_keyed_mappings": {
+            "matches.repositories": "fqn -> operations",
+            "matches.indexed.item.requirements": "factory name -> reader",
+        }
+    }
+    keys, _, _ = _catalog_words(tmp_path, exemptions)
     assert keys == {"matches", "repositories", "indexed", "item", "requirements", "kind"}
 
 
@@ -628,34 +577,64 @@ def test_a_module_scan_sees_class_body_sets_literal_aliases_and_lower_case_names
         "Kind = Literal['one', 'two']\n"
         "type Mode = Literal['fast']\n"
         "kinds = frozenset({'x'})\n"
+        "PROSE = {'gap_id': 'a sentence for a reader'}\n"
         "__all__ = ['Kind']\n"
         "class Holder:\n"
         "    WORDS = ('held', 'pending')\n"
+        "    model_config = {'frozen': True}\n"
         "    __slots__ = ('a',)\n",
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
-    found = _closed_sets(["fake_words"])
+    found = _closed_sets(["fake_words"], {"not_vocabulary_names": {"model_config": "pydantic"}})
     assert found == {
         "fake_words.py::Kind": {"one", "two"},
         "fake_words.py::Mode": {"fast"},
         "fake_words.py::kinds": {"x"},
+        "fake_words.py::PROSE": {"gap_id"},
         "fake_words.py::Holder.WORDS": {"held", "pending"},
     }
 
 
-def test_the_scan_reaches_shapes_and_engines():
-    found = _closed_sets()
-    assert "unrooted" in found[f"{_R}shapes/mounts.py::_REFUSES"]
-    assert "exact" in found[f"{_R}engines/config_join.py::_NAME_MATCHING"]
+def test_each_exemption_list_fails_when_stale(tmp_path: Path):
+    (tmp_path / "c.yml").write_text("style: fluent\n", encoding="utf-8")
+    document = {"exemptions": {"data_keyed_mappings": {"matches.gone": "a reason"}}}
+    assert stale_exemptions(document, tmp_path) == [
+        (
+            f"exemptions.data_keyed_mappings lists matches.gone, which no shipped catalog has: "
+            f"delete it from {FILE}"
+        )
+    ]
+    document = {
+        "exemptions": {
+            "not_vocabulary": {"src/sextant/domain/gone.py::_X": "a reason"},
+            "not_vocabulary_names": {"no_such_name": "a reason"},
+        }
+    }
+    assert stale_exemptions(document) == [
+        (
+            "exemptions.not_vocabulary lists src/sextant/domain/gone.py::_X, which is no longer a "
+            f"closed set in a scanned module: if it moved, move the entry to the new place in {FILE}; "
+            "if it is gone, delete the entry"
+        ),
+        "exemptions.not_vocabulary_names lists 'no_such_name', which no set has: delete it",
+    ]
 
 
-def test_the_scan_finds_the_closed_sets_named_in_guidelines_8_9():
+def test_the_scan_reaches_every_tree_it_claims():
     found = _closed_sets()
-    assert "payload_binding" in found[f"{_R}open_questions.py::QUESTIONS"]
-    assert "cycle" in found[f"{_R}values.py::_REASONS"]
+    resolve = "src/sextant/application/resolve/"
+    assert "unrooted" in found[f"{resolve}shapes/mounts.py::_REFUSES"]
+    assert "exact" in found[f"{resolve}engines/config_join.py::_NAME_MATCHING"]
+    assert "payload_binding" in found[f"{resolve}open_questions.py::QUESTIONS"]
+    assert "cycle" in found[f"{resolve}values.py::_REASONS"]
+    assert "pattern" in found[f"{resolve}engines/fluent.py::_URL_IS"]
     assert "resolved" in found["src/sextant/domain/closed_sets.py::Resolution"]
-    assert "pattern" in found[f"{_R}engines/fluent.py::_URL_IS"]
+    assert "positional" in found["src/sextant/domain/facts.py::ParameterKind"]
+    assert "callers" in found["src/sextant/application/query/questions.py::QUESTIONS"]
+    assert "superseded" in found["src/sextant/application/boundary/observability.py::SKIP_CAUSES"]
+    assert "grpc" in found["src/sextant/egress/render/document.py::_VERBED_PROTOCOLS"]
+    assert "endpoints" in found["src/sextant/storage/duckdb/workspace.py::READ_ONLY_TABLES"]
     assert (
         "returns_receiver" in found["src/sextant/ingress/catalogs/yaml_source.py::_RETURNS_FORMS"]
     )

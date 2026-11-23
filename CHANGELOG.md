@@ -99,12 +99,14 @@ here would restate those documents rather than add anything.
 
 ### Added
 
-- **Two tests enforce GUIDELINES §8.9** (approved 2026-11-23): a new catalog key, a new value
-  of a closed-value catalog key, or a new member of a closed set in the resolver, the catalog
-  loader or the domain's closed sets fails the suite until `tests/architecture/vocabulary.yml`
-  records who approved it, when, and the ruling; a spec or plan dated on or after 2026-11-23
-  without `## Principles check` fails. A word checked only inline in code, or kept outside
-  the scanned modules, is not caught; §8.9 leaves it to review.
+- **Two tests enforce GUIDELINES §8.9** (approved 2026-11-23): a new catalog key, a new word
+  value of a catalog key, or a new member of a closed set in `application/`, `domain/`,
+  `egress/`, `storage/` or the catalog loader fails the suite until
+  `tests/architecture/vocabulary.yml` records who approved it, when, and the ruling; a spec or
+  plan dated on or after 2026-11-23 without `## Principles check` fails. Not caught, and left
+  to review by §8.9: a new concept that is not a word (a fact's shape, a truth rule, a design
+  change), a word checked only inline in code, a word outside the scanned trees, and an untrue
+  approval or exemption.
 
 - **`--memory-limit <MiB>` on `module analyze`** (OI-493, minimum 64): caps the extractor JVM
   (`-Xmx` half the limit) and DuckDB (`memory_limit`, a quarter of the limit but never under

@@ -104,7 +104,11 @@ def test_an_undated_file_fails(tmp_path: Path):
 
 
 def test_a_markdown_extension_is_read_too(tmp_path: Path):
-    assert len(missing_checks(_folder(tmp_path, "2026-12-01-x.markdown", "# X\n"))) == 1
+    (only,) = missing_checks(_folder(tmp_path, "2026-12-01-x.markdown", "# X\n"))
+    assert only.endswith(
+        "2026-12-01-x.markdown is dated on or after 2026-11-23 and has no `## Principles check` "
+        "heading: GUIDELINES §8.9 requires one in every design and plan"
+    )
 
 
 def test_the_heading_must_be_a_heading_line_not_a_mention(tmp_path: Path):
@@ -114,6 +118,10 @@ def test_the_heading_must_be_a_heading_line_not_a_mention(tmp_path: Path):
 
 def test_a_heading_inside_a_code_fence_does_not_count(tmp_path: Path):
     text = "# X\n\n```markdown\n## Principles check\n```\n"
-    assert len(missing_checks(_folder(tmp_path, "2026-12-01-x.md", text))) == 1
+    (only,) = missing_checks(_folder(tmp_path, "2026-12-01-x.md", text))
+    assert only.endswith(
+        "2026-12-01-x.md is dated on or after 2026-11-23 and has no `## Principles check` "
+        "heading: GUIDELINES §8.9 requires one in every design and plan"
+    )
     text += "\n## Principles check\n"
     assert missing_checks(_folder(tmp_path, "2026-12-01-x.md", text)) == []

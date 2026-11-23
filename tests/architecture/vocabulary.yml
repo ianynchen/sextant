@@ -1,16 +1,20 @@
-# The words of Sextant as they were on `main` on 2026-11-23 (GUIDELINES §8.9).
+# The words of Sextant as they were on `main` on 2026-11-23 (GUIDELINES §8.9), the approvals
+# since, and what is not a Sextant word. ANY diff of this file — baseline, approvals or
+# exemptions — is reviewed as an approval.
 #
 # `baseline` was generated ONCE by `_document()` in test_vocabulary_ratchet.py and is never
-# regenerated: regenerating is how a word would slip in. Any diff of this file is reviewed as an
-# approval. A word added after the baseline needs an entry under `approvals`:
+# regenerated: regenerating is how a word would slip in. A word added after it needs an entry
+# under `approvals`:
 #   - word: <the word>
 #     where: catalog key | catalog value: <key> | <path>::<name> (as a failure message spells it)
 #     approved_by: <who approved it>
 #     approved_on: YYYY-MM-DD (after 2026-11-23)
 #     reference: <the ruling, design section or issue>
-# A new key that takes word values is also added under `baseline.closed_value_keys` in the same
-# change when its approval says it is closed-valued. A word removed from the code is removed
-# from this file by hand; a closed set that moves is moved here, as the failure message says.
+# A new catalog key that takes string values is also put in exactly one of
+# baseline.closed_value_keys, baseline.mixed_value_keys or exemptions.open_value_keys. A word
+# removed from the code is removed here by hand; a closed set that moves is moved here, as the
+# failure message says. An exemption is only for something that is NOT a Sextant word, and
+# carries its reason.
 baseline:
   catalog_keys:
   - absent
@@ -610,6 +614,9 @@ baseline:
     - sibling
     client_arg:
     - receiver
+    client_model:
+    - ktor
+    - vertx-web
     connector_names:
     - ignoring_case
     consumes: []
@@ -644,11 +651,30 @@ baseline:
     - none
     - sole_unannotated
     - sole_unbound
+    fallback_spelling:
+    - hyphenated
+    - hyphenated-capitalized
     fills:
     - consumes
     - produces
     follow_calls:
     - all
+    format:
+    - binary
+    - date
+    - date-time
+    - directory-path
+    - double
+    - email
+    - float
+    - int32
+    - int64
+    - ipvanyaddress
+    - multi-host-uri
+    - qname
+    - uri
+    - uuid
+    - uuid4
     format_from:
     - avro
     - bytes
@@ -713,12 +739,25 @@ baseline:
     - selector
     - subscription
     - task_queue
+    kinds:
+    - calendarInterval
+    - cron
+    - dailyTimeInterval
+    - simple
     match:
     - all
     - first
     - one
     means:
     - not_null_by_default
+    mechanism:
+    - akka-actors
+    - cdi-async-events
+    - cdi-events
+    - jdk-blocking-queue
+    - kotlinx-coroutines
+    - pekko-actors
+    - spring-events
     media_formats:
     - avro
     - json
@@ -886,6 +925,8 @@ baseline:
     stack:
     - reactive
     - servlet
+    step_model:
+    - spring-integration
     strategies:
     - annotated_only
     - honors_exported
@@ -916,6 +957,10 @@ baseline:
     - database
     to: []
     trigger: []
+    triggers:
+    - cron
+    - fixedDelay
+    - fixedRate
     unselected_binds:
     - sole
     url: []
@@ -929,7 +974,201 @@ baseline:
     - boolean
     yields:
     - authority
+  mixed_value_keys:
+    all_methods:
+    - activity
+    arg:
+    - all_strings
+    - channel
+    - value
+    default:
+    - variable
+    http_method:
+    - workflow
+    inbound:
+    - address
+    - destination
+    - queue
+    - topic
+    join:
+    - append_to_base
+    - fill_authority
+    - replace_last_segment
+    key:
+    - object
+    - type
+    outbound:
+    - address
+    - destination
+    - queue
+    - topic
+    prefix_from:
+    - id
+    - path
+    - prefix
+    - queues
+    - receiver_path
+    - topics
+    - url
+    - value
+    then:
+    - inbound
+    verb:
+    - none
+    wire:
+    - array
+    - boolean
+    - integer
+    - map
+    - number
+    - string
   closed_sets:
+    src/sextant/application/boundary/diff.py::Change:
+    - added
+    - changed
+    - removed
+    src/sextant/application/boundary/diff.py::Compatibility:
+    - breaking
+    - compatible
+    src/sextant/application/boundary/diff.py::_BODIES:
+    - request
+    - response
+    src/sextant/application/boundary/diff.py::_CHANGES:
+    - added
+    - changed
+    - removed
+    src/sextant/application/boundary/diff.py::_DESCRIPTORS:
+    - request_shape
+    - response_shape
+    src/sextant/application/boundary/diff.py::_PRODUCER:
+    - catalog_hash
+    - redaction_set_hash
+    - sextant_version
+    src/sextant/application/boundary/diff.py::_REQUEST_PARAMETER_KINDS:
+    - argument
+    - cookie
+    - flag
+    - header
+    - option
+    - param
+    - query
+    src/sextant/application/boundary/diff.py::_REQUIREMENT_SETS:
+    - headers
+    - requirements
+    src/sextant/application/boundary/diff.py::_SETS:
+    - conditions
+    - headers
+    - requirements
+    src/sextant/application/boundary/diff.py::_SYMBOL_KEYS:
+    - shape_id
+    - symbol
+    src/sextant/application/boundary/diff.py::_VERSIONS:
+    - boundary_vocabulary_version
+    - fact_schema_version
+    - graph_schema_version
+    src/sextant/application/boundary/observability.py::SKIP_CAUSES:
+    - dependencies_unrecorded
+    - framework_absent
+    - missing_capability
+    - superseded
+    src/sextant/application/boundary/observability.py::VerdictName:
+    - not-observable
+    - observable
+    - partial
+    src/sextant/application/boundary/observability.py::_FED_BY_DEPENDENCIES:
+    - data-contract
+    - dependency
+    src/sextant/application/boundary/observability.py::_RESOLVED_BY_THE_BUILD_TOOL:
+    - gradle
+    - maven
+    src/sextant/application/boundary/source.py::ROW_KEYS:
+    - request
+    - request_body
+    - response
+    - response_body
+    src/sextant/application/boundary/source.py::STAMPS:
+    - boundary_vocabulary_version
+    - catalog_hash
+    - fact_schema_version
+    - graph_schema_version
+    - redaction_set_hash
+    - sextant_version
+    src/sextant/application/boundary/source.py::_CONDITION_KEY:
+    - direction
+    - handler
+    - method
+    - path
+    - protocol
+    src/sextant/application/boundary/source.py::_DEPENDENCY_CONDITION_KEY:
+    - caller
+    - direction
+    - handler
+    - method
+    - path
+    - protocol
+    src/sextant/application/boundary/source.py::_DEPENDENCY_METADATA_KEY:
+    - caller
+    - direction
+    - method
+    - path
+    - protocol
+    src/sextant/application/boundary/source.py::_ENDPOINT_METADATA_KEY:
+    - direction
+    - handler
+    - method
+    - path
+    - protocol
+    src/sextant/application/boundary/source.py::_FIELD_KEYS:
+    - nullable
+    - required
+    - wire_format
+    - wire_name
+    - wire_type
+    src/sextant/application/boundary/source.py::_METADATA_KEY:
+    - caller
+    - direction
+    - method
+    - path
+    - protocol
+    src/sextant/application/boundary/source.py::_QUERY_OF:
+    - boundary-property
+    - boundary_contract
+    - boundary_dependency
+    - boundary_endpoint
+    - boundary_error_handler
+    - boundary_property
+    - boundary_schedule
+    - data-contract
+    - dependency
+    - endpoint
+    - error-handler
+    - schedule
+    src/sextant/application/boundary/vocabulary.py::KINDS:
+    - boundary-property
+    - data-contract
+    - dependency
+    - endpoint
+    - error-handler
+    - module
+    - schedule
+    src/sextant/application/enrich/brief.py::_DOUBTFUL_RESOLUTIONS:
+    - narrowed
+    - unresolved
+    src/sextant/application/query/questions.py::QUESTIONS:
+    - callees
+    - callers
+    - impact
+    - implementations
+    - source
+    - uses
+    src/sextant/application/query/questions.py::_ITEM:
+    - file
+    - line_end
+    - line_start
+    - symbol
+    src/sextant/application/query/questions.py::_REGIONS:
+    - unread
+    - unscanned
     src/sextant/application/resolve/conditions.py::_ARG_KEYS:
     - annotation
     - equals
@@ -937,13 +1176,6 @@ baseline:
     - parses_true
     src/sextant/application/resolve/conditions.py::_CONDITION_KEYS:
     - annotation_arg
-    src/sextant/application/resolve/config.py::_DEFAULT_PLACEHOLDERS:
-    - ${
-    - ':'
-    - close
-    - default_separator
-    - open
-    - '}'
     src/sextant/application/resolve/dependencies.py::DEPENDENCY_GATED:
     - config_join
     - derived_resource
@@ -1266,13 +1498,6 @@ baseline:
     - header
     - param
     - query
-    src/sextant/application/resolve/request_requirements.py::_LITERAL_KINDS:
-    - boolean
-    - double
-    - float
-    - int
-    - long
-    - string
     src/sextant/application/resolve/request_requirements.py::_MARKER_KEYS:
     - annotated_default
     - required_when
@@ -1337,16 +1562,6 @@ baseline:
     - config_join
     - injected_client
     - supertype_derived
-    src/sextant/application/resolve/settings_fields.py::_LITERALS:
-    - boolean
-    - int
-    - long
-    - string
-    src/sextant/application/resolve/shapes/arguments.py::_LITERAL_WIRE_TYPES:
-    - boolean
-    - int
-    - long
-    - string
     src/sextant/application/resolve/shapes/arguments.py::_UNREAD_KINDS:
     - concat
     - field
@@ -1582,17 +1797,6 @@ baseline:
     - class
     - enum
     - instance
-    src/sextant/application/resolve/values.py::_LITERAL_KINDS:
-    - bool
-    - boolean
-    - int
-    - long
-    - string
-    src/sextant/application/resolve/values.py::_NAMED_AFTER:
-    - <clinit>
-    - <init>
-    - new
-    - static
     src/sextant/application/resolve/values.py::_REASONS:
     - cycle
     - escapes
@@ -1600,11 +1804,6 @@ baseline:
     - no_writer
     - non_enumerable
     - not_readable
-    src/sextant/application/resolve/values.py::_STATED_KINDS:
-    - boolean
-    - int
-    - long
-    - string
     src/sextant/application/resolve/values.py::_YIELDS_KINDS:
     - address
     - authority
@@ -1700,11 +1899,113 @@ baseline:
     - boundary
     - cycle
     - revisited
-    src/sextant/domain/closed_sets.py::Visibility:
-    - package
-    - private
-    - protected
-    - public
+    src/sextant/domain/facts.py::Lookup:
+    - c3
+    - jvm
+    src/sextant/domain/facts.py::ParameterKind:
+    - keyword_only
+    - positional
+    - positional_only
+    - var_keyword
+    - var_positional
+    src/sextant/egress/render/document.py::_ANY_VERB_QUESTIONS:
+    - routing_conflict
+    src/sextant/egress/render/document.py::_ERROR_HEADERS:
+    - Declared by
+    - Exception
+    - Handler
+    - Response
+    - Scope
+    - Status
+    src/sextant/egress/render/document.py::_PROTOCOL_QUALIFIED:
+    - graphql
+    - sse
+    src/sextant/egress/render/document.py::_REFUSAL_CONSEQUENCES:
+    - empty_path
+    - invalid_response_type
+    - marked_twice
+    - no_methods
+    - path_variable_default
+    - path_variable_marked
+    - trailing_slash
+    src/sextant/egress/render/document.py::_REFUSAL_PHRASES:
+    - empty_path
+    - exact_mount_path
+    - invalid_response_type
+    - marked_twice
+    - no_methods
+    - path_variable_default
+    - path_variable_marked
+    - pattern_mount_path
+    - trailing_slash
+    - unrooted_path
+    - wildcard_mount_point
+    src/sextant/egress/render/document.py::_SCHEDULED_HEADERS:
+    - Expression
+    - Handler
+    - Name
+    - Resolution
+    - Trigger
+    src/sextant/egress/render/document.py::_SHAPE_FIELD_HEADERS:
+    - Field
+    - Nullable
+    - Required
+    - Type
+    src/sextant/egress/render/document.py::_TRACE_HEADERS:
+    - Depth
+    - Detail
+    - Reached by
+    - Root
+    - Starts as
+    - Steps
+    - Terminals
+    src/sextant/egress/render/document.py::_TRACE_STEP_HEADERS:
+    - Call
+    - Caller
+    - Depth
+    - Dispatch
+    - Reaches
+    - Resolution
+    - Returns
+    - Stop
+    - Value
+    src/sextant/egress/render/document.py::_VERBED_PROTOCOLS:
+    - graphql
+    - grpc
+    - http
+    - sse
+    - temporal
+    src/sextant/egress/render/document.py::_VERBLESS_PROTOCOLS:
+    - actor
+    - amqp
+    - eventbus
+    - in_process
+    - jms
+    - kafka
+    - pubsub
+    - pulsar
+    - rsocket
+    - soap
+    - sqs
+    - websocket
+    src/sextant/egress/render/document.py::_VERB_OPTIONAL_PROTOCOLS:
+    - graphql
+    src/sextant/egress/render/metadata.py::KNOWN_GAPS:
+    - a_method_is_expanded_once_per_trace
+    - catalog_module_matching_not_implemented
+    - computed_base_addresses_not_traced
+    - config_as_code_not_read
+    - cross_module_stops_look_third_party
+    - http_exchange_inbound_use_not_detected
+    - maven_profile_and_transitive_resolution_not_implemented
+    - module_classification_evidence_incomplete
+    - payload_parse_ambiguous
+    - payload_parsed_beyond_horizon
+    - reactive_flow_not_traced
+    - roots_are_declared_handlers_only
+    - shape_rules_unscoped_to_the_producing_catalog
+    - structure_diagram_limited_to_contracts
+    - traces_are_reachability_not_execution
     src/sextant/ingress/catalogs/yaml_source.py::_BODY_CALL_KEYS:
     - bound_by_calls
     - embed_arg
@@ -1858,4 +2159,622 @@ baseline:
     src/sextant/ingress/catalogs/yaml_source.py::_WRAPPER_KEYS:
     - call_wrappers
     - record_wrappers
+    src/sextant/storage/duckdb/workspace.py::READ_ONLY_TABLES:
+    - documents
+    - endpoint_conditions
+    - endpoint_metadata
+    - endpoints
+    - error_handlers
+    - resolved_config
+    - scheduled_work
+    - shape_fields
+    - shapes
+    - symbols
+    src/sextant/storage/duckdb/workspace.py::_DECODED_COLUMNS:
+    - call_sites
+    - method_declarations
+    src/sextant/storage/duckdb/workspace.py::_EXPORTED_TABLES:
+    - annotations
+    - bean_conditions
+    - bean_presence
+    - bound_receivers
+    - call_edges
+    - call_edges_by_callee
+    - call_sites
+    - candidate_presence
+    - config_entries
+    - constants
+    - dispatch_registrations
+    - documents
+    - endpoint_conditions
+    - endpoint_existence
+    - endpoint_metadata
+    - endpoints
+    - error_handlers
+    - field_writes
+    - hops
+    - interface_beans
+    - method_resolution
+    - method_returns
+    - open_questions
+    - raw_facts
+    - reachability
+    - resolved_config
+    - resolved_schedules
+    - return_flows
+    - roots
+    - roots_by_address
+    - scheduled_work
+    - selected_documents
+    - shape_fields
+    - shapes
+    - symbol_beans
+    - symbols
+    - type_hierarchy
+    - value_resolutions
+    src/sextant/storage/duckdb/workspace.py::_EXPORT_QUERIES:
+    - annotations
+    - bean_conditions
+    - bean_presence
+    - bound_receivers
+    - call_edges
+    - call_edges_by_callee
+    - call_sites
+    - candidate_presence
+    - config_entries
+    - constants
+    - dispatch_registrations
+    - documents
+    - endpoint_conditions
+    - endpoint_existence
+    - endpoint_metadata
+    - endpoints
+    - error_handlers
+    - field_writes
+    - hops
+    - interface_beans
+    - method_resolution
+    - method_returns
+    - open_questions
+    - raw_facts
+    - reachability
+    - resolved_config
+    - resolved_schedules
+    - return_flows
+    - roots
+    - roots_by_address
+    - scheduled_work
+    - selected_documents
+    - shape_fields
+    - shapes
+    - symbol_beans
+    - symbols
+    - type_hierarchy
+    - value_resolutions
+    src/sextant/storage/duckdb/workspace.py::_FACT_ONLY:
+    - abstract_types
+    - accessor_declarations
+    - annotations
+    - annotations_of
+    - bridge_declarations
+    - call_site_guards
+    - call_sites
+    - class_keywords
+    - config_entries
+    - constants
+    - constructor_declarations
+    - coverage
+    - declared_shapes
+    - declared_symbols
+    - declared_symbols_with_documents
+    - default_bodies
+    - documents
+    - entry_points
+    - enum_types
+    - facts
+    - field_writes
+    - fields
+    - generic_bases
+    - implementations
+    - interface_declarations
+    - interface_symbols
+    - lambda_bodies
+    - library_symbols
+    - located_annotations
+    - located_documents
+    - located_symbols
+    - lookup_rules
+    - method_declarations
+    - method_returns
+    - method_symbols
+    - method_visibility
+    - method_yields
+    - module_dependencies
+    - module_types
+    - nest_hosts
+    - own_types
+    - parents_unread
+    - question_members
+    - question_source
+    - selected_documents
+    - superclasses
+    - supertypes
+    - type_header_annotations
+    - type_header_bodies
+    - type_headers
+    - type_parameters
+    src/sextant/storage/duckdb/workspace.py::_FACT_VIEWS:
+    - annotations
+    - call_sites
+    - config_entries
+    - constants
+    - documents
+    - field_writes
+    - method_returns
+    - selected_documents
+    - symbols
+    src/sextant/storage/duckdb/workspace.py::_NAMED_QUERIES:
+    - abstract_types
+    - accessor_declarations
+    - annotations
+    - annotations_of
+    - bean_conditions
+    - bean_presence
+    - bound_receivers
+    - boundary_contract
+    - boundary_dependency
+    - boundary_endpoint
+    - boundary_error_handler
+    - boundary_property
+    - boundary_schedule
+    - boundary_shape_documents
+    - boundary_symbol_documents
+    - bridge_declarations
+    - call_edge_callers
+    - call_edges
+    - call_site_guards
+    - call_sites
+    - calls_running
+    - candidate_presence
+    - channel_bindings
+    - class_keywords
+    - config_entries
+    - constants
+    - constructor_declarations
+    - constructor_edges
+    - coverage
+    - declared_shapes
+    - declared_symbols
+    - declared_symbols_with_documents
+    - default_bodies
+    - dispatch_registrations
+    - dispatched_bodies
+    - documents
+    - endpoint_candidates_of
+    - endpoint_conditions
+    - endpoint_existence
+    - endpoint_metadata
+    - endpoints
+    - entry_points
+    - enum_types
+    - error_handlers
+    - facts
+    - field_writes
+    - fields
+    - generic_bases
+    - hops
+    - implementations
+    - interface_beans
+    - interface_declarations
+    - interface_symbols
+    - lambda_bodies
+    - lambda_edges
+    - library_symbols
+    - links
+    - located_annotations
+    - located_documents
+    - located_symbols
+    - lookup_rules
+    - method_declarations
+    - method_resolution
+    - method_resolution_distribution
+    - method_returns
+    - method_symbols
+    - method_visibility
+    - method_yields
+    - module_dependencies
+    - module_types
+    - nest_hosts
+    - open_questions
+    - own_types
+    - parents_unread
+    - participants
+    - question_callees
+    - question_callers
+    - question_impact_step
+    - question_implementations
+    - question_members
+    - question_source
+    - question_uses
+    - reach_distribution
+    - reachability
+    - reachable_throws
+    - resolution_distribution
+    - resolve_stamp
+    - resolved_config
+    - resolved_schedules
+    - return_flows
+    - roots
+    - route_requirements
+    - scan_reuse
+    - scheduled_work
+    - selected_documents
+    - shape_fields
+    - shapes
+    - stub_call_edges
+    - superclasses
+    - supertypes
+    - symbol_beans
+    - system_bean_presence
+    - system_config
+    - system_endpoint_conditions
+    - system_endpoint_hosts
+    - system_endpoints
+    - type_header_annotations
+    - type_header_bodies
+    - type_headers
+    - type_hierarchy
+    - type_parameters
+    - value_edges
+    - value_resolutions
+    src/sextant/storage/duckdb/workspace.py::_TABLES_NOW_VIEWS:
+    - endpoint_conditions
 approvals: []
+exemptions:
+  data_keyed_mappings:
+    client_base.default_ports: 'D02 client model: `{scheme: port}`'
+    matches.address_from_config.binder_protocols: 'D02 `config_join`: a configured binder name -> protocol'
+    matches.detection_strategy.strategies: 'D02 Spring Data REST: a value of the configured key -> flags'
+    matches.disabled: 'D02 scheduled: annotation attribute -> the value the framework reads as never'
+    matches.entries.arg_types: 'D02 §2: argument position -> parameter type'
+    matches.indexed.item.requirements: 'D02 `config_join` indexed: the gateway''s predicate factory name
+      (`Header`) -> its reader'
+    matches.kinds: 'D02 Quartz: schedule builder type -> the framework''s kind word'
+    matches.mapping.request_requirement_attrs: 'D02 `annotation_driven`: mapping annotation attribute
+      -> requirement kind'
+    matches.media_from_config.format_from: 'D02 §2d: serializer class -> format'
+    matches.media_from_config.values: 'D02 §2d: serializer class -> media'
+    matches.path_fallback.replace: 'D02: a character of the name -> its replacement'
+    matches.repositories: 'D02 Spring Data REST: contract fqn -> the CRUD operations it licenses'
+    matches.request_params.spelling.replace: 'D02 `spelling: {replace: {<from>: <to>}}`: a character ->
+      its replacement'
+    matches.triggers: 'D02 scheduled: annotation attribute -> the framework''s word for the kind'
+    matches.verb_values.fields: 'D02: `"<owner>#<field>"` -> verb'
+    matches.vocabulary.media_values.getters: 'D02 `combinator`: `"<owner>#<method>"` -> media value'
+    matches.vocabulary.media_values.values: 'D02 `combinator`: a constant of `media_values.owner` -> media
+      value'
+    matches.vocabulary.prefixes.arg_types: 'D02 §2: argument position -> parameter type'
+    matches.vocabulary.request_requirement.arg_types: 'D02 §2: argument position -> parameter type'
+    matches.vocabulary.verb_values.fields: 'D02 `combinator`: `"<owner>#<field>"` -> verb'
+    matches.vocabulary.verb_values.getters: 'D02 `combinator`: `"<owner>#<method>"` -> verb'
+    matches.vocabulary.verbs.arg_types: 'D02 §2: argument position -> parameter type'
+    media_formats: 'D02 format ladder rung 2: media type -> format'
+    stereotype_name_attrs: 'D02 §1c: stereotype annotation name -> the attribute naming the bean'
+  not_vocabulary:
+    src/sextant/application/enrich/brief.py::_ANCHOR_LINES: sentences of a brief; the words they explain
+      are `Anchor`'s, pinned there
+    src/sextant/application/enrich/tools.py::CONFIG_BEARING_EXTENSIONS: file extensions
+    src/sextant/application/enrich/tools.py::DERIVED_OUTPUT_DIRS: directory names
+    src/sextant/application/ports/detector.py::_RESERVED_RESULTS_NAMES: directory names in the results
+      folder
+    src/sextant/application/resolve/bean_conditions.py::_COMPOSITION: 'the language''s or the platform''s
+      own spellings: Spring condition operators `&|()`'
+    src/sextant/application/resolve/config.py::_DEFAULT_PLACEHOLDERS: keys are catalog keys, pinned as
+      such; values are Spring's placeholder syntax
+    src/sextant/application/resolve/dispatch.py::_NOT_INHERITED: 'the language''s or the platform''s own
+      spellings: JVM initializer names'
+    src/sextant/application/resolve/dispatch_hops.py::_KEPT_COLUMNS: a selection of an existing table's
+      columns; it defines no column — a column is defined in the storage schema's SQL, which this scan
+      does not read (GUIDELINES §8.9)
+    src/sextant/application/resolve/effective_calls.py::_BOXING: 'the language''s or the platform''s own
+      spellings: JVM boxing descriptors'
+    src/sextant/application/resolve/engines/combinator.py::_GROUPED_FIELDS: a selection of an existing
+      table's columns; it defines no column — a column is defined in the storage schema's SQL, which this
+      scan does not read (GUIDELINES §8.9)
+    src/sextant/application/resolve/engines/fluent.py::_DIRECTIONS: computed from `Direction`, which is
+      recorded itself
+    src/sextant/application/resolve/engines/single_call.py::_DIRECTIONS: computed from `Direction`, which
+      is recorded itself
+    src/sextant/application/resolve/format.py::_MATCH_COLUMNS: a selection of an existing table's columns;
+      it defines no column — a column is defined in the storage schema's SQL, which this scan does not
+      read (GUIDELINES §8.9)
+    src/sextant/application/resolve/format.py::_MEDIA_COLUMNS: a selection of an existing table's columns;
+      it defines no column — a column is defined in the storage schema's SQL, which this scan does not
+      read (GUIDELINES §8.9)
+    src/sextant/application/resolve/format.py::_PAYLOAD_COLUMNS: a selection of an existing table's columns;
+      it defines no column — a column is defined in the storage schema's SQL, which this scan does not
+      read (GUIDELINES §8.9)
+    src/sextant/application/resolve/path_prefix.py::_MATCH_COLUMNS: a selection of an existing table's
+      columns; it defines no column — a column is defined in the storage schema's SQL, which this scan
+      does not read (GUIDELINES §8.9)
+    src/sextant/application/resolve/protocol_hint.py::_MATCH_COLUMNS: a selection of an existing table's
+      columns; it defines no column — a column is defined in the storage schema's SQL, which this scan
+      does not read (GUIDELINES §8.9)
+    src/sextant/application/resolve/protocol_hint.py::_MEDIA_COLUMNS: a selection of an existing table's
+      columns; it defines no column — a column is defined in the storage schema's SQL, which this scan
+      does not read (GUIDELINES §8.9)
+    src/sextant/application/resolve/receiver_binding.py::_PROTOCOL: 'the language''s or the platform''s
+      own spellings: Python dunder protocol methods'
+    src/sextant/application/resolve/receiver_binding.py::_SYNTAX: 'the language''s or the platform''s
+      own spellings: Python dunder protocol methods'
+    src/sextant/application/resolve/request_requirements.py::BOUND: a value (a pair of empty strings),
+      not a set of words
+    src/sextant/application/resolve/request_requirements.py::_LITERAL_KINDS: the extractor's literal kinds,
+      as the fact schema spells them (D00)
+    src/sextant/application/resolve/request_requirements.py::_NEGOTIATION_HEADERS: 'a standard''s spellings:
+      HTTP header names'
+    src/sextant/application/resolve/self_calls.py::_LOOPBACK: 'a standard''s spellings: loopback host
+      names and addresses'
+    src/sextant/application/resolve/self_calls.py::_ROW_COLUMNS: a selection of an existing table's columns;
+      it defines no column — a column is defined in the storage schema's SQL, which this scan does not
+      read (GUIDELINES §8.9)
+    src/sextant/application/resolve/settings_fields.py::_LITERALS: the extractor's literal kinds, as the
+      fact schema spells them (D00)
+    src/sextant/application/resolve/shapes/arguments.py::_LITERAL_WIRE_TYPES: the extractor's literal
+      kinds, as the fact schema spells them (D00)
+    src/sextant/application/resolve/shapes/chains.py::_RULE_9: internal NUL-prefixed keys, never written
+      nor published
+    src/sextant/application/resolve/shapes/made_by.py::_SCHEMES: 'a standard''s spellings: URL schemes'
+    src/sextant/application/resolve/shapes/parse_binding.py::_MATCH_COLUMNS: a selection of an existing
+      table's columns; it defines no column — a column is defined in the storage schema's SQL, which this
+      scan does not read (GUIDELINES §8.9)
+    src/sextant/application/resolve/values.py::_CALLABLES: 'the language''s or the platform''s own spellings:
+      Python''s symbols for a callable type'
+    src/sextant/application/resolve/values.py::_LITERAL_KINDS: the extractor's literal kinds, as the fact
+      schema spells them (D00)
+    src/sextant/application/resolve/values.py::_NAMED_AFTER: the extractor's spellings `static`/`new`
+      in fact symbols (D00 §5a) and JVM initializer names
+    src/sextant/application/resolve/values.py::_STATED_KINDS: the extractor's literal kinds, as the fact
+      schema spells them (D00)
+    src/sextant/application/resolve/values.py::_UNCHANGEABLE: 'the language''s or the platform''s own
+      spellings: JVM descriptors of immutable types'
+    src/sextant/domain/closed_sets.py::Visibility: the source languages' visibility modifiers
+    src/sextant/domain/closed_sets.py::_RANKS: a rank per `Evidence` member, recorded there
+    src/sextant/domain/config_keys.py::_PLACEHOLDER: the frameworks' placeholder syntax
+    src/sextant/domain/ignorefile.py::BUILTIN_PATTERNS: file name patterns
+    src/sextant/domain/ignorefile.py::DOTENV_PATTERNS: file name patterns
+    src/sextant/domain/paths.py::EXPRESSION_OPENS: the frameworks' expression syntax (`${`, `#{`)
+    src/sextant/domain/paths.py::_EXPRESSION_OPENS: the frameworks' expression syntax (`${`, `#{`)
+    src/sextant/domain/pluralize.py::_CATEGORY_A_AE: English words of the pluralizer's rule set (Evo Inflector)
+    src/sextant/domain/pluralize.py::_CATEGORY_A_ATA: English words of the pluralizer's rule set (Evo
+      Inflector)
+    src/sextant/domain/pluralize.py::_CATEGORY_EX_ICES: English words of the pluralizer's rule set (Evo
+      Inflector)
+    src/sextant/domain/pluralize.py::_CATEGORY_IS_IDES: English words of the pluralizer's rule set (Evo
+      Inflector)
+    src/sextant/domain/pluralize.py::_CATEGORY_IX_ICES: English words of the pluralizer's rule set (Evo
+      Inflector)
+    src/sextant/domain/pluralize.py::_CATEGORY_MAN_MANS: English words of the pluralizer's rule set (Evo
+      Inflector)
+    src/sextant/domain/pluralize.py::_CATEGORY_ON_A: English words of the pluralizer's rule set (Evo Inflector)
+    src/sextant/domain/pluralize.py::_CATEGORY_O_I: English words of the pluralizer's rule set (Evo Inflector)
+    src/sextant/domain/pluralize.py::_CATEGORY_O_OS: English words of the pluralizer's rule set (Evo Inflector)
+    src/sextant/domain/pluralize.py::_CATEGORY_S_ES: English words of the pluralizer's rule set (Evo Inflector)
+    src/sextant/domain/pluralize.py::_CATEGORY_UM_A: English words of the pluralizer's rule set (Evo Inflector)
+    src/sextant/domain/pluralize.py::_CATEGORY_US_I: English words of the pluralizer's rule set (Evo Inflector)
+    src/sextant/domain/pluralize.py::_CATEGORY_US_US: English words of the pluralizer's rule set (Evo
+      Inflector)
+    src/sextant/domain/pluralize.py::_UNCOUNTABLE: English words of the pluralizer's rule set (Evo Inflector)
+    src/sextant/domain/redaction.py::BUILTIN_KEY_PATTERNS: spellings matched inside the user's config
+      keys, never published
+    src/sextant/domain/redaction.py::_FOLDS_TO_ASCII: characters
+    src/sextant/domain/redaction.py::_NORMALIZED_TOKEN_CHARACTERS: characters
+    src/sextant/domain/redaction.py::_NOT_SPELLED_AS_ITSELF: characters
+    src/sextant/domain/symbols.py::LITERAL_TYPES: the source language's own symbols
+    src/sextant/domain/symbols.py::_BASE_TYPES: the source languages' primitive type spellings
+    src/sextant/domain/symbols.py::_PRIMITIVES: the source languages' primitive type spellings
+    src/sextant/egress/render/document.py::_GAPS: sentences of the document; each gap's id is pinned in
+      `metadata.py::KNOWN_GAPS`
+    src/sextant/egress/render/document.py::_TRACE_PREAMBLE: sentences of the document
+    src/sextant/storage/duckdb/workspace.py::_CHUNKED_DERIVATIONS: names of SQL derivation steps, internal
+      to storage
+    src/sextant/storage/duckdb/workspace.py::_NAMED_DERIVATIONS: names of SQL derivation steps and files,
+      internal to storage
+  not_vocabulary_names:
+    model_config: pydantic's model settings (`frozen`, `extra`, `forbid`)
+  open_value_keys:
+    absent: an HTTP verb, media type or JVM descriptor
+    absent_value: the framework's value for an absent attribute (`true`)
+    active_keys: a configuration key, key template or file pattern of the framework
+    address_separator: a separator, placeholder or syntax character
+    advice_annotations: an annotation, type or class name of the framework or the user's code
+    annotation: an annotation, type or class name of the framework or the user's code
+    annotation_attrs: an annotation's or a connector's attribute name
+    annotation_names: an annotation, type or class name of the framework or the user's code
+    annotations: an annotation, type or class name of the framework or the user's code
+    arg_types: an annotation, type or class name of the framework or the user's code
+    args: a method, function, field or attribute name of the framework or the user's code
+    artifact: a library coordinate, catalog id, version or citation
+    attribute: a method, function, field or attribute name of the framework or the user's code
+    binder_key: a configuration key, key template or file pattern of the framework
+    binding_method: a method, function, field or attribute name of the framework or the user's code
+    bound_by: an annotation, type or class name of the framework or the user's code
+    bound_by_calls: an annotation, type or class name of the framework or the user's code
+    by: a library coordinate, catalog id, version or citation
+    bytes_payloads: an annotation, type or class name of the framework or the user's code
+    call: an annotation, type or class name of the framework or the user's code
+    calls: an annotation, type or class name of the framework or the user's code
+    channel_types: an annotation, type or class name of the framework or the user's code
+    class_annotations: an annotation, type or class name of the framework or the user's code
+    client_call_owner: an annotation, type or class name of the framework or the user's code
+    client_stub_supertype: an annotation, type or class name of the framework or the user's code
+    close: a separator, placeholder or syntax character
+    composition_separator: a separator, placeholder or syntax character
+    config_call: an annotation, type or class name of the framework or the user's code
+    config_field: a field name in the framework's settings class
+    configuration_annotation: an annotation, type or class name of the framework or the user's code
+    connector_attribute: an annotation's or a connector's attribute name
+    consumes_from: an annotation's or a connector's attribute name
+    container: an annotation, type or class name of the framework or the user's code
+    containing: a separator, placeholder or syntax character
+    controller_annotations: an annotation, type or class name of the framework or the user's code
+    coordinate: a library coordinate, catalog id, version or citation
+    coordinates: a library coordinate, catalog id, version or citation
+    crud_methods: a method, function, field or attribute name of the framework or the user's code
+    custom_condition: an annotation, type or class name of the framework or the user's code
+    declaring_annotation: an annotation, type or class name of the framework or the user's code
+    decorator: an annotation, type or class name of the framework or the user's code
+    default_annotation: an annotation, type or class name of the framework or the user's code
+    default_attr: a method, function, field or attribute name of the framework or the user's code
+    default_binder_key: a configuration key, key template or file pattern of the framework
+    default_group: a value the framework defines (a sentinel, a default name, a boolean spelling)
+    default_keys: a configuration key, key template or file pattern of the framework
+    default_produces: an HTTP verb, media type or JVM descriptor
+    default_profile: the framework's default profile name
+    default_separator: a separator, placeholder or syntax character
+    delegate_field: a field name in the framework's class
+    descriptor: an HTTP verb, media type or JVM descriptor
+    destination_from: an annotation's or a connector's attribute name
+    disabled: a separator, placeholder or syntax character
+    discriminators: an annotation's or a connector's attribute name
+    displayName: prose for a reader
+    drop_suffixes: a suffix of the user's class names
+    equals: a value the framework defines (a sentinel, a default name, a boolean spelling)
+    equals_field: a value the framework defines (a sentinel, a default name, a boolean spelling)
+    except_declared_by: an annotation, type or class name of the framework or the user's code
+    exception_roots: an annotation, type or class name of the framework or the user's code
+    excluded_by: an annotation, type or class name of the framework or the user's code
+    excludes: an annotation, type or class name of the framework or the user's code
+    exported_attribute: an annotation's or a connector's attribute name
+    expressions: an annotation's or a connector's attribute name
+    fallback_prefix_attr: a method, function, field or attribute name of the framework or the user's code
+    fallback_scope_separator: a separator, placeholder or syntax character
+    field: a field name in the framework's configuration
+    field_annotation: an annotation, type or class name of the framework or the user's code
+    fields: an HTTP verb, media type or JVM descriptor
+    fqn: an annotation, type or class name of the framework or the user's code
+    framework: a library coordinate, catalog id, version or citation
+    framework_handlers: an annotation, type or class name of the framework or the user's code
+    from_argument: a keyword argument name of the framework's function
+    from_document_key: a configuration key, key template or file pattern of the framework
+    from_filename: a configuration key, key template or file pattern of the framework
+    function: an annotation, type or class name of the framework or the user's code
+    getter_prefixes: a prefix of the framework's accessor names (`get`, `is`)
+    getters: an HTTP verb, media type or JVM descriptor
+    group_prefix: a configuration key, key template or file pattern of the framework
+    handler_annotation: an annotation, type or class name of the framework or the user's code
+    handler_descriptor: an HTTP verb, media type or JVM descriptor
+    handler_method: a method, function, field or attribute name of the framework or the user's code
+    handler_methods: a method name of the framework
+    having_value: a method, function, field or attribute name of the framework or the user's code
+    hint_annotations: an annotation, type or class name of the framework or the user's code
+    hint_media: an HTTP verb, media type or JVM descriptor
+    hint_returns: an annotation, type or class name of the framework or the user's code
+    id: a library coordinate, catalog id, version or citation
+    ignore: an annotation, type or class name of the framework or the user's code
+    implements: an annotation, type or class name of the framework or the user's code
+    include_keys: a configuration key, key template or file pattern of the framework
+    injecting_annotations: an annotation, type or class name of the framework or the user's code
+    interface: an annotation, type or class name of the framework or the user's code
+    item_segment: a configuration key, key template or file pattern of the framework
+    json_default_markers: a library coordinate, catalog id, version or citation
+    keyword: a keyword argument name of the framework's function
+    marker_calls: an annotation, type or class name of the framework or the user's code
+    match_if_missing: a method, function, field or attribute name of the framework or the user's code
+    measured: a library coordinate, catalog id, version or citation
+    member_annotation: an annotation, type or class name of the framework or the user's code
+    method: a method, function, field or attribute name of the framework or the user's code
+    method_from: an annotation's or a connector's attribute name
+    method_names: a method, function, field or attribute name of the framework or the user's code
+    methods: a method, function, field or attribute name of the framework or the user's code
+    missing: an annotation, type or class name of the framework or the user's code
+    multibinding_annotations: an annotation, type or class name of the framework or the user's code
+    name: a method, function, field or attribute name of the framework or the user's code
+    name_attrs: an annotation's or a connector's attribute name
+    name_from: a keyword argument or attribute name of the framework
+    names: an annotation's or a connector's attribute name
+    nest: a separator, placeholder or syntax character
+    no_repository_bean: an annotation, type or class name of the framework or the user's code
+    none_types: an annotation, type or class name of the framework or the user's code
+    not_null: an annotation, type or class name of the framework or the user's code
+    nullable: an annotation, type or class name of the framework or the user's code
+    open: a separator, placeholder or syntax character
+    optional_types: an annotation, type or class name of the framework or the user's code
+    order_reason: prose for a reader
+    owner: a method, function, field or attribute name of the framework or the user's code
+    owner_hierarchy: an annotation, type or class name of the framework or the user's code
+    owner_implemented_by_type_annotated: an annotation, type or class name of the framework or the user's
+      code
+    owners: an annotation, type or class name of the framework or the user's code
+    packages_from: an annotation's or a connector's attribute name
+    parameters: an annotation, type or class name of the framework or the user's code
+    participant_name_key: a configuration key, key template or file pattern of the framework
+    pass_through: a value the framework defines (a sentinel, a default name, a boolean spelling)
+    path: a separator, placeholder or syntax character
+    path_attribute: an annotation's or a connector's attribute name
+    path_from: a method, function, field or attribute name of the framework or the user's code
+    path_prefix: a separator, placeholder or syntax character
+    path_separator: a separator, placeholder or syntax character
+    pathless_serves: a separator, placeholder or syntax character
+    pattern: a configuration key, key template or file pattern of the framework
+    peer_annotation: an annotation, type or class name of the framework or the user's code
+    peer_from: a method, function, field or attribute name of the framework or the user's code
+    positional: a separator, placeholder or syntax character
+    prefix: a method, function, field or attribute name of the framework or the user's code
+    prefix_annotation: an annotation, type or class name of the framework or the user's code
+    present: an annotation, type or class name of the framework or the user's code
+    present_cycle_reason: prose for a reader
+    primary_annotation: an annotation, type or class name of the framework or the user's code
+    private_prefix: a separator, placeholder or syntax character
+    produces_from: an annotation's or a connector's attribute name
+    properties_annotation: an annotation, type or class name of the framework or the user's code
+    qualifier_annotation: an annotation, type or class name of the framework or the user's code
+    qualifier_from: a method, function, field or attribute name of the framework or the user's code
+    qualifier_meta_annotations: an annotation, type or class name of the framework or the user's code
+    qualifier_separator: a separator, placeholder or syntax character
+    registered_verb: an HTTP verb, media type or JVM descriptor
+    remote_prefixes: a configuration key, key template or file pattern of the framework
+    replace: a separator, placeholder or syntax character
+    required_attr: an annotation's or a connector's attribute name
+    required_when_thrown: an annotation, type or class name of the framework or the user's code
+    resource_annotation: an annotation, type or class name of the framework or the user's code
+    returns: an annotation, type or class name of the framework or the user's code
+    router_type: an annotation, type or class name of the framework or the user's code
+    rows: a library coordinate, catalog id, version or citation
+    satisfied_by: an annotation, type or class name of the framework or the user's code
+    scanned_by: an annotation, type or class name of the framework or the user's code
+    scheme: a URL scheme
+    scope_from: a method, function, field or attribute name of the framework or the user's code
+    search_segment: a path segment the framework serves
+    selected_by: a configuration key, key template or file pattern of the framework
+    selected_by_parameter: an annotation, type or class name of the framework or the user's code
+    selection_separator: a separator, placeholder or syntax character
+    serializers: a method name of the framework
+    served_by_annotation: an annotation, type or class name of the framework or the user's code
+    service_supertype: an annotation, type or class name of the framework or the user's code
+    set_by_probe: a library coordinate, catalog id, version or citation
+    settings_base: an annotation, type or class name of the framework or the user's code
+    skip_types: an annotation, type or class name of the framework or the user's code
+    status_annotation: an annotation, type or class name of the framework or the user's code
+    status_from: an annotation's or a connector's attribute name
+    stereotype_name_attrs: an annotation's or a connector's attribute name
+    stereotypes: an annotation, type or class name of the framework or the user's code
+    strip_trailing: a separator, placeholder or syntax character
+    subtype: an annotation, type or class name of the framework or the user's code
+    superseded_by: a library coordinate, catalog id, version or citation
+    supertype: an annotation, type or class name of the framework or the user's code
+    supertypes: an annotation, type or class name of the framework or the user's code
+    terminal: a method, function, field or attribute name of the framework or the user's code
+    true_values: a value the framework defines (a sentinel, a default name, a boolean spelling)
+    type: an annotation, type or class name of the framework or the user's code
+    type_annotation: an annotation, type or class name of the framework or the user's code
+    type_attrs: an annotation's or a connector's attribute name
+    type_carriers: an annotation, type or class name of the framework or the user's code
+    type_names: an annotation, type or class name of the framework or the user's code
+    unless_subtype_of: an annotation, type or class name of the framework or the user's code
+    value_annotation: an annotation, type or class name of the framework or the user's code
+    values: a value the framework defines (a sentinel, a default name, a boolean spelling)
+    versions: a library coordinate, catalog id, version or citation
+    why: prose for a reader
+    wildcard: a separator, placeholder or syntax character
+    with: a separator, placeholder or syntax character

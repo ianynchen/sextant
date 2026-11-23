@@ -431,24 +431,30 @@ the plan. A fixture shows that a rule works; only a real project shows which rul
 **How it is enforced** *(approved by the user 2026-11-23, and enforced since then, because §8
 says an untested rule is already being violated)*:  
 
-- **A vocabulary ratchet** (`tests/architecture/test_vocabulary_ratchet.py`, data in
-  `tests/architecture/vocabulary.yml`). It pins three things as they were on 2026-11-23: every
-  key name a shipped catalog uses; the values each listed closed-value key takes in the
-  shipped catalogs (`url_is`, `style`, `direction`, …); and every closed set of strings in
-  code under `src/sextant/application/resolve/`, the catalog loader and
-  `domain/closed_sets.py` — module-level and class-level constants of any spelling,
-  `Literal[...]` aliases and enums, which hold the open-question kinds and the reason and
-  resolution words. A word added to any of these fails the suite until the same change adds
-  an approval entry naming who approved it, when, and the ruling; a word removed fails until
-  the file drops it.  
+- **A vocabulary ratchet** (`tests/architecture/test_vocabulary_ratchet.py`; its one data
+  file, `tests/architecture/vocabulary.yml`, holds the baseline, the approvals and the
+  exemptions). It pins, as they were on 2026-11-23: every key name a shipped catalog uses; the
+  string values of every catalog key, each key declared closed (all values pinned), mixed (its
+  lower-case identifier values pinned) or open (with a reason); and every closed set of strings
+  in code under `src/sextant/application/`, `domain/`, `egress/` and `storage/` and in the
+  catalog loader — module-level and class-level, any spelling, `Literal[...]` aliases and
+  enums, which hold the open-question kinds, the reason and resolution words and the published
+  question and table words. A word added to any of these fails the suite until the same change
+  adds an approval entry naming who approved it, when, and the ruling; a word removed fails
+  until the file drops it.  
 - **A document check** (`tests/architecture/test_principles_check.py`). A spec or plan dated on
   or after 2026-11-23, or undated, without a `## Principles check` heading outside a code fence
   fails the suite.  
-- **What the tests cannot catch, and review must:** a word checked only by an inline comparison
-  in code, with no closed set, and not yet written in a shipped catalog; a word in a module
-  outside the scanned code; an approval entry that is not true; and a `## Principles check`
-  section that is empty or wrong. For these the control is review, and a diff of
-  `vocabulary.yml` — baseline or approvals — is reviewed as an approval.  
+- **What the tests cannot catch, and review must:** a new concept that is not a word — a scan
+  fact's shape, a truth rule (what makes a row `resolved`, `partial` or absent), a change to an
+  approved design; a word checked only by an inline comparison in code and not yet written in
+  a shipped catalog; a word in code outside the scanned trees — all of `ingress/` but the
+  catalog loader, `cli/`, `agents/`, `enrich/`, `api.py`, the JVM extractor — or in the
+  storage schema's SQL, which is where the scan-capability words, `ingress/interpret/wire.py`'s
+  `Origin`, Sextant's own config keys and the table columns live; an approval or
+  exemption that is not true; an approval dated in the future; and a `## Principles check`
+  section that is empty or wrong. For these the control is review: a diff of `vocabulary.yml` —
+  baseline, approvals or exemptions — is reviewed as an approval.  
 - **Reviewer briefs carry §8.8 and §8.9.** A violation is graded Important, never Minor, and
   two fix rounds on one task are reported to the user as "the concept may be wrong" (§13.8).  
 
