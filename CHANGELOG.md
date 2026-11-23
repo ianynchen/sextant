@@ -99,6 +99,10 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Two tests enforce GUIDELINES §8.9** (approved 2026-11-23): a new catalog key or closed-set
+  word fails the suite until `tests/architecture/vocabulary.yml` records who approved it, when,
+  and the ruling; a spec or plan dated after 2026-11-23 without `## Principles check` fails.
+
 - **`--memory-limit <MiB>` on `module analyze`** (OI-493, minimum 64): caps the extractor JVM
   (`-Xmx` half the limit) and DuckDB (`memory_limit`, a quarter of the limit but never under
   768 MiB: polar's fact load fails at 608 and completes at 640). The flag's value is the
