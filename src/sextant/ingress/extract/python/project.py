@@ -315,7 +315,10 @@ class ProjectHeaders:
         its types by their defining symbols. None for any other name."""
         header = self.header(module)
         written = None if header is None else header.aliases.get(name)
-        return None if written is None else self._typed(written)
+        if written is None:
+            return None
+        # `written` is the alias already read through once in its own file.
+        return self._typed(written, reading=frozenset({f"{module}/{name}#"}))
 
     def binds_class(self, module: str, name: str) -> bool:
         """Whether `module` binds `name` to its own class `name` alone, its one binding the
@@ -450,20 +453,25 @@ class ProjectHeaders:
         path = without_type_marker(symbol)
         return path if path in self._files else path.rpartition("/")[0]
 
-    def _typed(self, written: TypeRef, depth: int = _ALIAS_DEPTH) -> TypeRef:
+    def _typed(
+        self, written: TypeRef, depth: int = _ALIAS_DEPTH, reading: frozenset[str] = frozenset()
+    ) -> TypeRef:
         """`written` with each type it names by its defining symbol. A name another module
         file binds to a type alias (read in that file's scope, which reads no other header,
-        as a path) is the type the alias is: the path names no class."""
+        as a path) is the type the alias is: the path names no class. An alias that names
+        itself on the path (`Tree = list[Tree]`) stays its name, as the code writes it."""
         symbol = self.canonical(written.symbol) if names_a_type(written.symbol) else written.symbol
-        aliased = None if written.arguments or depth == 0 else self._aliased(symbol)
+        aliased = (
+            None if written.arguments or depth == 0 or symbol in reading else self._aliased(symbol)
+        )
         if aliased is not None:
-            found = self._typed(aliased, depth - 1)
+            found = self._typed(aliased, depth - 1, reading | {symbol})
             if written.nullable and not found.nullable:
                 found = found.model_copy(
                     update={"nullable": True, "nullable_resolution": written.nullable_resolution}
                 )
             return found
-        arguments = [self._typed(argument, depth) for argument in written.arguments]
+        arguments = [self._typed(argument, depth, reading) for argument in written.arguments]
         if symbol == written.symbol and all(
             new == old for new, old in zip(arguments, written.arguments, strict=True)
         ):

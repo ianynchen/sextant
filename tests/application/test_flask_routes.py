@@ -19,6 +19,7 @@ from sextant.application.resolve.pipeline import resolve
 from sextant.domain.factfile import write_fact_file
 from sextant.domain.facts import Document, ModuleFact
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.ingress.detect.python import PythonDetector
 from sextant.ingress.extract.python.scanner import PythonScanner
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -156,6 +157,32 @@ def test_a_route_on_anything_but_an_app_or_a_blueprint_derives_nothing(tmp_path:
     )
 
     assert rows == []
+
+
+def test_a_flask_declared_only_in_a_dependency_group_applies_the_catalog(tmp_path: Path, libraries):
+    """zulip declares Django only under `[dependency-groups]`: the detector reads it, so the
+    catalog applies (PEP 735; the declaration is what `detect.coordinates` is matched to)."""
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "shop"\n[dependency-groups]\nprod = ["flask>=3"]\n', encoding="utf-8"
+    )
+    (project / "app").mkdir()
+    (project / "app" / "main.py").write_text("", encoding="utf-8")
+    (module,) = PythonDetector().detect(project).modules
+    declared = {name: _LOCKED[name] for name in module.dependency_coordinates}
+
+    rows = _rows(
+        _resolved(
+            tmp_path,
+            libraries,
+            {"main.py": _APP + "@app.route('/items')\ndef items():\n    return ''\n"},
+            locked=declared,
+        )
+    )
+
+    assert declared == {"flask": "3.1.3"}
+    assert rows == [("GET", "/items", _handler("items"), "resolved")]
 
 
 def test_bare_route_is_get_only(tmp_path: Path, libraries):

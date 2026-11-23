@@ -223,6 +223,32 @@ def test_an_alias_of_an_alias_in_a_third_file_is_the_type_it_ends_at(tmp_path: P
     assert d.annotation_value == CallArgument(kind="field", symbol="app/more#Db.")
 
 
+def test_a_recursive_alias_in_another_file_is_read_through_once(tmp_path: Path):
+    """`Tree = Union[int, list[Tree], dict[str, Tree]]` in `trees.py`: the type is the alias
+    read through once, and where it names itself it stays its name, as the code writes it."""
+    tree = _scan(
+        tmp_path,
+        {
+            "trees.py": "from typing import TypeAlias, Union\n"
+            "Tree: TypeAlias = Union[int, list[Tree], dict[Tree, Tree]]\n",
+            "run.py": "from app.trees import Tree\ndef f(d: Tree):\n    pass\n",
+        },
+    )
+
+    def written(typed):
+        symbol = bare_descriptor(typed.symbol)
+        return (symbol, [written(a) for a in typed.arguments]) if typed.arguments else symbol
+
+    assert written(_parameter(tree, "app/run#f", "d").type) == (
+        "typing/Union#",
+        [
+            "builtins/int#",
+            ("builtins/list#", ["app/trees/Tree#"]),
+            ("builtins/dict#", ["app/trees/Tree#", "app/trees/Tree#"]),
+        ],
+    )
+
+
 def test_an_alias_in_the_same_file_in_each_spelling_is_its_type_and_its_field(tmp_path: Path):
     """`X = Annotated[T, ...]`, `X: TypeAlias = ...` and `type X = ...` are type aliases. A
     `type` statement is read as `X = v` is (ruling R6): its calls run in `<clinit>` and their
