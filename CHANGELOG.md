@@ -17,6 +17,12 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A Python project that declares its dependencies under `[dependency-groups]` (PEP 735, what
+  uv writes) is read.** Sextant took dependency names from `[project].dependencies`, Poetry,
+  `setup.cfg`, `requirements*.txt` and `Pipfile` only, so zulip (everything under
+  `[dependency-groups]`) found no Django and derived 0 rows, and bookwyrm (nothing else but tool
+  settings) was "no module". Every group is now read, and a `pyproject.toml` with
+  `[dependency-groups]` marks a module.
 - **Ten hardening fixes from the 2026-11-21 whole-repo audit.** A re-analyze killed mid-run
   (Ctrl-C, a CI timeout) no longer leaves the previous run's `metadata.json` vouching for a
   half-rewritten workspace — the stamp is removed before the first write, so `render`,

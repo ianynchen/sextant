@@ -190,7 +190,14 @@ opposite and was wrong.
 - **Build systems:** a new Python detector beside Maven and Gradle. Detectors of different
   languages all run; detectors of one language keep the old precedence (ruling R32): Maven before
   Gradle, one of them per repository, as `select_detector` chose. It reads:
-  - `pyproject.toml` (`[project]`, Poetry's table, `[build-system]`);
+  - `pyproject.toml` (`[project]`, Poetry's table, `[build-system]`, `[dependency-groups]`;
+    amended 2026-11-23, approved by the user: a file with `[dependency-groups]` marks a module
+    beside the others, bookwyrm holds only that and tool settings);
+  - dependency names from `[project].dependencies`, Poetry's table, `setup.cfg`, each
+    `requirements*.txt`, `Pipfile` and EVERY group of `[dependency-groups]` (PEP 735;
+    amended 2026-11-23, approved by the user: zulip declares Django only there; all groups,
+    as `requirements-dev.txt` is read, since a dependency in any group means the code path
+    can exist; an `include-group` entry adds nothing, the group it names is read anyway);
   - `[tool.uv.workspace]` members;
   - `setup.cfg [metadata]`;
   - `console_scripts`/`[project.scripts]`.
