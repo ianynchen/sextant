@@ -429,17 +429,26 @@ against the framework's own answer (its resolver, its route table), not as the l
 the plan. A fixture shows that a rule works; only a real project shows which rules are needed.  
 
 **How it is enforced** *(approved by the user 2026-11-23, and enforced since then, because §8
-says an untested rule is already being violated)*: the ratchet is
-`tests/architecture/test_vocabulary_ratchet.py` over the data file
-`tests/architecture/vocabulary.yml`, and the document check is
-`tests/architecture/test_principles_check.py`.  
+says an untested rule is already being violated)*:  
 
-- **A vocabulary ratchet.** `tests/architecture/` holds the closed sets as they are today
-  (catalog keys and closed values of D02, open-question kinds, reason and resolution words).
-  Adding one fails the suite until the same change adds an entry to an approvals file that
-  names the user's approval and its date. A word cannot arrive silently in a diff.  
-- **A document check.** A spec or plan dated after 2026-11-23 without a `## Principles check`
-  section fails the suite.  
+- **A vocabulary ratchet** (`tests/architecture/test_vocabulary_ratchet.py`, data in
+  `tests/architecture/vocabulary.yml`). It pins three things as they were on 2026-11-23: every
+  key name a shipped catalog uses; the values each listed closed-value key takes in the
+  shipped catalogs (`url_is`, `style`, `direction`, …); and every closed set of strings in
+  code under `src/sextant/application/resolve/`, the catalog loader and
+  `domain/closed_sets.py` — module-level and class-level constants of any spelling,
+  `Literal[...]` aliases and enums, which hold the open-question kinds and the reason and
+  resolution words. A word added to any of these fails the suite until the same change adds
+  an approval entry naming who approved it, when, and the ruling; a word removed fails until
+  the file drops it.  
+- **A document check** (`tests/architecture/test_principles_check.py`). A spec or plan dated on
+  or after 2026-11-23, or undated, without a `## Principles check` heading outside a code fence
+  fails the suite.  
+- **What the tests cannot catch, and review must:** a word checked only by an inline comparison
+  in code, with no closed set, and not yet written in a shipped catalog; a word in a module
+  outside the scanned code; an approval entry that is not true; and a `## Principles check`
+  section that is empty or wrong. For these the control is review, and a diff of
+  `vocabulary.yml` — baseline or approvals — is reviewed as an approval.  
 - **Reviewer briefs carry §8.8 and §8.9.** A violation is graded Important, never Minor, and
   two fix rounds on one task are reported to the user as "the concept may be wrong" (§13.8).  
 

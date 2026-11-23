@@ -1,14 +1,16 @@
 # The words of Sextant as they were on `main` on 2026-11-23 (GUIDELINES §8.9).
 #
 # `baseline` was generated ONCE by `_document()` in test_vocabulary_ratchet.py and is never
-# regenerated: regenerating is how a word would slip in. A word added after it needs an entry
-# under `approvals`:
+# regenerated: regenerating is how a word would slip in. Any diff of this file is reviewed as an
+# approval. A word added after the baseline needs an entry under `approvals`:
 #   - word: <the word>
-#     where: catalog key | <path>::<NAME> (as a failure message spells it)
+#     where: catalog key | catalog value: <key> | <path>::<name> (as a failure message spells it)
 #     approved_by: <who approved it>
-#     approved_on: YYYY-MM-DD
+#     approved_on: YYYY-MM-DD (after 2026-11-23)
 #     reference: <the ruling, design section or issue>
-# A word removed from the code is removed from this file by hand.
+# A new key that takes word values is also added under `baseline.closed_value_keys` in the same
+# change when its approval says it is closed-valued. A word removed from the code is removed
+# from this file by hand; a closed set that moves is moved here, as the failure message says.
 baseline:
   catalog_keys:
   - absent
@@ -572,7 +574,541 @@ baseline:
   - with
   - wrappers
   - yields
+  closed_value_keys:
+    alias:
+    - alias
+    - all
+    annotated_default:
+    - parameter
+    applies_to:
+    - jaxrs
+    - servlet
+    - spring
+    attach:
+    - sole_connector
+    base: []
+    bean_model:
+    - cdi
+    - spring
+    bean_via: []
+    binder_protocols:
+    - amqp
+    - kafka
+    - pubsub
+    - sqs
+    body: []
+    case:
+    - upper
+    channel:
+    - exchange
+    - routing_key
+    channel_link: []
+    channel_source: []
+    class_arg: []
+    class_level:
+    - prefix
+    - sibling
+    client_arg:
+    - receiver
+    connector_names:
+    - ignoring_case
+    consumes: []
+    declared_on:
+    - class
+    - interface
+    default_strategy:
+    - as_declared
+    destination:
+    - unread
+    direction:
+    - both
+    - inbound
+    - outbound
+    directions:
+    - inbound
+    - outbound
+    dispatcher:
+    - jaxrs
+    - servlet
+    - spring
+    dispatchers:
+    - jaxrs
+    - servlet
+    - spring
+    duplicate:
+    - conflict
+    empty_recipe:
+    - parameter_type
+    exchange: []
+    fallback:
+    - none
+    - sole_unannotated
+    - sole_unbound
+    fills:
+    - consumes
+    - produces
+    follow_calls:
+    - all
+    format_from:
+    - avro
+    - bytes
+    - json
+    - protobuf
+    - string
+    from:
+    - annotation_value
+    - bean_name
+    - handler_return
+    gather:
+    - list
+    - list_tail_flag
+    grammar:
+    - shortcut
+    graphql:
+    - json
+    group: []
+    grpc:
+    - protobuf
+    handler:
+    - enclosing
+    - lambda_arg
+    - none
+    host:
+    - localhost
+    identity:
+    - assumed
+    - reported
+    implicit_bindings:
+    - container
+    - path_variable
+    - scalar
+    inherit_siblings:
+    - all_or_nothing
+    injection:
+    - candidates
+    - exact_key
+    - names_recipe
+    into:
+    - channel_link
+    job: []
+    job_detail: []
+    job_group: []
+    job_key: []
+    job_name: []
+    key_matching:
+    - exact
+    - relaxed
+    kind:
+    - argument
+    - consumer_group
+    - cookie
+    - exclusive
+    - header
+    - host
+    - local
+    - option
+    - param
+    - persistence
+    - query
+    - selector
+    - subscription
+    - task_queue
+    match:
+    - all
+    - first
+    - one
+    means:
+    - not_null_by_default
+    media_formats:
+    - avro
+    - json
+    - protobuf
+    - xml
+    members:
+    - declared_type_methods
+    - overridden_dispatch_methods
+    - overridden_public_methods
+    - public_methods
+    method_case:
+    - upper
+    mutation:
+    - mutation
+    name_arg:
+    - all_strings
+    namespace_default:
+    - reversed_package
+    needs:
+    - collection_read
+    - delete
+    - item_read
+    - save
+    object:
+    - receiver
+    operation:
+    - operation
+    options: []
+    order:
+    - last
+    parent:
+    - receiver
+    part:
+    - host
+    - job
+    - port
+    - uri
+    path_fallback:
+    - construct_name
+    - declaring_type_qualified_name
+    - declaring_type_scoped_name
+    - declaring_type_simple_name
+    - payload_type
+    - prefixed_capitalized_construct_name
+    - read_accessor_property
+    - write_accessor_property
+    path_join:
+    - concatenate
+    - leading_slash
+    - single_slash
+    pattern_from:
+    - regex
+    payload:
+    - return
+    payload_ctor_arg:
+    - last
+    payload_from:
+    - class_arg
+    - receiver_owner
+    poisons:
+    - channel
+    - channel_link
+    - exchange
+    - handler
+    - routing_key
+    - serves
+    port: []
+    preserves:
+    - authority
+    produces: []
+    protocol:
+    - actor
+    - amqp
+    - eventbus
+    - graphql
+    - grpc
+    - http
+    - in_process
+    - jms
+    - kafka
+    - pubsub
+    - pulsar
+    - rsocket
+    - soap
+    - sqs
+    - sse
+    - temporal
+    - websocket
+    protocols:
+    - http
+    - sse
+    qualifier_format:
+    - qname
+    query:
+    - query
+    refuses:
+    - bound_elsewhere
+    - empty_path
+    - exact
+    - pattern
+    - trailing_slash
+    - unrooted
+    - wildcard
+    repeats:
+    - case
+    - consumes
+    - handler
+    - http_method
+    - produces
+    repositories:
+    - collection_read
+    - delete
+    - item_read
+    - save
+    request_requirement_attrs:
+    - header
+    - param
+    required:
+    - no_default
+    requirement:
+    - binder
+    - optional
+    - required
+    requires:
+    - annotation_args
+    - array_arguments
+    - call_site
+    - chain_reconstruction
+    - generic_interfaces
+    - implemented_interfaces
+    - nested_annotation_args
+    - resolved_config
+    - string_constants
+    - superclass
+    - type_annotations
+    - typed_signatures
+    response: []
+    response_is:
+    - array
+    result_calls: []
+    result_returns: []
+    root_kind:
+    - entry_point
+    router_arg:
+    - chain_result
+    routing_key: []
+    schedule: []
+    schema_format:
+    - graphql
+    - protobuf
+    - wsdl
+    semantics:
+    - async
+    - envelope
+    - http_envelope
+    - optional
+    - streaming
+    set_by:
+    - deployment
+    shape_model:
+    - json
+    - pydantic
+    soap:
+    - xml
+    stack:
+    - reactive
+    - servlet
+    strategies:
+    - annotated_only
+    - honors_exported
+    - public_only
+    strategy:
+    - camel
+    - humps_camelize
+    - pascal
+    style:
+    - annotation_driven
+    - combinator
+    - config_join
+    - derived_resource
+    - error_advice
+    - fluent
+    - injected_client
+    - interface_implementation
+    - scheduled_chain
+    - scheduled_work
+    - schema_operations
+    - single_call
+    - supertype_derived
+    - supertype_dispatch
+    subscription:
+    - subscription
+    target:
+    - cache
+    - database
+    to: []
+    trigger: []
+    unselected_binds:
+    - sole
+    url: []
+    url_is:
+    - address
+    - pattern
+    value: []
+    verbless_serves:
+    - any
+    wire_type:
+    - boolean
+    yields:
+    - authority
   closed_sets:
+    src/sextant/application/resolve/conditions.py::_ARG_KEYS:
+    - annotation
+    - equals
+    - name
+    - parses_true
+    src/sextant/application/resolve/conditions.py::_CONDITION_KEYS:
+    - annotation_arg
+    src/sextant/application/resolve/config.py::_DEFAULT_PLACEHOLDERS:
+    - ${
+    - ':'
+    - close
+    - default_separator
+    - open
+    - '}'
+    src/sextant/application/resolve/dependencies.py::DEPENDENCY_GATED:
+    - config_join
+    - derived_resource
+    src/sextant/application/resolve/dispatch.py::VIRTUAL_DISPATCH:
+    - interface
+    - virtual
+    src/sextant/application/resolve/dispatch_registrations.py::_CONSTANT_KINDS:
+    - enum
+    - field
+    src/sextant/application/resolve/endpoints.py::_DERIVES_ROWS:
+    - config_join
+    src/sextant/application/resolve/endpoints.py::_ENGINES:
+    - annotation_driven
+    - combinator
+    - config_join
+    - derived_resource
+    - error_advice
+    - fluent
+    - injected_client
+    - interface_implementation
+    - scheduled_chain
+    - scheduled_work
+    - schema_operations
+    - single_call
+    - supertype_derived
+    - supertype_dispatch
+    src/sextant/application/resolve/endpoints.py::_NON_WIRE:
+    - error_advice
+    - scheduled_chain
+    - scheduled_work
+    src/sextant/application/resolve/endpoints.py::_READS_THE_CONFIG_MODEL:
+    - scheduled_chain
+    - scheduled_work
+    src/sextant/application/resolve/endpoints.py::_RUNS_LAST:
+    - config_join
+    - derived_resource
+    - schema_operations
+    src/sextant/application/resolve/endpoints.py::_WRITES_ONLY_THE_CHANNEL_EDGE:
+    - config_join
+    src/sextant/application/resolve/engines/annotation_driven.py::_CLASS_LEVEL_VALUES:
+    - prefix
+    - sibling
+    src/sextant/application/resolve/engines/annotation_driven.py::_DECLARED_ON:
+    - class
+    - interface
+    src/sextant/application/resolve/engines/annotation_driven.py::_DIRECTION_CONDITIONS:
+    - owner_implemented_by_type_annotated
+    src/sextant/application/resolve/engines/annotation_driven.py::_IMPLEMENTS_NOTHING:
+    - annotation
+    - interface
+    src/sextant/application/resolve/engines/annotation_driven.py::_INHERIT_SIBLINGS:
+    - all_or_nothing
+    src/sextant/application/resolve/engines/annotation_driven.py::_MEMBER_RULES:
+    - declared_type_methods
+    - public_methods
+    src/sextant/application/resolve/engines/annotation_driven.py::_METADATA_FROM_KEYS:
+    - absent_value
+    - annotation
+    - attribute
+    - kind
+    src/sextant/application/resolve/engines/annotation_driven.py::_NAMESPACE_DEFAULTS:
+    - http://%s/
+    - reversed_package
+    src/sextant/application/resolve/engines/annotation_driven.py::_PATH_FALLBACKS:
+    - construct_name
+    - declaring_type_qualified_name
+    - declaring_type_scoped_name
+    - declaring_type_simple_name
+    - prefixed_capitalized_construct_name
+    - read_accessor_property
+    - write_accessor_property
+    src/sextant/application/resolve/engines/annotation_driven.py::_QUALIFIER_FORMATS:
+    - qname
+    src/sextant/application/resolve/engines/annotation_driven.py::_RESOLVES:
+    - direction
+    src/sextant/application/resolve/engines/annotation_driven.py::_SIBLING_KEYS:
+    - annotation
+    - arg
+    src/sextant/application/resolve/engines/annotation_driven.py::_UNLESS_KEYS:
+    - attribute
+    - equals
+    src/sextant/application/resolve/engines/combinator.py::_IDENTITY_POISON:
+    - method
+    - path
+    src/sextant/application/resolve/engines/combinator.py::_PROTOCOLS:
+    - actor
+    - amqp
+    - eventbus
+    - graphql
+    - grpc
+    - http
+    - in_process
+    - jms
+    - kafka
+    - pubsub
+    - pulsar
+    - rsocket
+    - soap
+    - sqs
+    - sse
+    - temporal
+    - websocket
+    src/sextant/application/resolve/engines/combinator.py::_REQUIREMENT_KINDS:
+    - cookie
+    - header
+    - param
+    - query
+    src/sextant/application/resolve/engines/combinator.py::_REQUIREMENT_LEVELS:
+    - absent
+    - optional
+    - required
+    src/sextant/application/resolve/engines/config_join.py::_ATTACH_RULES:
+    - sole_connector
+    src/sextant/application/resolve/engines/config_join.py::_BINDING_SOURCES:
+    - annotation_value
+    - bean_name
+    src/sextant/application/resolve/engines/config_join.py::_FILLABLE:
+    - consumes
+    - produces
+    src/sextant/application/resolve/engines/config_join.py::_GATHERS:
+    - list
+    - list_tail_flag
+    src/sextant/application/resolve/engines/config_join.py::_NAME_MATCHING:
+    - exact
+    - ignoring_case
+    src/sextant/application/resolve/engines/config_join.py::_REQUIREMENT_KINDS:
+    - cookie
+    - header
+    - param
+    - query
+    src/sextant/application/resolve/engines/config_join.py::_UNSELECTED_VALUES:
+    - all
+    - sole
+    src/sextant/application/resolve/engines/derived_resource.py::_REQUIRED_MATCHES:
+    - base_path
+    - crud_methods
+    - detection_strategy
+    - exported_attribute
+    - item_segment
+    - member_annotation
+    - no_repository_bean
+    - path_attribute
+    - repositories
+    - resource_annotation
+    - routes
+    - search_segment
+    src/sextant/application/resolve/engines/derived_resource.py::_STRATEGY_FLAGS:
+    - annotated_only
+    - honors_exported
+    - public_only
+    src/sextant/application/resolve/engines/error_advice.py::_LIST_MATCHES:
+    - advice_annotations
+    - controller_annotations
+    - exception_roots
+    - scope_from
+    - status_from
+    src/sextant/application/resolve/engines/error_advice.py::_OPTIONAL_PAIR:
+    - status_annotation
+    - status_from
+    src/sextant/application/resolve/engines/error_advice.py::_REQUIRED_MATCHES:
+    - advice_annotations
+    - controller_annotations
+    - exception_roots
+    - handler_annotation
+    - scope_from
     src/sextant/application/resolve/engines/fluent.py::PUBLISHED_PARTS:
     - base
     - body
@@ -614,6 +1150,81 @@ baseline:
     src/sextant/application/resolve/engines/fluent.py::_URL_IS:
     - address
     - pattern
+    src/sextant/application/resolve/engines/injected_client.py::_REQUIRED_MARKER:
+    - service_name_call
+    src/sextant/application/resolve/engines/injected_client.py::_REQUIRED_MATCHES:
+    - field_annotation
+    - identity_marker
+    src/sextant/application/resolve/engines/interface_implementation.py::_REQUIRED_MATCHES:
+    - handler_method
+    - interface
+    - registration
+    src/sextant/application/resolve/engines/interface_implementation.py::_REQUIRED_REGISTRATION:
+    - channel_arg
+    - method
+    - owner
+    - receiver_arg
+    src/sextant/application/resolve/engines/scheduled_chain.py::_SCHEDULE_STRENGTH:
+    - narrowed
+    - partial
+    - resolved
+    - unresolved
+    src/sextant/application/resolve/engines/scheduled_chain.py::_UNREAD_ENDS:
+    - cycle
+    - escapes
+    - non_enumerable
+    src/sextant/application/resolve/engines/scheduled_work.py::_REQUIRED_MATCHES:
+    - annotation
+    - container
+    - triggers
+    src/sextant/application/resolve/engines/single_call.py::_DEFAULT_ADDRESS_KEYS:
+    - arg
+    - method
+    src/sextant/application/resolve/engines/single_call.py::_IDENTITY_FORMATS:
+    - qname
+    src/sextant/application/resolve/engines/single_call.py::_IDENTITY_OPTIONAL:
+    - format
+    - qualifier_from
+    src/sextant/application/resolve/engines/single_call.py::_IDENTITY_REQUIRED:
+    - annotation
+    - arg
+    - name_from
+    src/sextant/application/resolve/engines/single_call.py::_METHOD_CASES:
+    - upper
+    src/sextant/application/resolve/engines/supertype_derived.py::CLIENT_KEYS:
+    - client_call_owner
+    - client_stub_supertype
+    src/sextant/application/resolve/engines/supertype_derived.py::_DELEGATING_BEAN:
+    - delegate_field
+    - implements
+    src/sextant/application/resolve/engines/supertype_derived.py::_OPTIONAL_TYPES:
+    - served_by_annotation
+    - service_supertype
+    src/sextant/application/resolve/engines/supertype_derived.py::_REQUIRED_MARKER:
+    - method_name_call
+    - service_name_call
+    src/sextant/application/resolve/engines/supertype_derived.py::_REQUIRED_MATCHES:
+    - members
+    - supertype_marker
+    src/sextant/application/resolve/engines/supertype_dispatch.py::_REQUIRED_MATCHES:
+    - address
+    - bypassed_by
+    - dispatch
+    - members
+    - supertype
+    src/sextant/application/resolve/environment_divergence.py::_GAP_ENGINES:
+    - derived_resource
+    src/sextant/application/resolve/format.py::_DESCRIBED_BY:
+    - compiler
+    - declared
+    src/sextant/application/resolve/format.py::_WIRE_FORMATS:
+    - any
+    - avro
+    - bytes
+    - json
+    - protobuf
+    - string
+    - xml
     src/sextant/application/resolve/open_questions.py::QUESTIONS:
     - binder_protocol
     - channel_destination
@@ -632,6 +1243,341 @@ baseline:
     - service_identity
     - unselected_binding
     - web_stack
+    src/sextant/application/resolve/protocol_hint.py::_KEYS:
+    - hint_annotations
+    - hint_media
+    - hint_returns
+    - hint_when
+    - protocol
+    src/sextant/application/resolve/request_requirements.py::_CALL_KINDS:
+    - argument
+    - flag
+    - option
+    src/sextant/application/resolve/request_requirements.py::_CALL_REQUIREMENTS:
+    - optional
+    - required
+    src/sextant/application/resolve/request_requirements.py::_CALL_STYLES:
+    - fluent
+    src/sextant/application/resolve/request_requirements.py::_FALLBACK_SPELLINGS:
+    - hyphenated
+    - hyphenated-capitalized
+    src/sextant/application/resolve/request_requirements.py::_KINDS:
+    - cookie
+    - header
+    - param
+    - query
+    src/sextant/application/resolve/request_requirements.py::_LITERAL_KINDS:
+    - boolean
+    - double
+    - float
+    - int
+    - long
+    - string
+    src/sextant/application/resolve/request_requirements.py::_MARKER_KEYS:
+    - annotated_default
+    - required_when
+    - spelling
+    src/sextant/application/resolve/request_requirements.py::_PARAMETER_KINDS:
+    - cookie
+    - header
+    - query
+    src/sextant/application/resolve/request_requirements.py::_READ_REQUIREMENTS:
+    - optional
+    - required
+    src/sextant/application/resolve/request_requirements.py::_REQUEST_PARAMS_KEYS:
+    - annotation
+    - default_annotation
+    - default_attr
+    - fallback_spelling
+    - kind
+    - name_attrs
+    - optional_types
+    - required_attr
+    - requirement
+    - skip_path_variables
+    - skip_types
+    src/sextant/application/resolve/request_requirements.py::_REQUEST_PARAM_CALL_KEYS:
+    - annotated_default
+    - default_arg
+    - flag_arg
+    - kind
+    - method
+    - name_arg
+    - optional_when
+    - owner
+    - required_arg
+    - required_when
+    - requirement
+    - spelling
+    src/sextant/application/resolve/request_requirements.py::_REQUEST_READS_KEYS:
+    - arity
+    - kind
+    - method
+    - name_arg
+    - owner
+    - required_when_thrown
+    - requirement
+    - skip_path_variables
+    - then
+    - via
+    src/sextant/application/resolve/request_requirements.py::_REQUIREMENTS:
+    - binder
+    - optional
+    src/sextant/application/resolve/request_requirements.py::_UNMARKED_KEYS:
+    - kind
+    - requirement
+    - scalar_only
+    - unmarked
+    src/sextant/application/resolve/self_calls.py::_PROTOCOLS:
+    - /
+    - actor
+    - grpc
+    src/sextant/application/resolve/service_identity.py::_GAP_ENGINES:
+    - annotation_driven
+    - config_join
+    - injected_client
+    - supertype_derived
+    src/sextant/application/resolve/settings_fields.py::_LITERALS:
+    - boolean
+    - int
+    - long
+    - string
+    src/sextant/application/resolve/shapes/arguments.py::_LITERAL_WIRE_TYPES:
+    - boolean
+    - int
+    - long
+    - string
+    src/sextant/application/resolve/shapes/arguments.py::_UNREAD_KINDS:
+    - concat
+    - field
+    - parameter
+    - unresolved
+    src/sextant/application/resolve/shapes/chains.py::_ARGUMENT_FIELDS:
+    - base
+    - body
+    - channel
+    - dependencies
+    - host
+    - options
+    - port
+    - response
+    - url
+    src/sextant/application/resolve/shapes/chains.py::_BEAN_REASONS:
+    - ambiguous
+    - external
+    - non_enumerable
+    - none
+    - unread
+    src/sextant/application/resolve/shapes/chains.py::_CHANNEL_NAME_FIELDS:
+    - channel_link
+    - channel_source
+    src/sextant/application/resolve/shapes/chains.py::_POISONED:
+    - kind
+    - poisoned
+    - reason
+    - unresolved
+    src/sextant/application/resolve/shapes/chains.py::_REFERENCE_KEYS:
+    - arg
+    - keyword
+    src/sextant/application/resolve/shapes/chains.py::_ROOT_ONLY_WORDS:
+    - compose
+    - continue
+    - direction
+    - method_annotation
+    - via_argument_of
+    src/sextant/application/resolve/shapes/chains.py::_UNREAD_WALKS:
+    - cycle
+    - escapes
+    - external
+    - non_enumerable
+    src/sextant/application/resolve/shapes/chains.py::_UNRESOLVED_ARGUMENT:
+    - kind
+    - unresolved
+    src/sextant/application/resolve/shapes/chains.py::_VERB_CASES:
+    - upper
+    src/sextant/application/resolve/shapes/chains.py::_VERB_LIST_KEYS:
+    - absent
+    - case
+    src/sextant/application/resolve/shapes/chains.py::_VIA_KEYS:
+    - channel
+    - channel_via
+    - url
+    - url_via
+    src/sextant/application/resolve/shapes/chains.py::_WHEN_KEYS:
+    - arg
+    - equals
+    src/sextant/application/resolve/shapes/client_base.py::PUBLISHED_PARTS:
+    - host
+    - port
+    - uri
+    src/sextant/application/resolve/shapes/client_base.py::_ARGUMENT_RUNG_KEYS:
+    - base_arg
+    - descriptor
+    - method
+    - owner
+    src/sextant/application/resolve/shapes/client_base.py::_BLOCK_ONLY_KEYS:
+    - may_set_base
+    - setter
+    src/sextant/application/resolve/shapes/client_base.py::_CONFIGURES_KEYS:
+    - owner
+    - returns
+    src/sextant/application/resolve/shapes/client_base.py::_JOINS:
+    - append_to_base
+    - fill_authority
+    - replace_last_segment
+    src/sextant/application/resolve/shapes/client_base.py::_KEYS:
+    - client_arg
+    - join
+    - ladder
+    - may_set_base
+    - setter
+    src/sextant/application/resolve/shapes/client_base.py::_LADDER_JOINS:
+    - append_to_base
+    - replace_last_segment
+    src/sextant/application/resolve/shapes/client_base.py::_MAY_SET_KEYS:
+    - arg
+    - descriptor
+    - field
+    - method
+    - owner
+    src/sextant/application/resolve/shapes/client_base.py::_NOT_ON_A_VALUE:
+    - dynamic
+    - static
+    src/sextant/application/resolve/shapes/client_base.py::_OPTIONS_KEYS:
+    - client_arg
+    - join
+    - ladder
+    - setters
+    src/sextant/application/resolve/shapes/client_base.py::_OPTIONS_RUNG_KEYS:
+    - descriptor
+    - method
+    - options_arg
+    - owner
+    src/sextant/application/resolve/shapes/client_base.py::_OPTIONS_SETTER_KEYS:
+    - descriptor
+    - method
+    - owner
+    - part
+    - value_arg
+    src/sextant/application/resolve/shapes/client_base.py::_PARENTS:
+    - receiver
+    src/sextant/application/resolve/shapes/client_base.py::_PARTS:
+    - host
+    - port
+    - uri
+    src/sextant/application/resolve/shapes/client_base.py::_REQUEST_KEYS:
+    - port
+    - scheme
+    src/sextant/application/resolve/shapes/client_base.py::_RUNG_KEYS:
+    - block_arg
+    - descriptor
+    - method
+    - owner
+    - parent
+    src/sextant/application/resolve/shapes/client_base.py::_SETTER_KEYS:
+    - descriptor
+    - method
+    - owner
+    - value_arg
+    src/sextant/application/resolve/shapes/client_base.py::_UNKNOWN:
+    - host
+    - port
+    - uri
+    src/sextant/application/resolve/shapes/contracts.py::_COMPOUND_WIRES:
+    - array
+    - map
+    - object
+    src/sextant/application/resolve/shapes/contracts.py::_IMPLICIT_BINDINGS:
+    - container
+    - path_variable
+    - scalar
+    src/sextant/application/resolve/shapes/contracts.py::_REQUEST_BODY_KEYS:
+    - annotated_default
+    - annotation
+    - bound_by
+    - bound_by_calls
+    - default_arg
+    - embed_arg
+    - embed_markers
+    - excludes
+    - fallback
+    - implicit_bindings
+    - marker_calls
+    - name_arg
+    - required_when
+    src/sextant/application/resolve/shapes/contracts.py::_SCALAR_WIRES:
+    - boolean
+    - integer
+    - number
+    - string
+    src/sextant/application/resolve/shapes/expansion.py::_COLLECTIONS:
+    - array
+    - map
+    src/sextant/application/resolve/shapes/expansion.py::_SCOPE_MEANINGS:
+    - not_null_by_default
+    src/sextant/application/resolve/shapes/expansion.py::_STRATEGIES:
+    - as_declared
+    - kebab_case
+    - snake_case
+    - upper_camel
+    src/sextant/application/resolve/shapes/inbound_routes.py::MEDIA_FIELDS:
+    - consumes
+    - produces
+    src/sextant/application/resolve/shapes/inbound_routes.py::_UNKNOWN_START:
+    - '#{'
+    - ${
+    - <host>
+    - '{}'
+    src/sextant/application/resolve/shapes/inbound_routes.py::_WORD_FALLBACK_KEYS:
+    - drop_suffixes
+    - lower
+    - name
+    - replace
+    src/sextant/application/resolve/shapes/member_values.py::_STATIC_FIELD_KINDS:
+    - enum
+    - field
+    src/sextant/application/resolve/shapes/model_fields.py::STRATEGIES:
+    - camel
+    - humps_camelize
+    - pascal
+    src/sextant/application/resolve/shapes/model_fields.py::_NONE:
+    - none
+    src/sextant/application/resolve/shapes/model_fields.py::_NOT_READ:
+    - not_read
+    src/sextant/application/resolve/shapes/model_fields.py::_STRENGTH:
+    - partial
+    - resolved
+    - unresolved
+    src/sextant/application/resolve/shapes/model_fields.py::_UNKNOWN:
+    - unknown
+    src/sextant/application/resolve/shapes/model_fields.py::_VALUE_NOT_READ:
+    - arguments
+    src/sextant/application/resolve/shapes/mounts.py::_HOLD_REFUSES:
+    - trailing_slash
+    - unrooted
+    src/sextant/application/resolve/shapes/mounts.py::_REFUSES:
+    - empty_path
+    - exact
+    - exact_mount_path
+    - pattern
+    - pattern_mount_path
+    - trailing_slash
+    - unrooted
+    - unrooted_path
+    - wildcard
+    - wildcard_mount_point
+    src/sextant/application/resolve/shapes/mounts.py::_STRENGTH:
+    - narrowed
+    - partial
+    - resolved
+    - unresolved
+    src/sextant/application/resolve/shapes/parse_binding.py::_PAYLOAD_SOURCES:
+    - class_arg
+    - receiver_owner
+    src/sextant/application/resolve/shapes/pass_through.py::Outcome:
+    - answers
+    - passes_on
+    - unreadable
     src/sextant/application/resolve/values.py::_DECLARATION_KINDS:
     - class
     - enum

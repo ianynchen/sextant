@@ -602,11 +602,13 @@ before resuming.
 
 **What prevents recurrence:** GUIDELINES §8.8 (the four rulings) and §8.9 (a new concept is the
 user's decision), approved 2026-11-23, and the two tests that enforce §8.9:
-`tests/architecture/test_vocabulary_ratchet.py` fails on a catalog key or closed-set word that
+`tests/architecture/test_vocabulary_ratchet.py` fails on a catalog key, a value of a
+closed-value catalog key, or a member of a closed set in the scanned code that
 `tests/architecture/vocabulary.yml` neither holds in its baseline nor records as approved (by
 whom, when, under which ruling), and `tests/architecture/test_principles_check.py` fails on a
-spec or plan dated after 2026-11-23 without a `## Principles check` section. The sites the
-decisions left on the branch are §8.8's audit list; that branch is not merged.
+spec or plan dated on or after 2026-11-23 without a `## Principles check` section. What the
+tests cannot catch is listed in §8.9 and is left to review. The sites the decisions left on
+the branch are §8.8's audit list; that branch is not merged.
 
 Five candidates were judged NOT violations and are recorded so the judgement can be
 overturned rather than forgotten:
