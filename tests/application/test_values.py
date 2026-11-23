@@ -56,12 +56,13 @@ from sextant.domain.facts import (
     Fact,
     FieldWriteFact,
     MethodReturnFact,
+    ModuleFact,
     Parameter,
     Signature,
     SymbolFact,
     TypeRef,
 )
-from sextant.domain.symbols import method_descriptor
+from sextant.domain.symbols import PY_SIGNATURE, disambiguator_of, method_descriptor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -6951,3 +6952,222 @@ def test_channel_via_reads_the_class_in_the_same_walk(tmp_path: Path):
         workspace.close()
     assert read == {1: [("a", "A#")], 3: [("b", "B#")], 5: [("c", "C#")]}
     assert plain == [None]
+
+
+# -- held lists that are not exactly known (plan 2026-11-23 Task 3) ----------------------
+#
+# Python-spelled facts (`lookup: c3`), because a held list's changes are read where calls
+# name a list's methods: each list below is a module-level name `held#<name>.` written as
+# `["a", "b"]` in the module body, read whole as an argument by `held#read_<name>`, and
+# called on (or handed on) by the module body as the case names.
+_PY = "sextant-python shop . . "
+_PY_DIS = "(" + disambiguator_of(PY_SIGNATURE) + ")."
+_HELD_PY = "held#"
+_PY_BODY = _PY + _HELD_PY + "<clinit>" + _PY_DIS
+_PY_SINK = ("lib#", "use", "(*)")
+# A call on the list the language makes to READ it (`for v in x`, `x[0]`, `v in x`, `len(x)`).
+_READS = ("__iter__", "__getitem__", "__contains__", "__len__")
+# A call on the list that may change it and that the facts do not state as a write.
+_CHANGES = (
+    "remove",
+    "pop",
+    "clear",
+    "insert",
+    "sort",
+    "reverse",
+    "__setitem__",
+    "__delitem__",
+)
+_MANY_MEMBERS = 300
+
+
+def _py_site(
+    caller: str,
+    ordinal: int,
+    target: tuple[str, str, str],
+    arguments: list[CallArgument],
+    receiver_field: str | None = None,
+) -> Fact:
+    owner, name, descriptor = target
+    return CallSiteFact(
+        document_id="doc_held",
+        caller=caller,
+        target=CallTarget(owner=owner, name=name, descriptor=descriptor),
+        invoke_kind="virtual" if receiver_field is not None else "static",
+        ordinal=ordinal,
+        receiver_field=receiver_field,
+        arguments=arguments,
+    )
+
+
+def _py_held_facts() -> list[Fact]:
+    lists = {
+        "plain": [],
+        **{f"read_by_{name}": [(name, [])] for name in _READS},
+        **{f"changed_by_{name}": [(name, [])] for name in _CHANGES},
+        "handed": [("keep", "whole")],
+    }
+    facts: list[Fact] = [
+        SymbolFact(
+            document_id="doc_held", symbol=_PY + _HELD_PY, construct_kind=ConstructKind.CLASS
+        )
+    ]
+    ordinal = 0
+    for name, calls in lists.items():
+        field = _HELD_PY + name + "."
+        facts.append(
+            FieldWriteFact(
+                document_id="doc_held",
+                field=field,
+                value=CallArgument(
+                    kind="array",
+                    elements=[
+                        CallArgument(kind="string", value="a"),
+                        CallArgument(kind="string", value="b"),
+                    ],
+                ),
+                written_by=_PY_BODY,
+            )
+        )
+        for called, how in calls:
+            if how == "whole":
+                facts.append(
+                    _py_site(
+                        _PY_BODY,
+                        ordinal,
+                        ("lib#", called, "(*)"),
+                        [CallArgument(kind="field", symbol=field)],
+                    )
+                )
+            else:
+                facts.append(
+                    _py_site(_PY_BODY, ordinal, ("builtins/list#", called, "(*)"), [], field)
+                )
+            ordinal += 1
+    # More members than `PATH_CAP` in one written list, and as many alternative writes of
+    # one name, each a string.
+    facts.append(
+        FieldWriteFact(
+            document_id="doc_held",
+            field=_HELD_PY + "long.",
+            value=CallArgument(
+                kind="array",
+                elements=[CallArgument(kind="string", value=f"m{n}") for n in range(_MANY_MEMBERS)],
+            ),
+            written_by=_PY_BODY,
+        )
+    )
+    facts.extend(
+        FieldWriteFact(
+            document_id="doc_held",
+            field=_HELD_PY + "branchy.",
+            value=CallArgument(kind="string", value=f"w{n}"),
+            written_by=_PY_BODY,
+        )
+        for n in range(_MANY_MEMBERS)
+    )
+    for name in (*lists, "long", "branchy"):
+        reader = _PY + _HELD_PY + "read_" + name + _PY_DIS
+        facts.append(
+            SymbolFact(
+                document_id="doc_held",
+                symbol=reader,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=_PY + _HELD_PY,
+            )
+        )
+        facts.append(
+            _py_site(
+                reader, 0, _PY_SINK, [CallArgument(kind="field", symbol=_HELD_PY + name + ".")]
+            )
+        )
+    return facts
+
+
+@pytest.fixture(scope="module")
+def held_py(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
+    tmp_path = tmp_path_factory.mktemp("values_held_py")
+    facts = tmp_path / "facts"
+    document = Document(
+        document_id="doc_held",
+        relative_path="held.py",
+        module_id="shop",
+        language="python",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="python",
+        content_hash="sha256:held",
+        origin_entry="src",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:none",
+    )
+    write_fact_file(facts / "held.jsonl", document, straight_line(_py_held_facts()))
+    write_fact_file(
+        facts / "module.jsonl",
+        document.model_copy(update={"document_id": "module", "relative_path": "pyproject.toml"}),
+        [
+            ModuleFact(
+                document_id="module",
+                module_id="shop",
+                module_kind="pyproject",
+                languages=["python"],
+                source_roots=["src"],
+                output_dirs=["src"],
+                lookup="c3",
+            )
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_return_flows(workspace)
+    record_call_edges(workspace)
+    return workspace
+
+
+def _held_read(workspace: DuckDbWorkspace, name: str) -> list[Binding]:
+    site = _at(workspace, _PY + _HELD_PY + "read_" + name + _PY_DIS, 0)
+    return resolve_site(workspace, site)
+
+
+def _held_answers(workspace: DuckDbWorkspace, name: str) -> list[tuple[object, str | None]]:
+    return [(b.slots[0].value, b.slots[0].reason) for b in _held_read(workspace, name)]
+
+
+def test_a_python_list_nothing_changes_answers_its_members(held_py):
+    assert _held_answers(held_py, "plain") == [("a", None), ("b", None)]
+
+
+@pytest.mark.parametrize("called", _CHANGES)
+def test_a_call_on_a_held_list_that_is_not_a_write_makes_it_not_known(held_py, called):
+    """**A list changed by a call the facts do not state as a write is not exactly known**
+    (spec §4c M7, ruled 2026-11-23): `x.remove(v)`, `x[0] = v` (`__setitem__`), `del x[0]`
+    (`__delitem__`) and the rest leave its values unknown, so the read answers `escapes`
+    and no member is answered at `resolved`."""
+    assert _held_answers(held_py, f"changed_by_{called}") == [(None, "escapes")]
+
+
+@pytest.mark.parametrize("called", _READS)
+def test_a_read_the_language_makes_on_a_held_list_keeps_its_members(held_py, called):
+    """`for v in x`, `x[0]`, `v in x`, `len(x)` read the list and change nothing."""
+    assert _held_answers(held_py, f"read_by_{called}") == [("a", None), ("b", None)]
+
+
+def test_a_held_list_handed_to_a_call_is_still_read(held_py):
+    """`keep(VERBS)`: a list handed to a call is still read (ruled 2026-11-23): the walk reads
+    a field's writes and tracks no hand-over of a field, in Python as in Java. A list handed
+    to module code that changes it is a known limit (plan Task 10)."""
+    assert _held_answers(held_py, "handed") == [("a", None), ("b", None)]
+
+
+def test_the_members_of_one_held_list_do_not_count_against_the_path_cap(held_py):
+    """One written list of more members than `PATH_CAP` is one value: every member is read
+    (Task 2's `members`), never `non_enumerable`."""
+    assert _MANY_MEMBERS > values.PATH_CAP
+    answers = _held_answers(held_py, "long")
+    assert len(answers) == _MANY_MEMBERS
+    assert all(reason is None for _, reason in answers)
+
+
+def test_more_alternative_writes_than_the_path_cap_are_non_enumerable(held_py):
+    """As many ALTERNATIVE writes of one name, each a string, are still past the cap."""
+    assert _held_answers(held_py, "branchy") == [(None, "non_enumerable")]

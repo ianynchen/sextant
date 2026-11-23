@@ -4548,8 +4548,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        for _, entry in constants:",
-                replace="        for _, entry in ():  # guard disabled by scripts/guard_check.py",
+                find="        for writer, entry in constants:",
+                replace="        for writer, entry in ():  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -4724,9 +4724,9 @@ GUARDS: dict[str, Guard] = {
             Edit(
                 path=_VALUES,
                 find="        for method, index in written:\n"
-                "            if len(reached) > PATH_CAP:\n",
+                "            if len(reached) - members > PATH_CAP:\n",
                 replace="        for method, index in ():  # guard disabled by guard_check.py\n"
-                "            if len(reached) > PATH_CAP:\n",
+                "            if len(reached) - members > PATH_CAP:\n",
             ),
         ),
     ),

@@ -136,6 +136,9 @@ _NEXT = "__next__"
 _ASYNC_ITER = "__aiter__"
 _ASYNC_NEXT = "__anext__"
 _GETITEM = "__getitem__"
+# An element store and an element delete, as the language makes them (`x[i] = v`, `del x[i]`).
+_SETITEM = "__setitem__"
+_DELITEM = "__delitem__"
 # What subscripting a type form calls (ruling R37; plan 2026-11-08 N2): the form's own
 # `__class_getitem__`, a static call whose result is the type it makes.
 _CLASS_GETITEM = "__class_getitem__"
@@ -791,7 +794,10 @@ class BodyReader:
             scope.flow.join([skipped, passed])
         elif isinstance(node, ast.Delete):
             for target in node.targets:
-                self._store(target, _UNKNOWN, scope)
+                if isinstance(target, ast.Subscript):
+                    self._subscript(target, scope, _DELITEM)
+                else:
+                    self._store(target, _UNKNOWN, scope)
         elif isinstance(node, ast.Import | ast.ImportFrom):
             self._import(node, scope)
 
@@ -1153,9 +1159,12 @@ class BodyReader:
                 self._write_field(written, value, scope)
             elif evaluate:
                 self._value(target.value, scope)
-        elif isinstance(target, ast.Subscript) and evaluate:
-            self._value(target.value, scope)
-            self._value(target.slice, scope)
+        elif isinstance(target, ast.Subscript):
+            # `x[i] = v` is `x.__setitem__(i, v)`; after `x[i] += v`'s read, its object and
+            # index are read again here.
+            # shortcut: a call inside the target of `x[f()] += v` is written twice; split the
+            # read and the store if a real tree shows one.
+            self._subscript(target, scope, _SETITEM, value)
 
     def _field_target(self, target: ast.Attribute, scope: Scope) -> str | None:
         """The field `target` names: an attribute of `self`, or of a module or a class
@@ -2409,14 +2418,21 @@ class BodyReader:
             protocol=True,
         )
 
-    def _subscript(self, node: ast.Subscript, scope: Scope) -> CallArgument:
-        """`xs[i]` is `type(xs).__getitem__(xs, i)`. A slice is a `slice` object, which the
+    def _subscript(
+        self,
+        node: ast.Subscript,
+        scope: Scope,
+        name: str = _GETITEM,
+        stored: CallArgument | None = None,
+    ) -> CallArgument:
+        """`xs[i]` is `type(xs).__getitem__(xs, i)`; a store `xs[i] = v` is `__setitem__(i, v)`
+        and `del xs[i]` is `__delitem__(i)` (`name`, `stored`). A slice is a `slice` object, which the
         argument grammar does not hold: it is `unresolved`, with the type `slice` for the
         overload it chooses. `pair[1]` on a `tuple[A, B]` is that position's type, the
         typing specification's rule for a tuple. Subscripting a class or a typing form
         (`list[int]`, `Optional[X]`) makes a type: the static call `<form>#__class_getitem__`
         (`_class_getitem`)."""
-        if self._names_a_type_form(node.value, scope):
+        if name == _GETITEM and self._names_a_type_form(node.value, scope):
             form = self._form(node.value, scope)
             if form is not None:
                 return self._class_getitem(form, node, scope)
@@ -2424,7 +2440,7 @@ class BodyReader:
             self._value(node.slice, scope)
             return _UNKNOWN
         container = self._value(node.value, scope)
-        if container.kind == "class" and container.symbol is not None:
+        if name == _GETITEM and container.kind == "class" and container.symbol is not None:
             return self._class_getitem(container.symbol, node, scope)
         if isinstance(node.slice, ast.Slice):
             for bound in (node.slice.lower, node.slice.upper, node.slice.step):
@@ -2435,8 +2451,9 @@ class BodyReader:
         else:
             index = self._value(node.slice, scope)
             index_type = self._typed(node.slice, index, scope)
-        callee = self._protocol(container, _GETITEM, node.value, scope)
-        result = self._invoke(callee, [index], scope, types=[index_type])
+        callee = self._protocol(container, name, node.value, scope)
+        arguments = [index] if stored is None else [index, stored]
+        result = self._invoke(callee, arguments, scope, types=[index_type])
         held = callee.typed
         if (
             held is not None

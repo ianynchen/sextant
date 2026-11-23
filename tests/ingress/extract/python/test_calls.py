@@ -574,3 +574,45 @@ def test_a_try_import_inside_a_function_is_a_closed_list(tmp_path: Path):
     dumps = _call(tree, "dumps")
     assert dumps.target.owner is None
     assert dumps.receiver is not None
+
+
+def test_an_element_store_and_delete_are_the_calls_the_language_makes(tmp_path: Path):
+    """`x[i] = v` is `x.__setitem__(i, v)`, `del x[i]` is `x.__delitem__(i)`, and
+    `x[i] += v` is the read then `__setitem__` (ruled 2026-11-23), named as `__getitem__`
+    is: on a module name through `receiver_field`, at module level and in a function."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "VERBS = ['get']\n"
+                "VERBS[0] = 'x'\n"
+                "del VERBS[0]\n"
+                "VERBS[0] += 'z'\n"
+                "def f():\n"
+                "    VERBS[0] = 'q'\n"
+                "    del VERBS[0]\n"
+            )
+        },
+    )
+
+    def on_verbs(caller: str) -> list[tuple[str, list[CallArgument]]]:
+        return [
+            (c.target.name, c.arguments)
+            for c in _calls(tree, caller)
+            if c.receiver_field == "app/m#VERBS." and c.target.owner == "builtins/list#"
+        ]
+
+    zero = CallArgument(kind="int", value=0)
+    module = on_verbs(f"app/m#<clinit>({DIS}).")
+    assert [name for name, _ in module] == [
+        "__setitem__",
+        "__delitem__",
+        "__getitem__",
+        "__setitem__",
+    ]
+    assert module[0][1] == [zero, CallArgument(kind="string", value="x")]
+    assert module[1][1] == [zero]
+    assert on_verbs(f"app/m#f({DIS}).") == [
+        ("__setitem__", [zero, CallArgument(kind="string", value="q")]),
+        ("__delitem__", [zero]),
+    ]

@@ -891,6 +891,10 @@ class ValueIndex:
     )
     # (capturing method, capture site ordinal, argument slot) -> (lambda body, its parameter):
     # the capture fold's own mapping (OI-150/OI-266), read forwards (M6).
+    # The fields a call that may change a list is made ON (`x.remove(v)`, `x.sort()`): a
+    # written method, or a `__setitem__` / `__delitem__` call. A read the language makes
+    # (`for v in x`, `x[0]`, `v in x`) is none.
+    changed_lists: frozenset[str] = frozenset()
     captured_as: Mapping[tuple[str, int, int], tuple[str, int]] = dataclass_field(
         default_factory=dict
     )
@@ -1727,6 +1731,7 @@ def value_index(
         parameter_types=parameter_types,
         unread_receivers={key: tuple(value) for key, value in shapes.unread_receivers.items()},
         captured_as=shapes.captured_as,
+        changed_lists=_changed_lists(sites) if by_name else frozenset(),
         lambda_types=frozenset(shapes.lambda_types),
         not_hand_offs=shapes.not_hand_offs,
         stated=frozenset(
@@ -2115,6 +2120,22 @@ def _nested_entries(argument: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     for inner in argument.values():
         walk(inner)
     return found
+
+
+def _changed_lists(sites: Mapping[tuple[str, int], Mapping[str, Any]]) -> frozenset[str]:
+    """`ValueIndex.changed_lists`: the fields whose list is not exactly known from its writes,
+    because a call is made ON the field that the facts do not state as a write: a written
+    method, or a store or a delete of an element. A read the language makes is none. A list
+    handed to a call is still read (ruled 2026-11-23): the walk reads a field's writes and
+    tracks no hand-over of a field."""
+    return frozenset(
+        str(site["receiver_field"])
+        for site in sites.values()
+        if site.get("receiver_field") is not None
+        and (
+            not str(site["name"]).startswith("__") or site["name"] in ("__setitem__", "__delitem__")
+        )
+    )
 
 
 def _record_store(
@@ -6825,7 +6846,7 @@ class _Walk:
         write through the writer's callers, each call-result write in the writer's frame."""
         reached: list[_Reached] = []
         members = 0
-        for _, entry in constants:
+        for writer, entry in constants:
             # **A CONSTANT write needs no crossing** (`OI-138` cause 2): the value is in the
             # fact, so the answer is that literal on the path already travelled.
             #
@@ -6862,13 +6883,22 @@ class _Walk:
             # **A list a name holds is read when its exact values are known** (ruled
             # 2026-11-23): the members each write states. An alteration the facts show is a
             # write of its own (`x += [...]`, `x.append(v)`: `[*x, v]`), so `*x` of the name
-            # itself adds nothing this loop does not read.
-            elif entry.get("kind") == "field" and _ is not None and entry.get("symbol") != symbol:
+            # itself adds nothing this loop does not read. A call made ON the list that the
+            # facts do not state as a write (`x.remove(v)`, `x.sort()`) leaves its values not
+            # known: `escapes`, as a call on any value before its use.
+            elif (
+                entry.get("kind") == "field"
+                and writer is not None
+                and entry.get("symbol") != symbol
+            ):
                 # `urlpatterns = real_patterns`: a name for another name's list.
-                held = self._entry(entry, _, (_BINDING, symbol, _), trail, frames)
+                held = self._entry(entry, writer, (_BINDING, symbol, writer), trail, frames)
                 members += len(held)
                 reached.extend(held)
-            elif entry.get("kind") == "array" and _ is not None:
+            elif entry.get("kind") == "array" and writer is not None:
+                if symbol in self._index.changed_lists:
+                    reached.append((trail, _unresolved(ESCAPES)))
+                    continue
                 own = {
                     **entry,
                     "elements": [
@@ -6881,7 +6911,7 @@ class _Walk:
                         )
                     ],
                 }
-                held = self._entry(own, _, (_BINDING, symbol, _), trail, frames)
+                held = self._entry(own, writer, (_BINDING, symbol, writer), trail, frames)
                 # The members of one written list are one value, not alternatives: they do
                 # not count against the path cap (ruled 2026-11-23).
                 members += len(held)
