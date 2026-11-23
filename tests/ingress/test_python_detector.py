@@ -595,3 +595,78 @@ def test_an_entry_point_that_cannot_be_read_is_noted(tmp_path: Path):
         "a: entry point not read, the target is not a string: [project.scripts] bad",
         "a: entry point not read, the target is not a string: [tool.poetry.scripts] tbl",
     ]
+
+
+def _groups_module(tmp_path: Path, groups: str, head: str = '[project]\nname = "app"\n'):
+    _write(tmp_path / "pyproject.toml", head + "[dependency-groups]\n" + groups)
+    _write(tmp_path / "app" / "main.py")
+    return _only_module(tmp_path)
+
+
+def test_a_dependency_group_is_read_as_requirement_lines(tmp_path: Path):
+    """zulip: `[project]` with no `dependencies`, Django under `[dependency-groups] prod`."""
+    module = _groups_module(tmp_path, 'prod = ["django[argon2]==5.2.*", "asgiref"]\n')
+
+    assert module.dependency_coordinates == ("asgiref", "django")
+
+
+def test_an_include_group_entry_is_followed_to_that_group(tmp_path: Path):
+    module = _groups_module(
+        tmp_path, 'prod = ["django"]\ndev = [{include-group = "prod"}, "pytest"]\n'
+    )
+
+    assert module.dependency_coordinates == ("django", "pytest")
+
+
+def test_include_groups_that_name_each_other_end(tmp_path: Path):
+    module = _groups_module(
+        tmp_path,
+        'a = ["one", {include-group = "b"}]\nb = ["two", {include-group = "a"}]\n',
+    )
+
+    assert module.dependency_coordinates == ("one", "two")
+
+
+def test_an_include_of_a_missing_group_is_ignored(tmp_path: Path):
+    module = _groups_module(tmp_path, 'a = ["one", {include-group = "nope"}]\n')
+
+    assert module.dependency_coordinates == ("one",)
+
+
+def test_a_group_name_is_matched_by_its_normalized_form(tmp_path: Path):
+    """PEP 735: group names compare as package names do (`Prod-Deps` is `prod_deps`)."""
+    module = _groups_module(
+        tmp_path, '"Prod-Deps" = ["django"]\ndev = [{include-group = "prod_deps"}]\n'
+    )
+
+    assert module.dependency_coordinates == ("django",)
+
+
+def test_an_entry_that_is_neither_a_string_nor_an_include_is_ignored(tmp_path: Path):
+    module = _groups_module(
+        tmp_path,
+        'a = ["one", 3, {other = "x"}, {include-group = 4}]\nb = "not a list"\n',
+    )
+
+    assert module.dependency_coordinates == ("one",)
+
+
+def test_a_pyproject_with_only_dependency_groups_is_a_module(tmp_path: Path):
+    """bookwyrm: `[dependency-groups]` and tool settings only."""
+    _write(
+        tmp_path / "pyproject.toml",
+        '[tool.ruff]\nline-length = 100\n[dependency-groups]\nmain = ["django"]\n',
+    )
+    _write(tmp_path / "bookwyrm" / "views.py")
+
+    module = _only_module(tmp_path)
+
+    assert module.dependency_coordinates == ("django",)
+    assert module.coordinates == "."
+
+
+def test_a_pyproject_with_only_tool_settings_marks_no_module(tmp_path: Path):
+    _write(tmp_path / "pyproject.toml", "[tool.ruff]\nline-length = 100\n")
+    _write(tmp_path / "app" / "main.py")
+
+    assert not _has_any_module(tmp_path)

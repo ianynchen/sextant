@@ -17,9 +17,10 @@ that holds `.git`, a folder (a clone, a submodule) or a file (a git worktree). I
 noted, not analysed. The given root is always read.
 
 **What is a module (§3e).**
-- A `pyproject.toml` with `[project]`, `[tool.poetry]` or `[build-system]`, or a
-  `setup.cfg` with `[metadata]`, marks a module wherever it is. A file that holds only
-  tool settings (CTFd's `[nosetests]`) marks nothing.
+- A `pyproject.toml` with `[project]`, `[tool.poetry]`, `[build-system]` or
+  `[dependency-groups]` (PEP 735; amended 2026-11-23, approved by the user: bookwyrm holds
+  only that and tool settings), or a `setup.cfg` with `[metadata]`, marks a module wherever
+  it is. A file that holds only tool settings (CTFd's `[nosetests]`) marks nothing.
 - A uv workspace root (`[tool.uv.workspace]`) is a module only when it also marks one
   and has Python files of its own, outside its members.
 - A `requirements*.txt` or a `Pipfile` marks a module only when its folder holds Python
@@ -32,6 +33,12 @@ noted, not analysed. The given root is always read.
 - A build file that cannot be read (not TOML, not UTF-8, a template with `{{ }}` in it)
   is a note, and its folder is not a module. Only the build file of the folder that was
   asked for is a refusal.
+
+**Dependencies (§3e).** The names in `[project] dependencies`, Poetry's table,
+`setup.cfg install_requires`, each `requirements*.txt`, `Pipfile [packages]` and every group
+of `[dependency-groups]` (amended 2026-11-23, approved by the user: zulip declares Django
+only there). All groups are read, as `requirements-dev.txt` is: a dependency in any group
+means the code path can exist (GUIDELINES §8).
 
 **Identity (§3e).** `[project]`, then `[tool.poetry]`, then `setup.cfg [metadata]`, with
 the name normalized by PEP 503. A dynamic version is the installed project's own
@@ -305,7 +312,12 @@ class _BuildFiles:
     def kind(self) -> str | None:
         """The build file that marks this folder as a module, strongest first, or None
         where none does. `setup_py` and `requirements` are the weak kinds (§3e)."""
-        if self.project or self.poetry or "build-system" in self.pyproject:
+        if (
+            self.project
+            or self.poetry
+            or "build-system" in self.pyproject
+            or "dependency-groups" in self.pyproject
+        ):
             return "pyproject"
         if self.setup_cfg is not None and self.setup_cfg.has_section("metadata"):
             return "setup_cfg"
@@ -335,8 +347,10 @@ class _BuildFiles:
     def dependencies(self) -> tuple[str, ...]:
         """Every distribution name this folder's build files declare, normalized and
         sorted: `[project] dependencies`, Poetry's dependency table (less `python`),
-        `setup.cfg install_requires`, each `requirements*.txt`, and `Pipfile [packages]`."""
+        `setup.cfg install_requires`, each `requirements*.txt`, `Pipfile [packages]`, and every
+        group of `[dependency-groups]` (PEP 735), `include-group` followed."""
         names: set[str | None] = set()
+        names.update(self._group_requirements())
         names.update(_requirement_name(str(line)) for line in self.project.get("dependencies", []))
         names.update(
             normalize_name(key)
@@ -352,6 +366,16 @@ class _BuildFiles:
                 names.update(_requirement_name(line) for line in text.splitlines())
         names.update(normalize_name(key) for key in _table(self.pipfile, "packages"))
         return tuple(sorted(name for name in names if name))
+
+    def _group_requirements(self) -> Iterator[str | None]:
+        """The name each requirement string of `[dependency-groups]` declares, in every group
+        (a dependency in any group means the code path can exist). An `include-group` table
+        adds nothing: the group it names is read in its own right, so a cycle, a missing group
+        or a spelling that differs by case or `-`/`_`/`.` cannot change the result. Any other
+        entry is ignored."""
+        for entries in _table(self.pyproject, "dependency-groups").values():
+            if isinstance(entries, list):
+                yield from (_requirement_name(e) for e in entries if isinstance(e, str))
 
     def entry_points(self) -> tuple[dict[str, str], list[str]]:
         """Each program this folder's build files declare, with its target as written

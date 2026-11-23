@@ -156,8 +156,8 @@ Python.
   `.claude/worktrees/agent-…`). Each one is a note ("another repository, not analysed:
   <folder>"). The analysed folder is always read, whatever it holds. The scanner shares the
   rule (`is_skipped_folder`); the Maven and Gradle detectors do not use it.
-- **What is a module.** A `pyproject.toml` with `[project]`, `[tool.poetry]` or
-  `[build-system]`, or a `setup.cfg` with `[metadata]`, marks a module. A file with only tool
+- **What is a module.** A `pyproject.toml` with `[project]`, `[tool.poetry]`,
+  `[build-system]` or `[dependency-groups]`, or a `setup.cfg` with `[metadata]`, marks a module. A file with only tool
   settings marks nothing (CTFd's `setup.cfg` holds only `[nosetests]`). A uv workspace root is
   a module only when it marks one and has Python files of its own outside its members
   (`[tool.uv.workspace]` `members`, less `exclude`). A `requirements*.txt` or `Pipfile` marks
@@ -214,7 +214,8 @@ Python.
   read. `.python-version` names an interpreter and is never an environment.
 - **Dependencies.** `dependency_coordinates` is every name the module folder's build files
   declare: `[project] dependencies`, Poetry's dependency table, `setup.cfg install_requires`,
-  each `requirements*.txt`, and `Pipfile [packages]`. `dependency_versions` is the installed
+  each `requirements*.txt`, `Pipfile [packages]`, and every group of `[dependency-groups]`
+  (PEP 735). `dependency_versions` is the installed
   version of each, from `<env>/lib/python*/site-packages/*.dist-info/METADATA` (`Name`,
   `Version`), and `dependency_archives` has one `LibraryRoot` per installed one, its archive
   the `site-packages` folder. Where an environment was found, each declared name it does not

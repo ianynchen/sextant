@@ -352,6 +352,60 @@ def test_a_recursive_alias_is_written_as_its_name_where_it_names_itself(tmp_path
     assert returns["tree"] == ("typing/Union#", [("builtins/list#", ["rec/Tree#"]), "rec/Base#"])
 
 
+_NON_RECURSIVE = {
+    "nr/__init__.py": (
+        "from typing import TypeAlias, Union\n"
+        "NR: TypeAlias = list[int]\n"
+        "C: TypeAlias = list[str]\n"
+        "A: TypeAlias = list[C]\n"
+        "B: TypeAlias = dict[str, C]\n"
+        "X: TypeAlias = Union[A, B]\n"
+        "class Value:\n"
+        "    def twice(self, a: NR, b: NR) -> dict[NR, NR]: ...\n"
+        "    def diamond(self) -> X: ...\n"
+    ),
+    "nr/py.typed": "",
+}
+
+
+def _non_recursive_methods(tmp_path: Path) -> dict:
+    nr = _install(tmp_path / "site", "nr", "1.0", _NON_RECURSIVE)
+    _, tree = _scan(
+        tmp_path,
+        {"app/main.py": "from nr import Value\ndef use(v: Value):\n    return v.diamond()\n"},
+        (nr,),
+    )
+    (header,) = [
+        fact
+        for _, _, facts in tree
+        for fact in facts
+        if isinstance(fact, TypeHeaderFact) and bare_descriptor(fact.symbol) == "nr/Value#"
+    ]
+    return {method.name: method for method in header.methods}
+
+
+def test_a_non_recursive_alias_used_twice_at_one_level_is_read_through_both_times(tmp_path: Path):
+    """The recursion guard fires only on an alias already on the current path: `NR` as two
+    parameters and as both arguments of one `dict` is not recursion."""
+    twice = _non_recursive_methods(tmp_path)["twice"]
+    listed = ("builtins/list#", ["builtins/int#"])
+
+    assert [_written(p) for p in twice.parameters] == [listed, listed]
+    assert _written(twice.returns) == ("builtins/dict#", [listed, listed])
+
+
+def test_a_non_recursive_alias_reached_by_both_arms_of_a_diamond_is_read_on_both(tmp_path: Path):
+    """`A = list[C]; B = dict[str, C]; X = Union[A, B]`: `C` is reached twice, on two arms,
+    never on its own path."""
+    diamond = _non_recursive_methods(tmp_path)["diamond"]
+    inner = ("builtins/list#", ["builtins/str#"])
+
+    assert _written(diamond.returns) == (
+        "typing/Union#",
+        [("builtins/list#", [inner]), ("builtins/dict#", ["builtins/str#", inner])],
+    )
+
+
 def test_a_parameter_type_the_rule_cannot_read_leaves_the_closed_list(tmp_path: Path):
     """The first overload's `Shape` is a protocol: whether `5` fits it is not decided
     here, so the first overload is not taken as certain."""
