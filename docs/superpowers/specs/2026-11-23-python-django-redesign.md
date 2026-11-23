@@ -171,6 +171,26 @@ annotations:
 | M10 22 named library decorators | a library is code we have; one structural rule | The common decorator returns an inner function that calls the wrapped one (`@wraps(f) def inner(...): ... f(...)`). Today the walk reads only a decorator that returns its function, which is why it stops on zulip's own decorators 290 times. The rule: a returned function that calls the decorator's parameter stands for that parameter — the meaning of the existing `result_calls`, read from the code. It applies to project decorators and, through the targeted read of row 11, to library decorators. A value-model entry stays only where the body cannot be read. Earlier measurement: handlers readable 747 → 1,937; 1,212 of 1,222 agree with Django. |
 | M11 the `PATH_CAP` exemption was undefined | ruling 5 | The reader resolves each member of a list as its own read, with its own limit. Nothing inside the limit changes; alternatives (branches, callers, several writes of one value) are counted as before. |
 
+## 4d. What "any method" means (ruled 2026-11-23: option B)
+
+An "any method" row means **the endpoint answers every method**, not "the router sends every
+method to the handler". So a function view's any-method row is `resolved` only when its body
+gives no reason to doubt it.
+
+- **A view that hands its request to another view** (bookwyrm
+  `unsafe_embed_list(request)` calls `EmbedList.as_view()(request, ...)`): this is the
+  existing rule "which handler answers" (`shapes/pass_through.py`, Vert.x `passes_on`): a
+  handler that hands the request it received to another handler passes on, and the row is
+  the answering handler's — here the rows of `EmbedList` (GET). Handed to code that is not
+  read: "not readable here", the row is `partial`.
+- **A view that tests `request.method` in its body:** not read in this plan (the next design).
+  Until then its row is `partial`, method not read, never a `resolved` any-method row.
+- **A view object** (`path("rss", RssFeed())`): calling an object runs its class's
+  `__call__`; that method is the handler, found by the class lookup.
+
+Measured in the engine on the four trees (Task 1, first run): 2 rows of the first kind and 14
+of the third were `resolved` and wrong.
+
 ## 5. Every concept the branch added, and its state
 
 | Concept | State |

@@ -166,6 +166,23 @@ Timebox: 4 hours green path; stop and report at 8.
 - [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** PASS; the vocabulary test shows no new word.
 - [ ] **Step 5:** Commit.
 
+### Task 7a: What "any method" means (spec §4d)
+
+**Files:**
+- Modify: `src/sextant/application/resolve/engines/fluent.py` (the any-method row of a function view), `src/sextant/application/resolve/shapes/pass_through.py` (reuse: a handler that hands the request it received to another handler passes on), `src/sextant/catalogs/django.yml`
+- Test: `tests/application/test_django_verbs.py`, `tests/application/test_django_routes.py`
+
+- [ ] **Step 1: Failing tests:**
+  - `test_a_view_that_hands_its_request_to_a_class_view_has_that_views_rows`: `def v(request): return Other.as_view()(request)` → the rows of `Other` (its defined methods), handler `Other.<method>`; never one any-method row.
+  - `test_a_view_that_hands_its_request_to_unread_code_is_partial`.
+  - `test_a_view_that_reads_request_method_is_partial_with_no_method`: `if request.method == "POST":` in the body → one row, method not read, `partial`; never `resolved`.
+  - `test_a_view_that_reads_no_method_and_hands_nothing_on_is_any_method_resolved`.
+  - `test_a_view_object_runs_its_call_method`: `path("rss", Feed())` → handler `Feed.__call__` by the class lookup; a class with no readable `__call__` → `partial`.
+- [ ] **Step 2:** FAIL. **Step 3:** Implement with the existing pass-through outcomes (`passes_on`, `answers`, `unreadable`); the request is the handler's parameter 0. No new word: if the catalog needs one to say "the request is the context", STOP and report.
+- [ ] **Step 4:** PASS. **Step 5:** Commit.
+
+Counted 2026-11-23 in the four projects: 1,285 function views; 124 read `request.method` in the body; 7 hand the request to a view.
+
 ### Task 8: A library `dispatch` is read by the existing rule
 
 **Files:**
