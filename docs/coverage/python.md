@@ -25,7 +25,8 @@ Python is read with the JVM's pipeline. A new scanner writes the existing facts,
 after the facts is the existing one, extended where Python needs it.
 
 - **Modules** (M02). A new detector reads `pyproject.toml` (`[project]`, Poetry's table,
-  `[build-system]`, `[tool.uv.workspace]` members, `[project.scripts]`), `setup.cfg`
+  `[build-system]`, `[dependency-groups]` (every group's requirements are dependencies),
+  `[tool.uv.workspace]` members, `[project.scripts]`), `setup.cfg`
   `[metadata]` and `console_scripts`, and `requirements*.txt` or `Pipfile` for a service with
   nothing else. A uv workspace root with no code of its own is not a module. A `setup.py`
   inside a package is not a module. When it looks for modules it skips folders that a
