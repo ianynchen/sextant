@@ -112,6 +112,10 @@ _CLOSING = _PKG + "Closing#"
 # assembled from an object has (`OI-138` cause 3, CP-39).
 _RENDERED = _PKG + "Rendered#"
 _UNREADABLE = _PKG + "Unreadable#"
+# Bindings that HOLD a list (ruled 2026-11-23: a list held in a name is read when its exact
+# values are known): `listed = ["a", "b"]`, `aliased = listed`, `summed = ["a"]` then
+# `summed = [*summed, "b"]`, and `partly = ["a", <no name>]`, each read by its own method.
+_HELD = _PKG + "Held#"
 # Bindings written from a CALL'S RESULT (CP-33 rows 6-7, 2026-10-26). `ProbeKt` is Kotlin's
 # file class for a top-level `val client = HttpClient(CIO) { … }` — spelled exactly as the
 # CP-54 probe module's bytecode spells it — whose `<clinit>` stores an unscanned factory's
@@ -387,6 +391,7 @@ def _facts() -> list[Fact]:
             _WRITTEN,
             _RENDERED,
             _UNREADABLE,
+            _HELD,
             _PROBE_KT,
             _PROPERTY,
             _SPILL,
@@ -1027,6 +1032,53 @@ def _facts() -> list[Fact]:
             field=_UNREADABLE + "held.",
             value=CallArgument(kind="class", symbol="com/acme/orders/values/Order#"),
             written_by=_symbol(_UNREADABLE, "<init>", "()V"),
+        ),
+        # Lists held in a binding, each read whole as one call argument.
+        *(
+            _site(
+                _symbol(_HELD, name, "()V"),
+                0,
+                _MANY_TARGET,
+                kind="virtual",
+                arguments=[CallArgument(kind="field", symbol=_HELD + name + ".")],
+            )
+            for name in ("listed", "aliased", "summed", "partly")
+        ),
+        *(_declared(_HELD, name, "()V") for name in ("listed", "aliased", "summed", "partly")),
+        *(
+            FieldWriteFact(
+                document_id="doc_values",
+                field=_HELD + name + ".",
+                value=CallArgument(kind="array", elements=elements),
+                written_by=_symbol(_HELD, "<clinit>", "()V"),
+            )
+            for name, elements in (
+                (
+                    "listed",
+                    [
+                        CallArgument(kind="string", value="a"),
+                        CallArgument(kind="string", value="b"),
+                    ],
+                ),
+                ("summed", [CallArgument(kind="string", value="a")]),
+                (
+                    "summed",
+                    [
+                        CallArgument(kind="field", symbol=_HELD + "summed.", keyword="*"),
+                        CallArgument(kind="string", value="b"),
+                    ],
+                ),
+                (
+                    "partly",
+                    [CallArgument(kind="string", value="a"), CallArgument(kind="unresolved")],
+                ),
+            )
+        ),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_HELD + "aliased.",
+            value=CallArgument(kind="field", symbol=_HELD + "listed."),
+            written_by=_symbol(_HELD, "<clinit>", "()V"),
         ),
         # A STATIC field written from a call's result in the static initialiser: `<clinit>`
         # stores `HttpClient(...)`'s result (value id 11) with `putstatic`, and a function
@@ -2319,6 +2371,42 @@ def test_a_constant_the_walk_cannot_read_answers_not_readable_and_keeps_the_site
     bindings = _bindings(walked, _symbol(_UNREADABLE, "read", "()V"), 0)
     assert len(bindings) == 1, bindings
     assert _reasons(bindings) == ["not_readable"]
+
+
+def test_a_list_held_in_a_field_answers_with_its_members(walked):
+    """**A list a name holds is read when its exact values are known** (ruled 2026-11-23):
+    `listed = ["a", "b"]` answers its members, each its own path, exactly as the same list
+    written in place does (`test_an_array_whose_every_element_is_written_branches_into_elements`).
+    Until the ruling it answered one `not_readable`."""
+    bindings = _bindings(walked, _symbol(_HELD, "listed", "()V"), 0)
+    assert [b.slots[0].value for b in bindings] == ["a", "b"]
+    assert len({b.path for b in bindings}) == 2
+
+
+def test_a_name_for_another_list_is_followed(walked):
+    """`aliased = listed`: a write that is another name holds that name's list, so the read
+    answers `listed`'s members."""
+    bindings = _bindings(walked, _symbol(_HELD, "aliased", "()V"), 0)
+    assert [b.slots[0].value for b in bindings] == ["a", "b"]
+
+
+def test_a_list_summed_onto_itself_holds_every_write(walked):
+    """`summed = ["a"]` then `summed = [*summed, "b"]` (what `+=` and `append` are written
+    as): `*summed` names the list itself, whose members are the other writes this read
+    already answers. Following it would walk back into the same binding: a `cycle`."""
+    bindings = _bindings(walked, _symbol(_HELD, "summed", "()V"), 0)
+    assert sorted(str(b.slots[0].value) for b in bindings) == ["a", "b"]
+    assert "cycle" not in _reasons(bindings)
+
+
+def test_a_held_list_with_one_unreadable_member_keeps_the_others(walked):
+    """The held twin of `test_an_array_with_one_unnameable_element_keeps_the_others`: one
+    member with no name costs one trailing `not_readable`, not the whole list."""
+    bindings = _bindings(walked, _symbol(_HELD, "partly", "()V"), 0)
+    assert [(b.slots[0].value, b.slots[0].reason) for b in bindings] == [
+        ("a", None),
+        (None, "not_readable"),
+    ]
 
 
 @pytest.mark.pins("values.a-field-written-from-a-CALL-is-followed")

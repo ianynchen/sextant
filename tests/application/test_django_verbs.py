@@ -70,19 +70,22 @@ def test_require_http_methods_serves_its_list(tmp_path: Path, libraries):
     ]
 
 
-def test_require_http_methods_with_a_list_held_in_a_module_name_guesses_no_method(
+def test_require_http_methods_with_a_list_held_in_a_module_name_serves_its_list(
     tmp_path: Path, libraries
 ):
-    """R12: the list is read by the value walk, which never reads a container a module name
-    holds (it may be changed after the write, `test_fastapi_routes`: "a verb list held in a
-    module name is never read as its first value"): one row, method NULL, `unresolved`."""
+    """R12: the list is read by the value walk, which reads a list a module name holds when
+    its exact values are known (ruled 2026-11-23, `test_fastapi_routes`: "a verb list held in
+    a module name is read"): one row per method, `resolved`."""
     rows = _view(
         tmp_path,
         libraries,
         "ALLOWED = ['PUT', 'DELETE']\n@require_http_methods(ALLOWED)\n" + _DEF,
     )
 
-    assert rows == [(None, None, "/x/", _handler("v"), "unresolved")]
+    assert rows == [
+        ("DELETE", None, "/x/", _handler("v"), "resolved"),
+        ("PUT", None, "/x/", _handler("v"), "resolved"),
+    ]
 
 
 def test_require_http_methods_with_a_list_not_read_guesses_no_method(tmp_path: Path, libraries):

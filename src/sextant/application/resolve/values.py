@@ -6824,6 +6824,7 @@ class _Walk:
         """The answers `_binding`'s writes give: each constant as its literal, each parameter
         write through the writer's callers, each call-result write in the writer's frame."""
         reached: list[_Reached] = []
+        members = 0
         for _, entry in constants:
             # **A CONSTANT write needs no crossing** (`OI-138` cause 2): the value is in the
             # fact, so the answer is that literal on the path already travelled.
@@ -6858,16 +6859,37 @@ class _Walk:
                         Answer(kind=LITERAL, value=named, literal_kind=SYMBOL, class_object=True),
                     )
                 )
-            # A container a binding is written with (`VERBS = ["GET"]`) is NOT read element by
-            # element: the code may change it after the write (`VERBS.append(...)`, `VERBS[0] =
-            # ...`, `del`, `+=`, a callee it is handed to, another file), and the facts state
-            # neither an index store nor whether the literal was a tuple, so they cannot show
-            # it unchanged. Its first value read at `resolved` would be a lie (task 5
-            # re-review).
+            # **A list a name holds is read when its exact values are known** (ruled
+            # 2026-11-23): the members each write states. An alteration the facts show is a
+            # write of its own (`x += [...]`, `x.append(v)`: `[*x, v]`), so `*x` of the name
+            # itself adds nothing this loop does not read.
+            elif entry.get("kind") == "field" and _ is not None and entry.get("symbol") != symbol:
+                # `urlpatterns = real_patterns`: a name for another name's list.
+                held = self._entry(entry, _, (_BINDING, symbol, _), trail, frames)
+                members += len(held)
+                reached.extend(held)
+            elif entry.get("kind") == "array" and _ is not None:
+                own = {
+                    **entry,
+                    "elements": [
+                        e
+                        for e in entry.get("elements") or []
+                        if not (
+                            e.get("keyword") == _UNPACKED_SEQUENCE
+                            and e.get("kind") == "field"
+                            and e.get("symbol") == symbol
+                        )
+                    ],
+                }
+                held = self._entry(own, _, (_BINDING, symbol, _), trail, frames)
+                # The members of one written list are one value, not alternatives: they do
+                # not count against the path cap (ruled 2026-11-23).
+                members += len(held)
+                reached.extend(held)
             else:
                 reached.append((trail, _unresolved(NOT_READABLE)))
         for method, index in written:
-            if len(reached) > PATH_CAP:
+            if len(reached) - members > PATH_CAP:
                 return _only(trail, _unresolved(NON_ENUMERABLE))
             reached.extend(self._resolve((_PARAMETER, method, index), trail, frames))
         for method, entry in produced:
@@ -6875,7 +6897,7 @@ class _Walk:
             # is the whole of the writing method after the call: a call made on the stored
             # object anywhere there changes what every later reader of the field sees.
             reached.extend(self._entry(entry, method, (_BINDING, symbol, method), trail, frames))
-        if len(reached) > PATH_CAP:
+        if len(reached) - members > PATH_CAP:
             return _only(trail, _unresolved(NON_ENUMERABLE))
         return self._distinct(reached)
 

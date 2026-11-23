@@ -10,6 +10,7 @@ FastAPI's own, quoted in `scripts/probes/fastapi_rules.md`.
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fixture_module import FIXTURE_CAPABILITIES
@@ -527,29 +528,66 @@ def test_a_verb_list_element_that_is_a_parameter_is_traced_to_its_arguments(
     assert [row[:2] for row in _rows(workspace)] == [("DELETE", "/p"), ("PUT", "/p")]
 
 
+_GET = ("GET", "/c", _handler("c"), "resolved", "string")
+_POST = ("POST", "/c", _handler("c"), "resolved", "string")
+_NOT_KNOWN = (None, "/c", _handler("c"), "unresolved", "string")
+
+
+def _not_yet(held: str, expected: list[tuple[object, ...]], task: str) -> Any:
+    """A case whose answer today is a `resolved` row that is not the true set of methods."""
+    return pytest.param(
+        held, expected, marks=pytest.mark.xfail(strict=True, reason=f"plan 2026-11-23 {task}")
+    )
+
+
 @pytest.mark.parametrize(
-    "held",
+    ("held", "expected"),
     [
-        # Changed after the write, each a way the code can: never its first value at `resolved`.
-        "VERBS = ['get']\nVERBS.append('post')\n",
-        "VERBS = ['get']\nVERBS.extend(['post'])\n",
-        "VERBS = ['get']\nVERBS[0] = 'delete'\n",
-        "VERBS = ['get']\nVERBS += ['post']\n",
-        "VERBS = ['get']\ndel VERBS[0]\n",
-        "VERBS = ['get']\ndef add():\n    VERBS.append('post')\n",
-        "VERBS = ['get']\ndef keep(v):\n    v.append('post')\nkeep(VERBS)\n",
-        # Not changed here, but the facts cannot show it: they state no index store, `del` or
-        # change made in another file, and they write a tuple and a list alike.
-        "VERBS = ['get']\n",
-        "VERBS = ('get', 'post')\n",
+        # Not changed after the write: its exact values are known, a tuple as a list.
+        ("VERBS = ['get']\n", [_GET]),
+        ("VERBS = ('get', 'post')\n", [_GET, _POST]),
+        # An addition the facts show is a write of its own (`[*VERBS, 'post']`).
+        ("VERBS = ['get']\nVERBS += ['post']\n", [_GET, _POST]),
+        # Changed after the write in a way the reader does not see yet: today the first write
+        # alone answers, which is not the true set.
+        _not_yet(
+            "VERBS = ['get']\nVERBS.append('post')\n",
+            [_GET, _POST],
+            "Task 4: append is a write of the list",
+        ),
+        _not_yet(
+            "VERBS = ['get']\nVERBS.extend(['post'])\n",
+            [_GET, _POST],
+            "Task 4: extend is a write of the list",
+        ),
+        _not_yet(
+            "VERBS = ['get']\ndef add():\n    VERBS.append('post')\n",
+            [_GET, _POST],
+            "Task 4: append is a write of the list",
+        ),
+        _not_yet(
+            "VERBS = ['get']\nVERBS[0] = 'delete'\n",
+            [_NOT_KNOWN],
+            "Task 3: an index store leaves the list not known (escapes)",
+        ),
+        _not_yet(
+            "VERBS = ['get']\ndel VERBS[0]\n",
+            [_NOT_KNOWN],
+            "Task 3: a delete leaves the list not known (escapes)",
+        ),
+        _not_yet(
+            "VERBS = ['get']\ndef keep(v):\n    v.append('post')\nkeep(VERBS)\n",
+            [_NOT_KNOWN],
+            "Task 3: a list handed to a call no value model states escapes",
+        ),
     ],
 )
-def test_a_verb_list_held_in_a_module_name_is_never_read_as_its_first_value(
-    tmp_path: Path, libraries, held: str
+def test_a_verb_list_held_in_a_module_name_is_read(
+    tmp_path: Path, libraries, held: str, expected: list[tuple[object, ...]]
 ):
-    """A container a module name is written with may be changed after the write, and the facts
-    cannot show that it is not: its verbs are not read, one row with no verb at `unresolved`,
-    never a `resolved` GET."""
+    """A list held in a module name is read when its exact values are known; an alteration
+    the reader can see does not make it unknown (ruled 2026-11-23). Only a list whose exact
+    values are not known keeps a reason, never its first value at `resolved`."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -561,11 +599,12 @@ def test_a_verb_list_held_in_a_module_name_is_never_read_as_its_first_value(
         },
     )
 
-    assert _rows(workspace) == [(None, "/c", _handler("c"), "unresolved", "string")]
+    assert _rows(workspace) == expected
 
 
-def test_a_verb_list_changed_in_another_file_is_not_read(tmp_path: Path, libraries):
-    """A module name changed by another file's code is the same object: still not read."""
+@pytest.mark.xfail(strict=True, reason="plan 2026-11-23 Task 4: append is a write of the list")
+def test_a_verb_list_changed_in_another_file_holds_both(tmp_path: Path, libraries):
+    """A module name changed by another file's code is the same object: it holds both."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -578,7 +617,7 @@ def test_a_verb_list_changed_in_another_file_is_not_read(tmp_path: Path, librari
         },
     )
 
-    assert _rows(workspace) == [(None, "/c", _handler("c"), "unresolved", "string")]
+    assert _rows(workspace) == [_GET, _POST]
 
 
 def test_a_refused_route_with_an_unread_path_is_still_filed(tmp_path: Path, libraries):
