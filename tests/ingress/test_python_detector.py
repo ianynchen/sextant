@@ -610,7 +610,7 @@ def test_a_dependency_group_is_read_as_requirement_lines(tmp_path: Path):
     assert module.dependency_coordinates == ("asgiref", "django")
 
 
-def test_an_include_group_entry_is_followed_to_that_group(tmp_path: Path):
+def test_an_included_group_is_read_as_every_group_is(tmp_path: Path):
     module = _groups_module(
         tmp_path, 'prod = ["django"]\ndev = [{include-group = "prod"}, "pytest"]\n'
     )
@@ -633,7 +633,7 @@ def test_an_include_of_a_missing_group_is_ignored(tmp_path: Path):
     assert module.dependency_coordinates == ("one",)
 
 
-def test_a_group_name_is_matched_by_its_normalized_form(tmp_path: Path):
+def test_a_group_under_another_spelling_is_read_as_every_group_is(tmp_path: Path):
     """PEP 735: group names compare as package names do (`Prod-Deps` is `prod_deps`)."""
     module = _groups_module(
         tmp_path, '"Prod-Deps" = ["django"]\ndev = [{include-group = "prod_deps"}]\n'

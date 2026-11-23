@@ -348,7 +348,8 @@ class _BuildFiles:
         """Every distribution name this folder's build files declare, normalized and
         sorted: `[project] dependencies`, Poetry's dependency table (less `python`),
         `setup.cfg install_requires`, each `requirements*.txt`, `Pipfile [packages]`, and every
-        group of `[dependency-groups]` (PEP 735), `include-group` followed."""
+        group of `[dependency-groups]` (PEP 735); an `include-group` entry adds nothing, since
+        every group is read."""
         names: set[str | None] = set()
         names.update(self._group_requirements())
         names.update(_requirement_name(str(line)) for line in self.project.get("dependencies", []))
