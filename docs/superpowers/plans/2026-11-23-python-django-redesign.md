@@ -197,6 +197,13 @@ Counted 2026-11-23 in the four projects: 1,285 function views; 124 read `request
 - [ ] **Step 5:** Cost: the fixture's scan time and fact count against the "full scan" figures of the spec (14.7 s, 46,757 call facts): the targeted read must stay within 1.2x of the unscanned run (1.5 s, 241).
 - [ ] **Step 6:** Commit.
 
+> **Task 9 is superseded by spec §4e (2026-11-23).** The rule below ("a returned function that
+> calls the decorator's parameter stands for that parameter") is withdrawn. The work is: (1)
+> the Python scanner records the captures of a nested function, in D00's existing `captures`
+> form; (2) the existing pass-through rule then names the answering handler; (3) the
+> `functools.wraps` statement fires where the applying call is typed. The capture format is
+> designed first and shown to the user. The tests listed below stay as the acceptance tests.
+
 ### Task 9: A wrapper that calls what it wraps
 
 **Files:**

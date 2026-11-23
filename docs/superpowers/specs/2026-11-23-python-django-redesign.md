@@ -191,6 +191,36 @@ gives no reason to doubt it.
 Measured in the engine on the four trees (Task 1, first run): 2 rows of the first kind and 14
 of the third were `resolved` and wrong.
 
+## 4e. A wrapper that calls what it wraps: corrected (Task 1 finding, 2026-11-23)
+
+§4c M10 stated a rule of its own ("a returned function that calls the decorator's parameter
+stands for that parameter"). The lookup in `docs/value-reading-scenarios.md` shows that two
+existing Java rules have this role together, so M10's rule is withdrawn:
+
+- **"Lambda body reads a captured value → the captured value"** (`values.py`, "the seventh
+  edge: a lambda's CAPTURE"; `tests/application/test_values.py:2247`). The wrapper's inner
+  function reads `view_func`, a value of the outer function.
+- **"Which handler answers"** (`shapes/pass_through.py`): the inner function receives the
+  request and hands it to another handler (`view_func(request, ...)`), so it passes on, and
+  the row is the answering handler's.
+
+**The real gap is in the Python scanner.** It records no capture: a nested function is
+written with `captures=0` (`ingress/extract/python/calls.py:2157`, `:2789`), and a name of
+the enclosing function read inside it is `unresolved` (`calls.py:2298`, "its value ids are
+another method's"). On the JVM the facts carry the capture (D00 `captures`: the capture site's
+last N arguments bind the body's N leading parameters). Zulip's own decorators stop the walk
+290 times for this reason.
+
+A second defect found on the way: `functools.wraps(f)(inner)` is stated `result_returns:
+arg0`, but `_stated_value` applies that form only where the applying `__call__` has no owner;
+here the scanner types it `functools/_Wrapper#`, so the statement never fires.
+
+**To design before Task 9 is built** (it is a fact-format question, Python calls an inner
+function directly and binds its arguments by its written signature, which a JVM lambda body
+never is): where the captured values sit among the body's parameters, so that the written
+parameters keep their positions. The format follows D00's `captures`; nothing is decided
+here beyond "reuse the capture edge and the pass-through rule".
+
 ## 5. Every concept the branch added, and its state
 
 | Concept | State |
