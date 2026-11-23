@@ -1,0 +1,1366 @@
+# The words of Sextant as they were on `main` on 2026-11-23 (GUIDELINES §8.9), the approvals
+# since, and what is not a Sextant word. ANY diff of this file — baseline, approvals or
+# exemptions — is reviewed as an approval.
+#
+# `baseline` was generated ONCE by `_document()` in test_vocabulary_ratchet.py and is never
+# regenerated: regenerating is how a word would slip in. A word added after it needs an entry
+# under `approvals`:
+#   - word: <the word>
+#     where: catalog key | catalog value: <key> | <path>::<name> (as a failure message spells it)
+#     approved_by: <who approved it>
+#     approved_on: YYYY-MM-DD (after 2026-11-23)
+#     reference: <the ruling, design section or issue>
+# A new catalog key that takes string values is also put in exactly one of
+# baseline.closed_value_keys, baseline.mixed_value_keys or exemptions.open_value_keys. A word
+# removed from the code is removed here by hand; a closed set that moves is moved here, as the
+# failure message says. An exemption is only for something that is NOT a Sextant word, and
+# carries its reason.
+baseline:
+  catalog_keys:
+  - absent
+  - absent_value
+  - absent_when
+  - accessors
+  - active_keys
+  - address
+  - address_arg_2
+  - address_from_config
+  - address_parts
+  - address_separator
+  - advice_annotations
+  - alias
+  - alias_priority
+  - all_methods
+  - also_input
+  - and
+  - annotated_default
+  - annotation
+  - annotation_arg
+  - annotation_attrs
+  - annotation_names
+  - annotation_test
+  - annotations
+  - applies_to
+  - arg
+  - arg_types
+  - args
+  - arity
+  - artifact
+  - attach
+  - attribute
+  - base
+  - base_arg
+  - base_path
+  - bean_model
+  - bean_via
+  - beans
+  - binder_key
+  - binder_protocols
+  - binding
+  - binding_method
+  - binds
+  - block_arg
+  - body
+  - body_arg
+  - booleans
+  - bound_by
+  - bound_by_calls
+  - by
+  - by_name
+  - bypassed_by
+  - bytes_arg
+  - bytes_payloads
+  - call
+  - call_wrappers
+  - calls
+  - captures
+  - case
+  - case_insensitive
+  - chain_composers
+  - channel
+  - channel_arg
+  - channel_ctor_arg
+  - channel_link
+  - channel_source
+  - channel_types
+  - channel_via
+  - channels
+  - class_annotations
+  - class_arg
+  - class_level
+  - class_path_prefixes
+  - client_arg
+  - client_base
+  - client_call_owner
+  - client_model
+  - client_stub_supertype
+  - close
+  - collects
+  - compose
+  - composers
+  - composition_separator
+  - conditions
+  - config_call
+  - config_field
+  - config_model
+  - configuration_annotation
+  - configures
+  - conformance
+  - connector_attribute
+  - connector_names
+  - connectors
+  - consumes
+  - consumes_from
+  - consumes_from_siblings
+  - container
+  - containing
+  - continuations
+  - continue
+  - controller_annotations
+  - coordinate
+  - coordinates
+  - corroborates
+  - crud_methods
+  - custom_condition
+  - declared_on
+  - declaring_annotation
+  - decorator
+  - default
+  - default_address
+  - default_annotation
+  - default_arg
+  - default_attr
+  - default_binder_key
+  - default_group
+  - default_keys
+  - default_ports
+  - default_produces
+  - default_profile
+  - default_schedule
+  - default_separator
+  - default_strategy
+  - defaults
+  - delegate_field
+  - delegating_bean
+  - dependencies
+  - dependencies_arg
+  - descriptor
+  - destination
+  - destination_from
+  - detect
+  - detection_strategy
+  - direction
+  - direction_by_type
+  - directions
+  - disabled
+  - disabled_when
+  - discriminators
+  - dispatch
+  - dispatch_implementations
+  - dispatch_receives
+  - dispatch_registrations
+  - dispatch_sends
+  - dispatch_views
+  - dispatcher
+  - dispatchers
+  - displayName
+  - drop_suffixes
+  - duplicate
+  - embed_arg
+  - embed_markers
+  - empty_recipe
+  - entries
+  - entry
+  - entry_method
+  - environment_reads
+  - equals
+  - equals_field
+  - except_declared_by
+  - exception_roots
+  - exchange
+  - excluded_by
+  - excluded_when
+  - excludes
+  - exported_attribute
+  - expressions
+  - extends_receiver
+  - fallback
+  - fallback_prefix_attr
+  - fallback_scope_separator
+  - fallback_spelling
+  - field
+  - field_annotation
+  - field_sources
+  - fields
+  - fills
+  - flag_arg
+  - follow_calls
+  - for_job
+  - format
+  - format_any
+  - format_fixed
+  - format_from
+  - fqn
+  - framework
+  - framework_handlers
+  - from
+  - from_argument
+  - from_document_key
+  - from_filename
+  - from_receiver
+  - function
+  - functions
+  - gather
+  - generator_wins
+  - getter_prefixes
+  - getters
+  - grammar
+  - graphql
+  - group
+  - group_prefix
+  - grpc
+  - hand_off_effects
+  - handler
+  - handler_annotation
+  - handler_arg
+  - handler_descriptor
+  - handler_method
+  - handler_methods
+  - hands_to
+  - having_value
+  - hint_annotations
+  - hint_media
+  - hint_returns
+  - hint_when
+  - host
+  - host_arg
+  - http_method
+  - id
+  - identified_by
+  - identity
+  - identity_marker
+  - ignore
+  - ignoring_case
+  - implements
+  - implicit_bindings
+  - inbound
+  - include_keys
+  - indexed
+  - inherit_siblings
+  - inherit_unoverridden
+  - injected
+  - injecting_annotations
+  - injection
+  - input_name_from
+  - installer
+  - interface
+  - interface_client
+  - interface_registrations
+  - into
+  - is
+  - item
+  - item_segment
+  - job
+  - job_detail
+  - job_group
+  - job_identity_step
+  - job_key
+  - job_name
+  - job_root
+  - join
+  - json_default_markers
+  - key
+  - key_arg
+  - key_matching
+  - keys
+  - keyword
+  - kind
+  - kinds
+  - known_types
+  - ladder
+  - lambda_arg
+  - lambda_steps
+  - literal_expression
+  - lower
+  - made_by
+  - mapping
+  - marker_calls
+  - match
+  - match_if_missing
+  - matcher
+  - matches
+  - may_set_base
+  - means
+  - measured
+  - mechanism
+  - media
+  - media_arg
+  - media_formats
+  - media_from_config
+  - media_values
+  - member_annotation
+  - members
+  - metadata_from
+  - method
+  - method_annotation
+  - method_arg
+  - method_case
+  - method_from
+  - method_name_call
+  - method_names
+  - methods
+  - missing
+  - mount
+  - multibinding_annotations
+  - mutation
+  - name
+  - name_arg
+  - name_attrs
+  - name_from
+  - name_generator
+  - names
+  - namespace_default
+  - needs
+  - negators
+  - nest
+  - no_repository_bean
+  - none_types
+  - not_hand_offs
+  - not_null
+  - nullability
+  - nullable
+  - object
+  - 'on'
+  - open
+  - open_when
+  - operation
+  - operations
+  - optional_types
+  - optional_when
+  - options
+  - options_arg
+  - or
+  - order
+  - order_reason
+  - origin_param
+  - origins
+  - orphans
+  - other
+  - outbound
+  - output_fields
+  - output_open_when
+  - outside
+  - owner
+  - owner_hierarchy
+  - owner_implemented_by_type_annotated
+  - owners
+  - package_name
+  - package_of
+  - packages_from
+  - pairing
+  - parameters
+  - parent
+  - parse_calls
+  - parses_true
+  - part
+  - participant_name_key
+  - pass_through
+  - passes_on
+  - path
+  - path_arg
+  - path_attribute
+  - path_fallback
+  - path_from
+  - path_from_argument_type
+  - path_from_siblings
+  - path_join
+  - path_prefix
+  - path_separator
+  - pathless_serves
+  - pattern
+  - pattern_from
+  - payload
+  - payload_arg
+  - payload_ctor_arg
+  - payload_from
+  - peer
+  - peer_annotation
+  - peer_from
+  - placeholders
+  - poisons
+  - port
+  - positional
+  - predicate_arg
+  - predicates
+  - prefix
+  - prefix_annotation
+  - prefix_arg
+  - prefix_from
+  - prefix_key
+  - prefix_replaces_own
+  - prefixes
+  - presence
+  - present
+  - present_cycle_reason
+  - preserves
+  - primary_annotation
+  - private_prefix
+  - produces
+  - produces_from
+  - produces_from_siblings
+  - profile
+  - profiles
+  - properties_annotation
+  - property
+  - protocol
+  - protocol_hint
+  - protocols
+  - qualifier_annotation
+  - qualifier_format
+  - qualifier_from
+  - qualifier_meta_annotations
+  - qualifier_separator
+  - query
+  - quote
+  - receiver_arg
+  - recipe_arg
+  - recipe_calls
+  - record_arg
+  - record_wrappers
+  - refuses
+  - refuses_unrooted_path
+  - registered_verb
+  - registration
+  - remote_prefixes
+  - repeats
+  - replace
+  - reply
+  - repositories
+  - request_body
+  - request_params
+  - request_reads
+  - request_requirement
+  - request_requirement_attrs
+  - request_url
+  - required
+  - required_arg
+  - required_attr
+  - required_when
+  - required_when_thrown
+  - requirement
+  - requirements
+  - requires
+  - requires_qualifier
+  - resolves
+  - resource_annotation
+  - response
+  - response_arg
+  - response_fallback
+  - response_is
+  - result_calls
+  - result_returns
+  - returns
+  - returns_argument
+  - returns_receiver
+  - returns_value
+  - root_kind
+  - roots
+  - router_arg
+  - router_holds
+  - router_type
+  - routes
+  - routing_key
+  - rows
+  - rules
+  - satisfied_by
+  - scalar_only
+  - scanned_by
+  - schedule
+  - schema_format
+  - schema_operations
+  - scheme
+  - scope
+  - scope_from
+  - search_segment
+  - selected_by
+  - selected_by_parameter
+  - selection_separator
+  - semantics
+  - serialization
+  - serializer_names_when
+  - serializers
+  - served_by_annotation
+  - serves
+  - service_name_call
+  - service_supertype
+  - set_by
+  - set_by_probe
+  - setter
+  - setters
+  - settings_base
+  - settings_form
+  - shape_model
+  - skip_path_variables
+  - skip_types
+  - slice
+  - soap
+  - sources
+  - spelling
+  - stack
+  - stacks
+  - started_by
+  - status_annotation
+  - status_from
+  - step_model
+  - steps
+  - stereotype_name_attrs
+  - stereotypes
+  - strategies
+  - strategy
+  - strip
+  - strip_trailing
+  - style
+  - subscription
+  - subtree_arg
+  - subtype
+  - suffix
+  - superseded_by
+  - supertype
+  - supertype_dispatch
+  - supertype_marker
+  - supertypes
+  - target
+  - terminal
+  - terminal_via_argument
+  - terminals
+  - then
+  - to
+  - trigger
+  - triggers
+  - trimmed
+  - true_values
+  - type
+  - type_annotation
+  - type_attrs
+  - type_carriers
+  - type_media_from_siblings
+  - type_names
+  - undeclared_steps
+  - unless
+  - unless_subtype_of
+  - unmarked
+  - unread_when
+  - unselected_binds
+  - unset
+  - url
+  - url_arg
+  - url_is
+  - url_via
+  - value
+  - value_annotation
+  - value_arg
+  - values
+  - verb
+  - verb_arg
+  - verb_values
+  - verbless_serves
+  - verbs
+  - versions
+  - via
+  - via_argument_of
+  - vocabulary
+  - when
+  - why
+  - wildcard
+  - wire
+  - wire_type
+  - wiring
+  - with
+  - wrappers
+  - yields
+  closed_value_keys:
+    alias:
+    - alias
+    - all
+    annotated_default:
+    - parameter
+    applies_to:
+    - jaxrs
+    - servlet
+    - spring
+    attach:
+    - sole_connector
+    base: []
+    bean_model:
+    - cdi
+    - spring
+    bean_via: []
+    binder_protocols:
+    - amqp
+    - kafka
+    - pubsub
+    - sqs
+    body: []
+    case:
+    - upper
+    channel:
+    - exchange
+    - routing_key
+    channel_link: []
+    channel_source: []
+    class_arg: []
+    class_level:
+    - prefix
+    - sibling
+    client_arg:
+    - receiver
+    client_model:
+    - ktor
+    - vertx-web
+    connector_names:
+    - ignoring_case
+    consumes: []
+    declared_on:
+    - class
+    - interface
+    default_strategy:
+    - as_declared
+    destination:
+    - unread
+    direction:
+    - both
+    - inbound
+    - outbound
+    directions:
+    - inbound
+    - outbound
+    dispatcher:
+    - jaxrs
+    - servlet
+    - spring
+    dispatchers:
+    - jaxrs
+    - servlet
+    - spring
+    duplicate:
+    - conflict
+    empty_recipe:
+    - parameter_type
+    exchange: []
+    fallback:
+    - none
+    - sole_unannotated
+    - sole_unbound
+    fallback_spelling:
+    - hyphenated
+    - hyphenated-capitalized
+    fills:
+    - consumes
+    - produces
+    follow_calls:
+    - all
+    format:
+    - binary
+    - date
+    - date-time
+    - directory-path
+    - double
+    - email
+    - float
+    - int32
+    - int64
+    - ipvanyaddress
+    - multi-host-uri
+    - qname
+    - uri
+    - uuid
+    - uuid4
+    format_from:
+    - avro
+    - bytes
+    - json
+    - protobuf
+    - string
+    from:
+    - annotation_value
+    - bean_name
+    - handler_return
+    gather:
+    - list
+    - list_tail_flag
+    grammar:
+    - shortcut
+    graphql:
+    - json
+    group: []
+    grpc:
+    - protobuf
+    handler:
+    - enclosing
+    - lambda_arg
+    - none
+    host:
+    - localhost
+    identity:
+    - assumed
+    - reported
+    implicit_bindings:
+    - container
+    - path_variable
+    - scalar
+    inherit_siblings:
+    - all_or_nothing
+    injection:
+    - candidates
+    - exact_key
+    - names_recipe
+    into:
+    - channel_link
+    job: []
+    job_detail: []
+    job_group: []
+    job_key: []
+    job_name: []
+    key_matching:
+    - exact
+    - relaxed
+    kind:
+    - argument
+    - consumer_group
+    - cookie
+    - exclusive
+    - header
+    - host
+    - local
+    - option
+    - param
+    - persistence
+    - query
+    - selector
+    - subscription
+    - task_queue
+    kinds:
+    - calendarInterval
+    - cron
+    - dailyTimeInterval
+    - simple
+    match:
+    - all
+    - first
+    - one
+    means:
+    - not_null_by_default
+    mechanism:
+    - akka-actors
+    - cdi-async-events
+    - cdi-events
+    - jdk-blocking-queue
+    - kotlinx-coroutines
+    - pekko-actors
+    - spring-events
+    media_formats:
+    - avro
+    - json
+    - protobuf
+    - xml
+    members:
+    - declared_type_methods
+    - overridden_dispatch_methods
+    - overridden_public_methods
+    - public_methods
+    method_case:
+    - upper
+    mutation:
+    - mutation
+    name_arg:
+    - all_strings
+    namespace_default:
+    - reversed_package
+    needs:
+    - collection_read
+    - delete
+    - item_read
+    - save
+    object:
+    - receiver
+    operation:
+    - operation
+    options: []
+    order:
+    - last
+    parent:
+    - receiver
+    part:
+    - host
+    - job
+    - port
+    - uri
+    path_fallback:
+    - construct_name
+    - declaring_type_qualified_name
+    - declaring_type_scoped_name
+    - declaring_type_simple_name
+    - payload_type
+    - prefixed_capitalized_construct_name
+    - read_accessor_property
+    - write_accessor_property
+    path_join:
+    - concatenate
+    - leading_slash
+    - single_slash
+    pattern_from:
+    - regex
+    payload:
+    - return
+    payload_ctor_arg:
+    - last
+    payload_from:
+    - class_arg
+    - receiver_owner
+    poisons:
+    - channel
+    - channel_link
+    - exchange
+    - handler
+    - routing_key
+    - serves
+    port: []
+    preserves:
+    - authority
+    produces: []
+    protocol:
+    - actor
+    - amqp
+    - eventbus
+    - graphql
+    - grpc
+    - http
+    - in_process
+    - jms
+    - kafka
+    - pubsub
+    - pulsar
+    - rsocket
+    - soap
+    - sqs
+    - sse
+    - temporal
+    - websocket
+    protocols:
+    - http
+    - sse
+    qualifier_format:
+    - qname
+    query:
+    - query
+    refuses:
+    - bound_elsewhere
+    - empty_path
+    - exact
+    - pattern
+    - trailing_slash
+    - unrooted
+    - wildcard
+    repeats:
+    - case
+    - consumes
+    - handler
+    - http_method
+    - produces
+    repositories:
+    - collection_read
+    - delete
+    - item_read
+    - save
+    request_requirement_attrs:
+    - header
+    - param
+    required:
+    - no_default
+    requirement:
+    - binder
+    - optional
+    - required
+    requires:
+    - annotation_args
+    - array_arguments
+    - call_site
+    - chain_reconstruction
+    - generic_interfaces
+    - implemented_interfaces
+    - nested_annotation_args
+    - resolved_config
+    - string_constants
+    - superclass
+    - type_annotations
+    - typed_signatures
+    response: []
+    response_is:
+    - array
+    result_calls: []
+    result_returns: []
+    root_kind:
+    - entry_point
+    router_arg:
+    - chain_result
+    routing_key: []
+    schedule: []
+    schema_format:
+    - graphql
+    - protobuf
+    - wsdl
+    semantics:
+    - async
+    - envelope
+    - http_envelope
+    - optional
+    - streaming
+    set_by:
+    - deployment
+    shape_model:
+    - json
+    - pydantic
+    soap:
+    - xml
+    stack:
+    - reactive
+    - servlet
+    step_model:
+    - spring-integration
+    strategies:
+    - annotated_only
+    - honors_exported
+    - public_only
+    strategy:
+    - camel
+    - humps_camelize
+    - pascal
+    style:
+    - annotation_driven
+    - combinator
+    - config_join
+    - derived_resource
+    - error_advice
+    - fluent
+    - injected_client
+    - interface_implementation
+    - scheduled_chain
+    - scheduled_work
+    - schema_operations
+    - single_call
+    - supertype_derived
+    - supertype_dispatch
+    subscription:
+    - subscription
+    target:
+    - cache
+    - database
+    to: []
+    trigger: []
+    triggers:
+    - cron
+    - fixedDelay
+    - fixedRate
+    unselected_binds:
+    - sole
+    url: []
+    url_is:
+    - address
+    - pattern
+    value: []
+    verbless_serves:
+    - any
+    wire_type:
+    - boolean
+    yields:
+    - authority
+  mixed_value_keys:
+    all_methods:
+    - activity
+    arg:
+    - all_strings
+    - channel
+    - value
+    default:
+    - variable
+    http_method:
+    - workflow
+    inbound:
+    - address
+    - destination
+    - queue
+    - topic
+    join:
+    - append_to_base
+    - fill_authority
+    - replace_last_segment
+    key:
+    - object
+    - type
+    outbound:
+    - address
+    - destination
+    - queue
+    - topic
+    prefix_from:
+    - id
+    - path
+    - prefix
+    - queues
+    - receiver_path
+    - topics
+    - url
+    - value
+    then:
+    - inbound
+    verb:
+    - none
+    wire:
+    - array
+    - boolean
+    - integer
+    - map
+    - number
+    - string
+  closed_sets:
+    src/sextant/application/resolve/open_questions.py::QUESTIONS:
+    - binder_protocol
+    - channel_destination
+    - environment_divergence
+    - format_conflict
+    - handler_pass_through
+    - handler_protocol
+    - mount_prefix
+    - payload_binding
+    - prefix_not_measured
+    - refused_registration
+    - registration_activation
+    - routing_conflict
+    - routing_depth
+    - self_exchange
+    - service_identity
+    - unselected_binding
+    - web_stack
+    src/sextant/domain/closed_sets.py::Anchor:
+    - after-component-overview
+    - after-endpoint-table
+    - beside-open-question
+    - end-of-document
+    src/sextant/domain/closed_sets.py::ConstructKind:
+    - accessor
+    - alias
+    - annotation
+    - class
+    - constructor
+    - enum
+    - field
+    - function
+    - interface
+    - method
+    - module
+    - protocol
+    - record
+    - struct
+    - trait
+    src/sextant/domain/closed_sets.py::Direction:
+    - both
+    - inbound
+    - outbound
+    src/sextant/domain/closed_sets.py::Evidence:
+    - compiler
+    - declared
+    - human
+    - llm
+    - name_match
+    - syntax
+    src/sextant/domain/closed_sets.py::Format:
+    - any
+    - avro
+    - bytes
+    - json
+    - protobuf
+    - string
+    - xml
+    src/sextant/domain/closed_sets.py::OriginTier:
+    - dependency
+    - first_party
+    - module_output
+    - platform
+    - third_party
+    src/sextant/domain/closed_sets.py::Protocol:
+    - actor
+    - amqp
+    - eventbus
+    - graphql
+    - grpc
+    - http
+    - in_process
+    - jms
+    - kafka
+    - pubsub
+    - pulsar
+    - rsocket
+    - soap
+    - sqs
+    - sse
+    - temporal
+    - websocket
+    src/sextant/domain/closed_sets.py::RESERVED_FORMATS:
+    - json_schema
+    src/sextant/domain/closed_sets.py::Resolution:
+    - narrowed
+    - partial
+    - resolved
+    - unresolved
+    src/sextant/domain/closed_sets.py::RootKind:
+    - entry_point
+    - inbound_endpoint
+    - scheduled
+    src/sextant/domain/closed_sets.py::TargetKind:
+    - cache
+    - database
+    - file
+    src/sextant/domain/closed_sets.py::TerminalKind:
+    - async_handoff
+    - cycle
+    - ends_silently
+    - outbound_call
+    - persistence
+    - returns
+    - throws
+    - unresolved
+    src/sextant/domain/closed_sets.py::TraceStop:
+    - boundary
+    - cycle
+    - revisited
+    src/sextant/domain/closed_sets.py::Visibility:
+    - package
+    - private
+    - protected
+    - public
+approvals: []
+exemptions:
+  data_keyed_mappings:
+    client_base.default_ports: 'D02 client model: `{scheme: port}`'
+    matches.address_from_config.binder_protocols: 'D02 `config_join`: a configured binder name -> protocol'
+    matches.detection_strategy.strategies: 'D02 Spring Data REST: a value of the configured key -> flags'
+    matches.disabled: 'D02 scheduled: annotation attribute -> the value the framework reads as never'
+    matches.entries.arg_types: 'D02 §2: argument position -> parameter type'
+    matches.indexed.item.requirements: 'D02 `config_join` indexed: the gateway''s predicate factory name (`Header`)
+      -> its reader'
+    matches.kinds: 'D02 Quartz: schedule builder type -> the framework''s kind word'
+    matches.mapping.request_requirement_attrs: 'D02 `annotation_driven`: mapping annotation attribute -> requirement
+      kind'
+    matches.media_from_config.format_from: 'D02 §2d: serializer class -> format'
+    matches.media_from_config.values: 'D02 §2d: serializer class -> media'
+    matches.path_fallback.replace: 'D02: a character of the name -> its replacement'
+    matches.repositories: 'D02 Spring Data REST: contract fqn -> the CRUD operations it licenses'
+    matches.request_params.spelling.replace: 'D02 `spelling: {replace: {<from>: <to>}}`: a character -> its replacement'
+    matches.triggers: 'D02 scheduled: annotation attribute -> the framework''s word for the kind'
+    matches.verb_values.fields: 'D02: `"<owner>#<field>"` -> verb'
+    matches.vocabulary.media_values.getters: 'D02 `combinator`: `"<owner>#<method>"` -> media value'
+    matches.vocabulary.media_values.values: 'D02 `combinator`: a constant of `media_values.owner` -> media value'
+    matches.vocabulary.prefixes.arg_types: 'D02 §2: argument position -> parameter type'
+    matches.vocabulary.request_requirement.arg_types: 'D02 §2: argument position -> parameter type'
+    matches.vocabulary.verb_values.fields: 'D02 `combinator`: `"<owner>#<field>"` -> verb'
+    matches.vocabulary.verb_values.getters: 'D02 `combinator`: `"<owner>#<method>"` -> verb'
+    matches.vocabulary.verbs.arg_types: 'D02 §2: argument position -> parameter type'
+    media_formats: 'D02 format ladder rung 2: media type -> format'
+    stereotype_name_attrs: 'D02 §1c: stereotype annotation name -> the attribute naming the bean'
+  not_vocabulary:
+    src/sextant/domain/closed_sets.py::_RANKS: a rank per `Evidence` member, recorded there
+  open_value_keys:
+    absent: an HTTP verb, media type or JVM descriptor
+    absent_value: the framework's value for an absent attribute (`true`)
+    active_keys: a configuration key, key template or file pattern of the framework
+    address_separator: a separator, placeholder or syntax character
+    advice_annotations: an annotation, type or class name of the framework or the user's code
+    annotation: an annotation, type or class name of the framework or the user's code
+    annotation_attrs: an annotation's or a connector's attribute name
+    annotation_names: an annotation, type or class name of the framework or the user's code
+    annotations: an annotation, type or class name of the framework or the user's code
+    arg_types: an annotation, type or class name of the framework or the user's code
+    args: a method, function, field or attribute name of the framework or the user's code
+    artifact: a library coordinate, catalog id, version or citation
+    attribute: a method, function, field or attribute name of the framework or the user's code
+    binder_key: a configuration key, key template or file pattern of the framework
+    binding_method: a method, function, field or attribute name of the framework or the user's code
+    bound_by: an annotation, type or class name of the framework or the user's code
+    bound_by_calls: an annotation, type or class name of the framework or the user's code
+    by: a library coordinate, catalog id, version or citation
+    bytes_payloads: an annotation, type or class name of the framework or the user's code
+    call: an annotation, type or class name of the framework or the user's code
+    calls: an annotation, type or class name of the framework or the user's code
+    channel_types: an annotation, type or class name of the framework or the user's code
+    class_annotations: an annotation, type or class name of the framework or the user's code
+    client_call_owner: an annotation, type or class name of the framework or the user's code
+    client_stub_supertype: an annotation, type or class name of the framework or the user's code
+    close: a separator, placeholder or syntax character
+    composition_separator: a separator, placeholder or syntax character
+    config_call: an annotation, type or class name of the framework or the user's code
+    config_field: a field name in the framework's settings class
+    configuration_annotation: an annotation, type or class name of the framework or the user's code
+    connector_attribute: an annotation's or a connector's attribute name
+    consumes_from: an annotation's or a connector's attribute name
+    container: an annotation, type or class name of the framework or the user's code
+    containing: a separator, placeholder or syntax character
+    controller_annotations: an annotation, type or class name of the framework or the user's code
+    coordinate: a library coordinate, catalog id, version or citation
+    coordinates: a library coordinate, catalog id, version or citation
+    crud_methods: a method, function, field or attribute name of the framework or the user's code
+    custom_condition: an annotation, type or class name of the framework or the user's code
+    declaring_annotation: an annotation, type or class name of the framework or the user's code
+    decorator: an annotation, type or class name of the framework or the user's code
+    default_annotation: an annotation, type or class name of the framework or the user's code
+    default_attr: a method, function, field or attribute name of the framework or the user's code
+    default_binder_key: a configuration key, key template or file pattern of the framework
+    default_group: a value the framework defines (a sentinel, a default name, a boolean spelling)
+    default_keys: a configuration key, key template or file pattern of the framework
+    default_produces: an HTTP verb, media type or JVM descriptor
+    default_profile: the framework's default profile name
+    default_separator: a separator, placeholder or syntax character
+    delegate_field: a field name in the framework's class
+    descriptor: an HTTP verb, media type or JVM descriptor
+    destination_from: an annotation's or a connector's attribute name
+    disabled: a separator, placeholder or syntax character
+    discriminators: an annotation's or a connector's attribute name
+    displayName: prose for a reader
+    drop_suffixes: a suffix of the user's class names
+    equals: a value the framework defines (a sentinel, a default name, a boolean spelling)
+    equals_field: a value the framework defines (a sentinel, a default name, a boolean spelling)
+    except_declared_by: an annotation, type or class name of the framework or the user's code
+    exception_roots: an annotation, type or class name of the framework or the user's code
+    excluded_by: an annotation, type or class name of the framework or the user's code
+    excludes: an annotation, type or class name of the framework or the user's code
+    exported_attribute: an annotation's or a connector's attribute name
+    expressions: an annotation's or a connector's attribute name
+    fallback_prefix_attr: a method, function, field or attribute name of the framework or the user's code
+    fallback_scope_separator: a separator, placeholder or syntax character
+    field: a field name in the framework's configuration
+    field_annotation: an annotation, type or class name of the framework or the user's code
+    fields: an HTTP verb, media type or JVM descriptor
+    fqn: an annotation, type or class name of the framework or the user's code
+    framework: a library coordinate, catalog id, version or citation
+    framework_handlers: an annotation, type or class name of the framework or the user's code
+    from_argument: a keyword argument name of the framework's function
+    from_document_key: a configuration key, key template or file pattern of the framework
+    from_filename: a configuration key, key template or file pattern of the framework
+    function: an annotation, type or class name of the framework or the user's code
+    getter_prefixes: a prefix of the framework's accessor names (`get`, `is`)
+    getters: an HTTP verb, media type or JVM descriptor
+    group_prefix: a configuration key, key template or file pattern of the framework
+    handler_annotation: an annotation, type or class name of the framework or the user's code
+    handler_descriptor: an HTTP verb, media type or JVM descriptor
+    handler_method: a method, function, field or attribute name of the framework or the user's code
+    handler_methods: a method name of the framework
+    having_value: a method, function, field or attribute name of the framework or the user's code
+    hint_annotations: an annotation, type or class name of the framework or the user's code
+    hint_media: an HTTP verb, media type or JVM descriptor
+    hint_returns: an annotation, type or class name of the framework or the user's code
+    id: a library coordinate, catalog id, version or citation
+    ignore: an annotation, type or class name of the framework or the user's code
+    implements: an annotation, type or class name of the framework or the user's code
+    include_keys: a configuration key, key template or file pattern of the framework
+    injecting_annotations: an annotation, type or class name of the framework or the user's code
+    interface: an annotation, type or class name of the framework or the user's code
+    item_segment: a configuration key, key template or file pattern of the framework
+    json_default_markers: a library coordinate, catalog id, version or citation
+    keyword: a keyword argument name of the framework's function
+    marker_calls: an annotation, type or class name of the framework or the user's code
+    match_if_missing: a method, function, field or attribute name of the framework or the user's code
+    measured: a library coordinate, catalog id, version or citation
+    member_annotation: an annotation, type or class name of the framework or the user's code
+    method: a method, function, field or attribute name of the framework or the user's code
+    method_from: an annotation's or a connector's attribute name
+    method_names: a method, function, field or attribute name of the framework or the user's code
+    methods: a method, function, field or attribute name of the framework or the user's code
+    missing: an annotation, type or class name of the framework or the user's code
+    multibinding_annotations: an annotation, type or class name of the framework or the user's code
+    name: a method, function, field or attribute name of the framework or the user's code
+    name_attrs: an annotation's or a connector's attribute name
+    name_from: a keyword argument or attribute name of the framework
+    names: an annotation's or a connector's attribute name
+    nest: a separator, placeholder or syntax character
+    no_repository_bean: an annotation, type or class name of the framework or the user's code
+    none_types: an annotation, type or class name of the framework or the user's code
+    not_null: an annotation, type or class name of the framework or the user's code
+    nullable: an annotation, type or class name of the framework or the user's code
+    open: a separator, placeholder or syntax character
+    optional_types: an annotation, type or class name of the framework or the user's code
+    order_reason: prose for a reader
+    owner: a method, function, field or attribute name of the framework or the user's code
+    owner_hierarchy: an annotation, type or class name of the framework or the user's code
+    owner_implemented_by_type_annotated: an annotation, type or class name of the framework or the user's code
+    owners: an annotation, type or class name of the framework or the user's code
+    packages_from: an annotation's or a connector's attribute name
+    parameters: an annotation, type or class name of the framework or the user's code
+    participant_name_key: a configuration key, key template or file pattern of the framework
+    pass_through: a value the framework defines (a sentinel, a default name, a boolean spelling)
+    path: a separator, placeholder or syntax character
+    path_attribute: an annotation's or a connector's attribute name
+    path_from: a method, function, field or attribute name of the framework or the user's code
+    path_prefix: a separator, placeholder or syntax character
+    path_separator: a separator, placeholder or syntax character
+    pathless_serves: a separator, placeholder or syntax character
+    pattern: a configuration key, key template or file pattern of the framework
+    peer_annotation: an annotation, type or class name of the framework or the user's code
+    peer_from: a method, function, field or attribute name of the framework or the user's code
+    positional: a separator, placeholder or syntax character
+    prefix: a method, function, field or attribute name of the framework or the user's code
+    prefix_annotation: an annotation, type or class name of the framework or the user's code
+    present: an annotation, type or class name of the framework or the user's code
+    present_cycle_reason: prose for a reader
+    primary_annotation: an annotation, type or class name of the framework or the user's code
+    private_prefix: a separator, placeholder or syntax character
+    produces_from: an annotation's or a connector's attribute name
+    properties_annotation: an annotation, type or class name of the framework or the user's code
+    qualifier_annotation: an annotation, type or class name of the framework or the user's code
+    qualifier_from: a method, function, field or attribute name of the framework or the user's code
+    qualifier_meta_annotations: an annotation, type or class name of the framework or the user's code
+    qualifier_separator: a separator, placeholder or syntax character
+    registered_verb: an HTTP verb, media type or JVM descriptor
+    remote_prefixes: a configuration key, key template or file pattern of the framework
+    replace: a separator, placeholder or syntax character
+    required_attr: an annotation's or a connector's attribute name
+    required_when_thrown: an annotation, type or class name of the framework or the user's code
+    resource_annotation: an annotation, type or class name of the framework or the user's code
+    returns: an annotation, type or class name of the framework or the user's code
+    router_type: an annotation, type or class name of the framework or the user's code
+    rows: a library coordinate, catalog id, version or citation
+    satisfied_by: an annotation, type or class name of the framework or the user's code
+    scanned_by: an annotation, type or class name of the framework or the user's code
+    scheme: a URL scheme
+    scope_from: a method, function, field or attribute name of the framework or the user's code
+    search_segment: a path segment the framework serves
+    selected_by: a configuration key, key template or file pattern of the framework
+    selected_by_parameter: an annotation, type or class name of the framework or the user's code
+    selection_separator: a separator, placeholder or syntax character
+    serializers: a method name of the framework
+    served_by_annotation: an annotation, type or class name of the framework or the user's code
+    service_supertype: an annotation, type or class name of the framework or the user's code
+    set_by_probe: a library coordinate, catalog id, version or citation
+    settings_base: an annotation, type or class name of the framework or the user's code
+    skip_types: an annotation, type or class name of the framework or the user's code
+    status_annotation: an annotation, type or class name of the framework or the user's code
+    status_from: an annotation's or a connector's attribute name
+    stereotype_name_attrs: an annotation's or a connector's attribute name
+    stereotypes: an annotation, type or class name of the framework or the user's code
+    strip_trailing: a separator, placeholder or syntax character
+    subtype: an annotation, type or class name of the framework or the user's code
+    superseded_by: a library coordinate, catalog id, version or citation
+    supertype: an annotation, type or class name of the framework or the user's code
+    supertypes: an annotation, type or class name of the framework or the user's code
+    terminal: a method, function, field or attribute name of the framework or the user's code
+    true_values: a value the framework defines (a sentinel, a default name, a boolean spelling)
+    type: an annotation, type or class name of the framework or the user's code
+    type_annotation: an annotation, type or class name of the framework or the user's code
+    type_attrs: an annotation's or a connector's attribute name
+    type_carriers: an annotation, type or class name of the framework or the user's code
+    type_names: an annotation, type or class name of the framework or the user's code
+    unless_subtype_of: an annotation, type or class name of the framework or the user's code
+    value_annotation: an annotation, type or class name of the framework or the user's code
+    values: a value the framework defines (a sentinel, a default name, a boolean spelling)
+    versions: a library coordinate, catalog id, version or citation
+    why: prose for a reader
+    wildcard: a separator, placeholder or syntax character
+    with: a separator, placeholder or syntax character

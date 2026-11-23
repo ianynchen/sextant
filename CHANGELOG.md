@@ -105,6 +105,19 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Two tests enforce GUIDELINES §8.9** (approved 2026-11-23): a new catalog key, a new word
+  value of a catalog key, a new member of a closed set in `domain/closed_sets.py`, or a new
+  open-question kind fails the suite until `tests/architecture/vocabulary.yml` records who
+  approved it, when, and the ruling; a spec or plan dated on or after 2026-11-23 fails without
+  a `## Principles check` section that names `docs/value-reading-scenarios.md`. The rest of
+  the code is not scanned, by the user's ruling: a closed set of published words belongs in
+  `domain/closed_sets.py`. Not caught, and left to the principles check and review by §8.9: a
+  new concept that is not a word (a fact's shape, a truth rule, a design change), an existing
+  mechanism built a second time, a word in other code, and an untrue approval or exemption.
+- **`docs/value-reading-scenarios.md`**: the code shapes Sextant reads today, the answer for
+  each and the test that proves it, as the reference for every language reader; with the
+  shapes that have no rule and the user's rulings on them.
+
 - **`--memory-limit <MiB>` on `module analyze`** (OI-493, minimum 64): caps the extractor JVM
   (`-Xmx` half the limit) and DuckDB (`memory_limit`, a quarter of the limit but never under
   768 MiB: polar's fact load fails at 608 and completes at 640). The flag's value is the
