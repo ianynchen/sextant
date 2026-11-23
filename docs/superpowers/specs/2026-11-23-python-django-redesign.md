@@ -1,12 +1,9 @@
 # Django inbound REST, redesign (plan 6, second design)
 
-**Status:** UNDER REVIEW, NOT READY. An adversarial review (2026-11-23) found 2 critical and
-11 major issues; they go to the user one at a time and this document changes with each
-ruling. No product code before approval.
-**What was and was not run.** Rows 1–5, 7 and 9 of §4 were run as throwaway changes on a copy
-(`tmp/django-on-main`, never merged). Rows 6, 11 (the targeted read), 12 and 18 were NOT run.
-§3's numbers come from a driver script that walks down from a root module given by hand; it
-is not the engine and not the algorithm of §4.
+**Status:** PROVED IN THE ENGINE (2026-11-23), product code not started. Every row of §4
+was built with the real mechanism on a throwaway copy (`tmp/django-on-main`, never merged;
+the change is kept as `.worktrees/django-task1-proper.patch`) and measured on the four real
+trees: §9. The rulings of §2 items 12–14 came from that work.
 **Replaces:** how route lists, mounts, roots, class views and method decorators are read in
 `2026-11-22-python-django-core-design.md`. The probe's 70 measured rules
 (`scripts/probes/django_rules.md`) and the approved `re_path` reads stay.
@@ -44,6 +41,16 @@ The first build gave 91 correct rows of 3,112 on the real trees. Two causes:
 11. Not supported: a registration in a loop or comprehension; the keywords of a `**kwargs`
     parameter; a lookup by key in a dict. The row keeps its reason and a question names the
     line.
+12. **The root has a catalog word** (approved 2026-11-23): `root_setting: ROOT_URLCONF`, beside
+    `router_named`, which gives the variable.
+13. **A read of the method has a catalog word and a fact** (approved 2026-11-23): a
+    `request_reads` entry with the new kind `method`
+    (`{ owner: django.http.request.HttpRequest, method: method, arity: 0, kind: method }`);
+    and the scanner writes an attribute read on a parameter whose class is not known as the
+    call fact it already writes for a known class, with no owner.
+14. **Captured values sit after the written parameters in a Python body** (approved
+    2026-11-23). D00's `captures` says "leading" for the JVM; a Python function is called by
+    its written signature, so those positions stay.
 
 ## 3. What was measured
 
@@ -243,10 +250,8 @@ A second defect found on the way: `functools.wraps(f)(inner)` is stated `result_
 arg0`, but `_stated_value` applies that form only where the applying `__call__` has no owner;
 here the scanner types it `functools/_Wrapper#`, so the statement never fires.
 
-**To design before Task 9 is built:** where the captured values sit among the body's
-parameters. A JVM lambda body is never called directly; a Python inner function is, and its
-arguments are bound by its written signature, so the written parameters must keep their
-positions. The format follows D00's `captures`.
+**Decided (2026-11-23, §2 item 14, built in §9a):** the captured values are the body's
+parameters after its written ones.
 
 ## 5. Every concept the branch added, and its state
 
@@ -259,6 +264,14 @@ positions. The format follows D00's `captures`.
 | question kind `mounted_router` | removed; existing rule (row 15) |
 | scan fact `calls_super` | removed; existing call facts (row 11) |
 | Task 7 (request reads) removed without approval | not in this design; its own design next |
+| key `root_setting` | new; approved 2026-11-23 (§2 item 12) |
+| `request_reads` kind `method` | new value; approved 2026-11-23 (§2 item 13) |
+| part `element` of `returns` | new; approved 2026-11-23 (§4c M2) |
+| key `supertype` in a `fluent` catalog | existing word of `jakarta-servlet.yml`, read by the fluent engine too: the class whose subclasses answer by `dispatch` |
+| key `annotations` in a `fluent` catalog | existing words of `spring-mvc.yml` (§4b) |
+| fact: an `array` entry carries `symbol` (`builtins/tuple#`, `builtins/list#`) | existing field, filled for a written collection; `element` needs it |
+| fact: a capture site `types/FunctionType#<init>` (`dynamic`) and `captures: N` | existing D00 words, written by the Python scanner for the first time |
+| fact: an attribute read on a parameter of unknown class, as an ownerless call | approved 2026-11-23 (§2 item 13) |
 
 ## 6. Open, to investigate in the plan's first task (no design yet)
 
@@ -330,3 +343,85 @@ Reference: `docs/value-reading-scenarios.md` (PR #111), and the catalog-level su
 | Tell the truth | §7 goal 1; row 11 shows the wrong row that reading the body removes |
 
 New concepts proposed by this design: none.
+
+## 9. Task 1 result: the design in the engine, with the real mechanisms (2026-11-23)
+
+Real engine, real trees, no step after the engine. Compared with Django's resolver: method,
+path and handler.
+
+| Project | Rows | `resolved` and equal to Django | `resolved` and wrong |
+|---|---|---|---|
+| healthchecks | 356 | 82 | 0 |
+| bookwyrm | 827 | 791 | 0 |
+| weblate | 493 | 210 | 0 |
+| zulip | 729 | 38 | 0 |
+
+The first build gave 91 correct rows. A first spike with shortcuts gave 1,175 correct and 4
+wrong; the user rejected it ("spike for proper solution, not shortcuts").
+
+### 9a. How each part is built
+
+- **Captures (§4e).** The scanner records the names of enclosing functions a nested function
+  or a `lambda` reads: a `dynamic` site `types/FunctionType#<init>` takes their values where
+  the function is made, the `lambda` entry carries `captures: N` and `source`, and the body
+  holds them as parameters after its written ones. A name written again after the `def` is
+  `unresolved`. The existing fold ("the seventh edge") binds them; for a body called by its
+  written signature the captured positions start after the declared parameters.
+- **A wrapper stands for what it wraps.** `ValueIndex.hands_on`, from call facts: the body
+  calls a captured parameter, the first argument is the first parameter the body is GIVEN
+  (written or unpacked, `f(request, *a)`, `f(*args)`), and the call's result is a value the
+  body returns. `if test_func(request):` is no hand-over. The walk then reads the captured
+  value on the same path (`_Walk._runs_captured`) and notes the body it ran through. Where
+  the body hands on and no function is read there, the answer is `not_readable`, never the
+  wrapper.
+- **A handler read on one path and not on another names no function** (`_walked_handler`):
+  the row is `partial` with the `handler_pass_through` question. `result_calls` keeps an
+  unread path beside the functions it reads.
+- **A decorator made in one method and applied in another** (`d = user_passes_test(t)` in a
+  helper, `d(view)` in its caller): the receiver's `made_by` call is looked up in the value
+  models (`_applied_elsewhere`). Zulip: 39 handler questions fall to 5.
+- **`include`, `as_view`.** `returns: { arg: 0, element: 0 }` and `returns_receiver: true`. A
+  stated call is matched on the receiver's class and its ancestors by `Dispatch`'s order; a
+  nearer body in read code wins (`_stated_on_ancestor`, Python modules only for now).
+- **The join (§4a).** `MountReader._list_tree`: from each written `root_setting` value and
+  through each mount, the members are asked of the value walk (`producer_paths`, the
+  registration calls its stops); prefixes are read and joined by the existing `_prefixes` and
+  `_behind`. A call that is both a route root and a mount is a mount where its router argument
+  reads as a router: it reaches a registration, or a string that names a module
+  (`mounts_a_router`). The branch's key `through` and the question `mounted_router` are gone.
+- **Held lists (rows 1–6, M6, M7, M11).** The value walk reads the members of each list
+  write; members do not count against `PATH_CAP` (256). The scanner writes a module-level
+  list with the elements it holds at that line (`_in_order`), so a copy does not see later
+  additions; `append` and `extend` are the writes `[*x, v]`, `[*x, *vs]`. Not exactly known,
+  answered `escapes`: a call on the list that is not such a write (`x.remove(v)`,
+  `x[0] = v`, `del x[0]`), and the list handed whole to a call no value model states.
+- **Any method (§4d).** `fluent._any_method_doubted`: the handler and each wrapper the path
+  ran through; a `kind: method` read on the request, in the body or in module code the
+  request is handed to; the request handed to a value that is called; a handler whose body
+  was not read (a library's).
+- **Method decorators, class views.** `annotations` (§4b) and `supertype` in `django.yml`;
+  the handler value is read by the value walk, and a class below `supertype` answers by
+  `dispatch`.
+
+### 9b. Known limits, each with its count
+
+- **One helper entered twice on one path** (the walk's existing bound, M-1): the same
+  decorator factory twice on one view gives handler not read. healthchecks: 5 routes.
+- **A list added under a test** (`if settings.DEVELOPMENT: urls += dev_urls.urls`): the
+  members are behind the hole at `partial`. A row with the condition (M5) needs the guard of
+  a field write in the facts; not built. Zulip: about 30 routes.
+- **A library `dispatch` body is not read** (row 11's targeted read is not built): such a
+  row is `partial`. Weblate DRF: 2 rows; zulip `LoginView`: 1.
+- **A mount whose router argument is not read** is published as a route with no handler, at
+  `partial`: nothing says it is a mount.
+- **The ancestor match is for Python modules only.**
+
+### 9c. Tests on the throwaway copy
+
+7,555 pass, 64 fail: 44 Django tests of the first design; 10 FastAPI and receiver-binding
+tests of the old held-list rule and of a wrapper now read through; 3 Java lambda numbers of
+that copy's fixture build; 7 pins of facts, documents and the vocabulary.
+
+The 13 field pins (`scripts/field_check.py`) are all `ok` with the change: no row lost in the
+five Java and eight Python projects. The run took 1,115 s where 650 s is usual; Task 10
+measures the cost again on the product branch.

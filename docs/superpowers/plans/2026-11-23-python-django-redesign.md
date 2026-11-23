@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **Truth first.** A `resolved` row that Django does not serve fails the task that produced it. Unknown is `partial` or `unresolved` with one of the six existing reasons; never a new reason.
-- **No new concept.** The only new vocabulary this plan may add, each with an approval entry in `tests/architecture/vocabulary.yml` (approved by the user 2026-11-23): catalog keys `router_named`, `variable`, `element`; catalog value `expression` of `url_is`. Any other new catalog key or value, question kind, scan fact, reason or truth rule: STOP and report to the controller, who asks the user. Never build it "provisionally".
+- **No new concept.** The only new vocabulary this plan may add, each with an approval entry in `tests/architecture/vocabulary.yml` (approved by the user 2026-11-23): catalog keys `router_named`, `variable`, `element`, `root_setting`; catalog value `expression` of `url_is`; value `method` of a `request_reads` entry's `kind`. The fluent engine also reads the existing keys `annotations` (`fqn`, `method`, `method_from`) and `supertype`. Any other new catalog key or value, question kind, scan fact, reason or truth rule: STOP and report to the controller, who asks the user. Never build it "provisionally".
 - **Reuse.** Before writing a rule, find its row in `docs/value-reading-scenarios.md` or in the spec's §4 table and use that mechanism. If the shape is in neither, STOP and report.
 - **Removed from the branch, and they stay removed:** keys `through`, `read`, `narrowed_by`; question kind `mounted_router`; scan fact `calls_super`; functions `_held_by`, `_reach`, `_lists`, `_reached_at`, `_handed_lists`, `unread_routers`.
 - **Not supported, by ruling:** a registration in a loop or comprehension; the keywords of a `**kwargs` parameter; a lookup by key in a dict. The row keeps its reason and a question names the line. Do not build a reader for these.
@@ -57,6 +57,54 @@ This task writes NO product code. It exists because the spec's numbers came from
 - [ ] **Step 4:** Report. **Gate for the rest of the plan: zero wrong `resolved` rows on the four trees**, or a user ruling on each remaining one.
 
 Timebox: 4 hours green path; stop and report at 8.
+
+### Task 1 outcome (2026-11-23): what binds Tasks 2–10
+
+Task 1 is done: spec §9. Zero wrong `resolved` rows on the four trees, with every mechanism
+built for real on the throwaway copy. **That change is the reference implementation**:
+`.worktrees/django-task1-proper.patch` (1,806 lines, against `tmp/django-on-main`). A task
+below ports its part of the patch to this branch, test first; it does not design again. Where
+a task's text below differs from spec §9a, spec §9a is right. The differences:
+
+- **Task 2.** `PATH_CAP` is checked without the members of written lists (`members` in
+  `_binding_writes`); it is not "one read per member by the caller".
+- **Task 3.** The order of writes is the SCANNER's (`BodyReader._in_order`: a module-level
+  list is written with the elements it holds at that line), not `Flow` in the walk. "Not
+  exactly known" is `ValueIndex.changed_lists`, answered `escapes`: a call on the list that
+  is not a write, and the list handed whole to a call no value model states. A member
+  written under a test is NOT built (spec §9b); another list added under a test is one
+  unread member. Drop the `inexact` and `..._carries_that_test` tests; add
+  `test_another_list_added_under_a_test_is_one_unread_member`.
+- **Task 4.** No forced sum: a name last written as a list in this body is a list
+  (`_is_list`, `_lists`). `append` and `extend` write the field directly (`_added`). A written
+  list or tuple carries its class in `symbol`. `.format` is NOT in the patch; build it as
+  written here.
+- **Task 5.** As written, plus: the match is `_stated_on_ancestor` with
+  `Dispatch.order_through_headers`; Python modules only (record the JVM half as an issue).
+- **Task 6.** As spec §9a: `_list_tree`, `mounts_a_router`, `MountRule.registers`,
+  `MountRules.root_setting`. Add `root_setting: ROOT_URLCONF` to `django.yml` with its
+  approval entry. `test_a_route_added_under_a_setting_carries_the_condition` holds for a
+  registration written under the test; for a LIST added under a test the rows are the hole.
+- **Task 7.** `annotations` is read from `matches` (`chains._with_narrowing`); `supertype`
+  replaces the handler's `through` (`chains._with_handler_through`, `fluent._class_view` by
+  the value walk).
+- **Task 7a.** `fluent._any_method_doubted` and `_request_flow`; the `kind: method` entry of
+  `request_reads` (`request_requirements.method_reads`); the scanner's ownerless
+  attribute-read call on a parameter (`BodyReader._parameter_read`). Not
+  `pass_through.py`.
+- **Task 8.** Not in the patch. Until it is built a library `dispatch` row is `partial`
+  (a handler whose body was not read is doubted). Build the targeted read as written.
+- **Task 9.** Replaced by: captures in the scanner (`_closure`, `_free_names`,
+  `_hold_captured`), the fold's Python layout, `ValueIndex.hands_on`,
+  `_Walk._runs_captured`, `_applied_elsewhere`, the unread path kept beside read functions
+  (`_stated_value`, `_walked_handler`). D00 gets the Python mapping of `captures`. The two
+  existing tests of a wrapper that "runs the wrapper"
+  (`test_receiver_binding.py::test_a_decorator_that_returns_its_own_wrapper_runs_the_wrapper`,
+  `test_fastapi_routes.py::test_a_function_named_after_an_unstated_decorator_is_partial_like_the_stacked_one`)
+  change to the new rule. This task goes BEFORE Task 7a, which reads the bodies a path ran
+  through.
+- **Order:** 2, 3, 4, 5, 6, 9, 7, 7a, 8, 10.
+- **Task 10** also logs the limits of spec §9b as issues, with their counts.
 
 ### Task 2: A list held in a name answers with its members
 
