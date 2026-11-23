@@ -6891,7 +6891,13 @@ class _Walk:
                 and writer is not None
                 and entry.get("symbol") != symbol
             ):
-                # `urlpatterns = real_patterns`: a name for another name's list.
+                # `urlpatterns = real_patterns`: a name for another name's list. A call made
+                # on THIS name changes that list too (`VERBS = BASE`, `VERBS.remove(v)`).
+                if symbol in self._index.changed_lists and self._names_a_list(
+                    str(entry["symbol"]), {symbol}
+                ):
+                    reached.append((trail, _unresolved(ESCAPES)))
+                    continue
                 held = self._entry(entry, writer, (_BINDING, symbol, writer), trail, frames)
                 members += len(held)
                 reached.extend(held)
@@ -6930,6 +6936,21 @@ class _Walk:
         if len(reached) - members > PATH_CAP:
             return _only(trail, _unresolved(NON_ENUMERABLE))
         return self._distinct(reached)
+
+    def _names_a_list(self, symbol: str, seen: set[str]) -> bool:
+        """Whether a write of the binding `symbol` is a list, or a name for one."""
+        if symbol in seen:
+            return False
+        seen.add(symbol)
+        return any(
+            entry.get("kind") == "array"
+            or (
+                entry.get("kind") == "field"
+                and entry.get("symbol") is not None
+                and self._names_a_list(str(entry["symbol"]), seen)
+            )
+            for _, entry in self._index.constants.get(symbol, ())
+        )
 
     def _object_site(
         self, symbol: str, frames: "_Frames", reader: str | None

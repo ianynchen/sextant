@@ -7044,6 +7044,18 @@ def _py_held_facts() -> list[Fact]:
                     _py_site(_PY_BODY, ordinal, ("builtins/list#", called, "(*)"), [], field)
                 )
             ordinal += 1
+    # A second name for `plain`'s list, changed through that second name.
+    facts.append(
+        FieldWriteFact(
+            document_id="doc_held",
+            field=_HELD_PY + "renamed.",
+            value=CallArgument(kind="field", symbol=_HELD_PY + "plain."),
+            written_by=_PY_BODY,
+        )
+    )
+    facts.append(
+        _py_site(_PY_BODY, ordinal, ("builtins/list#", "remove", "(*)"), [], _HELD_PY + "renamed.")
+    )
     # More members than `PATH_CAP` in one written list, and as many alternative writes of
     # one name, each a string.
     facts.append(
@@ -7066,7 +7078,7 @@ def _py_held_facts() -> list[Fact]:
         )
         for n in range(_MANY_MEMBERS)
     )
-    for name in (*lists, "long", "branchy"):
+    for name in (*lists, "renamed", "long", "branchy"):
         reader = _PY + _HELD_PY + "read_" + name + _PY_DIS
         facts.append(
             SymbolFact(
@@ -7157,6 +7169,13 @@ def test_a_held_list_handed_to_a_call_is_still_read(held_py):
     a field's writes and tracks no hand-over of a field, in Python as in Java. A list handed
     to module code that changes it is a known limit (plan Task 10)."""
     assert _held_answers(held_py, "handed") == [("a", None), ("b", None)]
+
+
+def test_a_list_changed_through_a_second_name_is_not_known_by_that_name(held_py):
+    """`VERBS = BASE` then `VERBS.remove(v)`: the call names `VERBS`, the list is written
+    under `BASE`. Read by the name the call was made on, the list is not exactly known;
+    read by `BASE` it is the same object, a limit the facts do not show."""
+    assert _held_answers(held_py, "renamed") == [(None, "escapes")]
 
 
 def test_the_members_of_one_held_list_do_not_count_against_the_path_cap(held_py):
