@@ -244,6 +244,7 @@ class _Writer(BodyReader):
         self.not_read: list[str] = []
         self._methods = {}
         self._bodies = {}
+        self._lists = {}
         self._rebound = rebound
         self._module_types = module_types
         self._module_writes = {}
@@ -484,7 +485,11 @@ class _Writer(BodyReader):
                         field=descriptor,
                         # One name takes the value; a name inside an unpacking takes a
                         # part of it this scanner does not split.
-                        value=value if named is not None else CallArgument(kind="unresolved"),
+                        value=self._in_order(
+                            descriptor,
+                            value if named is not None else CallArgument(kind="unresolved"),
+                            scope,
+                        ),
                         written_by=scope.body.caller,
                     )
                 )

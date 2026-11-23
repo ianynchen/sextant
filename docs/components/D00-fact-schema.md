@@ -1355,7 +1355,8 @@ what every varargs slot read as before 9.15.
 **An element marked `keyword: "*"` is every element of its own value, unpacked in its
 place** (fact schema 19, plan 2026-11-22-python-django-core-inbound Task 3). The Python
 scanner writes it for a list sum: `a + b` with no text in it, where one operand is known to
-be a list (written as one, or a module-level name of the file every write of which is one),
+be a list (written as one, or a module-level name of the file every write of which is one
+or that this body last wrote as one),
 is the `array` it makes — a written list's elements in place, every other operand its own
 entry (a `field`, an `unresolved` with its `source`, …) marked `*`. `x += [...]` is the same
 sum, and a list display's `*x` element is written the same way (`[*core, path("a/", v)]`;
@@ -1415,6 +1416,17 @@ above:
 - An f-string, and `+` with a string literal, is `concat`. The concatenation is a `dynamic`
   site `builtins/str#format`, with no receiver and no `implementation`, whose arguments are
   the values that fill the holes. With no value in it, it is the `string` itself.
+  `"...".format(...)` on a string literal is the same `concat`: each replacement field is a
+  `{}` filled by its argument, by position (`{}`), number (`{0}`) or name (`{a}`), and `{{`
+  `}}` are braces. A field with a conversion, a format spec, an attribute or an index,
+  automatic and numbered fields mixed, an unpacked argument, or a field with no argument
+  leave the call as it is, its value `unresolved`.
+- A written list or tuple is an `array` whose `symbol` is its class (`builtins/list#`,
+  `builtins/tuple#`); a list sum's `array` is `builtins/list#`. `list(x)` (the builtin, one
+  plain argument) is `[*x]`. At module level, `x.append(v)` and `x.extend(vs)` on a name this
+  body last wrote as a list are writes of `x`, `[*x, v]` and `[*x, *vs]` (a written list's
+  elements in place), with no call site; the call's value is `null`. A name this body last
+  wrote as a list is a list for a sum. Inside a function they stay calls.
 - `a if c else b` and `a or b` are `merge`; `await x` is the value of `x`; `with x as y` is
   the call `x.__enter__()` (`__aenter__` for `async with`), and `y` is its result.
 - A subscript of a type form, evaluated as a value, is the `static` call

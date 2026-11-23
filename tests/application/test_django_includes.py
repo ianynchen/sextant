@@ -538,16 +538,30 @@ def test_an_aliased_or_re_exported_list_in_a_root_module_stays_at_the_root(tmp_p
 
 
 def test_a_list_handed_to_a_call_no_catalog_reads_is_behind_an_unread_prefix(tmp_path, libraries):
-    """R9 part 2: `urlpatterns = list(base)` included at `api/`: `base` is handed to a call no
-    catalog reads, so it cannot be placed; nothing is `resolved` at the root."""
+    """R9 part 2: `urlpatterns = copy.copy(base)` included at `api/`: `base` is handed to a
+    call no catalog reads, so it cannot be placed; nothing is `resolved` at the root."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            **_INCLUDED,
+            "api_urls.py": "import copy\nbase = [path('x/', v)]\nurlpatterns = copy.copy(base)\n",
+        },
+    )
+
+    assert _rows(workspace) == [_row("/<prefix>x/", "partial")]
+    assert _questions(workspace, "mount_prefix") == ["/<prefix>x/"]
+
+
+def test_a_list_of_a_list_is_mounted(tmp_path, libraries):
+    """`urlpatterns = list(base)` is a new list of `base`'s elements (`[*base]`): mounted."""
     workspace = _program(
         tmp_path,
         libraries,
         {**_INCLUDED, "api_urls.py": "base = [path('x/', v)]\nurlpatterns = list(base)\n"},
     )
 
-    assert _rows(workspace) == [_row("/<prefix>x/", "partial")]
-    assert _questions(workspace, "mount_prefix") == ["/<prefix>x/"]
+    assert _rows(workspace) == [_row("/api/x/")]
 
 
 def test_a_list_unpacked_into_a_call_no_catalog_reads_is_behind_an_unread_prefix(

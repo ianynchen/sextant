@@ -548,12 +548,11 @@ def _not_yet(held: str, expected: list[tuple[object, ...]], task: str) -> Any:
         ("VERBS = ('get', 'post')\n", [_GET, _POST]),
         # An addition the facts show is a write of its own (`[*VERBS, 'post']`).
         ("VERBS = ['get']\nVERBS += ['post']\n", [_GET, _POST]),
+        # A module-level `append` / `extend` on the list is a write of it as well.
+        ("VERBS = ['get']\nVERBS.append('post')\n", [_GET, _POST]),
+        ("VERBS = ['get']\nVERBS.extend(['post'])\n", [_GET, _POST]),
         # A call made on the list that the facts do not state as a write leaves it not known
-        # (`escapes`). Task 4 writes a module-level `append` / `extend` as a write of the
-        # list; then these two hold both (`GET`, `POST`).
-        ("VERBS = ['get']\nVERBS.append('post')\n", [_NOT_KNOWN]),
-        ("VERBS = ['get']\nVERBS.extend(['post'])\n", [_NOT_KNOWN]),
-        # A call on the list inside a function is never a write the facts state.
+        # (`escapes`): a call on the list inside a function is never a write the facts state.
         ("VERBS = ['get']\ndef add():\n    VERBS.append('post')\n", [_NOT_KNOWN]),
         # An element store or delete is a call on the list (`__setitem__`, `__delitem__`).
         ("VERBS = ['get']\nVERBS[0] = 'delete'\n", [_NOT_KNOWN]),

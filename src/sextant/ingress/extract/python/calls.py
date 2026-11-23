@@ -65,6 +65,7 @@ A call's owner is the type the code writes for its receiver (design
 
 import ast
 import builtins
+import string
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from typing import Literal
@@ -376,6 +377,8 @@ class BodyReader:
     # One counter set per method symbol: a name defined twice is one method with two
     # bodies, whose call ordinals, value ids and returns continue across both.
     _bodies: dict[str, Body]
+    # The module-level names of this file the body last wrote as a list (`_in_order`).
+    _lists: dict[str, list[CallArgument] | None]
     # The type of each module-level name, a class or a callable, by every write to it in
     # this file, as the previous reading of the file found them (`structure.file_facts`).
     # None on a first reading, which answers from the writes read so far and is kept only
@@ -1179,6 +1182,7 @@ class BodyReader:
         return None
 
     def _write_field(self, written: str, value: CallArgument, scope: Scope) -> None:
+        value = self._in_order(written, value, scope)
         parameter = value.value if value.kind == "parameter" else None
         self.facts.append(
             FieldWriteFact(
@@ -1189,6 +1193,48 @@ class BodyReader:
                 written_by=scope.body.caller,
             )
         )
+
+    def _in_order(self, written: str, value: CallArgument, scope: Scope) -> CallArgument:
+        """A write to a module-level name, read in the order the body runs: the name is a
+        list from here on where the value is an `array` (`_is_list`, `_added`), and is not
+        where it is anything else. The value is written as it is."""
+        if scope.frame is not None or scope.class_path is not None:
+            return value
+        if value.kind == "array":
+            self._lists[written] = None
+        else:
+            self._lists.pop(written, None)
+        return value
+
+    def _added(self, node: ast.Call, scope: Scope) -> bool:
+        """`x.append(v)` and `x.extend(vs)` on a module-level name of this file that holds a
+        list: the write `x += [v]`, `x += vs` (ruled 2026-11-23). False for any other call."""
+        func = node.func
+        if not (
+            isinstance(func, ast.Attribute)
+            and func.attr in ("append", "extend")
+            and isinstance(func.value, ast.Name)
+            and len(node.args) == 1
+            and not node.keywords
+            and not isinstance(node.args[0], ast.Starred)
+            and scope.frame is None
+            and scope.class_path is None
+            and f"{scope.owner}{func.value.id}." in self._lists
+        ):
+            return False
+        symbol = f"{scope.owner}{func.value.id}."
+        added = self._value(node.args[0], scope)
+        if func.attr == "append":
+            new = [added]
+        elif isinstance(node.args[0], ast.List) and added.kind == "array":
+            new = list(added.elements or [])
+        else:
+            new = [added.model_copy(update={"keyword": _UNPACKED_POSITIONAL})]
+        own = CallArgument(kind="field", symbol=symbol, keyword=_UNPACKED_POSITIONAL)
+        made = _Part(kind="array", elements=[own, *new], symbol=_LITERAL_CLASSES[ast.List])
+        made._typed = TypeRef(symbol=_LITERAL_CLASSES[ast.List])
+        self._write_field(symbol, made, scope)
+        return True
 
     # -- decorators ----------------------------------------------------------------------
 
@@ -1214,6 +1260,11 @@ class BodyReader:
     # -- calls ---------------------------------------------------------------------------
 
     def _call(self, node: ast.Call, scope: Scope) -> CallArgument:
+        if self._added(node, scope):
+            return CallArgument(kind="null")
+        formatted = self._format(node, scope)
+        if formatted is not None:
+            return formatted
         if self._names_a_new_type(node.func, scope) and len(node.args) == 1 and not node.keywords:
             # Calling a `NewType` hands its argument back (the typing specification): no call
             # runs that the facts could name, and the value is the argument.
@@ -1884,6 +1935,19 @@ class BodyReader:
         """One value as D00 §5's argument grammar, writing every call in it."""
         if isinstance(node, ast.Constant):
             return _constant(node.value)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and len(node.args) == 1
+            and not node.keywords
+            and not isinstance(node.args[0], ast.Starred)
+            and self._targets(node.func, scope) == (Target(BUILTINS, "list"),)
+        ):
+            # `list(x)` makes a new list of `x`'s elements: `[*x]` (ruled 2026-11-23).
+            star = ast.copy_location(ast.Starred(value=node.args[0], ctx=ast.Load()), node)
+            return self._value(
+                ast.copy_location(ast.List(elts=[star], ctx=ast.Load()), node), scope
+            )
         if isinstance(node, ast.Call):
             return self._call(node, scope)
         if isinstance(node, ast.JoinedStr):
@@ -1946,7 +2010,7 @@ class BodyReader:
                 isinstance(element, ast.Starred) for element in node.elts
             ):
                 return _part(typed)
-            found = _Part(kind="array", elements=elements)
+            found = _Part(kind="array", elements=elements, symbol=_LITERAL_CLASSES[type(node)])
             found._typed = typed
             return found
         if isinstance(node, ast.Dict | ast.Set):
@@ -2086,9 +2150,66 @@ class BodyReader:
         produced = self._invoke(site, operands, scope)
         return CallArgument(kind="concat", value=text, source=produced.source)
 
+    def _format(self, node: ast.Call, scope: Scope) -> CallArgument | None:
+        """`"...".format(...)` on a string literal: the template its text makes, each
+        replacement field a `{}` filled by its argument, by position, by number or by name
+        (D00 §5 `concat`, as `_concat` writes it). None, the call unread as before, where a
+        field has a conversion, a format spec, an attribute or an index, where automatic and
+        numbered fields are mixed, where an argument is unpacked, or where a field has no
+        argument: Python raises for the last two of those, and the others make text this
+        reader does not model."""
+        func = node.func
+        if not (
+            isinstance(func, ast.Attribute)
+            and func.attr == _FORMAT
+            and isinstance(func.value, ast.Constant)
+            and isinstance(func.value.value, str)
+            and not any(isinstance(a, ast.Starred) for a in node.args)
+            and all(k.arg is not None for k in node.keywords)
+        ):
+            return None
+        named = {str(k.arg): k.value for k in node.keywords}
+        try:
+            fields = list(string.Formatter().parse(func.value.value))
+        except ValueError:
+            return None
+        template: list[str] = []
+        holes: list[ast.expr] = []
+        automatic, numbered = 0, False
+        filled: ast.expr | None
+        for literal, name, spec, conversion in fields:
+            template.append(literal)
+            if name is None:
+                continue
+            if spec or conversion is not None:
+                return None
+            if name == "":
+                filled = node.args[automatic] if automatic < len(node.args) else None
+                automatic += 1
+            elif name.isdigit():
+                numbered = True
+                filled = node.args[int(name)] if int(name) < len(node.args) else None
+            elif name.isidentifier():
+                filled = named.get(name)
+            else:
+                return None
+            if filled is None or (automatic > 0 and numbered):
+                return None
+            holes.append(filled)
+            template.append(_HOLE)
+        # Python evaluates every argument, in the order written, before it formats.
+        values = {id(a): self._value(a, scope) for a in [*node.args, *named.values()]}
+        text = "".join(template)
+        if not holes:
+            return CallArgument(kind="string", value=text)
+        site = Callee(_target(_STRING, _FORMAT), "dynamic")
+        produced = self._invoke(site, [values[id(h)] for h in holes], scope)
+        return CallArgument(kind="concat", value=text, source=produced.source)
+
     def _sum(self, parts: list[ast.expr], scope: Scope) -> CallArgument:
         """`a + b` with no text in it. Where one operand is known to be a list (written as
-        one, or a module-level name of this file every write of which is one), every operand
+        one, or a module-level name of this file every write of which is one or that this
+        body last wrote as one), every operand
         is: `list.__add__` takes a list alone, so code where one is not raises. The value is
         then the list it makes (D00 §5 `array`): a written list's elements in place, each
         other operand as its own entry marked `*`, unpacked there. Any other sum is unread."""
@@ -2101,7 +2222,7 @@ class BodyReader:
                 elements.extend(value.elements or [])
             else:
                 elements.append(value.model_copy(update={"keyword": _UNPACKED_POSITIONAL}))
-        found = _Part(kind="array", elements=elements)
+        found = _Part(kind="array", elements=elements, symbol=_LITERAL_CLASSES[ast.List])
         found._typed = TypeRef(symbol=_LITERAL_CLASSES[ast.List])
         return found
 
@@ -2109,6 +2230,9 @@ class BodyReader:
         typed = _type_of(value, scope)
         if typed is None and value.kind == "field" and value.symbol is not None:
             read = str(value.symbol)
+            if read in self._lists:
+                # The module-level name was last written as a list in this body.
+                return True
             if owner_of(read) == type_symbol(Target(self._context.here)):
                 typed = self._module_answer(member_name(read))
         return typed == _LITERAL_CLASSES[ast.List]

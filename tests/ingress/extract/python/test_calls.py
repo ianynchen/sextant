@@ -406,6 +406,7 @@ def test_lists_are_arrays_and_a_local_function_reference_is_a_lambda(tmp_path: P
     assert register.arguments == [
         CallArgument(
             kind="array",
+            symbol="builtins/list#",
             elements=[
                 CallArgument(kind="string", value="a"),
                 CallArgument(kind="string", value="b"),
@@ -616,3 +617,213 @@ def test_an_element_store_and_delete_are_the_calls_the_language_makes(tmp_path: 
         ("__setitem__", [zero, CallArgument(kind="string", value="q")]),
         ("__delitem__", [zero]),
     ]
+
+
+def _writes(tree, field: str) -> list[CallArgument | None]:
+    return [w.value for w in _facts(tree, FieldWriteFact) if w.field == field]
+
+
+def _star(symbol: str) -> CallArgument:
+    return CallArgument(kind="field", symbol=symbol, keyword="*")
+
+
+def _list(*elements: CallArgument) -> CallArgument:
+    return CallArgument(kind="array", symbol="builtins/list#", elements=list(elements))
+
+
+def test_a_written_list_and_tuple_carry_their_class(tmp_path: Path):
+    tree = _scan(tmp_path, {"app/m.py": "A = ['a']\nB = ('b',)\n"})
+
+    a = CallArgument(kind="string", value="a")
+    assert _writes(tree, "app/m#A.") == [_list(a)]
+    assert _writes(tree, "app/m#B.") == [
+        CallArgument(
+            kind="array",
+            symbol="builtins/tuple#",
+            elements=[CallArgument(kind="string", value="b")],
+        )
+    ]
+
+
+def test_list_of_a_value_is_the_list_of_its_members(tmp_path: Path):
+    """`list(x)` makes a new list of `x`'s elements: `[*x]`. Only the builtin `list` is it:
+    a name `list` this code binds to something else is a call of that."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": "A = ['a']\nB = list(A)\n",
+            "app/n.py": "from app.lib import list\nA = ['a']\nB = list(A)\n",
+            "app/o.py": "def f(x, make):\n    list = make\n    return list(x)\n",
+        },
+    )
+
+    assert _writes(tree, "app/m#B.") == [_list(_star("app/m#A."))]
+    (other,) = _writes(tree, "app/n#B.")
+    assert other is not None and other.kind == "unresolved"
+    (returned,) = _returns(tree, f"app/o#f({DIS}).")
+    assert returned.value is not None and returned.value.kind == "unresolved"
+
+
+def test_append_and_extend_on_a_module_list_are_writes(tmp_path: Path):
+    """At module level, `x.append(v)` writes `x` as `[*x, v]` and `x.extend(vs)` as
+    `[*x, *vs]`, a written list's elements in place. The call returns nothing, and no
+    `append` or `extend` site is written for it."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.lib import OTHER\n"
+                "X = ['a']\n"
+                "X.append('b')\n"
+                "X.extend(['c', 'd'])\n"
+                "X.extend(OTHER)\n"
+                "R = X.append('e')\n"
+            )
+        },
+    )
+
+    def text(value: str) -> CallArgument:
+        return CallArgument(kind="string", value=value)
+
+    own = _star("app/m#X.")
+    (other,) = [w for w in _writes(tree, "app/m#X.")[3].elements or [] if w != own]
+    assert other.keyword == "*"
+    assert _writes(tree, "app/m#X.") == [
+        _list(text("a")),
+        _list(own, text("b")),
+        _list(own, text("c"), text("d")),
+        _list(own, other),
+        _list(own, text("e")),
+    ]
+    assert _writes(tree, "app/m#R.") == [CallArgument(kind="null")]
+    assert not [c for c in _facts(tree, CallSiteFact) if c.target.name in ("append", "extend")]
+
+
+def test_an_adder_that_is_not_on_a_list_of_this_module_body_stays_a_call(tmp_path: Path):
+    """Inside a function, on a name of another module, or on a name this body last wrote as
+    something that is not a list, `append` and `extend` are calls."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.other import Y\n"
+                "X = ['a']\n"
+                "def f():\n"
+                "    X.append('b')\n"
+                "Y.append('c')\n"
+                "Z = ['a']\n"
+                "Z = make()\n"
+                "Z.extend(['d'])\n"
+            )
+        },
+    )
+
+    assert len(_writes(tree, "app/m#X.")) == 1
+    assert len(_writes(tree, "app/m#Z.")) == 2
+    assert not _writes(tree, "app/other#Y.")
+    adders = [
+        c.target.name for c in _facts(tree, CallSiteFact) if c.target.name in ("append", "extend")
+    ]
+    assert adders == ["append", "append", "extend"]
+
+
+def test_a_sum_onto_a_list_name_is_a_list(tmp_path: Path):
+    """A name last written as a list in this body is a list, whatever its other writes."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.lib import OTHER, f, make\n"
+                "x = make()\n"
+                "x = ['a']\n"
+                "x += OTHER\n"
+                "b = make()\n"
+                "b = ['p']\n"
+                "urlpatterns = f(*b) + b\n"
+                "count = 0\n"
+                "count += 1\n"
+                "text = 'a'\n"
+                "text += 'x'\n"
+            )
+        },
+    )
+
+    summed = _writes(tree, "app/m#x.")[-1]
+    assert summed is not None and summed.kind == "array"
+    own, other = summed.elements or []
+    assert own == _star("app/m#x.")
+    assert other.keyword == "*"
+    patterns = _writes(tree, "app/m#urlpatterns.")[-1]
+    assert patterns is not None and patterns.kind == "array"
+    called, held = patterns.elements or []
+    assert called.kind == "unresolved" and called.keyword == "*"
+    assert held == _star("app/m#b.")
+    counted = _writes(tree, "app/m#count.")[-1]
+    assert counted is not None and counted.kind == "unresolved"
+    texted = _writes(tree, "app/m#text.")[-1]
+    assert texted is not None and texted.kind == "concat"
+
+
+def test_format_on_a_literal_is_its_template(tmp_path: Path):
+    """`"...".format(...)` on a string literal is the `concat` its fields make, filled by
+    position, by number or by name; `{{` and `}}` are braces."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "def a(rule):\n    return '/<org>{}'.format(rule)\n"
+                "def b(x, y):\n    return '{b}-{a}'.format(a=x, b=y)\n"
+                "def c(x, y):\n    return '{1}/{0}/{1}'.format(x, y)\n"
+                "def d():\n    return '{{x}}/{}'.format('k')\n"
+                "def e(x, y):\n    return '{}/{n}'.format(x, n=y)\n"
+            )
+        },
+    )
+
+    def p(at: int) -> CallArgument:
+        return CallArgument(kind="parameter", value=at)
+
+    expected = {
+        "a": ("/<org>{}", [p(0)]),
+        "b": ("{}-{}", [p(1), p(0)]),
+        "c": ("{}/{}/{}", [p(1), p(0), p(1)]),
+        "d": ("{x}/{}", [CallArgument(kind="string", value="k")]),
+        "e": ("{}/{}", [p(0), p(1)]),
+    }
+    for name, (template, operands) in expected.items():
+        method = f"app/m#{name}({DIS})."
+        (site,) = _calls(tree, method)
+        assert site.invoke_kind == "dynamic"
+        assert site.target.owner == "builtins/str#"
+        assert site.target.name == "format"
+        assert site.receiver is None
+        assert site.arguments == operands
+        (returned,) = _returns(tree, method)
+        assert returned.value == CallArgument(kind="concat", value=template, source=site.result)
+
+
+def test_format_the_reader_does_not_model_is_unread(tmp_path: Path):
+    """A conversion, a format spec, an attribute or index of a field, automatic and numbered
+    fields mixed, an unpacked argument, a field with no argument, or a receiver that is not a
+    literal: the value is unread, as any call on a string is."""
+    shapes = [
+        "'{0!r}'.format(x)",
+        "'{:>8}'.format(x)",
+        "'{a.b}'.format(a=x)",
+        "'{a[0]}'.format(a=x)",
+        "'{}{0}'.format(x)",
+        "'{}'.format(*x)",
+        "'{a}'.format(**x)",
+        "'{1}'.format(x)",
+        "'{n}'.format(x)",
+        "'{'.format(x)",
+        "x.format(1)",
+    ]
+    text = "".join(f"def f{at}(x):\n    return {shape}\n" for at, shape in enumerate(shapes))
+    tree = _scan(tmp_path, {"app/m.py": text})
+
+    for at, shape in enumerate(shapes):
+        method = f"app/m#f{at}({DIS})."
+        (returned,) = _returns(tree, method)
+        assert returned.value is not None and returned.value.kind == "unresolved", shape
+        assert not [s for s in _calls(tree, method) if s.invoke_kind == "dynamic"], shape
