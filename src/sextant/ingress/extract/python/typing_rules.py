@@ -288,7 +288,9 @@ def _known(symbol: str, *, nullable: bool = False) -> TypeRef:
     return TypeRef(symbol=symbol, nullable=nullable, nullable_resolution=_RESOLVED)
 
 
-def _read(node: ast.expr, scope: TypeScope, depth: int) -> TypeRef | None:
+def _read(
+    node: ast.expr, scope: TypeScope, depth: int, reading: frozenset[Target] = frozenset()
+) -> TypeRef | None:
     if depth == 0:
         return None
     if isinstance(node, ast.Constant):
@@ -299,25 +301,35 @@ def _read(node: ast.expr, scope: TypeScope, depth: int) -> TypeRef | None:
                 written = ast.parse(node.value.strip(), mode="eval").body
             except SyntaxError:
                 return None
-            return _read(written, scope, depth - 1)
+            return _read(written, scope, depth - 1, reading)
         return None
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
-        return _union([_read(part, scope, depth - 1) for part in _alternatives(node)])
+        return _union([_read(part, scope, depth - 1, reading) for part in _alternatives(node)])
     if isinstance(node, ast.Subscript):
-        return _subscript(node, scope, depth)
+        return _subscript(node, scope, depth, reading)
     if isinstance(node, ast.Name | ast.Attribute):
         targets = scope.lookup(node)
         if len(targets) == 1:
-            return _named(targets[0], scope, depth)
-        return _union([_named(target, scope, depth) for target in targets]) if targets else None
+            return _named(targets[0], scope, depth, reading)
+        return (
+            _union([_named(target, scope, depth, reading) for target in targets])
+            if targets
+            else None
+        )
     return None
 
 
-def _named(target: Target, scope: TypeScope, depth: int) -> TypeRef | None:
+def _named(
+    target: Target, scope: TypeScope, depth: int, reading: frozenset[Target]
+) -> TypeRef | None:
     if target.kind == "type_variable" and target.member is not None:
         return TypeRef(symbol=target.member.rpartition(".")[2])
     if target.kind == "type_alias" and target.alias_of is not None:
-        return _read(target.alias_of, scope, depth - 1)
+        if target in reading:
+            # An alias that names itself on the path (`X = list[X]`) is written as the code
+            # writes it, its name: reading it again repeats it without end.
+            return _known(type_symbol(target))
+        return _read(target.alias_of, scope, depth - 1, reading | {target})
     if target.kind in ("variable", "function", "new_class"):
         return None
     headers = scope.index.headers
@@ -355,26 +367,30 @@ def _named(target: Target, scope: TypeScope, depth: int) -> TypeRef | None:
     return _known(type_symbol(target))
 
 
-def _subscript(node: ast.Subscript, scope: TypeScope, depth: int) -> TypeRef | None:
+def _subscript(
+    node: ast.Subscript, scope: TypeScope, depth: int, reading: frozenset[Target]
+) -> TypeRef | None:
     targets = scope.lookup(node.value) if isinstance(node.value, ast.Name | ast.Attribute) else ()
     written = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
     if len(targets) == 1:
         target = targets[0]
         if is_typing(target, "Optional"):
-            return _union([_read(written[0], scope, depth - 1), _known(NONE, nullable=True)])
+            return _union(
+                [_read(written[0], scope, depth - 1, reading), _known(NONE, nullable=True)]
+            )
         if is_typing(target, "Union"):
-            return _union([_read(part, scope, depth - 1) for part in written])
+            return _union([_read(part, scope, depth - 1, reading) for part in written])
         if is_typing(target, "Annotated") or any(is_typing(target, w) for w in _WRAPPERS):
-            return _read(written[0], scope, depth - 1)
+            return _read(written[0], scope, depth - 1, reading)
         if target.module == BUILTINS and target.member == "type":
-            return _read(written[0], scope, depth - 1)
+            return _read(written[0], scope, depth - 1, reading)
         if is_typing(target, "Literal"):
             return _known(type_symbol(target))
-    base = _read(node.value, scope, depth - 1)
+    base = _read(node.value, scope, depth - 1, reading)
     if base is None:
         return None
     arguments = [
-        _read(part, scope, depth - 1)
+        _read(part, scope, depth - 1, reading)
         for part in written
         if not (isinstance(part, ast.Constant) and part.value is Ellipsis)
     ]

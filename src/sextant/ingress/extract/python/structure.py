@@ -687,7 +687,8 @@ def header_types(
         (target,) = binding.targets
         if target.kind != "type_alias" or target.module != module or target.member != name:
             continue
-        typed = type_ref(target.alias_of, types) if target.alias_of is not None else None
+        # By its name, so an alias that names itself is read through once (`typing_rules`).
+        typed = type_ref(ast.Name(id=name), types) if target.alias_of is not None else None
         if typed is not None:
             aliases[name] = typed
     return classes, returns, fields, aliases, factories

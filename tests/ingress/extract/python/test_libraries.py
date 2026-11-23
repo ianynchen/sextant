@@ -296,6 +296,62 @@ def test_an_alias_is_read_to_its_literals_so_a_binary_mode_opens_a_binary_file()
     assert unknown is not None and unknown.resolution == "narrowed"
 
 
+def _written(typed) -> object:
+    """A type as nested (symbol, arguments), bare."""
+    if not typed.arguments:
+        return bare_descriptor(typed.symbol)
+    return (bare_descriptor(typed.symbol), [_written(a) for a in typed.arguments])
+
+
+_RECURSIVE = {
+    "rec/__init__.py": (
+        "from typing import TypeAlias, Union\n"
+        "class Base: ...\n"
+        "Plain: TypeAlias = Union[Base, list[Plain], dict[Plain, Plain]]\n"
+        "A: TypeAlias = list[B]\n"
+        "B: TypeAlias = dict[str, A]\n"
+        "type Tree = list[Tree] | Base\n"
+        "class Value:\n"
+        "    def plain(self) -> Plain: ...\n"
+        "    def a(self) -> A: ...\n"
+        "    def tree(self) -> Tree: ...\n"
+    ),
+    "rec/py.typed": "",
+}
+
+
+def test_a_recursive_alias_is_written_as_its_name_where_it_names_itself(tmp_path: Path):
+    """`Plain = Union[Base, list[Plain], ...]` (cel-expr-python's `PlainValue`): read through
+    once, and where the alias names itself again it is written as the code writes it, its
+    name. So are aliases that name each other (`A = list[B]; B = dict[str, A]`) and the
+    `type` statement. The header stays the size of what the stub writes."""
+    rec = _install(tmp_path / "site", "rec", "1.0", _RECURSIVE)
+    _, tree = _scan(
+        tmp_path,
+        {"app/main.py": "from rec import Value\ndef use(v: Value):\n    return v.a()\n"},
+        (rec,),
+    )
+    (header,) = [
+        fact
+        for _, _, facts in tree
+        for fact in facts
+        if isinstance(fact, TypeHeaderFact) and bare_descriptor(fact.symbol) == "rec/Value#"
+    ]
+    returns = {method.name: _written(method.returns) for method in header.methods}
+
+    assert len(header.model_dump_json()) < 4000
+    assert returns["plain"] == (
+        "typing/Union#",
+        [
+            "rec/Base#",
+            ("builtins/list#", ["rec/Plain#"]),
+            ("builtins/dict#", ["rec/Plain#", "rec/Plain#"]),
+        ],
+    )
+    assert returns["a"] == ("builtins/list#", [("builtins/dict#", ["builtins/str#", "rec/A#"])])
+    assert returns["tree"] == ("typing/Union#", [("builtins/list#", ["rec/Tree#"]), "rec/Base#"])
+
+
 def test_a_parameter_type_the_rule_cannot_read_leaves_the_closed_list(tmp_path: Path):
     """The first overload's `Shape` is a protocol: whether `5` fits it is not decided
     here, so the first overload is not taken as certain."""
