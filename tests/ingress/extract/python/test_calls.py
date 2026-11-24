@@ -657,7 +657,7 @@ def test_list_of_a_value_is_the_list_of_its_members(tmp_path: Path):
         },
     )
 
-    assert _writes(tree, "app/m#B.") == [_list(_star("app/m#A."))]
+    assert _writes(tree, "app/m#B.") == [_list(CallArgument(kind="string", value="a"))]
     (other,) = _writes(tree, "app/n#B.")
     assert other is not None and other.kind == "unresolved"
     (returned,) = _returns(tree, f"app/o#f({DIS}).")
@@ -685,15 +685,15 @@ def test_append_and_extend_on_a_module_list_are_writes(tmp_path: Path):
     def text(value: str) -> CallArgument:
         return CallArgument(kind="string", value=value)
 
-    own = _star("app/m#X.")
-    (other,) = [w for w in _writes(tree, "app/m#X.")[3].elements or [] if w != own]
+    other = (_writes(tree, "app/m#X.")[3].elements or [])[-1]
     assert other.keyword == "*"
+    a, b, c, d = text("a"), text("b"), text("c"), text("d")
     assert _writes(tree, "app/m#X.") == [
-        _list(text("a")),
-        _list(own, text("b")),
-        _list(own, text("c"), text("d")),
-        _list(own, other),
-        _list(own, text("e")),
+        _list(a),
+        _list(a, b),
+        _list(a, b, c, d),
+        _list(a, b, c, d, other),
+        _list(a, b, c, d, other, text("e")),
     ]
     assert _writes(tree, "app/m#R.") == [CallArgument(kind="null")]
     assert not [c for c in _facts(tree, CallSiteFact) if c.target.name in ("append", "extend")]
@@ -764,13 +764,13 @@ def test_a_sum_onto_a_list_name_is_a_list(tmp_path: Path):
     summed = _writes(tree, "app/m#x.")[-1]
     assert summed is not None and summed.kind == "array"
     own, other = summed.elements or []
-    assert own == _star("app/m#x.")
+    assert own == CallArgument(kind="string", value="a")
     assert other.keyword == "*"
     patterns = _writes(tree, "app/m#urlpatterns.")[-1]
     assert patterns is not None and patterns.kind == "array"
     called, held = patterns.elements or []
     assert called.kind == "unresolved" and called.keyword == "*"
-    assert held == _star("app/m#b.")
+    assert held == CallArgument(kind="string", value="p")
     counted = _writes(tree, "app/m#count.")[-1]
     assert counted is not None and counted.kind == "unresolved"
     texted = _writes(tree, "app/m#text.")[-1]
@@ -840,3 +840,82 @@ def test_format_the_reader_does_not_model_is_unread(tmp_path: Path):
         (returned,) = _returns(tree, method)
         assert returned.value is not None and returned.value.kind == "unresolved", shape
         assert not [s for s in _calls(tree, method) if s.invoke_kind == "dynamic"], shape
+
+
+# -- held lists in order (plan 2026-11-23 Task 6) -----------------------------------------
+
+_A = CallArgument(kind="string", value="a")
+_B = CallArgument(kind="string", value="b")
+
+
+def test_a_copy_of_a_module_list_holds_the_elements_at_its_line(tmp_path: Path):
+    """`B = [*A]` is written with what `A` holds at that line: the `b` added to `A` later is
+    not in the copy (spec §4c M6). The later write of `A` holds both."""
+    tree = _scan(
+        tmp_path,
+        {"app/m.py": "A = ['a']\nB = [*A]\nA = A + ['b']\nC = [*A]\nA += ['c']\n"},
+    )
+
+    assert _writes(tree, "app/m#B.") == [_list(_A)]
+    assert _writes(tree, "app/m#C.") == [_list(_A, _B)]
+    assert _writes(tree, "app/m#A.")[1:] == [
+        _list(_A, _B),
+        _list(_A, _B, CallArgument(kind="string", value="c")),
+    ]
+
+
+def test_a_name_written_under_a_test_or_in_a_loop_keeps_its_read(tmp_path: Path):
+    """A name written under a test or in a loop has no one value from there on: a later
+    `*name` stays a read of the name, which the walk answers with every write of it."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "import os\n"
+                "A = ['a']\n"
+                "if os.environ:\n"
+                "    A += ['b']\n"
+                "B = [*A]\n"
+                "for _ in range(2):\n"
+                "    F = ['f']\n"
+                "G = [*F]\n"
+            )
+        },
+    )
+
+    assert _writes(tree, "app/m#B.") == [_list(_star("app/m#A."))]
+    assert _writes(tree, "app/m#G.") == [_list(_star("app/m#F."))]
+
+
+def test_another_list_added_under_a_test_is_one_unread_member(tmp_path: Path):
+    """`if X: A += other.B`: the members of `other.B` are served only where the test holds,
+    and no fact says so. They are one unread member (spec §9b), never read as members, even
+    where this body holds them in order. A registration-like call's result added under a
+    test stays a member."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "import os\n"
+                "from app import other\n"
+                "from app.lib import reg\n"
+                "L = ['l']\n"
+                "A = ['a']\n"
+                "if os.environ:\n"
+                "    A += other.B\n"
+                "    A += L\n"
+                "    A += [reg()]\n"
+            ),
+            "app/other.py": "B = ['x']\n",
+        },
+    )
+
+    first, under, local, call = _writes(tree, "app/m#A.")
+    unread = CallArgument(kind="unresolved", keyword="*")
+    assert first == _list(_A)
+    assert under == _list(_A, unread)
+    assert local == _list(_star("app/m#A."), unread)
+    assert call is not None and call.elements is not None
+    own, member = call.elements
+    assert own == _star("app/m#A.")
+    assert member.kind == "unresolved" and member.source is not None and member.keyword is None

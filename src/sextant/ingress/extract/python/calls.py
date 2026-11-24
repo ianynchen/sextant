@@ -377,7 +377,9 @@ class BodyReader:
     # One counter set per method symbol: a name defined twice is one method with two
     # bodies, whose call ordinals, value ids and returns continue across both.
     _bodies: dict[str, Body]
-    # The module-level names of this file the body last wrote as a list (`_in_order`).
+    # The module-level names of this file the body last wrote as a list, each with the
+    # elements it holds at the line being read, where the body has written it in order;
+    # None where it has no one value (`_in_order`).
     _lists: dict[str, list[CallArgument] | None]
     # The type of each module-level name, a class or a callable, by every write to it in
     # this file, as the previous reading of the file found them (`structure.file_facts`).
@@ -1197,14 +1199,32 @@ class BodyReader:
     def _in_order(self, written: str, value: CallArgument, scope: Scope) -> CallArgument:
         """A write to a module-level name, read in the order the body runs: the name is a
         list from here on where the value is a list (`_is_list`, `_added`), and is not where
-        it is anything else, a tuple too. The value is written as it is."""
+        it is anything else, a tuple too. A list is written with each `*name` in it replaced
+        by the elements that name holds AT THIS LINE, where the body has written it in order:
+        a copy taken here does not hold what is added to the name later (`a = list(b)`, then
+        `b += [...]`). A name written under a test or in a loop has no one value from there
+        on, and its `*name` stays a read of the name (every write of it). Another list added
+        under a test is one unread member: its members are served only where the test holds,
+        and no fact of theirs says so (design 2026-11-23 §9b)."""
         if scope.frame is not None or scope.class_path is not None:
             return value
-        if value.kind == "array" and value.symbol == _LITERAL_CLASSES[ast.List]:
-            self._lists[written] = None
-        else:
+        if value.kind != "array" or value.symbol != _LITERAL_CLASSES[ast.List]:
             self._lists.pop(written, None)
-        return value
+            return value
+        elements: list[CallArgument] = []
+        for element in value.elements or []:
+            other = element.keyword == _UNPACKED_POSITIONAL and element.kind == "field"
+            if other and scope.guards and element.symbol != written:
+                elements.append(_UNKNOWN.model_copy(update={"keyword": _UNPACKED_POSITIONAL}))
+                continue
+            held = self._lists.get(str(element.symbol)) if other else None
+            if held is not None:
+                elements.extend(held)
+            else:
+                elements.append(element)
+        straight = not scope.guards and not scope.flow.in_loop()
+        self._lists[written] = elements if straight else None
+        return value.model_copy(update={"elements": elements})
 
     def _added(self, node: ast.Call, scope: Scope) -> bool:
         """`x.append(v)` and `x.extend(vs)` on a module-level name of this file that holds a
