@@ -6821,6 +6821,18 @@ delegates to; and a `single_call` row's handler is the REGISTERING method, not t
 lambda it passes, so a Javalin flat `app.get("/x", ctx -> ctx.queryParam("q"))` writes
 nothing — the `ApiBuilder` rows carry the lambda body as `handler` and read fully.
 
+**`kind: method`** (approved 2026-11-23, design 2026-11-23-python-django-redesign §2 item 13,
+§4d): a read of the request's METHOD, `{owner, method, arity: 0, kind: method}`, nothing else
+(no `name_arg`, no `requirement`, no `via`; anything else is refused naming the file).
+Django: `{ owner: django.http.request.HttpRequest, method: method, arity: 0, kind: method }`
+(`request.method`). It names no parameter and writes no `endpoint_metadata` row. The route
+engine reads it (`request_requirements.method_reads`) to doubt an any-method row: where the
+handler, or a wrapper the handler's path ran through, makes such a read in its body or in
+module code it hands the request to, the row is `partial`, method not read. The scanner
+writes an attribute read on a parameter whose class is not known as an ownerless call of
+that name, so the entry matches it. Only `django.yml` declares one, so no other catalog's
+rows are doubted (`tests/application/test_request_requirements.py::test_only_django_declares_a_method_read`).
+
 **Mechanism 4 — `request_params` naming a call**, on a `root_kind: entry_point` `fluent`
 catalog (design 2026-11-06-reading-decorators §3d, approved), read off the decorators a
 command's handler walk passed (§2's `fluent`), by the engine that derives the command:

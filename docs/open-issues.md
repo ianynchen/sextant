@@ -501,6 +501,57 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-497 | SEXTANT-490 | an untyped value handed to a call before its use answers `escapes`, though an immutable value (a string) cannot be changed by the call — reproduced on main 2026-11-22, cause found: the window rule, not the second route (open, a yield rule to rule on) |
 | OI-498 | SEXTANT-491 | the fluent reader tuple cannot carry the inexact flag, so an inexact template publishes resolved on the fluent path (fixed on `fix/inexact-template-fluent`) |
 | OI-499 | SEXTANT-492 | the fluent concat arm carries one address, so a second path's address is dropped or the first one is lost (open) |
+| OI-501 | SEXTANT-494 | fan-out alias chain (low) |
+| OI-502 | SEXTANT-TBD | a registration in a loop or a comprehension is not read, and no question names its line (plan 2026-11-23-python-django-redesign, medium) |
+| OI-503 | SEXTANT-TBD | the keywords of a `**kwargs` parameter are not read (zulip `rest_path`) (plan 2026-11-23-python-django-redesign, medium) |
+| OI-504 | SEXTANT-TBD | a lookup by key in a dict is not read (zulip `rest_dispatch`) (plan 2026-11-23-python-django-redesign, medium) |
+| OI-505 | SEXTANT-TBD | `as_view(http_method_names=...)` and an overridden `as_view` are not read (plan 2026-11-23-python-django-redesign, low) |
+| OI-506 | SEXTANT-TBD | Django's first-match order for two patterns with one path is not modelled (plan 2026-11-23-python-django-redesign, low) |
+| OI-507 | SEXTANT-TBD | Django admin routes are not read (plan 2026-11-23-python-django-redesign, medium) |
+| OI-508 | SEXTANT-TBD | a route list added under a test is published behind the `<prefix>` hole, without its condition (plan 2026-11-23-python-django-redesign, medium) |
+| OI-509 | SEXTANT-TBD | a root setting written twice, or under a test, gives two roots with no condition (plan 2026-11-23-python-django-redesign, high) |
+| OI-510 | SEXTANT-TBD | a held list handed to module code that changes it is read as written (plan 2026-11-23-python-django-redesign, low) |
+| OI-511 | SEXTANT-TBD | a JVM static array changed by an element store is read as known (plan 2026-11-23-python-django-redesign, low) |
+| OI-512 | SEXTANT-TBD | a read-only list method written as a call makes a held list `escapes` (plan 2026-11-23-python-django-redesign, low) |
+| OI-513 | SEXTANT-TBD | `x[f()] += v` writes the call `f()` twice (plan 2026-11-23-python-django-redesign, low) |
+| OI-514 | SEXTANT-TBD | a value stored by `d[k] = obj` counts as handed on (plan 2026-11-23-python-django-redesign, low) |
+| OI-515 | SEXTANT-TBD | some changes to a held list record no change (plan 2026-11-23-python-django-redesign, low) |
+| OI-516 | SEXTANT-TBD | a list changed through a second name stays known by its first name (plan 2026-11-23-python-django-redesign, low) |
+| OI-517 | SEXTANT-TBD | an alias write adds its members to the PATH_CAP exemption (plan 2026-11-23-python-django-redesign, low) |
+| OI-518 | SEXTANT-TBD | the scanner's list-name table does not follow `global X` or a function body's order (plan 2026-11-23-python-django-redesign, low) |
+| OI-519 | SEXTANT-TBD | `{{` and `}}` in a template become plain braces (plan 2026-11-23-python-django-redesign, low) |
+| OI-520 | SEXTANT-TBD | `list(S)` of a string name is written as a copy of a list (plan 2026-11-23-python-django-redesign, low) |
+| OI-521 | SEXTANT-TBD | a library override of a stated method does not stop the ancestor match (plan 2026-11-23-python-django-redesign, low) |
+| OI-522 | SEXTANT-TBD | an unbound call through a subclass answers the class object (plan 2026-11-23-python-django-redesign, low) |
+| OI-523 | SEXTANT-TBD | `as_view` on an instance, through `super()` or through `cls` is not read (plan 2026-11-23-python-django-redesign, low) |
+| OI-524 | SEXTANT-TBD | the value-model match on ancestors is for Python modules only (plan 2026-11-23-python-django-redesign, low) |
+| OI-525 | SEXTANT-TBD | a client subclass of httpx: `base_url` and the peer are not read (plan 2026-11-23-python-django-redesign, low) |
+| OI-526 | SEXTANT-TBD | `include(x)` of a tuple held in a name reads the string as a member (plan 2026-11-23-python-django-redesign, low) |
+| OI-527 | SEXTANT-TBD | two holes with the same `<prefix>` text merge (plan 2026-11-23-python-django-redesign, low) |
+| OI-528 | SEXTANT-TBD | the scanner writes a cumulative list per write (plan 2026-11-23-python-django-redesign, low) |
+| OI-529 | SEXTANT-TBD | `urlpatterns = [a]` then `urlpatterns = [b]` publishes `a` (plan 2026-11-23-python-django-redesign, low) |
+| OI-530 | SEXTANT-TBD | a module that includes itself recurses (plan 2026-11-23-python-django-redesign, low) |
+| OI-531 | SEXTANT-TBD | `include(module_object)` of a module not in the scan is a route at `partial` (plan 2026-11-23-python-django-redesign, low) |
+| OI-532 | SEXTANT-TBD | a decorator usable bare or with arguments gives `narrowed` rows naming the view and the wrapper (plan 2026-11-23-python-django-redesign, medium) |
+| OI-533 | SEXTANT-TBD | a wrapper that calls `helper(view_func)(request)` is not looked through (plan 2026-11-23-python-django-redesign, medium) |
+| OI-534 | SEXTANT-TBD | a wrapper's own calls are not in the call graph (plan 2026-11-23-python-django-redesign, medium) |
+| OI-535 | SEXTANT-TBD | a function defined in a loop captures the iteration's value (plan 2026-11-23-python-django-redesign, low) |
+| OI-536 | SEXTANT-TBD | a capture of a deeper function's own name is recorded (plan 2026-11-23-python-django-redesign, low) |
+| OI-537 | SEXTANT-TBD | one helper entered twice on one path names no handler (plan 2026-11-23-python-django-redesign, low) |
+| OI-538 | SEXTANT-TBD | some reads of the request method are missed, so an any-method row stays `resolved` (plan 2026-11-23-python-django-redesign, high) |
+| OI-539 | SEXTANT-TBD | a view object names no handler (plan 2026-11-23-python-django-redesign, low) |
+| OI-540 | SEXTANT-TBD | a doubted any-method row gets no question (plan 2026-11-23-python-django-redesign, medium) |
+| OI-541 | SEXTANT-TBD | a class below an unread base names no handler (plan 2026-11-23-python-django-redesign, low) |
+| OI-542 | SEXTANT-TBD | a library attribute read in an `if` test is written twice (plan 2026-11-23-python-django-redesign, low) |
+| OI-543 | SEXTANT-TBD | a library body's outbound call is dropped with the library's rows (plan 2026-11-23-python-django-redesign, low) |
+| OI-544 | SEXTANT-TBD | DRF `APIView` rows under `path()` name no handler (plan 2026-11-23-python-django-redesign, low) |
+| OI-545 | SEXTANT-TBD | a nested library class's bodies are not read (plan 2026-11-23-python-django-redesign, low) |
+| OI-546 | SEXTANT-TBD | `APIRouter(...)` in a project that subclasses the router gives `narrowed` call edges (plan 2026-11-23-python-django-redesign, low) |
+| OI-547 | SEXTANT-TBD | reading library bodies grows the export and the traces; their cost is not measured (plan 2026-11-23-python-django-redesign, low) |
+| OI-548 | SEXTANT-TBD | a mount whose router argument is not read is published as a route with no handler (plan 2026-11-23-python-django-redesign, low) |
+| OI-549 | SEXTANT-TBD | zulip's six `re_path` routes to `SCIMView.as_view(implemented=False)` publish no row (plan 2026-11-23-python-django-redesign, medium) |
+| OI-550 | SEXTANT-TBD | zulip's language-prefixed (`en-us/`) route copies have no row (plan 2026-11-23-python-django-redesign, medium) |
+| OI-551 | SEXTANT-TBD | an attribute read on an untyped parameter makes a string value a hole (plan 2026-11-23-python-django-redesign, low) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |

@@ -1,9 +1,11 @@
 # Django inbound REST, redesign (plan 6, second design)
 
-**Status:** PROVED IN THE ENGINE (2026-11-23), product code not started. Every row of §4
-was built with the real mechanism on a throwaway copy (`tmp/django-on-main`, never merged;
-the change is kept as `.worktrees/django-task1-proper.patch`) and measured on the four real
-trees: §9. The rulings of §2 items 12–14 came from that work.
+**Status:** BUILT on the branch `cov/python-django` (plan tasks 0–10, 2026-11-23 to
+2026-11-24); not pushed, no pull request yet. First proved on a throwaway copy
+(`tmp/django-on-main`, never merged; the change is kept as
+`.worktrees/django-task1-proper.patch`). The product branch is measured in §9 (Task 10,
+2026-11-24). The rulings of §2 items 12–14 came from the proof; items 9 and 11 and §4c M6 and
+M7 were corrected by rulings made during the tasks (marked "ruled during the build").
 **Replaces:** how route lists, mounts, roots, class views and method decorators are read in
 `2026-11-22-python-django-core-design.md`. The probe's 70 measured rules
 (`scripts/probes/django_rules.md`) and the approved `re_path` reads stay.
@@ -35,8 +37,13 @@ The first build gave 91 correct rows of 3,112 on the real trees. Two causes:
    FastAPI rule). No question kind for it.
 8. `@require_POST` and its three siblings are stated with the Spring words
    `annotations: [{fqn, method}]`.
-9. A library class's `dispatch` is read with the existing servlet rule; the scanner writes
-   the existing call facts for the library methods a catalog names. No new fact.
+9. A library class's `dispatch` is read with the existing servlet rule. **Ruled during the
+   build (user, 2026-11-23, option B):** the scanner reads the method bodies of each library
+   class a module class extends (the library classes in a module class's lookup order) and
+   writes the existing method and call facts for them. The scanner knows no catalog word: it
+   does not pick methods by a catalog. Rows that come from those bodies are not the module's
+   rows; the existing borrowed-rows rule drops them (keyed by the caller, then the handler).
+   No new fact. Fact schema 22.
 10. `url_is: expression` is approved for `re_path`.
 11. Not supported: a registration in a loop or comprehension; the keywords of a `**kwargs`
     parameter; a lookup by key in a dict. The row keeps its reason and a question names the
@@ -91,7 +98,7 @@ Not measured yet: methods and handlers on the four projects (this run compared p
 | 8 | `include("app.urls")`, `ROOT_URLCONF` | none in any language (survey E) | — | `router_named: { variable: urlpatterns }`, approved 2026-11-22, stays | module name arrives as a value |
 | 9 | `X.as_view()` | a call that returns its receiver | value-model `returns_receiver: true` | one entry; a stated call is matched on the owner the engine already binds, and its ancestors | bookwyrm 173 of 173 name their class |
 | 10 | Class view methods | servlet `doGet` | `dispatch`, `bypassed_by` (`jakarta-servlet.yml`) | as on the branch | fixture |
-| 11 | A library `dispatch` override | servlet base class calling `super.service` | the same rule, read from a `special` call fact | scanner writes the existing call facts for catalog-named methods of library classes a project class extends; `calls_super` removed | fixture: correct with bodies read, wrong `resolved` row without; a full scan is 10x slower, so the read is targeted |
+| 11 | A library `dispatch` override | servlet base class calling `super.service` | the same rule, read from a `special` call fact | scanner writes the existing method and call facts for every method body of each library class a project class extends (ruled during the build, option B: no catalog word in the scanner); rows from those bodies are dropped by the borrowed-rows rule; `calls_super` removed | fixture: correct with bodies read, wrong `resolved` row without. Cost measured in Task 8: whole run +12% on bookwyrm, +5% on weblate (resolve +23%, +13%) |
 | 12 | `@require_POST` | `@PostMapping`, `@RequestMapping(method=…)` | `annotations: [{fqn, method}]`, `method_from`; the engine's `decorators_passed` (click) | the words in `django.yml`; the fluent engine applies them to the decorators between a registration and its function; `narrowed_by` removed | mechanism on the fixture; 199 views to measure |
 | 13 | A view with no method stated | Vert.x route with no method | `verbless_serves: any` | as on the branch | fixture |
 | 14 | Library and project decorators on a view | — | `result_calls` / `result_returns`; walk into module decorators; `handler_pass_through` | as on the branch (22 entries, each citing the probe) | zulip: 290 questions on its own decorators, cause not known (§6) |
@@ -171,8 +178,8 @@ annotations:
 | M3 a stated call matched on ancestors | the language's own lookup is the truth | A value-model entry on a class applies to a call on a subclass, by the lookup order the engine's dispatch already has; a definition of that method in code we have, nearer in the order, wins over the entry. General for every value model; the pins and one test per changed match guard it. The spike's "any call named `as_view`" is not the rule. |
 | M4 a DRF `APIView` under `path()` | a wrong `resolved` is a lie; do not hide a route | `APIView.dispatch` does not call its parent and picks the method with `getattr`, which is not read. The row is published with its path, method not read, at `partial`, with a question. Never one `resolved` any-method row naming the library method. Plan 7 makes it exact. |
 | M5 a condition on the hand-over of a list | deployment decides (2026-10-23) | A member reached through a write under a test carries that test as its existence condition, "not evaluated": `if settings.DEVELOPMENT: urls += dev_urls.urls`. Row 16 is changed: this is work, read from the guard of the write. |
-| M6 a copy taken part-way is over-read | truth | A read of a held list inside the body that writes it sees only the writes before it, by the order of the body. A read from another body sees every write. Where the order is not proven (a write in a loop or under a branch after the read), the member is `partial`. Zulip: `urls = list(i18n_urls)` at line 776, more added at 908 and 1022. |
-| M7 when a held list is NOT exactly known | ruling 4, and the existing reasons | Known: the written members, `+`, `+=`, `append`, `extend`, a copy. Not known, and answered with the existing reason, never `resolved`: any other call on the list (`remove`, `pop`, `clear`, `insert`, `sort`, an index or slice store, `del`), or the list handed to code that is not read (`escapes`). The rule is in the shared value walk, so each case has a test that a wrong `resolved` row is not published, for Python and for Java. |
+| M6 a copy taken part-way is over-read | truth | A read of a held list inside the body that writes it sees only the writes before it, by the order of the body. A read from another body sees every write. Zulip: `urls = list(i18n_urls)` at line 776, more added at 908 and 1022. **Ruled during the build (Task 3):** the order is the SCANNER's (`BodyReader._in_order`): a module-level list is written with the elements it holds at that line, so a copy holds only the earlier members. A name written under a test or in a loop has no one value from there on: a later `*name` stays a read of the name, which the walk answers with every write of it. Test: `tests/ingress/extract/python/test_calls.py::test_a_copy_of_a_module_list_holds_the_elements_at_its_line`. |
+| M7 when a held list is NOT exactly known | ruling 4, and the existing reasons | Known: the written members, `+`, `+=`, `append`, `extend`, a copy. Not known, and answered `escapes`, never `resolved`: any other call ON the list (`remove`, `pop`, `clear`, `insert`, `sort`, `reverse`). **Ruled during the build (Task 3):** (1) a list passed as an argument stays read: the reading call is itself such a hand-over, and the walk tracks no hand-over of a field, as in Java (`tests/application/test_values.py::test_a_held_list_handed_to_a_call_is_still_read`; a list handed to module code that changes it is a logged limit); (2) an element store or delete is the call the language makes, `x[i] = v` is `__setitem__`, `del x[i]` is `__delitem__`, so it is a call on the list (`tests/ingress/extract/python/test_calls.py::test_an_element_store_and_delete_are_the_calls_the_language_makes`); (3) a call on the list through a second name (`VERBS = BASE; VERBS.remove(v)`) makes the list not known by that name; by the first name it is a logged limit (`test_values.py::test_a_list_changed_through_a_second_name_is_not_known_by_that_name`). The Java half (an element store on a static array) is not built: a logged limit. |
 | M8 §3 does not measure §4 | measure before design; say what was not verified | Stated in the status line. The plan's first task builds §4 in the engine and repeats the measurement there. The oracle has the allowed methods of each route (it calls each view), so methods are compared too. |
 | M9 `append` / `extend` had no mechanism | ruling 4 | The scanner records `x.append(v)` on a name as the write `[*x, v]` and `x.extend(vs)` as `[*x, *vs]`, as it records `x += [...]` today. |
 | M10 22 named library decorators | a library is code we have; one structural rule | The common decorator returns an inner function that calls the wrapped one (`@wraps(f) def inner(...): ... f(...)`). Today the walk reads only a decorator that returns its function, which is why it stops on zulip's own decorators 290 times. The rule: a returned function that calls the decorator's parameter stands for that parameter — the meaning of the existing `result_calls`, read from the code. It applies to project decorators and, through the targeted read of row 11, to library decorators. A value-model entry stays only where the body cannot be read. Earlier measurement: handlers readable 747 → 1,937; 1,212 of 1,222 agree with Django. |
@@ -349,12 +356,24 @@ New concepts proposed by this design: none.
 Real engine, real trees, no step after the engine. Compared with Django's resolver: method,
 path and handler.
 
-| Project | Rows | `resolved` and equal to Django | `resolved` and wrong |
-|---|---|---|---|
-| healthchecks | 356 | 82 | 0 |
-| bookwyrm | 827 | 791 | 0 |
-| weblate | 493 | 210 | 0 |
-| zulip | 729 | 38 | 0 |
+The table above is the throwaway copy's (Task 1). **The product branch, measured in Task 10
+(2026-11-24, HEAD 18c58a47)**, with the same compare (method, path and handler against
+Django's resolver):
+
+| Project | Inbound rows | `resolved` and equal to Django | `resolved` and wrong | Cold run (median of 3: scan / resolve / whole) |
+|---|---|---|---|---|
+| healthchecks | 356 | 82 | 0 | 3.1 / 2.2 / 6.3 s |
+| bookwyrm | 827 | 791 | 0 | 4.5 / 3.8 / 9.5 s |
+| weblate | 493 | 236 | 2 (true, see below) | 19.2 / 19.9 / 40.1 s |
+| zulip | 581 | 38 | 0 | 16.7 / 19.9 / 38.3 s |
+
+The two weblate rows the compare calls wrong are `POST` of the webauthn registration views
+(`weblate/accounts/urls.py:45-54`). The library `BaseWebAuthnView.dispatch`
+(`django_otp_webauthn/views.py:72`) calls `initial` and then `super().dispatch`, which gives
+the method table: `POST` only. Where `initial` raises an `OTPWebAuthnApiError` (no login), it
+answers every method with a JSON error. The oracle's request has no login, so it saw that
+error for every method. The rows are the endpoint's methods; the error depends on the user,
+which is a run-time fact. Checked against the library source on 2026-11-24.
 
 The first build gave 91 correct rows. A first spike with shortcuts gave 1,175 correct and 4
 wrong; the user rejected it ("spike for proper solution, not shortcuts").
@@ -380,6 +399,11 @@ wrong; the user rejected it ("spike for proper solution, not shortcuts").
 - **A decorator made in one method and applied in another** (`d = user_passes_test(t)` in a
   helper, `d(view)` in its caller): the receiver's `made_by` call is looked up in the value
   models (`_applied_elsewhere`). Zulip: 39 handler questions fall to 5.
+- **A library class's bodies (§2 item 9, option B).** The scanner reads every method body of
+  each library class in a module class's lookup order (`libraries._class_bodies`), as module
+  methods (fact schema 22). The servlet rule then reads `super().dispatch(...)` in a library
+  `dispatch` as the `special` call it is. Rows from those bodies are dropped by the
+  borrowed-rows rule. `calls_super` is gone.
 - **`include`, `as_view`.** `returns: { arg: 0, element: 0 }` and `returns_receiver: true`. A
   stated call is matched on the receiver's class and its ancestors by `Dispatch`'s order; a
   nearer body in read code wins (`_stated_on_ancestor`, Python modules only for now).
@@ -393,8 +417,11 @@ wrong; the user rejected it ("spike for proper solution, not shortcuts").
   write; members do not count against `PATH_CAP` (256). The scanner writes a module-level
   list with the elements it holds at that line (`_in_order`), so a copy does not see later
   additions; `append` and `extend` are the writes `[*x, v]`, `[*x, *vs]`. Not exactly known,
-  answered `escapes`: a call on the list that is not such a write (`x.remove(v)`,
-  `x[0] = v`, `del x[0]`), and the list handed whole to a call no value model states.
+  answered `escapes`: a call ON the list that is not such a write (`x.remove(v)`; `x[0] = v`
+  and `del x[0]`, which the scanner writes as the calls `__setitem__` and `__delitem__`).
+  Ruled during the build (Task 3): a list handed whole to a call stays read (the reading
+  call is such a hand-over; Java tracks no hand-over of a field either), and a call on the
+  list through a second name makes it not known by that name only (§4c M7).
 - **Any method (§4d).** `fluent._any_method_doubted`: the handler and each wrapper the path
   ran through; a `kind: method` read on the request, in the body or in module code the
   request is handed to; the request handed to a value that is called; a handler whose body
@@ -405,16 +432,53 @@ wrong; the user rejected it ("spike for proper solution, not shortcuts").
 
 ### 9b. Known limits, each with its count
 
+Counted on the product branch on 2026-11-24 (Task 10), from the compare and from each
+workspace's `open_questions`. Each limit is an open issue (`docs/open-issues.md`).
+
+- **What is not read, by cause, per project** (Django (method, route) pairs: healthchecks 304,
+  bookwyrm 536, weblate 913, zulip 1,366):
+  - **Django admin** (non-goal): Django patterns with no row: healthchecks 75, bookwyrm 93,
+    weblate 252, zulip 0 (OI-507).
+  - **DRF** (plan 7): weblate 253 router patterns with no row; 10 `APIView` routes under
+    `path()` are rows naming no handler, `partial` (OI-544).
+  - **A library's URL module adds nothing** (ruling 7): bookwyrm 19 (`oauth2_provider.urls`),
+    zulip 10 (`django_scim.urls` 6, `social_django.urls` 4).
+  - **A registration in a loop or a comprehension** (ruling 11): zulip 22 rows with no path
+    (3 `RedirectView` loops, 7 methods each; 1 webhook comprehension) stand for 149 Django
+    patterns (96 webhooks at `zproject/urls.py:865`, 53 redirects). No question names the
+    line, which ruling 11 asks for (OI-502).
+  - **`**kwargs` keywords and a lookup by key** (ruling 11): zulip `rest_path`, 295 routes and
+    829 Django pairs; Sextant publishes one any-method row per route, `partial` (259 rows
+    compared, 717 pairs covered by them) (OI-503, OI-504).
+  - **Any method doubted** (§4d): rows `partial` because the view or a wrapper reads
+    `request.method` or hands the request on: healthchecks 91 (36 behind `cors(...)`),
+    bookwyrm 2, weblate 52, zulip 287 (259 of them `rest_dispatch`). No question is filed
+    for them (OI-540).
+  - **Behind the `<prefix>` hole**: healthchecks 177 (every route a second time: the prefix
+    comes from `settings.SITE_ROOT`), weblate 4 (`weblate/addons/api.py`, a list no root
+    reaches), zulip 182 (`i18n_patterns(*x)`; lists added under a test; the
+    `EXTRA_INSTALLED_APPS` loop at `zproject/urls.py:904`). 202 of zulip's 477 patterns with no
+    exact row have a row behind the hole (prefix `""` or `en-us/`).
+  - **Handler not named, `handler_pass_through` question**: healthchecks 6, bookwyrm 7,
+    weblate 58, zulip 1. **Handler not named, no question**: bookwyrm 8 (view objects,
+    OI-539), weblate 15 (10 of them DRF), zulip 1.
+  - **`narrowed`**: zulip 22 rows name the view and `zulip_login_required`'s lambda (34 rows
+    in all, holes included; OI-532).
+  - **Not found by Task 10**: zulip's 66 language-prefixed (`en-us/`) copies have no row
+    (OI-550); zulip's 6 `re_path` routes to `SCIMView.as_view(implemented=False)`
+    (`zproject/urls.py:936-951`) have no row (OI-549).
 - **One helper entered twice on one path** (the walk's existing bound, M-1): the same
-  decorator factory twice on one view gives handler not read. healthchecks: 5 routes.
+  decorator factory twice on one view gives handler not read. healthchecks: 5 routes (OI-537).
 - **A list added under a test** (`if settings.DEVELOPMENT: urls += dev_urls.urls`): the
   members are behind the hole at `partial`. A row with the condition (M5) needs the guard of
-  a field write in the facts; not built. Zulip: about 30 routes.
-- **A library `dispatch` body is not read** (row 11's targeted read is not built): such a
-  row is `partial`. Weblate DRF: 2 rows; zulip `LoginView`: 1.
+  a field write in the facts; not built (OI-508). A MOUNT written under a test gives its
+  routes the condition (controller fix b1c75286).
+- **A root setting written twice, or under a test**: two roots, both `resolved`, with no
+  condition (zulip `zproject.tornado_urls` under `if RUNNING_INSIDE_TORNADO`) (OI-509).
+- **A library `dispatch` body** is now read (§2 item 9, Task 8).
 - **A mount whose router argument is not read** is published as a route with no handler, at
-  `partial`: nothing says it is a mount.
-- **The ancestor match is for Python modules only.**
+  `partial`: nothing says it is a mount (OI-548).
+- **The ancestor match is for Python modules only** (OI-524).
 
 ### 9c. Tests on the throwaway copy
 
@@ -425,3 +489,4 @@ that copy's fixture build; 7 pins of facts, documents and the vocabulary.
 The 13 field pins (`scripts/field_check.py`) are all `ok` with the change: no row lost in the
 five Java and eight Python projects. The run took 1,115 s where 650 s is usual; Task 10
 measures the cost again on the product branch.
+ **Product branch, 2026-11-24:** 16 field pins (the 13, plus bookwyrm, weblate and zulip, pinned with `build: none` because the script cannot rebuild their environments) are all `ok`; a cold run of all 16 took 985 s.

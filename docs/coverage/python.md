@@ -1,6 +1,6 @@
 # Coverage — Python
 
-**The Python reader's foundation ships, FastAPI and Flask inbound are read, and so are `requests` and `httpx` outbound with the configuration that fills their addresses.** The foundation was built
+**The Python reader's foundation ships, FastAPI and Flask inbound are read, Django inbound is read on the branch `cov/python-django` (not merged yet), and so are `requests` and `httpx` outbound with the configuration that fills their addresses.** The foundation was built
 by OI-208 plan 1 (`docs/superpowers/plans/2026-11-06-python-reader-foundation.md`, spec
 `docs/superpowers/specs/2026-11-06-python-reader-design.md`) and proved on Sextant's own code
 (`tests/e2e/test_sextant_reads_itself.py`). FastAPI inbound was built by plan 2
@@ -8,11 +8,11 @@ by OI-208 plan 1 (`docs/superpowers/plans/2026-11-06-python-reader-foundation.md
 route table (`tests/e2e/test_orders_fastapi.py`). Outbound HTTP clients, environment and settings
 configuration and the field pins were built by plan 3
 (`docs/superpowers/plans/2026-11-17-python-outbound-config-pins.md`). Flask inbound was built by plan 5
-(`docs/superpowers/plans/2026-11-19-python-flask-inbound.md`) and proved against Flask's own `url_map` (`tests/e2e/test_orders_flask.py`). Django is next (ruled 2026-10-26). Detection shapes are defined in [COVERAGE.md](../COVERAGE.md) §1. The typing
+(`docs/superpowers/plans/2026-11-19-python-flask-inbound.md`) and proved against Flask's own `url_map` (`tests/e2e/test_orders_flask.py`). Django inbound was built by plan 2026-11-23-python-django-redesign (`docs/superpowers/plans/2026-11-23-python-django-redesign.md`, spec `docs/superpowers/specs/2026-11-23-python-django-redesign.md`) and proved against Django's own resolver (`tests/e2e/test_orders_django.py`). Detection shapes are defined in [COVERAGE.md](../COVERAGE.md) §1. The typing
 problem this language creates is analysed in [COVERAGE.md](../COVERAGE.md) §10.
 
 > **Scope.** [COVERAGE.md](../COVERAGE.md) §5 is canonical for tier and status,
-> organised by protocol. The FastAPI and Flask REST-inbound rows and the requests/httpx REST-out row ship; every
+> organised by protocol. The FastAPI and Flask REST-inbound rows and the requests/httpx REST-out row ship, and the Django row ships limited; every
 > other Python cell there is still a plan. This file holds what does not fit a protocol row: what the reader reads, what it
 > does not, the toolchain verdict, the payload story, and the structural oddities of the
 > language.
@@ -384,8 +384,8 @@ is `docs/research/2026-11-06-python-type-tools.md`.
 
 ---
 
-**The sections below are the inventory the framework plans start from.** Only FastAPI, Flask and
-Pydantic are read today (above); the other rows say what each framework and library writes, and
+**The sections below are the inventory the framework plans start from.** Only FastAPI, Flask,
+Django and Pydantic are read today (above); the other rows say what each framework and library writes, and
 how hard it is to read.
 
 ## Inbound HTTP
@@ -396,7 +396,7 @@ how hard it is to read.
 | **Litestar** | `@get("/items/{id:int}")`, typed handlers | `annotation` | Yes, same reason |
 | Flask | `@app.route("/items", methods=["GET"])`, or `@app.get(...)` | `annotation` | **No.** Body reached via `request.json[...]`, `request.form[...]` — untyped `dict` access. **Built** (`flask.yml`, Flask 3.1.3 and 2.1.3). Request reads (`request.args`, `request.headers`, ...) are read; body reads are not (OI-484) |
 | Flask blueprints | `bp = Blueprint(...)`; `app.register_blueprint(bp, url_prefix="/api")` | `annotation` + `registration_call` | Prefix is joined at registration, in another module. **Built**, including a blueprint built in one module and imported by another |
-| **Django** | `urlpatterns = [path("items/<int:id>/", views.item)]` in `urls.py`, nested with `include()` | `registration_call` | **The path and the view are in different files**, joined by a list of call results, often nested several levels. No annotation exists on the view at all. |
+| **Django** | `urlpatterns = [path("items/<int:id>/", views.item)]` in `urls.py`, nested with `include()` | `registration_call` | **The path and the view are in different files**, joined by a list of call results, often nested several levels. No annotation exists on the view at all. **Built, limited** (`django.yml`; "Django (plan 2026-11-23)" below). |
 | **Django REST Framework** | `router.register(r"users", UserViewSet)` | `runtime_dynamic` | **One line produces six or more endpoints** by convention (`list`, `create`, `retrieve`, `update`, `partial_update`, `destroy`), with paths and verbs generated at runtime from the ViewSet's class hierarchy and `@action` decorators. Nothing in the source states them. |
 | aiohttp | `app.router.add_get("/items", handler)` | `registration_call` | No |
 | Starlette | `Route("/items", endpoint, methods=["GET"])` in a list | `registration_call` | No |
@@ -433,6 +433,61 @@ Stated boundaries (each an open issue in Plane): MethodView and `as_view` class 
 (OI-483); request body reads (OI-484); wrapper decorators that hide the handler (OI-485);
 prefix spellings `url_prefix=None` and a positional `url_prefix` (OI-486); `add_url_rule` on an
 untyped parameter (OI-487). Open: OI-479 to OI-490.
+
+### Django (plan 2026-11-23)
+
+Measured on 2026-11-24 at the end of the plan (branch `cov/python-django`, HEAD 18c58a47).
+Django's own resolver is walked by `tests/e2e/django_oracle.py` in each project's own
+environment; the walk also calls each view to find the methods it allows. Sextant never runs
+the code it reads. The Django rules are quoted with source lines in
+`scripts/probes/django_rules.md`.
+
+**What is read.** `path` and `re_path` routes (a `re_path` is a pattern, `url_is:
+expression`), in lists held in module names, copied (`list(x)`), summed and added to (`+=`,
+`append`, `extend`). `include(...)` is a mount: its prefix is joined, from the module that a
+written `ROOT_URLCONF` names (`root_setting`) down through each mount. `include("a.urls")`
+names a module, whose `urlpatterns` is read (`router_named`); a library's URL module adds
+nothing. `X.as_view()` is the class `X`; a class view answers by its method table (`get`,
+`post`, ...), and a `dispatch` that does not call its parent replaces the table with one row
+for every method. The bodies of library classes a project class extends are read for this
+(`LoginRequiredMixin.dispatch`). `@require_GET`, `@require_POST`, `@require_safe` and
+`@require_http_methods([...])` give the methods (the Spring `annotations` words). A wrapper
+that hands the request on stands for the function it wraps. A function view with none of
+these is one row for every method, `resolved` only when nothing doubts it (below).
+
+| | healthchecks | bookwyrm | weblate | zulip |
+|---|---|---|---|---|
+| Django (method, route) pairs | 304 | 536 | 913 | 1,366 |
+| Sextant inbound rows | 356 | 827 | 493 | 581 |
+| `resolved` and equal to Django (method, path, handler) | 82 | 791 | 236 | 38 |
+| `resolved` and wrong | 0 | 0 | 2, judged true (below) | 0 |
+| Cold analysis, scan / resolve / whole (median of 3) | 3.1 / 2.2 / 6.3 s | 4.5 / 3.8 / 9.5 s | 19.2 / 19.9 / 40.1 s | 16.7 / 19.9 / 38.3 s |
+
+- **weblate's 2 rows** are `POST` of the webauthn registration views. The library
+  `BaseWebAuthnView.dispatch` calls `super().dispatch` on one path (the method table, `POST`)
+  and answers every method with a JSON error on another (no login). The oracle's request had
+  no login.
+- **Rows under a deployment condition** ("not evaluated") are not counted as wrong: weblate
+  47 (`weblate.legal`, `weblate.billing`, git-export redirects), zulip 8.
+
+**What is not read, and why** (each an open issue in Plane):
+
+| Cause | healthchecks | bookwyrm | weblate | zulip |
+|---|---|---|---|---|
+| Django admin (not a goal of this plan; OI-507): patterns with no row | 75 | 93 | 252 | 0 |
+| DRF (plan 7): router patterns with no row; `APIView` rows naming no handler | | | 253; 10 | |
+| A library's URL module (adds nothing, by rule) | | 19 | | 10 |
+| A row for every method, doubted because the view or a wrapper reads `request.method` or hands the request on: `partial`, no question yet (OI-540) | 91 | 2 | 52 | 287 |
+| `**kwargs` keywords and a lookup by key (`rest_path`, ruled not supported; OI-503, OI-504): routes | | | | 295 (829 pairs) |
+| A registration in a loop or comprehension (ruled not supported; OI-502): rows with no path, and the patterns they stand for | | | | 22; 149 |
+| Behind the `<prefix>` hole, `partial` with a `mount_prefix` question | 177 (every route again: the prefix comes from `settings.SITE_ROOT`) | | 4 | 182 (`i18n_patterns`, lists added under a test, the `EXTRA_INSTALLED_APPS` loop) |
+| Handler not named: with a `handler_pass_through` question; with none | 6; 0 | 7; 8 (view objects, OI-539) | 58; 15 | 1; 1 |
+| `narrowed`: the view and a wrapper (OI-532) | | | | 22 |
+| No row, cause not found in this plan | | | | 66 `en-us/` copies (OI-550); 6 `SCIMView` routes (OI-549) |
+
+Not built in this plan, stated: request reads (which query, header or body values a view
+reads); HOW a view body limits its methods; Django admin; DRF. Open issues: OI-502 to
+OI-551 (`docs/open-issues.md`).
 
 ## Outbound HTTP
 

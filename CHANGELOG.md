@@ -105,6 +105,23 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **Django inbound routes are read** (plan `2026-11-23-python-django-redesign`). `path` and
+  `re_path` routes, `include` mounts and their prefixes, `as_view` class views and the
+  `require_GET` / `require_POST` / `require_safe` / `require_http_methods` decorators give
+  rows with their method, path and handler. The mechanisms are the ones other frameworks
+  already use: the value walk reads a route list held in a name, copied or added to
+  (`list(x)`, `+=`, `append`, `extend`); the mount join starts at the module `ROOT_URLCONF`
+  names; a class view uses the servlet dispatch rule; a decorator uses the Spring
+  `annotations` words. New catalog words, each approved 2026-11-23: `router_named`,
+  `root_setting`, `element`, and the `request_reads` kind `method`. A view that reads
+  `request.method` gives one row, method not read, `partial`. The Python scanner now records
+  the values a nested function captures, an element store as `__setitem__`, `.format` on a
+  literal as a template, and the method bodies of each library class a module class extends
+  (fact schema 22). Against Django's resolver on four real projects, the `resolved` rows that
+  are correct are healthchecks 82, bookwyrm 791, weblate 236, zulip 38, with no wrong
+  `resolved` row (two weblate rows the compare flags are true: the library answers an error
+  to a request with no login). Not read: Django admin, DRF, request reads, a registration in a loop. Field
+  pins added for bookwyrm, weblate and zulip. Open issues OI-502 to OI-551.
 - **Two tests enforce GUIDELINES §8.9** (approved 2026-11-23): a new catalog key, a new word
   value of a catalog key, a new member of a closed set in `domain/closed_sets.py`, or a new
   open-question kind fails the suite until `tests/architecture/vocabulary.yml` records who

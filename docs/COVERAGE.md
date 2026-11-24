@@ -53,7 +53,7 @@ and each protocol's own per-framework table opens its §5 section.
 | **Go** | none | 2A 1B 1C | 1A | — | 1A | 1B | 1C |
 | **TypeScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
 | **JavaScript** | none | 3A 2B | 1A | — | 2A | 2A 1B | 1B 1C |
-| **Python** | ✅ `ast` | ◐ (2A 1B 1C) | ✅ | 1B | 2A | 2A 1B | 2B |
+| **Python** | ✅ `ast` | ◐ (1 limited, 2A 1C) | ✅ | 1B | 2A | 2A 1B | 2B |
 | **Rust** | none | 1A 2B 1C | 1B | — | 1A | 1A 1B | 1B |
 | **Swift** | none | 1A | 1A 1B | — | 1A | 1B | — |
 | **C# / .NET** | none | · | · | · | · | · | · |
@@ -788,6 +788,17 @@ cell; it fills the address of a REST-out row, and the §2b grid scores protocols
 numbers and the open issues (OI-418 to OI-474).
 
 **Python aiohttp and urllib3 outbound calls were built 2026-11-18** (`catalogs/aiohttp.yml`, `urllib3.yml`), so the Python REST-out cell is `✅`. The corpus has no real aiohttp or urllib3 call site, so the evidence is the wire probe and the fixture, not a real service. The same branch types a module variable set from a typed call (`settings = get_settings()`), which moved mealie's `endpoint_existence` from 8 `test` / 0 `property` to 5 `test` / 3 `property`.
+
+**Django inbound was built 2026-11-23 to 2026-11-24** (plan
+`docs/superpowers/plans/2026-11-23-python-django-redesign.md`, on the branch `cov/python-django`,
+not merged yet). Routes, prefixes, class views, method decorators and wrappers are read with
+mechanisms Sextant already had (the value walk, mounts, the servlet dispatch rule, the Spring
+`annotations` words); the new words are `router_named`, `root_setting`, `element` and the
+`request_reads` kind `method`. Against Django's own resolver on four real projects, the rows
+that are `resolved` and correct are healthchecks 82, bookwyrm 791, weblate 236 and zulip 38,
+and no `resolved` row is wrong (two weblate rows the compare flags are true: the library
+answers an error to a request with no login). The §5.1 Django row is `◐`: admin, request reads
+and the method tests in a view body are not read. DRF is its own row and is not read.
 
 Per-language essays — toolchain detail, payload handling, structural oddities:
 [Go](coverage/go.md) · [Rust](coverage/rust.md) · [Python](coverage/python.md) ·
@@ -2634,7 +2645,7 @@ arrive there.
 | Python | Litestar | Litestar `@get("/items/{id:int}")` | same | `annotation` | A |
 | Python | Flask | Flask `@app.route(p, methods=["GET"])`, blueprints | prefix joined at `register_blueprint` | `annotation` + `registration_call` | ✅ shipped (`flask.yml`; Flask 3.1.3 and 2.1.3, werkzeug 3.1.9 and 2.2.3; OI-208 plan 5, OI-478). Pinned against Flask's own `url_map` on `fixtures/orders-flask` (16 (method, path) rows) by `tests/e2e/test_orders_flask.py`; request reads are read. Field pins: redash 09740ea reads all 34 core method pairs (37 inbound rows, 24 with an `(unresolved)` path from `org_scoped_rule(...)`), CTFd a6a81dd reads 95 of 98 core pairs. **Stated boundaries:** MethodView / `as_view` (OI-479); Flask-RESTful (OI-480, 71 of redash's 100 rules) and Flask-RESTX (OI-481, 92 of CTFd's 174); `subdomain=` (OI-482); `strict_slashes` (OI-483); body reads (OI-484); wrapper decorators that hide the handler (OI-485); prefix spellings (OI-486); `add_url_rule` on an untyped parameter (OI-487). The rest are in [the Python essay](coverage/python.md) |
 | Python | aiohttp, Starlette | aiohttp `app.router.add_get(p, h)`, Starlette `Route(p, ep, methods=[…])` | — | `registration_call` | A |
-| Python | Django | **Django** `urlpatterns = [path("items/<int:id>/", views.item)]` | **path and view in different files**, nested via `include()` | `registration_call` | B |
+| Python | Django | **Django** `urlpatterns = [path("items/<int:id>/", views.item)]` | **path and view in different files**, nested via `include()` | `registration_call` | ◐ shipped, limited (`django.yml`, `value-models/django.yml`; Django 5.2; plan 2026-11-23-python-django-redesign, built on `cov/python-django`, not merged). Read with the existing mechanisms: `path` and `re_path` routes in lists held in names, copied (`list(x)`) and added to (`+=`, `append`, `extend`); `include` mounts and their prefixes, joined from the module `ROOT_URLCONF` names (`root_setting`); `X.as_view()` class views by their method table, a library `dispatch` read through; `require_GET`, `require_POST`, `require_safe`, `require_http_methods` (`annotations`); project and library wrappers that hand the request on. A list no root reaches is published behind the `<prefix>` hole at `partial`. Pinned on `fixtures/orders-django` by `tests/e2e/test_orders_django.py`. Measured against Django's resolver on four real projects (2026-11-24): `resolved` and correct healthchecks 82, bookwyrm 791, weblate 236, zulip 38 rows; no wrong `resolved` row except two weblate rows judged true (a library `dispatch` that answers an error without a login). **Not built, stated:** DRF (the next row); Django admin; request reads; HOW a view body limits its methods (a view that reads `request.method` is one row, method not read, `partial`); a registration in a loop, the keywords of a `**kwargs` parameter and a lookup by key (ruled not supported). The counts and the open issues (OI-502 to OI-551) are in [the Python essay](coverage/python.md) |
 | Python | Django REST Framework | **Django REST Framework** `router.register(r"users", UserViewSet)` | **one line produces six+ endpoints**, generated at runtime | `runtime_dynamic` | **C — read `drf-spectacular` OpenAPI instead** |
 | Rust | actix-web, Rocket | `actix-web` / Rocket `#[get("/users/{id}")]` | attribute readable by `syn`, no types needed | `annotation` | A |
 | Rust | Rocket | Rocket `.mount("/api", routes![…])` | **prefix joined at the mount, elsewhere** | `registration_call` | B |

@@ -70,8 +70,10 @@ a task's text below differs from spec §9a, spec §9a is right. The differences:
   `_binding_writes`); it is not "one read per member by the caller".
 - **Task 3.** The order of writes is the SCANNER's (`BodyReader._in_order`: a module-level
   list is written with the elements it holds at that line), not `Flow` in the walk. "Not
-  exactly known" is `ValueIndex.changed_lists`, answered `escapes`: a call on the list that
-  is not a write, and the list handed whole to a call no value model states. A member
+  exactly known" is `ValueIndex.changed_lists`, answered `escapes`: a call ON the list that
+  is not a write (an element store or delete is the call `__setitem__` / `__delitem__`).
+  Ruled during Task 3: a list handed whole to a call stays read, and the order of writes
+  (`_in_order`) was built in Task 6 (spec §4c M6, M7). A member
   written under a test is NOT built (spec §9b); another list added under a test is one
   unread member. Drop the `inexact` and `..._carries_that_test` tests; add
   `test_another_list_added_under_a_test_is_one_unread_member`.
