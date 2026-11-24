@@ -17,7 +17,7 @@ approval (§8.9):
 - `baseline` — the words on `main` on 2026-11-23, generated once by `_document()` and never
   regenerated, because regenerating is how a word would slip in;
 - `approvals` — one entry per word added since: `word`, `where`, `approved_by`, `approved_on`
-  (a date after 2026-11-23) and `reference`;
+  (2026-11-23, the day of the rule, or later) and `reference`;
 - `exemptions` — what is NOT a Sextant word, each with its reason: catalog mappings whose keys
   are data (`data_keyed_mappings`), catalog keys whose values are the framework's or the
   user's names (`open_value_keys`), and sets in a pinned module whose strings are not words
@@ -287,8 +287,8 @@ def problems(live: dict[str, set[str]], document: dict[str, Any]) -> list[str]:
         entry = entry if isinstance(entry, dict) else {}
         missing = [one for one in _APPROVAL_FIELDS if not entry.get(one)]
         on = entry.get("approved_on")
-        if "approved_on" not in missing and not (isinstance(on, datetime.date) and on > RULE_DATE):
-            missing.append("approved_on (a date after 2026-11-23, YYYY-MM-DD)")
+        if "approved_on" not in missing and not (isinstance(on, datetime.date) and on >= RULE_DATE):
+            missing.append("approved_on (a date on or after 2026-11-23, YYYY-MM-DD)")
         if missing:
             found.append(
                 f"approval entry {index} ({entry.get('word')!r}) lacks {', '.join(missing)}: "
@@ -537,10 +537,15 @@ def test_an_approval_missing_a_field_fails_and_approves_nothing():
     assert found[1].startswith("new word 'mount_kind' in catalog key")
 
 
-def test_an_approval_date_must_be_a_date_after_the_rule():
-    for when in ("yesterday", datetime.date(2026, 11, 23), datetime.date(2026, 1, 1)):
+def test_an_approval_date_must_be_a_date_on_or_after_the_rule():
+    """The day of the rule counts: the user approved words on that day too."""
+    same_day = _approval("c", _SET, approved_on=datetime.date(2026, 11, 23))
+    assert not any(
+        "approved_on" in found for found in problems(_FAKE, _baseline_of(_FAKE, [same_day]))
+    )
+    for when in ("yesterday", datetime.date(2026, 11, 22), datetime.date(2026, 1, 1)):
         (only,) = problems(_FAKE, _baseline_of(_FAKE, [_approval("c", _SET, approved_on=when)]))
-        assert "lacks approved_on (a date after 2026-11-23, YYYY-MM-DD)" in only
+        assert "lacks approved_on (a date on or after 2026-11-23, YYYY-MM-DD)" in only
 
 
 def test_an_approval_of_a_baseline_word_fails():

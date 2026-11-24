@@ -8,7 +8,7 @@
 #   - word: <the word>
 #     where: catalog key | catalog value: <key> | <path>::<name> (as a failure message spells it)
 #     approved_by: <who approved it>
-#     approved_on: YYYY-MM-DD (after 2026-11-23)
+#     approved_on: YYYY-MM-DD (2026-11-23 or later)
 #     reference: <the ruling, design section or issue>
 # A new catalog key that takes string values is also put in exactly one of
 # baseline.closed_value_keys, baseline.mixed_value_keys or exemptions.open_value_keys. A word
