@@ -784,6 +784,10 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
     # `app/` with its target and callee, and each receiver the value walk bound. The library
     # class bodies' rows (OI-409) are facts about the installed libraries, not the fixture.
     "call_edges": [
+        # `p.limit` and `p.offset` on the parameter `p: Paging`, whose class declares neither in
+        # its body: each read is a call named as the attribute (fact schema 21).
+        ("app/orders#paged", 0, "virtual", "app/deps/Paging#limit", None, "resolved"),
+        ("app/orders#paged", 1, "virtual", "app/deps/Paging#offset", None, "resolved"),
         ("app/admin#<clinit>", 0, "virtual", "fastapi/routing/APIRouter#<init>", None, "resolved"),
         ("app/admin#<clinit>", 1, "virtual", "fastapi/routing/APIRouter#get", None, "resolved"),
         ("app/admin#<clinit>", 2, "virtual", None, None, "unresolved"),
@@ -1195,6 +1199,8 @@ PINNED: dict[str, list[tuple[object, ...]]] = {
         ("app/support#<clinit>", 2, "virtual", None, None, "unresolved"),
     ],
     "bound_receivers": [
+        ("app/orders#paged", 0, "app/deps/Paging#", "resolved", None),
+        ("app/orders#paged", 1, "app/deps/Paging#", "resolved", None),
         ("app/admin#<clinit>", 2, None, "unresolved", "external"),
         ("app/admin#<clinit>", 4, None, "unresolved", "external"),
         ("app/clients#rates", 3, "httpx/_client/Client#", "resolved", None),

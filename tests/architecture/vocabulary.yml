@@ -1164,6 +1164,11 @@ approvals:
   approved_by: user
   approved_on: 2026-11-23
   reference: docs/superpowers/specs/2026-11-23-python-django-redesign.md §2 item 10
+- word: method
+  where: 'catalog value: kind'
+  approved_by: user
+  approved_on: 2026-11-23
+  reference: docs/superpowers/specs/2026-11-23-python-django-redesign.md §2 item 13 (a `request_reads` entry that reads the request's method)
 exemptions:
   data_keyed_mappings:
     client_base.default_ports: 'D02 client model: `{scheme: port}`'

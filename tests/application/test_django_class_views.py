@@ -391,11 +391,12 @@ def test_a_project_mixin_that_returns_early_on_one_branch_delegates(tmp_path: Pa
     assert rows == [("GET", None, "/x/", _handler("get", "app/urls/Items"), "resolved")]
 
 
-def test_a_library_base_whose_dispatch_does_not_hand_back_serves_every_method(
+def test_a_library_base_whose_dispatch_does_not_hand_back_serves_every_method_partial(
     tmp_path: Path, libraries
 ):
     """A library class whose `dispatch` answers itself (a stub distribution beside Django):
-    the any-method row, the library's `dispatch` the handler."""
+    the any-method row, the library's `dispatch` the handler. Its body was not read, so what
+    it does with the method is not known: `partial` (design 2026-11-23 §4c M4, §4d)."""
     site = tmp_path / "stub-site"
     (site / "stubviews").mkdir(parents=True)
     (site / "stubviews" / "__init__.py").write_text(
@@ -428,7 +429,7 @@ def test_a_library_base_whose_dispatch_does_not_hand_back_serves_every_method(
             "any",
             "/x/",
             "sextant-python pypi stubviews 1 stubviews/Answering#dispatch(sig_",
-            "resolved",
+            "partial",
         )
     ]
 

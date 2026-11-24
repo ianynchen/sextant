@@ -1469,6 +1469,20 @@ above:
     (polar: 484 such reads). A module variable written by two constructions, by a function
     call, or reassigned is untyped and its reads stay `unresolved`; so does one set from a call
     with a declared return type (`settings = get_settings()` under `@lru_cache`, OI-444).
+  - **An attribute read on a value of a known LIBRARY class** (fact schema 18). `request.args`
+    with `request: Request` in the library's own file is a call site named for the attribute,
+    on the class that DEFINES it, with no arguments, giving the type that file writes, as a
+    getter call is on the JVM.
+  - **An attribute read on a parameter whose class is not known** (fact schema 21, approved
+    2026-11-23, spec 2026-11-23-python-django-redesign §2 item 13). `request.method` with
+    `request` a parameter is the same call site, named for the attribute, on that parameter
+    (`receiver_parameter`), with no owner and no arguments; the resolver names the owner where
+    it can, as for a method call on such a value. Where the parameter's written class neither
+    declares the attribute in its body (the field read above) nor its file types it (the
+    library read above), the same ownerless call is written, and the resolver binds it to
+    that class (`p.limit` with `p: Paging` binds to `Paging#limit`). The value read stays `unresolved`. A read
+    on `self`, on a local or on a module name writes no such call; a dotted read of a guard's
+    test, typed again for `guards.fields`, writes none either.
 - A module-level name that branches bind to several imports (`try: import ujson as json` /
   `except ImportError: import json`) is a static field with one `field_write` per import, so
   a call on it names the field as `receiver_field`. As an argument it is a `merge`.

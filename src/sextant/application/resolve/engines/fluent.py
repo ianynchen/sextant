@@ -42,6 +42,7 @@ from sextant.application.resolve.request_requirements import (
     ParameterReading,
     ParameterRules,
     body_field_requirement,
+    method_reads,
     parameter_rules,
     read_dependant,
     read_parameters,
@@ -516,6 +517,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         conditions = conditions_of(workspace)
         if not conditions.guards:
             conditions = None
+    # §4d of design 2026-11-23: read once per run, for the any-method rows it may doubt.
+    request_flow = (
+        _request_flow(walk_index, catalog, workspace)
+        if catalog.direction == "inbound" and verbless_serves is not None
+        else None
+    )
     context: _DeriveContext | None = None
     for end in ends:
         # Ends arrive caller by caller, so the caller's own facts are built once per
@@ -567,6 +574,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 model_fields=models,
                 conditions=conditions,
                 registrations=registrations,
+                request_flow=request_flow,
             )
         # A mount's chain (spec §3c) is not a route: what Vert.x refuses of it is recorded,
         # and it derives a row only where it was given a handler as well.
@@ -847,6 +855,112 @@ def _run_entry_points(
         workspace.derive("endpoint_metadata_insert", rows=metadata)
 
 
+@dataclass(frozen=True)
+class _RequestFlow:
+    """Per method and parameter: whether the method is read off it there, the module methods
+    and parameters it is handed to, and whether it is handed to a value that is called and is
+    no parameter of the method (`View.as_view()(request)`: another handler)."""
+
+    reads: frozenset[tuple[str, int]]
+    hands: Mapping[tuple[str, int], tuple[tuple[str, int], ...]]
+    calls: frozenset[tuple[str, int]]
+
+
+def _request_flow(
+    index: ValueIndex, catalog: Catalog, workspace: Workspace
+) -> "_RequestFlow | None":
+    """`_RequestFlow` for one run; None where the catalog declares no `kind: method` read. A
+    read of the method is a call the catalog's `request_reads` names with `kind: method`, made
+    on a parameter with no argument: on the type the entry names or a type below it, or on a
+    value whose class the facts do not name. A parameter is handed on along the index's own
+    binding of arguments to parameters (`ValueIndex.callers`), turned round; a call OF a value
+    the method was given (`f(request)` in a wrapper) is not followed: what it runs is the
+    path's own."""
+    named = method_reads(catalog)
+    if not named:
+        return None
+    dispatch = workspace.once(dispatch_of)
+    names = {name for _, name in named}
+    reads: set[tuple[str, int]] = set()
+    calls: set[tuple[str, int]] = set()
+    hands: dict[tuple[str, int], list[tuple[str, int]]] = {}
+    for (method, _), site in index.sites.items():
+        on = site.get("receiver_parameter")
+        owner = site.get("owner")
+        if (
+            on is not None
+            and site["name"] in names
+            and not site["arguments"]
+            and (
+                owner is None
+                or _below(
+                    str(owner), [type_ for type_, name in named if name == site["name"]], dispatch
+                )
+            )
+        ):
+            reads.add((method, int(str(on))))
+        given = (site["arguments"] or [None])[0]
+        if (
+            site["name"] == "__call__"
+            and on is None
+            and given is not None
+            and given.get("kind") == "parameter"
+            and given.get("value") is not None
+        ):
+            calls.add((method, int(str(given["value"]))))
+    for (callee, position), callers in index.callers.items():
+        for caller, ordinal, slot in callers:
+            made = index.sites.get((caller, ordinal)) or {}
+            if made.get("name") == "__call__" and made.get("receiver_parameter") is not None:
+                continue
+            arguments = made.get("arguments") or []
+            entry = arguments[slot] if 0 <= slot < len(arguments) else None
+            if (
+                entry is not None
+                and entry.get("kind") == "parameter"
+                and entry.get("value") is not None
+            ):
+                hands.setdefault((caller, int(str(entry["value"]))), []).append((callee, position))
+    return _RequestFlow(
+        frozenset(reads), {key: tuple(value) for key, value in hands.items()}, frozenset(calls)
+    )
+
+
+def _any_method_doubted(handler: Any, judged: "_Judged | None", context: "_DeriveContext") -> bool:
+    """Whether the code a request to this any-method row runs through gives a reason to doubt
+    that every method is answered (design 2026-11-23 §4d): the row names no handler; the
+    handler's body was not read (a library's); or the handler, or a module wrapper the walk ran
+    through to reach it, reads the method off the request it received, in its own body or in
+    module code it hands that request to, as far as the module's code goes, or hands the
+    request to another handler. A request handed to a library function is no reason."""
+    flow, index = context.request_flow, context.values
+    if flow is None or index is None:
+        return False
+    if judged is None or judged.symbol is None:
+        return True
+    if context.method_symbols.get(bare_descriptor(judged.symbol)) != judged.symbol:
+        return True
+    argument = handler[0] if isinstance(handler, tuple) and handler else handler
+    at = argument.get(_CAPTURED_AT) if isinstance(argument, dict) else None
+    through: list[str] = []
+    site = index.sites.get((str(at[0]), int(str(at[1])))) if at is not None else None
+    if site is not None and at is not None:
+        for _, path in producer_paths(index, site, int(at[2]), frozenset(), functions=True):
+            through.extend(path.ran_through())
+    # The request is each body's parameter 0.
+    pending = [(body, 0) for body in dict.fromkeys([judged.symbol, *through])]
+    seen: set[tuple[str, int]] = set()
+    while pending:
+        at_body = pending.pop()
+        if at_body in seen:
+            continue
+        seen.add(at_body)
+        if at_body in flow.reads or at_body in flow.calls:
+            return True
+        pending.extend(flow.hands.get(at_body, ()))
+    return False
+
+
 def _entry_handlers(
     index: ValueIndex,
     site: Mapping[str, Any],
@@ -1085,6 +1199,10 @@ class _DeriveContext:
     # `endpoint_existence` once the rows are. None where no call of the module is under a test.
     conditions: Conditions | None = None
     registrations: list[tuple[dict[str, Any], Existence]] | None = None
+    # Where a request flows in the module's code, read once per run (`_request_flow`), for an
+    # inbound catalog declaring a `kind: method` read; None for every other catalog, whose
+    # any-method rows nothing doubts.
+    request_flow: "_RequestFlow | None" = None
 
 
 def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
@@ -1249,6 +1367,17 @@ def _derive_captured(
     )
     if narrowed is not None:
         verbs, verbless = list(narrowed), False
+    # A row serving any method says the endpoint answers every method (design 2026-11-23 §4d):
+    # where the code a request to it runs through gives a reason to doubt that, the row is no
+    # surer than `partial`.
+    if (
+        verbless
+        and direction == "inbound"
+        and context.request_flow is not None
+        and not end.inexact
+        and _any_method_doubted(captures.get("handler"), answering, context)
+    ):
+        end = replace(end, inexact=True)
     # A verbless route of a framework that serves it for every verb says so on the row
     # (`method_kind`, Vert.x spec §3a), never by the NULL method alone, which reads as "nobody
     # read the verb".

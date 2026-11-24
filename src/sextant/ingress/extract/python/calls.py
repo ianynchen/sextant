@@ -415,6 +415,8 @@ class BodyReader:
     # The type each class of this file declares for an attribute in its body (`client:
     # HttpClient`, PEP 526), by bare field symbol (`app/m/C#client.`).
     _own_fields: dict[str, TypeRef]
+    # Set while a guard's dotted reads are typed again (`_fields`): reading them writes no call.
+    _rereading: bool = False
 
     def _body(self, caller: str) -> Body:
         return self._bodies.setdefault(caller, Body(caller))
@@ -716,12 +718,16 @@ class BodyReader:
         same text would be as a call argument (`_value`, R23; ruling R27). A read it cannot type
         is left out. A dotted name holds no call, so reading it writes none."""
         found: dict[str, str] = {}
-        for text in reads:
-            node = ast.parse(text, mode="eval").body
-            if isinstance(node, ast.Attribute):
-                value = self._value(node, scope)
-                if value.kind == "field" and value.symbol:
-                    found[text] = value.symbol
+        self._rereading = True
+        try:
+            for text in reads:
+                node = ast.parse(text, mode="eval").body
+                if isinstance(node, ast.Attribute):
+                    value = self._value(node, scope)
+                    if value.kind == "field" and value.symbol:
+                        found[text] = value.symbol
+        finally:
+            self._rereading = False
         return found
 
     def _guard_after(self, node: ast.stmt, scope: Scope) -> CallGuard | None:
@@ -1649,6 +1655,23 @@ class BodyReader:
             scope.body.returned[made.source] = typed
         return made
 
+    def _parameter_read(self, node: ast.Attribute, scope: Scope) -> None:
+        """`request.method` where `request` is a parameter whose class is not known (approved
+        2026-11-23, spec 2026-11-23-python-django-redesign §2 item 13): the read
+        `_attribute_read` writes for a known class, a call named as the attribute on the value,
+        with no owner and no arguments; the resolver names the owner where it can, as it does
+        for a method call on such a value. A parameter whose written class neither declares the
+        attribute (R23's field) nor has its type written (`_attribute_read`) gets the same
+        call, which the resolver binds to that class. The value read stays one this
+        scanner does not follow."""
+        if self._rereading or not isinstance(node.value, ast.Name) or scope.frame is None:
+            return
+        if self._targets(node.value, scope) is not None:
+            return
+        held = self._local(node.value.id, scope.frame)
+        if held is not None and held.kind == "parameter":
+            self._invoke(self._on_value(held, node.attr, scope), [], scope)
+
     def _library_member(self, owner: Target, name: str) -> Target | None:
         """`module.name` for a library module, as the library defines it: a re-export is
         its defining module's (`requests.get` is `requests.api.get`)."""
@@ -2111,6 +2134,7 @@ class BodyReader:
             held = self._typed(node.value, base, scope) or _hinted(base, scope)
             defining = None if held is None else self._defining_field(held, node.attr)
             if defining is None:
+                self._parameter_read(node, scope)
                 return _UNKNOWN
             # A read of the field the class declares (R23), as a JVM GETFIELD names it; its
             # declared type stays the scanner's, for the owner of a call on it.

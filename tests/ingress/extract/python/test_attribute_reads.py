@@ -410,3 +410,55 @@ def test_a_same_file_variable_from_a_plain_typed_def_holds_the_class(tmp_path: P
     )
     url = _argument(tree, "app/run#f", "send")
     assert (url.kind, url.symbol) == ("field", "app/run/Base#url.")
+
+
+def test_an_attribute_read_on_a_parameter_of_unknown_class_is_an_ownerless_call(tmp_path: Path):
+    """`request.method` with `request` a parameter whose class is not known (approved
+    2026-11-23, spec 2026-11-23-python-django-redesign §2 item 13): the call fact a known
+    class's attribute read writes, named as the attribute, on that parameter, with no owner
+    and no arguments. The value read stays `unresolved`; a read on a local or on `self` writes
+    no such call."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/run.py": "def send(x): ...\n"
+            "class C:\n"
+            "    def m(self, request):\n"
+            "        send(self.thing)\n"
+            "        return request.method == 'POST'\n"
+            "def f(request):\n"
+            "    local = make()\n"
+            "    send(local.method)\n"
+            "    send(request.method)\n"
+        },
+    )
+
+    reads = [
+        (site.target.owner, site.receiver_parameter, site.arguments)
+        for site in _sites(tree, "app/run#f(")
+        if site.target.name == "method"
+    ]
+    assert reads == [(None, 0, [])]
+    assert [
+        (site.target.owner, site.receiver_parameter)
+        for site in _sites(tree, "app/run/C#m(")
+        if site.target.name in ("method", "thing")
+    ] == [(None, 0)]
+    (_, sent) = [site for site in _sites(tree, "app/run#f(") if site.target.name == "send"]
+    assert sent.arguments[0].kind == "unresolved"
+
+
+def test_a_read_of_a_field_the_class_declares_writes_no_call(tmp_path: Path):
+    """R23's field read stays the read of the field: no call is written beside it. An
+    attribute the parameter's class does not declare in its body is the ownerless call, which
+    the resolver binds to that class."""
+    tree = _scan(
+        tmp_path,
+        {"app/run.py": _CLASSES + "def f(s: Service):\n    send(s.name)\n    send(s.extra)\n"},
+    )
+
+    assert [
+        (site.target.owner, site.target.name)
+        for site in _sites(tree, "app/run#f(")
+        if site.target.name in ("name", "extra")
+    ] == [(None, "extra")]

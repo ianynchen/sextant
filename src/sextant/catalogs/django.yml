@@ -146,6 +146,14 @@ matches:
   # method NULL, marked as serving any method. No automatic OPTIONS or HEAD row is the
   # framework's own: the view itself answers them.
   verbless_serves: any
+  # WHAT "ANY METHOD" MEANS (design 2026-11-23 §4d, ruled 2026-11-23): the endpoint answers every
+  # method. A view that reads `request.method`, in its body or in module code it hands the
+  # request to, decides by the method itself, and so does one that hands the request to another
+  # view: its any-method row is no surer than `partial`. A read of the method is this entry
+  # (approved 2026-11-23, §2 item 13): the attribute `method` of the request, on
+  # `HttpRequest` or on a value whose class the facts do not name.
+  request_reads:
+    - { owner: django.http.request.HttpRequest, method: method, arity: 0, kind: method }
   # THE PATH (probe, "Paths"): prefix and child route concatenate with nothing between
   # (`'api/'` + `'/lead'` is `api//lead`), an empty route adds nothing, and the served path is
   # that string with a leading `/`. Nothing is stripped or added between routes (probe,

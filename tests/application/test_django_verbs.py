@@ -542,3 +542,165 @@ def test_any_stated_decorator_called_without_its_function_is_never_resolved_with
 
     assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
     assert len(_questions(workspace)) == 1
+
+
+# -- What "any method" means (design 2026-11-23 §4d; plan Task 7a) ---------------------------
+#
+# The any-method row says the endpoint answers every method. Where the code a request to it
+# runs through reads the method off the request, or hands it to another view, the row is no
+# surer than `partial`. A request handed to a library function is no reason.
+
+
+def test_a_view_that_reads_request_method_is_partial(tmp_path: Path, libraries):
+    rows = _view(
+        tmp_path,
+        libraries,
+        "def v(request):\n    if request.method == 'POST':\n        return 1\n    return None\n",
+    )
+
+    assert rows == [(None, "any", "/x/", _handler("v"), "partial")]
+
+
+def test_a_typed_request_that_reads_its_method_is_partial(tmp_path: Path, libraries):
+    rows = _view(
+        tmp_path,
+        libraries,
+        "from django.http import HttpRequest\n"
+        "def v(request: HttpRequest):\n    return request.method\n",
+    )
+
+    assert rows == [(None, "any", "/x/", _handler("v"), "partial")]
+
+
+def test_a_view_that_hands_its_request_to_a_helper_that_reads_the_method_is_partial(
+    tmp_path: Path, libraries
+):
+    rows = _view(
+        tmp_path,
+        libraries,
+        "def is_post(r):\n    return r.method == 'POST'\n"
+        "def v(request):\n    return is_post(request)\n",
+    )
+
+    assert rows == [(None, "any", "/x/", _handler("v"), "partial")]
+
+
+def test_the_method_read_two_helpers_down_is_followed(tmp_path: Path, libraries):
+    rows = _view(
+        tmp_path,
+        libraries,
+        "def is_post(r):\n    return r.method == 'POST'\n"
+        "def check(req, n):\n    return is_post(req)\n"
+        "def v(request):\n    return check(request, 1)\n",
+    )
+
+    assert rows == [(None, "any", "/x/", _handler("v"), "partial")]
+
+
+def test_a_view_that_hands_its_request_only_to_a_library_function_is_resolved(
+    tmp_path: Path, libraries
+):
+    rows = _view(
+        tmp_path,
+        libraries,
+        "from django.shortcuts import render\n"
+        "def v(request):\n    return render(request, 'x.html')\n",
+    )
+
+    assert rows == [(None, "any", "/x/", _handler("v"), "resolved")]
+
+
+def test_a_view_that_reads_another_attribute_of_its_request_is_resolved(tmp_path: Path, libraries):
+    rows = _view(tmp_path, libraries, "def v(request):\n    return request.user\n")
+
+    assert rows == [(None, "any", "/x/", _handler("v"), "resolved")]
+
+
+def test_a_wrapper_on_the_path_that_reads_the_method_leaves_the_wrapped_view_partial(
+    tmp_path: Path, libraries
+):
+    """The `cors("GET")` shape: the module's wrapper answers some methods itself and hands the
+    rest to the view it captured. The handler is that view; the row is `partial`."""
+    rows = _view(
+        tmp_path,
+        libraries,
+        "def cors(allowed):\n"
+        "    def deco(f):\n"
+        "        def inner(request, *a, **k):\n"
+        "            if request.method == 'OPTIONS':\n"
+        "                return None\n"
+        "            return f(request, *a, **k)\n"
+        "        return inner\n"
+        "    return deco\n"
+        "@cors('GET')\n" + _DEF,
+    )
+
+    assert rows == [(None, "any", "/x/", _handler("v"), "partial")]
+
+
+def test_a_wrapper_that_reads_no_method_keeps_the_row_resolved(tmp_path: Path, libraries):
+    """A call of the captured view inside the wrapper (`f(request)`) runs the path's own
+    function, which the row names: it is not followed again."""
+    rows = _view(
+        tmp_path,
+        libraries,
+        "def audited(f):\n"
+        "    def inner(request):\n"
+        "        return f(request)\n"
+        "    return inner\n"
+        "@audited\n" + _DEF,
+    )
+
+    assert rows == [(None, "any", "/x/", _handler("v"), "resolved")]
+
+
+def test_a_view_that_calls_another_view_with_its_request_is_partial(tmp_path: Path, libraries):
+    rows = _view(
+        tmp_path,
+        libraries,
+        "from django.views import View\n"
+        "class Other(View):\n    def get(self, request):\n        return None\n"
+        "def v(request):\n    return Other.as_view()(request)\n",
+    )
+
+    assert rows == [(None, "any", "/x/", _handler("v"), "partial")]
+
+
+def test_a_narrowed_view_that_reads_the_method_keeps_its_method(tmp_path: Path, libraries):
+    """The rule is for any-method rows: a `require_POST` view serves POST alone, whatever its
+    body reads."""
+    rows = _view(
+        tmp_path,
+        libraries,
+        "@require_POST\ndef v(request):\n    return request.method\n",
+    )
+
+    assert rows == [("POST", None, "/x/", _handler("v"), "resolved")]
+
+
+def test_a_class_whose_own_dispatch_reads_the_method_is_partial(tmp_path: Path, libraries):
+    rows = _view(
+        tmp_path,
+        libraries,
+        "from django.views import View\n"
+        "class Items(View):\n"
+        "    def dispatch(self, request, *a, **k):\n"
+        "        return request.method\n",
+        "path('x/', Items.as_view())",
+    )
+
+    assert rows == [(None, "any", "/x/", _handler("dispatch", "app/urls/Items"), "partial")]
+
+
+def test_a_view_object_names_no_handler_and_is_partial(tmp_path: Path, libraries):
+    """`path("rss", Feed())`: calling an object runs its class's `__call__` (design §4d). The
+    handler reader does not name that method today, so the row names no handler: `partial`,
+    never a `resolved` any-method row (Task 7a, rule 1)."""
+    rows = _view(
+        tmp_path,
+        libraries,
+        "class Feed:\n    def __call__(self, request):\n        return None\n",
+        "path('x/', Feed())",
+    )
+
+    assert rows == [(None, "any", "/x/", None, "partial")]

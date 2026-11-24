@@ -172,6 +172,12 @@ SEXTANT_VERSION = version("sextant")
 #             `lambda` entry counts them and carries that call's `source`, and the body reads
 #             each as its parameter after the written ones, where it read `unresolved`. A
 #             fact set of the older vintage holds no capture; it is refused and re-extracted.
+#     21      a Python read of an attribute on a PARAMETER whose class is not known
+#             (`request.method`, spec 2026-11-23-python-django-redesign §2 item 13) is the call
+#             site a known class's read is (version 18), named for the attribute on that
+#             parameter, with no owner and no arguments; so is one whose written class does not
+#             declare the attribute nor type it. The value read stays `unresolved`. A
+#             fact set of the older vintage holds no such call; it is refused and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -316,6 +322,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 20
+FACT_SCHEMA_VERSION = 21
 GRAPH_SCHEMA_VERSION = 18
 BOUNDARY_VOCABULARY_VERSION = 5

@@ -40,6 +40,7 @@ from sextant.application.resolve.path_prefix import apply_path_prefixes
 from sextant.application.resolve.request_requirements import (
     _expression,
     _fallback,
+    method_reads,
     record_request_requirements,
 )
 from sextant.domain.closed_sets import OriginTier
@@ -1488,3 +1489,56 @@ def test_request_reads_must_be_a_list(tmp_path: Path):
     with pytest.raises(CatalogError, match=r"invented-reads\.yml.*must be a list"):
         record_request_requirements(workspace, [catalog])
     workspace.close()
+
+
+# --- `kind: method` (spec 2026-11-23-python-django-redesign §2 item 13) -----------------------
+
+_METHOD_READ = {
+    "owner": "django.http.request.HttpRequest",
+    "method": "method",
+    "arity": 0,
+    "kind": "method",
+}
+
+
+def test_a_method_read_entry_loads_and_gives_no_metadata_row(tmp_path: Path):
+    """A read of the request's method names no parameter: it loads with no `name_arg`, gives
+    no `endpoint_metadata` row, and is what `method_reads` hands the route engine."""
+    sites = [_site(0, REQUEST, "method", result=3)]
+    workspace = _reads_workspace(tmp_path, sites, ("GET", "/orders", HANDLER))
+    record_request_requirements(workspace, [_reads_catalog(_METHOD_READ)])
+    rows = workspace.query("endpoint_metadata")
+    workspace.close()
+
+    assert rows == []
+    assert method_reads(_reads_catalog(_METHOD_READ)) == {
+        ("django/http/request/HttpRequest#", "method")
+    }
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        {**_METHOD_READ, "name_arg": 0},
+        {**_METHOD_READ, "arity": 1},
+        {**_METHOD_READ, "arity": False},
+        {key: value for key, value in _METHOD_READ.items() if key != "owner"},
+    ],
+    ids=["name_arg", "arity-1", "arity-bool", "no-owner"],
+)
+def test_a_malformed_method_read_entry_is_refused(tmp_path: Path, entry: dict[str, object]):
+    workspace = _reads_workspace(tmp_path, [], ("GET", "/orders", HANDLER))
+    with pytest.raises(CatalogError, match=r"invented-reads\.yml.*kind: method"):
+        record_request_requirements(workspace, [_reads_catalog(entry)])
+    workspace.close()
+
+
+def test_only_django_declares_a_method_read():
+    """The any-method doubt (design 2026-11-23 §4d) is read only where a catalog declares a
+    `kind: method` read: FastAPI, Flask, Vert.x and every other shipped catalog declare none,
+    so nothing doubts their rows."""
+    declaring = sorted(
+        catalog.id for catalog in YamlCatalogSource(catalogs_dir()).load() if method_reads(catalog)
+    )
+
+    assert declaring == ["django"]
