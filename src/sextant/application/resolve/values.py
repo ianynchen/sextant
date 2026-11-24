@@ -288,6 +288,11 @@ _TUPLE = "builtins/tuple#"
 # A function value stood for the function its body hands the request on to
 # (`_Walk._runs_captured`): the label is the body the call runs through.
 _RUNS_THROUGH = "runs-through"
+# A call a value model states hands its argument on (`returns`, `result_calls`, a decorator
+# made by a `result_returns` call), passed on the way to the value (`_Walk._stated_value`):
+# the context names the call that STATES it, so a reader of what that call states (the methods
+# a `require_POST` allows) reads the calls of this path (`Path.passed`).
+_PASSED = "passed"
 # Which recipe's return a container-filled parameter receives (spec 2026-11-05 di-recipe-hop
 # §2): one context per parameter, because the container fills each parameter on its own.
 _FILLED_BY = "filled-by"
@@ -2516,6 +2521,16 @@ class Path:
         stood for the function its body hands the request on to (`_Walk._runs_captured`)."""
         return tuple(step.label for step in self.trail if step.context[0] == _RUNS_THROUGH)
 
+    def passed(self) -> tuple[tuple[str, int], ...]:
+        """The calls a value model states hand their argument on that this path passed through
+        to the value, `(method, ordinal)`, in the order passed (`_PASSED`): for a decorator a
+        `result_returns` call made, the call that made it."""
+        return tuple(
+            (str(step.context[1]), int(step.context[2]))
+            for step in self.trail
+            if step.context[0] == _PASSED
+        )
+
     def calls_into(self) -> dict[str, tuple[str, int]]:
         """The call this path chose for each method it crossed into or out of, `{method:
         (caller, ordinal)}`: the calling context it was read in (task 10b review, Major 1). A
@@ -3184,6 +3199,13 @@ def _combine(left: _Trail, right: _Trail) -> _Trail | None:
     if not left:
         return right
     return left + tuple(step for step in right if step.context not in visited)
+
+
+def _passing(trail: _Trail, site: tuple[str, int]) -> _Trail:
+    """`trail` with the stated call at `site` passed (`Path.passed`): one context per call,
+    so two paths through one call agree and two calls never conflict."""
+    step = _Step((_PASSED, *site), _PASSED)
+    return trail if step in trail else (*trail, step)
 
 
 def _path(trail: _Trail) -> tuple[str, ...]:
@@ -5585,7 +5607,7 @@ class _Walk:
                 return inherited
         if own is not None and own[0] == _RETURNS:
             element = self._index.stated_elements.get((str(row.get("owner")), str(row["name"])))
-            return self._stated_slot(site, row, own[1], trail, frames, element)
+            return self._stated_slot(site, row, own[1], _passing(trail, site), frames, element)
         if own is not None and own[0] == _RETURNS_RECEIVER:
             # The call returns the object it is called on (`with httpx.Client() as c`: `c` is
             # the client `__enter__` was called on, plan 3 R13): the value is its receiver.
@@ -5597,7 +5619,7 @@ class _Walk:
             # stands for), so it is kept as what the call of the class runs.
             runs = tuple(
                 reached
-                for reached in self._stated_slot(site, row, own[1], trail, frames)
+                for reached in self._stated_slot(site, row, own[1], _passing(trail, site), frames)
                 if _callable(reached[1]) or reached[1].kind == UNRESOLVED
             )
             return runs if any(_callable(answer) for _, answer in runs) else None
@@ -5611,9 +5633,10 @@ class _Walk:
         applied = (
             None if maker is None else stated.get((str(maker.get("owner")), str(maker["name"])))
         )
-        if applied is None or applied[0] != _RESULT_RETURNS:
+        if maker is None or applied is None or applied[0] != _RESULT_RETURNS:
             return self._applied_elsewhere(site, row, trail, frames)
-        return self._stated_slot(site, row, applied[1], trail, frames)
+        passed = _passing(trail, (method, int(str(maker["ordinal"]))))
+        return self._stated_slot(site, row, applied[1], passed, frames)
 
     def _applied_elsewhere(
         self,
@@ -5636,9 +5659,9 @@ class _Walk:
             applied = (
                 None if maker is None else stated.get((str(maker.get("owner")), str(maker["name"])))
             )
-            if applied is None or applied[0] != _RESULT_RETURNS:
+            if made is None or applied is None or applied[0] != _RESULT_RETURNS:
                 return None
-            reached.extend(self._stated_slot(site, row, applied[1], path, frames))
+            reached.extend(self._stated_slot(site, row, applied[1], _passing(path, made), frames))
         return tuple(reached) or None
 
     def _environment_read(
@@ -5756,7 +5779,7 @@ class _Walk:
             if found is None:
                 return None
             if found[1][0] == _RETURNS:
-                return stated_slot(found, trail)
+                return stated_slot(found, _passing(trail, site))
             if row.get("receiver") is None and site in self._index.class_receivers:
                 # Called through the class (`Sub.as_view()`): its receiver is that class.
                 return _only(
@@ -5778,7 +5801,7 @@ class _Walk:
                 return None
             matched = True
             if found[1][0] == _RETURNS:
-                reached.extend(stated_slot(found, path))
+                reached.extend(stated_slot(found, _passing(path, site)))
             else:
                 reached.append((path, answer))
         return tuple(reached) if matched else None

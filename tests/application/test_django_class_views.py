@@ -636,3 +636,22 @@ def test_a_module_route_with_a_library_handler_stays(tmp_path: Path, libraries):
     assert [(method, handler) for method, _, _, handler, _ in rows if method == "GET"] == [
         ("GET", "sextant-python pypi django 5.2.8 django/views/generic/base/RedirectView#get(sig_")
     ]
+
+
+def test_a_class_narrowed_through_a_project_helper_keeps_the_allowed_rows(
+    tmp_path: Path, libraries
+):
+    """Final review C1: the stated call the value walk passed through inside the helper
+    narrows the class's rows as one written in the registration does."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        "from django.views.decorators.http import require_POST\n"
+        "class Items(View):\n"
+        "    def get(self, request):\n        return None\n"
+        "    def post(self, request):\n        return None\n"
+        "def post_only(view):\n    return require_POST(view)\n",
+        "path('x/', post_only(Items.as_view()))",
+    )
+
+    assert rows == [("POST", None, "/x/", _handler("post", "app/urls/Items"), "resolved")]

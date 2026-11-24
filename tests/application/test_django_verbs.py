@@ -704,3 +704,118 @@ def test_a_view_object_names_no_handler_and_is_partial(tmp_path: Path, libraries
     )
 
     assert rows == [(None, "any", "/x/", None, "partial")]
+
+
+# One reader of one path (final review, C1): the methods are read from the stated calls the
+# value walk passed through to the handler, so a project decorator, a held decorator and a
+# stated call inside a wrapper narrow the row as one written on the def does.
+
+
+def test_a_project_decorator_that_applies_require_post_narrows(tmp_path: Path, libraries):
+    rows = _view(
+        tmp_path,
+        libraries,
+        "from django.views.decorators.csrf import csrf_exempt\n"
+        "def api_post(f):\n    return csrf_exempt(require_POST(f))\n"
+        "@api_post\n" + _DEF,
+    )
+
+    assert rows == [("POST", None, "/x/", _handler("v"), "resolved")]
+
+
+def test_a_held_require_http_methods_decorator_narrows(tmp_path: Path, libraries):
+    rows = _view(
+        tmp_path,
+        libraries,
+        "get_or_post = require_http_methods(['GET', 'POST'])\n@login_required\n@get_or_post\n"
+        + _DEF,
+    )
+
+    assert rows == [
+        ("GET", None, "/x/", _handler("v"), "resolved"),
+        ("POST", None, "/x/", _handler("v"), "resolved"),
+    ]
+
+
+def test_a_wrapper_returned_through_require_post_narrows(tmp_path: Path, libraries):
+    rows = _view(
+        tmp_path,
+        libraries,
+        "import functools\n"
+        "def api_post(f):\n    @functools.wraps(f)\n    def inner(request, *a, **k):\n"
+        "        return f(request, *a, **k)\n    return require_POST(inner)\n"
+        "@api_post\n" + _DEF,
+    )
+
+    assert rows == [("POST", None, "/x/", _handler("v"), "resolved")]
+
+
+def test_require_post_written_on_a_wrappers_inner_function_narrows(tmp_path: Path, libraries):
+    rows = _view(
+        tmp_path,
+        libraries,
+        "import functools\n"
+        "def api_post(f):\n    @require_POST\n    @functools.wraps(f)\n"
+        "    def inner(request, *a, **k):\n        return f(request, *a, **k)\n    return inner\n"
+        "@api_post\n" + _DEF,
+    )
+
+    assert rows == [("POST", None, "/x/", _handler("v"), "resolved")]
+
+
+def test_require_post_on_one_branch_of_a_project_decorator_is_partial(tmp_path: Path, libraries):
+    """One path of the handler value passes `require_POST`, the other does not: the view may
+    serve POST alone or every method. The rows of the paths, each no surer than `partial` (the
+    rule `_class_view` applies to a handler value with a path that names no class): here the
+    any-method row, which holds POST."""
+    rows = _view(
+        tmp_path,
+        libraries,
+        "from django.conf import settings\n"
+        "def maybe_post(f):\n    if settings.STRICT:\n        return require_POST(f)\n"
+        "    return f\n"
+        "@maybe_post\n" + _DEF,
+    )
+
+    assert rows == [(None, "any", "/x/", _handler("v"), "partial")]
+
+
+def test_two_methods_on_two_branches_of_a_project_decorator_are_both_partial(
+    tmp_path: Path, libraries
+):
+    rows = _view(
+        tmp_path,
+        libraries,
+        "from django.conf import settings\n"
+        "def one_way(f):\n    if settings.STRICT:\n        return require_POST(f)\n"
+        "    return require_GET(f)\n"
+        "@one_way\n" + _DEF,
+    )
+
+    assert sorted(rows) == [
+        ("GET", None, "/x/", _handler("v"), "partial"),
+        ("POST", None, "/x/", _handler("v"), "partial"),
+    ]
+
+
+def test_require_post_twice_on_one_path_still_serves_post(tmp_path: Path, libraries):
+    rows = _view(
+        tmp_path,
+        libraries,
+        "def api_post(f):\n    return require_POST(f)\n@api_post\n@require_POST\n" + _DEF,
+    )
+
+    assert rows == [("POST", None, "/x/", _handler("v"), "resolved")]
+
+
+def test_require_get_and_require_post_on_one_path_through_a_decorator_serve_no_method(
+    tmp_path: Path, libraries
+):
+    """The intersection rule on a path the walk read: no method passes both, no method row."""
+    rows = _view(
+        tmp_path,
+        libraries,
+        "def get_only(f):\n    return require_GET(f)\n@get_only\n@require_POST\n" + _DEF,
+    )
+
+    assert [row[:2] for row in rows] == []

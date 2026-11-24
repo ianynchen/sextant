@@ -196,6 +196,7 @@ from sextant.application.resolve.values import (
     UNPACKED_SLOT,
     Answer,
     Path,
+    Producer,
     ValueIndex,
     argument_slot,
     cached_value_index,
@@ -948,13 +949,19 @@ def _request_flow(
     )
 
 
-def _any_method_doubted(handler: Any, judged: "_Judged | None", context: "_DeriveContext") -> bool:
+def _any_method_doubted(
+    handler: Any,
+    judged: "_Judged | None",
+    context: "_DeriveContext",
+    paths: Sequence[tuple[Producer, Path]],
+) -> bool:
     """Whether the code a request to this any-method row runs through gives a reason to doubt
     that every method is answered (design 2026-11-23 §4d): the row names no handler; the
     handler's body was not read (a library's); or the handler, or a module wrapper the walk ran
     through to reach it, reads the method off the request it received, in its own body or in
     module code it hands that request to, as far as the module's code goes, or hands the
-    request to another handler. A request handed to a library function is no reason."""
+    request to another handler. A request handed to a library function is no reason. `paths`
+    are the handler value's (`_handler_paths`)."""
     flow, index = context.request_flow, context.values
     if flow is None or index is None:
         return False
@@ -962,13 +969,7 @@ def _any_method_doubted(handler: Any, judged: "_Judged | None", context: "_Deriv
         return True
     if context.method_symbols.get(bare_descriptor(judged.symbol)) != judged.symbol:
         return True
-    argument = handler[0] if isinstance(handler, tuple) and handler else handler
-    at = argument.get(_CAPTURED_AT) if isinstance(argument, dict) else None
-    through: list[str] = []
-    site = index.sites.get((str(at[0]), int(str(at[1])))) if at is not None else None
-    if site is not None and at is not None:
-        for _, path in producer_paths(index, site, int(at[2]), frozenset(), functions=True):
-            through.extend(path.ran_through())
+    through = [body for _, path in paths for body in path.ran_through()]
     # The request is each body's parameter 0.
     pending = [(body, 0) for body in dict.fromkeys([judged.symbol, *through])]
     seen: set[tuple[str, int]] = set()
@@ -981,6 +982,18 @@ def _any_method_doubted(handler: Any, judged: "_Judged | None", context: "_Deriv
             return True
         pending.extend(flow.hands.get(at_body, ()))
     return False
+
+
+def _handler_paths(handler: Any, context: "_DeriveContext") -> tuple[tuple[Producer, Path], ...]:
+    """Every path of a handler argument, read as a call of it is (`producer_paths(...,
+    functions=True)`); none where the argument names no site the walk can be asked about."""
+    argument = handler[0] if isinstance(handler, tuple) and handler else handler
+    at = argument.get(_CAPTURED_AT) if isinstance(argument, dict) else None
+    index = context.values
+    site = None if at is None or index is None else index.sites.get((str(at[0]), int(str(at[1]))))
+    if site is None or at is None or index is None:
+        return ()
+    return producer_paths(index, site, int(at[2]), frozenset(), functions=True)
 
 
 def _entry_handlers(
@@ -1380,15 +1393,23 @@ def _derive_captured(
     # the row below is then `unresolved` with `method` NULL rather than
     # carrying whichever literal an earlier step happened to seed.
     verbless = "http_method" not in captures
+    # The handler value's paths, read once for the two readers below.
+    handler_paths = (
+        _handler_paths(captures.get("handler"), context)
+        if verbless and direction == "inbound"
+        else ()
+    )
     # A verbless route whose handler passed a decorator the catalog's `annotations` state the
     # methods of serves exactly those methods, one row each.
-    narrowed = (
-        _narrowed_verbs(captures.get("handler"), captures[NARROWED_BY], context)
+    narrowed, unsure = (
+        _narrowed_verbs(captures.get("handler"), captures[NARROWED_BY], context, handler_paths)
         if verbless and NARROWED_BY in captures and direction == "inbound"
-        else None
+        else (None, False)
     )
     if narrowed is not None:
         verbs, verbless = list(narrowed), False
+    if unsure:
+        end = replace(end, inexact=True)
     # A row serving any method says the endpoint answers every method (design 2026-11-23 §4d):
     # where the code a request to it runs through gives a reason to doubt that, the row is no
     # surer than `partial`.
@@ -1397,7 +1418,7 @@ def _derive_captured(
         and direction == "inbound"
         and context.request_flow is not None
         and not end.inexact
-        and _any_method_doubted(captures.get("handler"), answering, context)
+        and _any_method_doubted(captures.get("handler"), answering, context, handler_paths)
     ):
         end = replace(end, inexact=True)
     # A verbless route of a framework that serves it for every verb says so on the row
@@ -4253,7 +4274,8 @@ def _class_view(
     # by its methods.
     owners: list[str] = []
     other = False
-    for producer, path in producer_paths(index, site, int(at[2]), frozenset(), functions=True):
+    paths = producer_paths(index, site, int(at[2]), frozenset(), functions=True)
+    for producer, path in paths:
         if context.path is not None and path.joined(context.path) is None:
             continue
         held = producer.ended_at
@@ -4279,10 +4301,10 @@ def _class_view(
         ):
             return None
         return _blocked(replace(stack, reaches_function=True), context)
-    narrowed = (
-        _narrowed_verbs(argument, captures[NARROWED_BY], context)
+    narrowed, unsure = (
+        _narrowed_verbs(argument, captures[NARROWED_BY], context, paths)
         if NARROWED_BY in captures
-        else None
+        else (None, False)
     )
     # The arguments of the calls the handler was made through (`as_view(http_method_names=...)`
     # changes the table: `_class_rows`).
@@ -4296,8 +4318,9 @@ def _class_view(
         for filled, handled, inexact in _class_rows(
             owner, made, captures, rule.owners, context, narrowed
         ):
-            # A path of the handler value that names no class leaves every row unsure.
-            rows.append((filled, handled, inexact or other))
+            # A path of the handler value that names no class, or that allows other methods,
+            # leaves every row unsure.
+            rows.append((filled, handled, inexact or other or unsure))
     return rows
 
 
@@ -4473,40 +4496,75 @@ def _class_members(
 
 
 def _narrowed_verbs(
-    handler: Any, narrowing: Sequence[Mapping[str, Any]], context: "_DeriveContext"
-) -> tuple[str | None, ...] | None:
+    handler: Any,
+    narrowing: Sequence[Mapping[str, Any]],
+    context: "_DeriveContext",
+    paths: Sequence[tuple[Producer, Path]],
+) -> tuple[tuple[str | None, ...] | None, bool]:
     """The methods a handler serves where it passed a call `annotations` names (D02 §2's
-    `fluent` style): each such call's methods, intersected where several apply (each allows a
-    method or refuses it), in the order of the outermost; an unread method list is no method
-    at all (one row, `unresolved`). None where it passed no such call: the route stays as its
-    root declared it."""
+    `fluent` style), read on each path of the handler value (`paths`, `_handler_paths`): the
+    stated calls the value walk passed through on that path (`Path.passed`), and on a path the
+    walk read to no function, the calls written between the registration and the def as well
+    (`_decorator_stack`), which the walk did not reach. On one path, each such call's methods,
+    intersected where several apply (each allows a method or refuses it), in the order of the
+    outermost; an unread method list is no method at all (one row, `unresolved`). None where no
+    path passed such a call: the route stays as its root declared it.
+
+    Where the paths give different methods (a decorator that applies `require_POST` on one
+    branch only), every method of every path, or None, the any-method row, where a path passed
+    no such call; and True: no row is surer than `partial`, as a path of a class view's handler
+    value that names no class leaves every row unsure (`_class_view`)."""
     argument = handler[0] if isinstance(handler, tuple) and handler else handler
     at = argument.get(_CAPTURED_AT) if isinstance(argument, dict) else None
-    if at is None or context.values is None:
-        return None
-    sets: list[tuple[str | None, ...]] = []
-    stack = _decorator_stack(context.values, str(at[0]), argument, context.method_symbols)
-    for method, row in stack.calls:
-        named = _maker(context.values, method, row) if row["name"] == "__call__" else row
-        entry = (
-            None
-            if named is None
-            else next(
-                (
-                    one
-                    for one in narrowing
-                    if one["method"] == named["name"] and named.get("owner") in one["owners"]
-                ),
-                None,
+    index = context.values
+    if at is None or index is None:
+        return None, False
+    written: list[tuple[str, int]] | None = None
+    found: list[tuple[str | None, ...] | None] = []
+    for producer, path in paths:
+        if context.path is not None and path.joined(context.path) is None:
+            continue
+        calls = list(path.passed())
+        if producer.ended_at is None:
+            if written is None:
+                stack = _decorator_stack(index, str(at[0]), argument, context.method_symbols)
+                written = [
+                    (method, int(str(named["ordinal"])))
+                    for method, row in stack.calls
+                    if (named := _maker(index, method, row) if row["name"] == "__call__" else row)
+                    is not None
+                ]
+            calls.extend(written)
+        sets: list[tuple[str | None, ...]] = []
+        for call in dict.fromkeys(calls):
+            named = index.sites.get(call)
+            entry = (
+                None
+                if named is None
+                else next(
+                    (
+                        one
+                        for one in narrowing
+                        if one["method"] == named["name"] and named.get("owner") in one["owners"]
+                    ),
+                    None,
+                )
             )
+            if entry is not None and named is not None:
+                sets.append(_narrowing_verbs(entry["http_method"], named, context))
+        found.append(
+            None
+            if not sets
+            else (None,)
+            if any(None in one for one in sets)
+            else tuple(verb for verb in sets[0] if all(verb in one for one in sets[1:]))
         )
-        if entry is not None and named is not None:
-            sets.append(_narrowing_verbs(entry["http_method"], named, context))
-    if not sets:
-        return None
-    if any(None in one for one in sets):
-        return (None,)
-    return tuple(verb for verb in sets[0] if all(verb in one for one in sets[1:]))
+    distinct = list(dict.fromkeys(found))
+    if len(distinct) <= 1:
+        return (distinct[0] if distinct else None), False
+    if None in distinct:
+        return None, True
+    return tuple(dict.fromkeys(verb for one in distinct if one is not None for verb in one)), True
 
 
 def _narrowing_verbs(

@@ -57,17 +57,21 @@ matches:
   # request.method not in request_method_list`), so nothing is respelled. A list the value
   # walk cannot read names no method: one row, method NULL, `unresolved`. Two of them on one
   # view each refuse what they do not list, so the row is their intersection.
-  # A narrowing decorator is found anywhere on the def, above or below any other, and in a
-  # wrapper call the registration writes.
+  # A narrowing decorator is read on the path the value walk takes to the view: on the def,
+  # above or below any other, in a wrapper call the registration writes, held in a name
+  # (`get_or_post = require_http_methods([...])`), or applied inside a project's own decorator
+  # (`return csrf_exempt(require_POST(f))`). Where the paths of one view allow different
+  # methods (a decorator that applies `require_POST` on one branch), every row is `partial`.
   # WHICH FUNCTION RUNS (ruling R13): the handler is followed through the decorators and wrapper
   # calls that a value model states hand the view on (`value-models/django.yml`, each measured:
   # probe, "View decorators that hand the view on": `login_required`, `csrf_exempt`, `cache_page`
-  # and the rest keep the inner view's allowed set). A decorator or wrapper that no value model
-  # states (a project's own, a library's not listed) ends that walk, whether it sits on the def
-  # or in the registration. The row then names no handler, is `partial`, and files a
-  # `handler_pass_through` question. Its methods are still narrowed by a `require_*` on the
-  # same path: Django routes every method to the callable, and each `require_*` on the way
-  # answers 405 to the methods it does not list.
+  # and the rest keep the inner view's allowed set), and into a project's own decorator, whose
+  # inner function stands for the view it calls (design 2026-11-23 §4e). A library decorator or
+  # wrapper that no value model states ends that walk, whether it sits on the def or in the
+  # registration. The row then names no handler, is `partial`, and files a
+  # `handler_pass_through` question. Its methods are still narrowed by a `require_*` written
+  # between the registration and the def: Django routes every method to the callable, and each
+  # `require_*` on the way answers 405 to the methods it does not list.
   #
   # A CLASS VIEW (plan 6, Task 5, ruling R3; probe, "Class views"): `path("x/", Items.as_view())`
   # hands Django the closure `view`, whose `view_class` is the class the `as_view` call is made
