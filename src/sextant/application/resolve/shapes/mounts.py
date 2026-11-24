@@ -719,9 +719,17 @@ class MountReader:
                     # The place is the registration on the path the read reached it by, so
                     # what else the route reads is read on that same call (M-1): a helper
                     # called from two lists gives each its own path under its own prefix.
-                    place: Place = (((("call", *key), path), None),)
-                    merged = held.get(prefix, prefix)
-                    held[prefix] = replace(merged, places=merged.places | {place})
+                    # It stands at the end of each way the prefix was reached, behind the
+                    # mounts on that way: a mount written under a test is one of the calls
+                    # the row's registration ran through.
+                    on: Router = (("call", *key), path)
+                    places = frozenset(
+                        (*place[:-1], (on, None)) for place in prefix.places or (ANY_ROUTER,)
+                    )
+                    merged = held.get(prefix)
+                    held[prefix] = replace(
+                        prefix, places=places if merged is None else merged.places | places
+                    )
                 if held:
                     return tuple(held.values())
                 # A list no readable mount and no root reaches: where it is served is not

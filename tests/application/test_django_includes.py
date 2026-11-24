@@ -291,6 +291,32 @@ def test_routes_added_under_debug_are_not_evaluated(tmp_path, libraries):
     ]
 
 
+def test_a_mount_written_under_a_test_gives_its_routes_the_condition(tmp_path, libraries):
+    """`if "app.legal" in settings.INSTALLED_APPS: urlpatterns += [path("legal/",
+    include("app.legal_urls"))]`: the mount is one of the calls the routes below it are
+    registered through, so each of them is "not evaluated" as the mount is (weblate's
+    `legal/` routes); a route outside the test has no condition."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            "legal_urls.py": "urlpatterns = [path('terms/', v)]\n",
+            "urls.py": "from django.conf import settings\n"
+            "urlpatterns = [path('a/', v)]\n"
+            "if settings.LEGAL:\n"
+            "    urlpatterns += [path('legal/', include('app.legal_urls'))]\n",
+        },
+    )
+
+    assert _rows(workspace) == [_row("/a/"), _row("/legal/terms/")]
+    live = {row["row_id"]: row["path"] for row in workspace.query("endpoints")}
+    conditions = sorted(
+        (live[row["row_id"]], json.loads(str(row["expression"]))["test"], row["holds"])
+        for row in workspace.query("endpoint_existence")
+    )
+    assert conditions == [("/legal/terms/", "settings.LEGAL", "unresolved")]
+
+
 # -- design 2026-11-23 §4a: the roots --------------------------------------------------------------
 
 
