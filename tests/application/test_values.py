@@ -7346,3 +7346,38 @@ def test_the_members_of_one_held_list_do_not_count_against_the_path_cap(held_py)
 def test_more_alternative_writes_than_the_path_cap_are_non_enumerable(held_py):
     """As many ALTERNATIVE writes of one name, each a string, are still past the cap."""
     assert _held_answers(held_py, "branchy") == [(None, "non_enumerable")]
+
+
+def test_a_stated_wrapper_of_a_class_runs_the_class(tmp_path: Path):
+    """`functools.cache(Box)`, stated `result_calls: arg0`: calling the wrapper runs a call of
+    `Box`, a class, so the call reader keeps the class as what it runs, as it keeps a function
+    (plan 2026-11-23-python-django-redesign Task 7: `login_required(X.as_view())` is `X`). A
+    wrapper of a value that is no callable (`cache(128)`) still states nothing."""
+    import test_receiver_binding
+
+    workspace = test_receiver_binding._resolved(
+        tmp_path,
+        {
+            "a.py": _REGISTER
+            + "import functools\n"
+            + "class Box:\n    pass\n"
+            + "register(functools.cache(Box))\n"
+            + "register(functools.cache(128))\n"
+        },
+    )
+    stated = ({"owner": "functools#", "method": "cache", "form": "result_calls", "arg": 0},)
+    index = value_index(workspace, returns_arguments=stated)
+    rows = sorted(
+        (row for row in workspace.query("call_sites") if row["name"] == "register"),
+        key=lambda row: row["ordinal"],
+    )
+    found = [
+        [
+            (producer.reason, None if producer.ended_at is None else producer.ended_at.value)
+            for producer, _ in producer_paths(index, dict(row), 0, frozenset(), functions=True)
+        ]
+        for row in rows
+    ]
+    workspace.close()
+
+    assert found == [[(None, "app/a/Box#")], [("external", None)]]

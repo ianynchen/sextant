@@ -1027,8 +1027,8 @@ class _DeriveContext:
     # catalog's `path_join`. None for every catalog not declaring it.
     path_prefix: str | None = None
     # `matches.dispatch` and `matches.bypassed_by` (the `supertype_dispatch` words, plan
-    # 2026-11-22 Task 5), for a root whose handler is a class given through a call
-    # (`HANDLER_THROUGH`). None for every catalog declaring no such root.
+    # 2026-11-22 Task 5), for a root whose handler is a class below the catalog's `supertype`
+    # (`HANDLER_THROUGH`). None for every catalog declaring none.
     class_dispatch: "_ClassDispatch | None" = None
     # The workspace and the walk's index, for the hop ladders (Task 9), shared with the
     # walk (`values.cached_value_index`).
@@ -1144,8 +1144,8 @@ def _derive_captured(
     # the catalog's otherwise — read once, because every column and key
     # below that names a direction names this one.
     direction = captures.get(_DIRECTION, context.catalog.direction)
-    # A handler given as a class through a call (`HANDLER_THROUGH`): one row per method of the
-    # class's dispatch table, or the judgement of a wrapper that hides it.
+    # A handler that is a class below the catalog's `supertype` (`HANDLER_THROUGH`): one row per
+    # method of the class's dispatch table.
     view = (
         _class_view(captures, context)
         if HANDLER_THROUGH in captures and direction == "inbound" and answered is None
@@ -1240,8 +1240,8 @@ def _derive_captured(
     # the row below is then `unresolved` with `method` NULL rather than
     # carrying whichever literal an earlier step happened to seed.
     verbless = "http_method" not in captures
-    # A verbless route whose handler passed a call the catalog says narrows its methods
-    # (`narrowed_by`) serves exactly those methods, one row each.
+    # A verbless route whose handler passed a decorator the catalog's `annotations` state the
+    # methods of serves exactly those methods, one row each.
     narrowed = (
         _narrowed_verbs(captures.get("handler"), captures[NARROWED_BY], context)
         if verbless and NARROWED_BY in captures and direction == "inbound"
@@ -4027,7 +4027,7 @@ def _blocked(stack: _Stack, context: "_DeriveContext") -> "_Judged | None":
 @dataclass(frozen=True)
 class _ClassDispatch:
     """`matches.dispatch` (`{name, method}`, a method of the class and the verb it serves) and
-    `matches.bypassed_by` (`{name}`), read for a handler given as a class through a call."""
+    `matches.bypassed_by` (`{name}`), read for a handler that is a class below `supertype`."""
 
     verbs: tuple[tuple[str, str], ...]
     bypassed: tuple[str, ...]
@@ -4044,7 +4044,7 @@ def _class_dispatch(
         if "dispatch" in matches or "bypassed_by" in matches:
             raise CatalogError(
                 f"loading catalog {catalog.source}: `dispatch` and `bypassed_by` are read for a "
-                f"root whose handler capture declares `through` (D02 §2's `fluent` style)"
+                f"catalog that declares `supertype` (D02 §2's `fluent` style)"
             )
         return None
     verbs = matches.get("dispatch")
@@ -4068,7 +4068,7 @@ def _class_dispatch(
         )
     ):
         raise CatalogError(
-            f"loading catalog {catalog.source}: a root whose handler is given `through` a call "
+            f"loading catalog {catalog.source}: a catalog that declares `supertype` "
             f"needs `dispatch`, a non-empty list of `{{name, method}}`, and `bypassed_by`, a "
             f"list of `{{name}}` (D02 §2's `fluent` style)"
         )
@@ -4081,12 +4081,10 @@ def _class_dispatch(
 def _class_view(
     captures: dict[str, Any], context: "_DeriveContext"
 ) -> list[tuple[dict[str, Any], "_Judged | None", bool]] | _Judged | None:
-    """A handler given as a class through a call (`HANDLER_THROUGH`): where the handler
-    argument was made by a call of `through.owner.method` on that owner or a class below it,
-    read as decorators are (`_decorator_stack`) through calls a value model states hand it on,
-    the captures of each row the class serves (`_class_rows`). Where a call no value model
-    states lies between, which function runs is not read here (`_blocked`). None where the
-    argument was made by no such call: the handler reads as it always has."""
+    """A handler that is a class below the catalog's `supertype` (`HANDLER_THROUGH`): where the
+    value walk reads the handler argument as such a class, the captures of each row the class
+    serves (`_class_rows`), each no surer than `partial` where another path of the value names
+    no such class. None where no path does: the handler reads as it always has."""
     rule = captures[HANDLER_THROUGH]
     argument = captures.get("handler")
     if not isinstance(argument, dict):
@@ -4095,25 +4093,73 @@ def _class_view(
     index = context.values
     if at is None or index is None or context.workspace is None or context.class_dispatch is None:
         return None
+    site = index.sites.get((str(at[0]), int(str(at[1]))))
+    if site is None:
+        return None
     dispatch = context.workspace.once(dispatch_of)
-    stack = _decorator_stack(index, str(at[0]), argument, context.method_symbols)
-    for position, (method, row) in enumerate(stack.calls):
-        owner = _bound_owner(method, row, context)
-        if owner is None or row["name"] != rule.method or not _below(owner, rule.owners, dispatch):
+    # The handler value, read as a call of it is (Django calls the view): a class below the
+    # catalog's `supertype` (`X.as_view()` is `X`, a value model's `returns_receiver`) answers
+    # by its methods.
+    owners: list[str] = []
+    other = False
+    for producer, path in producer_paths(index, site, int(at[2]), frozenset(), functions=True):
+        if context.path is not None and path.joined(context.path) is None:
             continue
-        outer = stack.calls[:position]
-        unstated = next(
-            (call for call in outer if _handed_back(index, call[0], call[1]) is None), None
+        held = producer.ended_at
+        if held is not None and _view_class(held, rule.owners, dispatch):
+            owners.append(str(held.value))
+        else:
+            other = True
+    stack = _decorator_stack(index, str(at[0]), argument, context.method_symbols)
+    if not owners:
+        # A call no value model states, applied to such a class (`own_wrapper(X.as_view())`):
+        # which function runs is not read here, as for a function it is applied to.
+        if stack.blocked is None:
+            return None
+        _, row = stack.blocked
+        slot = argument_slot(row["arguments"] or [], 0)
+        if (
+            slot is None
+            or slot == UNPACKED_SLOT
+            or not any(
+                _view_class(producer.ended_at, rule.owners, dispatch)
+                for producer, _ in producer_paths(index, row, slot, frozenset(), functions=True)
+            )
+        ):
+            return None
+        return _blocked(replace(stack, reaches_function=True), context)
+    narrowed = (
+        _narrowed_verbs(argument, captures[NARROWED_BY], context)
+        if NARROWED_BY in captures
+        else None
+    )
+    # The arguments of the calls the handler was made through (`as_view(http_method_names=...)`
+    # changes the table: `_class_rows`).
+    made = {
+        "arguments": tuple(
+            argument for _, row in stack.calls for argument in row["arguments"] or ()
         )
-        if unstated is not None:
-            return _blocked(_Stack(outer, unstated, True), context)
-        narrowed = (
-            _narrowed_verbs(argument, captures[NARROWED_BY], context)
-            if NARROWED_BY in captures
-            else None
-        )
-        return _class_rows(owner, row, captures, rule.owners, context, narrowed)
-    return None
+    }
+    rows: list[tuple[dict[str, Any], _Judged | None, bool]] = []
+    for owner in dict.fromkeys(owners):
+        for filled, handled, inexact in _class_rows(
+            owner, made, captures, rule.owners, context, narrowed
+        ):
+            # A path of the handler value that names no class leaves every row unsure.
+            rows.append((filled, handled, inexact or other))
+    return rows
+
+
+def _view_class(held: Answer | None, owners: Sequence[str], dispatch: Dispatch) -> bool:
+    """Whether a value is a class (not an object of it) below one of `owners`."""
+    return (
+        held is not None
+        and held.class_object
+        and held.kind == LITERAL
+        and held.literal_kind == SYMBOL
+        and names_a_type(str(held.value))
+        and _below(str(held.value), owners, dispatch)
+    )
 
 
 def _below(owner: str, owners: Sequence[str], dispatch: Dispatch) -> bool:
@@ -4129,18 +4175,6 @@ def _below(owner: str, owners: Sequence[str], dispatch: Dispatch) -> bool:
     return False
 
 
-def _bound_owner(method: str, row: Mapping[str, Any], context: "_DeriveContext") -> str | None:
-    """The type a call is made on: its own owner, else the one receiver binding settled on
-    (`bound_call_site_index`, which `context.facts` holds)."""
-    if row.get("owner") is not None:
-        return str(row["owner"])
-    ordinal = row["ordinal"]
-    for site in context.facts.sites_by_caller.get(method, ()):
-        if site["ordinal"] == ordinal:
-            return None if site["owner"] is None else str(site["owner"])
-    return None
-
-
 def _class_rows(
     owner: str,
     row: Mapping[str, Any],
@@ -4152,13 +4186,13 @@ def _class_rows(
     """The rows the class `owner` serves through the call `row` (D02 §2's `fluent` style), each
     as its captures, its handler and whether it is no surer than `partial`. Each member is
     looked up in the class's lookup order (`Dispatch.order_through_headers`), on the types whose
-    methods were read, the module's and the libraries' class bodies; one the `through` owner
+    methods were read, the module's and the libraries' class bodies; one the `supertype`
     itself defines is the framework's own answer and never a row. A `bypassed_by` method the
-    class's chain defines, down to the `through` owner's own, replaces the dispatch unless it
+    class's chain defines, down to the `supertype`'s own, replaces the dispatch unless it
     calls the method it overrides on its parent on some path (`special` in a module body,
     `calls_super` in a library one; the servlet precedent): the first that does not is one
     row serving any method, that method the handler. One whose body was not read leaves the
-    rows `partial`. A `narrowed_by` call wrapping the registration narrows the rows
+    rows `partial`. An `annotations` call wrapping the registration narrows the rows
     (`_narrowed_rows`).
     Otherwise one row per `dispatch` method the class defines, that method the handler. Every
     row is `partial` where the order meets a type whose methods were not read (it may define
@@ -4191,7 +4225,7 @@ def _class_rows(
         key: value for key, value in captures.items() if key not in (HANDLER_THROUGH, NARROWED_BY)
     }
     for name in table.bypassed:
-        # Every override on the chain, in lookup order, down to the `through` owner's own: each
+        # Every override on the chain, in lookup order, down to the `supertype`'s own: each
         # one that hands the request back (`super().<name>(...)` on some path; what it answers
         # on another is the handler's own behaviour, as a pass-through decorator's) lets the
         # next one run; the first one read that does not is the one that answers.
@@ -4227,7 +4261,7 @@ def _class_rows(
 def _narrowed_rows(
     rows: list[tuple[dict[str, Any], _Judged | None, bool]], narrowed: tuple[str | None, ...] | None
 ) -> list[tuple[dict[str, Any], _Judged | None, bool]]:
-    """A class's rows where a call `narrowed_by` names wraps the registration (`_narrowed_verbs`):
+    """A class's rows where a call `annotations` names wraps the registration (`_narrowed_verbs`):
     each verb row the narrowing allows, and an any-method row as one row per allowed method.
     Unchanged where no such call wraps it."""
     if narrowed is None:
@@ -4295,7 +4329,7 @@ def _class_members(
 def _narrowed_verbs(
     handler: Any, narrowing: Sequence[Mapping[str, Any]], context: "_DeriveContext"
 ) -> tuple[str | None, ...] | None:
-    """The methods a handler serves where it passed a call `narrowed_by` names (D02 §2's
+    """The methods a handler serves where it passed a call `annotations` names (D02 §2's
     `fluent` style): each such call's methods, intersected where several apply (each allows a
     method or refuses it), in the order of the outermost; an unread method list is no method
     at all (one row, `unresolved`). None where it passed no such call: the route stays as its
@@ -4332,7 +4366,7 @@ def _narrowed_verbs(
 def _narrowing_verbs(
     declared: Any, row: Mapping[str, Any], context: "_DeriveContext"
 ) -> tuple[str | None, ...]:
-    """One `narrowed_by` entry's methods on the call `row`: its literal verb or verbs, or the
+    """One `annotations` entry's methods on the call `row`: its literal verb or verbs, or the
     list its argument reference reads, as written (the list form's read, `_listed_verbs`)."""
     if isinstance(declared, str):
         return (declared,)

@@ -1149,6 +1149,21 @@ approvals:
   approved_by: user
   approved_on: 2026-11-23
   reference: docs/superpowers/specs/2026-11-23-python-django-redesign.md §2 item 12
+- word: router_named
+  where: catalog key
+  approved_by: user
+  approved_on: 2026-11-23
+  reference: approved by the user 2026-11-22; plan 2026-11-23-python-django-redesign Global Constraints; `django.yml` header (capability 3, a router named by a module-name string)
+- word: variable
+  where: catalog key
+  approved_by: user
+  approved_on: 2026-11-23
+  reference: approved by the user 2026-11-22; plan 2026-11-23-python-django-redesign Global Constraints; the part of `router_named` in `django.yml` that names the module's variable (`urlpatterns`)
+- word: expression
+  where: 'catalog value: url_is'
+  approved_by: user
+  approved_on: 2026-11-23
+  reference: docs/superpowers/specs/2026-11-23-python-django-redesign.md §2 item 10
 exemptions:
   data_keyed_mappings:
     client_base.default_ports: 'D02 client model: `{scheme: port}`'
@@ -1371,6 +1386,7 @@ exemptions:
     unless_subtype_of: an annotation, type or class name of the framework or the user's code
     value_annotation: an annotation, type or class name of the framework or the user's code
     values: a value the framework defines (a sentinel, a default name, a boolean spelling)
+    variable: a method, function, field or attribute name of the framework or the user's code
     versions: a library coordinate, catalog id, version or citation
     why: prose for a reader
     wildcard: a separator, placeholder or syntax character

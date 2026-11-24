@@ -3,7 +3,7 @@
 
 A function view serves every method (probe, "Function views"): one row with no method. A
 `require_*` decorator of `django.views.decorators.http` narrows it to exactly its set, one row
-per method (`narrowed_by`). The rules are Django's own, measured in
+per method (`annotations` in `django.yml`, the `spring-mvc.yml` words). The rules are Django's own, measured in
 `scripts/probes/django_rules.md`; the harness is `test_django_routes`'s.
 """
 
@@ -63,6 +63,21 @@ def test_require_safe_serves_get_and_head(tmp_path: Path, libraries):
 def test_require_http_methods_serves_its_list(tmp_path: Path, libraries):
     """Review Focus 3: `@require_http_methods(["GET", "POST"])` gives two rows."""
     rows = _view(tmp_path, libraries, "@require_http_methods(['GET', 'POST'])\n" + _DEF)
+
+    assert rows == [
+        ("GET", None, "/x/", _handler("v"), "resolved"),
+        ("POST", None, "/x/", _handler("v"), "resolved"),
+    ]
+
+
+def test_require_http_methods_by_keyword_serves_its_list(tmp_path: Path, libraries):
+    """`method_from: { arg: 0, keyword: request_method_list }` (design 2026-11-23 §4b): the
+    list written by keyword is read as the one written by position."""
+    rows = _view(
+        tmp_path,
+        libraries,
+        "@require_http_methods(request_method_list=['GET', 'POST'])\n" + _DEF,
+    )
 
     assert rows == [
         ("GET", None, "/x/", _handler("v"), "resolved"),
@@ -266,6 +281,36 @@ def test_two_narrowing_decorators_serve_their_intersection(tmp_path: Path, libra
     )
 
     assert rows == [("POST", None, "/x/", _handler("v"), "resolved")]
+
+
+def test_two_narrowing_decorators_with_no_method_in_common_serve_no_method(
+    tmp_path: Path, libraries
+):
+    """Each refuses what it does not list, so no method passes both: no method row."""
+    rows = _view(tmp_path, libraries, "@require_POST\n@require_GET\n" + _DEF)
+
+    assert [row[:2] for row in rows] == []
+
+
+def test_an_unknown_decorator_above_require_post_keeps_the_narrowing_and_asks(
+    tmp_path: Path, libraries
+):
+    """The walk to the function ends at `singledispatch`, which no value model states: the
+    handler is not named and a `handler_pass_through` question is asked, and the `require_POST`
+    below it still narrows the row (Django runs it on the way to the view)."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "from functools import singledispatch\n@singledispatch\n@require_POST\n"
+            + _DEF
+            + "urlpatterns = [path('x/', v)]\n"
+        },
+    )
+
+    assert _rows(workspace) == [("POST", None, "/x/", None, "partial")]
+    assert len(_questions(workspace)) == 1
 
 
 def test_a_project_wrapper_in_the_registration_is_followed_into(tmp_path: Path, libraries):

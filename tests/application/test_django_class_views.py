@@ -120,8 +120,10 @@ def test_a_class_imported_from_another_file(tmp_path: Path, libraries):
 
 
 def test_a_class_whose_base_is_not_read_is_partial(tmp_path: Path, libraries):
-    """A base this analysis cannot read (a library not installed) may define more verbs: the
-    verbs found are published, never `resolved`."""
+    """A base this analysis cannot read (a library not installed) comes first in the lookup
+    order, so it may define `as_view` itself: the value walk does not read `Items.as_view()` as
+    `Items` (design 2026-11-23 §9a, the handler value read by the value walk). The path is
+    published, no handler and no method named, never `resolved`."""
     rows = _views(
         tmp_path,
         libraries,
@@ -129,7 +131,7 @@ def test_a_class_whose_base_is_not_read_is_partial(tmp_path: Path, libraries):
         "class Items(Mixin, View):\n    def get(self, request):\n        return None\n",
     )
 
-    assert rows == [("GET", None, "/x/", _handler("get", "app/urls/Items"), "partial")]
+    assert rows == [(None, "any", "/x/", None, "partial")]
 
 
 def test_an_own_head_is_a_row_and_an_own_options_is_a_row(tmp_path: Path, libraries):
@@ -278,7 +280,7 @@ def test_method_decorator_on_the_class_hides_no_verb(tmp_path: Path, libraries):
 
 
 def test_a_function_view_beside_a_class_view_keeps_its_row(tmp_path: Path, libraries):
-    """`narrowed_by` and the any-method row stay the function view's (Task 4)."""
+    """`annotations` and the any-method row stay the function view's (Task 4)."""
     rows = _views(
         tmp_path,
         libraries,
@@ -447,16 +449,32 @@ def test_a_narrowing_wrapper_narrows_the_class_rows(tmp_path: Path, libraries):
     assert rows == [("POST", None, "/x/", _handler("post", "app/urls/Items"), "resolved")]
 
 
+def test_a_class_handed_through_a_helper_serves_its_verbs(tmp_path: Path, libraries):
+    """The handler value is read by the value walk (design 2026-11-23 §9a): `view_of(Items)`
+    returns `cls.as_view()`, which is `cls`, which is `Items` at this call."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        _ITEMS + "def view_of(cls):\n    return cls.as_view()\n",
+        "path('x/', view_of(Items))",
+    )
+
+    assert rows == [
+        ("DELETE", None, "/x/", _handler("delete", "app/urls/Items"), "resolved"),
+        ("GET", None, "/x/", _handler("get", "app/urls/Items"), "resolved"),
+    ]
+
+
 def test_no_member_found_past_a_base_not_read_names_no_method(tmp_path: Path, libraries):
     """A class with no verb method of its own, below a base not read, may serve anything that
-    base defines: one row naming no method, `unresolved`."""
+    base defines, `as_view` included: one row naming no handler, never `resolved`."""
     rows = _views(
         tmp_path,
         libraries,
         "from not_installed import Mixin\nclass Items(Mixin, View):\n    pass\n",
     )
 
-    assert rows == [(None, None, "/x/", None, "unresolved")]
+    assert rows == [(None, "any", "/x/", None, "partial")]
 
 
 # -- `as_view` read by the value walk (plan 2026-11-23-python-django-redesign, Task 5) ------

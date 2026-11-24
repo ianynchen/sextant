@@ -2331,11 +2331,8 @@ def _check_argument_references(node: Any, style: Any, path: Path, dispatch: bool
             and isinstance(value, dict)
         ):
             keyword, position = value.get("keyword"), value.get("arg", 0)
-            # A mount's router read through an inner call (`through`), checked by its reader
-            # (`mounts._through`).
-            written = set(value) - ({"through"} if key == "router_arg" else set())
             valid = (
-                written <= _REFERENCE_KEYS
+                set(value) <= _REFERENCE_KEYS
                 and isinstance(keyword, str)
                 and keyword.isidentifier()
                 and isinstance(position, int)

@@ -21,13 +21,13 @@ direction: inbound
 #   `router_named: { variable: urlpatterns }` on a mount: a router argument that reads as a
 #   string names a module, and the router is that module's variable of the given name.
 # - Verbs from the methods a class defines, `View.as_view()` (capability 5): REUSED
-#   `dispatch: [{ name, method }]` and `bypassed_by: [{ name }]` (`jakarta-servlet.yml`), the
-#   handler reached by `through` with `read: receiver` on `View.as_view`. Python has no
-#   overloads, so an entry names a method by name alone, with no `parameters`.
-# - The methods a decorator narrows a function view to (capability 4): NEW key `narrowed_by`
-#   on the root's handler capture (ruling R10, the plan's third and last new word):
-#   `handler: { arg: 1, keyword: view, narrowed_by: [{ owner, method, http_method }] }`, the
-#   `http_method` forms reused inside it.
+#   `supertype`, `dispatch: [{ name, method }]` and `bypassed_by: [{ name }]`
+#   (`jakarta-servlet.yml`); the handler value is read by the value walk, `X.as_view()` being
+#   `X`. Python has no overloads, so an entry names a method by name alone, with no
+#   `parameters`.
+# - The methods a decorator narrows a function view to (capability 4; design 2026-11-23 §2
+#   item 8): REUSED `annotations: [{ fqn, method }]` (`spring-mvc.yml`), with `method_from`
+#   in the argument form the fluent catalogs use, `{ arg, keyword }` (approved 2026-11-23).
 # - The any-method row: REUSED `verbless_serves: any` (`vertx-web.yml`; the fluent spelling
 #   of the null method `spring-webflux-router.yml` publishes as `verb: null`).
 # - The join: REUSED `path_join: concatenate` (`fastapi.yml`) and `path_prefix: /`
@@ -50,7 +50,7 @@ matches:
   # THE METHODS A FUNCTION VIEW SERVES (probe, "Function views"; plan 6, Task 4, rulings
   # R10-R12). A plain function serves every method: the any-method row below. Each decorator of
   # `django.views.decorators.http` (probe, "Defining symbols") narrows it to exactly its set, one
-  # row per method (`narrowed_by`): `require_GET` serves GET alone (HEAD and OPTIONS 405),
+  # row per method (`annotations` below): `require_GET` serves GET alone (HEAD and OPTIONS 405),
   # `require_POST` POST alone, `require_safe` GET and HEAD, both rows because the program wrote
   # them; `require_http_methods(request_method_list)` exactly its parameter 0, as written —
   # Django compares the request's upper-cased method against the list unchanged (`if
@@ -72,20 +72,13 @@ matches:
   # A CLASS VIEW (plan 6, Task 5, ruling R3; probe, "Class views"): `path("x/", Items.as_view())`
   # hands Django the closure `view`, whose `view_class` is the class the `as_view` call is made
   # on (probe: "the class must be read from view_class / the as_view receiver, never the
-  # name"), so the handler is read `through` `View.as_view` (a `classonlymethod`, which binds
-  # as a `classmethod`: probe, "Defining symbols") off its receiver. The rows are the class's
-  # dispatch table, `dispatch` and `bypassed_by` below.
+  # name"), so `View.as_view` (a `classonlymethod`, which binds as a `classmethod`: probe,
+  # "Defining symbols") hands back its receiver, the class (`supertype` below). The rows are the
+  # class's dispatch table, `dispatch` and `bypassed_by` below.
   roots:
     - { owner: django.urls.conf, method: path,
         captures: { url: { arg: 0, keyword: route },
-                    handler: { arg: 1, keyword: view,
-                      through: { owner: django.views.generic.base.View, method: as_view, read: receiver },
-                      narrowed_by: [
-                      { owner: django.views.decorators.http, method: require_GET, http_method: GET },
-                      { owner: django.views.decorators.http, method: require_POST, http_method: POST },
-                      { owner: django.views.decorators.http, method: require_safe, http_method: [GET, HEAD] },
-                      { owner: django.views.decorators.http, method: require_http_methods,
-                        http_method: { arg: 0, keyword: request_method_list } } ] } } }
+                    handler: { arg: 1, keyword: view } } }
     # `re_path` is `functools.partial(_path, Pattern=RegexPattern)`, the same `_path(route, view,
     # ...)` (probe, "Defining symbols"), so the same captures; its route is a regular expression
     # (`url_is: expression`, ruling R15), read by the three structural reads of design §5c with
@@ -99,15 +92,21 @@ matches:
     # "alternation inside a named group is one argument".
     - { owner: django.urls.conf, method: re_path,
         captures: { url: { arg: 0, keyword: route }, url_is: expression,
-                    handler: { arg: 1, keyword: view,
-                      through: { owner: django.views.generic.base.View, method: as_view, read: receiver },
-                      narrowed_by: [
-                      { owner: django.views.decorators.http, method: require_GET, http_method: GET },
-                      { owner: django.views.decorators.http, method: require_POST, http_method: POST },
-                      { owner: django.views.decorators.http, method: require_safe, http_method: [GET, HEAD] },
-                      { owner: django.views.decorators.http, method: require_http_methods,
-                        http_method: { arg: 0, keyword: request_method_list } } ] } } }
+                    handler: { arg: 1, keyword: view } } }
   terminal: [path, re_path]
+  # THE METHODS A DECORATOR ON THE VIEW STATES (probe, "Function views"; design 2026-11-23 §4b),
+  # with the words an annotation on a handler has (`spring-mvc.yml`); `method_from` names the
+  # argument of the decorator call that holds the list, as written.
+  annotations:
+    - { fqn: django.views.decorators.http.require_GET, method: [GET] }
+    - { fqn: django.views.decorators.http.require_POST, method: [POST] }
+    - { fqn: django.views.decorators.http.require_safe, method: [GET, HEAD] }
+    - { fqn: django.views.decorators.http.require_http_methods,
+        method_from: { arg: 0, keyword: request_method_list } }
+  # THE CLASS VIEW (the servlet catalog's word): a view the value walk reads as a class below
+  # `View` (`X.as_view()` is `X`, `returns_receiver` in `value-models/django.yml`) answers by
+  # the names of its methods, `dispatch` below.
+  supertype: django.views.generic.base.View
   # THE VERBS A CLASS VIEW SERVES (probe, "Class views"). "as_view() dispatches only methods
   # the class defines: Items(get, post) answers GET and POST 200, PUT and DELETE 405", looked up
   # by name in `View.http_method_names`, "['get','post','put','patch','delete','head','options',

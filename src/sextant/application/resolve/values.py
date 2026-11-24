@@ -3310,6 +3310,14 @@ def called_function(answer: Answer) -> str | None:
     return named if named.endswith(").") else None
 
 
+def _callable(answer: Answer) -> bool:
+    """Whether a call of the value runs a body the walk names: a function (`called_function`)
+    or a class (`class_object`, ruling R37)."""
+    return called_function(answer) is not None or (
+        answer.class_object and bound_owner(answer) is not None
+    )
+
+
 # The descriptor every Python method is called by (D00 §5a): its arguments are bound by name and
 # position at the call, not by a written signature.
 _ANY_ARGUMENTS = "(*)"
@@ -5584,13 +5592,15 @@ class _Walk:
             return self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames)
         if own is not None and own[0] == _RESULT_CALLS and self._functions:
             # A path of the argument that was not read stays beside the functions read: the
-            # wrapper runs one of them, or what was not read.
+            # wrapper runs one of them, or what was not read. A class is called as a function
+            # is (`login_required(Items.as_view())`, the class a value model says `as_view`
+            # stands for), so it is kept as what the call of the class runs.
             runs = tuple(
                 reached
                 for reached in self._stated_slot(site, row, own[1], trail, frames)
-                if called_function(reached[1]) is not None or reached[1].kind == UNRESOLVED
+                if _callable(reached[1]) or reached[1].kind == UNRESOLVED
             )
-            return runs if any(called_function(answer) for _, answer in runs) else None
+            return runs if any(_callable(answer) for _, answer in runs) else None
         receiver = row.get("receiver")
         # Whatever class the scanner typed the call on (`functools.wraps(f)(inner)` is a
         # `functools/_Wrapper#__call__`), applying what a stated call made is read by it.

@@ -2725,50 +2725,60 @@ give (`^opt/?` mounts under `opt` and `opt/`), and the named hole `<prefix>` at 
 its `mount_prefix` question where the reads do not make it exact. Only `expression`, beside a
 `prefix_arg`, loads.
 
-**`roots[].captures.handler.narrowed_by: [{owner, method, http_method}]`** (plan
-2026-11-22-python-django-core-inbound Task 4, ruling R10; the plan's third new word): a
-verbless route whose handler argument was made through a call of `owner.method` serves exactly
-that entry's methods, one row each, instead of the `verbless_serves` row. `http_method` is a
-verb, a list of verbs, or an argument reference `{arg: N, keyword: name}` read as a list of
-verbs as written (the list form's read; a list the value walk does not read is one row with
-method NULL at `unresolved`). The calls are read as decorators are applied, each one's first
-positional argument being what it wraps (`__call__` matched by the call that made its
-receiver), stated or not, in the registration and then through the one value a name a
+**`matches.annotations: [{fqn, method: [verbs]} | {fqn, method_from: {arg: N, keyword: name}}]`**
+(design 2026-11-23 §4b, ruled 2026-11-23: the `annotation_driven` words of `spring-mvc.yml`; a
+decorator on a handler is an annotation on a handler), for a catalog whose roots capture a
+`handler`: a verbless route whose handler argument was made through a call of the function
+`fqn` names (its module and name) serves exactly that entry's methods, one row each, instead
+of the `verbless_serves` row. `method` is a list of verbs; `method_from` is the one extension
+(approved 2026-11-23): in the `fluent` style it is the argument form the fluent catalogs use,
+`{arg: N, keyword: name}`, of the decorator call, read as a list of verbs as written (the list
+form's read; a list the value walk does not read is one row with method NULL at `unresolved`).
+In `spring-mvc.yml` it is an attribute name. The calls are read as decorators are applied, each
+one's first positional argument being what it wraps (`__call__` matched by the call that made
+its receiver), stated or not, in the registration and then through the one value a name a
 decorated `def` binds, down to the def. Several matching calls give the intersection of their
-sets. The handler is a separate question (ruling R13): it is followed only through calls a
-value model states hand the function on (`returns_argument`); where a call no value model
-states lies between the registration and a function the module defines, on the def or in the
+sets (an empty one, no row). The handler is a separate question (ruling R13): it is followed
+only through calls a value model states hand the function on (`returns_argument`) and the
+module's own wrappers that call what they captured; where a call no value model states lies
+between the registration and a function the module defines, on the def or in the
 registration, the row names no handler, is `partial`, and files a `handler_pass_through`
 question, and its methods are still narrowed.
 Django: `require_GET`, `require_POST`, `require_safe`, `require_http_methods` (probe
 `scripts/probes/django_rules.md`, "Function views").
 
-**`roots[].captures.handler.through: {owner, method, read: receiver}`, with `matches.dispatch:
-[{name, method}]` and `matches.bypassed_by: [{name}]`** (plan 2026-11-22-python-django-core-inbound
-Task 5, ruling R3; the `through` word of `mount[].router_arg` and the two `supertype_dispatch`
-words, no new word): a handler argument made by a call of `owner.method` on `owner` or a type
-below it (its read ancestors) is that call's receiver, a class, and the route serves the class's
-dispatch table. Each `dispatch` member is looked up by name in the class's C3 order through the
-types whose methods were read (the module's, and the library class bodies a header lists); the
-route gets one row per member found, its `method` the verb and its handler that member, on the
-type that defines it. A member `owner` itself defines is the framework's own answer and never a
-row. Every `bypassed_by` method on the class's chain, down to `owner`'s own, is asked whether
-its body calls the method it overrides on its parent on some path (`special` in a module body,
-the header's `calls_super` in a library one, D00 §5 `type_header`; the servlet rule): the first
-that does not replaces the dispatch, one row serving any method (`verbless_serves`), that
-method the handler; one whose body was not read leaves the rows `partial`. A `narrowed_by` call
-wrapping the registration narrows the rows, an any-method row becoming one row per method it
-allows. A `bypassed_by` name the class writes as a value,
-or the call passes as a keyword, changes the table in a way not read: every row is `partial`.
-So is every row where the order meets a type whose methods were not read, or a bypass whose
-body was not read; such a class with no member found is one row naming no method,
-`unresolved`. The call is read as `narrowed_by` reads its calls, through calls a value model
-states hand the value on; one no value model states gives that convention's `partial` row with
-no handler and a `handler_pass_through` question. `narrowed_by` does not apply to the class's
-rows. Python names a member by name alone, so an entry has no `parameters`. Django:
-`through: { owner: django.views.generic.base.View, method: as_view, read: receiver }`,
-`dispatch` the eight names of `View.http_method_names`, `bypassed_by: [dispatch,
-http_method_names]` (probe `scripts/probes/django_rules.md`, "Class views").
+**`matches.supertype: <class>`, with `matches.dispatch: [{name, method}]` and
+`matches.bypassed_by: [{name}]`** (plan 2026-11-22-python-django-core-inbound Task 5, ruling
+R3; design 2026-11-23 §9a; the three `supertype_dispatch` words of `jakarta-servlet.yml`, no
+new word), for a catalog whose roots capture a `handler`: where the value walk reads the
+handler argument as a call of it is read (the framework calls the view) and a path gives a
+class below `supertype` (its read ancestors), the route serves that class's dispatch table.
+`X.as_view()` is `X` by a value model (`returns_receiver`), and a stated wrapper of it
+(`login_required(X.as_view())`, `result_calls`) runs it; a helper that returns `cls.as_view()`
+is read on each caller's path. A path of the handler value that gives no such class leaves
+every row `partial`. Each `dispatch` member is looked up by name in the class's C3 order through
+the types whose methods were read (the module's, and the library class bodies a header lists);
+the route gets one row per member found, its `method` the verb and its handler that member, on
+the type that defines it. A member `supertype` itself defines is the framework's own answer and
+never a row. Every `bypassed_by` method on the class's chain, down to `supertype`'s own, is
+asked whether its body calls the method it overrides on its parent on some path (`special` in
+a module body, the header's `calls_super` in a library one, D00 §5 `type_header`; the servlet
+rule): the first that does not replaces the dispatch, one row serving any method
+(`verbless_serves`), that method the handler; one whose body was not read leaves the rows
+`partial`. An `annotations` call wrapping the registration narrows the rows, an any-method row
+becoming one row per method it allows. A `bypassed_by` name the class writes as a value, or a
+call the handler was made through passes as a keyword, changes the table in a way not read:
+every row is `partial`. So is every row where the order meets a type whose methods were not
+read, or a bypass whose body was not read; such a class with no member found is one row naming
+no method, `unresolved`. A class whose lookup order meets an unread type before the value
+model's type may define `as_view` itself, so its handler value is not read: one row naming no
+handler, `partial`. A call no value model states applied to such a class gives that
+convention's `partial` row with no handler and a `handler_pass_through` question. Python names
+a member by name alone, so an entry has no `parameters`. Django: `supertype:
+django.views.generic.base.View`, `dispatch` the eight names of `View.http_method_names`,
+`bypassed_by: [dispatch, http_method_names]` (probe `scripts/probes/django_rules.md`, "Class
+views"). The handler capture takes no other key: the first build's `through` and
+`narrowed_by` on it are removed, and a catalog declaring them does not load.
 
 **A step may declare `receiver_arg: N`** (spec 2026-10-26 §3c): the step joins the chain
 through argument N's value id instead of through its own `receiver`. A Kotlin extension
@@ -4958,7 +4968,7 @@ ones it names and withhold the ones it does not — a wrong answer, not a partia
 REQUIRED and may be empty: a supertype with no bypass says so, because an omitted bypass is
 indistinguishable from a forgotten one and the forgotten one publishes wrong verbs. **A second reading, in the `fluent` style only** (plan
 2026-11-22-python-django-core-inbound Task 5): there a `bypassed_by` name the class writes as a
-value (a class attribute, not a method), or the `through` call passes as a keyword, changes the
+value (a class attribute, not a method), or a call the handler was made through passes as a keyword, changes the
 dispatch table in a way not read, and every row the table gives is `partial` rather than
 discarded (Django's `http_method_names`).
 

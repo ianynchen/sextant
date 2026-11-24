@@ -207,19 +207,6 @@ class MountRule:
 
 
 @dataclass(frozen=True)
-class Through:
-    """A handler capture's `through` (D02): the call the handler argument must be, and the
-    argument reference read off it."""
-
-    owners: tuple[str, ...]
-    method: str
-    read: Any
-
-    def matches(self, site: Mapping[str, Any]) -> bool:
-        return str(site.get("owner")) in self.owners and site["name"] == self.method
-
-
-@dataclass(frozen=True)
 class HoldRule:
     """One `router_holds` entry (plan 2026-11-08 N7): the construction that makes a router,
     the argument holding the prefix it carries, and the dependencies it adds (N6)."""
@@ -533,29 +520,6 @@ def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> M
         router_named=_router_named(entry, where),
         expression=_expression(entry, prefix_arg, where),
         registers=entry["method"] in roots,
-    )
-
-
-def _through(declared: Any, where: str) -> Through:
-    """A handler capture's `through`: `{owner, method, read}`, `read` any argument reference
-    or `receiver`."""
-    if (
-        not isinstance(declared, dict)
-        or set(declared) != {"owner", "method", "read"}
-        or not isinstance(declared["method"], str)
-        or (
-            declared["read"] != RECEIVER
-            and argument_reference(declared["read"], spelled=False) is None
-        )
-    ):
-        raise CatalogError(
-            f"{where} `through` must be `{{owner, method, read}}`, `read` a position, "
-            f"`{{keyword: name}}`, `{{arg: N, keyword: name}}` or `{RECEIVER}`"
-        )
-    return Through(
-        catalog_symbols(declared["owner"], f"{where} through owner"),
-        declared["method"],
-        declared["read"],
     )
 
 
