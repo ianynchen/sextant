@@ -310,18 +310,18 @@
       "PUT /api/v1/{organization}/workflows/{workflow_id}"
     ],
     "outbound": [
-      "DELETE (unresolved)",
-      "GET (unresolved)",
+      "DELETE /v2/{path}",
       "GET (unresolved)",
       "GET (unresolved)",
       "GET /repos/{}/{}/{}/{}",
       "GET /v2/schedules/{team_id}/on-calls",
+      "GET /v2/{path}",
       "GET /{kid}",
       "GET <host>/rest/api/2/groupuserpicker",
       "POST (unresolved)",
-      "POST (unresolved)",
       "POST /v1.0/users/{}/onlineMeetings",
       "POST /v2/alerts",
+      "POST /v2/{path}",
       "PUT <host>wiki/rest/api/content/{page_id_to_move}/move/append/{parent_id}"
     ]
   }

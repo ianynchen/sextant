@@ -727,6 +727,19 @@ def test_an_adder_that_is_not_on_a_list_of_this_module_body_stays_a_call(tmp_pat
     assert adders == ["append", "append", "extend"]
 
 
+def test_a_name_written_as_a_tuple_is_not_a_list(tmp_path: Path):
+    """`T = ('a',)` then `T += OTHER`: a tuple is no list, so the sum is not written as a
+    list of the list class (older Django settings write `MIDDLEWARE_CLASSES` so)."""
+    tree = _scan(
+        tmp_path,
+        {"app/m.py": "from app.lib import OTHER\nT = ('a',)\nT += OTHER\nT.append('b')\n"},
+    )
+
+    first, summed = _writes(tree, "app/m#T.")
+    assert first is not None and first.symbol == "builtins/tuple#"
+    assert summed is None or summed.kind != "array"
+
+
 def test_a_sum_onto_a_list_name_is_a_list(tmp_path: Path):
     """A name last written as a list in this body is a list, whatever its other writes."""
     tree = _scan(

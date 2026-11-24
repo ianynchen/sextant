@@ -1196,11 +1196,11 @@ class BodyReader:
 
     def _in_order(self, written: str, value: CallArgument, scope: Scope) -> CallArgument:
         """A write to a module-level name, read in the order the body runs: the name is a
-        list from here on where the value is an `array` (`_is_list`, `_added`), and is not
-        where it is anything else. The value is written as it is."""
+        list from here on where the value is a list (`_is_list`, `_added`), and is not where
+        it is anything else, a tuple too. The value is written as it is."""
         if scope.frame is not None or scope.class_path is not None:
             return value
-        if value.kind == "array":
+        if value.kind == "array" and value.symbol == _LITERAL_CLASSES[ast.List]:
             self._lists[written] = None
         else:
             self._lists.pop(written, None)
