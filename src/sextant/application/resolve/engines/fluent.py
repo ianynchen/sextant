@@ -22,7 +22,7 @@ from typing import Any, cast
 
 from sextant.application.ports.catalogs import Catalog, CatalogError
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.dispatch import dispatch_of
+from sextant.application.resolve.dispatch import Dispatch, dispatch_of
 from sextant.application.resolve.open_questions import record_open_questions
 from sextant.application.resolve.parameter_markers import (
     parameter_markers,
@@ -42,6 +42,7 @@ from sextant.application.resolve.request_requirements import (
     ParameterReading,
     ParameterRules,
     body_field_requirement,
+    method_reads,
     parameter_rules,
     read_dependant,
     read_parameters,
@@ -86,10 +87,13 @@ from sextant.application.resolve.shapes.chains import (
     _LINK_SENDER,
     _READS_LINK,
     _UNRESOLVED_ARGUMENT,
+    HANDLER_THROUGH,
+    NARROWED_BY,
     VERBS_TO_READ,
     ChainEnd,
     _captured_at,
     _declared_entries,
+    _listed_verbs,
     _matching_root,
     _method_symbols,
     _resolve_captures,
@@ -156,6 +160,7 @@ from sextant.application.resolve.shapes.mounts import (
     Prefix,
     file_unread_prefix,
     mount_rules_of,
+    mounts_a_router,
     programs_of,
     router_producers,
     same_router,
@@ -177,6 +182,7 @@ from sextant.application.resolve.shapes.pass_through import (
     unread_rows,
 )
 from sextant.application.resolve.shapes.rooting import _catalog_symbol, catalog_symbols
+from sextant.application.resolve.shapes.route_expression import URL_IS_EXPRESSION, paths_of
 from sextant.application.resolve.values import (
     ABSENT,
     EXPRESSION,
@@ -190,6 +196,7 @@ from sextant.application.resolve.values import (
     UNPACKED_SLOT,
     Answer,
     Path,
+    Producer,
     ValueIndex,
     argument_slot,
     cached_value_index,
@@ -211,9 +218,11 @@ from sextant.domain.paths import canonical_http_path, serves_urls
 from sextant.domain.redaction import REDACTED, Redactor
 from sextant.domain.symbols import (
     ANY_TYPE,
+    PY_SIGNATURE,
     UNION_TYPE,
     bare_descriptor,
     member_name,
+    method_descriptor,
     method_name,
     names_a_type,
     owner_of,
@@ -271,7 +280,9 @@ _UNREAD_DESTINATION = "unread"
 # What a captured address IS (`url_is`, Vert.x spec §3a), a literal capture beside `url`, last
 # wins: a regular expression the framework matches (`pattern`, the row's `path_kind`), or an
 # address (`address`, the default), which a later step declares to undo an earlier pattern.
-_URL_IS = {PATH_KIND_PATTERN: PATH_KIND_PATTERN, "address": None}
+# A route expression (`expression`, D02) is read by its structural reads (`paths_of`) per
+# destination: its exact paths are addresses, anything else the text as a pattern.
+_URL_IS = {PATH_KIND_PATTERN: PATH_KIND_PATTERN, "address": None, URL_IS_EXPRESSION: None}
 # A literal capture saying whether the chain serves at all (`serves`, Vert.x spec §3a): a
 # step declaring `serves: false` (`disable()`) makes the chain derive nothing until a later
 # step declares `serves: true`. A `poisons: [serves]` step ends it for good.
@@ -373,6 +384,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     refuses_unrooted = _refuses_unrooted_path(matches, catalog)
     verbless_serves = validated_verbless_serves(matches, catalog.source, "fluent")
     pathless_serves = _pathless_serves(matches, catalog)
+    path_prefix = _path_prefix(matches, catalog)
+    class_dispatch = _class_dispatch(matches, catalog, roots)
     _validate_route_captures([*roots, *bean_roots, *steps], catalog)
     pass_through = pass_through_of(matches, catalog.source)
     mount_rules = mount_rules_of(matches, catalog.source, words=catalog.root_kind is not None)
@@ -505,6 +518,12 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         conditions = conditions_of(workspace)
         if not conditions.guards:
             conditions = None
+    # §4d of design 2026-11-23: read once per run, for the any-method rows it may doubt.
+    request_flow = (
+        _request_flow(walk_index, catalog, workspace)
+        if catalog.direction == "inbound" and verbless_serves is not None
+        else None
+    )
     context: _DeriveContext | None = None
     for end in ends:
         # Ends arrive caller by caller, so the caller's own facts are built once per
@@ -541,6 +560,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 roots=roots,
                 verbless_serves=verbless_serves,
                 pathless_serves=pathless_serves,
+                path_prefix=path_prefix,
+                class_dispatch=class_dispatch,
                 judged=judged,
                 candidates=candidates,
                 unread=unread,
@@ -554,6 +575,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 model_fields=models,
                 conditions=conditions,
                 registrations=registrations,
+                request_flow=request_flow,
             )
         # A mount's chain (spec §3c) is not a route: what Vert.x refuses of it is recorded,
         # and it derives a row only where it was given a handler as well.
@@ -574,8 +596,15 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     caller=end.caller,
                     handler=None,
                 )
-            if "handler" not in end.captures:
+            # A mount that is a route root too holds its router where a route holds its
+            # handler: the capture names the router, never a handler.
+            if "handler" not in end.captures or mount.rule.registers:
                 continue
+        elif mount_rules is not None and _unread_router(end, mount_rules, walk_index):
+            # A call that may be a mount whose router argument reads as no value at all: a
+            # route or a mount, which is not read, so the row is no surer than `partial`
+            # (design 2026-11-23 §9b).
+            end = replace(end, inexact=True)
         # A chain walked back across methods is read on the path it took (ruling 5), and a
         # client sitting at the root's receiver is read off that root.
         held = context
@@ -655,15 +684,31 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # one of them would erase whichever ran first.
     if metadata:
         workspace.derive("endpoint_metadata_insert", rows=metadata)
-    # The ledger's reset is the pipeline's, for the `open_questions` reason above.
+    # The ledger's reset is the pipeline's, for the `open_questions` reason above. A question
+    # about a registration written in a library body the header document holds goes with the
+    # row `drop_borrowed_endpoints.sql` drops (F4 §5.2), by the same key, its `caller`.
+    borrowed = {str(row["symbol"]) for row in workspace.query("header_symbols")}
     record_open_questions(
         workspace,
         [
-            *refusal_rows(refusals),
-            *unread_rows(unread),
-            *unread_prefix_rows(unread_prefixes, rows),
+            *refusal_rows(_own_candidates(refusals, borrowed)),
+            *unread_rows(_own_candidates(unread, borrowed)),
+            *unread_prefix_rows(_own_candidates(unread_prefixes, borrowed), rows),
         ],
     )
+
+
+def _own_candidates[K](
+    questions: Mapping[K, dict[str, Any]], borrowed: set[str]
+) -> dict[K, dict[str, Any]]:
+    """Each question with only the candidates whose `caller` is not in `borrowed` (a library
+    body's); a question left with none is no question of this module's."""
+    kept: dict[K, dict[str, Any]] = {}
+    for key, question in questions.items():
+        own = [one for one in question["candidates"] if str(one["caller"]) not in borrowed]
+        if own:
+            kept[key] = {**question, "candidates": own}
+    return kept
 
 
 @dataclass(frozen=True)
@@ -755,6 +800,7 @@ def _run_entry_points(
         )
     roots: dict[tuple[str | None, str | None], None] = {}
     metadata: list[dict[str, Any]] = []
+    borrowed = {str(row["symbol"]) for row in workspace.query("header_symbols")}
     for end in ends:
         terminal = end.terminal
         if terminal is None or _site_key(end.root) in mounted or _site_key(terminal) in mounted:
@@ -765,6 +811,11 @@ def _run_entry_points(
         # `class MyGroup(click.Group)`'s `command` is). The walk also hands back ends with no
         # declared root (a `__call__` walked back to nothing), which register nothing.
         if _matching_root(dict(end.root), list(registrations)) is None:
+            continue
+        # F4 §5.2 (W24): a registration written in a library body the header document holds
+        # (`Group.command`'s own code) is the library's; a root row has no caller for
+        # `drop_borrowed_endpoints.sql` to key on, so it is left out here.
+        if str(end.root["caller"]) in borrowed:
             continue
         captured = end.captures.get("handler")
         at = captured.get(_CAPTURED_AT) if isinstance(captured, dict) else None
@@ -827,17 +878,139 @@ def _run_entry_points(
         workspace.derive("endpoint_metadata_insert", rows=metadata)
 
 
+@dataclass(frozen=True)
+class _RequestFlow:
+    """Per method and parameter: whether the method is read off it there, the module methods
+    and parameters it is handed to, and whether it is handed to a value that is called and is
+    no parameter of the method (`View.as_view()(request)`: another handler)."""
+
+    reads: frozenset[tuple[str, int]]
+    hands: Mapping[tuple[str, int], tuple[tuple[str, int], ...]]
+    calls: frozenset[tuple[str, int]]
+
+
+def _request_flow(
+    index: ValueIndex, catalog: Catalog, workspace: Workspace
+) -> "_RequestFlow | None":
+    """`_RequestFlow` for one run; None where the catalog declares no `kind: method` read. A
+    read of the method is a call the catalog's `request_reads` names with `kind: method`, made
+    on a parameter with no argument: on the type the entry names or a type below it, or on a
+    value whose class the facts do not name. A parameter is handed on along the index's own
+    binding of arguments to parameters (`ValueIndex.callers`), turned round; a call OF a value
+    the method was given (`f(request)` in a wrapper) is not followed: what it runs is the
+    path's own."""
+    named = method_reads(catalog)
+    if not named:
+        return None
+    dispatch = workspace.once(dispatch_of)
+    names = {name for _, name in named}
+    reads: set[tuple[str, int]] = set()
+    calls: set[tuple[str, int]] = set()
+    hands: dict[tuple[str, int], list[tuple[str, int]]] = {}
+    for (method, _), site in index.sites.items():
+        on = site.get("receiver_parameter")
+        owner = site.get("owner")
+        if (
+            on is not None
+            and site["name"] in names
+            and not site["arguments"]
+            and (
+                owner is None
+                or _below(
+                    str(owner), [type_ for type_, name in named if name == site["name"]], dispatch
+                )
+            )
+        ):
+            reads.add((method, int(str(on))))
+        given = (site["arguments"] or [None])[0]
+        if (
+            site["name"] == "__call__"
+            and on is None
+            and given is not None
+            and given.get("kind") == "parameter"
+            and given.get("value") is not None
+        ):
+            calls.add((method, int(str(given["value"]))))
+    for (callee, position), callers in index.callers.items():
+        for caller, ordinal, slot in callers:
+            made = index.sites.get((caller, ordinal)) or {}
+            if made.get("name") == "__call__" and made.get("receiver_parameter") is not None:
+                continue
+            arguments = made.get("arguments") or []
+            entry = arguments[slot] if 0 <= slot < len(arguments) else None
+            if (
+                entry is not None
+                and entry.get("kind") == "parameter"
+                and entry.get("value") is not None
+            ):
+                hands.setdefault((caller, int(str(entry["value"]))), []).append((callee, position))
+    return _RequestFlow(
+        frozenset(reads), {key: tuple(value) for key, value in hands.items()}, frozenset(calls)
+    )
+
+
+def _any_method_doubted(
+    handler: Any,
+    judged: "_Judged | None",
+    context: "_DeriveContext",
+    paths: Sequence[tuple[Producer, Path]],
+) -> bool:
+    """Whether the code a request to this any-method row runs through gives a reason to doubt
+    that every method is answered (design 2026-11-23 §4d): the row names no handler; the
+    handler's body was not read (a library's); or the handler, or a module wrapper the walk ran
+    through to reach it, reads the method off the request it received, in its own body or in
+    module code it hands that request to, as far as the module's code goes, or hands the
+    request to another handler. A request handed to a library function is no reason. `paths`
+    are the handler value's (`_handler_paths`)."""
+    flow, index = context.request_flow, context.values
+    if flow is None or index is None:
+        return False
+    if judged is None or judged.symbol is None:
+        return True
+    if context.method_symbols.get(bare_descriptor(judged.symbol)) != judged.symbol:
+        return True
+    through = [body for _, path in paths for body in path.ran_through()]
+    # The request is each body's parameter 0.
+    pending = [(body, 0) for body in dict.fromkeys([judged.symbol, *through])]
+    seen: set[tuple[str, int]] = set()
+    while pending:
+        at_body = pending.pop()
+        if at_body in seen:
+            continue
+        seen.add(at_body)
+        if at_body in flow.reads or at_body in flow.calls:
+            return True
+        pending.extend(flow.hands.get(at_body, ()))
+    return False
+
+
+def _handler_paths(handler: Any, context: "_DeriveContext") -> tuple[tuple[Producer, Path], ...]:
+    """Every path of a handler argument, read as a call of it is (`producer_paths(...,
+    functions=True)`); none where the argument names no site the walk can be asked about."""
+    argument = handler[0] if isinstance(handler, tuple) and handler else handler
+    at = argument.get(_CAPTURED_AT) if isinstance(argument, dict) else None
+    index = context.values
+    site = None if at is None or index is None else index.sites.get((str(at[0]), int(str(at[1]))))
+    if site is None or at is None or index is None:
+        return ()
+    return producer_paths(index, site, int(at[2]), frozenset(), functions=True)
+
+
 def _entry_handlers(
     index: ValueIndex,
     site: Mapping[str, Any],
     slot: int,
     method_symbols: Mapping[str, str],
     within: Path | None = None,
+    unread: list[str] | None = None,
+    through: list[str] | None = None,
 ) -> tuple[str, ...]:
     """The function each path of the handler argument at `site`'s `slot` reaches, as a call of
     it would (`producer_paths(..., functions=True)`), joined to its full method symbol; in
     path order, each once. Only the paths agreeing with `within`, where one is given: the
-    handler one call hands a factory, read on that call (M-1)."""
+    handler one call hands a factory, read on that call (M-1). The reason of each path that
+    reached no function is added to `unread`, and the module wrappers it ran through
+    (`Path.ran_through`) to `through`, where one is given."""
     found: list[str] = []
     for producer, path in producer_paths(index, site, slot, frozenset(), functions=True):
         if within is not None and path.joined(within) is None:
@@ -846,6 +1019,10 @@ def _entry_handlers(
         symbol = None if body is None else method_symbols.get(body)
         if symbol is not None and symbol not in found:
             found.append(symbol)
+        elif symbol is None and unread is not None:
+            unread.append(str(producer.reason or NOT_READABLE))
+            if through is not None:
+                through.extend(path.ran_through())
     return tuple(found)
 
 
@@ -998,6 +1175,14 @@ class _DeriveContext:
     # the framework's own spelling (`/*`). None for every catalog not declaring it, whose
     # address-less chain reads as an unread address.
     pathless_serves: str | None = None
+    # `matches.path_prefix` (the `annotation_driven` word, plan 2026-11-22 Task 2): a literal
+    # in front of every inbound address, outermost mount prefix included, joined by the
+    # catalog's `path_join`. None for every catalog not declaring it.
+    path_prefix: str | None = None
+    # `matches.dispatch` and `matches.bypassed_by` (the `supertype_dispatch` words, plan
+    # 2026-11-22 Task 5), for a root whose handler is a class below the catalog's `supertype`
+    # (`HANDLER_THROUGH`). None for every catalog declaring none.
+    class_dispatch: "_ClassDispatch | None" = None
     # The workspace and the walk's index, for the hop ladders (Task 9), shared with the
     # walk (`values.cached_value_index`).
     workspace: "Workspace | None" = None
@@ -1053,6 +1238,10 @@ class _DeriveContext:
     # `endpoint_existence` once the rows are. None where no call of the module is under a test.
     conditions: Conditions | None = None
     registrations: list[tuple[dict[str, Any], Existence]] | None = None
+    # Where a request flows in the module's code, read once per run (`_request_flow`), for an
+    # inbound catalog declaring a `kind: method` read; None for every other catalog, whose
+    # any-method rows nothing doubts.
+    request_flow: "_RequestFlow | None" = None
 
 
 def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
@@ -1100,12 +1289,31 @@ def _derive(end: ChainEnd, context: "_DeriveContext") -> None:
         _derive_captured(end if exact else replace(end, inexact=True), filled, context)
 
 
-def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveContext") -> None:
-    """`_derive`'s row for one reading of the chain's captures."""
+def _derive_captured(
+    end: ChainEnd,
+    captures: dict[str, Any],
+    context: "_DeriveContext",
+    answered: "_Judged | None" = None,
+) -> None:
+    """`_derive`'s row for one reading of the chain's captures; `answered`, the handler where
+    the captures were read for one method of a class (`_class_view`)."""
     # Spec 2026-09-21 §4: the root's own direction where it declared one,
     # the catalog's otherwise — read once, because every column and key
     # below that names a direction names this one.
     direction = captures.get(_DIRECTION, context.catalog.direction)
+    # A handler that is a class below the catalog's `supertype` (`HANDLER_THROUGH`): one row per
+    # method of the class's dispatch table.
+    view = (
+        _class_view(captures, context)
+        if HANDLER_THROUGH in captures and direction == "inbound" and answered is None
+        else None
+    )
+    if isinstance(view, list):
+        for filled, handled, inexact in view:
+            _derive_captured(
+                replace(end, inexact=True) if inexact else end, filled, context, handled
+            )
+        return
     # The consumer the chain captured, whatever the direction (read on the row
     # for an inbound one alone, below); and — fix round 1, finding 4 — a
     # channel-sourced chain (`from("ch")…`, spec §5), whose row is decided by
@@ -1130,7 +1338,13 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
     # branch's own edge written here too.
     # Spec §3b: the chain's handlers run in order until one does not pass the request on; that
     # one names the row. None where every one passes on: middleware, no row.
-    answering = _answering(captures.get("handler"), context)
+    answering = (
+        answered
+        if answered is not None
+        else view
+        if view is not None
+        else _answering(captures.get("handler"), context)
+    )
     last_handler = answering.symbol if answering is not None else None
     reads_link = _READS_LINK in captures
     read = _string_value(captures[_READS_LINK]) if reads_link else None
@@ -1183,12 +1397,42 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
     # the row below is then `unresolved` with `method` NULL rather than
     # carrying whichever literal an earlier step happened to seed.
     verbless = "http_method" not in captures
+    # The handler value's paths, read once for the two readers below.
+    handler_paths = (
+        _handler_paths(captures.get("handler"), context)
+        if verbless and direction == "inbound"
+        else ()
+    )
+    # A verbless route whose handler passed a decorator the catalog's `annotations` state the
+    # methods of serves exactly those methods, one row each.
+    narrowed, unsure = (
+        _narrowed_verbs(captures.get("handler"), captures[NARROWED_BY], context, handler_paths)
+        if verbless and NARROWED_BY in captures and direction == "inbound"
+        else (None, False)
+    )
+    if narrowed is not None:
+        verbs, verbless = list(narrowed), False
+    if unsure:
+        end = replace(end, inexact=True)
+    # A row serving any method says the endpoint answers every method (design 2026-11-23 §4d):
+    # where the code a request to it runs through gives a reason to doubt that, the row is no
+    # surer than `partial`.
+    if (
+        verbless
+        and direction == "inbound"
+        and context.request_flow is not None
+        and not end.inexact
+        and _any_method_doubted(captures.get("handler"), answering, context, handler_paths)
+    ):
+        end = replace(end, inexact=True)
     # A verbless route of a framework that serves it for every verb says so on the row
     # (`method_kind`, Vert.x spec §3a), never by the NULL method alone, which reads as "nobody
     # read the verb".
     method_kind = context.verbless_serves if verbless and direction == "inbound" else None
     # What the address is (`url_is`): a pattern is published verbatim and linked by nothing.
     path_kind = _URL_IS.get(str(captures.get("url_is")))
+    # Per destination below: a route expression decides each one's own.
+    declared_path_kind = path_kind
     # `disable()` without a later `enable()`, or `remove()`: the framework serves nothing.
     serving = captures.get(_SERVES, True) is True
     body_argument = captures.get("body")
@@ -1263,6 +1507,10 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                 for destination in _composed_address(captures, context, url_argument)
             )
         )
+    # A route expression's destinations are the paths its reads give (`url_is: expression`).
+    expression_kinds: dict[tuple[str | None, str | None, str], str] = {}
+    if captures.get("url_is") == URL_IS_EXPRESSION:
+        destinations, expression_kinds = _expression_destinations(destinations)
     # Computed once, outside the destinations loop — the same
     # `single_call` reasoning: neither depends on peer/path/resolution, and
     # `argument_descriptor` appends to the shared `referenced` accumulator,
@@ -1358,6 +1606,7 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
     # served through), read once per prefix.
     existing: dict[int, Existence | None] = {}
     for verb, (peer, path, url_resolution), prefix in product(verbs, destinations, prefixes):
+        path_kind = expression_kinds.get((peer, path, url_resolution), declared_path_kind)
         # An address nobody read takes no prefix: one row for it, not one per prefix.
         if path is None and prefix is not prefixes[0]:
             continue
@@ -1424,6 +1673,10 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
         # The mount's prefix goes in front of the address the route itself named and the
         # framework accepted (spec §3c), at the weaker of the two words.
         if context.mounts is not None and path is not None:
+            # A route expression's own text behind a prefix drops its leading `^`, as the
+            # framework's route text does (probe: `_join_route('a/', '^in$')` is `a/in$`).
+            if prefix.text and (peer, path, url_resolution) in expression_kinds:
+                path = path.removeprefix("^")
             path = context.mounts.joined(prefix, path, path_kind == PATH_KIND_PATTERN)
             # A mount with an empty prefix of a route whose path below it is empty too is one
             # the framework refuses (`empty_path`, plan 2026-11-08 N7): no row, the refusal
@@ -1446,18 +1699,33 @@ def _derive_captured(end: ChainEnd, captures: dict[str, Any], context: "_DeriveC
                 continue
             url_resolution = weaker(url_resolution, prefix.resolution)
             # A prefix not read whole says where it was not read (`mount_prefix`), filed for
-            # the rows the run keeps.
+            # the rows the run keeps, by the path the row publishes (`path_prefix` included).
             if prefix.unread and context.unread_prefixes is not None:
                 file_unread_prefix(
                     context.unread_prefixes,
                     protocol=context.catalog.protocol,
                     method=verb,
                     method_kind=method_kind,
-                    path=path,
+                    path=(
+                        path
+                        if context.path_prefix is None
+                        or direction != "inbound"
+                        or path_kind == PATH_KIND_PATTERN
+                        else context.path_prefix + path
+                    ),
                     path_kind=path_kind,
                     prefix=prefix,
                     caller=context.caller,
                 )
+        # The catalog's own literal goes in front of everything, mounts included; a pattern
+        # is published verbatim (`url_is: pattern`).
+        if (
+            context.path_prefix is not None
+            and path is not None
+            and direction == "inbound"
+            and path_kind != PATH_KIND_PATTERN
+        ):
+            path = context.path_prefix + path
         # Checkpoint ruling I1, folded in from single_call: a capture that
         # WAS reached but which the scanner could not read drops the row's
         # resolution; a capture never reached at all is simply not part of
@@ -2035,9 +2303,16 @@ def _mounts(
         if way not in paths:
             paths.append(way)
         ways[id(end)] = paths.index(way)
+    stops = frozenset(
+        (owner, rule.method) for rule in rules.mounts if rule.registers for owner in rule.owners
+    )
     for site in index.sites.values():
         for rule in rules.mounts:
-            if rule.by_call and rule.matches(site):
+            if (
+                rule.by_call
+                and rule.matches(site)
+                and (not rule.registers or mounts_a_router(index, site, rule, stops))
+            ):
                 slot = (
                     None
                     if rule.prefix_arg is None
@@ -2069,8 +2344,12 @@ def _mounts(
                     ),
                 )
     # A catalog whose routers hold a prefix of their own (`router_holds`) reads it even where
-    # the module mounts nothing.
-    if not found and not rules.holds:
+    # the module mounts nothing; so does one whose routes are made on nothing, whose router is
+    # the list holding them (ruling R8: a list no reader can place is behind `<prefix>`).
+    made_on_nothing = entry_points is None and any(
+        end.root and end.root.get("invoke_kind") == "static" for end in ends
+    )
+    if not found and not rules.holds and not made_on_nothing:
         return None, {}, {}
     mounts = {key: Mount(rule, site, tuple(paths)) for key, (rule, site, paths) in found.items()}
     reader = _router_reader(
@@ -2083,6 +2362,39 @@ def _mounts(
         None if entry_points is None else entry_points.programs,
     )
     return reader, mounts, ways
+
+
+def _unread_router(end: ChainEnd, rules: MountRules, index: ValueIndex) -> bool:
+    """Whether `end` is a route made by a call that may be a mount (`MountRule.registers`,
+    not one here: `mounts_a_router`) whose router argument the walk reads as no value on any
+    path (`include(router.urls)` on an object no code here builds, `include(lib.urls())`): it
+    reaches no function, as a call of it would, and no path ends at a library call a value
+    model states hands on what it wraps (`login_required(view)`, judged by the handler reader,
+    `_walked_handler`)."""
+    terminal = end.terminal
+    rule = next(
+        (
+            rule
+            for rule in rules.mounts
+            if rule.registers and terminal is not None and rule.matches(terminal)
+        ),
+        None,
+    )
+    if rule is None or terminal is None:
+        return False
+    slot = argument_slot(terminal["arguments"] or [], rule.router_arg)
+    if slot is None or slot == UNPACKED_SLOT:
+        return False
+    for producer, _ in producer_paths(index, terminal, slot, frozenset(), functions=True):
+        if producer.ended_at is not None:
+            return False
+        if producer.reason != EXTERNAL:
+            continue
+        made = producer.made_by
+        site = None if made is None else index.sites.get(made)
+        if made is None or site is None or _handed_back(index, made[0], site) is not None:
+            return False
+    return True
 
 
 def _router_reader(
@@ -2856,6 +3168,29 @@ def _assembled_text(answer: "Answer | None") -> tuple[str | None, str | None, st
             _INEXACT_TEMPLATE if answer.inexact else str(Resolution.PARTIAL),
         )
     return None, None, str(Resolution.UNRESOLVED)
+
+
+def _expression_destinations(
+    destinations: Sequence[tuple[str | None, str | None, str]],
+) -> tuple[list[tuple[str | None, str | None, str]], dict[tuple[str | None, str | None, str], str]]:
+    """Each destination whose path is a route expression read whole, as the paths its
+    structural reads give (`paths_of`): exact, one destination per path at its own word; not
+    exact, or not read whole, the text as written at `partial`, marked as a pattern (D02
+    `url_is: expression`). With the marker of each destination that is a pattern."""
+    found: list[tuple[str | None, str | None, str]] = []
+    kinds: dict[tuple[str | None, str | None, str], str] = {}
+    for peer, path, resolution in destinations:
+        if path is None:
+            found.append((peer, path, resolution))
+            continue
+        paths, exact = paths_of(path) if resolution == str(Resolution.RESOLVED) else ((), False)
+        if exact:
+            found.extend((peer, served, resolution) for served in paths)
+            continue
+        pattern = (peer, path, weaker(resolution, str(Resolution.PARTIAL)))
+        kinds[pattern] = PATH_KIND_PATTERN
+        found.append(pattern)
+    return list(dict.fromkeys(found)), kinds
 
 
 def _composed_address(
@@ -3663,8 +3998,12 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
     decorator a value model states hands the function back and into module code, to each
     function a path reaches — one answering handler, or one alternative each. Where no path
     reaches a function because a library call no value model states made the value, the
-    handler is not read here (`external`, the call named). None otherwise, and for an
-    argument the walk cannot be asked about, which reads as it always has."""
+    handler is not read here (`external`, the call named). The same where the argument is
+    made through calls (`_decorator_stack`, a name a decorated `def` binds entered once) of
+    which one no value model states, down to a function the module defines, whether that call
+    is a decorator on the def or a wrapper the registration writes (ruling R13): `_blocked`,
+    `external` or `not_readable`. None otherwise, and for an argument the walk cannot be asked
+    about, which reads as it always has."""
     if not isinstance(argument, dict) or argument.get("kind") == "lambda" or context.values is None:
         return None
     at = argument.get(_CAPTURED_AT)
@@ -3672,12 +4011,47 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
     if site is None or at is None:
         return None
     slot = int(at[2])
+    unread: list[str] = []
+    through: list[str] = []
     handlers = _entry_handlers(
-        context.values, site, slot, context.method_symbols, context.path
-    ) or (_bound_methods(argument, context))
+        context.values, site, slot, context.method_symbols, context.path, unread, through
+    )
+    if not handlers and through:
+        # A module wrapper hands the request on, and what it hands it to is not read: never the
+        # wrapper (design 2026-11-23 §9a).
+        return _Judged(
+            None,
+            UNREADABLE,
+            (
+                (
+                    unread[0],
+                    (
+                        f"the handler is what the module wrapper {through[0]} hands the "
+                        "request on to, which is not read"
+                    ),
+                ),
+            ),
+        )
+    if handlers and unread:
+        # One path names a function and another was not read: the handler is one of those
+        # read, or one that was not. No function is named as the one that answers.
+        return _Judged(
+            None,
+            UNREADABLE,
+            (
+                (
+                    unread[0],
+                    "the handler is read on one path ("
+                    + ", ".join(handlers)
+                    + ") and not on another",
+                ),
+            ),
+        )
+    handlers = handlers or (_bound_methods(argument, context))
     if handlers:
         alternatives = tuple(_Judged(symbol, ANSWERS) for symbol in handlers)
         return _Judged(handlers[0], ANSWERS, (), alternatives if len(handlers) > 1 else ())
+    stack = _decorator_stack(context.values, str(at[0]), argument, context.method_symbols)
     # Only a value a library call made OF a function the module defines (a decorator applied to
     # it, a wrapper handed it): any other object a library builds is no function at all, and
     # its handler reads as it always has.
@@ -3705,12 +4079,12 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
         )
     made = undecorated_maker(context.values, site, slot)
     if made is None:
-        return None
+        return _blocked(stack, context)
     made_with, maker = made
     if maker.get("owner") is None or not any(
         argument.get("kind") == "lambda" for argument in made_with["arguments"] or ()
     ):
-        return None
+        return _blocked(stack, context)
     ended = {
         producer.reason
         for producer, _ in producer_paths(context.values, site, slot, frozenset(), functions=True)
@@ -3730,6 +4104,504 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
             ),
         ),
     )
+
+
+@dataclass(frozen=True)
+class _Stack:
+    """The calls a handler argument was made through, outermost first (`_decorator_stack`),
+    each with the method it is in; the first of them no value model states, None where every
+    one is stated; and whether the walk ended at a function the module defines."""
+
+    calls: tuple[tuple[str, Mapping[str, Any]], ...] = ()
+    blocked: tuple[str, Mapping[str, Any]] | None = None
+    reaches_function: bool = False
+
+
+def _names_function(name: str, symbol: str) -> bool:
+    """Whether the method `symbol` is the function a module name `name` (`pkg/m#f.`) names:
+    the same owner and name, any signature."""
+    return symbol.startswith(name.removesuffix(".") + "(")
+
+
+def _decorator_stack(
+    index: "ValueIndex", method: str, held: Mapping[str, Any], functions: Iterable[str]
+) -> _Stack:
+    """The calls between a handler argument and the function it names, read as decorators
+    are applied: each call's first positional argument is what it wraps, stated or not. A name
+    read on the way is entered once, where one written value binds it (a decorated `def`'s name
+    holds what its decorators made), down to the def itself, which is the function only where
+    it has the name's own owner and name. A name no value binds is the function `functions`
+    (the module's methods) names, if any."""
+    calls: list[tuple[str, Mapping[str, Any]]] = []
+    blocked: tuple[str, Mapping[str, Any]] | None = None
+    bound: str | None = None
+    while True:
+        kind = held.get("kind")
+        symbol = held.get("symbol")
+        if kind == "lambda":
+            reaches = symbol is not None and (bound is None or _names_function(bound, str(symbol)))
+            return _Stack(tuple(calls), blocked, reaches)
+        if kind == "field" and bound is None and symbol is not None:
+            writes = index.produced.get(str(symbol), ())
+            if len(writes) != 1:
+                reaches = not writes and any(_names_function(str(symbol), f) for f in functions)
+                return _Stack(tuple(calls), blocked, reaches)
+            bound = str(symbol)
+            method, held = writes[0]
+            continue
+        source = held.get("source")
+        made = index.producers.get((method, int(str(source)))) if source is not None else None
+        row = index.sites.get((method, min(made))) if made else None
+        if row is None:
+            return _Stack(tuple(calls), blocked)
+        position = _handed_back(index, method, row)
+        if blocked is None and position is None:
+            blocked = (method, row)
+        calls.append((method, row))
+        arguments = row["arguments"] or []
+        slot = argument_slot(arguments, 0 if position is None else position)
+        if slot is None or slot == UNPACKED_SLOT:
+            return _Stack(tuple(calls), blocked)
+        held = arguments[slot]
+
+
+def _handed_back(index: "ValueIndex", method: str, row: Mapping[str, Any]) -> int | None:
+    """The position of the argument a value model states `row` hands on (`returns_argument`),
+    in the spelling the call is written in: a `__call__` whose receiver a `result_returns`
+    call made, or a call stated `returns` or `result_calls` itself. None for any other call,
+    a stated one written in the other spelling among them (`login_required(login_url=...)`,
+    stated for `login_required(view)`, makes a decorator nothing states)."""
+    if row["name"] == "__call__":
+        maker = _maker(index, method, row)
+        stated = (
+            None
+            if maker is None
+            else index.stated_returns.get((str(maker.get("owner")), str(maker["name"])))
+        )
+        return stated[1] if stated is not None and stated[0] == "result_returns" else None
+    stated = index.stated_returns.get((str(row.get("owner")), str(row["name"])))
+    return stated[1] if stated is not None and stated[0] in ("returns", "result_calls") else None
+
+
+def _maker(index: "ValueIndex", method: str, row: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The call in `method` that made what `row` is called on; None where none did."""
+    receiver = row.get("receiver")
+    made = index.producers.get((method, int(str(receiver)))) if receiver is not None else None
+    return index.sites.get((method, min(made))) if made else None
+
+
+def _blocked(stack: _Stack, context: "_DeriveContext") -> "_Judged | None":
+    """The handler of a function the module defines, reached through a call no value model
+    states (`_Stack.blocked`): which function runs is not read here, `external` where the
+    call's body is not in the scanned code and `not_readable` where it is. None where nothing
+    blocked the walk, or it reached no function the module defines (a spec object, a value of
+    its own): that argument reads as it always has."""
+    index = context.values
+    if stack.blocked is None or not stack.reaches_function or index is None:
+        return None
+    method, row = stack.blocked
+    call = row if row["name"] != "__call__" else (_maker(index, method, row) or row)
+    outside = (method, int(str(row["ordinal"]))) not in index.reached
+    return _Judged(
+        None,
+        UNREADABLE,
+        (
+            (
+                EXTERNAL if outside else NOT_READABLE,
+                (
+                    f"the function is what the call {call.get('owner') or ''}{call['name']} "
+                    "returns, which no value model states"
+                ),
+            ),
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class _ClassDispatch:
+    """`matches.dispatch` (`{name, method}`, a method of the class and the verb it serves) and
+    `matches.bypassed_by` (`{name}`), read for a handler that is a class below `supertype`."""
+
+    verbs: tuple[tuple[str, str], ...]
+    bypassed: tuple[str, ...]
+
+
+def _class_dispatch(
+    matches: dict[str, Any], catalog: Catalog, roots: Sequence[dict[str, Any]]
+) -> _ClassDispatch | None:
+    """The dispatch table a root's class handler is read by: required where a root's handler
+    is given through a call, and refused where none is (it would be read by nothing). Python
+    has no overloads, so an entry names its method by name alone (no `parameters`)."""
+    through = any(HANDLER_THROUGH in root["captures"] for root in roots)
+    if not through:
+        if "dispatch" in matches or "bypassed_by" in matches:
+            raise CatalogError(
+                f"loading catalog {catalog.source}: `dispatch` and `bypassed_by` are read for a "
+                f"catalog that declares `supertype` (D02 §2's `fluent` style)"
+            )
+        return None
+    verbs = matches.get("dispatch")
+    bypassed = matches.get("bypassed_by")
+    if not (
+        isinstance(verbs, list)
+        and verbs
+        and all(
+            isinstance(entry, dict)
+            and set(entry) == {"name", "method"}
+            and all(isinstance(entry[key], str) and entry[key] for key in entry)
+            for entry in verbs
+        )
+        and isinstance(bypassed, list)
+        and all(
+            isinstance(entry, dict)
+            and set(entry) == {"name"}
+            and isinstance(entry["name"], str)
+            and entry["name"]
+            for entry in bypassed
+        )
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: a catalog that declares `supertype` "
+            f"needs `dispatch`, a non-empty list of `{{name, method}}`, and `bypassed_by`, a "
+            f"list of `{{name}}` (D02 §2's `fluent` style)"
+        )
+    return _ClassDispatch(
+        tuple((entry["name"], entry["method"]) for entry in verbs),
+        tuple(entry["name"] for entry in bypassed),
+    )
+
+
+def _class_view(
+    captures: dict[str, Any], context: "_DeriveContext"
+) -> list[tuple[dict[str, Any], "_Judged | None", bool]] | _Judged | None:
+    """A handler that is a class below the catalog's `supertype` (`HANDLER_THROUGH`): where the
+    value walk reads the handler argument as such a class, the captures of each row the class
+    serves (`_class_rows`), each no surer than `partial` where another path of the value names
+    no such class. None where no path does: the handler reads as it always has."""
+    rule = captures[HANDLER_THROUGH]
+    argument = captures.get("handler")
+    if not isinstance(argument, dict):
+        return None
+    at = argument.get(_CAPTURED_AT)
+    index = context.values
+    if at is None or index is None or context.workspace is None or context.class_dispatch is None:
+        return None
+    site = index.sites.get((str(at[0]), int(str(at[1]))))
+    if site is None:
+        return None
+    dispatch = context.workspace.once(dispatch_of)
+    # The handler value, read as a call of it is (Django calls the view): a class below the
+    # catalog's `supertype` (`X.as_view()` is `X`, a value model's `returns_receiver`) answers
+    # by its methods.
+    owners: list[str] = []
+    other = False
+    paths = producer_paths(index, site, int(at[2]), frozenset(), functions=True)
+    for producer, path in paths:
+        if context.path is not None and path.joined(context.path) is None:
+            continue
+        held = producer.ended_at
+        if held is not None and _view_class(held, rule.owners, dispatch):
+            owners.append(str(held.value))
+        else:
+            other = True
+    stack = _decorator_stack(index, str(at[0]), argument, context.method_symbols)
+    if not owners:
+        # A call no value model states, applied to such a class (`own_wrapper(X.as_view())`):
+        # which function runs is not read here, as for a function it is applied to.
+        if stack.blocked is None:
+            return None
+        _, row = stack.blocked
+        slot = argument_slot(row["arguments"] or [], 0)
+        if (
+            slot is None
+            or slot == UNPACKED_SLOT
+            or not any(
+                _view_class(producer.ended_at, rule.owners, dispatch)
+                for producer, _ in producer_paths(index, row, slot, frozenset(), functions=True)
+            )
+        ):
+            return None
+        return _blocked(replace(stack, reaches_function=True), context)
+    narrowed, unsure = (
+        _narrowed_verbs(argument, captures[NARROWED_BY], context, paths)
+        if NARROWED_BY in captures
+        else (None, False)
+    )
+    # The arguments of the calls the handler was made through (`as_view(http_method_names=...)`
+    # changes the table: `_class_rows`).
+    made = {
+        "arguments": tuple(
+            argument for _, row in stack.calls for argument in row["arguments"] or ()
+        )
+    }
+    rows: list[tuple[dict[str, Any], _Judged | None, bool]] = []
+    for owner in dict.fromkeys(owners):
+        for filled, handled, inexact in _class_rows(
+            owner, made, captures, rule.owners, context, narrowed
+        ):
+            # A path of the handler value that names no class, or that allows other methods,
+            # leaves every row unsure.
+            rows.append((filled, handled, inexact or other or unsure))
+    return rows
+
+
+def _view_class(held: Answer | None, owners: Sequence[str], dispatch: Dispatch) -> bool:
+    """Whether a value is a class (not an object of it) below one of `owners`."""
+    return (
+        held is not None
+        and held.class_object
+        and held.kind == LITERAL
+        and held.literal_kind == SYMBOL
+        and names_a_type(str(held.value))
+        and _below(str(held.value), owners, dispatch)
+    )
+
+
+def _below(owner: str, owners: Sequence[str], dispatch: Dispatch) -> bool:
+    """Whether the type `owner` is one of `owners` or has one among its read ancestors."""
+    pending, seen = [owner], set()
+    while pending:
+        type_ = pending.pop()
+        if type_ in owners:
+            return True
+        if type_ not in seen:
+            seen.add(type_)
+            pending.extend(str(ancestor) for ancestor, _, _ in dispatch.ancestors.get(type_, ()))
+    return False
+
+
+def _class_rows(
+    owner: str,
+    row: Mapping[str, Any],
+    captures: dict[str, Any],
+    framework: Sequence[str],
+    context: "_DeriveContext",
+    narrowed: tuple[str | None, ...] | None = None,
+) -> list[tuple[dict[str, Any], _Judged | None, bool]]:
+    """The rows the class `owner` serves through the call `row` (D02 §2's `fluent` style), each
+    as its captures, its handler and whether it is no surer than `partial`. Each member is
+    looked up in the class's lookup order (`Dispatch.order_through_headers`), on the types whose
+    methods were read, the module's and the libraries' class bodies; one the `supertype`
+    itself defines is the framework's own answer and never a row. A `bypassed_by` method the
+    class's chain defines, down to the `supertype`'s own, replaces the dispatch unless it
+    calls the method it overrides on its parent on some path (a `special` call of its name in
+    its body, a module's or a library's alike; the servlet precedent): the first that does not
+    is one row serving any method, that method the handler. One whose body was not read leaves
+    the rows `partial`. An `annotations` call wrapping the registration narrows the rows
+    (`_narrowed_rows`).
+    Otherwise one row per `dispatch` method the class defines, that method the handler. Every
+    row is `partial` where the order meets a type whose methods were not read (it may define
+    more), where a bypass is a library's whose body was not read, or where the class writes a
+    `bypassed_by` member as a value or the call passes one as a keyword (the table is changed
+    in a way not read here). A class read of no row past such a type is one row naming no
+    method."""
+    assert context.workspace is not None and context.class_dispatch is not None
+    assert context.values is not None
+    dispatch = context.workspace.once(dispatch_of)
+    members, read, fields = context.workspace.once(_class_members)
+    table = context.class_dispatch
+    order, unread = dispatch.order_through_headers(owner)
+    if unread is None:
+        unread = next((type_ for type_ in order if type_ not in read), None)
+        order = order if unread is None else order[: order.index(unread)]
+    inexact = (unread is not None and unread not in framework) or any(
+        name in {argument.get("keyword") for argument in row["arguments"] or ()}
+        or any(f"{type_}{name}." in fields for type_ in order if type_ not in framework)
+        for name in table.bypassed
+    )
+
+    def defined(name: str) -> str | None:
+        for type_ in order:
+            if (type_, name) in members:
+                return None if type_ in framework else members[(type_, name)]
+        return None
+
+    base = {
+        key: value for key, value in captures.items() if key not in (HANDLER_THROUGH, NARROWED_BY)
+    }
+    for name in table.bypassed:
+        # Every override on the chain, in lookup order, down to the `supertype`'s own: each
+        # one that hands the request back (`super().<name>(...)` on some path; what it answers
+        # on another is the handler's own behaviour, as a pass-through decorator's) lets the
+        # next one run; the first one read that does not is the one that answers.
+        for type_ in order:
+            if type_ in framework:
+                break
+            symbol = members.get((type_, name))
+            if symbol is None:
+                continue
+            # A library class a module class extends has its bodies read too (ruling
+            # 2026-11-23, option B): its method is then a declared one, read alike.
+            if type_ in dispatch.scanned or bare_descriptor(symbol) in dispatch.declared:
+                delegates = any(
+                    site["invoke_kind"] == "special" and site["name"] == name
+                    for site in context.facts.sites_by_caller.get(symbol, ())
+                )
+            else:
+                inexact = True
+                continue
+            if not delegates:
+                return _narrowed_rows([(base, _Judged(symbol, ANSWERS), inexact)], narrowed)
+    rows: list[tuple[dict[str, Any], _Judged | None, bool]] = [
+        ({**base, "http_method": verb}, _Judged(symbol, ANSWERS), inexact)
+        for name, verb in table.verbs
+        for symbol in [defined(name)]
+        if symbol is not None
+    ]
+    if not rows and unread is not None and unread not in framework:
+        return [({**base, "http_method": None}, _Judged(None, ANSWERS), False)]
+    return _narrowed_rows(rows, narrowed)
+
+
+def _narrowed_rows(
+    rows: list[tuple[dict[str, Any], _Judged | None, bool]], narrowed: tuple[str | None, ...] | None
+) -> list[tuple[dict[str, Any], _Judged | None, bool]]:
+    """A class's rows where a call `annotations` names wraps the registration (`_narrowed_verbs`):
+    each verb row the narrowing allows, and an any-method row as one row per allowed method.
+    Unchanged where no such call wraps it."""
+    if narrowed is None:
+        return rows
+    kept: list[tuple[dict[str, Any], _Judged | None, bool]] = []
+    for captures, handled, inexact in rows:
+        if "http_method" not in captures:
+            kept.extend(({**captures, "http_method": verb}, handled, inexact) for verb in narrowed)
+        elif captures["http_method"] in narrowed or None in narrowed:
+            kept.append(
+                (
+                    captures if None not in narrowed else {**captures, "http_method": None},
+                    handled,
+                    inexact,
+                )
+            )
+    return kept
+
+
+def _class_members(
+    workspace: "Workspace",
+) -> tuple[dict[tuple[str, str], str], frozenset[str], frozenset[str]]:
+    """Each method whose body or header was read, by its bare type and name, as its full symbol
+    (one of that name on that type alone); the types whose methods were read: the module's
+    (`Dispatch.declared`) and the libraries' class bodies a header lists (`type_header_bodies`);
+    and every field declared, bare. Read once per workspace."""
+    dispatch = workspace.once(dispatch_of)
+    symbols = workspace.once(_method_symbols)
+    found: dict[tuple[str, str], str | None] = {}
+    read: set[str] = set(dispatch.scanned)
+
+    def add(type_: str, name: str, symbol: str) -> None:
+        key = (type_, name)
+        found[key] = symbol if found.get(key, symbol) == symbol else None
+
+    for bare in dispatch.declared:
+        type_ = owner_of(bare)
+        if type_ is not None and bare in symbols:
+            add(type_, method_name(bare), symbols[bare])
+    for header in workspace.query("type_header_bodies"):
+        full = str(header["symbol"])
+        type_ = bare_descriptor(full)
+        prefix = full[: len(full) - len(type_)]
+        listed = header["methods"]
+        listed = json.loads(listed) if isinstance(listed, str) else listed
+        read.add(type_)
+        for entry in listed if isinstance(listed, list) else ():
+            name = str(entry["name"])
+            # Python's one method descriptor: a header lists its methods by name alone.
+            symbol = prefix + method_descriptor(type_, name, PY_SIGNATURE)
+            add(type_, name, symbol)
+    fields = frozenset(bare_descriptor(str(row["symbol"])) for row in workspace.query("fields"))
+    return (
+        {key: symbol for key, symbol in found.items() if symbol is not None},
+        frozenset(read),
+        fields,
+    )
+
+
+def _narrowed_verbs(
+    handler: Any,
+    narrowing: Sequence[Mapping[str, Any]],
+    context: "_DeriveContext",
+    paths: Sequence[tuple[Producer, Path]],
+) -> tuple[tuple[str | None, ...] | None, bool]:
+    """The methods a handler serves where it passed a call `annotations` names (D02 §2's
+    `fluent` style), read on each path of the handler value (`paths`, `_handler_paths`): the
+    stated calls the value walk passed through on that path (`Path.passed`), and on a path the
+    walk read to no function, the calls written between the registration and the def as well
+    (`_decorator_stack`), which the walk did not reach. On one path, each such call's methods,
+    intersected where several apply (each allows a method or refuses it), in the order of the
+    outermost; an unread method list is no method at all (one row, `unresolved`). None where no
+    path passed such a call: the route stays as its root declared it.
+
+    Where the paths give different methods (a decorator that applies `require_POST` on one
+    branch only), every method of every path, or None, the any-method row, where a path passed
+    no such call; and True: no row is surer than `partial`, as a path of a class view's handler
+    value that names no class leaves every row unsure (`_class_view`)."""
+    argument = handler[0] if isinstance(handler, tuple) and handler else handler
+    at = argument.get(_CAPTURED_AT) if isinstance(argument, dict) else None
+    index = context.values
+    if at is None or index is None:
+        return None, False
+    written: list[tuple[str, int]] | None = None
+    found: list[tuple[str | None, ...] | None] = []
+    for producer, path in paths:
+        if context.path is not None and path.joined(context.path) is None:
+            continue
+        calls = list(path.passed())
+        if producer.ended_at is None:
+            if written is None:
+                stack = _decorator_stack(index, str(at[0]), argument, context.method_symbols)
+                written = [
+                    (method, int(str(named["ordinal"])))
+                    for method, row in stack.calls
+                    if (named := _maker(index, method, row) if row["name"] == "__call__" else row)
+                    is not None
+                ]
+            calls.extend(written)
+        sets: list[tuple[str | None, ...]] = []
+        for call in dict.fromkeys(calls):
+            named = index.sites.get(call)
+            entry = (
+                None
+                if named is None
+                else next(
+                    (
+                        one
+                        for one in narrowing
+                        if one["method"] == named["name"] and named.get("owner") in one["owners"]
+                    ),
+                    None,
+                )
+            )
+            if entry is not None and named is not None:
+                sets.append(_narrowing_verbs(entry["http_method"], named, context))
+        found.append(
+            None
+            if not sets
+            else (None,)
+            if any(None in one for one in sets)
+            else tuple(verb for verb in sets[0] if all(verb in one for one in sets[1:]))
+        )
+    distinct = list(dict.fromkeys(found))
+    if len(distinct) <= 1:
+        return (distinct[0] if distinct else None), False
+    if None in distinct:
+        return None, True
+    return tuple(dict.fromkeys(verb for one in distinct if one is not None for verb in one)), True
+
+
+def _narrowing_verbs(
+    declared: Any, row: Mapping[str, Any], context: "_DeriveContext"
+) -> tuple[str | None, ...]:
+    """One `annotations` entry's methods on the call `row`: its literal verb or verbs, or the
+    list its argument reference reads, as written (the list form's read, `_listed_verbs`)."""
+    if isinstance(declared, str):
+        return (declared,)
+    if isinstance(declared, list):
+        return tuple(declared)
+    listed = _listed_verbs(declared, dict(row))
+    if _unread_verbs(listed):
+        listed = _walked_verbs(listed, replace(context, path=None))
+    values = listed if isinstance(listed, tuple) else (listed,)
+    return tuple(dict.fromkeys(_verb_of(each, context) for each in values)) or (None,)
 
 
 def _written(argument: Mapping[str, Any], index: "ValueIndex") -> bool:
@@ -3923,6 +4795,21 @@ def _pathless_serves(matches: dict[str, Any], catalog: Catalog) -> str | None:
         raise CatalogError(
             f"loading catalog {catalog.source}: `pathless_serves` is a path, got {declared!r} "
             f"(D02 §2's `fluent` style)"
+        )
+    return declared
+
+
+def _path_prefix(matches: dict[str, Any], catalog: Catalog) -> str | None:
+    """`matches.path_prefix`: the literal every inbound address is served behind (Django's
+    leading `/`). Only a `concatenate` join composes it as written: anything but a non-empty
+    string, or a prefix under another join, is a broken file, never read as absent."""
+    declared = matches.get("path_prefix")
+    if declared is not None and not (
+        isinstance(declared, str) and declared and matches.get("path_join") == CONCATENATE
+    ):
+        raise CatalogError(
+            f"loading catalog {catalog.source}: `path_prefix` is a non-empty string beside "
+            f"`path_join: concatenate`, got {declared!r} (D02 §2's `fluent` style)"
         )
     return declared
 

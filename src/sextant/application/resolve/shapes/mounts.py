@@ -40,13 +40,30 @@ It is read on the producer the route's receiver reached, within the same path, s
 helper's routers each hold their own caller's prefix. A held prefix the framework refuses
 (`refuses`) gives the router no serving place at all.
 
+**A list is a router** (design 2026-11-23 §4a): a route made by a call on nothing has no
+receiver to join, so where it is served is read top-down (`_list_tree`). From each root (the
+variable `router_named` names, in each module a written `root_setting` names) and through each
+mount, the members of the list are asked of the value walk (`producer_paths`, the registration
+calls its stops): a list held in a name, a copy, a sum and a helper are read as any value is,
+each caller on its own path. A member that is a mount is gone through under its own prefix
+behind its parents'; a router argument that is a string names a module, whose variable is the
+list. A mount of a module that is not in the workspace adds nothing. A call that is both a
+route root and a mount (`path(p, include(x))`, `path(p, view)`) is a mount only where its
+router argument reads as a router (`mounts_a_router`). A registration that no root and no
+readable mount reaches is behind the named hole `<prefix>`, at `partial`, never at the root:
+the framework serves only what the root reaches (a library call holding the list,
+`i18n_patterns(*x)`, is no readable mount).
+
 **Cost** (spec §5): one producer read per route-root receiver and one per mount argument and
 mount receiver, each cached here and run on the resolve's shared index; one `within=` read of
 the mount path per (mount, path) pair actually joined, cached; one read of each mount path on
 every path, for its refusals. Nested mounts recurse once per level. A module with no mount
 reads nothing: every route serves at its root. Which executions reach no mount is decided
 from the mount paths already read and the callers that take a helper's router back
-(`ValueIndex.returns`, turned round once per reader): no read of its own.
+(`ValueIndex.returns`, turned round once per reader): no read of its own. Where each route
+made on nothing is served is one top-down read per reader (`_list_tree`): one producer read
+per root and per (mount, prefix, parent) reached, each member read once; then a route asks one
+dict lookup. No query.
 """
 
 import json
@@ -59,6 +76,7 @@ from sextant.application.ports.catalogs import CatalogError
 from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.dispatch import Dispatch
 from sextant.application.resolve.shapes.inbound_routes import (
+    CONCATENATE,
     EMPTY_PATH,
     EXACT_MOUNT_PATH,
     PATTERN_MOUNT_PATH,
@@ -72,12 +90,14 @@ from sextant.application.resolve.shapes.inbound_routes import (
     validated_path_join,
 )
 from sextant.application.resolve.shapes.rooting import catalog_symbols
+from sextant.application.resolve.shapes.route_expression import URL_IS_EXPRESSION, paths_of
 from sextant.application.resolve.values import (
     EXPRESSION,
     EXTERNAL,
     LITERAL,
     RECEIVER,
     STRING,
+    SYMBOL,
     UNPACKED_SLOT,
     Answer,
     Path,
@@ -162,6 +182,15 @@ class MountRule:
     # A prefix the call writes REPLACES the prefix the mounted router holds (`router_holds`),
     # the empty one too; only a call that writes none keeps it (D02 `prefix_replaces_own`).
     prefix_replaces_own: bool = False
+    # The variable of a module a router argument names, by its dotted name or as the module
+    # object (`router_named`, D02); None where an argument names no module.
+    router_named: str | None = None
+    # The prefix is a route expression (`url_is: expression`, D02), read by its structural
+    # reads as a prefix (`route_expression.paths_of`).
+    expression: bool = False
+    # The call is a route root of the catalog too (`path(p, view)` and `path(p, include(x))`):
+    # it is a mount only where its router argument reads as a router (`mounts_a_router`).
+    registers: bool = False
 
     def matches(self, site: Mapping[str, Any]) -> bool:
         return (
@@ -200,6 +229,10 @@ class MountRules:
     mounts: tuple[MountRule, ...]
     path_join: str | None
     holds: tuple[HoldRule, ...] = ()
+    # The setting whose written value names the module the framework starts its routes from
+    # (`root_setting`, approved 2026-11-23: Django's `ROOT_URLCONF`); the router there is the
+    # variable `router_named` names. None for a catalog whose routes are made on routers.
+    root_setting: str | None = None
 
 
 @dataclass(frozen=True)
@@ -332,11 +365,20 @@ def mount_rules_of(
     holds = matches.get("router_holds", [])
     if not isinstance(holds, list):
         raise CatalogError(f"loading catalog {source}: `router_holds` must be a list")
+    root_setting = matches.get("root_setting")
+    if root_setting is not None and not (
+        isinstance(root_setting, str) and root_setting.isidentifier()
+    ):
+        raise CatalogError(
+            f"loading catalog {source}: `root_setting` is the name of a setting, "
+            f"got {root_setting!r}"
+        )
     return MountRules(
         router_types,
         tuple(_rule(entry, terminals, roots, source) for entry in declared),
         path_join,
         tuple(_hold(entry, source) for entry in holds),
+        root_setting,
     )
 
 
@@ -475,7 +517,78 @@ def _rule(entry: Any, terminals: set[Any], roots: set[Any], source: object) -> M
         dependencies_arg=_dependencies_arg(entry, where),
         host_arg=host_arg,
         prefix_replaces_own=_replaces_own(entry, prefix_arg, where),
+        router_named=_router_named(entry, where),
+        expression=_expression(entry, prefix_arg, where),
+        registers=entry["method"] in roots,
     )
+
+
+def _expression(entry: Mapping[str, Any], prefix_arg: Any, where: str) -> bool:
+    """`url_is: expression` on a mount with a `prefix_arg`: its prefix is a route expression."""
+    declared = entry.get("url_is")
+    if declared is not None and (declared != URL_IS_EXPRESSION or prefix_arg is None):
+        raise CatalogError(
+            f"{where} `{entry['method']}` `url_is` is `{URL_IS_EXPRESSION}` beside a `prefix_arg`, "
+            f"got {declared!r}"
+        )
+    return declared is not None
+
+
+def _router_named(entry: Mapping[str, Any], where: str) -> str | None:
+    """`router_named: {variable: name}`, the module variable a router argument naming a
+    module is."""
+    declared = entry.get("router_named")
+    if declared is None:
+        return None
+    variable = declared.get("variable") if isinstance(declared, dict) else None
+    if (
+        set(declared) != {"variable"}
+        or not isinstance(variable, str)
+        or not variable.isidentifier()
+    ):
+        raise CatalogError(
+            f"{where} `{entry['method']}` `router_named` must be `{{variable: name}}`"
+        )
+    return variable
+
+
+def mounts_a_router(
+    index: ValueIndex, site: Mapping[str, Any], rule: MountRule, stops: frozenset[tuple[str, str]]
+) -> bool:
+    """Whether a call that is both a route root and a mount (`MountRule.registers`) mounts a
+    router here: its router argument, read as a value, reaches a registration (a member of a
+    list) or a string (a module's name, `router_named`). A function or a class there is a
+    view: the call registers a route."""
+    slot = argument_slot(site["arguments"] or [], rule.router_arg)
+    if slot is None or slot == UNPACKED_SLOT:
+        return False
+    variables = frozenset({rule.router_named} if rule.router_named is not None else ())
+    for producer, _ in producer_paths(index, site, slot, stops, which_object=True):
+        if producer.caller is not None and producer.identity in stops:
+            return True
+        if _named_module(index, producer.ended_at, variables) is not None:
+            return True
+    return False
+
+
+def _named_module(index: ValueIndex, ended: Answer | None, variables: frozenset[str]) -> str | None:
+    """The module a value the walk ended at names (`router_named`, D02), as the descriptor its
+    variables are members of: a string by its dotted name (a module not in the scan too, whose
+    variable no write holds); the module object, a symbol, where one of `variables` is written
+    on it in the scanned code (a class, `V.as_view()`'s value, has no such variable). None for
+    anything else."""
+    if not variables or ended is None or ended.kind != LITERAL or not isinstance(ended.value, str):
+        return None
+    if ended.literal_kind != SYMBOL:
+        return type_descriptor(ended.value)
+    written = (
+        field
+        for variable in variables
+        if (field := ended.value + variable + ".") in index.constants
+        or field in index.produced
+        or field in index.writers
+    )
+    return ended.value if next(written, None) is not None else None
 
 
 def _replaces_own(entry: Mapping[str, Any], prefix_arg: Any, where: str) -> bool:
@@ -583,6 +696,8 @@ class MountReader:
         self._refused: dict[tuple[str, int], tuple[tuple[int, str, str], ...]] = {}
         self._called_by: dict[str, tuple[tuple[str, int], ...]] | None = None
         self._held: dict[tuple[tuple[str, int], Path], tuple[Prefix, ...] | None] = {}
+        # Where each registration made on nothing is served (`_list_tree`).
+        self._tree: dict[tuple[str, int], list[tuple[Prefix, Path]]] | None = None
 
     def of_route(self, root: Mapping[str, Any], within: Path | None) -> tuple[Prefix, ...]:
         """The prefixes a route whose root call is `root` serves under, each once: its
@@ -591,13 +706,57 @@ class MountReader:
         every way the router is reached runs through a mount the framework refuses: nothing
         serves the route. The root alone where the walk reaches no end at all. A prefix
         reached several ways is one, holding every way's `places`."""
+        # A registration made on nothing is placed by the lists that hold it, read top-down
+        # from each root and each mount (design 2026-11-23 §4a).
+        if root.get("invoke_kind") == "static" and root.get("receiver") is None:
+            tree = self._list_tree()
+            if tree is not None:
+                key = (str(root["caller"]), int(str(root["ordinal"])))
+                held: dict[Prefix, Prefix] = {}
+                for prefix, path in tree.get(key, ()):
+                    if within is not None and path.joined(within) is None:
+                        continue
+                    # The place is the registration on the path the read reached it by, so
+                    # what else the route reads is read on that same call (M-1): a helper
+                    # called from two lists gives each its own path under its own prefix.
+                    # It stands at the end of each way the prefix was reached, behind the
+                    # mounts on that way: a mount written under a test is one of the calls
+                    # the row's registration ran through.
+                    on: Router = (("call", *key), path)
+                    places = frozenset(
+                        (*place[:-1], (on, None)) for place in prefix.places or (ANY_ROUTER,)
+                    )
+                    merged = held.get(prefix)
+                    held[prefix] = replace(
+                        prefix, places=places if merged is None else merged.places | places
+                    )
+                if held:
+                    return tuple(held.values())
+                # A list no readable mount and no root reaches: where it is served is not
+                # read, so the route is behind the named hole, never at the root.
+                return (
+                    Prefix(
+                        UNREAD_PREFIX,
+                        str(Resolution.PARTIAL),
+                        (
+                            UnreadPrefix(
+                                mount=key[0],
+                                mount_ordinal=key[1],
+                                at=key[0],
+                                at_ordinal=key[1],
+                                argument=-1,
+                                read="a list no readable mount and no root reaches",
+                            ),
+                        ),
+                    ),
+                )
         found: dict[Prefix, Prefix] = {}
         ended = False
-        for producer, path in self._producers_of(root, RECEIVER):
+        for made, path in self._routers_of(root):
             joined = path if within is None else path.joined(within)
             if joined is not None:
                 ended = True
-                for prefix in self._served(producer, joined, frozenset()):
+                for prefix in self._served(made, joined, frozenset()):
                     kept = found.get(prefix)
                     found[prefix] = (
                         prefix
@@ -605,6 +764,79 @@ class MountReader:
                         else replace(kept, places=kept.places | prefix.places)
                     )
         return tuple(found.values()) if ended else (ROOT,)
+
+    def _list_tree(self) -> dict[tuple[str, int], list[tuple[Prefix, Path]]] | None:
+        """Where each registration made on nothing is served (design 2026-11-23 §4a):
+        `(registration site) -> [(prefix, path)]`, read top-down once per reader (module
+        docstring). Empty where no root and no mount reaches a list; None where no mount rule
+        of the catalog is on a call that also registers routes."""
+        rules = [rule for rule in self._rules.mounts if rule.by_call and rule.registers]
+        if not rules:
+            return None
+        if self._tree is not None:
+            return self._tree
+        index, sites = self._index, self._index.sites
+        tree: dict[tuple[str, int], list[tuple[Prefix, Path]]] = {}
+        self._tree = tree
+        stops = frozenset((owner, rule.method) for rule in rules for owner in rule.owners)
+        mounts = {mount.key: mount for mount in self._mounts}
+        variables = frozenset(rule.router_named for rule in rules if rule.router_named is not None)
+        seen: set[tuple[Any, ...]] = set()
+
+        def named(caller: str, module: str, variable: str) -> dict[str, Any]:
+            symbol = module + variable + "."
+            return {
+                "caller": caller,
+                "ordinal": -1,
+                "arguments": [{"kind": "field", "symbol": symbol}],
+            }
+
+        def members(
+            source: Mapping[str, Any], slot: int, parent: Prefix, within: Path | None
+        ) -> None:
+            for producer, path in producer_paths(index, source, slot, stops, which_object=True):
+                joined = path if within is None else within.joined(path)
+                if joined is None:
+                    continue
+                if producer.caller is None:
+                    module = _named_module(index, producer.ended_at, variables)
+                    if module is None:
+                        continue
+                    for variable in sorted(variables):
+                        read = (module, variable, parent.text, parent.resolution)
+                        if read not in seen:
+                            seen.add(read)
+                            members(
+                                named(str(source["caller"]), module, variable), 0, parent, joined
+                            )
+                    continue
+                key = (str(producer.caller), int(str(producer.ordinal)))
+                mount = mounts.get(key)
+                if mount is None:
+                    tree.setdefault(key, []).append((parent, joined))
+                    continue
+                made = sites[key]
+                router = argument_slot(made["arguments"] or [], mount.rule.router_arg)
+                if router is None or router == UNPACKED_SLOT:
+                    continue
+                for own in self._prefixes(mount, 0, joined):
+                    reached = (key, own.text, parent.text, parent.resolution)
+                    if reached in seen:
+                        continue
+                    seen.add(reached)
+                    members(made, router, self._behind(parent, own, mount.paths[0], None), joined)
+
+        setting = self._rules.root_setting
+        for symbol, writes in sorted(index.constants.items()):
+            if setting is None or not symbol.endswith(f"#{setting}."):
+                continue
+            for writer, written in writes:
+                if written.get("kind") != "string" or writer is None:
+                    continue
+                module = type_descriptor(str(written["value"]))
+                for variable in sorted(variables):
+                    members(named(str(writer), module, variable), 0, ROOT, None)
+        return tree
 
     def refusals(self, mount: Mount) -> tuple[tuple[int, str, str], ...]:
         """`(way, mount path, reason)` for every way the framework refuses `mount`, `way`
@@ -892,8 +1124,10 @@ class MountReader:
             places=places,
         )
 
-    def _served(self, producer: Producer, path: Path, mounting: frozenset[Any]) -> list[Prefix]:
-        """The prefixes of the router `producer` made, as reached on `path`: one per mount
+    def _served(
+        self, made: tuple[str, str, int] | None, path: Path, mounting: frozenset[Any]
+    ) -> list[Prefix]:
+        """The prefixes of the router `made` (`_identity`), as reached on `path`: one per mount
         that received the same router on a path agreeing with it, behind that mount's own
         router's prefixes; and the root wherever an execution `path` allows reaches no mount
         (`_unmounted`). A mount the framework refuses gives no prefix, and the executions it
@@ -903,7 +1137,6 @@ class MountReader:
         The same router is the same producer — or, for a router handed in from outside, the
         same parameter it arrived at (`_identity`): two ends there on agreeing paths are one
         object."""
-        made = _identity(producer)
         if made is None:
             return [replace(ROOT, places=frozenset({ANY_ROUTER}))]
         found: list[Prefix] = []
@@ -913,7 +1146,7 @@ class MountReader:
             if mount.key in mounting:
                 continue
             for mounted, mount_path, ways in self._mounted(mount):
-                if _identity(mounted) != made:
+                if mounted != made:
                     continue
                 for way, at in ways:
                     joined = path.joined(mount_path)
@@ -989,11 +1222,11 @@ class MountReader:
             return [ROOT]
         found: list[Prefix] = []
         ended = False
-        for producer, parent_path in self._producers_of(at.parent, RECEIVER):
+        for made, parent_path in self._routers_of(at.parent):
             joined = path.joined(parent_path)
             if joined is not None:
                 ended = True
-                found.extend(self._served(producer, joined, mounting))
+                found.extend(self._served(made, joined, mounting))
         return found if ended else [ROOT]
 
     def _prefixes(self, mount: Mount, way: int, path: Path) -> tuple[Prefix, ...]:
@@ -1019,9 +1252,10 @@ class MountReader:
                 self._workspace, {"prefix": at.prefix}, self._index, within=path
             )
             for on, answers in read:
-                prefix = self._prefix_of(mount, at, answers["prefix"])
-                if prefix is not None:
-                    found.append(replace(prefix, chosen_on=frozenset({on})))
+                found.extend(
+                    replace(prefix, chosen_on=frozenset({on}))
+                    for prefix in self._prefixes_of(mount, at, answers["prefix"])
+                )
             if not read:
                 found.append(self._hole(mount, at, "nothing on this path"))
         if at.host is not None:
@@ -1093,6 +1327,18 @@ class MountReader:
             ),
         )
 
+    def _prefixes_of(self, mount: Mount, at: MountPath, answer: Answer) -> list[Prefix]:
+        """The prefixes one read of a mount path gives: a route expression's exact paths each
+        (`url_is: expression`), the named hole where the reads do not make it exact; any other
+        mount path one prefix, or none where it is refused."""
+        prefix = self._prefix_of(mount, at, answer)
+        if prefix is None or not mount.rule.expression or prefix.text == UNREAD_PREFIX:
+            return [] if prefix is None else [prefix]
+        paths, exact = paths_of(prefix.text or "", prefix=True)
+        if not exact:
+            return [self._hole(mount, at, f"a route expression not read exactly: {prefix.text}")]
+        return [replace(prefix, text=path) for path in paths]
+
     def _prefix_of(self, mount: Mount, at: MountPath, answer: Answer) -> Prefix | None:
         text = _text_of(answer)
         if text is not None and self._refusal(mount, at, *text) is not None:
@@ -1106,8 +1352,12 @@ class MountReader:
         # The `/` before the wildcard, or ending a mount point, is the separator the join
         # supplies: `/api/*`, `/api*` and `/api/` all mount at `/api`. A framework that strips
         # every trailing copy says so (`strip_trailing`): `/api//` mounts at `/api` too.
+        # A join of plain concatenation supplies no separator, so nothing is removed.
         strip = mount.rule.strip_trailing
-        mounted = mounted.rstrip(strip) if strip is not None else mounted.removesuffix("/")
+        if strip is not None:
+            mounted = mounted.rstrip(strip)
+        elif self._rules.path_join != CONCATENATE:
+            mounted = mounted.removesuffix("/")
         resolution = Resolution.NARROWED if answer.narrowed else Resolution.RESOLVED
         return Prefix(mounted, str(resolution))
 
@@ -1220,25 +1470,33 @@ class MountReader:
 
     def _mounted(
         self, mount: Mount
-    ) -> tuple[tuple[Producer, Path, tuple[tuple[int, MountPath], ...]], ...]:
-        """Each router `mount` mounts, with the path it was reached on and the ways to the
-        mount it is mounted by: the producers of its router argument, by every way; or, for a
-        `chain_result` mount, the call that ends each way's chain, by that way alone."""
+    ) -> tuple[tuple[tuple[str, str, int] | None, Path, tuple[tuple[int, MountPath], ...]], ...]:
+        """Each router `mount` mounts (`_identity`), with the path it was reached on and the
+        ways to the mount it is mounted by: the producers of its router argument, by every
+        way; or, for a `chain_result` mount, the call that ends each way's chain, by that way
+        alone."""
         ways = tuple(enumerate(mount.paths))
         if mount.rule.router_arg != CHAIN_RESULT:
             return tuple(
-                (producer, path, ways)
+                (_identity(producer), path, ways)
                 for producer, path in self._producers_of(mount.site, mount.rule.router_arg)
             )
         return tuple(
             (
-                Producer(caller=str(at.made["caller"]), ordinal=int(str(at.made["ordinal"]))),
+                ("call", str(at.made["caller"]), int(str(at.made["ordinal"]))),
                 Path(),
                 ((way, at),),
             )
             for way, at in ways
             if at.made is not None
         )
+
+    def _routers_of(
+        self, site: Mapping[str, Any]
+    ) -> tuple[tuple[tuple[str, str, int] | None, Path], ...]:
+        """The routers the call `site` is made on, each with the path it was reached on: its
+        receiver followed to its producers."""
+        return tuple((_identity(p), path) for p, path in self._producers_of(site, RECEIVER))
 
     def _producers_of(
         self, site: Mapping[str, Any], slot: Any

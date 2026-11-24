@@ -298,3 +298,66 @@ def test_an_app_rule_with_no_leading_slash_and_no_prefix_derives_nothing(tmp_pat
     rows = _flask(tmp_path, libraries, "@app.route('x')\ndef x():\n    return ''\n")
 
     assert rows == []
+
+
+def test_a_module_import_rebound_as_the_app_keeps_its_routes(tmp_path: Path, libraries):
+    """Plan 6 Task 3 fix round 3: `import app.c` binds the name `app` to the package, and the
+    file then rebinds `app` as its own variable. The import is no project variable, so it
+    writes no field, and the route on the file's own `app` stays."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "c.py": "X = 1\n",
+            "main.py": "from flask import Flask\nimport app.c\napp = Flask(__name__)\n"
+            "@app.route('/z')\ndef z():\n    return ''\n",
+        },
+    )
+
+    assert _rows(workspace) == [("GET", "/z", _handler("z"), "resolved")]
+
+
+@pytest.mark.parametrize(
+    "registration", ["app.add_url_rule('/x', view_func=f)", "app.add_url_rule('/x', 'f', f)"]
+)
+def test_a_function_named_after_an_unstated_decorator_is_partial(
+    tmp_path: Path, libraries, registration: str
+):
+    """Ruling R13: a decorator no value model states ends the handler walk, by name as under
+    the route: `partial`, no handler, one `handler_pass_through` question — never `resolved`
+    with no handler, nor the function the decorator wraps."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + "from flask import stream_with_context\n"
+            + "@stream_with_context\ndef f():\n    return ''\n"
+            + registration
+            + "\n"
+        },
+    )
+
+    assert _rows(workspace) == [("GET", "/x", None, "partial")]
+    assert len(_questions(workspace, "handler_pass_through")) == 1
+
+
+def test_a_module_wrapper_that_wraps_the_result_of_the_view_names_the_view(
+    tmp_path: Path, libraries
+):
+    """Final review I1: `inner` calls the one `f` it captured and wraps what it gives
+    (`jsonify(f(*a, **k))`): calling `inner` runs `f`, so the handler is `f`, never the
+    wrapper."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + "import functools\nfrom flask import jsonify\n"
+            + "def deco(f):\n    @functools.wraps(f)\n    def inner(*a, **k):\n"
+            + "        return jsonify(f(*a, **k))\n    return inner\n"
+            + "@app.route('/x')\n@deco\ndef f():\n    return {}\n"
+        },
+    )
+
+    assert _rows(workspace) == [("GET", "/x", _handler("f"), "resolved")]

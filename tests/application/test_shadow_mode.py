@@ -357,6 +357,11 @@ def test_every_position_a_catalog_asked_about_is_answered(analyzed):
 # argument.
 # **`click` joined with Sextant's own commands** (design 2026-11-06-reading-decorators §5): its
 # three positions as `asks_of` counts them, one slot each.
+# **`django` joined with Django includes** (plan 2026-11-22-python-django-core-inbound Task 3):
+# its mount's router, prefix and `through.read` positions, one slot each. **+3 on 2026-11-22**
+# (Task 6): the `re_path` mount's router, prefix and `through.read` positions. **-2 on
+# 2026-11-23** (plan 2026-11-23-python-django-redesign Task 6): the mounts lose `through`, so
+# the two `through.read` positions.
 # **`fastapi` joined with FastAPI routes** (plan 2026-11-08-python-fastapi-inbound Task 5): the
 # `__call__` step's handler, one slot; its keyword captures are not `argN` positions. **+4 on
 # 2026-11-08** (Task 6): its mounts' router and prefix positions, one slot each (both
@@ -377,6 +382,7 @@ _ASKS_PER_CATALOG = {
     "cdi-async-events": (4, 4),
     "cdi-events": (2, 2),
     "click": (3, 3),
+    "django": (4, 4),
     "fastapi": (19, 19),
     "flask": (19, 19),
     "google-pubsub-client": (1, 1),
@@ -516,7 +522,10 @@ def test_the_ask_reader_still_sees_every_position_the_shipped_catalogs_spell():
     # **+1 on 2026-11-19** (plan 5 Task 2): the new `flask` catalog's `__call__` handler slot.
     # **+2 on 2026-11-19** (plan 5 Task 3): its two `register_blueprint` prefix positions.
     # **+16 on 2026-11-19** (plan 5 Task 4): its sixteen request-read entries' name positions.
-    assert sum(asks for asks, _ in counted.values()) == 1569
+    # **+3 on 2026-11-22** (plan 6 Task 3): the `django` mount's router, prefix and `through`.
+    # **+3 on 2026-11-22** (plan 6 Task 6): the `re_path` mount's, the same three.
+    # **-2 on 2026-11-23** (plan 2026-11-23 Task 6): the two mounts' `through.read` positions.
+    assert sum(asks for asks, _ in counted.values()) == 1573
 
 
 # A tiny compiled Maven fixture — two classes, thirteen endpoints, 0.6s through the whole

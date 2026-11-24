@@ -389,7 +389,7 @@ Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 | `relationship` | Subject, object, relationship kind | Hierarchy, dispatch, class diagrams |
 | `occurrence` | Symbol, range, enclosing symbol, role | Type-reference edges, `uses` |
 | `annotation` | Target symbol, annotation symbol, **argument values**, retention, and — for a type-use annotation on a field or a type — **`type_path`** locating it within the type reference | Every endpoint engine |
-| `type_header` | **A DEPENDENCY type's place in the hierarchy, read from its class-file header in the resolved classpath** (2026-10-21, user decision A): symbol (the library's own coordinate and version), construct kind, superclass, interfaces, class-level annotations in the `annotation` fact's own `use` shape, and the `origin` jar. Emitted for every type the module's own classes refer to and did not compile, then transitively up each one's superclass and interfaces; a type in no jar on the classpath (the JDK's) gets none, so the catalog's declared roots stay the JDK boundary. **No member of the type is read** — no method, field, body or call site — so method lookup is untouched and the type stays "not scanned" to every consumer asking about its methods. **A kind of its own, deliberately**: were these `symbol`/`annotation` facts, the engines minting endpoint rows would see a library's `@RestController` or `CrudRepository` as this module's (measured risk). Only the type lattice reads them: `superclasses`, `implementations`, and `error_advice`'s class-annotation lookup. **Python (2026-11-06, ruled A, "like Java"):** the same fact and the same meaning, read from the installed environment and the pinned typeshed copy instead of a classpath (M03 "Libraries"): a header for every library type the module's facts name (a class, or a module, which is a type, ruling R4), and for every library class a `static` call names as a member of its module (`fastapi/applications#FastAPI` gives `fastapi/applications/FastAPI#`; a member that is no class gets none and is not counted unlocated, ruling R17), then up each one's bases; `superclass` is the first written base and `interfaces` the rest, in written order, as the scanner maps a module class's (`object` is not written, and is the boundary, as the JVM's root type is); no `annotations` (a decorator is a call); `origin` is the distribution's PEP 503 name, or `typeshed@<commit>/<stub package>@<version>` where the type file is typeshed's (`typeshed@13ffe24…/requests@~=2.33.0`; the standard library is the stub package `stdlib`, at the environment's Python version), and `version` the installed version (`.` for the standard library). A library class whose bases are not all read (§5a `parents_unread`) gets no header, since the fact has no key to say so: a lookup reaching it ends there. The `c3` lookup reads a header's parents to place it, and ends at it, since its methods are not read. **A Python header's class body is read (fact schema 12, plan 2026-11-08 task 9c and its review C2):** by the scanner's own reader (`file_facts`) over the library module with every function body left out and only the module-level names the header classes use, so its names, their values, the calls that made them and the module-level names they use are ordinary `symbol` (field and `<clinit>`), `field_write` and `call_site` facts of the header document, read by every consumer as a module class's are. No class `symbol` and no method `symbol` is written: the type stays a header, its methods unread. The header itself carries `methods` (`{name, returns, parameters}`, each function and constructor the body defines, `parameters` their types with the receiver taken; absent where the body was not read, which is how a reader tells "declares nothing" from "not read") and `keywords` (the class statement's keyword arguments, as a module class's `symbol` fact carries them, `symbol.keywords`). A class only a whole-module read answers, and every JVM header, carries neither. A class a read body calls gets a header, as one a module's call names does. Still no method body is read | `type_hierarchy`, `supertype_dispatch`, the throwable walk, `@ResponseStatus` on a handled exception's class |
+| `type_header` | **A DEPENDENCY type's place in the hierarchy, read from its class-file header in the resolved classpath** (2026-10-21, user decision A): symbol (the library's own coordinate and version), construct kind, superclass, interfaces, class-level annotations in the `annotation` fact's own `use` shape, and the `origin` jar. Emitted for every type the module's own classes refer to and did not compile, then transitively up each one's superclass and interfaces; a type in no jar on the classpath (the JDK's) gets none, so the catalog's declared roots stay the JDK boundary. **No member of the type is read** — no method, field, body or call site — so method lookup is untouched and the type stays "not scanned" to every consumer asking about its methods (on the JVM; a Python library class a module class extends has its method bodies read, below). **A kind of its own, deliberately**: were these `symbol`/`annotation` facts, the engines minting endpoint rows would see a library's `@RestController` or `CrudRepository` as this module's (measured risk). Only the type lattice reads them: `superclasses`, `implementations`, and `error_advice`'s class-annotation lookup. **Python (2026-11-06, ruled A, "like Java"):** the same fact and the same meaning, read from the installed environment and the pinned typeshed copy instead of a classpath (M03 "Libraries"): a header for every library type the module's facts name (a class, or a module, which is a type, ruling R4), and for every library class a `static` call names as a member of its module (`fastapi/applications#FastAPI` gives `fastapi/applications/FastAPI#`; a member that is no class gets none and is not counted unlocated, ruling R17), then up each one's bases; `superclass` is the first written base and `interfaces` the rest, in written order, as the scanner maps a module class's (`object` is not written, and is the boundary, as the JVM's root type is); no `annotations` (a decorator is a call); `origin` is the distribution's PEP 503 name, or `typeshed@<commit>/<stub package>@<version>` where the type file is typeshed's (`typeshed@13ffe24…/requests@~=2.33.0`; the standard library is the stub package `stdlib`, at the environment's Python version), and `version` the installed version (`.` for the standard library). A library class whose bases are not all read (§5a `parents_unread`) gets no header, since the fact has no key to say so: a lookup reaching it ends there. The `c3` lookup reads a header's parents to place it, and ends at it where its methods are not read. **A Python header's class body is read (fact schema 12, plan 2026-11-08 task 9c and its review C2):** by the scanner's own reader (`file_facts`) over the library module with every function body left out and only the module-level names the header classes use, so its names, their values, the calls that made them and the module-level names they use are ordinary `symbol` (field and `<clinit>`), `field_write` and `call_site` facts of the header document, read by every consumer as a module class's are. No class `symbol` is written. **A library class a module class has in its lookup order (one of the bases the module's classes write, or up their bases) has its functions' bodies read (fact schema 22, ruling 2026-11-23 option B):** each method, and each nested function and `lambda` in one, is an ordinary method `symbol` of the header document with its `call_site`, `method_return` and `field_write` facts, in the shapes a module method's body gets, so a consumer reads it as a module method (`super().dispatch(...)` is its `special` call). The methods of every other header class stay unread: no method `symbol`. The header itself carries `methods` (`{name, returns, parameters}`, each function and constructor the body defines, `parameters` their types with the receiver taken; absent where the body was not read, which is how a reader tells "declares nothing" from "not read") and `keywords` (the class statement's keyword arguments, as a module class's `symbol` fact carries them, `symbol.keywords`). A class only a whole-module read answers, and every JVM header, carries neither. A class a read body calls gets a header, as one a module's call names does. No other method body is read. **The rows rule:** a row a derivation mints from a read library body (an endpoint whose caller, or else whose handler, is in that body) is the library's, not the module's, and `drop_borrowed_endpoints.sql` drops it, as it drops a sibling's (F4 §5.2) | `type_hierarchy`, `supertype_dispatch`, the throwable walk, `@ResponseStatus` on a handled exception's class |
 | `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, `receiver_parameter` (the receiver as the enclosing method's parameter N where it is one, absent otherwise), `receiver_field` (the static field a `getstatic` receiver was read from, absent otherwise), `dominator`, `on_every_exit`, `post_dominator`, `reaches_return` and `loop_group` (the call's place in the method's control flow, rule 9), structured `arguments`, and on a Python site `guards` (the undecided tests it runs under within its body, fact schema 13) | Call edges, dispatch, traces, endpoints |
 | — | The invoke-kind set includes **`throw`**: a throw site is a call-site-shaped observation whose target is the thrown exception type. It is what gives traces their `throws` terminal. | Trace terminals, blast radius |
 | `field_write` | The writing method's symbol, the assigned field's symbol, and EITHER the source parameter's ordinal OR the value it was written from — a constant, or the call whose result it is | The field resolution ladder (2F), the value walk's sixth edge |
@@ -1352,6 +1352,19 @@ identically**, deliberately: javac erases the sugar at the call site and the cal
 does not consult `array` treats it exactly as it always treated `unresolved`, which is
 what every varargs slot read as before 9.15.
 
+**An element marked `keyword: "*"` is every element of its own value, unpacked in its
+place** (fact schema 19, plan 2026-11-22-python-django-core-inbound Task 3). The Python
+scanner writes it for a list sum: `a + b` with no text in it, where one operand is known to
+be a list (written as one, or a module-level name of the file every write of which is one
+or that this body last wrote as one),
+is the `array` it makes — a written list's elements in place, every other operand its own
+entry (a `field`, an `unresolved` with its `source`, …) marked `*`. `x += [...]` is the same
+sum, and a list display's `*x` element is written the same way (`[*core, path("a/", v)]`;
+a tuple's is not). `urlpatterns = core + [path("a/", v)]` is
+`{kind: array, elements: [{kind: field, symbol: …#core., keyword: "*"}, {kind: unresolved,
+source: 3}]}`. Any other sum stays `unresolved`. An engine that does not read the mark reads
+the entry as the one value it holds.
+
 **`merge` is the canonical cross-language kind for "this argument came from one of several
 places"** (capability 9.19) — a value a branch reassigned, a conditional expression, any
 join of control flow where two producers meet. `candidates` carries each producer in this
@@ -1371,7 +1384,9 @@ knows of the callee (ruling R27, 2026-11-06, which amends R2): argument position
 order the call is written in, and the resolver binds every call's arguments to parameters by
 one calling rule (`values.parameter_slots`, over each parameter's `kind`). `**` marks keyword
 arguments unpacked from a mapping (`f(**options)`), whose names are not written, and `*` a
-positional argument unpacked from a sequence (`f(*items)`), whose entry is `unresolved` and
+positional argument unpacked from a sequence (`f(*items)`), whose entry is `unresolved` (a
+`field` where the sequence is one, a module-level name or an attribute, fact schema 19: which
+value is unpacked) and
 stands in its place among the positional entries: after it, no later positional argument's
 parameter is known (user ruling A, 2026-11-06). Entries with no `keyword`, and `*` entries,
 are positional, in order, before the keyword entries; a parameter the call leaves out has no
@@ -1401,6 +1416,17 @@ above:
 - An f-string, and `+` with a string literal, is `concat`. The concatenation is a `dynamic`
   site `builtins/str#format`, with no receiver and no `implementation`, whose arguments are
   the values that fill the holes. With no value in it, it is the `string` itself.
+  `"...".format(...)` on a string literal is the same `concat`: each replacement field is a
+  `{}` filled by its argument, by position (`{}`), number (`{0}`) or name (`{a}`), and `{{`
+  `}}` are braces. A field with a conversion, a format spec, an attribute or an index,
+  automatic and numbered fields mixed, an unpacked argument, or a field with no argument
+  leave the call as it is, its value `unresolved`.
+- A written list or tuple is an `array` whose `symbol` is its class (`builtins/list#`,
+  `builtins/tuple#`); a list sum's `array` is `builtins/list#`. `list(x)` (the builtin, one
+  plain argument) is `[*x]`. At module level, `x.append(v)` and `x.extend(vs)` on a name this
+  body last wrote as a list are writes of `x`, `[*x, v]` and `[*x, *vs]` (a written list's
+  elements in place), with no call site; the call's value is `null`. A name this body last
+  wrote as a list is a list for a sum. Inside a function they stay calls.
 - `a if c else b` and `a or b` are `merge`; `await x` is the value of `x`; `with x as y` is
   the call `x.__enter__()` (`__aenter__` for `async with`), and `y` is its result.
 - A subscript of a type form, evaluated as a value, is the `static` call
@@ -1409,8 +1435,20 @@ above:
 - A nested function is a method of the same owner, named after the function that holds it
   (`outer$inner`), as kotlinc names a local function. A `lambda` is
   `lambda$<method>$<n>`, as javac names a lambda body (`static` for a module or class body,
-  `new` for `__init__`), numbered per method. Both are `lambda` arguments with `captures` 0.
-  Inside them the method's `self` is the receiver, as `this` is in a JVM lambda body.
+  `new` for `__init__`), numbered per method. Both are `lambda` arguments. Where the body
+  reads names of an enclosing function, it captures them (`captures`, approved 2026-11-23,
+  spec 2026-11-23-python-django-redesign §2 item 14): a `dynamic` call
+  `types/FunctionType#<init>` takes their values, in the order the body first reads them,
+  where the function is made; the `lambda` entry carries `captures: N` and that call's
+  `source`. A Python function is called by its written signature, so its written
+  parameters keep their places and the captured values FOLLOW them: the body reads its
+  captured name `k` as parameter `written + k` (the JVM's captured values lead). A function
+  nested deeper captures through each function between: the middle one captures the name
+  too. A name the enclosing function writes again after the `def` line has no one value
+  where the function is made, and its captured value is `unresolved`, as is a name a nested
+  function rebinds with `nonlocal`. A nested function that captures nothing and a nested
+  class are named directly (`captures` 0, no capture call), and the method's `self` is not
+  captured: inside them it is the receiver, as `this` is in a JVM lambda body.
 - A name defined twice (on two branches) is one method symbol: `ordinal`, value ids and
   `method_return.ordinal` continue from one body to the next, so no two sites of the method
   share an ordinal or a value id.
@@ -1431,6 +1469,20 @@ above:
     (polar: 484 such reads). A module variable written by two constructions, by a function
     call, or reassigned is untyped and its reads stay `unresolved`; so does one set from a call
     with a declared return type (`settings = get_settings()` under `@lru_cache`, OI-444).
+  - **An attribute read on a value of a known LIBRARY class** (fact schema 18). `request.args`
+    with `request: Request` in the library's own file is a call site named for the attribute,
+    on the class that DEFINES it, with no arguments, giving the type that file writes, as a
+    getter call is on the JVM.
+  - **An attribute read on a parameter whose class is not known** (fact schema 21, approved
+    2026-11-23, spec 2026-11-23-python-django-redesign §2 item 13). `request.method` with
+    `request` a parameter is the same call site, named for the attribute, on that parameter
+    (`receiver_parameter`), with no owner and no arguments; the resolver names the owner where
+    it can, as for a method call on such a value. Where the parameter's written class neither
+    declares the attribute in its body (the field read above) nor its file types it (the
+    library read above), the same ownerless call is written, and the resolver binds it to
+    that class (`p.limit` with `p: Paging` binds to `Paging#limit`). The value read stays `unresolved`. A read
+    on `self`, on a local or on a module name writes no such call; a dotted read of a guard's
+    test, typed again for `guards.fields`, writes none either.
 - A module-level name that branches bind to several imports (`try: import ujson as json` /
   `except ImportError: import json`) is a static field with one `field_write` per import, so
   a call on it names the field as `receiver_field`. As an argument it is a `merge`.

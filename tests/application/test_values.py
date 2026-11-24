@@ -56,12 +56,13 @@ from sextant.domain.facts import (
     Fact,
     FieldWriteFact,
     MethodReturnFact,
+    ModuleFact,
     Parameter,
     Signature,
     SymbolFact,
     TypeRef,
 )
-from sextant.domain.symbols import method_descriptor
+from sextant.domain.symbols import PY_SIGNATURE, disambiguator_of, method_descriptor
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
@@ -112,6 +113,10 @@ _CLOSING = _PKG + "Closing#"
 # assembled from an object has (`OI-138` cause 3, CP-39).
 _RENDERED = _PKG + "Rendered#"
 _UNREADABLE = _PKG + "Unreadable#"
+# Bindings that HOLD a list (ruled 2026-11-23: a list held in a name is read when its exact
+# values are known): `listed = ["a", "b"]`, `aliased = listed`, `summed = ["a"]` then
+# `summed = [*summed, "b"]`, and `partly = ["a", <no name>]`, each read by its own method.
+_HELD = _PKG + "Held#"
 # Bindings written from a CALL'S RESULT (CP-33 rows 6-7, 2026-10-26). `ProbeKt` is Kotlin's
 # file class for a top-level `val client = HttpClient(CIO) { … }` — spelled exactly as the
 # CP-54 probe module's bytecode spells it — whose `<clinit>` stores an unscanned factory's
@@ -387,6 +392,7 @@ def _facts() -> list[Fact]:
             _WRITTEN,
             _RENDERED,
             _UNREADABLE,
+            _HELD,
             _PROBE_KT,
             _PROPERTY,
             _SPILL,
@@ -1027,6 +1033,53 @@ def _facts() -> list[Fact]:
             field=_UNREADABLE + "held.",
             value=CallArgument(kind="class", symbol="com/acme/orders/values/Order#"),
             written_by=_symbol(_UNREADABLE, "<init>", "()V"),
+        ),
+        # Lists held in a binding, each read whole as one call argument.
+        *(
+            _site(
+                _symbol(_HELD, name, "()V"),
+                0,
+                _MANY_TARGET,
+                kind="virtual",
+                arguments=[CallArgument(kind="field", symbol=_HELD + name + ".")],
+            )
+            for name in ("listed", "aliased", "summed", "partly")
+        ),
+        *(_declared(_HELD, name, "()V") for name in ("listed", "aliased", "summed", "partly")),
+        *(
+            FieldWriteFact(
+                document_id="doc_values",
+                field=_HELD + name + ".",
+                value=CallArgument(kind="array", elements=elements),
+                written_by=_symbol(_HELD, "<clinit>", "()V"),
+            )
+            for name, elements in (
+                (
+                    "listed",
+                    [
+                        CallArgument(kind="string", value="a"),
+                        CallArgument(kind="string", value="b"),
+                    ],
+                ),
+                ("summed", [CallArgument(kind="string", value="a")]),
+                (
+                    "summed",
+                    [
+                        CallArgument(kind="field", symbol=_HELD + "summed.", keyword="*"),
+                        CallArgument(kind="string", value="b"),
+                    ],
+                ),
+                (
+                    "partly",
+                    [CallArgument(kind="string", value="a"), CallArgument(kind="unresolved")],
+                ),
+            )
+        ),
+        FieldWriteFact(
+            document_id="doc_values",
+            field=_HELD + "aliased.",
+            value=CallArgument(kind="field", symbol=_HELD + "listed."),
+            written_by=_symbol(_HELD, "<clinit>", "()V"),
         ),
         # A STATIC field written from a call's result in the static initialiser: `<clinit>`
         # stores `HttpClient(...)`'s result (value id 11) with `putstatic`, and a function
@@ -2300,6 +2353,162 @@ def test_a_bound_method_reference_binds_no_parameter_to_its_receiver(walked):
     assert _reasons(bindings) == ["external"]
 
 
+# -- a Python body's captures (spec 2026-11-23 §4e, §9a) ------------------------------------
+
+
+_REGISTER = "def register(h):\n    return None\n"
+_PAGE = "def page(request):\n    return None\n"
+
+
+def _registered(
+    tmp_path: Path, source: str, stated: tuple[dict[str, Any], ...] = ()
+) -> list[list[str]]:
+    """What a CALL of each `register(...)` argument in `a.py` runs, in the order written: the
+    bare body each path reaches, or the reason of a path that reaches none (the real scanner,
+    no catalogs, `stated` as the value models' `returns_arguments`)."""
+    import test_receiver_binding
+
+    workspace = test_receiver_binding._resolved(tmp_path, {"a.py": _REGISTER + _PAGE + source})
+    index = value_index(workspace, returns_arguments=stated)
+    rows = sorted(
+        (row for row in workspace.query("call_sites") if row["name"] == "register"),
+        key=lambda row: row["ordinal"],
+    )
+    found = []
+    for row in rows:
+        runs = []
+        for producer, _ in producer_paths(index, dict(row), 0, frozenset(), functions=True):
+            body = None if producer.ended_at is None else values.called_function(producer.ended_at)
+            runs.append(
+                str(producer.reason) if body is None else body.split("#", 1)[1].split("(")[0]
+            )
+        found.append(runs)
+    workspace.close()
+    return found
+
+
+def test_a_python_body_reads_its_captured_value_where_the_function_was_made(tmp_path: Path):
+    """The captured `f` sits after `w`'s written parameters (spec §2 item 14), and each call of
+    `deco` makes its own `w`: each registration runs the function its own call captured."""
+    source = (
+        "def deco(f):\n"
+        "    def w(request, *a, **k):\n"
+        "        return f(request, *a, **k)\n"
+        "    return w\n"
+        "def other(request):\n    return None\n"
+        "register(deco(page))\n"
+        "register(deco(other))\n"
+    )
+    assert _registered(tmp_path, source) == [["page"], ["other"]]
+
+
+def test_a_wrapper_that_only_tests_with_a_captured_function_stands_for_the_one_it_returns(
+    tmp_path: Path,
+):
+    """`if test(request): return view(request)`: the call of `test` is no hand-over (what it
+    gives is not returned), so the wrapper stands for `view` alone."""
+    source = (
+        "def check(request):\n    return True\n"
+        "def guard(test, view):\n"
+        "    def w(request):\n"
+        "        if test(request):\n"
+        "            return view(request)\n"
+        "        return None\n"
+        "    return w\n"
+        "register(guard(check, page))\n"
+    )
+    assert _registered(tmp_path, source) == [["page"]]
+
+
+def test_a_wrapper_that_hands_its_unpacked_arguments_on_stands_for_the_wrapped(tmp_path: Path):
+    source = (
+        "def deco(f):\n"
+        "    def w(*args):\n"
+        "        return f(*args)\n"
+        "    return w\n"
+        "register(deco(page))\n"
+    )
+    assert _registered(tmp_path, source) == [["page"]]
+
+
+def test_a_wrapper_three_levels_down_stands_for_the_function_its_middle_level_took(
+    tmp_path: Path,
+):
+    source = (
+        "def a(k):\n"
+        "    def b(f):\n"
+        "        def c(request):\n"
+        "            return f(request) if k else None\n"
+        "        return c\n"
+        "    return b\n"
+        "register(a(1)(page))\n"
+    )
+    assert _registered(tmp_path, source) == [["page"]]
+
+
+def test_a_body_that_hands_nothing_on_is_itself_what_runs(tmp_path: Path):
+    """`w` reads its captured `name` but calls nothing with the request it was given: a call
+    of `w` runs `w`."""
+    source = (
+        "def deco(name):\n"
+        "    def w(request):\n"
+        "        return name\n"
+        "    return w\n"
+        "register(deco('x'))\n"
+    )
+    assert _registered(tmp_path, source) == [["deco$w"]]
+
+
+def test_a_wrapper_whose_captured_function_is_not_read_never_names_the_wrapper(tmp_path: Path):
+    """`f` is what a library call no value model states made: which function `w` hands the
+    request on to is not read, and the answer is a reason, never `w`, which does not answer."""
+    source = (
+        "from lib import make\n"
+        "def deco():\n"
+        "    f = make()\n"
+        "    def w(request):\n"
+        "        return f(request)\n"
+        "    return w\n"
+        "register(deco())\n"
+    )
+    # `escapes`: the made value is captured by a body that calls it (`captured_as`).
+    assert _registered(tmp_path, source) == [["escapes"]]
+
+
+def test_a_decorator_a_library_made_in_a_helper_and_applied_in_its_caller_is_its_argument(
+    tmp_path: Path,
+):
+    """`d = factory(t)` in `helper`, `d(page)` in the module: the receiver ends at the call
+    that made it, which a value model states returns what its result is applied to."""
+    source = (
+        "from lib import factory\n"
+        "def helper(t):\n"
+        "    return factory(t)\n"
+        "d = helper(1)\n"
+        "register(d(page))\n"
+    )
+    stated = ({"owner": "lib#", "method": "factory", "form": "result_returns", "arg": 0},)
+    assert _registered(tmp_path, source) != [["page"]]
+    assert _registered(tmp_path / "stated", source, stated) == [["page"]]
+
+
+def test_functools_wraps_applied_to_the_inner_function_is_that_function(tmp_path: Path):
+    """`@functools.wraps(f) def w` is `functools.wraps(f)(w)`, a `__call__` the scanner types
+    on `functools._Wrapper`: the stated `result_returns` of `wraps` makes it `w`, which then
+    stands for `f`."""
+    source = (
+        "import functools\n"
+        "def deco(f):\n"
+        "    @functools.wraps(f)\n"
+        "    def w(request):\n"
+        "        return f(request)\n"
+        "    return w\n"
+        "register(deco(page))\n"
+    )
+    stated = ({"owner": "functools#", "method": "wraps", "form": "result_returns", "arg": 0},)
+    assert _registered(tmp_path, source, stated) == [["page"]]
+
+
 @pytest.mark.pins("values.an-UNREADABLE-constant-answers-not_readable-never-nothing")
 def test_a_constant_the_walk_cannot_read_answers_not_readable_and_keeps_the_site(walked):
     """**An answer, never an absence.** `Unreadable#held` is written from a `class` constant
@@ -2319,6 +2528,42 @@ def test_a_constant_the_walk_cannot_read_answers_not_readable_and_keeps_the_site
     bindings = _bindings(walked, _symbol(_UNREADABLE, "read", "()V"), 0)
     assert len(bindings) == 1, bindings
     assert _reasons(bindings) == ["not_readable"]
+
+
+def test_a_list_held_in_a_field_answers_with_its_members(walked):
+    """**A list a name holds is read when its exact values are known** (ruled 2026-11-23):
+    `listed = ["a", "b"]` answers its members, each its own path, exactly as the same list
+    written in place does (`test_an_array_whose_every_element_is_written_branches_into_elements`).
+    Until the ruling it answered one `not_readable`."""
+    bindings = _bindings(walked, _symbol(_HELD, "listed", "()V"), 0)
+    assert [b.slots[0].value for b in bindings] == ["a", "b"]
+    assert len({b.path for b in bindings}) == 2
+
+
+def test_a_name_for_another_list_is_followed(walked):
+    """`aliased = listed`: a write that is another name holds that name's list, so the read
+    answers `listed`'s members."""
+    bindings = _bindings(walked, _symbol(_HELD, "aliased", "()V"), 0)
+    assert [b.slots[0].value for b in bindings] == ["a", "b"]
+
+
+def test_a_list_summed_onto_itself_holds_every_write(walked):
+    """`summed = ["a"]` then `summed = [*summed, "b"]` (what `+=` and `append` are written
+    as): `*summed` names the list itself, whose members are the other writes this read
+    already answers. Following it would walk back into the same binding: a `cycle`."""
+    bindings = _bindings(walked, _symbol(_HELD, "summed", "()V"), 0)
+    assert sorted(str(b.slots[0].value) for b in bindings) == ["a", "b"]
+    assert "cycle" not in _reasons(bindings)
+
+
+def test_a_held_list_with_one_unreadable_member_keeps_the_others(walked):
+    """The held twin of `test_an_array_with_one_unnameable_element_keeps_the_others`: one
+    member with no name costs one trailing `not_readable`, not the whole list."""
+    bindings = _bindings(walked, _symbol(_HELD, "partly", "()V"), 0)
+    assert [(b.slots[0].value, b.slots[0].reason) for b in bindings] == [
+        ("a", None),
+        (None, "not_readable"),
+    ]
 
 
 @pytest.mark.pins("values.a-field-written-from-a-CALL-is-followed")
@@ -6863,3 +7108,342 @@ def test_channel_via_reads_the_class_in_the_same_walk(tmp_path: Path):
         workspace.close()
     assert read == {1: [("a", "A#")], 3: [("b", "B#")], 5: [("c", "C#")]}
     assert plain == [None]
+
+
+# -- held lists that are not exactly known (plan 2026-11-23 Task 3) ----------------------
+#
+# Python-spelled facts (`lookup: c3`), because a held list's changes are read where calls
+# name a list's methods: each list below is a module-level name `held#<name>.` written as
+# `["a", "b"]` in the module body, read whole as an argument by `held#read_<name>`, and
+# called on (or handed on) by the module body as the case names.
+_PY = "sextant-python shop . . "
+_PY_DIS = "(" + disambiguator_of(PY_SIGNATURE) + ")."
+_HELD_PY = "held#"
+_PY_BODY = _PY + _HELD_PY + "<clinit>" + _PY_DIS
+_PY_SINK = ("lib#", "use", "(*)")
+# A call on the list the language makes to READ it (`for v in x`, `x[0]`, `v in x`, `len(x)`).
+_READS = ("__iter__", "__getitem__", "__contains__", "__len__")
+# A call on the list that may change it and that the facts do not state as a write.
+_CHANGES = (
+    "remove",
+    "pop",
+    "clear",
+    "insert",
+    "sort",
+    "reverse",
+    "__setitem__",
+    "__delitem__",
+)
+_MANY_MEMBERS = 300
+
+
+def _py_site(
+    caller: str,
+    ordinal: int,
+    target: tuple[str, str, str],
+    arguments: list[CallArgument],
+    receiver_field: str | None = None,
+) -> Fact:
+    owner, name, descriptor = target
+    return CallSiteFact(
+        document_id="doc_held",
+        caller=caller,
+        target=CallTarget(owner=owner, name=name, descriptor=descriptor),
+        invoke_kind="virtual" if receiver_field is not None else "static",
+        ordinal=ordinal,
+        receiver_field=receiver_field,
+        arguments=arguments,
+    )
+
+
+def _py_held_facts() -> list[Fact]:
+    lists = {
+        "plain": [],
+        **{f"read_by_{name}": [(name, [])] for name in _READS},
+        **{f"changed_by_{name}": [(name, [])] for name in _CHANGES},
+        "handed": [("keep", "whole")],
+    }
+    facts: list[Fact] = [
+        SymbolFact(
+            document_id="doc_held", symbol=_PY + _HELD_PY, construct_kind=ConstructKind.CLASS
+        )
+    ]
+    ordinal = 0
+    for name, calls in lists.items():
+        field = _HELD_PY + name + "."
+        facts.append(
+            FieldWriteFact(
+                document_id="doc_held",
+                field=field,
+                value=CallArgument(
+                    kind="array",
+                    elements=[
+                        CallArgument(kind="string", value="a"),
+                        CallArgument(kind="string", value="b"),
+                    ],
+                ),
+                written_by=_PY_BODY,
+            )
+        )
+        for called, how in calls:
+            if how == "whole":
+                facts.append(
+                    _py_site(
+                        _PY_BODY,
+                        ordinal,
+                        ("lib#", called, "(*)"),
+                        [CallArgument(kind="field", symbol=field)],
+                    )
+                )
+            else:
+                facts.append(
+                    _py_site(_PY_BODY, ordinal, ("builtins/list#", called, "(*)"), [], field)
+                )
+            ordinal += 1
+    # A second name for `plain`'s list, changed through that second name.
+    facts.append(
+        FieldWriteFact(
+            document_id="doc_held",
+            field=_HELD_PY + "renamed.",
+            value=CallArgument(kind="field", symbol=_HELD_PY + "plain."),
+            written_by=_PY_BODY,
+        )
+    )
+    facts.append(
+        _py_site(_PY_BODY, ordinal, ("builtins/list#", "remove", "(*)"), [], _HELD_PY + "renamed.")
+    )
+    # More members than `PATH_CAP` in one written list, and as many alternative writes of
+    # one name, each a string.
+    facts.append(
+        FieldWriteFact(
+            document_id="doc_held",
+            field=_HELD_PY + "long.",
+            value=CallArgument(
+                kind="array",
+                elements=[CallArgument(kind="string", value=f"m{n}") for n in range(_MANY_MEMBERS)],
+            ),
+            written_by=_PY_BODY,
+        )
+    )
+    facts.extend(
+        FieldWriteFact(
+            document_id="doc_held",
+            field=_HELD_PY + "branchy.",
+            value=CallArgument(kind="string", value=f"w{n}"),
+            written_by=_PY_BODY,
+        )
+        for n in range(_MANY_MEMBERS)
+    )
+    for name in (*lists, "renamed", "long", "branchy"):
+        reader = _PY + _HELD_PY + "read_" + name + _PY_DIS
+        facts.append(
+            SymbolFact(
+                document_id="doc_held",
+                symbol=reader,
+                construct_kind=ConstructKind.METHOD,
+                enclosing=_PY + _HELD_PY,
+            )
+        )
+        facts.append(
+            _py_site(
+                reader, 0, _PY_SINK, [CallArgument(kind="field", symbol=_HELD_PY + name + ".")]
+            )
+        )
+    return facts
+
+
+@pytest.fixture(scope="module")
+def held_py(tmp_path_factory: pytest.TempPathFactory) -> DuckDbWorkspace:
+    tmp_path = tmp_path_factory.mktemp("values_held_py")
+    facts = tmp_path / "facts"
+    document = Document(
+        document_id="doc_held",
+        relative_path="held.py",
+        module_id="shop",
+        language="python",
+        sextant_version="0.1.0",
+        fact_schema_version=2,
+        scanner_id="python",
+        content_hash="sha256:held",
+        origin_entry="src",
+        origin_tier=OriginTier.MODULE_OUTPUT,
+        redaction_set_hash="sha256:none",
+    )
+    write_fact_file(facts / "held.jsonl", document, straight_line(_py_held_facts()))
+    write_fact_file(
+        facts / "module.jsonl",
+        document.model_copy(update={"document_id": "module", "relative_path": "pyproject.toml"}),
+        [
+            ModuleFact(
+                document_id="module",
+                module_id="shop",
+                module_kind="pyproject",
+                languages=["python"],
+                source_roots=["src"],
+                output_dirs=["src"],
+                lookup="c3",
+            )
+        ],
+    )
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(facts)
+    record_return_flows(workspace)
+    record_call_edges(workspace)
+    return workspace
+
+
+def _held_read(workspace: DuckDbWorkspace, name: str) -> list[Binding]:
+    site = _at(workspace, _PY + _HELD_PY + "read_" + name + _PY_DIS, 0)
+    return resolve_site(workspace, site)
+
+
+def _held_answers(workspace: DuckDbWorkspace, name: str) -> list[tuple[object, str | None]]:
+    return [(b.slots[0].value, b.slots[0].reason) for b in _held_read(workspace, name)]
+
+
+def test_a_python_list_nothing_changes_answers_its_members(held_py):
+    assert _held_answers(held_py, "plain") == [("a", None), ("b", None)]
+
+
+@pytest.mark.parametrize("called", _CHANGES)
+def test_a_call_on_a_held_list_that_is_not_a_write_makes_it_not_known(held_py, called):
+    """**A list changed by a call the facts do not state as a write is not exactly known**
+    (spec §4c M7, ruled 2026-11-23): `x.remove(v)`, `x[0] = v` (`__setitem__`), `del x[0]`
+    (`__delitem__`) and the rest leave its values unknown, so the read answers `escapes`
+    and no member is answered at `resolved`."""
+    assert _held_answers(held_py, f"changed_by_{called}") == [(None, "escapes")]
+
+
+@pytest.mark.parametrize("called", _READS)
+def test_a_read_the_language_makes_on_a_held_list_keeps_its_members(held_py, called):
+    """`for v in x`, `x[0]`, `v in x`, `len(x)` read the list and change nothing."""
+    assert _held_answers(held_py, f"read_by_{called}") == [("a", None), ("b", None)]
+
+
+def test_a_held_list_handed_to_a_call_is_still_read(held_py):
+    """`keep(VERBS)`: a list handed to a call is still read (ruled 2026-11-23): the walk reads
+    a field's writes and tracks no hand-over of a field, in Python as in Java. A list handed
+    to module code that changes it is a known limit (plan Task 10)."""
+    assert _held_answers(held_py, "handed") == [("a", None), ("b", None)]
+
+
+def test_a_list_changed_through_a_second_name_is_not_known_by_that_name(held_py):
+    """`VERBS = BASE` then `VERBS.remove(v)`: the call names `VERBS`, the list is written
+    under `BASE`. Read by the name the call was made on, the list is not exactly known;
+    read by `BASE` it is the same object, a limit the facts do not show."""
+    assert _held_answers(held_py, "renamed") == [(None, "escapes")]
+
+
+def test_the_members_of_one_held_list_do_not_count_against_the_path_cap(held_py):
+    """One written list of more members than `PATH_CAP` is one value: every member is read
+    (Task 2's `members`), never `non_enumerable`."""
+    assert _MANY_MEMBERS > values.PATH_CAP
+    answers = _held_answers(held_py, "long")
+    assert len(answers) == _MANY_MEMBERS
+    assert all(reason is None for _, reason in answers)
+
+
+def test_more_alternative_writes_than_the_path_cap_are_non_enumerable(held_py):
+    """As many ALTERNATIVE writes of one name, each a string, are still past the cap."""
+    assert _held_answers(held_py, "branchy") == [(None, "non_enumerable")]
+
+
+def test_a_stated_wrapper_of_a_class_runs_the_class(tmp_path: Path):
+    """`functools.cache(Box)`, stated `result_calls: arg0`: calling the wrapper runs a call of
+    `Box`, a class, so the call reader keeps the class as what it runs, as it keeps a function
+    (plan 2026-11-23-python-django-redesign Task 7: `login_required(X.as_view())` is `X`). A
+    wrapper of a value that is no callable (`cache(128)`) still states nothing."""
+    import test_receiver_binding
+
+    workspace = test_receiver_binding._resolved(
+        tmp_path,
+        {
+            "a.py": _REGISTER
+            + "import functools\n"
+            + "class Box:\n    pass\n"
+            + "register(functools.cache(Box))\n"
+            + "register(functools.cache(128))\n"
+        },
+    )
+    stated = ({"owner": "functools#", "method": "cache", "form": "result_calls", "arg": 0},)
+    index = value_index(workspace, returns_arguments=stated)
+    rows = sorted(
+        (row for row in workspace.query("call_sites") if row["name"] == "register"),
+        key=lambda row: row["ordinal"],
+    )
+    found = [
+        [
+            (producer.reason, None if producer.ended_at is None else producer.ended_at.value)
+            for producer, _ in producer_paths(index, dict(row), 0, frozenset(), functions=True)
+        ]
+        for row in rows
+    ]
+    workspace.close()
+
+    assert found == [[(None, "app/a/Box#")], [("external", None)]]
+
+
+def test_a_wrapper_that_wraps_what_its_captured_function_gives_stands_for_it(tmp_path: Path):
+    """`return JsonResponse(f(request))` (final review I1): the one captured function called
+    with the request runs; what the wrapper does with its result is the wrapper's own."""
+    source = (
+        "def deco(f):\n"
+        "    def w(request, *a, **k):\n"
+        "        return JsonResponse(f(request, *a, **k))\n"
+        "    return w\n"
+        "register(deco(page))\n"
+    )
+    assert _registered(tmp_path, source) == [["page"]]
+
+
+def test_a_wrapper_that_changes_the_response_its_captured_function_gives_stands_for_it(
+    tmp_path: Path,
+):
+    source = (
+        "def deco(f):\n"
+        "    def w(request):\n"
+        "        response = f(request)\n"
+        "        response['X'] = 1\n"
+        "        return response\n"
+        "    return w\n"
+        "register(deco(page))\n"
+    )
+    assert _registered(tmp_path, source) == [["page"]]
+
+
+def test_a_wrapper_whose_return_takes_two_captured_functions_results_stands_for_both(
+    tmp_path: Path,
+):
+    """What both give goes into what the wrapper returns: it stands for each, never for itself."""
+    source = (
+        "def other(request):\n    return None\n"
+        "def deco(f, g):\n"
+        "    def w(request):\n"
+        "        return merge(f(request), g(request))\n"
+        "    return w\n"
+        "register(deco(page, other))\n"
+    )
+    assert _registered(tmp_path, source) == [["page", "other"]]
+
+
+def test_a_captured_function_whose_result_is_not_used_is_no_hand_over(tmp_path: Path):
+    """`logger(request)` and `if hook(request):` give nothing that the wrapper returns, and
+    the wrapped function is not called with the request: the wrapper is itself what runs,
+    never the logger or the hook (review of 2026-11-24)."""
+    source = (
+        "def log_it(request):\n    return None\n"
+        "def audited(f, logger=log_it):\n"
+        "    def w(request):\n"
+        "        logger(request)\n"
+        "        return make()\n"
+        "    return w\n"
+        "def hooked(f, h=log_it):\n"
+        "    def x(request):\n"
+        "        if h(request):\n"
+        "            return None\n"
+        "        return wrap(f(request.user))\n"
+        "    return x\n"
+        "register(audited(page))\n"
+        "register(hooked(page))\n"
+    )
+    assert _registered(tmp_path, source) == [["audited$w"], ["hooked$x"]]

@@ -323,6 +323,213 @@ def test_nested_function_and_lambda_are_methods_of_their_own(tmp_path: Path):
     assert returned.value == CallArgument(kind="lambda", symbol=inner, captures=0)
 
 
+def _made(tree, caller: str) -> list[CallSiteFact]:
+    """The capture sites of `caller`: where it makes a function that captured values."""
+    return [
+        c
+        for c in _calls(tree, caller)
+        if c.target.owner == "types/FunctionType#" and c.target.name == "<init>"
+    ]
+
+
+def test_a_nested_function_captures_the_outer_names_it_reads_after_its_parameters(
+    tmp_path: Path,
+):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.lib import work\n"
+                "def outer(view, flag):\n"
+                "    def inner(request, *args):\n"
+                "        return flag and view(request, *args)\n"
+                "    return inner\n"
+            )
+        },
+    )
+
+    outer = f"app/m#outer({DIS})."
+    inner = f"app/m#outer$inner({DIS})."
+    (site,) = _made(tree, outer)
+    assert site.invoke_kind == "dynamic"
+    assert site.arguments == [
+        CallArgument(kind="parameter", value=1),
+        CallArgument(kind="parameter", value=0),
+    ]
+    (returned,) = _returns(tree, outer)
+    assert returned.value == CallArgument(
+        kind="lambda", symbol=inner, captures=2, source=site.result
+    )
+    # Written `(request, *args)`: `flag` is parameter 2, `view` parameter 3.
+    (view,) = [c for c in _calls(tree, inner) if c.target.name == "__call__"]
+    assert view.receiver_parameter == 3
+    assert view.arguments == [
+        CallArgument(kind="parameter", value=0),
+        CallArgument(kind="parameter", value=1, keyword="*"),
+    ]
+
+
+def test_a_lambda_captures_the_outer_name_it_reads(tmp_path: Path):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.lib import rank\n"
+                "def outer(items, by):\n"
+                "    items.sort(key=lambda i: rank(i, by))\n"
+            )
+        },
+    )
+
+    outer = f"app/m#outer({DIS})."
+    lam = f"app/m#lambda$outer$0({DIS})."
+    (site,) = _made(tree, outer)
+    assert site.arguments == [CallArgument(kind="parameter", value=1)]
+    sort = _call(tree, "sort")
+    assert sort.arguments == [
+        CallArgument(kind="lambda", symbol=lam, captures=1, source=site.result, keyword="key")
+    ]
+    assert _call(tree, "rank").arguments == [
+        CallArgument(kind="parameter", value=0),
+        CallArgument(kind="parameter", value=1),
+    ]
+
+
+def test_a_middle_function_captures_what_its_inner_function_reads(tmp_path: Path):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "def a(k):\n"
+                "    def b(f):\n"
+                "        def c(request):\n"
+                "            return f(request) if k else None\n"
+                "        return c\n"
+                "    return b\n"
+            )
+        },
+    )
+
+    a, b, c = (f"app/m#{name}({DIS})." for name in ("a", "a$b", "a$b$c"))
+    (from_a,) = _made(tree, a)
+    assert from_a.arguments == [CallArgument(kind="parameter", value=0)]
+    (made_b,) = _returns(tree, a)
+    assert made_b.value.captures == 1
+    # `b` holds `k` as its parameter 1, and hands it on to `c` beside its own `f`.
+    (from_b,) = _made(tree, b)
+    assert from_b.arguments == [
+        CallArgument(kind="parameter", value=0),
+        CallArgument(kind="parameter", value=1),
+    ]
+    (made_c,) = _returns(tree, b)
+    assert made_c.value.captures == 2
+    (f,) = [x for x in _calls(tree, c) if x.target.name == "__call__"]
+    assert f.receiver_parameter == 1
+
+
+def test_a_name_written_again_after_the_def_is_captured_unread(tmp_path: Path):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.lib import make, other\n"
+                "def outer():\n"
+                "    view = make()\n"
+                "    def inner(request):\n"
+                "        return view(request)\n"
+                "    view = other()\n"
+                "    return inner\n"
+            )
+        },
+    )
+
+    (site,) = _made(tree, f"app/m#outer({DIS}).")
+    assert site.arguments == [CallArgument(kind="unresolved")]
+
+
+def test_a_name_an_inner_function_rebinds_nonlocal_is_captured_unread(tmp_path: Path):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "def outer(count):\n"
+                "    def bump():\n"
+                "        nonlocal count\n"
+                "        count = count + 1\n"
+                "    def read():\n"
+                "        return count\n"
+                "    return read\n"
+            )
+        },
+    )
+
+    # `bump` and `read` each capture `count`; neither has one value of it.
+    sites = _made(tree, f"app/m#outer({DIS}).")
+    assert [site.arguments for site in sites] == [[CallArgument(kind="unresolved")]] * 2
+
+
+def test_a_function_with_no_capture_a_class_and_the_receiver_are_named_directly(
+    tmp_path: Path,
+):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.lib import work\n"
+                "class Box:\n"
+                "    def outer(self):\n"
+                "        def helper(x):\n"
+                "            return work(x)\n"
+                "        class Local:\n"
+                "            pass\n"
+                "        def inner(y):\n"
+                "            self.put(helper(y), Local())\n"
+                "        return inner\n"
+            )
+        },
+    )
+
+    outer = f"app/m/Box#outer({DIS})."
+    inner = f"app/m/Box#outer$inner({DIS})."
+    assert _made(tree, outer) == []
+    (returned,) = _returns(tree, outer)
+    assert returned.value == CallArgument(kind="lambda", symbol=inner, captures=0)
+    called = {(c.target.owner, c.target.name) for c in _calls(tree, inner)}
+    assert ("app/m/Box#", "outer$helper") in called
+    assert ("app/m/Box$outer$Local#", "<init>") in called
+    (put,) = [c for c in _calls(tree, inner) if c.target.name == "put"]
+    assert put.receiver_parameter is None
+
+
+def test_a_sibling_function_with_captures_and_the_bodys_own_name_are_named_directly(
+    tmp_path: Path,
+):
+    """`b` calls its sibling `a`, which captured `n`, and `again` calls itself: each call
+    names the body it runs, as before captures were written, so the call graph keeps the
+    edge. What `a` captured is bound where `a` was made."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.lib import work\n"
+                "def outer(n):\n"
+                "    def a(k):\n"
+                "        return work(k, n)\n"
+                "    def b(k):\n"
+                "        return a(k)\n"
+                "    def again(k):\n"
+                "        return again(k - n)\n"
+                "    return b, again\n"
+            )
+        },
+    )
+
+    called = {(c.target.owner, c.target.name) for c in _calls(tree, f"app/m#outer$b({DIS}).")}
+    assert ("app/m#", "outer$a") in called
+    recursive = _calls(tree, f"app/m#outer$again({DIS}).")
+    assert ("app/m#", "outer$again") in {(c.target.owner, c.target.name) for c in recursive}
+
+
 def test_closed_list_receiver_is_followed_through_its_field(tmp_path: Path):
     tree = _scan(
         tmp_path,
@@ -406,6 +613,7 @@ def test_lists_are_arrays_and_a_local_function_reference_is_a_lambda(tmp_path: P
     assert register.arguments == [
         CallArgument(
             kind="array",
+            symbol="builtins/list#",
             elements=[
                 CallArgument(kind="string", value="a"),
                 CallArgument(kind="string", value="b"),
@@ -574,3 +782,347 @@ def test_a_try_import_inside_a_function_is_a_closed_list(tmp_path: Path):
     dumps = _call(tree, "dumps")
     assert dumps.target.owner is None
     assert dumps.receiver is not None
+
+
+def test_an_element_store_and_delete_are_the_calls_the_language_makes(tmp_path: Path):
+    """`x[i] = v` is `x.__setitem__(i, v)`, `del x[i]` is `x.__delitem__(i)`, and
+    `x[i] += v` is the read then `__setitem__` (ruled 2026-11-23), named as `__getitem__`
+    is: on a module name through `receiver_field`, at module level and in a function."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "VERBS = ['get']\n"
+                "VERBS[0] = 'x'\n"
+                "del VERBS[0]\n"
+                "VERBS[0] += 'z'\n"
+                "def f():\n"
+                "    VERBS[0] = 'q'\n"
+                "    del VERBS[0]\n"
+            )
+        },
+    )
+
+    def on_verbs(caller: str) -> list[tuple[str, list[CallArgument]]]:
+        return [
+            (c.target.name, c.arguments)
+            for c in _calls(tree, caller)
+            if c.receiver_field == "app/m#VERBS." and c.target.owner == "builtins/list#"
+        ]
+
+    zero = CallArgument(kind="int", value=0)
+    module = on_verbs(f"app/m#<clinit>({DIS}).")
+    assert [name for name, _ in module] == [
+        "__setitem__",
+        "__delitem__",
+        "__getitem__",
+        "__setitem__",
+    ]
+    assert module[0][1] == [zero, CallArgument(kind="string", value="x")]
+    assert module[1][1] == [zero]
+    assert on_verbs(f"app/m#f({DIS}).") == [
+        ("__setitem__", [zero, CallArgument(kind="string", value="q")]),
+        ("__delitem__", [zero]),
+    ]
+
+
+def _writes(tree, field: str) -> list[CallArgument | None]:
+    return [w.value for w in _facts(tree, FieldWriteFact) if w.field == field]
+
+
+def _star(symbol: str) -> CallArgument:
+    return CallArgument(kind="field", symbol=symbol, keyword="*")
+
+
+def _list(*elements: CallArgument) -> CallArgument:
+    return CallArgument(kind="array", symbol="builtins/list#", elements=list(elements))
+
+
+def test_a_written_list_and_tuple_carry_their_class(tmp_path: Path):
+    tree = _scan(tmp_path, {"app/m.py": "A = ['a']\nB = ('b',)\n"})
+
+    a = CallArgument(kind="string", value="a")
+    assert _writes(tree, "app/m#A.") == [_list(a)]
+    assert _writes(tree, "app/m#B.") == [
+        CallArgument(
+            kind="array",
+            symbol="builtins/tuple#",
+            elements=[CallArgument(kind="string", value="b")],
+        )
+    ]
+
+
+def test_list_of_a_value_is_the_list_of_its_members(tmp_path: Path):
+    """`list(x)` makes a new list of `x`'s elements: `[*x]`. Only the builtin `list` is it:
+    a name `list` this code binds to something else is a call of that."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": "A = ['a']\nB = list(A)\n",
+            "app/n.py": "from app.lib import list\nA = ['a']\nB = list(A)\n",
+            "app/o.py": "def f(x, make):\n    list = make\n    return list(x)\n",
+        },
+    )
+
+    assert _writes(tree, "app/m#B.") == [_list(CallArgument(kind="string", value="a"))]
+    (other,) = _writes(tree, "app/n#B.")
+    assert other is not None and other.kind == "unresolved"
+    (returned,) = _returns(tree, f"app/o#f({DIS}).")
+    assert returned.value is not None and returned.value.kind == "unresolved"
+
+
+def test_append_and_extend_on_a_module_list_are_writes(tmp_path: Path):
+    """At module level, `x.append(v)` writes `x` as `[*x, v]` and `x.extend(vs)` as
+    `[*x, *vs]`, a written list's elements in place. The call returns nothing, and no
+    `append` or `extend` site is written for it."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.lib import OTHER\n"
+                "X = ['a']\n"
+                "X.append('b')\n"
+                "X.extend(['c', 'd'])\n"
+                "X.extend(OTHER)\n"
+                "R = X.append('e')\n"
+            )
+        },
+    )
+
+    def text(value: str) -> CallArgument:
+        return CallArgument(kind="string", value=value)
+
+    other = (_writes(tree, "app/m#X.")[3].elements or [])[-1]
+    assert other.keyword == "*"
+    a, b, c, d = text("a"), text("b"), text("c"), text("d")
+    assert _writes(tree, "app/m#X.") == [
+        _list(a),
+        _list(a, b),
+        _list(a, b, c, d),
+        _list(a, b, c, d, other),
+        _list(a, b, c, d, other, text("e")),
+    ]
+    assert _writes(tree, "app/m#R.") == [CallArgument(kind="null")]
+    assert not [c for c in _facts(tree, CallSiteFact) if c.target.name in ("append", "extend")]
+
+
+def test_an_adder_that_is_not_on_a_list_of_this_module_body_stays_a_call(tmp_path: Path):
+    """Inside a function, on a name of another module, or on a name this body last wrote as
+    something that is not a list, `append` and `extend` are calls."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.other import Y\n"
+                "X = ['a']\n"
+                "def f():\n"
+                "    X.append('b')\n"
+                "Y.append('c')\n"
+                "Z = ['a']\n"
+                "Z = make()\n"
+                "Z.extend(['d'])\n"
+            )
+        },
+    )
+
+    assert len(_writes(tree, "app/m#X.")) == 1
+    assert len(_writes(tree, "app/m#Z.")) == 2
+    assert not _writes(tree, "app/other#Y.")
+    adders = [
+        c.target.name for c in _facts(tree, CallSiteFact) if c.target.name in ("append", "extend")
+    ]
+    assert adders == ["append", "append", "extend"]
+
+
+def test_a_name_written_as_a_tuple_is_not_a_list(tmp_path: Path):
+    """`T = ('a',)` then `T += OTHER`: a tuple is no list, so the sum is not written as a
+    list of the list class (older Django settings write `MIDDLEWARE_CLASSES` so)."""
+    tree = _scan(
+        tmp_path,
+        {"app/m.py": "from app.lib import OTHER\nT = ('a',)\nT += OTHER\nT.append('b')\n"},
+    )
+
+    first, summed = _writes(tree, "app/m#T.")
+    assert first is not None and first.symbol == "builtins/tuple#"
+    assert summed is None or summed.kind != "array"
+
+
+def test_a_sum_onto_a_list_name_is_a_list(tmp_path: Path):
+    """A name last written as a list in this body is a list, whatever its other writes."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.lib import OTHER, f, make\n"
+                "x = make()\n"
+                "x = ['a']\n"
+                "x += OTHER\n"
+                "b = make()\n"
+                "b = ['p']\n"
+                "urlpatterns = f(*b) + b\n"
+                "count = 0\n"
+                "count += 1\n"
+                "text = 'a'\n"
+                "text += 'x'\n"
+            )
+        },
+    )
+
+    summed = _writes(tree, "app/m#x.")[-1]
+    assert summed is not None and summed.kind == "array"
+    own, other = summed.elements or []
+    assert own == CallArgument(kind="string", value="a")
+    assert other.keyword == "*"
+    patterns = _writes(tree, "app/m#urlpatterns.")[-1]
+    assert patterns is not None and patterns.kind == "array"
+    called, held = patterns.elements or []
+    assert called.kind == "unresolved" and called.keyword == "*"
+    assert held == CallArgument(kind="string", value="p")
+    counted = _writes(tree, "app/m#count.")[-1]
+    assert counted is not None and counted.kind == "unresolved"
+    texted = _writes(tree, "app/m#text.")[-1]
+    assert texted is not None and texted.kind == "concat"
+
+
+def test_format_on_a_literal_is_its_template(tmp_path: Path):
+    """`"...".format(...)` on a string literal is the `concat` its fields make, filled by
+    position, by number or by name; `{{` and `}}` are braces."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "def a(rule):\n    return '/<org>{}'.format(rule)\n"
+                "def b(x, y):\n    return '{b}-{a}'.format(a=x, b=y)\n"
+                "def c(x, y):\n    return '{1}/{0}/{1}'.format(x, y)\n"
+                "def d():\n    return '{{x}}/{}'.format('k')\n"
+                "def e(x, y):\n    return '{}/{n}'.format(x, n=y)\n"
+            )
+        },
+    )
+
+    def p(at: int) -> CallArgument:
+        return CallArgument(kind="parameter", value=at)
+
+    expected = {
+        "a": ("/<org>{}", [p(0)]),
+        "b": ("{}-{}", [p(1), p(0)]),
+        "c": ("{}/{}/{}", [p(1), p(0), p(1)]),
+        "d": ("{x}/{}", [CallArgument(kind="string", value="k")]),
+        "e": ("{}/{}", [p(0), p(1)]),
+    }
+    for name, (template, operands) in expected.items():
+        method = f"app/m#{name}({DIS})."
+        (site,) = _calls(tree, method)
+        assert site.invoke_kind == "dynamic"
+        assert site.target.owner == "builtins/str#"
+        assert site.target.name == "format"
+        assert site.receiver is None
+        assert site.arguments == operands
+        (returned,) = _returns(tree, method)
+        assert returned.value == CallArgument(kind="concat", value=template, source=site.result)
+
+
+def test_format_the_reader_does_not_model_is_unread(tmp_path: Path):
+    """A conversion, a format spec, an attribute or index of a field, automatic and numbered
+    fields mixed, an unpacked argument, a field with no argument, or a receiver that is not a
+    literal: the value is unread, as any call on a string is."""
+    shapes = [
+        "'{0!r}'.format(x)",
+        "'{:>8}'.format(x)",
+        "'{a.b}'.format(a=x)",
+        "'{a[0]}'.format(a=x)",
+        "'{}{0}'.format(x)",
+        "'{}'.format(*x)",
+        "'{a}'.format(**x)",
+        "'{1}'.format(x)",
+        "'{n}'.format(x)",
+        "'{'.format(x)",
+        "x.format(1)",
+    ]
+    text = "".join(f"def f{at}(x):\n    return {shape}\n" for at, shape in enumerate(shapes))
+    tree = _scan(tmp_path, {"app/m.py": text})
+
+    for at, shape in enumerate(shapes):
+        method = f"app/m#f{at}({DIS})."
+        (returned,) = _returns(tree, method)
+        assert returned.value is not None and returned.value.kind == "unresolved", shape
+        assert not [s for s in _calls(tree, method) if s.invoke_kind == "dynamic"], shape
+
+
+# -- held lists in order (plan 2026-11-23 Task 6) -----------------------------------------
+
+_A = CallArgument(kind="string", value="a")
+_B = CallArgument(kind="string", value="b")
+
+
+def test_a_copy_of_a_module_list_holds_the_elements_at_its_line(tmp_path: Path):
+    """`B = [*A]` is written with what `A` holds at that line: the `b` added to `A` later is
+    not in the copy (spec §4c M6). The later write of `A` holds both."""
+    tree = _scan(
+        tmp_path,
+        {"app/m.py": "A = ['a']\nB = [*A]\nA = A + ['b']\nC = [*A]\nA += ['c']\n"},
+    )
+
+    assert _writes(tree, "app/m#B.") == [_list(_A)]
+    assert _writes(tree, "app/m#C.") == [_list(_A, _B)]
+    assert _writes(tree, "app/m#A.")[1:] == [
+        _list(_A, _B),
+        _list(_A, _B, CallArgument(kind="string", value="c")),
+    ]
+
+
+def test_a_name_written_under_a_test_or_in_a_loop_keeps_its_read(tmp_path: Path):
+    """A name written under a test or in a loop has no one value from there on: a later
+    `*name` stays a read of the name, which the walk answers with every write of it."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "import os\n"
+                "A = ['a']\n"
+                "if os.environ:\n"
+                "    A += ['b']\n"
+                "B = [*A]\n"
+                "for _ in range(2):\n"
+                "    F = ['f']\n"
+                "G = [*F]\n"
+            )
+        },
+    )
+
+    assert _writes(tree, "app/m#B.") == [_list(_star("app/m#A."))]
+    assert _writes(tree, "app/m#G.") == [_list(_star("app/m#F."))]
+
+
+def test_another_list_added_under_a_test_is_one_unread_member(tmp_path: Path):
+    """`if X: A += other.B`: the members of `other.B` are served only where the test holds,
+    and no fact says so. They are one unread member (spec §9b), never read as members, even
+    where this body holds them in order. A registration-like call's result added under a
+    test stays a member."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "import os\n"
+                "from app import other\n"
+                "from app.lib import reg\n"
+                "L = ['l']\n"
+                "A = ['a']\n"
+                "if os.environ:\n"
+                "    A += other.B\n"
+                "    A += L\n"
+                "    A += [reg()]\n"
+            ),
+            "app/other.py": "B = ['x']\n",
+        },
+    )
+
+    first, under, local, call = _writes(tree, "app/m#A.")
+    unread = CallArgument(kind="unresolved", keyword="*")
+    assert first == _list(_A)
+    assert under == _list(_A, unread)
+    assert local == _list(_star("app/m#A."), unread)
+    assert call is not None and call.elements is not None
+    own, member = call.elements
+    assert own == _star("app/m#A.")
+    assert member.kind == "unresolved" and member.source is not None and member.keyword is None

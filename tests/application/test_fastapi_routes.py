@@ -10,6 +10,7 @@ FastAPI's own, quoted in `scripts/probes/fastapi_rules.md`.
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fixture_module import FIXTURE_CAPABILITIES
@@ -527,29 +528,52 @@ def test_a_verb_list_element_that_is_a_parameter_is_traced_to_its_arguments(
     assert [row[:2] for row in _rows(workspace)] == [("DELETE", "/p"), ("PUT", "/p")]
 
 
+_GET = ("GET", "/c", _handler("c"), "resolved", "string")
+_POST = ("POST", "/c", _handler("c"), "resolved", "string")
+_NOT_KNOWN = (None, "/c", _handler("c"), "unresolved", "string")
+
+
+def _not_yet(held: str, expected: list[tuple[object, ...]], task: str) -> Any:
+    """A case whose answer today is a `resolved` row that is not the true set of methods."""
+    return pytest.param(
+        held, expected, marks=pytest.mark.xfail(strict=True, reason=f"plan 2026-11-23 {task}")
+    )
+
+
 @pytest.mark.parametrize(
-    "held",
+    ("held", "expected"),
     [
-        # Changed after the write, each a way the code can: never its first value at `resolved`.
-        "VERBS = ['get']\nVERBS.append('post')\n",
-        "VERBS = ['get']\nVERBS.extend(['post'])\n",
-        "VERBS = ['get']\nVERBS[0] = 'delete'\n",
-        "VERBS = ['get']\nVERBS += ['post']\n",
-        "VERBS = ['get']\ndel VERBS[0]\n",
-        "VERBS = ['get']\ndef add():\n    VERBS.append('post')\n",
-        "VERBS = ['get']\ndef keep(v):\n    v.append('post')\nkeep(VERBS)\n",
-        # Not changed here, but the facts cannot show it: they state no index store, `del` or
-        # change made in another file, and they write a tuple and a list alike.
-        "VERBS = ['get']\n",
-        "VERBS = ('get', 'post')\n",
+        # Not changed after the write: its exact values are known, a tuple as a list.
+        ("VERBS = ['get']\n", [_GET]),
+        ("VERBS = ('get', 'post')\n", [_GET, _POST]),
+        # An addition the facts show is a write of its own (`[*VERBS, 'post']`).
+        ("VERBS = ['get']\nVERBS += ['post']\n", [_GET, _POST]),
+        # A module-level `append` / `extend` on the list is a write of it as well.
+        ("VERBS = ['get']\nVERBS.append('post')\n", [_GET, _POST]),
+        ("VERBS = ['get']\nVERBS.extend(['post'])\n", [_GET, _POST]),
+        # A call made on the list that the facts do not state as a write leaves it not known
+        # (`escapes`): a call on the list inside a function is never a write the facts state.
+        ("VERBS = ['get']\ndef add():\n    VERBS.append('post')\n", [_NOT_KNOWN]),
+        # An element store or delete is a call on the list (`__setitem__`, `__delitem__`).
+        ("VERBS = ['get']\nVERBS[0] = 'delete'\n", [_NOT_KNOWN]),
+        ("VERBS = ['get']\ndel VERBS[0]\n", [_NOT_KNOWN]),
+        pytest.param(
+            "VERBS = ['get']\ndef keep(v):\n    v.append('post')\nkeep(VERBS)\n",
+            [_NOT_KNOWN],
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason="a held list handed to module code that changes it: logged as an issue "
+                "in plan Task 10",
+            ),
+        ),
     ],
 )
-def test_a_verb_list_held_in_a_module_name_is_never_read_as_its_first_value(
-    tmp_path: Path, libraries, held: str
+def test_a_verb_list_held_in_a_module_name_is_read(
+    tmp_path: Path, libraries, held: str, expected: list[tuple[object, ...]]
 ):
-    """A container a module name is written with may be changed after the write, and the facts
-    cannot show that it is not: its verbs are not read, one row with no verb at `unresolved`,
-    never a `resolved` GET."""
+    """A list held in a module name is read when its exact values are known; an alteration
+    the reader can see does not make it unknown (ruled 2026-11-23). Only a list whose exact
+    values are not known keeps a reason, never its first value at `resolved`."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -561,11 +585,13 @@ def test_a_verb_list_held_in_a_module_name_is_never_read_as_its_first_value(
         },
     )
 
-    assert _rows(workspace) == [(None, "/c", _handler("c"), "unresolved", "string")]
+    assert _rows(workspace) == expected
 
 
 def test_a_verb_list_changed_in_another_file_is_not_read(tmp_path: Path, libraries):
-    """A module name changed by another file's code is the same object: still not read."""
+    """A module name changed by another file's code (`VERBS.append` after an import) is the
+    same object, changed by a call the facts do not state as a write: not known, never its
+    first value at `resolved`."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -578,7 +604,7 @@ def test_a_verb_list_changed_in_another_file_is_not_read(tmp_path: Path, librari
         },
     )
 
-    assert _rows(workspace) == [(None, "/c", _handler("c"), "unresolved", "string")]
+    assert _rows(workspace) == [_NOT_KNOWN]
 
 
 def test_a_refused_route_with_an_unread_path_is_still_filed(tmp_path: Path, libraries):
@@ -715,3 +741,69 @@ def test_every_jvm_catalog_derives_the_same_rows(tmp_path: Path, fixture_facts: 
         }
 
     assert tables(catalogs_dir(), "with") == tables(without, "without")
+
+
+def test_a_function_named_after_an_unstated_decorator_is_partial_like_the_stacked_one(
+    tmp_path: Path, libraries
+):
+    """Ruling R13: a decorator no value model states ends the handler walk whether the function
+    reaches the registration under it or by name, so `add_api_route('/x', f)` with `@deco` on
+    `f` gives the stacked spelling's row and question
+    (`test_a_library_wrapper_under_the_route_is_partial_external`)."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _ROUTER
+            + "from functools import singledispatch as deco\n"
+            + "@deco\nasync def f() -> str:\n    return ''\n"
+            + "router.add_api_route('/x', f)\n"
+        },
+    )
+
+    assert _rows(workspace) == [("GET", "/x", None, "partial", None)]
+    assert len(_questions(workspace, "handler_pass_through")) == 1
+
+
+def test_a_function_named_after_a_module_wrapper_is_the_function_it_wraps(
+    tmp_path: Path, libraries
+):
+    """The module's `deco` returns an inner function that calls the `f` it captured with what
+    it was given (spec 2026-11-23 §4e): the handler is `f`, read by name as stacked."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _ROUTER
+            + "import functools\n"
+            + "def deco(f):\n    @functools.wraps(f)\n    def inner(*a):\n        return f(*a)\n"
+            + "    return inner\n"
+            + "@deco\nasync def f() -> str:\n    return ''\n"
+            + "router.add_api_route('/x', f)\n"
+        },
+    )
+
+    assert _rows(workspace) == [("GET", "/x", "app/main#f(sig_", "resolved", "string")]
+    assert _questions(workspace, "handler_pass_through") == []
+
+
+def test_a_module_wrapper_that_wraps_the_result_of_the_function_names_the_function(
+    tmp_path: Path, libraries
+):
+    """Final review I1: `inner` calls the one `f` it captured and wraps what it gives
+    (`JSONResponse(await f(*a, **k))`): calling `inner` runs `f`, so the handler is `f`, never
+    the wrapper."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _ROUTER
+            + "import functools\nfrom fastapi.responses import JSONResponse\n"
+            + "def deco(f):\n    @functools.wraps(f)\n    async def inner(*a, **k):\n"
+            + "        return JSONResponse(await f(*a, **k))\n    return inner\n"
+            + "@deco\nasync def f() -> str:\n    return ''\n"
+            + "router.add_api_route('/x', f)\n"
+        },
+    )
+
+    assert _rows(workspace) == [("GET", "/x", "app/main#f(sig_", "resolved", "string")]

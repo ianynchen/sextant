@@ -217,6 +217,14 @@ class ProjectHeaders:
         """Whether `module.name`, followed to where it is defined, is bound to a value, a
         function or a type alias rather than a class (`SaveFixture = Callable[...]`): such a
         name, written as a type in another file, names no class there."""
+        return self._bound_to(module, name, ("variable", "function", "type_alias", "new_class"))
+
+    def names_a_variable(self, module: str, name: str) -> bool:
+        """Whether `module.name`, followed to where it is defined, is bound to a variable on
+        every statement: an import of it binds the importing module's name to that value."""
+        return self._bound_to(module, name, ("variable",))
+
+    def _bound_to(self, module: str, name: str, kinds: tuple[str, ...]) -> bool:
         defined = self.member(module, name)
         if not defined:
             return False
@@ -226,9 +234,7 @@ class ProjectHeaders:
                 return False
             binding = header.names.get(target.member or "")
             if binding is None or any(
-                own.kind not in ("variable", "function", "type_alias", "new_class")
-                for own in binding.targets
-                if own.module == target.module
+                own.kind not in kinds for own in binding.targets if own.module == target.module
             ):
                 return False
             if not any(own.module == target.module for own in binding.targets):

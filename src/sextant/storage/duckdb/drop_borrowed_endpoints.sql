@@ -41,3 +41,19 @@ WHERE coalesce(handler, caller) IN (
         FROM raw_facts WHERE kind = 'module'
     )
 );
+
+-- The same rule for a library's bodies in the header document (fact schema 22): a Python
+-- library class a module class extends has its methods read, because the module's lookup
+-- order holds it, and nobody asked for its rows. A row whose registration or call is WRITTEN
+-- in that document is the library's, so it goes: keyed on `caller` (the body holding the
+-- registering or calling site), and only on a row with no caller on its `handler`. Not on
+-- `coalesce(handler, caller)` as above: a module's own route may name a library method as its
+-- handler (`path("x/", RedirectView.as_view())` gives `RedirectView.get`), and that row is the
+-- module's. A JVM header document holds no method, so this reaches nothing there.
+DELETE FROM endpoints
+WHERE coalesce(caller, handler) IN (
+    SELECT s.symbol
+    FROM symbols s
+    JOIN documents d ON d.document_id = s.document_id
+    WHERE d.header_only
+);

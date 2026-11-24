@@ -16,6 +16,7 @@ from test_fastapi_routes import _LOCKED, _bare, _resolved
 from fixture_python import FIXTURES
 from sextant.application.ports.catalogs import CatalogError
 from sextant.application.ports.detector import LibraryRoot
+from sextant.application.resolve import values
 from sextant.application.resolve.engines import single_call
 from sextant.application.resolve.shapes.client_base import APPEND_TO_BASE, join_url
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
@@ -219,6 +220,48 @@ def test_a_client_a_with_statement_opens_is_the_client_it_built(tmp_path, librar
         ("GET", "a.example", "/v1/x", "app/main#sync", "resolved", None),
         ("POST", "b.example", "/y", "app/main#run", "resolved", None),
     ]
+
+
+def test_a_with_statement_on_a_client_subclass_is_the_client_it_built(tmp_path, libraries):
+    """The `__enter__` entry is on `httpx.Client`; a subclass that does not define its own
+    `__enter__` inherits it, so the name `with … as` binds is the subclass instance (plan
+    2026-11-23-python-django-redesign, Task 5: a stated call matches on ancestors). A
+    subclass that defines its own `__enter__` runs that body, which is followed."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": "import httpx\n"
+            "class Api(httpx.Client):\n"
+            "    pass\n"
+            "class Own(httpx.Client):\n"
+            "    def __enter__(self) -> str:\n"
+            "        return 'own'\n"
+            "def sink(x: object) -> None: ...\n"
+            "def run(client: Api, own: Own) -> None:\n"
+            "    with client as c:\n"
+            "        sink(c)\n"
+            "    with own as o:\n"
+            "        sink(o)\n"
+            "def main() -> None:\n"
+            "    run(Api(), Own())\n",
+            "models.py": _MODELS,
+        },
+        locked=_CLIENTS,
+    )
+    index = values.value_index(
+        workspace, returns_arguments=YamlCatalogSource(catalogs_dir()).returns_arguments()
+    )
+    sites = sorted(
+        (row for row in workspace.query("call_sites") if row["name"] == "sink"),
+        key=lambda row: row["ordinal"],
+    )
+    sunk = [
+        [b.slots[0].value for b in values.resolve_site(workspace, dict(row), index)]
+        for row in sites
+    ]
+    workspace.close()
+    assert sunk == [["app/main/Api#"], ["own"]]
 
 
 @pytest.mark.parametrize(
@@ -538,3 +581,20 @@ def test_a_broken_word_is_refused_naming_the_file(tmp_path, text, refusal):
     with pytest.raises(CatalogError, match=refusal):
         (probe,) = [one for one in YamlCatalogSource(catalogs).load() if one.id == "probe"]
         single_call.run(DuckDbWorkspace(tmp_path / "ws.duckdb"), probe)
+
+
+def test_a_session_subclass_publishes_only_the_modules_own_calls(tmp_path, libraries):
+    """`class Outgoing(requests.Session)`: `Session`'s bodies are read (a module class extends
+    it, fact schema 22), and its own `self.request("GET", url)` inside `Session.get` is the
+    library's call, never this module's row (F4 §5.2, `drop_borrowed_endpoints.sql`). The
+    module's call is its one row."""
+    rows = _outbound(
+        tmp_path,
+        libraries,
+        "import requests\n"
+        "class Outgoing(requests.Session):\n    pass\n"
+        "def send() -> None:\n"
+        "    Outgoing().get('https://a.example/w')\n",
+    )
+
+    assert rows == [("GET", "a.example", "/w", "app/main#send", "resolved", None)]

@@ -1,0 +1,200 @@
+id: django
+displayName: Django (urlpatterns, function views behind path)
+style: fluent
+protocol: http
+direction: inbound
+
+# Every rule below is Django's own, measured in `scripts/probes/django_rules.md` (plan 6,
+# Task 1; DR-6) against Django 5.2.8 as the running process reported it.
+#
+# THE VOCABULARY OF THIS CATALOG (plan 6, Task 2; the user's ruling 2026-11-22: reuse an
+# existing word wherever one states the rule, a new word only where none fits). The later
+# tasks write exactly these spellings:
+# - A mount whose router is an argument of an inner call, `path(prefix, include(x))`: the
+#   router argument is read as a value, and `include` hands back its argument
+#   (`value-models/django.yml`, design 2026-11-23 §9a). `path` is a mount only where that
+#   value reaches a registration or a module's name (`mounts_a_router`).
+# - The root, `ROOT_URLCONF` (design 2026-11-23 §2 item 12): NEW key `root_setting`, the
+#   setting whose written value names the module whose `router_named` variable Django starts
+#   from.
+# - A router named by a module-name string, `include("pkg.urls")` (capability 3): NEW key
+#   `router_named: { variable: urlpatterns }` on a mount: a router argument that reads as a
+#   string names a module, and the router is that module's variable of the given name.
+# - Verbs from the methods a class defines, `View.as_view()` (capability 5): REUSED
+#   `supertype`, `dispatch: [{ name, method }]` and `bypassed_by: [{ name }]`
+#   (`jakarta-servlet.yml`); the handler value is read by the value walk, `X.as_view()` being
+#   `X`. Python has no overloads, so an entry names a method by name alone, with no
+#   `parameters`.
+# - The methods a decorator narrows a function view to (capability 4; design 2026-11-23 §2
+#   item 8): REUSED `annotations: [{ fqn, method }]` (`spring-mvc.yml`), with `method_from`
+#   in the argument form the fluent catalogs use, `{ arg, keyword }` (approved 2026-11-23).
+# - The any-method row: REUSED `verbless_serves: any` (`vertx-web.yml`; the fluent spelling
+#   of the null method `spring-webflux-router.yml` publishes as `verb: null`).
+# - The join: REUSED `path_join: concatenate` (`fastapi.yml`) and `path_prefix: /`
+#   (`spring-actuator.yml`'s literal in front of every path).
+
+detect:
+  coordinates: [django]
+
+measured:
+  - { artifact: django, versions: ["5.2.8"], identity: reported, by: scripts/probes/django_rules.md }
+
+matches:
+  # THE REGISTRATION. `path` is `functools.partial(_path, Pattern=RoutePattern)`, a variable
+  # of `django.urls.conf`, so a call of it names that module (probe, "Defining symbols":
+  # "calls of `path`, `re_path`, `include` carry owner `django/urls/conf#`"). `_path(route,
+  # view, kwargs=None, name=None, Pattern=None)`: route index 0, view index 1 (probe, "Paths").
+  # The route is kept as written, converters included (probe: "`ResolverMatch.route` keeps
+  # converters as written: `c/<id>`, `i/<int:id>`").
+  #
+  # THE METHODS A FUNCTION VIEW SERVES (probe, "Function views"; plan 6, Task 4, rulings
+  # R10-R12). A plain function serves every method: the any-method row below. Each decorator of
+  # `django.views.decorators.http` (probe, "Defining symbols") narrows it to exactly its set, one
+  # row per method (`annotations` below): `require_GET` serves GET alone (HEAD and OPTIONS 405),
+  # `require_POST` POST alone, `require_safe` GET and HEAD, both rows because the program wrote
+  # them; `require_http_methods(request_method_list)` exactly its parameter 0, as written —
+  # Django compares the request's upper-cased method against the list unchanged (`if
+  # request.method not in request_method_list`), so nothing is respelled. A list the value
+  # walk cannot read names no method: one row, method NULL, `unresolved`. Two of them on one
+  # view each refuse what they do not list, so the row is their intersection.
+  # A narrowing decorator is read on the path the value walk takes to the view: on the def,
+  # above or below any other, in a wrapper call the registration writes, held in a name
+  # (`get_or_post = require_http_methods([...])`), or applied inside a project's own decorator
+  # (`return csrf_exempt(require_POST(f))`). Where the paths of one view allow different
+  # methods (a decorator that applies `require_POST` on one branch), every row is `partial`.
+  # WHICH FUNCTION RUNS (ruling R13): the handler is followed through the decorators and wrapper
+  # calls that a value model states hand the view on (`value-models/django.yml`, each measured:
+  # probe, "View decorators that hand the view on": `login_required`, `csrf_exempt`, `cache_page`
+  # and the rest keep the inner view's allowed set), and into a project's own decorator, whose
+  # inner function stands for the view it calls (design 2026-11-23 §4e). A library decorator or
+  # wrapper that no value model states ends that walk, whether it sits on the def or in the
+  # registration. The row then names no handler, is `partial`, and files a
+  # `handler_pass_through` question. Its methods are still narrowed by a `require_*` written
+  # between the registration and the def: Django routes every method to the callable, and each
+  # `require_*` on the way answers 405 to the methods it does not list.
+  #
+  # A CLASS VIEW (plan 6, Task 5, ruling R3; probe, "Class views"): `path("x/", Items.as_view())`
+  # hands Django the closure `view`, whose `view_class` is the class the `as_view` call is made
+  # on (probe: "the class must be read from view_class / the as_view receiver, never the
+  # name"), so `View.as_view` (a `classonlymethod`, which binds as a `classmethod`: probe,
+  # "Defining symbols") hands back its receiver, the class (`supertype` below). The rows are the
+  # class's dispatch table, `dispatch` and `bypassed_by` below.
+  roots:
+    - { owner: django.urls.conf, method: path,
+        captures: { url: { arg: 0, keyword: route },
+                    handler: { arg: 1, keyword: view } } }
+    # `re_path` is `functools.partial(_path, Pattern=RegexPattern)`, the same `_path(route, view,
+    # ...)` (probe, "Defining symbols"), so the same captures; its route is a regular expression
+    # (`url_is: expression`, ruling R15), read by the three structural reads of design §5c with
+    # Django's match (probe, "`re_path`"): "RegexPattern.match uses fullmatch when the pattern
+    # is an endpoint ... and ends with '$', otherwise search", so a `$`-ended route is exact with
+    # or without `^` ("'mid/x$' without ^ still answers '/mid/x' only"), one without `$` also
+    # serves longer paths ("'^noend' serves /noend, /noendx, /noend/deeper") and is published
+    # as written; "a named group is passed as a keyword argument" (`<name>`); an optional piece
+    # serves the path with and without it ("'^r/(?P<id>\\d+)(\\.json)?/?$' answers /r/5, /r/5/,
+    # /r/5.json and /r/5.json/", "'^deactivate?$' answers /deactivat and /deactivate"); and
+    # "alternation inside a named group is one argument".
+    - { owner: django.urls.conf, method: re_path,
+        captures: { url: { arg: 0, keyword: route }, url_is: expression,
+                    handler: { arg: 1, keyword: view } } }
+  terminal: [path, re_path]
+  # THE METHODS A DECORATOR ON THE VIEW STATES (probe, "Function views"; design 2026-11-23 §4b),
+  # with the words an annotation on a handler has (`spring-mvc.yml`); `method_from` names the
+  # argument of the decorator call that holds the list, as written.
+  annotations:
+    - { fqn: django.views.decorators.http.require_GET, method: [GET] }
+    - { fqn: django.views.decorators.http.require_POST, method: [POST] }
+    - { fqn: django.views.decorators.http.require_safe, method: [GET, HEAD] }
+    - { fqn: django.views.decorators.http.require_http_methods,
+        method_from: { arg: 0, keyword: request_method_list } }
+  # THE CLASS VIEW (the servlet catalog's word): a view the value walk reads as a class below
+  # `View` (`X.as_view()` is `X`, `returns_receiver` in `value-models/django.yml`) answers by
+  # the names of its methods, `dispatch` below.
+  supertype: django.views.generic.base.View
+  # THE VERBS A CLASS VIEW SERVES (probe, "Class views"). "as_view() dispatches only methods
+  # the class defines: Items(get, post) answers GET and POST 200, PUT and DELETE 405", looked up
+  # by name in `View.http_method_names`, "['get','post','put','patch','delete','head','options',
+  # 'trace']", and "verb methods are inherited through the MRO: Child(Base) answers Base's get
+  # and delete and its own post" — a library base's too (`TemplateView.get`). One row per
+  # method the class defines, own or inherited, the method its handler; a method `View` itself
+  # defines is Django's own answer and never a row: "View defines options: an OPTIONS request
+  # is 200 on every class view", and the automatic `head` is no method at all ("View.setup
+  # assigns self.head = self.get when the class has get and no head"). A `head` or an `options`
+  # the class defines is a row: "a class with its own head keeps it (203)", "an options method
+  # on the subclass replaces View.options". `http_method_names` "can add a non-HTTP-standard
+  # name" (`custom`): such a method is not listed here, a stated under-report.
+  dispatch:
+    - { name: get, method: GET }
+    - { name: post, method: POST }
+    - { name: put, method: PUT }
+    - { name: patch, method: PATCH }
+    - { name: delete, method: DELETE }
+    - { name: head, method: HEAD }
+    - { name: options, method: OPTIONS }
+    - { name: trace, method: TRACE }
+  # WHAT REPLACES OR CHANGES THAT TABLE. "A class that overrides dispatch answers every method
+  # itself (POST 200 with no post method)": one any-method row (`verbless_serves`), `dispatch`
+  # the handler. "A dispatch override that calls super().dispatch keeps View.dispatch's verb
+  # lookup", the servlet catalog's delegating `service()`: the table's rows. `http_method_names`
+  # changes the table ("a class-level http_method_names overrides the dispatch list:
+  # Narrow(['get']) over a class with post leaves POST 405"; "as_view(http_method_names=[...])
+  # replaces the dispatch list for that route") and is written as a value, which is not read
+  # here: a STATED BOUNDARY, every row of a class that writes it, or of a call that passes it,
+  # is `partial`, never a `resolved` verb Django may refuse. Other initkwargs
+  # (`as_view(template_name=...)`) change no verb.
+  bypassed_by:
+    - { name: dispatch }
+    - { name: http_method_names }
+  # A FUNCTION VIEW SERVES EVERY METHOD (probe, "Function views": a plain function answers
+  # GET, POST, PUT and DELETE 200, and OPTIONS 200, the request reaching the view): one row,
+  # method NULL, marked as serving any method. No automatic OPTIONS or HEAD row is the
+  # framework's own: the view itself answers them.
+  verbless_serves: any
+  # WHAT "ANY METHOD" MEANS (design 2026-11-23 §4d, ruled 2026-11-23): the endpoint answers every
+  # method. A view that reads `request.method`, in its body or in module code it hands the
+  # request to, decides by the method itself, and so does one that hands the request to another
+  # view: its any-method row is no surer than `partial`. A read of the method is this entry
+  # (approved 2026-11-23, §2 item 13): the attribute `method` of the request, on
+  # `HttpRequest` or on a value whose class the facts do not name.
+  request_reads:
+    - { owner: django.http.request.HttpRequest, method: method, arity: 0, kind: method }
+  # THE PATH (probe, "Paths"): prefix and child route concatenate with nothing between
+  # (`'api/'` + `'/lead'` is `api//lead`), an empty route adds nothing, and the served path is
+  # that string with a leading `/`. Nothing is stripped or added between routes (probe,
+  # "Differs from the design" item 3: a child route starting with `/` serves `//`).
+  path_join: concatenate
+  path_prefix: /
+  # Django refuses no route at registration: a route starting with `/` draws the system check
+  # `urls.W002` and still loads (probe, "Differs from the design" item 3).
+  refuses_unrooted_path: false
+
+  # THE MOUNT (probe, "`include`"): `path(prefix, include(x))` serves `x`'s patterns under the
+  # prefix. `include(arg, namespace=None)` is a plain function of `django.urls.conf`; its `arg`
+  # is a dotted string, a module object, a list, or a `(list, app_name)` tuple, and the
+  # variable Django reads from a module is `urlpatterns` (a module naming its list anything
+  # else raises `ImproperlyConfigured`). `namespace` and `app_name` change no path. One list
+  # included at two prefixes is served at both. The router is the list itself, so a
+  # registration's router is the list it is an element of (probe: `urlpatterns` is a list of
+  # `path` results), read top-down from the root and through each mount (design 2026-11-23
+  # §4a); a list no root and no readable mount reaches is behind the named hole. The prefix is
+  # the `path` call's own route, kept as written: the join is the concatenation above, so
+  # nothing is stripped from it.
+  router_type: [builtins.list]
+  # THE ROOT: Django starts at the `urlpatterns` of the module the setting `ROOT_URLCONF`
+  # names; two written values are two roots.
+  root_setting: ROOT_URLCONF
+  mount:
+    - { owner: django.urls.conf, method: path,
+        router_arg: { arg: 1, keyword: view },
+        prefix_arg: { arg: 0, keyword: route },
+        router_named: { variable: urlpatterns } }
+    # `re_path(prefix, include(x))`: the same mount (probe, "`re_path`": "re_path('^rx/',
+    # include([path('x/', v)])) serves /rx/x/"). Its prefix is a route expression matched at
+    # the start of the remainder ("a re_path prefix and child are matched in turn against the
+    # remainder"): exact where it starts with `^` and has no final `$`, under both prefixes
+    # where it has an optional piece ("re_path('^opt2/?', include([path('x/', v)])) serves
+    # /opt2/x/ and /opt2x/"), and the unread `<prefix>` where the reads do not make it exact.
+    - { owner: django.urls.conf, method: re_path,
+        router_arg: { arg: 1, keyword: view },
+        prefix_arg: { arg: 0, keyword: route }, url_is: expression,
+        router_named: { variable: urlpatterns } }

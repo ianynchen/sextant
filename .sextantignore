@@ -3,3 +3,4 @@
 # fixture is analysed on its own, by its own tests.
 fixtures/orders-fastapi/
 fixtures/orders-flask/
+fixtures/orders-django/

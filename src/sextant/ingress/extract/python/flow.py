@@ -94,6 +94,10 @@ class Flow:
 
     # -- building --------------------------------------------------------------------------
 
+    def in_loop(self) -> bool:
+        """Whether the statement being read is inside a loop of this body."""
+        return any(isinstance(jump, Loop) for jump in self._jumps)
+
     def _raw(self) -> int:
         self._successors.append([])
         self._entered.append(False)

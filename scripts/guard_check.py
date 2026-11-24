@@ -1928,7 +1928,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_MOUNTS,
-                find="                if _identity(mounted) != made:\n",
+                find="                if mounted != made:\n",
                 replace="                if True:  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
@@ -1969,8 +1969,11 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="            if rule.by_call and rule.matches(site):\n",
-                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+                find="                rule.by_call\n                and rule.matches(site)\n"
+                "                and (not rule.registers or mounts_a_router(index, site, rule, stops))\n",
+                replace="                False  # guard disabled by scripts/guard_check.py\n"
+                "                and rule.matches(site)\n"
+                "                and (not rule.registers or mounts_a_router(index, site, rule, stops))\n",
             ),
         ),
     ),
@@ -2184,7 +2187,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find='            if "handler" not in end.captures:\n                continue\n',
+                find='            if "handler" not in end.captures or mount.rule.registers:\n'
+                "                continue\n",
                 replace="            if False:  # guard disabled by scripts/guard_check.py\n"
                 "                continue\n",
             ),
@@ -4547,8 +4551,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        for _, entry in constants:",
-                replace="        for _, entry in ():  # guard disabled by scripts/guard_check.py",
+                find="        for writer, entry in constants:",
+                replace="        for writer, entry in ():  # guard disabled by scripts/guard_check.py",
             ),
         ),
     ),
@@ -4723,9 +4727,9 @@ GUARDS: dict[str, Guard] = {
             Edit(
                 path=_VALUES,
                 find="        for method, index in written:\n"
-                "            if len(reached) > PATH_CAP:\n",
+                "            if len(reached) - members > PATH_CAP:\n",
                 replace="        for method, index in ():  # guard disabled by guard_check.py\n"
-                "            if len(reached) > PATH_CAP:\n",
+                "            if len(reached) - members > PATH_CAP:\n",
             ),
         ),
     ),
@@ -4949,11 +4953,11 @@ GUARDS: dict[str, Guard] = {
             Edit(
                 path=_VALUES,
                 find="        if own is not None and own[0] == _RETURNS:\n"
-                "            return self._stated_slot(site, row, own[1], trail, frames)\n",
+                "            element = self._index.stated_elements.get(",
                 replace="        if own is None or own[0] == _RETURNS:  # guard disabled by "
                 "scripts/guard_check.py\n"
-                "            return self._stated_slot(site, row, 0 if own is None else own[1], "
-                "trail, frames)\n",
+                "            own = own or (_RETURNS, 0)\n"
+                "            element = self._index.stated_elements.get(",
             ),
         ),
     ),

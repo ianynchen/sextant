@@ -65,6 +65,7 @@ A call's owner is the type the code writes for its receiver (design
 
 import ast
 import builtins
+import string
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from typing import Literal
@@ -136,6 +137,9 @@ _NEXT = "__next__"
 _ASYNC_ITER = "__aiter__"
 _ASYNC_NEXT = "__anext__"
 _GETITEM = "__getitem__"
+# An element store and an element delete, as the language makes them (`x[i] = v`, `del x[i]`).
+_SETITEM = "__setitem__"
+_DELITEM = "__delitem__"
 # What subscripting a type form calls (ruling R37; plan 2026-11-08 N2): the form's own
 # `__class_getitem__`, a static call whose result is the type it makes.
 _CLASS_GETITEM = "__class_getitem__"
@@ -165,6 +169,7 @@ _TYPE_ARGUMENTS = {
 }
 # The `dynamic` site an f-string or a string `+` is: its template is a `str.format` text.
 _STRING = "builtins/str#"
+_FUNCTION = "types/FunctionType#"
 _FORMAT = "format"
 _HOLE = "{}"
 # A keyword argument unpacked from a mapping (`f(**options)`): its names are not written.
@@ -324,6 +329,13 @@ class Frame:
     rebound: frozenset[str] = frozenset()
     # The receiver is the class the method was called through (`cls`), not an instance.
     class_receiver: bool = False
+    # The names of enclosing functions this body reads, each as the parameter that holds it
+    # (D00 §5 `captures`): they follow the written parameters.
+    captured: dict[str, int] = field(default_factory=dict)
+    # The last line each name is written on in this body.
+    last_write: dict[str, int] = field(default_factory=dict)
+    # How many parameters the body is written with, the receiver not counted.
+    parameter_count: int = 0
 
 
 @dataclass
@@ -373,6 +385,12 @@ class BodyReader:
     # One counter set per method symbol: a name defined twice is one method with two
     # bodies, whose call ordinals, value ids and returns continue across both.
     _bodies: dict[str, Body]
+    # The names each nested function or `lambda` captured, by the id of its node.
+    _closures: dict[int, list[str]]
+    # The module-level names of this file the body last wrote as a list, each with the
+    # elements it holds at the line being read, where the body has written it in order;
+    # None where it has no one value (`_in_order`).
+    _lists: dict[str, list[CallArgument] | None]
     # The type of each module-level name, a class or a callable, by every write to it in
     # this file, as the previous reading of the file found them (`structure.file_facts`).
     # None on a first reading, which answers from the writes read so far and is kept only
@@ -397,6 +415,8 @@ class BodyReader:
     # The type each class of this file declares for an attribute in its body (`client:
     # HttpClient`, PEP 526), by bare field symbol (`app/m/C#client.`).
     _own_fields: dict[str, TypeRef]
+    # Set while a guard's dotted reads are typed again (`_fields`): reading them writes no call.
+    _rereading: bool = False
 
     def _body(self, caller: str) -> Body:
         return self._bodies.setdefault(caller, Body(caller))
@@ -458,6 +478,7 @@ class BodyReader:
             return
         frame = self._frame(node.args, node.body, scope, types, name, receiver_taken)
         frame.class_receiver = class_receiver
+        self._hold_captured(node, frame)
         inner = Scope(
             owner=scope.owner,
             types=types,
@@ -512,6 +533,10 @@ class BodyReader:
         outer = {n for node in own if isinstance(node, ast.Nonlocal) for n in node.names}
         local_names = (_assigned(own) | set(values)) - global_names - outer
         rebound = _rebound_nonlocal(body) & local_names
+        last_write: dict[str, int] = {}
+        for node in own:
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store | ast.Del):
+                last_write[node.id] = max(last_write.get(node.id, 0), node.lineno)
         for shared in rebound & set(values):
             values[shared] = _UNKNOWN
         if self_name is not None:
@@ -529,6 +554,8 @@ class BodyReader:
             self_name=self_name,
             bindings=self._import_bindings(body, own),
             rebound=frozenset(rebound),
+            last_write=last_write,
+            parameter_count=len(ordered),
         )
 
     def _import_bindings(self, body: list[ast.stmt], own: list[ast.AST]) -> dict[str, Binding]:
@@ -536,6 +563,90 @@ class BodyReader:
             return {}
         context = self._context
         return bind_names(body, context.here, is_package=context.is_package, index=context.index)
+
+    def _closure(
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+        descriptor: str,
+        scope: Scope,
+    ) -> CallArgument:
+        """The function value a `def` or a `lambda` makes (D00 §5 `lambda`). Where its body
+        reads names of an enclosing function, a `dynamic` site `types/FunctionType#<init>`
+        takes their values as they are where the function is made, and the entry counts them
+        (`captures`): the body holds them as the parameters after its written ones. A name
+        written again after this line has no one value here; it is `unresolved`."""
+        names = self._free_names(node, scope.frame)
+        if not names:
+            return CallArgument(kind="lambda", symbol=descriptor, captures=0)
+        held = []
+        for name in names:
+            frame = scope.frame
+            while frame is not None and name not in frame.local_names:
+                frame = frame.enclosing
+            late = frame is not None and frame.last_write.get(name, 0) > node.lineno
+            held.append(_UNKNOWN if late else self._local(name, scope.frame) or _UNKNOWN)
+        self._closures[id(node)] = names
+        produced = self._invoke(Callee(_target(_FUNCTION, INIT), "dynamic"), held, scope)
+        return CallArgument(
+            kind="lambda", symbol=descriptor, captures=len(names), source=produced.source
+        )
+
+    def _free_names(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda, frame: Frame | None
+    ) -> list[str]:
+        """The names `node`'s body (a function nested in it too) reads that an enclosing
+        function holds as a value, in the order they are first read. A function (the body's
+        own name too, which it calls to run again) and a class are named directly, and the
+        receiver stays the receiver."""
+        if frame is None:
+            return []
+        body = [node.body] if isinstance(node, ast.Lambda) else node.body
+        written = node.args
+        own = _assigned(_own_nodes(body)) | {
+            a.arg
+            for a in (
+                *written.posonlyargs,
+                *written.args,
+                *written.kwonlyargs,
+                *(x for x in (written.vararg, written.kwarg) if x is not None),
+            )
+        }
+        declared = {
+            n
+            for each in _own_nodes(body)
+            if isinstance(each, ast.Global | ast.Nonlocal)
+            for n in each.names
+        }
+        own -= declared
+        loads = sorted(
+            (each.lineno, each.col_offset, each.id)
+            for part in body
+            for each in ast.walk(part)
+            if isinstance(each, ast.Name) and isinstance(each.ctx, ast.Load)
+        )
+        found: list[str] = []
+        for _, _, name in loads:
+            if name in own or name in found or name == getattr(node, "name", None):
+                continue
+            current: Frame | None = frame
+            while current is not None:
+                if name in current.global_names:
+                    break
+                if name in current.local_names:
+                    value = current.values.get(name, _UNKNOWN)
+                    direct = value.kind in ("class", "lambda")
+                    if value is not _SELF and not direct:
+                        found.append(name)
+                    break
+                current = current.enclosing
+        return found
+
+    def _hold_captured(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda, frame: Frame
+    ) -> None:
+        """The body's captured names, after its written parameters."""
+        names = self._closures.get(id(node), [])
+        frame.captured = {name: frame.parameter_count + at for at, name in enumerate(names)}
 
     def _nested_name(self, node: ast.FunctionDef | ast.AsyncFunctionDef, scope: Scope) -> str:
         """A function defined inside a function is a method of the same owner, named
@@ -607,12 +718,16 @@ class BodyReader:
         same text would be as a call argument (`_value`, R23; ruling R27). A read it cannot type
         is left out. A dotted name holds no call, so reading it writes none."""
         found: dict[str, str] = {}
-        for text in reads:
-            node = ast.parse(text, mode="eval").body
-            if isinstance(node, ast.Attribute):
-                value = self._value(node, scope)
-                if value.kind == "field" and value.symbol:
-                    found[text] = value.symbol
+        self._rereading = True
+        try:
+            for text in reads:
+                node = ast.parse(text, mode="eval").body
+                if isinstance(node, ast.Attribute):
+                    value = self._value(node, scope)
+                    if value.kind == "field" and value.symbol:
+                        found[text] = value.symbol
+        finally:
+            self._rereading = False
         return found
 
     def _guard_after(self, node: ast.stmt, scope: Scope) -> CallGuard | None:
@@ -791,7 +906,10 @@ class BodyReader:
             scope.flow.join([skipped, passed])
         elif isinstance(node, ast.Delete):
             for target in node.targets:
-                self._store(target, _UNKNOWN, scope)
+                if isinstance(target, ast.Subscript):
+                    self._subscript(target, scope, _DELITEM)
+                else:
+                    self._store(target, _UNKNOWN, scope)
         elif isinstance(node, ast.Import | ast.ImportFrom):
             self._import(node, scope)
 
@@ -809,7 +927,9 @@ class BodyReader:
         """An import inside a function binds a local name. A module-level name that
         branches bind to several things (`try: import ujson as json` / `except
         ImportError: import json`) is read as a static field, one write per binding, so a
-        call on it names the field as its receiver and the resolver follows each write."""
+        call on it names the field as its receiver and the resolver follows each write. So is
+        a module-level import of one variable another file of the module defines (`from
+        app.other import urlpatterns`): the name is that value, written once (ruling R9)."""
         context = self._context
         bound = bind_names([node], context.here, is_package=context.is_package, index=context.index)
         if scope.frame is not None:
@@ -825,7 +945,12 @@ class BodyReader:
             return
         for name, binding in bound.items():
             final = scope.types.names.get(name)
-            if final is None or len(final.targets) < 2:
+            # An import of one project variable is that value, decided by the import's own
+            # targets; a name the file rebinds is the file's own variable (fix round 3).
+            if final is None or (
+                len(final.targets) < 2
+                and not (final.targets == binding.targets and self._a_variable(binding.targets))
+            ):
                 continue
             descriptor = f"{scope.owner}{name}."
             if descriptor not in scope.fields:
@@ -839,6 +964,18 @@ class BodyReader:
                     modifiers={"static": True},
                 )
             self._write_field(descriptor, _reference(binding.targets[0]), scope)
+
+    def _a_variable(self, targets: tuple[Target, ...] | list[Target]) -> bool:
+        """Whether one import target is a variable another file of this module defines."""
+        if len(targets) != 1:
+            return False
+        index, target = self._context.index, targets[0]
+        return (
+            target.member is not None
+            and index.headers is not None
+            and index.owns(target.module)
+            and index.headers.names_a_variable(target.module, target.member)
+        )
 
     def _branches(
         self,
@@ -1134,9 +1271,12 @@ class BodyReader:
                 self._write_field(written, value, scope)
             elif evaluate:
                 self._value(target.value, scope)
-        elif isinstance(target, ast.Subscript) and evaluate:
-            self._value(target.value, scope)
-            self._value(target.slice, scope)
+        elif isinstance(target, ast.Subscript):
+            # `x[i] = v` is `x.__setitem__(i, v)`; after `x[i] += v`'s read, its object and
+            # index are read again here.
+            # shortcut: a call inside the target of `x[f()] += v` is written twice; split the
+            # read and the store if a real tree shows one.
+            self._subscript(target, scope, _SETITEM, value)
 
     def _field_target(self, target: ast.Attribute, scope: Scope) -> str | None:
         """The field `target` names: an attribute of `self`, or of a module or a class
@@ -1151,6 +1291,7 @@ class BodyReader:
         return None
 
     def _write_field(self, written: str, value: CallArgument, scope: Scope) -> None:
+        value = self._in_order(written, value, scope)
         parameter = value.value if value.kind == "parameter" else None
         self.facts.append(
             FieldWriteFact(
@@ -1161,6 +1302,66 @@ class BodyReader:
                 written_by=scope.body.caller,
             )
         )
+
+    def _in_order(self, written: str, value: CallArgument, scope: Scope) -> CallArgument:
+        """A write to a module-level name, read in the order the body runs: the name is a
+        list from here on where the value is a list (`_is_list`, `_added`), and is not where
+        it is anything else, a tuple too. A list is written with each `*name` in it replaced
+        by the elements that name holds AT THIS LINE, where the body has written it in order:
+        a copy taken here does not hold what is added to the name later (`a = list(b)`, then
+        `b += [...]`). A name written under a test or in a loop has no one value from there
+        on, and its `*name` stays a read of the name (every write of it). Another list added
+        under a test is one unread member: its members are served only where the test holds,
+        and no fact of theirs says so (design 2026-11-23 §9b)."""
+        if scope.frame is not None or scope.class_path is not None:
+            return value
+        if value.kind != "array" or value.symbol != _LITERAL_CLASSES[ast.List]:
+            self._lists.pop(written, None)
+            return value
+        elements: list[CallArgument] = []
+        for element in value.elements or []:
+            other = element.keyword == _UNPACKED_POSITIONAL and element.kind == "field"
+            if other and scope.guards and element.symbol != written:
+                elements.append(_UNKNOWN.model_copy(update={"keyword": _UNPACKED_POSITIONAL}))
+                continue
+            held = self._lists.get(str(element.symbol)) if other else None
+            if held is not None:
+                elements.extend(held)
+            else:
+                elements.append(element)
+        straight = not scope.guards and not scope.flow.in_loop()
+        self._lists[written] = elements if straight else None
+        return value.model_copy(update={"elements": elements})
+
+    def _added(self, node: ast.Call, scope: Scope) -> bool:
+        """`x.append(v)` and `x.extend(vs)` on a module-level name of this file that holds a
+        list: the write `x += [v]`, `x += vs` (ruled 2026-11-23). False for any other call."""
+        func = node.func
+        if not (
+            isinstance(func, ast.Attribute)
+            and func.attr in ("append", "extend")
+            and isinstance(func.value, ast.Name)
+            and len(node.args) == 1
+            and not node.keywords
+            and not isinstance(node.args[0], ast.Starred)
+            and scope.frame is None
+            and scope.class_path is None
+            and f"{scope.owner}{func.value.id}." in self._lists
+        ):
+            return False
+        symbol = f"{scope.owner}{func.value.id}."
+        added = self._value(node.args[0], scope)
+        if func.attr == "append":
+            new = [added]
+        elif isinstance(node.args[0], ast.List) and added.kind == "array":
+            new = list(added.elements or [])
+        else:
+            new = [added.model_copy(update={"keyword": _UNPACKED_POSITIONAL})]
+        own = CallArgument(kind="field", symbol=symbol, keyword=_UNPACKED_POSITIONAL)
+        made = _Part(kind="array", elements=[own, *new], symbol=_LITERAL_CLASSES[ast.List])
+        made._typed = TypeRef(symbol=_LITERAL_CLASSES[ast.List])
+        self._write_field(symbol, made, scope)
+        return True
 
     # -- decorators ----------------------------------------------------------------------
 
@@ -1186,6 +1387,11 @@ class BodyReader:
     # -- calls ---------------------------------------------------------------------------
 
     def _call(self, node: ast.Call, scope: Scope) -> CallArgument:
+        if self._added(node, scope):
+            return CallArgument(kind="null")
+        formatted = self._format(node, scope)
+        if formatted is not None:
+            return formatted
         if self._names_a_new_type(node.func, scope) and len(node.args) == 1 and not node.keywords:
             # Calling a `NewType` hands its argument back (the typing specification): no call
             # runs that the facts could name, and the value is the argument.
@@ -1200,9 +1406,15 @@ class BodyReader:
                 types.append(None)
             elif isinstance(argument, ast.Starred):
                 # Unpacked into the positional arguments (D00 §5 `keyword: "*"`): how many it
-                # fills, and so where every later one lands, is not known.
-                self._value(argument.value, scope)
-                positional.append(_UNKNOWN.model_copy(update={"keyword": _UNPACKED_POSITIONAL}))
+                # fills, and so where every later one lands, is not known. A name keeps its
+                # `field` or its `parameter` (which value is unpacked, ruling R9); anything
+                # else is `unresolved`.
+                unpacked = self._value(argument.value, scope)
+                positional.append(
+                    (unpacked if unpacked.kind in ("field", "parameter") else _UNKNOWN).model_copy(
+                        update={"keyword": _UNPACKED_POSITIONAL}
+                    )
+                )
                 types.append(None)
             else:
                 positional.append(self._value(argument, scope))
@@ -1442,6 +1654,23 @@ class BodyReader:
         if made.source is not None:
             scope.body.returned[made.source] = typed
         return made
+
+    def _parameter_read(self, node: ast.Attribute, scope: Scope) -> None:
+        """`request.method` where `request` is a parameter whose class is not known (approved
+        2026-11-23, spec 2026-11-23-python-django-redesign §2 item 13): the read
+        `_attribute_read` writes for a known class, a call named as the attribute on the value,
+        with no owner and no arguments; the resolver names the owner where it can, as it does
+        for a method call on such a value. A parameter whose written class neither declares the
+        attribute (R23's field) nor has its type written (`_attribute_read`) gets the same
+        call, which the resolver binds to that class. The value read stays one this
+        scanner does not follow."""
+        if self._rereading or not isinstance(node.value, ast.Name) or scope.frame is None:
+            return
+        if self._targets(node.value, scope) is not None:
+            return
+        held = self._local(node.value.id, scope.frame)
+        if held is not None and held.kind == "parameter":
+            self._invoke(self._on_value(held, node.attr, scope), [], scope)
 
     def _library_member(self, owner: Target, name: str) -> Target | None:
         """`module.name` for a library module, as the library defines it: a re-export is
@@ -1851,6 +2080,19 @@ class BodyReader:
         """One value as D00 §5's argument grammar, writing every call in it."""
         if isinstance(node, ast.Constant):
             return _constant(node.value)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and len(node.args) == 1
+            and not node.keywords
+            and not isinstance(node.args[0], ast.Starred)
+            and self._targets(node.func, scope) == (Target(BUILTINS, "list"),)
+        ):
+            # `list(x)` makes a new list of `x`'s elements: `[*x]` (ruled 2026-11-23).
+            star = ast.copy_location(ast.Starred(value=node.args[0], ctx=ast.Load()), node)
+            return self._value(
+                ast.copy_location(ast.List(elts=[star], ctx=ast.Load()), node), scope
+            )
         if isinstance(node, ast.Call):
             return self._call(node, scope)
         if isinstance(node, ast.JoinedStr):
@@ -1859,6 +2101,7 @@ class BodyReader:
             parts = _added(node)
             if any(_is_text(part) for part in parts):
                 return self._concat(parts, scope)
+            return self._sum(parts, scope)
         if (
             isinstance(node, ast.UnaryOp)
             and isinstance(node.op, ast.USub)
@@ -1891,6 +2134,7 @@ class BodyReader:
             held = self._typed(node.value, base, scope) or _hinted(base, scope)
             defining = None if held is None else self._defining_field(held, node.attr)
             if defining is None:
+                self._parameter_read(node, scope)
                 return _UNKNOWN
             # A read of the field the class declares (R23), as a JVM GETFIELD names it; its
             # declared type stays the scanner's, for the owner of a call on it.
@@ -1898,11 +2142,21 @@ class BodyReader:
             field_read._typed = defining[1]
             return field_read
         if isinstance(node, ast.List | ast.Tuple):
-            elements = [self._value(element, scope) for element in node.elts]
+            # A list's `*x` element is every element of `x`, unpacked there (D00 §5 `array`).
+            elements = [
+                self._value(element.value, scope).model_copy(
+                    update={"keyword": _UNPACKED_POSITIONAL}
+                )
+                if isinstance(element, ast.Starred) and isinstance(node, ast.List)
+                else self._value(element, scope)
+                for element in node.elts
+            ]
             typed = self._literal_type(node, node.elts, elements, scope)
-            if any(isinstance(element, ast.Starred) for element in node.elts):
+            if isinstance(node, ast.Tuple) and any(
+                isinstance(element, ast.Starred) for element in node.elts
+            ):
                 return _part(typed)
-            found = _Part(kind="array", elements=elements)
+            found = _Part(kind="array", elements=elements, symbol=_LITERAL_CLASSES[type(node)])
             found._typed = typed
             return found
         if isinstance(node, ast.Dict | ast.Set):
@@ -2042,6 +2296,93 @@ class BodyReader:
         produced = self._invoke(site, operands, scope)
         return CallArgument(kind="concat", value=text, source=produced.source)
 
+    def _format(self, node: ast.Call, scope: Scope) -> CallArgument | None:
+        """`"...".format(...)` on a string literal: the template its text makes, each
+        replacement field a `{}` filled by its argument, by position, by number or by name
+        (D00 §5 `concat`, as `_concat` writes it). None, the call unread as before, where a
+        field has a conversion, a format spec, an attribute or an index, where automatic and
+        numbered fields are mixed, where an argument is unpacked, or where a field has no
+        argument: Python raises for the last two of those, and the others make text this
+        reader does not model."""
+        func = node.func
+        if not (
+            isinstance(func, ast.Attribute)
+            and func.attr == _FORMAT
+            and isinstance(func.value, ast.Constant)
+            and isinstance(func.value.value, str)
+            and not any(isinstance(a, ast.Starred) for a in node.args)
+            and all(k.arg is not None for k in node.keywords)
+        ):
+            return None
+        named = {str(k.arg): k.value for k in node.keywords}
+        try:
+            fields = list(string.Formatter().parse(func.value.value))
+        except ValueError:
+            return None
+        template: list[str] = []
+        holes: list[ast.expr] = []
+        automatic, numbered = 0, False
+        filled: ast.expr | None
+        for literal, name, spec, conversion in fields:
+            template.append(literal)
+            if name is None:
+                continue
+            if spec or conversion is not None:
+                return None
+            if name == "":
+                filled = node.args[automatic] if automatic < len(node.args) else None
+                automatic += 1
+            elif name.isdigit():
+                numbered = True
+                filled = node.args[int(name)] if int(name) < len(node.args) else None
+            elif name.isidentifier():
+                filled = named.get(name)
+            else:
+                return None
+            if filled is None or (automatic > 0 and numbered):
+                return None
+            holes.append(filled)
+            template.append(_HOLE)
+        # Python evaluates every argument, in the order written, before it formats.
+        values = {id(a): self._value(a, scope) for a in [*node.args, *named.values()]}
+        text = "".join(template)
+        if not holes:
+            return CallArgument(kind="string", value=text)
+        site = Callee(_target(_STRING, _FORMAT), "dynamic")
+        produced = self._invoke(site, [values[id(h)] for h in holes], scope)
+        return CallArgument(kind="concat", value=text, source=produced.source)
+
+    def _sum(self, parts: list[ast.expr], scope: Scope) -> CallArgument:
+        """`a + b` with no text in it. Where one operand is known to be a list (written as
+        one, or a module-level name of this file every write of which is one or that this
+        body last wrote as one), every operand
+        is: `list.__add__` takes a list alone, so code where one is not raises. The value is
+        then the list it makes (D00 §5 `array`): a written list's elements in place, each
+        other operand as its own entry marked `*`, unpacked there. Any other sum is unread."""
+        values = [self._value(part, scope) for part in parts]
+        if not any(self._is_list(value, scope) for value in values):
+            return _UNKNOWN
+        elements: list[CallArgument] = []
+        for part, value in zip(parts, values, strict=True):
+            if isinstance(part, ast.List) and value.kind == "array":
+                elements.extend(value.elements or [])
+            else:
+                elements.append(value.model_copy(update={"keyword": _UNPACKED_POSITIONAL}))
+        found = _Part(kind="array", elements=elements, symbol=_LITERAL_CLASSES[ast.List])
+        found._typed = TypeRef(symbol=_LITERAL_CLASSES[ast.List])
+        return found
+
+    def _is_list(self, value: CallArgument, scope: Scope) -> bool:
+        typed = _type_of(value, scope)
+        if typed is None and value.kind == "field" and value.symbol is not None:
+            read = str(value.symbol)
+            if read in self._lists:
+                # The module-level name was last written as a list in this body.
+                return True
+            if owner_of(read) == type_symbol(Target(self._context.here)):
+                typed = self._module_answer(member_name(read))
+        return typed == _LITERAL_CLASSES[ast.List]
+
     def _lambda(self, node: ast.Lambda, scope: Scope) -> CallArgument:
         """A `lambda` is a method of its own, named as javac names a lambda body
         (`lambda$<method>$<n>`, numbered per method); its value is its one return."""
@@ -2060,7 +2401,9 @@ class BodyReader:
             signature=self._signature(node, scope.types, skip_first=False, values=values),
             modifiers={"abstract": False, "static": True, "varargs": node.args.vararg is not None},
         )
+        made = self._closure(node, descriptor, scope)
         frame = self._frame(node.args, [], scope, scope.types, name, receiver_taken=False)
+        self._hold_captured(node, frame)
         inner = Scope(
             owner=scope.owner,
             types=scope.types,
@@ -2070,7 +2413,7 @@ class BodyReader:
         )
         self._return(self._value(node.body, inner), inner)
         self._positions(inner)
-        return CallArgument(kind="lambda", symbol=descriptor, captures=0)
+        return made
 
     def _comprehension(
         self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp, scope: Scope
@@ -2211,8 +2554,8 @@ class BodyReader:
 
     def _local(self, name: str, frame: Frame | None) -> CallArgument | None:
         """The value of a function's own name, or None where `name` is not one. A name
-        of an enclosing function is `unresolved` (its value ids are another method's),
-        except a function or a class it defines."""
+        of an enclosing function is the parameter that holds it (`_closure`), except a
+        function with no capture or a class it defines, which is named directly."""
         current, nested = frame, False
         while current is not None:
             if name in current.global_names:
@@ -2221,8 +2564,14 @@ class BodyReader:
                 value = current.values.get(name, _UNKNOWN)
                 if value is _SELF:
                     return _UNKNOWN
+                if nested and frame is not None and name in frame.captured:
+                    return CallArgument(kind="parameter", value=frame.captured[name])
                 if nested and value.kind not in ("lambda", "class"):
                     return _UNKNOWN
+                if nested and value.kind == "lambda" and value.source is not None:
+                    # A function of the enclosing body is named by its body alone: where it
+                    # was made, with what it captured, is that body's own value id.
+                    return CallArgument(kind="lambda", symbol=value.symbol, captures=0)
                 if name in current.mutable:
                     # A list can change once it is handed out, as a JVM array that
                     # reaches another call does: the first read gets the literal, a
@@ -2347,14 +2696,21 @@ class BodyReader:
             protocol=True,
         )
 
-    def _subscript(self, node: ast.Subscript, scope: Scope) -> CallArgument:
-        """`xs[i]` is `type(xs).__getitem__(xs, i)`. A slice is a `slice` object, which the
+    def _subscript(
+        self,
+        node: ast.Subscript,
+        scope: Scope,
+        name: str = _GETITEM,
+        stored: CallArgument | None = None,
+    ) -> CallArgument:
+        """`xs[i]` is `type(xs).__getitem__(xs, i)`; a store `xs[i] = v` is `__setitem__(i, v)`
+        and `del xs[i]` is `__delitem__(i)` (`name`, `stored`). A slice is a `slice` object, which the
         argument grammar does not hold: it is `unresolved`, with the type `slice` for the
         overload it chooses. `pair[1]` on a `tuple[A, B]` is that position's type, the
         typing specification's rule for a tuple. Subscripting a class or a typing form
         (`list[int]`, `Optional[X]`) makes a type: the static call `<form>#__class_getitem__`
         (`_class_getitem`)."""
-        if self._names_a_type_form(node.value, scope):
+        if name == _GETITEM and self._names_a_type_form(node.value, scope):
             form = self._form(node.value, scope)
             if form is not None:
                 return self._class_getitem(form, node, scope)
@@ -2362,7 +2718,7 @@ class BodyReader:
             self._value(node.slice, scope)
             return _UNKNOWN
         container = self._value(node.value, scope)
-        if container.kind == "class" and container.symbol is not None:
+        if name == _GETITEM and container.kind == "class" and container.symbol is not None:
             return self._class_getitem(container.symbol, node, scope)
         if isinstance(node.slice, ast.Slice):
             for bound in (node.slice.lower, node.slice.upper, node.slice.step):
@@ -2373,8 +2729,9 @@ class BodyReader:
         else:
             index = self._value(node.slice, scope)
             index_type = self._typed(node.slice, index, scope)
-        callee = self._protocol(container, _GETITEM, node.value, scope)
-        result = self._invoke(callee, [index], scope, types=[index_type])
+        callee = self._protocol(container, name, node.value, scope)
+        arguments = [index] if stored is None else [index, stored]
+        result = self._invoke(callee, arguments, scope, types=[index_type])
         held = callee.typed
         if (
             held is not None

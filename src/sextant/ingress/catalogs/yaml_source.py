@@ -2171,12 +2171,25 @@ def _returns_argument(entry: Any, path: Path) -> dict[str, Any]:
         )
     if forms[0] == _RETURNS_RECEIVER and entry[_RETURNS_RECEIVER] is not True:
         raise CatalogError(f"{where}: `{_RETURNS_RECEIVER}` is written `true`, got {entry!r}")
+    stated: Any = entry[forms[0]]
+    # `{ arg: N, element: M }`: where the argument is a written tuple, its element M.
+    element = None
+    if forms[0] == "returns" and isinstance(stated, dict):
+        if set(stated) != {"arg", "element"} or not all(
+            isinstance(stated[key], int) and not isinstance(stated[key], bool) and stated[key] >= 0
+            for key in stated
+        ):
+            raise CatalogError(
+                f"{where}: `returns` is `argN` or `{{arg: N, element: M}}`, got {entry!r}"
+            )
+        stated, element = f"arg{stated['arg']}", stated["element"]
     return {
         "owner": type_descriptor(str(entry["owner"])),
         "method": str(entry["method"]),
         "form": forms[0],
         # The receiver is no argument: the position is unused for that form.
-        "arg": 0 if forms[0] == _RETURNS_RECEIVER else _arg_index(entry[forms[0]], where),
+        "arg": 0 if forms[0] == _RETURNS_RECEIVER else _arg_index(stated, where),
+        "element": element,
         "by": str(entry["by"]),
     }
 

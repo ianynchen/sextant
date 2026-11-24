@@ -124,6 +124,9 @@ class PythonScanner:
         # The classes a static call may name (`called_types`): a header where a library
         # declares one, and no count of unlocated types where none does.
         called: set[str] = set()
+        # The bases the module's classes write: the library classes in a module class's lookup
+        # order have their method bodies read (`Libraries.headers`).
+        extended: set[str] = set()
         # Only the module's own scan keeps documents (OI-325): an opted-in library's is read
         # whole into a subtree the stage discards before every run (D04 §2a).
         inputs = _inputs(request, prefix, libraries) if request.origin is None else None
@@ -172,6 +175,7 @@ class PythonScanner:
                 own.update(kept.declared)
                 referenced.update(kept.referenced)
                 called.update(kept.called)
+                extended.update(kept.extended)
                 records.append(kept.record)
                 continue
             try:
@@ -209,10 +213,12 @@ class PythonScanner:
             declared = _declared(read.facts)
             types = referenced_types(read.facts)
             maybe = called_types(read.facts)
+            bases = _bases(read.facts)
             if libraries is not None:
                 own.update(declared)
                 referenced |= types
                 called |= maybe
+                extended |= bases
             if inputs is not None:
                 asked = sorted(index.asked)
                 records.append(
@@ -228,6 +234,7 @@ class PythonScanner:
                                 "declared": sorted(declared),
                                 "referenced": sorted(types),
                                 "called": sorted(maybe),
+                                "extended": sorted(bases),
                                 "content_hash": document.content_hash,
                                 "header": own_header,
                             },
@@ -248,7 +255,7 @@ class PythonScanner:
             # merge of the new types' headers into the kept ones would not keep.
             assert inputs is not None
             document_id = hashlib.sha256(f"type-headers:{request.module_id}".encode()).hexdigest()
-            key = _headers_key(inputs, referenced, own, called)
+            key = _headers_key(inputs, referenced, own, called, extended)
             path = request.out_dir / _HEADER_FILE
             kept_headers = _kept_headers(
                 previous_headers, key, request, document_id, libraries, path
@@ -256,7 +263,7 @@ class PythonScanner:
             if kept_headers is None:
                 libraries.notes = []
                 headers, unlocated, not_read = libraries.headers(
-                    referenced, own, document_id, called
+                    referenced, own, document_id, called, extended
                 )
                 write_fact_file(
                     path,
@@ -307,6 +314,7 @@ class _Kept:
     declared: list[str]
     referenced: list[str]
     called: list[str]
+    extended: list[str]
 
 
 @dataclass(frozen=True)
@@ -319,9 +327,11 @@ class _KeptHeaders:
     not_read: list[str]
 
 
-def _headers_key(inputs: str, referenced: set[str], own: set[str], called: set[str]) -> str:
+def _headers_key(
+    inputs: str, referenced: set[str], own: set[str], called: set[str], extended: set[str]
+) -> str:
     """The header document's key: the scan's inputs, and the types its read starts from."""
-    text = json.dumps([inputs, sorted(referenced), sorted(own), sorted(called)])
+    text = json.dumps([inputs, sorted(referenced), sorted(own), sorted(called), sorted(extended)])
     return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 
 
@@ -404,6 +414,7 @@ def _kept(
             [str(symbol) for symbol in detail["declared"]],
             [str(symbol) for symbol in detail["referenced"]],
             [str(symbol) for symbol in detail["called"]],
+            [str(symbol) for symbol in detail["extended"]],
         )
     except (ValueError, TypeError, KeyError):
         # A record this build cannot read — a damaged row, or one an older build wrote in
@@ -447,6 +458,17 @@ def _previous_headers(records: Iterable[ReuseRecord]) -> dict[str, tuple[str, st
 
 def _declared(facts: list[Fact]) -> set[str]:
     return {bare_descriptor(fact.symbol) for fact in facts if isinstance(fact, SymbolFact)}
+
+
+def _bases(facts: list[Fact]) -> set[str]:
+    """Every base the file's classes write, bare."""
+    return {
+        bare_descriptor(parent)
+        for fact in facts
+        if isinstance(fact, SymbolFact)
+        for parent in [fact.superclass, *fact.interfaces]
+        if parent is not None
+    }
 
 
 def _header_document(

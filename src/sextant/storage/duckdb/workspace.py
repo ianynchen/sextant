@@ -736,6 +736,17 @@ _NAMED_QUERIES = {
         WHERE d.origin IS NOT NULL
         ORDER BY symbol
     """,
+    # Every symbol of the header document (D00 §5 `type_header`): the library bodies a module
+    # class's lookup order has read (fact schema 22). F4 §5.2 (W24): nobody asked for them, so
+    # a row registered in one is the library's, never published (`drop_borrowed_endpoints.sql`,
+    # and at source where a row carries no caller).
+    "header_symbols": """
+        SELECT s.symbol AS symbol
+        FROM symbols s
+        JOIN documents d ON d.document_id = s.document_id
+        WHERE d.header_only
+        ORDER BY symbol
+    """,
     # The two NON-WIRE tables (2O design §4). Ordered on their whole content
     # rather than on a key, for the reason `open_questions` above states: these
     # rows carry no wire identity to order by, and an ordering with ties is one
@@ -1913,6 +1924,7 @@ _FACT_ONLY = frozenset(
         "coverage",
         "config_entries",
         "library_symbols",
+        "header_symbols",
         "declared_symbols_with_documents",
         "located_documents",
         "located_annotations",

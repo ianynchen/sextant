@@ -8,7 +8,7 @@
 #   - word: <the word>
 #     where: catalog key | catalog value: <key> | <path>::<name> (as a failure message spells it)
 #     approved_by: <who approved it>
-#     approved_on: YYYY-MM-DD (after 2026-11-23)
+#     approved_on: YYYY-MM-DD (2026-11-23 or later)
 #     reference: <the ruling, design section or issue>
 # A new catalog key that takes string values is also put in exactly one of
 # baseline.closed_value_keys, baseline.mixed_value_keys or exemptions.open_value_keys. A word
@@ -1138,7 +1138,37 @@ baseline:
     - private
     - protected
     - public
-approvals: []
+approvals:
+- word: element
+  where: catalog key
+  approved_by: user
+  approved_on: 2026-11-23
+  reference: docs/superpowers/specs/2026-11-23-python-django-redesign.md §9a (`include`, `as_view`); plan 2026-11-23-python-django-redesign Global Constraints
+- word: root_setting
+  where: catalog key
+  approved_by: user
+  approved_on: 2026-11-23
+  reference: docs/superpowers/specs/2026-11-23-python-django-redesign.md §2 item 12
+- word: router_named
+  where: catalog key
+  approved_by: user
+  approved_on: 2026-11-23
+  reference: approved by the user 2026-11-22; plan 2026-11-23-python-django-redesign Global Constraints; `django.yml` header (capability 3, a router named by a module-name string)
+- word: variable
+  where: catalog key
+  approved_by: user
+  approved_on: 2026-11-23
+  reference: approved by the user 2026-11-22; plan 2026-11-23-python-django-redesign Global Constraints; the part of `router_named` in `django.yml` that names the module's variable (`urlpatterns`)
+- word: expression
+  where: 'catalog value: url_is'
+  approved_by: user
+  approved_on: 2026-11-23
+  reference: docs/superpowers/specs/2026-11-23-python-django-redesign.md §2 item 10
+- word: method
+  where: 'catalog value: kind'
+  approved_by: user
+  approved_on: 2026-11-23
+  reference: docs/superpowers/specs/2026-11-23-python-django-redesign.md §2 item 13 (a `request_reads` entry that reads the request's method)
 exemptions:
   data_keyed_mappings:
     client_base.default_ports: 'D02 client model: `{scheme: port}`'
@@ -1325,6 +1355,7 @@ exemptions:
     required_when_thrown: an annotation, type or class name of the framework or the user's code
     resource_annotation: an annotation, type or class name of the framework or the user's code
     returns: an annotation, type or class name of the framework or the user's code
+    root_setting: a configuration key, key template or file pattern of the framework
     router_type: an annotation, type or class name of the framework or the user's code
     rows: a library coordinate, catalog id, version or citation
     satisfied_by: an annotation, type or class name of the framework or the user's code
@@ -1360,6 +1391,7 @@ exemptions:
     unless_subtype_of: an annotation, type or class name of the framework or the user's code
     value_annotation: an annotation, type or class name of the framework or the user's code
     values: a value the framework defines (a sentinel, a default name, a boolean spelling)
+    variable: a method, function, field or attribute name of the framework or the user's code
     versions: a library coordinate, catalog id, version or citation
     why: prose for a reader
     wildcard: a separator, placeholder or syntax character

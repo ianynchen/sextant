@@ -57,6 +57,7 @@ from sextant.ingress.extract.python.imports import (
     ProjectNames,
     Target,
     bind_names,
+    binds_as,
     calls_through,
     every_statement,
     holds_decorated_value,
@@ -243,6 +244,8 @@ class _Writer(BodyReader):
         self.not_read: list[str] = []
         self._methods = {}
         self._bodies = {}
+        self._closures = {}
+        self._lists = {}
         self._rebound = rebound
         self._module_types = module_types
         self._module_writes = {}
@@ -483,7 +486,11 @@ class _Writer(BodyReader):
                         field=descriptor,
                         # One name takes the value; a name inside an unpacking takes a
                         # part of it this scanner does not split.
-                        value=value if named is not None else CallArgument(kind="unresolved"),
+                        value=self._in_order(
+                            descriptor,
+                            value if named is not None else CallArgument(kind="unresolved"),
+                            scope,
+                        ),
                         written_by=scope.body.caller,
                     )
                 )
@@ -494,7 +501,9 @@ class _Writer(BodyReader):
         nested = scope.frame is not None
         in_class = scope.class_path is not None and not nested
         decorators = [
-            target for decorator in node.decorator_list for target in scope.types.lookup(decorator)
+            binds_as(target, self._context.index)
+            for decorator in node.decorator_list
+            for target in scope.types.lookup(decorator)
         ]
         is_static = any(t == Target(BUILTINS, "staticmethod") for t in decorators)
         # A classmethod is bound to the class, not to an instance (D00 §5a `static`): `cls`
@@ -517,11 +526,10 @@ class _Writer(BodyReader):
         values = self._parameter_values(node.args, scope)
         if nested:
             self._method_known(descriptor, scope.owner, name)
-        applied = self._apply(
-            callees, CallArgument(kind="lambda", symbol=descriptor, captures=0), scope
-        )
+        made_function = self._closure(node, descriptor, scope)
+        applied = self._apply(callees, made_function, scope)
         self._bind_nested(node.name, applied, scope)
-        if not nested and holds_decorated_value(node, scope.types.lookup):
+        if not nested and holds_decorated_value(node, scope.types.lookup, self._context.index):
             # `f = dec(f)` (design 2026-11-06-reading-decorators §3e): the name is a field of
             # the module or the class, written from the outermost decorator's result.
             self._decorated_name(node, applied, scope)
@@ -765,7 +773,11 @@ def class_header(
 
 
 def header_body_tree(
-    tree: ast.Module, paths: list[str], index: ModuleIndex, here: str
+    tree: ast.Module,
+    paths: list[str],
+    index: ModuleIndex,
+    here: str,
+    whole: frozenset[str] = frozenset(),
 ) -> tuple[ast.Module, frozenset[str]]:
     """The library module `tree` as a type header reads its classes at `paths` (task 9c
     review C2): with `file_facts`, the reader of a module's own classes, over a copy that
@@ -774,12 +786,18 @@ def header_body_tree(
     classes' bodies, and of the module's other statements only the assignments to the names
     those classes use, followed through the names those assignments use in turn. Also those
     module-level names. A version test's arm the read does not run is left out, as
-    `file_facts` leaves it. Nothing of `tree` itself is changed."""
+    `file_facts` leaves it. The top-level classes named in `whole` (a module class's lookup
+    order holds them) keep their functions' bodies, and the names those bodies use count as
+    used. Nothing of `tree` itself is changed."""
     tops = {path.partition(".")[0] for path in paths}
     used: set[str] = set()
     for node in _scope_statements(tree.body, index, here):
         if isinstance(node, ast.ClassDef) and node.name in tops:
-            used |= _names_used(node)
+            used |= (
+                {name.id for name in ast.walk(node) if isinstance(name, ast.Name)}
+                if node.name in whole
+                else _names_used(node)
+            )
     assignments = [
         node
         for node in _scope_statements(tree.body, index, here)
@@ -793,7 +811,7 @@ def header_body_tree(
         if grown == used:
             break
         used = grown
-    body = _kept_statements(tree.body, used, index, here, tops)
+    body = _kept_statements(tree.body, used, index, here, tops, whole)
     return ast.Module(body=body or [ast.Pass()], type_ignores=[]), frozenset(used)
 
 
@@ -824,14 +842,19 @@ def _assigned(node: ast.Assign | ast.AnnAssign | ast.TypeAlias) -> set[str]:
 
 
 def _kept_statements(
-    body: list[ast.stmt], used: set[str], index: ModuleIndex, here: str, tops: set[str]
+    body: list[ast.stmt],
+    used: set[str],
+    index: ModuleIndex,
+    here: str,
+    tops: set[str],
+    whole: frozenset[str],
 ) -> list[ast.stmt]:
     kept: list[ast.stmt] = []
     for node in body:
         if isinstance(node, ast.Import | ast.ImportFrom):
             kept.append(node)
         elif isinstance(node, ast.ClassDef) and node.name in tops:
-            kept.append(_without_function_bodies(node))
+            kept.append(node if node.name in whole else _without_function_bodies(node))
         elif isinstance(node, ast.ClassDef):
             # Another class binds its name and nothing a header class's body reads.
             kept.append(
@@ -860,10 +883,10 @@ def _kept_statements(
         elif isinstance(node, ast.If):
             live = live_arm(node, index, here)
             if live is not None:
-                kept.extend(_kept_statements(live, used, index, here, tops))
+                kept.extend(_kept_statements(live, used, index, here, tops, whole))
                 continue
-            inner = _kept_statements(node.body, used, index, here, tops)
-            other = _kept_statements(node.orelse, used, index, here, tops)
+            inner = _kept_statements(node.body, used, index, here, tops, whole)
+            other = _kept_statements(node.orelse, used, index, here, tops, whole)
             if inner or other:
                 kept.append(
                     ast.copy_location(
@@ -871,13 +894,13 @@ def _kept_statements(
                     )
                 )
         elif isinstance(node, ast.Try | ast.TryStar):
-            inner = _kept_statements(node.body, used, index, here, tops)
+            inner = _kept_statements(node.body, used, index, here, tops, whole)
             handlers = [
                 ast.copy_location(
                     ast.ExceptHandler(
                         type=handler.type,
                         name=handler.name,
-                        body=_kept_statements(handler.body, used, index, here, tops)
+                        body=_kept_statements(handler.body, used, index, here, tops, whole)
                         or [ast.Pass()],
                     ),
                     handler,
@@ -890,8 +913,10 @@ def _kept_statements(
                         type(node)(
                             body=inner or [ast.Pass()],
                             handlers=handlers,
-                            orelse=_kept_statements(node.orelse, used, index, here, tops),
-                            finalbody=_kept_statements(node.finalbody, used, index, here, tops),
+                            orelse=_kept_statements(node.orelse, used, index, here, tops, whole),
+                            finalbody=_kept_statements(
+                                node.finalbody, used, index, here, tops, whole
+                            ),
                         ),
                         node,
                     )
@@ -1038,7 +1063,7 @@ def declared_types(
             # A decorated name holds what its decorators made (`f = dec(f)`), whose call
             # the function's own declaration does not describe.
             # A module-level call-through wrapper gives what the `def` declares (OI-444).
-            decorated = holds_decorated_value(node, scope.lookup) and not (
+            decorated = holds_decorated_value(node, scope.lookup, index) and not (
                 path is None and calls_through(node, scope.lookup)
             )
             name = node.name

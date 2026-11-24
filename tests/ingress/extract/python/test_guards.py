@@ -12,6 +12,8 @@ from pathlib import Path
 
 from test_flow import _scan, _sites
 
+from sextant.domain.facts import CallSiteFact
+
 
 def _guards(sites) -> dict[str, list[tuple[str, bool, list[str]]] | None]:
     return {
@@ -39,6 +41,17 @@ def test_each_arm_and_an_early_return_guard_the_calls_under_them(tmp_path: Path)
 
     enter = ("s.ENV != 'prod'", True, ["s.ENV"])
     stay = ("flag", False, ["flag"])
+    # `s.ENV` and `s.X` read attributes of the parameter `s`: each read is an ownerless call
+    # on it (fact schema 21), named as the attribute; the calls this test is about are the rest.
+    reads = [
+        f.target.name
+        for f in facts
+        if isinstance(f, CallSiteFact) and f.target.name in ("ENV", "X")
+    ]
+    assert sorted(reads) == ["ENV", "X"]
+    facts = [
+        f for f in facts if not (isinstance(f, CallSiteFact) and f.target.name in ("ENV", "X"))
+    ]
     assert _guards(_sites(facts)) == {
         "a": None,
         "b": [enter],

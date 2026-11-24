@@ -953,21 +953,24 @@ _WRAPPING = (
 )
 
 
-def test_a_decorator_that_returns_its_own_wrapper_runs_the_wrapper(tmp_path: Path):
-    """`deco` returns its nested `w`: the name `f` holds `w`, so `f()` runs `w`'s body."""
+def test_a_decorator_whose_wrapper_calls_what_it_captured_runs_the_wrapped_function(
+    tmp_path: Path,
+):
+    """`deco` returns its nested `w`, which calls the `fn` it captured with what it was given:
+    `w` stands for `fn` (spec 2026-11-23 §4e, as `result_calls` states it of a library
+    wrapper), so `f()` runs the decorated `f`."""
     workspace = _resolved(tmp_path, {"a.py": _WRAPPING})
     site = _site(workspace, "app/a#run(sig_dd69782a).", "__call__")
     assert [row["callee"] for row in _edges(workspace, site)] == [
-        _PREFIX + "app/a#deco$w(sig_dd69782a)."
+        _PREFIX + "app/a#f(sig_dd69782a)."
     ]
     workspace.close()
 
 
 @pytest.mark.xfail(
     strict=True,
-    reason="a nested function's read of an enclosing name (`fn` in `w`) is `unresolved`: the "
-    "scanner writes no captures (calls.py `_local`), so the wrapper's `fn(*a)` is not followed "
-    "to `f` (task 9a fix round 2 report)",
+    reason="the receiver of the wrapper's `fn(*a)` is a captured parameter, which the receiver "
+    "reader answers `escapes` (the module hands it on as a value): not followed to `f`",
 )
 def test_the_wrappers_call_of_its_argument_reaches_the_decorated_function(tmp_path: Path):
     workspace = _resolved(tmp_path, {"a.py": _WRAPPING})

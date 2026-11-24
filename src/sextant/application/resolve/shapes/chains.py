@@ -192,6 +192,14 @@ _COMPOSE = "\x00compose"
 # says the handler reads a channel nobody can name — no edge, and never the
 # source or the wire in its place.
 _CONTINUE = "\x00continue"
+# The methods a decorator on a root's handler states (`matches.annotations`, `{fqn, method}` or
+# `{fqn, method_from}`, the `spring-mvc.yml` words; D02 §2's `fluent` style): the entries ride
+# with the chain under this key, each owner a symbol tuple.
+NARROWED_BY = "\x00narrowed_by"
+# The framework class a root's handler answers by the names of its methods below
+# (`matches.supertype`, the `jakarta-servlet.yml` word; D02 §2's `fluent` style): the rule
+# (`HandlerClass`) rides with the chain under this key.
+HANDLER_THROUGH = "\x00handler_through"
 _READS_LINK = "\x00reads_link"
 # The handler a `channel_link` was captured AFTER (fix round 1, finding 3) —
 # present exactly when the link sits after a handler step, holding that
@@ -731,7 +739,9 @@ def _root_entry(root: dict[str, Any], catalog: Catalog, where: str) -> dict[str,
         # slots (CP-27 row 6), and one name matching all ten would read one slot
         # for each; None for the root that matches by owner and name alone.
         "descriptor": _validated_descriptor(root, catalog, where),
-        "captures": _merged_captures(root),
+        "captures": _with_handler_through(
+            _with_narrowing(_merged_captures(root), catalog, where), catalog, where
+        ),
         # Carried forward (never a root's own field, D02 §2's `fluent`
         # style) purely so `_validate_captures` can see and refuse it,
         # exactly as an unchecked value must not silently survive the file.
@@ -2713,6 +2723,74 @@ def _merged_captures(entry: dict[str, Any]) -> dict[str, Any]:
         if key in entry:
             captures[key] = _channel_via_forms(entry, key)
     return captures
+
+
+def _with_narrowing(captures: dict[str, Any], catalog: Catalog, where: str) -> dict[str, Any]:
+    """`captures` of a root that captures a handler, with the catalog's `annotations` under
+    `NARROWED_BY` (design 2026-11-23 §4b): a decorator on the handler states the methods it
+    serves, as an annotation on a handler does (`spring-mvc.yml`). Each entry is `{fqn,
+    method: [verbs]}` or `{fqn, method_from: {arg: N, keyword: name}}`, the list form read as
+    written. Unchanged where the catalog declares none or the root captures no handler."""
+    entries = catalog.matches.get("annotations")
+    if entries is None or "handler" not in captures:
+        return captures
+    where = f"{catalog.source}: annotations"
+    if not isinstance(entries, list) or not entries:
+        raise CatalogError(f"loading catalog {where}: a non-empty list of entries is required")
+    narrowing = []
+    for entry in entries:
+        fqn = entry.get("fqn") if isinstance(entry, Mapping) else None
+        verbs = entry.get("method") if isinstance(entry, Mapping) else None
+        read = entry.get("method_from") if isinstance(entry, Mapping) else None
+        if (
+            not isinstance(fqn, str)
+            or "." not in fqn
+            or set(entry) not in ({"fqn", "method"}, {"fqn", "method_from"})
+            or (
+                verbs is not None
+                and not (
+                    isinstance(verbs, list)
+                    and verbs
+                    and all(isinstance(v, str) and v for v in verbs)
+                )
+            )
+            or (
+                read is not None
+                and not (isinstance(read, Mapping) and _capture_reference(dict(read)) is not None)
+            )
+        ):
+            raise CatalogError(
+                f"loading catalog {where}: `{entry!r}` — an entry is `{{fqn, method: [verbs]}}` "
+                f"or `{{fqn, method_from: {{arg: N, keyword: name}}}}`"
+            )
+        owner, _, name = fqn.rpartition(".")
+        narrowing.append(
+            {
+                "owners": catalog_symbols(owner, where),
+                "method": name,
+                "http_method": list(verbs) if verbs is not None else dict(read or {}),
+            }
+        )
+    return {**captures, NARROWED_BY: tuple(narrowing)}
+
+
+@dataclass(frozen=True)
+class HandlerClass:
+    """`matches.supertype` of a catalog that declares `dispatch` (the servlet catalog's word):
+    the framework class whose subclasses answer by the names of their methods."""
+
+    owners: tuple[str, ...]
+
+
+def _with_handler_through(captures: dict[str, Any], catalog: Catalog, where: str) -> dict[str, Any]:
+    """`captures` of a root that captures a handler, with the catalog's `supertype` under
+    `HANDLER_THROUGH`: a handler value that is a class below it is read by the catalog's
+    `dispatch` table. Unchanged where the catalog declares none."""
+    declared = catalog.matches.get("supertype")
+    if declared is None or "handler" not in captures:
+        return captures
+    owners = catalog_symbols(declared, f"{catalog.source}: supertype")
+    return {**captures, HANDLER_THROUGH: HandlerClass(tuple(owners))}
 
 
 def _validate_channel_via_entries(entries: list[dict[str, Any]], catalog: Catalog) -> None:

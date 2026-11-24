@@ -160,6 +160,29 @@ SEXTANT_VERSION = version("sextant")
 #             writes, where it was a bare receiver field with no owner (plan 5, Task 4). A fact
 #             set of the older vintage leaves the calls made on it ownerless; it is refused and
 #             re-extracted.
+#     19      a Python `a + b` with no text in it, where one operand is known to be a list, is
+#             the `array` it makes: a written list's elements in place, every other operand an
+#             element marked `keyword: "*"`, unpacked there (plan 6, Task 3), where it was
+#             `unresolved`. `x += [...]` is the same sum, and a list display's `*x` element is
+#             written the same way. A fact set of the older vintage holds
+#             no element of such a list; it is refused and re-extracted.
+#     20      a Python nested function or `lambda` that reads names of an enclosing function
+#             captures them (D00 §5 `captures`, spec 2026-11-23 §2 item 14): a `dynamic` call
+#             `types/FunctionType#<init>` takes their values where the function is made, the
+#             `lambda` entry counts them and carries that call's `source`, and the body reads
+#             each as its parameter after the written ones, where it read `unresolved`. A
+#             fact set of the older vintage holds no capture; it is refused and re-extracted.
+#     21      a Python read of an attribute on a PARAMETER whose class is not known
+#             (`request.method`, spec 2026-11-23-python-django-redesign §2 item 13) is the call
+#             site a known class's read is (version 18), named for the attribute on that
+#             parameter, with no owner and no arguments; so is one whose written class does not
+#             declare the attribute nor type it. The value read stays `unresolved`. A
+#             fact set of the older vintage holds no such call; it is refused and re-extracted.
+#     22      a Python library class a module class's lookup order holds has its functions'
+#             bodies read into the header document as a module method's are (the method
+#             `symbol`, its call sites, returns and field writes; ruling 2026-11-23, option B),
+#             and `type_header.methods` loses `calls_super`, which that read replaces. A fact
+#             set of the older vintage holds no such body; it is refused and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -304,6 +327,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 18
+FACT_SCHEMA_VERSION = 22
 GRAPH_SCHEMA_VERSION = 18
 BOUNDARY_VOCABULARY_VERSION = 5

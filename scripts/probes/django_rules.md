@@ -1,0 +1,279 @@
+# Django URL-routing, view and request-read rules (plan 6, Task 1)
+
+Measured by `django_rules.py`, run as
+`fixtures/orders-django/.venv/bin/python -I scripts/probes/django_rules.py`.
+Every rule below is an `assert` in the script. URL lists are built in-process with settings
+configured by `django.conf.settings.configure(...)` (no database, no network); URLs are walked
+through `django.urls.resolve` and requests go through `django.test.Client`.
+
+**Version scope.** Django 5.2.8, pinned in the fixture's `pyproject.toml` and `uv.lock`. The running
+process prints the version on its first line. Every verdict holds for this version and no other.
+
+## Differs from the design
+
+Against `docs/superpowers/specs/2026-11-22-python-django-core-design.md` §3 and §5c:
+
+1. **§5c, "a missing `$` included: Django matches a prefix" is only half true.**
+   `RegexPattern.match` uses `self.regex.fullmatch(path)` when the pattern is an endpoint
+   (`_is_endpoint`, no include below it) and its text ends with `$`; otherwise `self.regex.search(path)`.
+   So `^noend` serves `/noend`, `/noendx` and `/noend/deeper` (prefix), and a pattern with
+   neither `^` nor a final `$` (`loose/`) matches anywhere (`/zz/loose/` is 200). But `mid/x$`
+   with no `^` serves only `/mid/x`: the `$` makes it a full match. A missing `^` matters only
+   when there is no final `$`.
+2. **§5c read 1, "`^` and `$` are dropped" must also drop the child `^` after a prefix**, and
+   **named versus unnamed groups matter.** When a pattern has any named group, unnamed groups are
+   ignored (`^mixed/(\d+)/(?P<n>[a-z]+)/$` calls the view with `n=` only). Only a pattern with no
+   named group passes unnamed groups as positional arguments. The unnamed group still has to match
+   the URL text, but it adds no argument to the view.
+3. **§3 rule 1, "joined with nothing between them" holds, and a child route that starts with `/`
+   is a real case.** `path("api/", include([path("/lead", v)]))` serves `/api//lead`, not
+   `/api/lead`. A route that starts with `/` at the root never matches (`/lead` is 404) and draws
+   system check `urls.W002`. The catalog must not strip or add a slash.
+4. **§3 rule 2, "narrows it", needs the exact sets.** `require_GET` serves GET only: a HEAD
+   request is 405. `require_safe` serves GET and HEAD. `require_http_methods([...])` serves exactly
+   its list, no automatic HEAD or OPTIONS. A function view has no automatic OPTIONS: an
+   OPTIONS request reaches a plain function view (200) and is 405 on `require_GET`.
+5. **§3 rule 3, "`View.as_view()` serves each name in `http_method_names`", leaves out three
+   overrides.** (a) `as_view(http_method_names=[...])` replaces the list for that route (it is an
+   initkwarg; `as_view` accepts any attribute the class already has, and raises `TypeError` for a
+   verb name or an unknown name). The route's list wins over the class's. (b) A class that
+   overrides `dispatch` answers every method, so its verb set cannot be read from its methods.
+   (c) `http_method_names` may list a name that is not a standard verb (`custom`); the request
+   method `CUSTOM` reaches `custom`.
+6. **§3 rule 3, "the automatic `head`" is `View.setup`, not `View.dispatch`.** `setup` sets
+   `self.head = self.get` when the class has `get` and no `head`. A class with no `get` has no
+   HEAD (405). A class with its own `head` keeps it. `options` is `View.options`; a subclass
+   `options` replaces it. A class view with no verb methods still answers OPTIONS 200.
+7. **Request reads, not in the design: `request.GET["k"]` with `k` absent is 500, not 400.**
+   `MultiValueDictKeyError` is a `KeyError` subclass that Django does not map to a client error
+   (Flask's `BadRequestKeyError` answers 400). The `.get` form never raises. A row for the
+   subscript read should not claim "400 when absent".
+8. **`as_view()` returns a closure named `view`.** `view.__name__` is `'view'`;
+   `view.view_class` holds the class. The class comes from the `as_view` receiver in the source,
+   never from a name on the returned function.
+
+## Defining symbols
+
+Quoted symbols are the file's own names; no line numbers.
+
+| Surface | Defined on | Module |
+|---|---|---|
+| `path` | `functools.partial(_path, Pattern=RoutePattern)`, bound in `django.urls.conf` | `django.urls.conf` (re-exported by `django.urls`) |
+| `re_path` | `functools.partial(_path, Pattern=RegexPattern)` | `django.urls.conf` |
+| `_path` | `def _path(route, view, kwargs=None, name=None, Pattern=None)` | `django.urls.conf` |
+| `include` | plain function `include(arg, namespace=None)` | `django.urls.conf` |
+| `register_converter` | function | `django.urls.converters`, re-exported by `django.urls` |
+| `View`, `View.as_view`, `View.setup`, `View.dispatch`, `View.options`, `View.http_method_not_allowed` | `View` | `django.views.generic.base` |
+| `View.as_view` kind | `classonlymethod`, whose base class is `classmethod` | `django.utils.decorators` |
+| `require_http_methods`, `require_GET`, `require_POST`, `require_safe` | decorators | `django.views.decorators.http` |
+| `csrf_exempt` | decorator | `django.views.decorators.csrf` |
+| `cache_page` | decorator | `django.views.decorators.cache` |
+| `RegexPattern.match`, `RoutePattern.match` | `RegexPattern`, `RoutePattern` | `django.urls.resolvers` |
+| `URLResolver._join_route` | `URLResolver` | `django.urls.resolvers` |
+| `HttpRequest.GET`, `.COOKIES`, `.META` | instance attributes assigned in `HttpRequest.__init__` | `django.http.request` |
+| `HttpRequest.headers` | `cached_property` on `HttpRequest` | `django.http.request` |
+| `MultiValueDictKeyError` | subclass of `KeyError` | `django.utils.datastructures` |
+
+What the scanner must name: calls of `path`, `re_path`, `include` carry owner
+`django/urls/conf#`, which is the module that defines them (the `partial` objects are module
+variables, not functions). `as_view` is a `classonlymethod`, so the scanner must treat
+`classonlymethod` as a `classmethod` kind to bind `Class.as_view()`.
+
+## Paths
+
+- `RoutePattern` and `RegexPattern` store the route text verbatim; `str(pattern.pattern)` is the
+  route as written.
+- Prefix and child route concatenate with nothing between: `'api'` + `'x'` is `apix`, `'api/'` +
+  `'x'` is `api/x`, `'api/'` + `'/lead'` is `api//lead`. An empty route adds nothing. The served
+  path is that string with a leading `/`.
+- `path` and `re_path` take `(route, view, kwargs=None, name=None)`: route index 0, view index 1.
+  `include(arg, namespace=None)`.
+- `ResolverMatch.route` keeps converters as written: `c/<id>`, `i/<int:id>`, `p/<path:rest>`,
+  `u/<uuid:x>`, `h/<hex2:h>` (a custom converter registered by `register_converter`).
+- View keyword arguments are converted by the converter's `to_python`: `int` gives `int`, `uuid`
+  gives `UUID`, `hex2` gives what its `to_python` returns; `<id>` has no converter and is `str`.
+  `<path:rest>` spans `/`; `<id>` does not.
+- A converter name never registered raises `ImproperlyConfigured` when the `path(...)` call runs.
+
+## `include`
+
+- `include` accepts a dotted string, a module object, a list, and a `(list, app_name)` tuple. Each
+  mounts its patterns under the prefix.
+- The variable Django reads from an included module is `urlpatterns`. A module that names its
+  list anything else raises `ImproperlyConfigured` when the patterns are first needed.
+- A `(list, app_name)` tuple sets the namespace to `app_name`. `namespace='inst'` overrides the
+  namespace and keeps `app_name`. A module's own `app_name` is read. With no `app_name` there is
+  no namespace.
+- One list included at two prefixes mounts at both (`/twice1/leaf` and `/twice2/leaf` are 200).
+- `ROOT_URLCONF` is the setting `get_resolver()` reads, a dotted module path; the root list is
+  that module's `urlpatterns`.
+- `BaseHandler.resolve_request` reads `request.urlconf`. Setting it on a request (the probe
+  does so by hand) swaps the root for that request only: `/b` is 200 under `request.urlconf = 'probe_alt'` and 404 under
+  `ROOT_URLCONF`. This is the boundary §5d states, measured: `ROOT_URLCONF` is the root only when
+  `request.urlconf` is unset; a middleware that sets it is the case, not measured as such.
+
+## Function views
+
+| Registration | GET | POST | PUT | DELETE | Other |
+|---|---|---|---|---|---|
+| plain function | 200 | 200 | 200 | 200 | OPTIONS 200 |
+| `require_http_methods(["GET", "PUT"])` | 200 | 405 | 200 | 405 | |
+| `require_GET` | 200 | 405 | 405 | 405 | HEAD 405, OPTIONS 405 |
+| `require_POST` | 405 | 200 | 405 | 405 | |
+| `require_safe` | 200 | 405 | 405 | 405 | HEAD 200 |
+| `csrf_exempt(require_POST(f))`, or `@csrf_exempt` over `@require_POST` | 405 | 200 | 405 | 405 | |
+| `cache_page(60)(require_GET(f))` | 200 | 405 | 405 | 405 | |
+
+- `require_http_methods(request_method_list)`: the allowed set is parameter 0, a list of method
+  names. The 405 response's `Allow` header lists the set: `GET` for `require_GET`, `GET, HEAD` for
+  `require_safe`, `GET, PUT` for `require_http_methods(["GET", "PUT"])`.
+- `csrf_exempt` and `cache_page` keep the inner function's allowed set, as a decorator or as a call.
+- A `require_*` decorated view keeps its name and module (`functools.wraps`), so the decorated
+  function is still the handler.
+
+## Class views
+
+- `View.http_method_names` is `['get','post','put','patch','delete','head','options','trace']`.
+- `as_view()` dispatches only methods the class defines: `Items(get, post)` answers GET and POST
+  200, PUT and DELETE 405.
+- Verb methods are inherited through the MRO: `Child(Base)` answers `Base.get`, `Base.delete` and
+  its own `post`.
+- A class-level `http_method_names` overrides the list: `('get',)` over a class with `post`
+  leaves POST 405. Names left out of the list are not dispatched even when defined.
+- `View.options` answers OPTIONS 200 on every class view; `Allow` lists the defined verbs plus
+  `HEAD` and `OPTIONS` (`GET, POST, HEAD, OPTIONS` for `Items`). A subclass `options` replaces it.
+- HEAD: `View.setup` sets `self.head = self.get` when there is a `get` and no `head`. HEAD is 200
+  on `Items` and has no body; an own `head` is kept (203 in the probe); no `get` means HEAD is 405.
+- A `View` subclass with no verb methods answers 405 to every method except OPTIONS (200).
+- A class overriding `dispatch` answers every method itself (POST 200 with no `post` method).
+- A `dispatch` override that calls `super().dispatch(...)` keeps `View.dispatch`'s verb lookup:
+  `Delegating(get)` answers GET 200 and POST, PUT, DELETE 405 (plan 6, Task 5).
+- `LoginRequiredMixin`, `PermissionRequiredMixin` and `UserPassesTestMixin`
+  (`django.contrib.auth.mixins`) each define `dispatch`, which returns `handle_no_permission()`
+  when the test fails and else calls `super().dispatch`. With a user that passes (a stub
+  `request.user`, no database), a view defining `get` and `post` answers GET and POST 200 and
+  PUT, DELETE 405: the class's verbs are kept (plan 6, Task 5 fix round 1). The probe's settings
+  install `django.contrib.contenttypes` and `django.contrib.auth` so the mixins import; no
+  database is configured.
+- `as_view(**initkwargs)` sets instance attributes. `as_view(http_method_names=['post'])` on a class
+  that defines `get` and `post` answers POST 200 and GET 405; `['get','post','delete']` on `Items`
+  still answers only GET and POST. A verb name as a keyword (`get=...`) or an attribute the class
+  lacks raises `TypeError` at `as_view()`. `view.view_initkwargs` holds them.
+- `as_view()` returns the closure `view` with `.view_class` set to the class.
+- `View.as_view` is a `classonlymethod` of `django.utils.decorators`, whose base class is
+  `classmethod`. `django.views.generic.View` is the same class as
+  `django.views.generic.base.View`.
+
+## `re_path`
+
+| Expression | Serves |
+|---|---|
+| `^exact/$` | `/exact/` only |
+| `^noend` | `/noend`, `/noendx`, `/noend/deeper` (prefix) |
+| `mid/x$` | `/mid/x` only (final `$`: `fullmatch`); `/zzmid/x` and `/a/b/mid/x` are 404 |
+| `loose/` | `/loose/`, `/zz/loose/`, `/loose/deeper` (no `^`, no `$`: `search`) |
+| `^opt/?$` | `/opt` and `/opt/`; `/opt//` is 404 |
+| `^named/(?P<id>\d+)/$` | view called with `id='5'` (str keyword) |
+| `^unnamed/(\d+)/$` | view called with `'5'` positional |
+| `^mixed/(\d+)/(?P<n>[a-z]+)/$` | view called with `n='ab'` only; the unnamed group is ignored |
+
+- `RegexPattern.match` returns `fullmatch` for an endpoint ending in `$`, and `search` otherwise.
+  The remainder after the match goes to the child patterns.
+- A `re_path` prefix and a `re_path` child are each matched against the remainder, so a child `^`
+  still anchors at the child's start. `ResolverMatch.route` joins them with
+  `URLResolver._join_route`, which drops the child's leading `^`: `^pre/` and `^in$` give
+  `^pre/in$`.
+- A route starting with `/` (see "Differs from the design" item 3) is `urls.W002`.
+
+Optional pieces, alternation and mixed joins (section 7b of the script, plan 6, Task 6):
+
+| Expression | Serves |
+|---|---|
+| `^r/(?P<id>\d+)(\.json)?/?$` | `/r/5`, `/r/5/`, `/r/5.json`, `/r/5.json/`; `/r/5.jsonx` is 404; view called with `id='5'` only |
+| `^u/(?P<a>\d+)/(?P<b>\d+)?$` | `/u/1/` (no `b=` passed) and `/u/1/2`; `/u/1` is 404 |
+| `^deactivate?$` | `/deactivat` and `/deactivate` |
+| `^m/(?P<x>\d+)?/end/$` | `/m/5/end/` and `/m//end/`; `/m/end/` is 404 |
+| `^s/(?P<status>(local\|federated))/$` | `/s/local/` and `/s/federated/`, `status=` the matched text |
+| `re_path(r"^opt2/?", include([path("x/", v)]))` | `/opt2/x/` and `/opt2x/` (both prefixes) |
+| `path("api/", include([re_path(r"^x/$", v)]))` | `/api/x/` (`ResolverMatch.route` is `api/x/$`) |
+| `re_path(r"^rx/", include([path("x/", v)]))` | `/rx/x/` |
+| `re_path(r"^g1/(?P<lang>[a-z]{2})?/?", include([path("ab/", v)]))` | `/g1/frab/`; `/g1/ab/` is 404 (`lang` takes `ab`) |
+| `re_path(r"^g2/(?P<slug>[\w-]+)", include([path("x/", v)]))` | `/g2/ax/`, `/g2/a/x/`, `/g2/x/` all 404 (`slug` takes `ax`) |
+| `re_path(r"^g3/(?P<lang>[a-z]{2})/", include([path("ab/", v)]))` | `/g3/fr/ab/` |
+
+- A `?` after one literal character or one group makes that piece optional: the path is served
+  with and without it. A group that did not match passes no argument.
+- Alternation inside a named group is one argument whose value is the matched text.
+- `path` and `re_path` mix under `include` by plain concatenation of the read paths.
+- A mount prefix's match is not backtracked across the include boundary: a named group that
+  can end the prefix (the last piece, or followed only by optional pieces) takes all it can,
+  and the child may never match. A named group followed by a required literal mounts as read.
+
+## Request reads
+
+- `request.GET["k"]` with `k` absent raises `MultiValueDictKeyError` (a `KeyError`); the client
+  gets **500**. `request.GET.get("k", default)` never raises.
+- `request.COOKIES["ck"]`, `request.headers["X-Thing"]` and `request.META["HTTP_X_THING"]` read
+  the same cookie and header; `headers` keys are case-insensitive, `META` keys are `HTTP_` plus
+  the upper-cased name with `-` as `_`.
+- Parameter 0 of a function view, and parameter 1 (after `self`) of a class verb method, is the
+  `HttpRequest`; it is the same object as `self.request`.
+
+## View decorators that hand the view on
+
+Measured in section 9 of the script (plan 6, Task 4 fix round 1, ruling R13). Each decorator
+below was applied over `require_POST(ok)`. The view was then called with a signed-in staff user
+that has every permission, and with CSRF checks off. For every decorator, GET gave the inner
+view's 405 and POST the inner view's 200. So the decorator wraps the view, calls it, and keeps
+its allowed set. "Decorator" means it is applied to the view (`d(view)`). "Factory" means it is
+called first and its result is applied (`d(args)(view)`). "Variable" means the name is a module
+variable that holds a decorator, not a `def` of that name.
+
+| Name | Form | Bound in |
+|---|---|---|
+| `login_required` | decorator | `django.contrib.auth.decorators` (function) |
+| `permission_required` | factory | `django.contrib.auth.decorators` (function) |
+| `user_passes_test` | factory | `django.contrib.auth.decorators` (function) |
+| `staff_member_required` | decorator | `django.contrib.admin.views.decorators` (function) |
+| `csrf_exempt` | decorator | `django.views.decorators.csrf` (function) |
+| `csrf_protect` | decorator | `django.views.decorators.csrf` (variable) |
+| `ensure_csrf_cookie` | decorator | `django.views.decorators.csrf` (variable) |
+| `never_cache` | decorator | `django.views.decorators.cache` (function) |
+| `cache_page` | factory | `django.views.decorators.cache` (function) |
+| `cache_control` | factory | `django.views.decorators.cache` (function) |
+| `vary_on_cookie` | decorator | `django.views.decorators.vary` (variable) |
+| `vary_on_headers` | factory | `django.views.decorators.vary` (function) |
+| `xframe_options_exempt` | decorator | `django.views.decorators.clickjacking` (function) |
+| `sensitive_post_parameters` | factory | `django.views.decorators.debug` (function) |
+| `gzip_page` | decorator | `django.views.decorators.gzip` (variable) |
+| `condition` | factory | `django.views.decorators.http` (function) |
+| `etag` | factory | `django.views.decorators.http` (function) |
+| `last_modified` | factory | `django.views.decorators.http` (function) |
+
+- `login_required` and `staff_member_required` also accept keyword arguments alone
+  (`login_required(login_url=...)`). That call returns the decorator, not a wrapped view.
+- What each decorator answers when its own check fails (a redirect to the login page, 403 on
+  a missing CSRF token, 304 on a matching ETag) was not measured. That is the view's own
+  behaviour, not a route.
+
+## Not measured
+
+- `re_path` with more than two optional pieces, an unnamed group that is not optional, or `|`
+  outside a named group: the design's §5c read 3 publishes these as written. That is Sextant's
+  own structural read of the text, not a Django behaviour; Django's regex engine is Python `re`.
+- Async views (`async def` verb methods, `view_is_async`): not in the brief.
+- `decorator_from_middleware`-style decorators and `method_decorator` on class methods: not in the
+  brief.
+
+## Observations
+
+| Check | 5.2.8 |
+|---|---|
+| Assertions in `scripts/probes/django_rules.py` | all pass; the run prints `OK` |
+| `RULE:` lines printed | 70 |
+
+The `5.2.8` column is the version the process under test printed on its first line
+(`importlib.metadata.version("django")`, run by `scripts/probes/django_rules.py` inside
+`fixtures/orders-django/.venv`), not the version the fixture's `pyproject.toml` asked for.
+Every rule in this file is one of those printed `RULE:` lines; each row of the defining-symbol
+table is an assertion the probe makes before it prints them.

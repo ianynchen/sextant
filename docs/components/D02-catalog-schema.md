@@ -760,7 +760,14 @@ not, that it is genuinely a constructor rather than an ordinary void call.
 2026-11-06-reading-decorators §3d, §3e, approved). A `value-models/` file may declare
 `returns_argument: [{owner, method, <form>: argN, by}]`, exactly one form per entry:
 
-- **`returns: argN`** — the call returns its argument N (`Objects.requireNonNull`; none ships);
+- **`returns: argN`** — the call returns its argument N (`Objects.requireNonNull`).
+  **`returns: { arg: N, element: M }`** (approved 2026-11-23) — the same, except where that
+  argument is a TUPLE written in the call: then the call returns the tuple's element M.
+  `value-models/django.yml` states `include` this way, `{ arg: 0, element: 0 }`: of
+  `include((patterns, "app"))` the value is `patterns`, never the app name. An argument that
+  is no written tuple is the argument itself (`include(patterns)`, and a written LIST, which
+  is one value, never its first member); a written tuple with no element M, or with an
+  unpacked member at or before it, is `not_readable`;
 - **`result_returns: argN`** — calling the call's RESULT returns that call's argument N: a
   decorator factory whose decorator hands the function back. `value-models/click.yml` states
   click's `option`, `argument`, `password_option` and `version_option`, and
@@ -772,7 +779,8 @@ not, that it is genuinely a constructor rather than an ordinary void call.
   2026-10-30, the `fluent` step's word, here in a value model; plan 3 R13).
   `value-models/python-clients.yml` states httpx's `Client.__enter__` and
   `AsyncClient.__aenter__` and requests' `Session.__enter__`, so `with … as c` binds `c` to
-  the client its construction built.
+  the client its construction built. `value-models/django.yml` states `View.as_view`, so
+  `Items.as_view()` is the class `Items`.
 
 `owner` is dotted as every catalog spells a type, a module included (`click.decorators` is the
 facts' `click/decorators#`). `by` is required, as `identified_by`'s is; a call stated in two
@@ -788,6 +796,13 @@ argument N where that is a function — the bare spelling `lru_cache(f)`, never 
 value whose type the facts name and whose `__call__` no body here has (typeshed types
 `@functools.cache`'s name as `_lru_cache_wrapper`), for the functions its receiver is, and the
 edge to each is drawn beside the library edge. A position counts positional arguments only.
+**A `returns` or `returns_receiver` entry also applies to a call on a SUBCLASS of its owner**
+(plan 2026-11-23-python-django-redesign Task 5; `values._Walk._stated_on_ancestor`): the type
+the call is made on — its owner, or its receiver read on each path — is searched in its lookup
+order (`Dispatch.order_through_headers`) for the first type the entry is stated on, and a type
+nearer in that order whose own body of the method was read wins over the entry: that body is
+followed, as any call's is. Python modules only (`lookup` `c3`); a JVM call on a subclass is
+matched on its owner as written.
 
 **`environment_reads` — a call that reads a deployment-set key by name** (plan 3 Task 3, N1,
 approved 2026-11-17). A `value-models/` file may declare `environment_reads: [{owner, method,
@@ -2468,12 +2483,28 @@ leading-slash repair applies as before. A value that is not a boolean is refused
 - **`matches.pathless_serves: <path>`** is the path, in the framework's own spelling, that an
   inbound chain naming no address serves (Vert.x's `/*`), `resolved`: the framework stores no
   path, and that is exact. Anything but a non-empty string is refused at load.
+- **`matches.path_prefix: <literal>`** is the `annotation_driven` word of the same name (plan
+  2026-11-22 Task 2, `django.yml`): the literal goes in front of every inbound address the
+  catalog serves, the outermost mount prefix included, as written: Django's served path is `/`
+  + the joined routes. A pattern (`url_is: pattern`) is published without it. It needs
+  `path_join: concatenate`; anything but a non-empty string beside that join is refused at load.
 - **`url_is: pattern | address`**, a literal capture beside `url`, says what the captured
   address IS, last wins: `pattern` is a regular expression the framework matches, published
   verbatim with `path_kind = pattern`, never refused as unrooted, canonicalised or linked by
   path, and a mount prefix goes in front of it as written, with no `path_join`; `address`, the
   default, lets a later step undo an earlier pattern. (`annotation_driven` spells the same marker `pattern_from`, an attribute list; the
-  column is `path_kind`.) Any other value is refused at load.
+  column is `path_kind`.) `expression` (plan 2026-11-22 Task 6, ruling R15; Django's `re_path`)
+  says the text is a route expression read by the three structural reads of
+  `shapes/route_expression.paths_of` (design 2026-11-22 §5c): `^` and a final `$` dropped, a
+  named group `(?P<name>...)` as `<name>`, and an optional piece (`X?`, one literal character or
+  one group) as the path with and without it, two such pieces at most. Each exact path is a row
+  at the read's own word, the catalog's `path_prefix` in front; anything else (an unnamed group
+  not optional, `|` outside a named group, a class, a quantifier, a backslash other than `\.`,
+  `\-`, `\/`, a `^` not first, a text not read whole) is one row of the expression as written
+  at `partial`, marked `path_kind = pattern`. The anchors are the framework's match, measured
+  (`scripts/probes/django_rules.md`, "`re_path`"): a route is exact only where it ends in `$`
+  (`fullmatch`; without it `search` serves longer paths too). Any other value is refused at
+  load.
 - **`serves: true | false`**, a literal capture, says whether the chain derives a row. On an
   inbound route it is whether the framework serves it: `serves: false` (`disable()`) derives
   nothing until a later `serves: true` (`enable()`), and a `poisons: [serves]` step ends it for
@@ -2509,7 +2540,7 @@ names its first. A malformed entry, or `framework_handlers`/`handler_methods` wi
 
 **`matches.router_type: [<type>, …]` and `matches.mount: [{owner, method, descriptor?,
 router_arg, prefix_arg | prefix_from: receiver_path, prefix_replaces_own?, wildcard?,
-strip_trailing?, refuses?, dependencies_arg?, host_arg?}, …]`** (Vert.x spec
+strip_trailing?, refuses?, dependencies_arg?, host_arg?, router_named?, url_is?}, …]`** (Vert.x spec
 §3c) declare sub-router mounts: a route registered on a router serves under the prefix of every
 mount that received that same router — the object one producer made, reached along one call
 path. The producers are derived from the facts by type: every call returning a `router_type`
@@ -2523,7 +2554,8 @@ of the route the mount call is made on (`prefix_from: receiver_path`, which must
 declared `terminal`), or the string argument `prefix_arg` — less a trailing `wildcard` and the
 `/` before it (every trailing copy of the one character **`strip_trailing`** names, where it
 names one — part of plan 2026-11-08 N7: Starlette's `Mount` strips `path.rstrip("/")`, so
-`/api//` mounts at `/api`), joined
+`/api//` mounts at `/api`; under `concatenate`, which supplies no separator, nothing is
+removed: Django's `path("api/", include(x))` mounts at `api/`), joined
 by **`matches.path_join`** (`leading_slash` or absent, as `combinator`'s; or, on a `fluent`
 catalog, **`concatenate`**, plan 2026-11-08 ruling R23: plain string concatenation with the
 served path published as written — never passed to `canonical_http_path`, so FastAPI's
@@ -2654,6 +2686,99 @@ mount entry's ROOT starts returns — `@cli.group() def module` makes the `Group
 root (refused otherwise) and `prefix_from: receiver_path`: its prefix is that chain's own word.
 The chain's terminal is the router's producer (the producer reader stops there), and like every
 mount chain it derives no row of its own.
+
+**A mount that is a route root too** (design 2026-11-23 §4a, §9a): a `mount` entry whose
+`method` is also one of `roots` (Django's `path("api/", include(x))` beside `path("x/", view)`)
+is a mount only where its router argument, read as a value, reaches a registration (a member of
+a list) or a string naming a module (`router_named`); a function or a class there is a view, and
+the call is a route. The router argument is read by the value walk like any value: `include(x)`
+hands back `x` (`value-models/django.yml`). Such a mount derives no row of its own: its route's
+handler capture is the router. The key `through` on a `router_arg` is removed (it was plan
+2026-11-22's; a catalog declaring it does not load). A router a call MADE ON NOTHING
+(`invoke_kind: static`) registers on is the list value its result is a member of, read
+TOP-DOWN: from each root (`root_setting` below) and through each mount, the members of the list
+are asked of the value walk, a list held in a name, a copy, a sum and a helper read as any value
+is, each caller on its own path; a member that is a mount is gone through under its own prefix
+behind its parents'. A mount of a module not in the scan adds nothing. A registration no root
+and no readable mount reaches (a library call holding the list, `i18n_patterns(*x)`; a module no
+root reaches; a repository with no written root setting) publishes behind the named hole
+`<prefix>` at `partial`, with the `mount_prefix` question, never at the root: the framework
+serves only what the root reaches.
+
+**`root_setting: <setting name>`** (approved 2026-11-23, design 2026-11-23 §2 item 12; beside
+`router_type`): the setting whose written value names the module the framework starts its
+routes from; the router there is that module's variable `router_named` names. Every write of
+the setting to a string is one root (two projects in one repository are two roots). Django:
+`root_setting: ROOT_URLCONF`. A name, not a key path; absent, the catalog's routes made on
+nothing have no root.
+
+**`mount[].router_named: {variable: name}`** (same task, capability 3): a router argument that
+names a module — a string read as its dotted name (`include("shop.api_urls")`), or the module
+object itself (`include(api_urls)`) — is that module's variable `name`, read as any list field
+is. Django's `router_named: { variable: urlpatterns }` (probe: the variable Django reads from an
+included module is `urlpatterns`). Absent, a string or a module mounts nothing.
+
+**`mount[].url_is: expression`** (plan 2026-11-22 Task 6, ruling R15): the mount's `prefix_arg`
+is a route expression, read by `paths_of` as a PREFIX, matched at the start of what is left of
+the path: exact where it starts with `^` and has no final `$`, one prefix per path its reads
+give (`^opt/?` mounts under `opt` and `opt/`), and the named hole `<prefix>` at `partial` with
+its `mount_prefix` question where the reads do not make it exact. Only `expression`, beside a
+`prefix_arg`, loads.
+
+**`matches.annotations: [{fqn, method: [verbs]} | {fqn, method_from: {arg: N, keyword: name}}]`**
+(design 2026-11-23 §4b, ruled 2026-11-23: the `annotation_driven` words of `spring-mvc.yml`; a
+decorator on a handler is an annotation on a handler), for a catalog whose roots capture a
+`handler`: a verbless route whose handler argument was made through a call of the function
+`fqn` names (its module and name) serves exactly that entry's methods, one row each, instead
+of the `verbless_serves` row. `method` is a list of verbs; `method_from` is the one extension
+(approved 2026-11-23): in the `fluent` style it is the argument form the fluent catalogs use,
+`{arg: N, keyword: name}`, of the decorator call, read as a list of verbs as written (the list
+form's read; a list the value walk does not read is one row with method NULL at `unresolved`).
+In `spring-mvc.yml` it is an attribute name. The calls are read as decorators are applied, each
+one's first positional argument being what it wraps (`__call__` matched by the call that made
+its receiver), stated or not, in the registration and then through the one value a name a
+decorated `def` binds, down to the def. Several matching calls give the intersection of their
+sets (an empty one, no row). The handler is a separate question (ruling R13): it is followed
+only through calls a value model states hand the function on (`returns_argument`) and the
+module's own wrappers that call what they captured; where a call no value model states lies
+between the registration and a function the module defines, on the def or in the
+registration, the row names no handler, is `partial`, and files a `handler_pass_through`
+question, and its methods are still narrowed.
+Django: `require_GET`, `require_POST`, `require_safe`, `require_http_methods` (probe
+`scripts/probes/django_rules.md`, "Function views").
+
+**`matches.supertype: <class>`, with `matches.dispatch: [{name, method}]` and
+`matches.bypassed_by: [{name}]`** (plan 2026-11-22-python-django-core-inbound Task 5, ruling
+R3; design 2026-11-23 §9a; the three `supertype_dispatch` words of `jakarta-servlet.yml`, no
+new word), for a catalog whose roots capture a `handler`: where the value walk reads the
+handler argument as a call of it is read (the framework calls the view) and a path gives a
+class below `supertype` (its read ancestors), the route serves that class's dispatch table.
+`X.as_view()` is `X` by a value model (`returns_receiver`), and a stated wrapper of it
+(`login_required(X.as_view())`, `result_calls`) runs it; a helper that returns `cls.as_view()`
+is read on each caller's path. A path of the handler value that gives no such class leaves
+every row `partial`. Each `dispatch` member is looked up by name in the class's C3 order through
+the types whose methods were read (the module's, and the library class bodies a header lists);
+the route gets one row per member found, its `method` the verb and its handler that member, on
+the type that defines it. A member `supertype` itself defines is the framework's own answer and
+never a row. Every `bypassed_by` method on the class's chain, down to `supertype`'s own, is
+asked whether its body calls the method it overrides on its parent on some path (a `special`
+call of its name in its body, a module's or a library's alike: a library class a module class
+extends has its bodies read, D00 §5 `type_header`; the servlet rule): the first that does not replaces the dispatch, one row serving any method
+(`verbless_serves`), that method the handler; one whose body was not read leaves the rows
+`partial`. An `annotations` call wrapping the registration narrows the rows, an any-method row
+becoming one row per method it allows. A `bypassed_by` name the class writes as a value, or a
+call the handler was made through passes as a keyword, changes the table in a way not read:
+every row is `partial`. So is every row where the order meets a type whose methods were not
+read, or a bypass whose body was not read; such a class with no member found is one row naming
+no method, `unresolved`. A class whose lookup order meets an unread type before the value
+model's type may define `as_view` itself, so its handler value is not read: one row naming no
+handler, `partial`. A call no value model states applied to such a class gives that
+convention's `partial` row with no handler and a `handler_pass_through` question. Python names
+a member by name alone, so an entry has no `parameters`. Django: `supertype:
+django.views.generic.base.View`, `dispatch` the eight names of `View.http_method_names`,
+`bypassed_by: [dispatch, http_method_names]` (probe `scripts/probes/django_rules.md`, "Class
+views"). The handler capture takes no other key: the first build's `through` and
+`narrowed_by` on it are removed, and a catalog declaring them does not load.
 
 **A step may declare `receiver_arg: N`** (spec 2026-10-26 §3c): the step joins the chain
 through argument N's value id instead of through its own `receiver`. A Kotlin extension
@@ -4841,7 +4966,11 @@ supertype's own dispatch ENTRY POINT has replaced the lookup the table describes
 every operation alike (CP-9 rows 14-15). Deriving the table's entries anyway would publish the
 ones it names and withhold the ones it does not — a wrong answer, not a partial one. The key is
 REQUIRED and may be empty: a supertype with no bypass says so, because an omitted bypass is
-indistinguishable from a forgotten one and the forgotten one publishes wrong verbs.
+indistinguishable from a forgotten one and the forgotten one publishes wrong verbs. **A second reading, in the `fluent` style only** (plan
+2026-11-22-python-django-core-inbound Task 5): there a `bypassed_by` name the class writes as a
+value (a class attribute, not a method), or a call the handler was made through passes as a keyword, changes the
+dispatch table in a way not read, and every row the table gives is `partial` rather than
+discarded (Django's `http_method_names`).
 
 **One row per handler the MODULE DECLARES.** A dispatch supertype may also serve operations
 IMPLICITLY, off a member the module never overrode — measured, it does (CP-9 rows 7-9 and 32).
@@ -6691,6 +6820,18 @@ refused naming the file. **Boundaries, stated:** the handler body only, never a 
 delegates to; and a `single_call` row's handler is the REGISTERING method, not the `Handler`
 lambda it passes, so a Javalin flat `app.get("/x", ctx -> ctx.queryParam("q"))` writes
 nothing — the `ApiBuilder` rows carry the lambda body as `handler` and read fully.
+
+**`kind: method`** (approved 2026-11-23, design 2026-11-23-python-django-redesign §2 item 13,
+§4d): a read of the request's METHOD, `{owner, method, arity: 0, kind: method}`, nothing else
+(no `name_arg`, no `requirement`, no `via`; anything else is refused naming the file).
+Django: `{ owner: django.http.request.HttpRequest, method: method, arity: 0, kind: method }`
+(`request.method`). It names no parameter and writes no `endpoint_metadata` row. The route
+engine reads it (`request_requirements.method_reads`) to doubt an any-method row: where the
+handler, or a wrapper the handler's path ran through, makes such a read in its body or in
+module code it hands the request to, the row is `partial`, method not read. The scanner
+writes an attribute read on a parameter whose class is not known as an ownerless call of
+that name, so the entry matches it. Only `django.yml` declares one, so no other catalog's
+rows are doubted (`tests/application/test_request_requirements.py::test_only_django_declares_a_method_read`).
 
 **Mechanism 4 — `request_params` naming a call**, on a `root_kind: entry_point` `fluent`
 catalog (design 2026-11-06-reading-decorators §3d, approved), read off the decorators a

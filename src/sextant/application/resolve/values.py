@@ -284,6 +284,15 @@ _UNSEEN = "unseen"
 # are independent, and combining them is not a fabrication but the code's own product.
 _CALLER_OF = "caller-of"
 _RETURN_OF = "return-of"
+_TUPLE = "builtins/tuple#"
+# A function value stood for the function its body hands the request on to
+# (`_Walk._runs_captured`): the label is the body the call runs through.
+_RUNS_THROUGH = "runs-through"
+# A call a value model states hands its argument on (`returns`, `result_calls`, a decorator
+# made by a `result_returns` call), passed on the way to the value (`_Walk._stated_value`):
+# the context names the call that STATES it, so a reader of what that call states (the methods
+# a `require_POST` allows) reads the calls of this path (`Path.passed`).
+_PASSED = "passed"
 # Which recipe's return a container-filled parameter receives (spec 2026-11-05 di-recipe-hop
 # §2): one context per parameter, because the container fills each parameter on its own.
 _FILLED_BY = "filled-by"
@@ -891,6 +900,16 @@ class ValueIndex:
     )
     # (capturing method, capture site ordinal, argument slot) -> (lambda body, its parameter):
     # the capture fold's own mapping (OI-150/OI-266), read forwards (M6).
+    # Each body's parameters that it CALLS with the first value it received itself
+    # (`f(request, ...)`), and whether the body returns what the call gives: calling the body
+    # runs what that parameter holds (`_Walk._runs_captured`).
+    hands_on: Mapping[str, tuple[tuple[int, int, bool], ...]] = dataclass_field(
+        default_factory=dict
+    )
+    # The fields a call that may change a list is made ON (`x.remove(v)`, `x.sort()`): a
+    # written method, or a `__setitem__` / `__delitem__` call. A read the language makes
+    # (`for v in x`, `x[0]`, `v in x`) is none.
+    changed_lists: frozenset[str] = frozenset()
     captured_as: Mapping[tuple[str, int, int], tuple[str, int]] = dataclass_field(
         default_factory=dict
     )
@@ -946,6 +965,10 @@ class ValueIndex:
     # design 2026-11-06-reading-decorators §3d/§3e), `(owner, name)` -> `(form, position)`:
     # `returns`, `result_returns` or `result_calls` of its argument at that position. Read by
     # `_Walk._stated_value`; empty, nothing is stated and the walk reads as before.
+    # The method names `stated_returns` has an entry for.
+    stated_names: frozenset[str] = frozenset()
+    # `returns: { arg, element }`: the element of a written tuple argument the call returns.
+    stated_elements: Mapping[tuple[str, str], int] = dataclass_field(default_factory=dict)
     stated_returns: Mapping[tuple[str, str], tuple[str, int]] = dataclass_field(
         default_factory=dict
     )
@@ -1451,50 +1474,6 @@ def value_index(
         # the slot instead — they carry no `to_index`, so neither can say which slot it
         # is about. The module docstring states the consequence.
 
-    # **The seventh edge: a lambda's CAPTURE** (`OI-150`). A lambda body is a synthetic
-    # method whose leading parameters are the values the enclosing method closed over, and
-    # nothing in `value_edges` binds them — `callers` held no entry for any lambda body's
-    # parameters, so the walk answered `external` for every captured value. Measured on a
-    # module shaped like `ruoyi`'s own declaration: the prefix (an argument) resolved to both
-    # its values and the pattern (captured) to nothing, so two controllers differing only by
-    # prefix collapsed onto one published path.
-    #
-    # The facts carry the whole edge already, which is why this is a fold and not a schema
-    # change: a `lambda` entry of the argument grammar names its body and how many values it
-    # captured, and the value it came from was PRODUCED by the capture site, whose arguments
-    # are those values in order. **The captures are the site's LAST `captures` arguments**
-    # (`OI-266`): an instance body's capture site hands `this` first, and `this` becomes the
-    # body's receiver rather than its parameter 0 — D00's `captures` is the site's argument
-    # count minus one for exactly that body. So body parameter *i* is argument
-    # *i + (arguments - captures)*: *i* for a static body, *i + 1* for an instance one. Taking
-    # *i* for both bound every value an instance lambda closed over to its neighbour's
-    # parameter; vertx-examples' `sqlclient` published `POST /products` as answered by
-    # `handleGetProduct`, at `resolved`.
-    #
-    # Parameters at or past the capture count are NOT bound here and must not be: those are
-    # the lambda's own arguments, handed in by whoever invokes it, and `external` is the true
-    # answer for them. A bound method reference (`captures` 0) binds none: its one argument
-    # is the receiver.
-    for (method, _), site in sites.items():
-        for captured in _captures(site["arguments"]):
-            # The entry names its body BARE, and every index here is keyed on full symbols.
-            # The body is declared in the same class as the method that captured it, so its
-            # coordinates are that method's — exact, where a bare-to-full map would be
-            # ambiguous the moment two modules declare the same descriptor.
-            body = with_descriptor(method, str(captured["symbol"]))
-            count = int(str(captured["captures"]))
-            source = captured.get("source")
-            if count <= 0 or source is None:
-                continue
-            for maker in producers.get((method, int(str(source))), ()):
-                bound = (sites.get((method, maker)) or {}).get("arguments") or []
-                receiver = max(len(bound) - count, 0)
-                for position in range(min(count, len(bound))):
-                    callers.setdefault((body, position), []).append(
-                        (method, maker, receiver + position)
-                    )
-                    shapes.captured_as[(method, maker, receiver + position)] = (body, position)
-
     parameters: dict[str, tuple[str | None, ...]] = {}
     parameter_types: dict[str, tuple[str | None, ...]] = {}
     call_parameters: dict[str, tuple[tuple[str | None, str | None], ...]] = {}
@@ -1561,6 +1540,56 @@ def value_index(
             typed.append(str(erased) if isinstance(erased, str) and erased else None)
         parameters[str(row["symbol"])] = tuple(named)
         parameter_types[str(row["symbol"])] = tuple(typed)
+
+    # **The seventh edge: a lambda's CAPTURE** (`OI-150`). A lambda body is a synthetic
+    # method whose leading parameters are the values the enclosing method closed over, and
+    # nothing in `value_edges` binds them — `callers` held no entry for any lambda body's
+    # parameters, so the walk answered `external` for every captured value. Measured on a
+    # module shaped like `ruoyi`'s own declaration: the prefix (an argument) resolved to both
+    # its values and the pattern (captured) to nothing, so two controllers differing only by
+    # prefix collapsed onto one published path.
+    #
+    # The facts carry the whole edge already, which is why this is a fold and not a schema
+    # change: a `lambda` entry of the argument grammar names its body and how many values it
+    # captured, and the value it came from was PRODUCED by the capture site, whose arguments
+    # are those values in order. **The captures are the site's LAST `captures` arguments**
+    # (`OI-266`): an instance body's capture site hands `this` first, and `this` becomes the
+    # body's receiver rather than its parameter 0 — D00's `captures` is the site's argument
+    # count minus one for exactly that body. So body parameter *i* is argument
+    # *i + (arguments - captures)*: *i* for a static body, *i + 1* for an instance one. Taking
+    # *i* for both bound every value an instance lambda closed over to its neighbour's
+    # parameter; vertx-examples' `sqlclient` published `POST /products` as answered by
+    # `handleGetProduct`, at `resolved`.
+    #
+    # Parameters at or past the capture count are NOT bound here and must not be: those are
+    # the lambda's own arguments, handed in by whoever invokes it, and `external` is the true
+    # answer for them. A bound method reference (`captures` 0) binds none: its one argument
+    # is the receiver.
+    for (method, _), site in sites.items():
+        for captured in _captures(site["arguments"]):
+            # The entry names its body BARE, and every index here is keyed on full symbols.
+            # The body is declared in the same class as the method that captured it, so its
+            # coordinates are that method's — exact, where a bare-to-full map would be
+            # ambiguous the moment two modules declare the same descriptor.
+            body = with_descriptor(method, str(captured["symbol"]))
+            count = int(str(captured["captures"]))
+            source = captured.get("source")
+            if count <= 0 or source is None:
+                continue
+            for maker in producers.get((method, int(str(source))), ()):
+                bound = (sites.get((method, maker)) or {}).get("arguments") or []
+                receiver = max(len(bound) - count, 0)
+                # A body called by its written signature (Python) holds what it captured
+                # AFTER its written parameters, which keep their places (D00 §5 `captures`).
+                first = len(parameters.get(body, ())) if by_name else 0
+                for position in range(min(count, len(bound))):
+                    callers.setdefault((body, first + position), []).append(
+                        (method, maker, receiver + position)
+                    )
+                    shapes.captured_as[(method, maker, receiver + position)] = (
+                        body,
+                        first + position,
+                    )
 
     # Every method something in this module calls, which the dead-write test below reads.
     called = {
@@ -1727,6 +1756,8 @@ def value_index(
         parameter_types=parameter_types,
         unread_receivers={key: tuple(value) for key, value in shapes.unread_receivers.items()},
         captured_as=shapes.captured_as,
+        hands_on=_hands_on(sites, returned_values),
+        changed_lists=_changed_lists(sites) if by_name else frozenset(),
         lambda_types=frozenset(shapes.lambda_types),
         not_hand_offs=shapes.not_hand_offs,
         stated=frozenset(
@@ -1748,6 +1779,16 @@ def value_index(
             (str(entry["owner"]), str(entry["method"])): (str(entry["form"]), int(entry["arg"]))
             for entry in returns_arguments
             if entry["form"] not in (_ENVIRONMENT_READ, CONFIG_MODEL_FORM)
+        },
+        stated_names=frozenset(
+            str(entry["method"])
+            for entry in returns_arguments
+            if entry["form"] in (_RETURNS, _RETURNS_RECEIVER)
+        ),
+        stated_elements={
+            (str(entry["owner"]), str(entry["method"])): int(entry["element"])
+            for entry in returns_arguments
+            if entry.get("element") is not None
         },
         environment_reads={
             (str(entry["owner"]), str(entry["method"])): (entry["arg"], entry.get("default"))
@@ -2117,6 +2158,22 @@ def _nested_entries(argument: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return found
 
 
+def _changed_lists(sites: Mapping[tuple[str, int], Mapping[str, Any]]) -> frozenset[str]:
+    """`ValueIndex.changed_lists`: the fields whose list is not exactly known from its writes,
+    because a call is made ON the field that the facts do not state as a write: a written
+    method, or a store or a delete of an element. A read the language makes is none. A list
+    handed to a call is still read (ruled 2026-11-23): the walk reads a field's writes and
+    tracks no hand-over of a field."""
+    return frozenset(
+        str(site["receiver_field"])
+        for site in sites.values()
+        if site.get("receiver_field") is not None
+        and (
+            not str(site["name"]).startswith("__") or site["name"] in ("__setitem__", "__delitem__")
+        )
+    )
+
+
 def _record_store(
     row: Mapping[str, Any], stored: set[tuple[str, int]], stored_parameters: set[tuple[str, int]]
 ) -> None:
@@ -2132,6 +2189,64 @@ def _record_store(
     entry = json.loads(str(written)) if isinstance(written, str) else written
     if isinstance(entry, dict) and entry.get("source") is not None:
         stored.add((str(writer), int(str(entry["source"]))))
+
+
+def _is_tuple(entry: Mapping[str, Any]) -> bool:
+    """Whether an argument-grammar entry is a written tuple (D00 §5 `array`, its class)."""
+    return entry.get("kind") == "array" and entry.get("symbol") == _TUPLE
+
+
+def _hands_on(
+    sites: Mapping[tuple[str, int], Mapping[str, Any]],
+    returned: Mapping[str, Sequence[tuple[int, Mapping[str, Any]]]],
+) -> dict[str, tuple[tuple[int, int, bool], ...]]:
+    """`ValueIndex.hands_on`: per method, `(called, handed, returned)` for each of its
+    parameters it calls with another of its parameters as the first argument, written or
+    unpacked first (`f(request, *a)`, `f(*args)`); `returned` where what that call gives goes
+    into a value the method returns, as it is (`return f(request)`) or inside what it returns
+    (`return JsonResponse(f(request))`: the result of a call that took it), against one whose
+    result it only tests (`if allowed(request):`) or does not use (`log(request)`)."""
+    found: dict[str, list[tuple[int, int, bool]]] = {}
+    results: dict[str, set[Any]] = {}
+    for method, entries in returned.items():
+        for _, entry in entries:
+            for inner in (entry, *_nested_entries(entry)):
+                if inner.get("source") is not None:
+                    results.setdefault(method, set()).add(int(str(inner["source"])))
+    # What goes into a returned value: the arguments of each call whose result does.
+    made: dict[tuple[str, int], list[int]] = {}
+    for (method, _), site in sites.items():
+        if method in results and site.get("result") is not None:
+            taken = [
+                int(str(inner["source"]))
+                for argument in site.get("arguments") or []
+                for inner in (argument, *_nested_entries(argument))
+                if inner.get("source") is not None
+            ]
+            made.setdefault((method, int(str(site["result"]))), []).extend(taken)
+    for method, reached in results.items():
+        pending = list(reached)
+        while pending:
+            for taken_in in made.get((method, pending.pop()), ()):
+                if taken_in not in reached:
+                    reached.add(taken_in)
+                    pending.append(taken_in)
+    for (method, _), site in sites.items():
+        held = site.get("receiver_parameter")
+        arguments = site.get("arguments") or []
+        if site["name"] != _CALL or held is None or not arguments:
+            continue
+        given = site.get("result") is not None and int(str(site["result"])) in results.get(
+            method, ()
+        )
+        first = arguments[0]
+        if (
+            first.get("kind") == "parameter"
+            and first.get("value") is not None
+            and first.get("keyword") in (None, _UNPACKED_SEQUENCE)
+        ):
+            found.setdefault(method, []).append((int(str(held)), int(str(first["value"])), given))
+    return {method: tuple(dict.fromkeys(held)) for method, held in found.items()}
 
 
 def _captures(arguments: Any) -> list[Mapping[str, Any]]:
@@ -2423,6 +2538,21 @@ class Path:
         step = _Step((_CALLER_OF, callee), f"{caller}@{ordinal}")
         merged = _combine(self.trail, (step,))
         return None if merged is None else Path(merged, self.entered | {step})
+
+    def ran_through(self) -> tuple[str, ...]:
+        """The bodies this path ran through to the function it reached, where a function value
+        stood for the function its body hands the request on to (`_Walk._runs_captured`)."""
+        return tuple(step.label for step in self.trail if step.context[0] == _RUNS_THROUGH)
+
+    def passed(self) -> tuple[tuple[str, int], ...]:
+        """The calls a value model states hand their argument on that this path passed through
+        to the value, `(method, ordinal)`, in the order passed (`_PASSED`): for a decorator a
+        `result_returns` call made, the call that made it."""
+        return tuple(
+            (str(step.context[1]), int(step.context[2]))
+            for step in self.trail
+            if step.context[0] == _PASSED
+        )
 
     def calls_into(self) -> dict[str, tuple[str, int]]:
         """The call this path chose for each method it crossed into or out of, `{method:
@@ -3094,6 +3224,13 @@ def _combine(left: _Trail, right: _Trail) -> _Trail | None:
     return left + tuple(step for step in right if step.context not in visited)
 
 
+def _passing(trail: _Trail, site: tuple[str, int]) -> _Trail:
+    """`trail` with the stated call at `site` passed (`Path.passed`): one context per call,
+    so two paths through one call agree and two calls never conflict."""
+    step = _Step((_PASSED, *site), _PASSED)
+    return trail if step in trail else (*trail, step)
+
+
 def _path(trail: _Trail) -> tuple[str, ...]:
     """The path a binding carries: the crossings, OUTERMOST FIRST. The walk discovers the
     nearest crossing first and the furthest last, so the record reads the way a reader
@@ -3216,6 +3353,14 @@ def called_function(answer: Answer) -> str | None:
     named = str(answer.value)
     # A method descriptor ends with its parameter list: `app/a#f(sig_…).`.
     return named if named.endswith(").") else None
+
+
+def _callable(answer: Answer) -> bool:
+    """Whether a call of the value runs a body the walk names: a function (`called_function`)
+    or a class (`class_object`, ruling R37)."""
+    return called_function(answer) is not None or (
+        answer.class_object and bound_owner(answer) is not None
+    )
 
 
 # The descriptor every Python method is called by (D00 §5a): its arguments are bound by name and
@@ -4111,6 +4256,9 @@ class _Walk:
             # The one reader asking what a CALL of the value runs is answered that body
             # (ruling R29): calling a function runs it, as a lambda on the JVM.
             if self._functions and argument.get("symbol") is not None:
+                stood = self._runs_captured(argument, method, origin, trail, frames)
+                if stood is not None:
+                    return stood
                 return _only(
                     trail, Answer(kind=LITERAL, literal_kind=SYMBOL, value=str(argument["symbol"]))
                 )
@@ -4125,6 +4273,61 @@ class _Walk:
         if source is None:
             return _only(trail, _unresolved(NOT_READABLE))
         return self._through(method, int(str(source)), _used_at(origin), trail, frames)
+
+    def _runs_captured(
+        self,
+        argument: Mapping[str, Any],
+        method: str,
+        origin: _Position,
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...] | None:
+        """The functions a call of the function value `argument` runs in its place: where its
+        body calls a value it captured, handing on the first value it received
+        (`ValueIndex.hands_on`), calling it runs what was captured, read where the function
+        was made, on this path — what a value model states of a library wrapper with
+        `result_calls`, read here from the code. Each path notes the body it ran through.
+        It stands for each captured value whose call gives a value that goes into what the
+        body returns (`return view(request)`, `return JsonResponse(f(request))`); a call
+        whose result it only tests or does not use (`if test(request):`, `log(request)`) is
+        no hand-over. None where no call of a captured value goes into what it returns: the
+        function is itself what runs. Where one does and no path reads a function there,
+        which function runs is `not_readable`: never the wrapper, which does not answer."""
+        count, source = int(argument.get("captures") or 0), argument.get("source")
+        body = with_descriptor(method, str(argument["symbol"]))
+        # Where the captured values sit, and which parameter is the first the body is GIVEN
+        # (D00 §5 `captures`): after the written ones in a body called by its signature,
+        # before the given ones in a JVM lambda body.
+        first = len(self._index.parameters.get(body, ())) if self._index.by_name else 0
+        given = 0 if self._index.by_name else count
+        calls = [
+            (position, returned)
+            for position, passed, returned in self._index.hands_on.get(body, ())
+            if first <= position < first + count and passed == given
+        ]
+        handed = tuple(dict.fromkeys(position for position, kept in calls if kept))
+        if count <= 0 or source is None or not handed:
+            return None
+        step = _Step((_RUNS_THROUGH, method, int(str(source))), body)
+        # The unread answer notes the body too, so a reader names the wrapper it ran through.
+        unread = _only(_combine(trail, (step,)) or trail, _unresolved(NOT_READABLE))
+        runs: list[_Reached] = []
+        for maker in self._index.producers.get((method, int(str(source))), ()):
+            bound = (self._index.sites.get((method, maker)) or {}).get("arguments") or []
+            receiver = max(len(bound) - count, 0)
+            for position in handed:
+                at = position - first
+                if not 0 <= at < min(count, len(bound)):
+                    continue
+                merged = _combine(trail, (step,))
+                if merged is None:
+                    continue
+                runs.extend(
+                    reached
+                    for reached in self._entry(bound[receiver + at], method, origin, merged, frames)
+                    if called_function(reached[1]) is not None or reached[1].kind == UNRESOLVED
+                )
+        return tuple(runs) or unread
 
     def _merged(
         self,
@@ -5427,30 +5630,68 @@ class _Walk:
             return None
         method = site[0]
         own = stated.get((str(row.get("owner")), str(row["name"])))
+        if own is None and row["name"] in self._index.stated_names:
+            inherited = self._stated_on_ancestor(site, row, trail, frames)
+            if inherited is not None:
+                return inherited
         if own is not None and own[0] == _RETURNS:
-            return self._stated_slot(site, row, own[1], trail, frames)
+            element = self._index.stated_elements.get((str(row.get("owner")), str(row["name"])))
+            return self._stated_slot(site, row, own[1], _passing(trail, site), frames, element)
         if own is not None and own[0] == _RETURNS_RECEIVER:
             # The call returns the object it is called on (`with httpx.Client() as c`: `c` is
             # the client `__enter__` was called on, plan 3 R13): the value is its receiver.
             return self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames)
         if own is not None and own[0] == _RESULT_CALLS and self._functions:
+            # A path of the argument that was not read stays beside the functions read: the
+            # wrapper runs one of them, or what was not read. A class is called as a function
+            # is (`login_required(Items.as_view())`, the class a value model says `as_view`
+            # stands for), so it is kept as what the call of the class runs.
             runs = tuple(
                 reached
-                for reached in self._stated_slot(site, row, own[1], trail, frames)
-                if called_function(reached[1]) is not None
+                for reached in self._stated_slot(site, row, own[1], _passing(trail, site), frames)
+                if _callable(reached[1]) or reached[1].kind == UNRESOLVED
             )
-            return runs or None
+            return runs if any(_callable(answer) for _, answer in runs) else None
         receiver = row.get("receiver")
-        if row["name"] != _CALL or row.get("owner") is not None or receiver is None:
+        # Whatever class the scanner typed the call on (`functools.wraps(f)(inner)` is a
+        # `functools/_Wrapper#__call__`), applying what a stated call made is read by it.
+        if row["name"] != _CALL or receiver is None:
             return None
         made = self._index.producers.get((method, int(str(receiver))))
         maker = self._index.sites.get((method, min(made))) if made else None
         applied = (
             None if maker is None else stated.get((str(maker.get("owner")), str(maker["name"])))
         )
-        if applied is None or applied[0] != _RESULT_RETURNS:
-            return None
-        return self._stated_slot(site, row, applied[1], trail, frames)
+        if maker is None or applied is None or applied[0] != _RESULT_RETURNS:
+            return self._applied_elsewhere(site, row, trail, frames)
+        passed = _passing(trail, (method, int(str(maker["ordinal"]))))
+        return self._stated_slot(site, row, applied[1], passed, frames)
+
+    def _applied_elsewhere(
+        self,
+        site: tuple[str, int],
+        row: Mapping[str, Any],
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...] | None:
+        """`result_returns` where the decorator was made in ANOTHER method than the one that
+        applies it (`d = user_passes_test(test)` in a helper, `d(view)` in its caller): the
+        receiver, read on each path, ends at the library call that made it (`made_by`), and
+        where a value model states that call hands back what its result is applied to, the
+        value is this call's argument. None unless every path of the receiver ends at such a
+        call: any other receiver is read as it always has been."""
+        stated = self._index.stated_returns
+        reached: list[_Reached] = []
+        for path, answer in self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames):
+            made = answer.made_by if answer.kind == UNRESOLVED else None
+            maker = None if made is None else self._index.sites.get(made)
+            applied = (
+                None if maker is None else stated.get((str(maker.get("owner")), str(maker["name"])))
+            )
+            if made is None or applied is None or applied[0] != _RESULT_RETURNS:
+                return None
+            reached.extend(self._stated_slot(site, row, applied[1], _passing(path, made), frames))
+        return tuple(reached) or None
 
     def _environment_read(
         self,
@@ -5525,6 +5766,75 @@ class _Walk:
             )
         )
 
+    def _stated_on_ancestor(
+        self,
+        site: tuple[str, int],
+        row: Mapping[str, Any],
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...] | None:
+        """A stated call made on a SUBCLASS of the class the value model names
+        (`Sub.as_view()` for an entry on `View`): the language's own lookup. The receiver, read
+        on each path, names the type; its lookup order (`Dispatch.order_through_headers`) is
+        searched for the first type the entry is stated on, and a type nearer in the order
+        whose own body of that method was read wins over the entry (None: the body is followed
+        as any call is). `returns` and `returns_receiver` alone; None where no path's receiver
+        reaches a stated type. Python modules only (`lookup` `c3`): the JVM's order is not
+        searched here."""
+        dispatch = self._index.dispatch
+        if dispatch is None or dispatch.lookup != "c3":
+            return None
+        if row.get("receiver") is None and row.get("owner") is None:
+            return None
+        stated, name = self._index.stated_returns, str(row["name"])
+        defined = self._index.named_functions
+
+        def entry_of(owner: str) -> tuple[str, tuple[str, int]] | None:
+            """The type the entry is stated on, and the entry; None where a body wins."""
+            for type_ in dispatch.order_through_headers(owner)[0]:
+                own = stated.get((type_, name))
+                if own is not None:
+                    return (type_, own) if own[0] in (_RETURNS, _RETURNS_RECEIVER) else None
+                if defined.get((type_, name)):
+                    return None
+            return None
+
+        def stated_slot(found: tuple[str, tuple[str, int]], path: _Trail) -> tuple[_Reached, ...]:
+            element = self._index.stated_elements.get((found[0], name))
+            return self._stated_slot(site, row, found[1][1], path, frames, element)
+
+        if row.get("owner") is not None:
+            found = entry_of(str(row["owner"]))
+            if found is None:
+                return None
+            if found[1][0] == _RETURNS:
+                return stated_slot(found, _passing(trail, site))
+            if row.get("receiver") is None and site in self._index.class_receivers:
+                # Called through the class (`Sub.as_view()`): its receiver is that class.
+                return _only(
+                    trail,
+                    Answer(
+                        kind=LITERAL,
+                        value=str(row["owner"]),
+                        literal_kind=SYMBOL,
+                        class_object=True,
+                    ),
+                )
+            return self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames)
+        reached: list[_Reached] = []
+        matched = False
+        for path, answer in self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames):
+            owner = bound_owner(answer)
+            found = None if owner is None else entry_of(owner)
+            if found is None:
+                return None
+            matched = True
+            if found[1][0] == _RETURNS:
+                reached.extend(stated_slot(found, _passing(path, site)))
+            else:
+                reached.append((path, answer))
+        return tuple(reached) if matched else None
+
     def _stated_slot(
         self,
         site: tuple[str, int],
@@ -5532,12 +5842,47 @@ class _Walk:
         position: int,
         trail: _Trail,
         frames: "_Frames",
+        element: int | None = None,
     ) -> tuple[_Reached, ...]:
-        """The value of `row`'s positional argument `position`, read on this path."""
+        """The value of `row`'s positional argument `position`, read on this path. With
+        `element`, where that argument is a written tuple, the value of that element of it;
+        so too where it is a name every write of which is a written tuple (`named = (patterns,
+        "app")`, `include(named)`: the shape Django's documentation shows)."""
         slot = argument_slot(row["arguments"] or [], position)
         if slot is None or slot == UNPACKED_SLOT:
             return _only(trail, _unresolved(NOT_READABLE))
-        return self._resolve((_SLOT, site[0], site[1], slot), trail, frames)
+        written = (row["arguments"] or [])[slot]
+        origin = (_SLOT, site[0], site[1], slot)
+        if element is not None and _is_tuple(written):
+            return self._tuple_element(written, element, site[0], origin, trail, frames)
+        if element is not None and written.get("kind") == "field" and written.get("symbol"):
+            symbol = str(written["symbol"])
+            writes = self._index.constants.get(symbol, ())
+            if writes and all(by is not None and _is_tuple(entry) for by, entry in writes):
+                reached: list[_Reached] = []
+                for by, entry in writes:
+                    held = (_BINDING, symbol, by)
+                    reached.extend(
+                        self._tuple_element(entry, element, str(by), held, trail, frames)
+                    )
+                return tuple(reached)
+        return self._resolve(origin, trail, frames)
+
+    def _tuple_element(
+        self,
+        written: Mapping[str, Any],
+        element: int,
+        method: str,
+        origin: _Position,
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...]:
+        """Element `element` of the written tuple `written`; `not_readable` where the tuple is
+        too short or an unpacked member lies at or before it."""
+        members = written.get("elements") or []
+        if element >= len(members) or any(m.get("keyword") for m in members[: element + 1]):
+            return _only(trail, _unresolved(NOT_READABLE))
+        return self._entry(members[element], method, origin, trail, frames)
 
     def _constructed_through(self, owner: str, trail: _Trail) -> tuple[_Reached, ...]:
         """The classes a call of the class object `owner` may construct: `owner` and each of
@@ -6824,7 +7169,8 @@ class _Walk:
         """The answers `_binding`'s writes give: each constant as its literal, each parameter
         write through the writer's callers, each call-result write in the writer's frame."""
         reached: list[_Reached] = []
-        for _, entry in constants:
+        members = 0
+        for writer, entry in constants:
             # **A CONSTANT write needs no crossing** (`OI-138` cause 2): the value is in the
             # fact, so the answer is that literal on the path already travelled.
             #
@@ -6858,16 +7204,52 @@ class _Walk:
                         Answer(kind=LITERAL, value=named, literal_kind=SYMBOL, class_object=True),
                     )
                 )
-            # A container a binding is written with (`VERBS = ["GET"]`) is NOT read element by
-            # element: the code may change it after the write (`VERBS.append(...)`, `VERBS[0] =
-            # ...`, `del`, `+=`, a callee it is handed to, another file), and the facts state
-            # neither an index store nor whether the literal was a tuple, so they cannot show
-            # it unchanged. Its first value read at `resolved` would be a lie (task 5
-            # re-review).
+            # **A list a name holds is read when its exact values are known** (ruled
+            # 2026-11-23): the members each write states. An alteration the facts show is a
+            # write of its own (`x += [...]`, `x.append(v)`: `[*x, v]`), so `*x` of the name
+            # itself adds nothing this loop does not read. A call made ON the list that the
+            # facts do not state as a write (`x.remove(v)`, `x.sort()`) leaves its values not
+            # known: `escapes`, as a call on any value before its use.
+            elif (
+                entry.get("kind") == "field"
+                and writer is not None
+                and entry.get("symbol") != symbol
+            ):
+                # `urlpatterns = real_patterns`: a name for another name's list. A call made
+                # on THIS name changes that list too (`VERBS = BASE`, `VERBS.remove(v)`).
+                if symbol in self._index.changed_lists and self._names_a_list(
+                    str(entry["symbol"]), {symbol}
+                ):
+                    reached.append((trail, _unresolved(ESCAPES)))
+                    continue
+                held = self._entry(entry, writer, (_BINDING, symbol, writer), trail, frames)
+                members += len(held)
+                reached.extend(held)
+            elif entry.get("kind") == "array" and writer is not None:
+                if symbol in self._index.changed_lists:
+                    reached.append((trail, _unresolved(ESCAPES)))
+                    continue
+                own = {
+                    **entry,
+                    "elements": [
+                        e
+                        for e in entry.get("elements") or []
+                        if not (
+                            e.get("keyword") == _UNPACKED_SEQUENCE
+                            and e.get("kind") == "field"
+                            and e.get("symbol") == symbol
+                        )
+                    ],
+                }
+                held = self._entry(own, writer, (_BINDING, symbol, writer), trail, frames)
+                # The members of one written list are one value, not alternatives: they do
+                # not count against the path cap (ruled 2026-11-23).
+                members += len(held)
+                reached.extend(held)
             else:
                 reached.append((trail, _unresolved(NOT_READABLE)))
         for method, index in written:
-            if len(reached) > PATH_CAP:
+            if len(reached) - members > PATH_CAP:
                 return _only(trail, _unresolved(NON_ENUMERABLE))
             reached.extend(self._resolve((_PARAMETER, method, index), trail, frames))
         for method, entry in produced:
@@ -6875,9 +7257,24 @@ class _Walk:
             # is the whole of the writing method after the call: a call made on the stored
             # object anywhere there changes what every later reader of the field sees.
             reached.extend(self._entry(entry, method, (_BINDING, symbol, method), trail, frames))
-        if len(reached) > PATH_CAP:
+        if len(reached) - members > PATH_CAP:
             return _only(trail, _unresolved(NON_ENUMERABLE))
         return self._distinct(reached)
+
+    def _names_a_list(self, symbol: str, seen: set[str]) -> bool:
+        """Whether a write of the binding `symbol` is a list, or a name for one."""
+        if symbol in seen:
+            return False
+        seen.add(symbol)
+        return any(
+            entry.get("kind") == "array"
+            or (
+                entry.get("kind") == "field"
+                and entry.get("symbol") is not None
+                and self._names_a_list(str(entry["symbol"]), seen)
+            )
+            for _, entry in self._index.constants.get(symbol, ())
+        )
 
     def _object_site(
         self, symbol: str, frames: "_Frames", reader: str | None

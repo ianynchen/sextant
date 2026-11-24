@@ -512,6 +512,9 @@ def test_the_loader_refuses_root_kind_on_another_style(tmp_path: Path):
         "{ owner: a.b, method: f, returns: arg0, result_calls: arg0, by: p.md }",
         "{ owner: a.b, method: f, result_returns: 0, by: p.md }",
         "{ owner: a.b, method: f, passes: arg0, by: p.md }",
+        "{ owner: a.b, method: f, returns: { arg: 0 }, by: p.md }",
+        "{ owner: a.b, method: f, returns: { arg: 0, element: -1 }, by: p.md }",
+        "{ owner: a.b, method: f, result_returns: { arg: 0, element: 0 }, by: p.md }",
     ],
 )
 def test_the_loader_refuses_a_malformed_returns_argument(tmp_path: Path, entry: str):
@@ -839,6 +842,29 @@ def test_a_command_on_a_subclassed_group_is_registered(tmp_path: Path):
 
     assert _roots(workspace) == [(_handler("x"), "<program> x")]
     assert _params(workspace) == [("<program> x", "option", "--n", "optional", "resolved")]
+
+
+def test_a_command_registered_inside_a_library_body_is_no_root(tmp_path: Path):
+    """`class MyGroup(click.Group)` has `Group`'s bodies read (fact schema 22), and
+    `Group.command`'s own `self.add_command(...)` is click's registration, not this module's
+    (F4 §5.2): the module's command is the one root, and no root has no handler."""
+    workspace = _resolved(
+        tmp_path,
+        {
+            "cli.py": (
+                "import click\n"
+                "class MyGroup(click.Group):\n    pass\n"
+                "cli = MyGroup()\n"
+                "@cli.command('x')\n"
+                "def x():\n    pass\n"
+            )
+        },
+        entry_points={},
+    )
+
+    library = {str(row["symbol"]) for row in workspace.query("header_symbols")}
+    assert any("click/core/Group#command" in symbol for symbol in library)
+    assert _roots(workspace) == [(_handler("x"), "<program> x")]
 
 
 def test_an_option_of_a_handler_taking_any_keyword_has_no_name(tmp_path: Path):

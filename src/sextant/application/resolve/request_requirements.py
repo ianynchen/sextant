@@ -540,6 +540,11 @@ _PATH_VARIABLES = (
 # D01 §3's inbound `kind` set: `param` only for an API that cannot tell query from form
 # (Spring's `@RequestParam`), said on the entry.
 _KINDS = frozenset({"header", "query", "cookie", "param"})
+# A read of the request's METHOD (`request.method`, approved 2026-11-23, spec
+# 2026-11-23-python-django-redesign §2 item 13): it names no parameter, so it takes no
+# `name_arg` and gives no metadata row. The route engine reads it to know that a handler
+# serving any method looks at the method (`method_reads`).
+METHOD_READ = "method"
 # `absent` is a route-tree word (§5c), never an annotation's: an annotation binds a value
 # and cannot demand its absence.
 _REQUIREMENTS = frozenset({"binder", "optional"})
@@ -1354,7 +1359,7 @@ def _from_reads(
     named method — the framework's own throwing accessor. A name that is not a string
     literal is a row with `name` NULL, `resolution: unresolved` (§5a). The handler body
     only, never a method it delegates to — stated on the catalogs."""
-    entries = _request_reads(catalogs)
+    entries = [entry for entry in _request_reads(catalogs) if entry["kind"] != METHOD_READ]
     if not entries:
         return []
     handlers = {str(e["handler"]) for e in endpoints if e.get("handler") is not None}
@@ -1471,6 +1476,16 @@ def _scan(body: list[dict[str, Any]], entries: list[dict[str, Any]]) -> list[_Re
     return reads
 
 
+def method_reads(catalog: Catalog) -> frozenset[tuple[str, str]]:
+    """The catalog's `kind: method` reads, `(owner, name)` each: the reads of the request's
+    method a handler body may make."""
+    return frozenset(
+        (str(entry["owner"]), str(entry["method"]))
+        for entry in _request_reads([catalog])
+        if entry["kind"] == METHOD_READ
+    )
+
+
 def _request_reads(catalogs: list[Catalog]) -> list[dict[str, Any]]:
     """Every loaded catalog's `request_reads` entries, validated and converted to the
     descriptor forms the facts spell (`owner` a type descriptor, `via` — the producing
@@ -1496,6 +1511,25 @@ def _request_read(entry: object, where: str) -> dict[str, Any]:
         raise CatalogError(
             f"{where} entries carry only {'/'.join(sorted(_REQUEST_READS_KEYS))}, got {entry!r}"
         )
+    if entry.get("kind") == METHOD_READ:
+        if (
+            set(entry) != {"owner", "method", "arity", "kind"}
+            or not isinstance(entry["owner"], str)
+            or not isinstance(entry["method"], str)
+            or not entry["method"]
+            or entry["arity"] != 0
+            or isinstance(entry["arity"], bool)
+        ):
+            raise CatalogError(
+                f"{where} a `kind: {METHOD_READ}` entry is `{{owner, method, arity: 0, kind}}`, "
+                f"got {entry!r}"
+            )
+        return {
+            "owner": _catalog_symbol(entry["owner"]),
+            "method": entry["method"],
+            "arity": 0,
+            "kind": METHOD_READ,
+        }
     for key in ("method", "arity", "name_arg", "kind"):
         if key not in entry:
             raise CatalogError(f"{where} entry lacks `{key}`: {entry!r}")

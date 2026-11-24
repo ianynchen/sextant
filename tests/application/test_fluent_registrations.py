@@ -646,6 +646,43 @@ def test_a_handler_capture_that_is_neither_a_position_nor_none_is_refused(tmp_pa
     _refused(tmp_path, matches, "invented-adapters.*handler: x")
 
 
+@pytest.mark.parametrize(
+    "key, value",
+    [
+        ("narrowed_by", [{"owner": "a.b", "method": "only", "http_method": "POST"}]),
+        ("through", {"owner": "a.b.View", "method": "as_view", "read": "receiver"}),
+    ],
+)
+def test_the_removed_handler_keys_are_refused(tmp_path: Path, key: str, value: object):
+    """The first Django build's `narrowed_by` and `through` on a handler capture are removed:
+    the methods a decorator states are `matches.annotations`, a class handler is
+    `matches.supertype` (plan 2026-11-23-python-django-redesign Task 7)."""
+    matches = {
+        **_ADAPTER_MATCHES,
+        "roots": [
+            {
+                **_ADAPTER_MATCHES["roots"][0],
+                "captures": {"channel": "arg1", "handler": {"arg": 0, key: value}},
+            }
+        ],
+    }
+    _refused(tmp_path, matches, "invented-adapters.*handler")
+
+
+def test_an_annotations_entry_with_both_method_forms_is_refused(tmp_path: Path):
+    matches = {
+        **_ADAPTER_MATCHES,
+        "roots": [
+            {
+                **_ADAPTER_MATCHES["roots"][0],
+                "captures": {"channel": "arg1", "handler": "arg0"},
+            }
+        ],
+        "annotations": [{"fqn": "a.b.only", "method": ["POST"], "method_from": {"arg": 0}}],
+    }
+    _refused(tmp_path, matches, "invented-adapters.*annotations")
+
+
 def test_a_channel_link_capture_of_the_wrong_shape_is_refused(tmp_path: Path):
     matches = {
         **_ADAPTER_MATCHES,

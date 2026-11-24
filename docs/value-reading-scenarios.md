@@ -91,6 +91,8 @@ Two marks on an answer: `inexact` (a URL publishes at `partial`; a channel is re
 | Concat, one part unknown | `expression` with the hole kept | `TV:3009`; Python prefix hole `<prefix>/x` at `partial`, `FP:410` |
 | Concat hole with several callers | one answer per caller | `TV:4702`, `TV:4725`; `FP:313` |
 | `${KEY}` placeholder, environment read | `expression` `${KEY}`; a key that is not a literal is `non_enumerable` | `TV:4714`†; `tests/application/test_environment_reads.py:44` (Python only) |
+| `"/<org>{}".format(x)` on a literal | a template, read as a concat: `expression` with `x` as its part (ruled 2026-11-23). By name too (`"{a}".format(a=x)`). A conversion or format spec the reader does not model (`{0!r}`, `{:>8}`) leaves the value unread, as before | `tests/ingress/extract/python/test_calls.py::test_format_on_a_literal_is_its_template`, `::test_format_the_reader_does_not_model_is_unread` (Python only) |
+| Any other transforming call used as the value (`old_url.lstrip("/")`) | rule 4: no model of the library method; `x` merged with `f(x)` answers the root `x`, `inexact` | `tests/application/test_values.py::test_a_merge_of_a_parameter_and_a_call_on_it_resolves_to_every_caller_inexactly` |
 
 ### Helpers
 
@@ -129,7 +131,12 @@ Two marks on an answer: `inexact` (a URL publishes at `partial`; a channel is re
 | The array was not read at all | ONE `non_enumerable` | `TV:2049` |
 | Varargs, `List.of("a","b")` | one array argument; one row per element | `TV:2767`, `TV:2746` |
 | Unpacked argument (`*rest`, `**options`) | the parameter it may fill is `not_readable`, not the default | `tests/application/test_values_defaults.py:93` (Python only) |
-| **A list held in a module name, used later** (`VERBS = ['get']`, `methods=VERBS`) | TODAY: not read, `unresolved` (`FR:547`, `:567`, Python only). **RULED 2026-11-23, not built yet:** the list is read when its exact values are known; an alteration we can see (`+=`, `.append`, `.extend` of known values) does not make it unknown. Only a list whose exact values are not known keeps a reason | ruling; the two tests change with it |
+| **A list held in a module name, used later** (`VERBS = ['get']`, `methods=VERBS`) | Ruled 2026-11-23, built (plan 2026-11-23-python-django-redesign Tasks 2–6): the list answers with its members, one path each, as an array written in place does. A name written as another list (`Y = X`) is followed. The members of one written list do not count against `PATH_CAP`. A list whose exact values are not known keeps a reason (rows below) | `tests/application/test_values.py::test_a_list_held_in_a_field_answers_with_its_members`, `::test_a_name_for_another_list_is_followed`, `::test_the_members_of_one_held_list_do_not_count_against_the_path_cap`; `tests/application/test_fastapi_routes.py::test_a_verb_list_held_in_a_module_name_is_read` (Python only) |
+| A copy of a list (`B = list(A)`, `[*A]`) | the scanner writes `[*A]` with the members `A` holds at that line: a member added to `A` later is not in the copy. A name written under a test or in a loop has no one value from there on, so a later copy stays a read of the name (every write of it) | `tests/ingress/extract/python/test_calls.py::test_list_of_a_value_is_the_list_of_its_members`, `::test_a_copy_of_a_module_list_holds_the_elements_at_its_line`, `::test_a_name_written_under_a_test_or_in_a_loop_keeps_its_read` |
+| An addition to a held list (`x.append(v)`, `x.extend(vs)`, `x += other.attr`, `x = f() + b`) | written as the list `[*x, v]`, `[*x, *vs]`: known, not a reason. Only on a name this file writes as a list; `count += 1` stays a number | `tests/ingress/extract/python/test_calls.py::test_append_and_extend_on_a_module_list_are_writes`, `::test_a_sum_onto_a_list_name_is_a_list` |
+| Any other call on a held list (`remove`, `pop`, `clear`, `insert`, `sort`, `reverse`), an element store `x[i] = v` or delete `del x[i]` | `escapes` for the list: it is not exactly known. The scanner writes an element store and delete as the calls the language makes, `__setitem__` and `__delitem__`. A read the language makes (`__iter__`, `__getitem__`, `in`, `len`) keeps the members | `tests/application/test_values.py::test_a_call_on_a_held_list_that_is_not_a_write_makes_it_not_known`, `::test_a_read_the_language_makes_on_a_held_list_keeps_its_members`; `tests/ingress/extract/python/test_calls.py::test_an_element_store_and_delete_are_the_calls_the_language_makes` |
+| A held list passed whole as an argument (`keep(VERBS)`) | still read (ruled 2026-11-23): the walk tracks no hand-over of a field, in Python as in Java. Limit: a list that module code changes after the hand-over is read as written (OI-510) | `tests/application/test_values.py::test_a_held_list_handed_to_a_call_is_still_read` |
+| A held list changed through a second name (`VERBS = BASE`, `VERBS.remove(v)`) | not known by the name the call was made on (`escapes`). Limit: by the first name (`BASE`) it is still read as written (OI-516) | `tests/application/test_values.py::test_a_list_changed_through_a_second_name_is_not_known_by_that_name` |
 
 ### Loops
 
@@ -150,6 +157,11 @@ Two marks on an answer: `inexact` (a URL publishes at `partial`; a channel is re
 | Builder handed to code we do not have | `escapes` | `TV:5562` |
 | Chain started in a helper, sent by the caller | one row, the caller's | `tests/application/test_call_engines.py:7102` |
 | Lambda body reads a captured value | the captured value | `TV:2247` |
+| A Python nested function or `lambda` reads a name of its enclosing function | the captured value, as for a Java lambda. The scanner writes the capture (a `dynamic` site `types/FunctionType#<init>`, `captures: N`); in a Python body the captured values sit after the written parameters (ruled 2026-11-23). A name written again after the `def` is captured `unresolved` | `tests/ingress/extract/python/test_calls.py::test_a_nested_function_captures_the_outer_names_it_reads_after_its_parameters`, `::test_a_name_written_again_after_the_def_is_captured_unread`; `tests/application/test_values.py::test_a_python_body_reads_its_captured_value_where_the_function_was_made` |
+| A wrapper that hands the request on (`@wraps(f) def inner(request, *a, **k): return f(request, *a, **k)`) | stands for the function it wraps: the handler is `f`, never `inner`. Where the captured function is not read, the answer is a reason, never the wrapper. The call's result must go into what the body returns, as it is or inside it (`return JsonResponse(f(request))` is `f`). A call whose result is only tested (`if test(request):`) or not used (`logger(request)`) is no hand-over, and a body with no hand-over is itself what runs | `tests/application/test_receiver_binding.py::test_a_decorator_whose_wrapper_calls_what_it_captured_runs_the_wrapped_function`; `tests/application/test_values.py::test_a_wrapper_that_hands_its_unpacked_arguments_on_stands_for_the_wrapped`, `::test_a_wrapper_whose_captured_function_is_not_read_never_names_the_wrapper`, `::test_a_wrapper_that_wraps_what_its_captured_function_gives_stands_for_it`, `::test_a_wrapper_whose_return_takes_two_captured_functions_results_stands_for_both`, `::test_a_captured_function_whose_result_is_not_used_is_no_hand_over` |
+| A method decorator applied inside a project decorator or held in a name (`return csrf_exempt(require_POST(f))`, `get_or_post = require_http_methods([...])`) | read on the path the value walk takes to the view: each stated call the walk passes is on the path (`Path.passed`), and the `annotations` among them narrow the row. Paths that allow different methods make every row `partial` | `tests/application/test_django_verbs.py::test_a_project_decorator_that_applies_require_post_narrows`, `::test_a_held_require_http_methods_decorator_narrows`, `::test_require_post_on_one_branch_of_a_project_decorator_is_partial` |
+| A decorator made in one method and applied in another (`d = user_passes_test(t)` in a helper, `d(view)` in its caller) | the call that made the decorator is looked up in the value models: the result is the argument it is applied to | `tests/application/test_values.py::test_a_decorator_a_library_made_in_a_helper_and_applied_in_its_caller_is_its_argument` |
+| A library class's method body (`class MyView(LoginRequiredMixin, View)`) | read where a module class extends the library class (every class in the lookup order; ruled 2026-11-23, option B), as a module method is: `super().dispatch(...)` in a library `dispatch` is the `special` call. Rows that come from those bodies are not the module's: the borrowed-rows rule drops them. A library class no module class extends stays unread | `tests/ingress/extract/python/test_libraries.py::test_a_library_class_in_a_lookup_order_has_its_method_bodies_read`; `tests/application/test_django_class_views.py::test_a_library_dispatch_that_calls_its_parent_on_one_branch_keeps_the_verbs`, `::test_a_library_class_no_module_class_extends_keeps_its_dispatch_unread`; `tests/application/test_python_outbound.py::test_a_session_subclass_publishes_only_the_modules_own_calls` |
 | Handler as a method reference with two implementations | one `narrowed` row each | `tests/application/test_pass_through.py:971`† |
 | A decorator written in the module that returns its function | walked into; handler `resolved` | `FR:438` (Python only) |
 | A library wrapper a value model states (`functools.wraps`) | `result_returns` / `result_calls` in `value-models/python-wrappers.yml` | model file |
@@ -170,6 +182,8 @@ Two marks on an answer: `inexact` (a URL publishes at `partial`; a channel is re
 | A mount the framework refuses | no row, or the refusal is recorded (rule 9) | `TM:449`, `TM:528`; `FP:161` |
 | A router factory in another file; a router subclass | the prefix is held | `FP:125`, `FP:335`; `TM:562`† |
 | A call that returns its receiver | the same router | `TM:462` |
+| A registration made on nothing (Django `path()` in a list) | joined top-down: from each root (the module a written `ROOT_URLCONF` names, catalog word `root_setting`) and through each mount (`path(p, include(x))`), the members of the lists are read by the value walk, each under its mount's prefix. A list that no root and no readable mount reaches is published behind the hole `<prefix>/x` at `partial` with `mount_prefix`, never at the root; a repository with no written root has no `resolved` row; a library call that takes the list (`i18n_patterns(*x)`) is no mount. A mount written under a test gives its routes that condition; a list added under a test is behind the hole (OI-508) | `tests/application/test_django_includes.py::test_the_root_is_the_module_root_urlconf_names`, `::test_a_list_no_mount_and_no_root_reaches_is_the_hole`, `::test_a_repository_with_no_root_urlconf_has_no_resolved_row`, `::test_a_library_call_that_takes_the_list_is_no_mount`, `::test_a_mount_written_under_a_test_gives_its_routes_the_condition`, `::test_a_list_added_under_a_test_is_behind_the_hole` (Python only) |
+| A mount of a library's URL module (`include("django_scim.urls")`) | adds nothing, as a mount of a router the module does not build | `tests/application/test_django_includes.py::test_a_mount_of_a_library_module_adds_nothing` |
 
 ### More rows of the same rules
 
@@ -231,6 +245,21 @@ Tests, in `tests/application/test_pass_through.py`:
 with the catalog word `passes_on`. A Django view that calls another view with its `request`
 has the same role (ruled 2026-11-23).
 
+**"Any method"** (ruled 2026-11-23, built in plan 2026-11-23-python-django-redesign Task 7a).
+A row that serves every method (`verbless_serves: any`) says the endpoint answers every
+method. It is `resolved` only when nothing in the code doubts it. It is `partial`, method not
+read, when the handler or a wrapper the path ran through reads the request's method (a
+`request_reads` entry of kind `method`, only `django.yml` declares one), in its own body or in
+module code it hands the request to; when it hands the request to another view; or when its
+body was not read. A request handed only to a library function (`render(request, ...)`) is
+no doubt. Example: `def v(request): if request.method == "POST": ...` gives one row, method
+NULL, `partial`. No question is filed for such a row yet (OI-540). Tests:
+`tests/application/test_django_verbs.py::test_a_view_that_reads_request_method_is_partial`,
+`::test_a_view_that_hands_its_request_to_a_helper_that_reads_the_method_is_partial`,
+`::test_a_view_that_calls_another_view_with_its_request_is_partial`,
+`::test_a_view_that_hands_its_request_only_to_a_library_function_is_resolved`,
+`::test_a_wrapper_that_reads_no_method_keeps_the_row_resolved`.
+
 ## Catalog-level roles (survey of 2026-11-23)
 
 Every row names the existing word and one catalog line. The survey read the catalogs and the
@@ -286,8 +315,8 @@ format document; a test named here is a name match unless a table above cites it
 | two handlers on one address is an error | `mapping.duplicate: conflict` | annotation_driven | `src/sextant/catalogs/spring-mvc.yml:127` |
 | route disabled / removed | `serves` capture, `poisons` | fluent | `src/sextant/catalogs/vertx-web.yml:194-199` |
 | automatic HEAD/OPTIONS | NO word; stated boundary, not published | all | C |
-| router named by a string / module / class | NO word | — | E (NOT FOUND) |
-| decorator/annotation on the handler changes a fluent/combinator route | NO word | — | A(vii), L (NOT FOUND) |
+| router named by a string / module / class | `mount[].router_named: {variable}` (approved 2026-11-22); the root module by `root_setting` (approved 2026-11-23) | fluent | `src/sextant/catalogs/django.yml` (D02 §2 `fluent`) |
+| decorator/annotation on the handler changes a fluent route | `matches.annotations` (`fqn`, `method`, `method_from`), the `annotation_driven` words, read by the fluent engine (ruled 2026-11-23) | fluent | `src/sextant/catalogs/django.yml` (D02 §2 `fluent`) |
 
 ### Words that have the same role under different names
 
@@ -309,16 +338,16 @@ format document; a test named here is a name match unless a table above cites it
 
 ## Cases with no rule today
 
-No rule and no test exists for these. Each is a decision for the user, taken with a count.
+No rule reads these. The first three are ruled not supported (2026-11-23): the row keeps its
+reason, and no rule enumerates the values. A copy (`list(x)`) and `.format` were in this
+table; they are ruled and built now (rows in "Lists and arrays" and "Constants and text").
 
 | Case | Example | Seen in |
 |---|---|---|
-| A registration call inside a loop | `for r in REDIRECTS: urls += [path(r.old_url, ...)]` | **RULED 2026-11-23: not supported.** Counted in 14 Python projects: about 15 places, 9 over a run-time registry, 6 over written values (zulip 4, redash 1, home-assistant 1), and the zulip ones need more than the loop. The row keeps its reason and a question names the line; no rule enumerates the loop |
-| A map or dict as a value source, a lookup by key | `handlers[request.method]`; `Map.of(...)`; `switch` | zulip `rest_path`: 259 routes, 731 method pairs |
-| A `**kwargs` parameter (the left-over keywords) | `rest_path("realm", GET=f, PATCH=g)` | zulip, same 259 routes |
-| A copy of a collection | `list(x)`, `List.copyOf(x)` | zulip: 95 pairs |
-| A transforming call used directly as the value | `old_url.lstrip("/")`, `String.format(...)` | zulip redirects |
-| A constant read from another class (Java) | `Other.TOPIC` | no test found |
+| A registration call inside a loop or a comprehension | `for r in REDIRECTS: urls += [path(r.old_url, ...)]` | **RULED 2026-11-23: not supported.** Counted in 14 Python projects: about 15 places, 9 over a run-time registry, 6 over written values (zulip 4, redash 1, home-assistant 1). Measured 2026-11-24 on zulip: 22 rows with no path stand for 149 Django patterns. The ruling asks for a question that names the line; none is filed today (OI-502) |
+| A map or dict as a value source, a lookup by key | `handlers[request.method]`; `Map.of(...)`; `switch` | **RULED 2026-11-23: not supported.** zulip `rest_dispatch`: 295 routes, 829 Django (method, route) pairs (OI-504) |
+| A `**kwargs` parameter (the left-over keywords) | `rest_path("realm", GET=f, PATCH=g)` | **RULED 2026-11-23: not supported.** zulip, the same 295 routes: one any-method row each, `partial` (OI-503) |
+| A constant read from another class (Java) | `Other.TOPIC` | no test found (the "Static field" row is the nearest rule) |
 
 ## Known disagreements in the code's own text
 
