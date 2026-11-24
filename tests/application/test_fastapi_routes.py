@@ -743,19 +743,8 @@ def test_every_jvm_catalog_derives_the_same_rows(tmp_path: Path, fixture_facts: 
     assert tables(catalogs_dir(), "with") == tables(without, "without")
 
 
-@pytest.mark.parametrize(
-    "decorator",
-    [
-        "from functools import singledispatch as deco\n",
-        (
-            "import functools\n"
-            "def deco(f):\n    @functools.wraps(f)\n    def inner(*a):\n        return f(*a)\n"
-            "    return inner\n"
-        ),
-    ],
-)
 def test_a_function_named_after_an_unstated_decorator_is_partial_like_the_stacked_one(
-    tmp_path: Path, libraries, decorator: str
+    tmp_path: Path, libraries
 ):
     """Ruling R13: a decorator no value model states ends the handler walk whether the function
     reaches the registration under it or by name, so `add_api_route('/x', f)` with `@deco` on
@@ -766,7 +755,7 @@ def test_a_function_named_after_an_unstated_decorator_is_partial_like_the_stacke
         libraries,
         {
             "main.py": _ROUTER
-            + decorator
+            + "from functools import singledispatch as deco\n"
             + "@deco\nasync def f() -> str:\n    return ''\n"
             + "router.add_api_route('/x', f)\n"
         },
@@ -774,3 +763,25 @@ def test_a_function_named_after_an_unstated_decorator_is_partial_like_the_stacke
 
     assert _rows(workspace) == [("GET", "/x", None, "partial", None)]
     assert len(_questions(workspace, "handler_pass_through")) == 1
+
+
+def test_a_function_named_after_a_module_wrapper_is_the_function_it_wraps(
+    tmp_path: Path, libraries
+):
+    """The module's `deco` returns an inner function that calls the `f` it captured with what
+    it was given (spec 2026-11-23 §4e): the handler is `f`, read by name as stacked."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _ROUTER
+            + "import functools\n"
+            + "def deco(f):\n    @functools.wraps(f)\n    def inner(*a):\n        return f(*a)\n"
+            + "    return inner\n"
+            + "@deco\nasync def f() -> str:\n    return ''\n"
+            + "router.add_api_route('/x', f)\n"
+        },
+    )
+
+    assert _rows(workspace) == [("GET", "/x", "app/main#f(sig_", "resolved", "string")]
+    assert _questions(workspace, "handler_pass_through") == []

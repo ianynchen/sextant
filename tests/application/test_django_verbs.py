@@ -137,10 +137,12 @@ def _questions(workspace) -> list[dict]:
     ]
 
 
-def test_a_project_decorator_on_the_def_ends_the_handler_walk(tmp_path: Path, libraries):
-    """R13: a decorator no value model states (here the module's own, through
-    `functools.wraps`) ends the handler walk: the row names no handler, is `partial`, and files
-    one `handler_pass_through` question. The `require_POST` on the same def still narrows it."""
+def test_a_project_decorator_on_the_def_is_read_through_to_the_function_it_wraps(
+    tmp_path: Path, libraries
+):
+    """The module's own decorator returns an inner function that calls the one it captured
+    with what it was given (spec 2026-11-23 §4e): the handler is the wrapped `v`, and the
+    `require_POST` under it still narrows the row."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -155,8 +157,8 @@ def test_a_project_decorator_on_the_def_ends_the_handler_walk(tmp_path: Path, li
         },
     )
 
-    assert _rows(workspace) == [("POST", None, "/x/", None, "partial")]
-    assert len(_questions(workspace)) == 1
+    assert _rows(workspace) == [("POST", None, "/x/", _handler("v"), "resolved")]
+    assert _questions(workspace) == []
 
 
 def test_an_unknown_library_decorator_on_the_def_ends_the_handler_walk(tmp_path: Path, libraries):
@@ -268,8 +270,8 @@ def test_two_narrowing_decorators_serve_their_intersection(tmp_path: Path, libra
 
 def test_a_project_wrapper_in_the_registration_is_followed_into(tmp_path: Path, libraries):
     """A wrapper the module defines is followed into its code, as every catalog's handler is
-    (design 2026-11-06-reading-decorators §6): the function the framework calls is its inner
-    `def`, which answers every method."""
+    (design 2026-11-06-reading-decorators §6): its inner `def` calls the function it captured
+    with the request, so the handler is that function (spec 2026-11-23 §4e)."""
     rows = _view(
         tmp_path,
         libraries,
@@ -278,7 +280,77 @@ def test_a_project_wrapper_in_the_registration_is_followed_into(tmp_path: Path, 
         "path('x/', own_wrapper(v))",
     )
 
-    assert rows == [(None, "any", "/x/", _handler("own_wrapper$inner"), "resolved")]
+    assert rows == [(None, "any", "/x/", _handler("v"), "resolved")]
+
+
+def test_a_handler_read_on_one_path_and_not_on_another_names_no_function(tmp_path: Path, libraries):
+    """`deco` hands back `wrap(f)` on one path and what a library call no value model states
+    makes on another: the handler is the wrapped `v`, or what was not read. No function is
+    named as the one that answers (spec 2026-11-23 §9a); naming `v` would be a guess."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "from lib import fallback\n"
+            + "def wrap(f):\n    def inner(request):\n        return f(request)\n"
+            + "    return inner\n"
+            + "def deco(f=None):\n    if f:\n        return wrap(f)\n    return fallback()\n"
+            + "@deco\n"
+            + _DEF
+            + "urlpatterns = [path('x/', v)]\n"
+        },
+    )
+
+    assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
+    assert len(_questions(workspace)) == 1
+
+
+def test_a_decorator_that_hands_back_a_bare_function_on_one_path_names_both(
+    tmp_path: Path, libraries
+):
+    """`deco` hands back `wrap(f)` on one path and the bare `wrap` on another (the shape of a
+    decorator usable with and without arguments): the walk does not evaluate `if f`, so the
+    handler is the wrapped `v` or `wrap` itself, both read, one alternative each."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "def wrap(f):\n    def inner(request):\n        return f(request)\n"
+            + "    return inner\n"
+            + "def deco(f=None):\n    if f:\n        return wrap(f)\n    return wrap\n"
+            + "@deco\n"
+            + _DEF
+            + "urlpatterns = [path('x/', v)]\n"
+        },
+    )
+
+    assert _rows(workspace) == [
+        (None, "any", "/x/", _handler("v"), "narrowed"),
+        (None, "any", "/x/", _handler("wrap"), "narrowed"),
+    ]
+
+
+def test_one_decorator_factory_applied_twice_to_one_view_is_not_read(tmp_path: Path, libraries):
+    """A known limit (spec 2026-11-23 §9b): the walk enters one helper once on a path, so the
+    second application of `guard` on the same view is not followed, and the handler is not
+    read: `partial`, never the wrapper."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "def guard(name):\n    def deco(f):\n        def inner(request):\n"
+            + "            return f(request) if name else None\n"
+            + "        return inner\n    return deco\n"
+            + "@guard('a')\n@guard('b')\n"
+            + _DEF
+            + "urlpatterns = [path('x/', v)]\n"
+        },
+    )
+
+    assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
 
 
 def test_an_unknown_wrapper_over_a_narrowing_call_is_partial_and_narrowed(

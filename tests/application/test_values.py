@@ -2353,6 +2353,162 @@ def test_a_bound_method_reference_binds_no_parameter_to_its_receiver(walked):
     assert _reasons(bindings) == ["external"]
 
 
+# -- a Python body's captures (spec 2026-11-23 §4e, §9a) ------------------------------------
+
+
+_REGISTER = "def register(h):\n    return None\n"
+_PAGE = "def page(request):\n    return None\n"
+
+
+def _registered(
+    tmp_path: Path, source: str, stated: tuple[dict[str, Any], ...] = ()
+) -> list[list[str]]:
+    """What a CALL of each `register(...)` argument in `a.py` runs, in the order written: the
+    bare body each path reaches, or the reason of a path that reaches none (the real scanner,
+    no catalogs, `stated` as the value models' `returns_arguments`)."""
+    import test_receiver_binding
+
+    workspace = test_receiver_binding._resolved(tmp_path, {"a.py": _REGISTER + _PAGE + source})
+    index = value_index(workspace, returns_arguments=stated)
+    rows = sorted(
+        (row for row in workspace.query("call_sites") if row["name"] == "register"),
+        key=lambda row: row["ordinal"],
+    )
+    found = []
+    for row in rows:
+        runs = []
+        for producer, _ in producer_paths(index, dict(row), 0, frozenset(), functions=True):
+            body = None if producer.ended_at is None else values.called_function(producer.ended_at)
+            runs.append(
+                str(producer.reason) if body is None else body.split("#", 1)[1].split("(")[0]
+            )
+        found.append(runs)
+    workspace.close()
+    return found
+
+
+def test_a_python_body_reads_its_captured_value_where_the_function_was_made(tmp_path: Path):
+    """The captured `f` sits after `w`'s written parameters (spec §2 item 14), and each call of
+    `deco` makes its own `w`: each registration runs the function its own call captured."""
+    source = (
+        "def deco(f):\n"
+        "    def w(request, *a, **k):\n"
+        "        return f(request, *a, **k)\n"
+        "    return w\n"
+        "def other(request):\n    return None\n"
+        "register(deco(page))\n"
+        "register(deco(other))\n"
+    )
+    assert _registered(tmp_path, source) == [["page"], ["other"]]
+
+
+def test_a_wrapper_that_only_tests_with_a_captured_function_stands_for_the_one_it_returns(
+    tmp_path: Path,
+):
+    """`if test(request): return view(request)`: the call of `test` is no hand-over (what it
+    gives is not returned), so the wrapper stands for `view` alone."""
+    source = (
+        "def check(request):\n    return True\n"
+        "def guard(test, view):\n"
+        "    def w(request):\n"
+        "        if test(request):\n"
+        "            return view(request)\n"
+        "        return None\n"
+        "    return w\n"
+        "register(guard(check, page))\n"
+    )
+    assert _registered(tmp_path, source) == [["page"]]
+
+
+def test_a_wrapper_that_hands_its_unpacked_arguments_on_stands_for_the_wrapped(tmp_path: Path):
+    source = (
+        "def deco(f):\n"
+        "    def w(*args):\n"
+        "        return f(*args)\n"
+        "    return w\n"
+        "register(deco(page))\n"
+    )
+    assert _registered(tmp_path, source) == [["page"]]
+
+
+def test_a_wrapper_three_levels_down_stands_for_the_function_its_middle_level_took(
+    tmp_path: Path,
+):
+    source = (
+        "def a(k):\n"
+        "    def b(f):\n"
+        "        def c(request):\n"
+        "            return f(request) if k else None\n"
+        "        return c\n"
+        "    return b\n"
+        "register(a(1)(page))\n"
+    )
+    assert _registered(tmp_path, source) == [["page"]]
+
+
+def test_a_body_that_hands_nothing_on_is_itself_what_runs(tmp_path: Path):
+    """`w` reads its captured `name` but calls nothing with the request it was given: a call
+    of `w` runs `w`."""
+    source = (
+        "def deco(name):\n"
+        "    def w(request):\n"
+        "        return name\n"
+        "    return w\n"
+        "register(deco('x'))\n"
+    )
+    assert _registered(tmp_path, source) == [["deco$w"]]
+
+
+def test_a_wrapper_whose_captured_function_is_not_read_never_names_the_wrapper(tmp_path: Path):
+    """`f` is what a library call no value model states made: which function `w` hands the
+    request on to is not read, and the answer is a reason, never `w`, which does not answer."""
+    source = (
+        "from lib import make\n"
+        "def deco():\n"
+        "    f = make()\n"
+        "    def w(request):\n"
+        "        return f(request)\n"
+        "    return w\n"
+        "register(deco())\n"
+    )
+    # `escapes`: the made value is captured by a body that calls it (`captured_as`).
+    assert _registered(tmp_path, source) == [["escapes"]]
+
+
+def test_a_decorator_a_library_made_in_a_helper_and_applied_in_its_caller_is_its_argument(
+    tmp_path: Path,
+):
+    """`d = factory(t)` in `helper`, `d(page)` in the module: the receiver ends at the call
+    that made it, which a value model states returns what its result is applied to."""
+    source = (
+        "from lib import factory\n"
+        "def helper(t):\n"
+        "    return factory(t)\n"
+        "d = helper(1)\n"
+        "register(d(page))\n"
+    )
+    stated = ({"owner": "lib#", "method": "factory", "form": "result_returns", "arg": 0},)
+    assert _registered(tmp_path, source) != [["page"]]
+    assert _registered(tmp_path / "stated", source, stated) == [["page"]]
+
+
+def test_functools_wraps_applied_to_the_inner_function_is_that_function(tmp_path: Path):
+    """`@functools.wraps(f) def w` is `functools.wraps(f)(w)`, a `__call__` the scanner types
+    on `functools._Wrapper`: the stated `result_returns` of `wraps` makes it `w`, which then
+    stands for `f`."""
+    source = (
+        "import functools\n"
+        "def deco(f):\n"
+        "    @functools.wraps(f)\n"
+        "    def w(request):\n"
+        "        return f(request)\n"
+        "    return w\n"
+        "register(deco(page))\n"
+    )
+    stated = ({"owner": "functools#", "method": "wraps", "form": "result_returns", "arg": 0},)
+    assert _registered(tmp_path, source, stated) == [["page"]]
+
+
 @pytest.mark.pins("values.an-UNREADABLE-constant-answers-not_readable-never-nothing")
 def test_a_constant_the_walk_cannot_read_answers_not_readable_and_keeps_the_site(walked):
     """**An answer, never an absence.** `Unreadable#held` is written from a `class` constant

@@ -853,11 +853,13 @@ def _entry_handlers(
     slot: int,
     method_symbols: Mapping[str, str],
     within: Path | None = None,
+    unread: list[str] | None = None,
 ) -> tuple[str, ...]:
     """The function each path of the handler argument at `site`'s `slot` reaches, as a call of
     it would (`producer_paths(..., functions=True)`), joined to its full method symbol; in
     path order, each once. Only the paths agreeing with `within`, where one is given: the
-    handler one call hands a factory, read on that call (M-1)."""
+    handler one call hands a factory, read on that call (M-1). The reason of each path that
+    reached no function is added to `unread`, where one is given."""
     found: list[str] = []
     for producer, path in producer_paths(index, site, slot, frozenset(), functions=True):
         if within is not None and path.joined(within) is None:
@@ -866,6 +868,8 @@ def _entry_handlers(
         symbol = None if body is None else method_symbols.get(body)
         if symbol is not None and symbol not in found:
             found.append(symbol)
+        elif symbol is None and unread is not None:
+            unread.append(str(producer.reason or NOT_READABLE))
     return tuple(found)
 
 
@@ -3831,9 +3835,26 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
     if site is None or at is None:
         return None
     slot = int(at[2])
+    unread: list[str] = []
     handlers = _entry_handlers(
-        context.values, site, slot, context.method_symbols, context.path
-    ) or (_bound_methods(argument, context))
+        context.values, site, slot, context.method_symbols, context.path, unread
+    )
+    if handlers and unread:
+        # One path names a function and another was not read: the handler is one of those
+        # read, or one that was not. No function is named as the one that answers.
+        return _Judged(
+            None,
+            UNREADABLE,
+            (
+                (
+                    unread[0],
+                    "the handler is read on one path ("
+                    + ", ".join(handlers)
+                    + ") and not on another",
+                ),
+            ),
+        )
+    handlers = handlers or (_bound_methods(argument, context))
     if handlers:
         alternatives = tuple(_Judged(symbol, ANSWERS) for symbol in handlers)
         return _Judged(handlers[0], ANSWERS, (), alternatives if len(handlers) > 1 else ())
