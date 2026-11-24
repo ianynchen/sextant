@@ -581,3 +581,20 @@ def test_a_broken_word_is_refused_naming_the_file(tmp_path, text, refusal):
     with pytest.raises(CatalogError, match=refusal):
         (probe,) = [one for one in YamlCatalogSource(catalogs).load() if one.id == "probe"]
         single_call.run(DuckDbWorkspace(tmp_path / "ws.duckdb"), probe)
+
+
+def test_a_session_subclass_publishes_only_the_modules_own_calls(tmp_path, libraries):
+    """`class Outgoing(requests.Session)`: `Session`'s bodies are read (a module class extends
+    it, fact schema 22), and its own `self.request("GET", url)` inside `Session.get` is the
+    library's call, never this module's row (F4 §5.2, `drop_borrowed_endpoints.sql`). The
+    module's call is its one row."""
+    rows = _outbound(
+        tmp_path,
+        libraries,
+        "import requests\n"
+        "class Outgoing(requests.Session):\n    pass\n"
+        "def send() -> None:\n"
+        "    Outgoing().get('https://a.example/w')\n",
+    )
+
+    assert rows == [("GET", "a.example", "/w", "app/main#send", "resolved", None)]

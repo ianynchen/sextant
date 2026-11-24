@@ -175,7 +175,7 @@ def test_a_dispatch_override_serves_every_method(tmp_path: Path, libraries):
     assert rows == [(None, "any", "/x/", _handler("dispatch", "app/urls/Items"), "resolved")]
 
 
-def test_a_dispatch_override_that_calls_super_keeps_the_verbs(tmp_path: Path, libraries):
+def test_a_dispatch_override_that_calls_its_parent_keeps_the_verbs(tmp_path: Path, libraries):
     """Probe: a `dispatch` override that calls `super().dispatch` keeps `View.dispatch`'s
     verb lookup (GET 200, POST 405), the servlet catalog's delegating `service()`."""
     rows = _views(
@@ -391,47 +391,115 @@ def test_a_project_mixin_that_returns_early_on_one_branch_delegates(tmp_path: Pa
     assert rows == [("GET", None, "/x/", _handler("get", "app/urls/Items"), "resolved")]
 
 
-def test_a_library_base_whose_dispatch_does_not_hand_back_serves_every_method_partial(
-    tmp_path: Path, libraries
-):
-    """A library class whose `dispatch` answers itself (a stub distribution beside Django):
-    the any-method row, the library's `dispatch` the handler. Its body was not read, so what
-    it does with the method is not known: `partial` (design 2026-11-23 §4c M4, §4d)."""
+def _stub(tmp_path: Path, text: str) -> LibraryRoot:
+    """A distribution `stubviews` beside Django whose `__init__.py` is `text`."""
     site = tmp_path / "stub-site"
     (site / "stubviews").mkdir(parents=True)
-    (site / "stubviews" / "__init__.py").write_text(
-        "from django.views import View\n"
-        "class Answering(View):\n"
-        "    def dispatch(self, request, *a, **k):\n        return None\n"
-        "    def get(self, request):\n        return None\n",
-        encoding="utf-8",
-    )
+    (site / "stubviews" / "__init__.py").write_text(text, encoding="utf-8")
     info = site / "stubviews-1.dist-info"
     info.mkdir()
     (info / "METADATA").write_text("Name: stubviews\nVersion: 1\n", encoding="utf-8")
     (info / "RECORD").write_text("stubviews/__init__.py,,\n", encoding="utf-8")
-    stub = LibraryRoot("stubviews", "1", site)
-    rows = _rows(
+    return LibraryRoot("stubviews", "1", site)
+
+
+def _stub_rows(tmp_path: Path, libraries, stub: str, body: str) -> list[tuple[object, ...]]:
+    return _rows(
         _resolved(
             tmp_path,
-            (*libraries, stub),
-            {
-                "urls.py": _HEAD + "from stubviews import Answering\n"
-                "class Items(Answering):\n    pass\n"
-                "urlpatterns = [path('x/', Items.as_view())]\n"
-            },
+            (*libraries, _stub(tmp_path, stub)),
+            {"urls.py": _HEAD + body},
         )
     )
 
+
+_STUB = "sextant-python pypi stubviews 1 stubviews/"
+
+
+def test_a_library_base_whose_dispatch_does_not_hand_back_serves_every_method(
+    tmp_path: Path, libraries
+):
+    """A library class whose `dispatch` answers itself: the any-method row, the library's
+    `dispatch` the handler. Its body is read (a module class extends the class, ruling
+    2026-11-23 option B) and does nothing with the method, so the row is `resolved`."""
+    rows = _stub_rows(
+        tmp_path,
+        libraries,
+        "from django.views import View\n"
+        "class Answering(View):\n"
+        "    def dispatch(self, request, *a, **k):\n        return None\n"
+        "    def get(self, request):\n        return None\n",
+        "from stubviews import Answering\n"
+        "class Items(Answering):\n    pass\n"
+        "urlpatterns = [path('x/', Items.as_view())]\n",
+    )
+
+    assert rows == [(None, "any", "/x/", _STUB + "Answering#dispatch(sig_", "resolved")]
+
+
+def test_a_library_dispatch_that_does_not_call_its_parent_is_partial(tmp_path: Path, libraries):
+    """DRF's `APIView.dispatch` shape: it never calls `super().dispatch` and picks the handler
+    off `request.method.lower()`. One any-method row naming that `dispatch`, `partial` by the
+    any-method rule (the body reads the method), never `resolved` (design 2026-11-23 §4c M4)."""
+    rows = _stub_rows(
+        tmp_path,
+        libraries,
+        "from django.views import View\n"
+        "class APIish(View):\n"
+        "    def dispatch(self, request, *a, **k):\n"
+        "        handler = getattr(self, request.method.lower(), None)\n"
+        "        return handler(request, *a, **k)\n",
+        "from stubviews import APIish\n"
+        "class Items(APIish):\n    def get(self, request):\n        return None\n"
+        "urlpatterns = [path('x/', Items.as_view())]\n",
+    )
+
+    assert rows == [(None, "any", "/x/", _STUB + "APIish#dispatch(sig_", "partial")]
+
+
+def test_a_library_dispatch_that_calls_its_parent_on_one_branch_keeps_the_verbs(
+    tmp_path: Path, libraries
+):
+    """A library `dispatch` that answers on one branch and calls `super().dispatch` on the
+    other hands the request back on some path: the class's verbs, `resolved`."""
+    rows = _stub_rows(
+        tmp_path,
+        libraries,
+        "from django.views import View\n"
+        "class Guarded(View):\n"
+        "    def dispatch(self, request, *a, **k):\n"
+        "        if request.user is None:\n            return None\n"
+        "        return super().dispatch(request, *a, **k)\n",
+        "from stubviews import Guarded\n"
+        "class Items(Guarded):\n"
+        "    def get(self, request):\n        return None\n"
+        "    def post(self, request):\n        return None\n"
+        "urlpatterns = [path('x/', Items.as_view())]\n",
+    )
+
     assert rows == [
-        (
-            None,
-            "any",
-            "/x/",
-            "sextant-python pypi stubviews 1 stubviews/Answering#dispatch(sig_",
-            "partial",
-        )
+        ("GET", None, "/x/", _handler("get", "app/urls/Items"), "resolved"),
+        ("POST", None, "/x/", _handler("post", "app/urls/Items"), "resolved"),
     ]
+
+
+def test_a_library_class_no_module_class_extends_keeps_its_dispatch_unread(
+    tmp_path: Path, libraries
+):
+    """`Answering.as_view()` straight from the library: no module class has `Answering` in its
+    lookup order, so its bodies are not read (the targeted read) and what its `dispatch` does
+    is not known: the rows its verbs give, `partial`, never `resolved`."""
+    rows = _stub_rows(
+        tmp_path,
+        libraries,
+        "from django.views import View\n"
+        "class Answering(View):\n"
+        "    def dispatch(self, request, *a, **k):\n        return None\n"
+        "    def get(self, request):\n        return None\n",
+        "from stubviews import Answering\nurlpatterns = [path('x/', Answering.as_view())]\n",
+    )
+
+    assert rows == [("GET", None, "/x/", _STUB + "Answering#get(sig_", "partial")]
 
 
 def test_a_narrowing_wrapper_narrows_the_class_rows(tmp_path: Path, libraries):
@@ -524,3 +592,47 @@ def test_a_nearer_definition_in_read_code_wins_over_the_entry(tmp_path: Path, li
     )
 
     assert sunk == [[("own", None)], [("own", None)]]
+
+
+def test_an_admin_mount_publishes_no_route_of_the_admins_own_body(tmp_path: Path, libraries):
+    """`class Mine(admin.ModelAdmin)` has `ModelAdmin`'s bodies read (fact schema 22); the
+    `path()` calls of `ModelAdmin.get_urls` register Django's admin, not this module's routes
+    (F4 §5.2, `drop_borrowed_endpoints.sql`). The module's own route stays."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HEAD + "from django.contrib import admin\n"
+            "class Mine(admin.ModelAdmin):\n    pass\n"
+            "def home(request):\n    return None\n"
+            "urlpatterns = [path('admin/', admin.site.urls), path('', home)]\n"
+        },
+    )
+
+    library = {str(row["symbol"]) for row in workspace.query("header_symbols")}
+    assert any("django/contrib/admin/options/ModelAdmin#get_urls" in one for one in library)
+    assert not [row for row in workspace.query("endpoints") if row["caller"] in library]
+    assert not [
+        row
+        for row in workspace.query("open_questions")
+        if any(one in str(row["candidates"]) for one in library)
+    ]
+    assert ("/", _handler("home")) in [
+        (path, handler) for _, _, path, handler, _ in _rows(workspace)
+    ]
+
+
+def test_a_module_route_with_a_library_handler_stays(tmp_path: Path, libraries):
+    """`path('r/', RedirectView.as_view(url='/x'))` is this module's route although its handler
+    is the library's `RedirectView.get`: the drop keys on where the registration is written,
+    the module's urls."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        "from django.views.generic import RedirectView\n",
+        "path('r/', RedirectView.as_view(url='/x'))",
+    )
+
+    assert [(method, handler) for method, _, _, handler, _ in rows if method == "GET"] == [
+        ("GET", "sextant-python pypi django 5.2.8 django/views/generic/base/RedirectView#get(sig_")
+    ]

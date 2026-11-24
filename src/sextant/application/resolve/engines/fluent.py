@@ -683,15 +683,31 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     # one of them would erase whichever ran first.
     if metadata:
         workspace.derive("endpoint_metadata_insert", rows=metadata)
-    # The ledger's reset is the pipeline's, for the `open_questions` reason above.
+    # The ledger's reset is the pipeline's, for the `open_questions` reason above. A question
+    # about a registration written in a library body the header document holds goes with the
+    # row `drop_borrowed_endpoints.sql` drops (F4 §5.2), by the same key, its `caller`.
+    borrowed = {str(row["symbol"]) for row in workspace.query("header_symbols")}
     record_open_questions(
         workspace,
         [
-            *refusal_rows(refusals),
-            *unread_rows(unread),
-            *unread_prefix_rows(unread_prefixes, rows),
+            *refusal_rows(_own_candidates(refusals, borrowed)),
+            *unread_rows(_own_candidates(unread, borrowed)),
+            *unread_prefix_rows(_own_candidates(unread_prefixes, borrowed), rows),
         ],
     )
+
+
+def _own_candidates[K](
+    questions: Mapping[K, dict[str, Any]], borrowed: set[str]
+) -> dict[K, dict[str, Any]]:
+    """Each question with only the candidates whose `caller` is not in `borrowed` (a library
+    body's); a question left with none is no question of this module's."""
+    kept: dict[K, dict[str, Any]] = {}
+    for key, question in questions.items():
+        own = [one for one in question["candidates"] if str(one["caller"]) not in borrowed]
+        if own:
+            kept[key] = {**question, "candidates": own}
+    return kept
 
 
 @dataclass(frozen=True)
@@ -783,6 +799,7 @@ def _run_entry_points(
         )
     roots: dict[tuple[str | None, str | None], None] = {}
     metadata: list[dict[str, Any]] = []
+    borrowed = {str(row["symbol"]) for row in workspace.query("header_symbols")}
     for end in ends:
         terminal = end.terminal
         if terminal is None or _site_key(end.root) in mounted or _site_key(terminal) in mounted:
@@ -793,6 +810,11 @@ def _run_entry_points(
         # `class MyGroup(click.Group)`'s `command` is). The walk also hands back ends with no
         # declared root (a `__call__` walked back to nothing), which register nothing.
         if _matching_root(dict(end.root), list(registrations)) is None:
+            continue
+        # F4 §5.2 (W24): a registration written in a library body the header document holds
+        # (`Group.command`'s own code) is the library's; a root row has no caller for
+        # `drop_borrowed_endpoints.sql` to key on, so it is left out here.
+        if str(end.root["caller"]) in borrowed:
             continue
         captured = end.captures.get("handler")
         at = captured.get(_CAPTURED_AT) if isinstance(captured, dict) else None
@@ -4318,10 +4340,10 @@ def _class_rows(
     methods were read, the module's and the libraries' class bodies; one the `supertype`
     itself defines is the framework's own answer and never a row. A `bypassed_by` method the
     class's chain defines, down to the `supertype`'s own, replaces the dispatch unless it
-    calls the method it overrides on its parent on some path (`special` in a module body,
-    `calls_super` in a library one; the servlet precedent): the first that does not is one
-    row serving any method, that method the handler. One whose body was not read leaves the
-    rows `partial`. An `annotations` call wrapping the registration narrows the rows
+    calls the method it overrides on its parent on some path (a `special` call of its name in
+    its body, a module's or a library's alike; the servlet precedent): the first that does not
+    is one row serving any method, that method the handler. One whose body was not read leaves
+    the rows `partial`. An `annotations` call wrapping the registration narrows the rows
     (`_narrowed_rows`).
     Otherwise one row per `dispatch` method the class defines, that method the handler. Every
     row is `partial` where the order meets a type whose methods were not read (it may define
@@ -4332,7 +4354,7 @@ def _class_rows(
     assert context.workspace is not None and context.class_dispatch is not None
     assert context.values is not None
     dispatch = context.workspace.once(dispatch_of)
-    members, read, fields, delegating = context.workspace.once(_class_members)
+    members, read, fields = context.workspace.once(_class_members)
     table = context.class_dispatch
     order, unread = dispatch.order_through_headers(owner)
     if unread is None:
@@ -4364,13 +4386,13 @@ def _class_rows(
             symbol = members.get((type_, name))
             if symbol is None:
                 continue
-            if type_ in dispatch.scanned:
+            # A library class a module class extends has its bodies read too (ruling
+            # 2026-11-23, option B): its method is then a declared one, read alike.
+            if type_ in dispatch.scanned or bare_descriptor(symbol) in dispatch.declared:
                 delegates = any(
                     site["invoke_kind"] == "special" and site["name"] == name
                     for site in context.facts.sites_by_caller.get(symbol, ())
                 )
-            elif type_ in read:
-                delegates = symbol in delegating
             else:
                 inexact = True
                 continue
@@ -4412,12 +4434,11 @@ def _narrowed_rows(
 
 def _class_members(
     workspace: "Workspace",
-) -> tuple[dict[tuple[str, str], str], frozenset[str], frozenset[str], frozenset[str]]:
+) -> tuple[dict[tuple[str, str], str], frozenset[str], frozenset[str]]:
     """Each method whose body or header was read, by its bare type and name, as its full symbol
     (one of that name on that type alone); the types whose methods were read: the module's
     (`Dispatch.declared`) and the libraries' class bodies a header lists (`type_header_bodies`);
-    every field declared, bare; and the header methods whose body calls `super()` on their own
-    name (`calls_super`). Read once per workspace."""
+    and every field declared, bare. Read once per workspace."""
     dispatch = workspace.once(dispatch_of)
     symbols = workspace.once(_method_symbols)
     found: dict[tuple[str, str], str | None] = {}
@@ -4431,7 +4452,6 @@ def _class_members(
         type_ = owner_of(bare)
         if type_ is not None and bare in symbols:
             add(type_, method_name(bare), symbols[bare])
-    delegating: set[str] = set()
     for header in workspace.query("type_header_bodies"):
         full = str(header["symbol"])
         type_ = bare_descriptor(full)
@@ -4444,14 +4464,11 @@ def _class_members(
             # Python's one method descriptor: a header lists its methods by name alone.
             symbol = prefix + method_descriptor(type_, name, PY_SIGNATURE)
             add(type_, name, symbol)
-            if entry.get("calls_super"):
-                delegating.add(symbol)
     fields = frozenset(bare_descriptor(str(row["symbol"])) for row in workspace.query("fields"))
     return (
         {key: symbol for key, symbol in found.items() if symbol is not None},
         frozenset(read),
         fields,
-        frozenset(delegating),
     )
 
 

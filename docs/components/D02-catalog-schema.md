@@ -2761,9 +2761,9 @@ the types whose methods were read (the module's, and the library class bodies a 
 the route gets one row per member found, its `method` the verb and its handler that member, on
 the type that defines it. A member `supertype` itself defines is the framework's own answer and
 never a row. Every `bypassed_by` method on the class's chain, down to `supertype`'s own, is
-asked whether its body calls the method it overrides on its parent on some path (`special` in
-a module body, the header's `calls_super` in a library one, D00 §5 `type_header`; the servlet
-rule): the first that does not replaces the dispatch, one row serving any method
+asked whether its body calls the method it overrides on its parent on some path (a `special`
+call of its name in its body, a module's or a library's alike: a library class a module class
+extends has its bodies read, D00 §5 `type_header`; the servlet rule): the first that does not replaces the dispatch, one row serving any method
 (`verbless_serves`), that method the handler; one whose body was not read leaves the rows
 `partial`. An `annotations` call wrapping the registration narrows the rows, an any-method row
 becoming one row per method it allows. A `bypassed_by` name the class writes as a value, or a

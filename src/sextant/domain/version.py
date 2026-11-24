@@ -178,6 +178,11 @@ SEXTANT_VERSION = version("sextant")
 #             parameter, with no owner and no arguments; so is one whose written class does not
 #             declare the attribute nor type it. The value read stays `unresolved`. A
 #             fact set of the older vintage holds no such call; it is refused and re-extracted.
+#     22      a Python library class a module class's lookup order holds has its functions'
+#             bodies read into the header document as a module method's are (the method
+#             `symbol`, its call sites, returns and field writes; ruling 2026-11-23, option B),
+#             and `type_header.methods` loses `calls_super`, which that read replaces. A fact
+#             set of the older vintage holds no such body; it is refused and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -322,6 +327,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 21
+FACT_SCHEMA_VERSION = 22
 GRAPH_SCHEMA_VERSION = 18
 BOUNDARY_VOCABULARY_VERSION = 5

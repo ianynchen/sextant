@@ -773,7 +773,11 @@ def class_header(
 
 
 def header_body_tree(
-    tree: ast.Module, paths: list[str], index: ModuleIndex, here: str
+    tree: ast.Module,
+    paths: list[str],
+    index: ModuleIndex,
+    here: str,
+    whole: frozenset[str] = frozenset(),
 ) -> tuple[ast.Module, frozenset[str]]:
     """The library module `tree` as a type header reads its classes at `paths` (task 9c
     review C2): with `file_facts`, the reader of a module's own classes, over a copy that
@@ -782,12 +786,18 @@ def header_body_tree(
     classes' bodies, and of the module's other statements only the assignments to the names
     those classes use, followed through the names those assignments use in turn. Also those
     module-level names. A version test's arm the read does not run is left out, as
-    `file_facts` leaves it. Nothing of `tree` itself is changed."""
+    `file_facts` leaves it. The top-level classes named in `whole` (a module class's lookup
+    order holds them) keep their functions' bodies, and the names those bodies use count as
+    used. Nothing of `tree` itself is changed."""
     tops = {path.partition(".")[0] for path in paths}
     used: set[str] = set()
     for node in _scope_statements(tree.body, index, here):
         if isinstance(node, ast.ClassDef) and node.name in tops:
-            used |= _names_used(node)
+            used |= (
+                {name.id for name in ast.walk(node) if isinstance(name, ast.Name)}
+                if node.name in whole
+                else _names_used(node)
+            )
     assignments = [
         node
         for node in _scope_statements(tree.body, index, here)
@@ -801,7 +811,7 @@ def header_body_tree(
         if grown == used:
             break
         used = grown
-    body = _kept_statements(tree.body, used, index, here, tops)
+    body = _kept_statements(tree.body, used, index, here, tops, whole)
     return ast.Module(body=body or [ast.Pass()], type_ignores=[]), frozenset(used)
 
 
@@ -832,14 +842,19 @@ def _assigned(node: ast.Assign | ast.AnnAssign | ast.TypeAlias) -> set[str]:
 
 
 def _kept_statements(
-    body: list[ast.stmt], used: set[str], index: ModuleIndex, here: str, tops: set[str]
+    body: list[ast.stmt],
+    used: set[str],
+    index: ModuleIndex,
+    here: str,
+    tops: set[str],
+    whole: frozenset[str],
 ) -> list[ast.stmt]:
     kept: list[ast.stmt] = []
     for node in body:
         if isinstance(node, ast.Import | ast.ImportFrom):
             kept.append(node)
         elif isinstance(node, ast.ClassDef) and node.name in tops:
-            kept.append(_without_function_bodies(node))
+            kept.append(node if node.name in whole else _without_function_bodies(node))
         elif isinstance(node, ast.ClassDef):
             # Another class binds its name and nothing a header class's body reads.
             kept.append(
@@ -868,10 +883,10 @@ def _kept_statements(
         elif isinstance(node, ast.If):
             live = live_arm(node, index, here)
             if live is not None:
-                kept.extend(_kept_statements(live, used, index, here, tops))
+                kept.extend(_kept_statements(live, used, index, here, tops, whole))
                 continue
-            inner = _kept_statements(node.body, used, index, here, tops)
-            other = _kept_statements(node.orelse, used, index, here, tops)
+            inner = _kept_statements(node.body, used, index, here, tops, whole)
+            other = _kept_statements(node.orelse, used, index, here, tops, whole)
             if inner or other:
                 kept.append(
                     ast.copy_location(
@@ -879,13 +894,13 @@ def _kept_statements(
                     )
                 )
         elif isinstance(node, ast.Try | ast.TryStar):
-            inner = _kept_statements(node.body, used, index, here, tops)
+            inner = _kept_statements(node.body, used, index, here, tops, whole)
             handlers = [
                 ast.copy_location(
                     ast.ExceptHandler(
                         type=handler.type,
                         name=handler.name,
-                        body=_kept_statements(handler.body, used, index, here, tops)
+                        body=_kept_statements(handler.body, used, index, here, tops, whole)
                         or [ast.Pass()],
                     ),
                     handler,
@@ -898,8 +913,10 @@ def _kept_statements(
                         type(node)(
                             body=inner or [ast.Pass()],
                             handlers=handlers,
-                            orelse=_kept_statements(node.orelse, used, index, here, tops),
-                            finalbody=_kept_statements(node.finalbody, used, index, here, tops),
+                            orelse=_kept_statements(node.orelse, used, index, here, tops, whole),
+                            finalbody=_kept_statements(
+                                node.finalbody, used, index, here, tops, whole
+                            ),
                         ),
                         node,
                     )

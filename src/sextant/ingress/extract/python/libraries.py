@@ -1094,6 +1094,7 @@ class Libraries:
         own: set[str],
         document_id: str,
         called: Iterable[str] = (),
+        extended: Iterable[str] = (),
     ) -> tuple[list[Fact], int, list[str]]:
         """A `type_header` (D00 §5) for every library type the module refers to, then
         transitively up each one's written bases, as the JVM scanner reads a classpath:
@@ -1106,7 +1107,12 @@ class Libraries:
 
         `called` are the classes a static call may name (`called_types`): each gets a header
         where a library declares that class, and is no unlocated type where none does, since
-        the call may name a function."""
+        the call may name a function.
+
+        `extended` are the bases the module's own classes write: each library class in a
+        module class's lookup order (one of them, or up their bases) has its functions' bodies
+        read, as a module method's are: the method `symbol`, its call sites, returns and field
+        writes, in the header document (ruling 2026-11-23, option B)."""
         declared_types: list[tuple[_Declared, _Provider]] = []
         unlocated = 0
         not_read: list[str] = []
@@ -1143,13 +1149,15 @@ class Libraries:
                     if bare is not None and bare not in seen:
                         seen.add(bare)
                         queue.append(bare)
+            in_order = self._in_order(extended, declared_types)
             # A class a read body calls gets a header, as one a module's call names does.
             wanted: dict[str, list[str]] = {}
             for declared, _provider in declared_types:
                 if declared.body is not None and declared.body[0] not in bodies:
                     wanted.setdefault(declared.body[0], []).append(declared.body[1])
             for module, paths in wanted.items():
-                read = self._class_bodies(module, paths, document_id)
+                whole = [path for path in paths if type_symbol(Target(module, path)) in in_order]
+                read = self._class_bodies(module, paths, document_id, whole)
                 bodies[module] = read
                 for symbol in read.called:
                     if symbol not in seen and self._names_a_class(symbol):
@@ -1244,21 +1252,53 @@ class Libraries:
             (source.module, target.member),
         )
 
-    def _class_bodies(self, module: str, paths: list[str], document_id: str) -> "_Bodies":
+    @staticmethod
+    def _in_order(
+        extended: Iterable[str], declared_types: list[tuple[_Declared, _Provider]]
+    ) -> set[str]:
+        """The library classes, bare, a module class's lookup order holds: each base the
+        module's classes write that a header is written for, then up each one's bases."""
+        parents = {
+            bare_descriptor(declared.symbol): [
+                bare_descriptor(parent)
+                for parent in [declared.superclass, *declared.interfaces]
+                if parent is not None
+            ]
+            for declared, _provider in declared_types
+            if declared.construct_kind != ConstructKind.MODULE
+        }
+        found: set[str] = set()
+        pending = [bare_descriptor(base) for base in extended]
+        while pending:
+            type_ = pending.pop()
+            if type_ in parents and type_ not in found:
+                found.add(type_)
+                pending.extend(parents[type_])
+        return found
+
+    def _class_bodies(
+        self, module: str, paths: list[str], document_id: str, whole: Sequence[str] = ()
+    ) -> "_Bodies":
         """The bodies of `module`'s classes at `paths`, read by the scanner's own reader
         (`file_facts`) over the module with every function body left out and only the
         module-level names those classes use (`structure.header_body_tree`), as the type
         header's own facts (fact schema 12, task 9c review C2): each class's names, their
         writes and the calls its body makes, the module-level names it uses with theirs; each
-        class's functions with their return types, and its class-statement keywords. No
-        method, no class symbol: a header-read type stays a header, its methods unread."""
+        class's functions with their return types, and its class-statement keywords. No class
+        symbol. The classes at `whole` keep their functions' bodies, read as a module class's:
+        every method `symbol` (nested functions and lambdas among them) and the call sites,
+        returns and field writes of those bodies. The others' methods stay unread."""
         table = self._table(module)
         assert table is not None
         source = table.source
         here = source.module
         owners = {type_symbol(Target(here, path)) for path in paths}
+        # shortcut: a nested class (`Outer.Inner`) keeps its bodies left out; read it whole
+        # once a lookup order is seen to need one.
+        full = frozenset(path for path in whole if "." not in path)
+        read_owners = {type_symbol(Target(here, path)) for path in full}
         module_type = type_symbol(Target(here))
-        tree, names = header_body_tree(table.tree, paths, self._index, here)
+        tree, names = header_body_tree(table.tree, paths, self._index, here, full)
         context = FileContext(
             here, source.is_package, self._index, _prefix(source.provider), document_id
         )
@@ -1271,16 +1311,6 @@ class Libraries:
             self._inside = inside
         bodies = {method_descriptor(owner, CLINIT, PY_SIGNATURE) for owner in owners}
         module_body = method_descriptor(module_type, CLINIT, PY_SIGNATURE)
-        # The functions whose written body calls `super().<own name>(...)`, by class and name.
-        delegating = {
-            (type_symbol(Target(here, path)), function.name)
-            for path in paths
-            for node in [self._class_node(table, Target(here, path))]
-            if node is not None
-            for function in node.body
-            if isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef)
-            and _calls_super(function)
-        }
         kept: list[Fact] = []
         methods: dict[str, list[HeaderMethod]] = {}
         keywords: dict[str, list[CallArgument] | None] = {}
@@ -1302,10 +1332,15 @@ class Libraries:
                     ConstructKind.CONSTRUCTOR,
                 ):
                     name = bare[len(holder) :].split("(")[0]
+                    if holder in read_owners:
+                        kept.append(fact)
+                        # A nested function or a lambda (`dispatch$inner`, `lambda$dispatch$0`)
+                        # is no function of the class.
+                        if "$" in name and CLINIT not in name:
+                            continue
                     methods.setdefault(holder, []).append(
                         HeaderMethod(
                             name=name,
-                            calls_super=(holder, name) in delegating,
                             returns=None if fact.signature is None else fact.signature.returns,
                             parameters=[]
                             if fact.signature is None
@@ -1320,20 +1355,30 @@ class Libraries:
                     kept.append(fact)
             elif isinstance(fact, FieldWriteFact):
                 writer = bare_descriptor(fact.written_by or "")
-                if writer in bodies or (
-                    writer == module_body
-                    and bare_descriptor(fact.field)[len(module_type) :].removesuffix(".") in names
+                if (
+                    writer in bodies
+                    or owner_of(writer) in read_owners
+                    or (
+                        writer == module_body
+                        and bare_descriptor(fact.field)[len(module_type) :].removesuffix(".")
+                        in names
+                    )
                 ):
                     kept.append(fact)
             elif isinstance(fact, CallSiteFact):
                 caller = bare_descriptor(fact.caller)
-                if caller in bodies or caller == module_body:
+                if caller in bodies or caller == module_body or owner_of(caller) in read_owners:
                     kept.append(fact)
                     target = fact.target
                     if fact.invoke_kind == "static" and target.owner and target.name:
                         candidate = member_type(target.owner, target.name)
                         if candidate is not None:
                             called.append(candidate)
+            elif (
+                isinstance(fact, MethodReturnFact)
+                and owner_of(bare_descriptor(fact.method)) in read_owners
+            ):
+                kept.append(fact)
         return _Bodies(kept, methods, keywords, list(dict.fromkeys(called)))
 
     def _module_symbols(self, table: _Table) -> dict[str, SymbolFact]:
@@ -2073,19 +2118,6 @@ _RECEIVER = -1
 _INSTANCE = "instance"
 # What calling a value runs: `type(value).__call__`.
 _CALL = "__call__"
-
-
-def _calls_super(function: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Whether `function`'s body calls `super().<its own name>(...)` on some path."""
-    return any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == function.name
-        and isinstance(node.func.value, ast.Call)
-        and isinstance(node.func.value.func, ast.Name)
-        and node.func.value.func.id == "super"
-        for node in ast.walk(function)
-    )
 
 
 def _makes_type_variable(value: ast.expr) -> bool:

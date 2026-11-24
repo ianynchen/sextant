@@ -385,6 +385,11 @@ def test_a_router_subclass_inheriting_the_constructor_holds_its_prefix(tmp_path:
     )
 
     assert _paths(workspace) == [("GET", "/s/inc/r/x"), ("GET", "/s/y")]
+    # `APIRouter`'s bodies are read (`S` extends it, fact schema 22); the `api_route` and
+    # `add_api_route` calls inside them register nothing of this module's (F4 §5.2).
+    library = {str(row["symbol"]) for row in workspace.query("header_symbols")}
+    assert any("fastapi/routing/APIRouter#api_route" in symbol for symbol in library)
+    assert not [row for row in workspace.query("endpoints") if row["caller"] in library]
 
 
 def test_an_app_subclass_includes_its_routers(tmp_path: Path, libraries):

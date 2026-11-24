@@ -732,17 +732,18 @@ def test_library_types_are_headers_up_their_bases_and_nothing_else(tmp_path: Pat
     assert not any(bare_descriptor(s).startswith("shapes/child/Child#area") for s in headers)
     assert not any(document.origin is not None for _, document, _ in tree)
     # Beside the headers, the header document holds only the bodies a header read (fact schema
-    # 12, task 9c review C2): field and `<clinit>` symbols, their writes and the body's calls.
-    # Never a class or any other method: the type stays a header, its methods unread.
-    assert not [
-        fact
+    # 12, task 9c review C2): field and `<clinit>` symbols, their writes and the body's calls;
+    # and the methods of the library classes in a module class's lookup order (`Mine(Child)`:
+    # `Child.area`, fact schema 22). Never a class, nor a method of any other class.
+    assert [
+        bare_descriptor(fact.symbol).split("(")[0]
         for _, document, facts in tree
         if document.header_only
         for fact in facts
         if isinstance(fact, SymbolFact)
         and fact.construct_kind != "field"
         and "#<clinit>(" not in fact.symbol
-    ]
+    ] == ["shapes/child/Child#area"]
     assert _header_document(tree).type_headers_unlocated >= 1
     assert report.documents == 1
 
@@ -1621,3 +1622,67 @@ def test_the_version_tests_of_an_evicted_module_are_read_again():
 
     assert capped._version_tests("subprocess") == plain._version_tests("subprocess")
     assert capped._version_tests("subprocess") is not None
+
+
+# A library class a module class has in its lookup order has its functions' bodies read as a
+# module method's are (ruling 2026-11-23, option B): what `super().dispatch(...)` in a library
+# `dispatch` is, is read off the body's own call sites.
+_VIEWS = {
+    "views/py.typed": "",
+    "views/__init__.py": "",
+    "views/base.py": (
+        "class Guard:\n"
+        "    def dispatch(self, request, *args):\n"
+        "        if request.user is None:\n"
+        "            return None\n"
+        "        return super().dispatch(request, *args)\n"
+        "class Typed:\n"
+        "    def dispatch(self, request):\n"
+        "        return request.method.lower()\n"
+    ),
+}
+
+
+def _shape(fact: CallSiteFact) -> dict[str, object]:
+    """A call site as the facts hold it, without where it was written and by which file."""
+    held = fact.model_dump(exclude={"document_id", "caller", "line", "column"})
+    return {**held, "target": {**held["target"], "owner": None}}
+
+
+def test_a_library_class_in_a_lookup_order_has_its_method_bodies_read(tmp_path: Path):
+    """`Mine(Guard)`: `Guard.dispatch` is a method `symbol` of the header document, and its
+    call sites are the ones the same class written in the module gets, `super().dispatch(...)`
+    a `special` call of `dispatch`. `Typed` is only a parameter's type, in no class's lookup
+    order: its methods stay unread."""
+    views = _install(tmp_path / "site", "views", "1.0", _VIEWS)
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/main.py": (
+                "from views.base import Guard, Typed\n"
+                "class Mine(Guard): ...\n"
+                "def use(t: Typed): ...\n"
+            ),
+            "app/copy.py": _VIEWS["views/base.py"],
+        },
+        (views,),
+    )
+
+    header_methods = [
+        bare_descriptor(fact.symbol).split("(")[0]
+        for _, document, facts in tree
+        if document.header_only
+        for fact in facts
+        if isinstance(fact, SymbolFact)
+        and fact.construct_kind == "method"
+        and "#<clinit>(" not in fact.symbol
+    ]
+    assert "views/base/Guard#dispatch" in header_methods
+    assert not [one for one in header_methods if one.startswith("views/base/Typed#")]
+    library = _sites(tree, "views/base/Guard#dispatch(")
+    module = _sites(tree, "app/copy/Guard#dispatch(")
+    assert [_shape(fact) for fact in library] == [_shape(fact) for fact in module]
+    assert [
+        (fact.invoke_kind, fact.target.name) for fact in library if fact.invoke_kind == "special"
+    ] == [("special", "dispatch")]
+    assert not _sites(tree, "views/base/Typed#")
