@@ -474,7 +474,7 @@ these is one row for every method, `resolved` only when nothing doubts it (below
 
 | Cause | healthchecks | bookwyrm | weblate | zulip |
 |---|---|---|---|---|
-| Django admin (not a goal of this plan; OI-507): patterns with no row | 75 | 93 | 252 | 0 |
+| Django admin (not built yet; OI-507): patterns with no row | 75 | 93 | 252 | 0 |
 | DRF (plan 7): router patterns with no row; `APIView` rows naming no handler | | | 253; 10 | |
 | A library's URL module (adds nothing, by rule) | | 19 | | 10 |
 | A row for every method, doubted because the view or a wrapper reads `request.method` or hands the request on: `partial`, no question yet (OI-540) | 91 | 2 | 52 | 287 |

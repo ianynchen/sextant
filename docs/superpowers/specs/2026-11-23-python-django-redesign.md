@@ -77,7 +77,7 @@ Routes read that Django's answer lacks are under a deployment setting (healthche
 the path. The existing rules publish those with a condition or at `partial`, never
 `resolved`.
 
-Still missed, by cause: Django admin about 330 (non-goal); DRF 254 (plan 7); zulip loops and
+Still missed, by cause: Django admin about 330 (not built in this plan); DRF 254 (plan 7); zulip loops and
 comprehensions about 280 (ruling 11); library URL modules about 40 (ruling 7); regex routes
 the test script compared as text and small unopened groups about 220.
 
@@ -308,8 +308,18 @@ parameters after its written ones.
 - Goal: zero wrong `resolved` rows against Django's resolver on the four projects, for paths,
   methods and handlers.
 - Goal: no second mechanism (§4 column 4 is the whole list).
-- Non-goals: DRF (plan 7), admin, method tests in a view body (next design), request reads
+- Not in this plan, each still a goal of Django REST inbound: DRF (plan 7), admin routes
+  (ruled 2026-11-24, below), method tests in a view body (next design), request reads
   (the design after).
+
+**Admin routes are routes (user, 2026-11-24).** "Admin" is not a kind of endpoint: a route
+the service answers is a route, written by the project or built by a library. Earlier text
+called admin a non-goal; that was a build order, never a decision of the user. The routes
+come from a registration in the code (`admin.site.register(Order)`), and the Java construct
+with the same role is built: `spring-data-rest.yml`, style `derived_resource`, routes a
+framework rule derives from a declaration, each rule measured on a live application. Size:
+420 served admin patterns with no row (healthchecks 75, bookwyrm 93, weblate 252), from 46
+registration lines in the four projects.
 
 ## 8. Done when
 
@@ -448,7 +458,7 @@ workspace's `open_questions`. Each limit is an open issue (`docs/open-issues.md`
 
 - **What is not read, by cause, per project** (Django (method, route) pairs: healthchecks 304,
   bookwyrm 536, weblate 913, zulip 1,366):
-  - **Django admin** (non-goal): Django patterns with no row: healthchecks 75, bookwyrm 93,
+  - **Django admin** (not built yet): Django patterns with no row: healthchecks 75, bookwyrm 93,
     weblate 252, zulip 0 (OI-507).
   - **DRF** (plan 7): weblate 253 router patterns with no row; 10 `APIView` routes under
     `path()` are rows naming no handler, `partial` (OI-544).
