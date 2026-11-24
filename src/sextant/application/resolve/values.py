@@ -1762,7 +1762,7 @@ def value_index(
         stated_names=frozenset(
             str(entry["method"])
             for entry in returns_arguments
-            if entry["form"] not in (_ENVIRONMENT_READ, CONFIG_MODEL_FORM)
+            if entry["form"] in (_RETURNS, _RETURNS_RECEIVER)
         ),
         stated_elements={
             (str(entry["owner"]), str(entry["method"])): int(entry["element"])
@@ -2168,6 +2168,11 @@ def _record_store(
     entry = json.loads(str(written)) if isinstance(written, str) else written
     if isinstance(entry, dict) and entry.get("source") is not None:
         stored.add((str(writer), int(str(entry["source"]))))
+
+
+def _is_tuple(entry: Mapping[str, Any]) -> bool:
+    """Whether an argument-grammar entry is a written tuple (D00 §5 `array`, its class)."""
+    return entry.get("kind") == "array" and entry.get("symbol") == _TUPLE
 
 
 def _captures(arguments: Any) -> list[Mapping[str, Any]]:
@@ -5645,23 +5650,44 @@ class _Walk:
         element: int | None = None,
     ) -> tuple[_Reached, ...]:
         """The value of `row`'s positional argument `position`, read on this path. With
-        `element`, where that argument is a written tuple, the value of that element of it."""
+        `element`, where that argument is a written tuple, the value of that element of it;
+        so too where it is a name every write of which is a written tuple (`named = (patterns,
+        "app")`, `include(named)`: the shape Django's documentation shows)."""
         slot = argument_slot(row["arguments"] or [], position)
         if slot is None or slot == UNPACKED_SLOT:
             return _only(trail, _unresolved(NOT_READABLE))
         written = (row["arguments"] or [])[slot]
-        if (
-            element is not None
-            and written.get("kind") == "array"
-            and written.get("symbol") == _TUPLE
-        ):
-            members = written.get("elements") or []
-            if element >= len(members) or any(m.get("keyword") for m in members[: element + 1]):
-                return _only(trail, _unresolved(NOT_READABLE))
-            return self._entry(
-                members[element], site[0], (_SLOT, site[0], site[1], slot), trail, frames
-            )
-        return self._resolve((_SLOT, site[0], site[1], slot), trail, frames)
+        origin = (_SLOT, site[0], site[1], slot)
+        if element is not None and _is_tuple(written):
+            return self._tuple_element(written, element, site[0], origin, trail, frames)
+        if element is not None and written.get("kind") == "field" and written.get("symbol"):
+            symbol = str(written["symbol"])
+            writes = self._index.constants.get(symbol, ())
+            if writes and all(by is not None and _is_tuple(entry) for by, entry in writes):
+                reached: list[_Reached] = []
+                for by, entry in writes:
+                    held = (_BINDING, symbol, by)
+                    reached.extend(
+                        self._tuple_element(entry, element, str(by), held, trail, frames)
+                    )
+                return tuple(reached)
+        return self._resolve(origin, trail, frames)
+
+    def _tuple_element(
+        self,
+        written: Mapping[str, Any],
+        element: int,
+        method: str,
+        origin: _Position,
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...]:
+        """Element `element` of the written tuple `written`; `not_readable` where the tuple is
+        too short or an unpacked member lies at or before it."""
+        members = written.get("elements") or []
+        if element >= len(members) or any(m.get("keyword") for m in members[: element + 1]):
+            return _only(trail, _unresolved(NOT_READABLE))
+        return self._entry(members[element], method, origin, trail, frames)
 
     def _constructed_through(self, owner: str, trail: _Trail) -> tuple[_Reached, ...]:
         """The classes a call of the class object `owner` may construct: `owner` and each of

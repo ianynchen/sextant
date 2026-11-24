@@ -391,14 +391,17 @@ def test_the_app_name_of_a_tuple_is_no_module(tmp_path, libraries):
 def test_element_reads_the_first_of_a_written_tuple(tmp_path, libraries):
     """`include` hands back its argument, and of a written `(list, app_name)` tuple its first
     element (`value-models/django.yml`, `returns: { arg: 0, element: 0 }`; probe, "`include`").
-    The app name `"app"` is never the value. A written LIST is the list itself, every member,
+    The app name `"app"` is never the value, of a tuple held in a name too (the shape Django's
+    documentation shows). A written LIST is the list itself, every member,
     never its first; a tuple with no element 0, or with an unpacked member before it, is
     `not_readable`."""
     sunk = _sunk(
         tmp_path,
         libraries,
         "from django.urls import include\n" + _SINK + "patterns = ['p1', 'p2']\n"
+        "named = (patterns, 'app')\n"
         "def read():\n"
+        "    sink(include(named))\n"
         "    sink(include((patterns, 'app')))\n"
         "    sink(include(patterns))\n"
         "    sink(include(['l1', 'l2']))\n"
@@ -407,6 +410,7 @@ def test_element_reads_the_first_of_a_written_tuple(tmp_path, libraries):
     )
 
     assert sunk == [
+        [("p1", None), ("p2", None)],
         [("p1", None), ("p2", None)],
         [("p1", None), ("p2", None)],
         [("l1", None), ("l2", None)],
