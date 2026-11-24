@@ -512,6 +512,9 @@ def test_the_loader_refuses_root_kind_on_another_style(tmp_path: Path):
         "{ owner: a.b, method: f, returns: arg0, result_calls: arg0, by: p.md }",
         "{ owner: a.b, method: f, result_returns: 0, by: p.md }",
         "{ owner: a.b, method: f, passes: arg0, by: p.md }",
+        "{ owner: a.b, method: f, returns: { arg: 0 }, by: p.md }",
+        "{ owner: a.b, method: f, returns: { arg: 0, element: -1 }, by: p.md }",
+        "{ owner: a.b, method: f, result_returns: { arg: 0, element: 0 }, by: p.md }",
     ],
 )
 def test_the_loader_refuses_a_malformed_returns_argument(tmp_path: Path, entry: str):

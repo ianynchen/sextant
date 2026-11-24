@@ -19,6 +19,10 @@ from pathlib import Path
 import test_django_routes
 from test_django_routes import _handler, _resolved, _rows
 
+from sextant.application.resolve.values import resolve_site, value_index
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
+
 libraries = test_django_routes.libraries
 orders_django_env = test_django_routes.orders_django_env
 
@@ -40,6 +44,29 @@ def _served(tmp_path: Path, libraries, modules: dict[str, str]) -> list[tuple[ob
 
 def _row(path: str, resolution: str = "resolved") -> tuple[object, ...]:
     return (None, "any", path, _V, resolution)
+
+
+def _sunk(tmp_path: Path, libraries, urls: str) -> list[list[tuple[object, str | None]]]:
+    """What each `sink(...)` call in `urls.py` is handed, in the order written: the value
+    walk's answers, `(value, reason)`, read with the shipped value models."""
+    workspace = _resolved(tmp_path, libraries, {**_VIEWS, "urls.py": urls})
+    index = value_index(
+        workspace, returns_arguments=YamlCatalogSource(catalogs_dir()).returns_arguments()
+    )
+    sites = sorted(
+        (row for row in workspace.query("call_sites") if row["name"] == "sink"),
+        key=lambda row: row["ordinal"],
+    )
+    return [
+        [
+            (binding.slots[0].value, binding.slots[0].reason)
+            for binding in resolve_site(workspace, dict(row), index)
+        ]
+        for row in sites
+    ]
+
+
+_SINK = "def sink(x):\n    return None\n"
 
 
 # -- Review Focus 1: the join adds nothing ---------------------------------------------------
@@ -356,6 +383,47 @@ def test_the_app_name_of_a_tuple_is_no_module(tmp_path, libraries):
     )
 
     assert rows == [_row("/own/"), _row("/t/e/")]
+
+
+# -- `include` read by the value walk (plan 2026-11-23-python-django-redesign, Task 5) -----
+
+
+def test_element_reads_the_first_of_a_written_tuple(tmp_path, libraries):
+    """`include` hands back its argument, and of a written `(list, app_name)` tuple its first
+    element (`value-models/django.yml`, `returns: { arg: 0, element: 0 }`; probe, "`include`").
+    The app name `"app"` is never the value. A written LIST is the list itself, every member,
+    never its first; a tuple with no element 0, or with an unpacked member before it, is
+    `not_readable`."""
+    sunk = _sunk(
+        tmp_path,
+        libraries,
+        "from django.urls import include\n" + _SINK + "patterns = ['p1', 'p2']\n"
+        "def read():\n"
+        "    sink(include((patterns, 'app')))\n"
+        "    sink(include(patterns))\n"
+        "    sink(include(['l1', 'l2']))\n"
+        "    sink(include(()))\n"
+        "    sink(include((*patterns, 'x')))\n",
+    )
+
+    assert sunk == [
+        [("p1", None), ("p2", None)],
+        [("p1", None), ("p2", None)],
+        [("l1", None), ("l2", None)],
+        [(None, "not_readable")],
+        [(None, "not_readable")],
+    ]
+
+
+def test_include_of_a_module_name_arrives_as_its_name(tmp_path, libraries):
+    """`include("a.urls")`: the value is the dotted name, a literal string."""
+    sunk = _sunk(
+        tmp_path,
+        libraries,
+        "from django.urls import include\n" + _SINK + "def read():\n    sink(include('a.urls'))\n",
+    )
+
+    assert sunk == [[("a.urls", None)]]
 
 
 def test_a_path_whose_view_is_not_an_include_is_a_route_not_a_mount(tmp_path, libraries):

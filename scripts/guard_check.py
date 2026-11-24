@@ -4950,11 +4950,11 @@ GUARDS: dict[str, Guard] = {
             Edit(
                 path=_VALUES,
                 find="        if own is not None and own[0] == _RETURNS:\n"
-                "            return self._stated_slot(site, row, own[1], trail, frames)\n",
+                "            element = self._index.stated_elements.get(",
                 replace="        if own is None or own[0] == _RETURNS:  # guard disabled by "
                 "scripts/guard_check.py\n"
-                "            return self._stated_slot(site, row, 0 if own is None else own[1], "
-                "trail, frames)\n",
+                "            own = own or (_RETURNS, 0)\n"
+                "            element = self._index.stated_elements.get(",
             ),
         ),
     ),

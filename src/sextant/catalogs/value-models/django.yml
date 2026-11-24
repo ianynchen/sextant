@@ -37,3 +37,5 @@ returns_argument:
   - { owner: django.contrib.auth.decorators, method: permission_required, result_returns: arg0, by: scripts/probes/django_rules.md }
   - { owner: django.contrib.auth.decorators, method: user_passes_test, result_returns: arg0, by: scripts/probes/django_rules.md }
   - { owner: django.contrib.admin.views.decorators, method: staff_member_required, result_calls: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.urls.conf, method: include, returns: { arg: 0, element: 0 }, by: scripts/probes/django_rules.md }
+  - { owner: django.views.generic.base.View, method: as_view, returns_receiver: true, by: scripts/probes/django_rules.md }

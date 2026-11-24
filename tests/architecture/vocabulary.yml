@@ -1138,7 +1138,12 @@ baseline:
     - private
     - protected
     - public
-approvals: []
+approvals:
+- word: element
+  where: catalog key
+  approved_by: user
+  approved_on: 2026-11-23
+  reference: docs/superpowers/specs/2026-11-23-python-django-redesign.md §9a (`include`, `as_view`); plan 2026-11-23-python-django-redesign Global Constraints
 exemptions:
   data_keyed_mappings:
     client_base.default_ports: 'D02 client model: `{scheme: port}`'

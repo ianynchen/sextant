@@ -13,6 +13,7 @@ measured in `scripts/probes/django_rules.md`; the harness is `test_django_routes
 from pathlib import Path
 
 import test_django_routes
+from test_django_includes import _SINK, _sunk
 from test_django_routes import _handler, _resolved, _rows
 
 from sextant.application.ports.detector import LibraryRoot
@@ -456,3 +457,51 @@ def test_no_member_found_past_a_base_not_read_names_no_method(tmp_path: Path, li
     )
 
     assert rows == [(None, None, "/x/", None, "unresolved")]
+
+
+# -- `as_view` read by the value walk (plan 2026-11-23-python-django-redesign, Task 5) ------
+
+
+def test_as_view_names_the_class_it_is_called_on(tmp_path: Path, libraries):
+    """`X.as_view()` hands back a view of the class it is called on (`value-models/django.yml`,
+    `returns_receiver` on `View.as_view`): the value is that class, `View` itself as well."""
+    sunk = _sunk(
+        tmp_path,
+        libraries,
+        _HEAD + _SINK + _ITEMS + "def read():\n"
+        "    sink(Items.as_view())\n    sink(View.as_view())\n",
+    )
+
+    assert sunk == [[("app/urls/Items#", None)], [("django/views/generic/base/View#", None)]]
+
+
+def test_a_stated_call_matches_a_subclass_receiver(tmp_path: Path, libraries):
+    """The entry is on `View`; a call on `Sub`, a subclass two levels down through a library
+    base (`ListView`), finds it in `Sub`'s lookup order, as Python's own lookup does."""
+    sunk = _sunk(
+        tmp_path,
+        libraries,
+        _HEAD
+        + "from django.views.generic import ListView\n"
+        + _SINK
+        + "class Sub(ListView):\n    pass\n"
+        "def read():\n    sink(Sub.as_view())\n",
+    )
+
+    assert sunk == [[("app/urls/Sub#", None)]]
+
+
+def test_a_nearer_definition_in_read_code_wins_over_the_entry(tmp_path: Path, libraries):
+    """A class nearer in the lookup order than `View` that defines its own `as_view` is what
+    runs: the entry does not apply, and that body is followed, for the class and for its
+    subclass alike."""
+    sunk = _sunk(
+        tmp_path,
+        libraries,
+        _HEAD + _SINK + "class Own(View):\n"
+        "    @classmethod\n    def as_view(cls, **kwargs):\n        return 'own'\n"
+        "class Deeper(Own):\n    pass\n"
+        "def read():\n    sink(Own.as_view())\n    sink(Deeper.as_view())\n",
+    )
+
+    assert sunk == [[("own", None)], [("own", None)]]

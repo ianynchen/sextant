@@ -284,6 +284,7 @@ _UNSEEN = "unseen"
 # are independent, and combining them is not a fabrication but the code's own product.
 _CALLER_OF = "caller-of"
 _RETURN_OF = "return-of"
+_TUPLE = "builtins/tuple#"
 # Which recipe's return a container-filled parameter receives (spec 2026-11-05 di-recipe-hop
 # §2): one context per parameter, because the container fills each parameter on its own.
 _FILLED_BY = "filled-by"
@@ -950,6 +951,10 @@ class ValueIndex:
     # design 2026-11-06-reading-decorators §3d/§3e), `(owner, name)` -> `(form, position)`:
     # `returns`, `result_returns` or `result_calls` of its argument at that position. Read by
     # `_Walk._stated_value`; empty, nothing is stated and the walk reads as before.
+    # The method names `stated_returns` has an entry for.
+    stated_names: frozenset[str] = frozenset()
+    # `returns: { arg, element }`: the element of a written tuple argument the call returns.
+    stated_elements: Mapping[tuple[str, str], int] = dataclass_field(default_factory=dict)
     stated_returns: Mapping[tuple[str, str], tuple[str, int]] = dataclass_field(
         default_factory=dict
     )
@@ -1753,6 +1758,16 @@ def value_index(
             (str(entry["owner"]), str(entry["method"])): (str(entry["form"]), int(entry["arg"]))
             for entry in returns_arguments
             if entry["form"] not in (_ENVIRONMENT_READ, CONFIG_MODEL_FORM)
+        },
+        stated_names=frozenset(
+            str(entry["method"])
+            for entry in returns_arguments
+            if entry["form"] not in (_ENVIRONMENT_READ, CONFIG_MODEL_FORM)
+        ),
+        stated_elements={
+            (str(entry["owner"]), str(entry["method"])): int(entry["element"])
+            for entry in returns_arguments
+            if entry.get("element") is not None
         },
         environment_reads={
             (str(entry["owner"]), str(entry["method"])): (entry["arg"], entry.get("default"))
@@ -5448,8 +5463,13 @@ class _Walk:
             return None
         method = site[0]
         own = stated.get((str(row.get("owner")), str(row["name"])))
+        if own is None and row["name"] in self._index.stated_names:
+            inherited = self._stated_on_ancestor(site, row, trail, frames)
+            if inherited is not None:
+                return inherited
         if own is not None and own[0] == _RETURNS:
-            return self._stated_slot(site, row, own[1], trail, frames)
+            element = self._index.stated_elements.get((str(row.get("owner")), str(row["name"])))
+            return self._stated_slot(site, row, own[1], trail, frames, element)
         if own is not None and own[0] == _RETURNS_RECEIVER:
             # The call returns the object it is called on (`with httpx.Client() as c`: `c` is
             # the client `__enter__` was called on, plan 3 R13): the value is its receiver.
@@ -5546,6 +5566,75 @@ class _Walk:
             )
         )
 
+    def _stated_on_ancestor(
+        self,
+        site: tuple[str, int],
+        row: Mapping[str, Any],
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...] | None:
+        """A stated call made on a SUBCLASS of the class the value model names
+        (`Sub.as_view()` for an entry on `View`): the language's own lookup. The receiver, read
+        on each path, names the type; its lookup order (`Dispatch.order_through_headers`) is
+        searched for the first type the entry is stated on, and a type nearer in the order
+        whose own body of that method was read wins over the entry (None: the body is followed
+        as any call is). `returns` and `returns_receiver` alone; None where no path's receiver
+        reaches a stated type. Python modules only (`lookup` `c3`): the JVM's order is not
+        searched here."""
+        dispatch = self._index.dispatch
+        if dispatch is None or dispatch.lookup != "c3":
+            return None
+        if row.get("receiver") is None and row.get("owner") is None:
+            return None
+        stated, name = self._index.stated_returns, str(row["name"])
+        defined = self._index.named_functions
+
+        def entry_of(owner: str) -> tuple[str, tuple[str, int]] | None:
+            """The type the entry is stated on, and the entry; None where a body wins."""
+            for type_ in dispatch.order_through_headers(owner)[0]:
+                own = stated.get((type_, name))
+                if own is not None:
+                    return (type_, own) if own[0] in (_RETURNS, _RETURNS_RECEIVER) else None
+                if defined.get((type_, name)):
+                    return None
+            return None
+
+        def stated_slot(found: tuple[str, tuple[str, int]], path: _Trail) -> tuple[_Reached, ...]:
+            element = self._index.stated_elements.get((found[0], name))
+            return self._stated_slot(site, row, found[1][1], path, frames, element)
+
+        if row.get("owner") is not None:
+            found = entry_of(str(row["owner"]))
+            if found is None:
+                return None
+            if found[1][0] == _RETURNS:
+                return stated_slot(found, trail)
+            if row.get("receiver") is None and site in self._index.class_receivers:
+                # Called through the class (`Sub.as_view()`): its receiver is that class.
+                return _only(
+                    trail,
+                    Answer(
+                        kind=LITERAL,
+                        value=str(row["owner"]),
+                        literal_kind=SYMBOL,
+                        class_object=True,
+                    ),
+                )
+            return self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames)
+        reached: list[_Reached] = []
+        matched = False
+        for path, answer in self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames):
+            owner = bound_owner(answer)
+            found = None if owner is None else entry_of(owner)
+            if found is None:
+                return None
+            matched = True
+            if found[1][0] == _RETURNS:
+                reached.extend(stated_slot(found, path))
+            else:
+                reached.append((path, answer))
+        return tuple(reached) if matched else None
+
     def _stated_slot(
         self,
         site: tuple[str, int],
@@ -5553,11 +5642,25 @@ class _Walk:
         position: int,
         trail: _Trail,
         frames: "_Frames",
+        element: int | None = None,
     ) -> tuple[_Reached, ...]:
-        """The value of `row`'s positional argument `position`, read on this path."""
+        """The value of `row`'s positional argument `position`, read on this path. With
+        `element`, where that argument is a written tuple, the value of that element of it."""
         slot = argument_slot(row["arguments"] or [], position)
         if slot is None or slot == UNPACKED_SLOT:
             return _only(trail, _unresolved(NOT_READABLE))
+        written = (row["arguments"] or [])[slot]
+        if (
+            element is not None
+            and written.get("kind") == "array"
+            and written.get("symbol") == _TUPLE
+        ):
+            members = written.get("elements") or []
+            if element >= len(members) or any(m.get("keyword") for m in members[: element + 1]):
+                return _only(trail, _unresolved(NOT_READABLE))
+            return self._entry(
+                members[element], site[0], (_SLOT, site[0], site[1], slot), trail, frames
+            )
         return self._resolve((_SLOT, site[0], site[1], slot), trail, frames)
 
     def _constructed_through(self, owner: str, trail: _Trail) -> tuple[_Reached, ...]:

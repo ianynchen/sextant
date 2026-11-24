@@ -760,7 +760,14 @@ not, that it is genuinely a constructor rather than an ordinary void call.
 2026-11-06-reading-decorators §3d, §3e, approved). A `value-models/` file may declare
 `returns_argument: [{owner, method, <form>: argN, by}]`, exactly one form per entry:
 
-- **`returns: argN`** — the call returns its argument N (`Objects.requireNonNull`; none ships);
+- **`returns: argN`** — the call returns its argument N (`Objects.requireNonNull`).
+  **`returns: { arg: N, element: M }`** (approved 2026-11-23) — the same, except where that
+  argument is a TUPLE written in the call: then the call returns the tuple's element M.
+  `value-models/django.yml` states `include` this way, `{ arg: 0, element: 0 }`: of
+  `include((patterns, "app"))` the value is `patterns`, never the app name. An argument that
+  is no written tuple is the argument itself (`include(patterns)`, and a written LIST, which
+  is one value, never its first member); a written tuple with no element M, or with an
+  unpacked member at or before it, is `not_readable`;
 - **`result_returns: argN`** — calling the call's RESULT returns that call's argument N: a
   decorator factory whose decorator hands the function back. `value-models/click.yml` states
   click's `option`, `argument`, `password_option` and `version_option`, and
@@ -772,7 +779,8 @@ not, that it is genuinely a constructor rather than an ordinary void call.
   2026-10-30, the `fluent` step's word, here in a value model; plan 3 R13).
   `value-models/python-clients.yml` states httpx's `Client.__enter__` and
   `AsyncClient.__aenter__` and requests' `Session.__enter__`, so `with … as c` binds `c` to
-  the client its construction built.
+  the client its construction built. `value-models/django.yml` states `View.as_view`, so
+  `Items.as_view()` is the class `Items`.
 
 `owner` is dotted as every catalog spells a type, a module included (`click.decorators` is the
 facts' `click/decorators#`). `by` is required, as `identified_by`'s is; a call stated in two
@@ -788,6 +796,13 @@ argument N where that is a function — the bare spelling `lru_cache(f)`, never 
 value whose type the facts name and whose `__call__` no body here has (typeshed types
 `@functools.cache`'s name as `_lru_cache_wrapper`), for the functions its receiver is, and the
 edge to each is drawn beside the library edge. A position counts positional arguments only.
+**A `returns` or `returns_receiver` entry also applies to a call on a SUBCLASS of its owner**
+(plan 2026-11-23-python-django-redesign Task 5; `values._Walk._stated_on_ancestor`): the type
+the call is made on — its owner, or its receiver read on each path — is searched in its lookup
+order (`Dispatch.order_through_headers`) for the first type the entry is stated on, and a type
+nearer in that order whose own body of the method was read wins over the entry: that body is
+followed, as any call's is. Python modules only (`lookup` `c3`); a JVM call on a subclass is
+matched on its owner as written.
 
 **`environment_reads` — a call that reads a deployment-set key by name** (plan 3 Task 3, N1,
 approved 2026-11-17). A `value-models/` file may declare `environment_reads: [{owner, method,
