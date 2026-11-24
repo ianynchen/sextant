@@ -593,8 +593,9 @@ class BodyReader:
         self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda, frame: Frame | None
     ) -> list[str]:
         """The names `node`'s body (a function nested in it too) reads that an enclosing
-        function holds as a value, in the order they are first read. A function with no
-        capture and a class are named directly, and the receiver stays the receiver."""
+        function holds as a value, in the order they are first read. A function (the body's
+        own name too, which it calls to run again) and a class are named directly, and the
+        receiver stays the receiver."""
         if frame is None:
             return []
         body = [node.body] if isinstance(node, ast.Lambda) else node.body
@@ -623,7 +624,7 @@ class BodyReader:
         )
         found: list[str] = []
         for _, _, name in loads:
-            if name in own or name in found:
+            if name in own or name in found or name == getattr(node, "name", None):
                 continue
             current: Frame | None = frame
             while current is not None:
@@ -631,9 +632,7 @@ class BodyReader:
                     break
                 if name in current.local_names:
                     value = current.values.get(name, _UNKNOWN)
-                    direct = value.kind == "class" or (
-                        value.kind == "lambda" and not value.captures
-                    )
+                    direct = value.kind in ("class", "lambda")
                     if value is not _SELF and not direct:
                         found.append(name)
                     break
@@ -2545,6 +2544,10 @@ class BodyReader:
                     return CallArgument(kind="parameter", value=frame.captured[name])
                 if nested and value.kind not in ("lambda", "class"):
                     return _UNKNOWN
+                if nested and value.kind == "lambda" and value.source is not None:
+                    # A function of the enclosing body is named by its body alone: where it
+                    # was made, with what it captured, is that body's own value id.
+                    return CallArgument(kind="lambda", symbol=value.symbol, captures=0)
                 if name in current.mutable:
                     # A list can change once it is handed out, as a JVM array that
                     # reaches another call does: the first read gets the literal, a

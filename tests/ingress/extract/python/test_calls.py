@@ -501,6 +501,35 @@ def test_a_function_with_no_capture_a_class_and_the_receiver_are_named_directly(
     assert put.receiver_parameter is None
 
 
+def test_a_sibling_function_with_captures_and_the_bodys_own_name_are_named_directly(
+    tmp_path: Path,
+):
+    """`b` calls its sibling `a`, which captured `n`, and `again` calls itself: each call
+    names the body it runs, as before captures were written, so the call graph keeps the
+    edge. What `a` captured is bound where `a` was made."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.lib import work\n"
+                "def outer(n):\n"
+                "    def a(k):\n"
+                "        return work(k, n)\n"
+                "    def b(k):\n"
+                "        return a(k)\n"
+                "    def again(k):\n"
+                "        return again(k - n)\n"
+                "    return b, again\n"
+            )
+        },
+    )
+
+    called = {(c.target.owner, c.target.name) for c in _calls(tree, f"app/m#outer$b({DIS}).")}
+    assert ("app/m#", "outer$a") in called
+    recursive = _calls(tree, f"app/m#outer$again({DIS}).")
+    assert ("app/m#", "outer$again") in {(c.target.owner, c.target.name) for c in recursive}
+
+
 def test_closed_list_receiver_is_followed_through_its_field(tmp_path: Path):
     tree = _scan(
         tmp_path,
