@@ -6,8 +6,9 @@ The rules are Django's own, measured in `scripts/probes/django_rules.md` ("Paths
 "`include`"): prefix and child route concatenate with nothing between, the served path is
 that string with a leading `/`, `include` takes a dotted string, a module object, a list or a
 `(list, app_name)` tuple, the variable read from a module is `urlpatterns`, and one list
-included at two prefixes is served at both. A list no `include` names is served at `/`
-(design §5d).
+included at two prefixes is served at both. Django serves what the root reaches: the
+`urlpatterns` of the module `ROOT_URLCONF` names, and through each mount (design 2026-11-23
+§4a). A list no root and no readable mount reaches is behind the named hole at `partial`.
 
 Each test writes a small Django program and runs the real scanner and pipeline with the
 shipped catalogs (`test_django_routes._resolved`).
@@ -290,13 +291,14 @@ def test_routes_added_under_debug_are_not_evaluated(tmp_path, libraries):
     ]
 
 
-# -- design §5d: the roots -------------------------------------------------------------------------
+# -- design 2026-11-23 §4a: the roots --------------------------------------------------------------
 
 
-def test_a_list_nothing_includes_is_served_at_the_root(tmp_path, libraries):
-    """Design §5d: `ROOT_URLCONF` is not needed to find the root; a list no `include` names is
-    served at `/`, beside the lists that are included."""
-    rows = _served(
+def test_a_list_no_mount_and_no_root_reaches_is_the_hole(tmp_path, libraries):
+    """Design 2026-11-23 §4a: Django serves what `ROOT_URLCONF`'s module reaches. A list no
+    mount and no root reaches is served where nothing here says: behind `<prefix>` at
+    `partial`, with one `mount_prefix` question; never `resolved`."""
+    workspace = _program(
         tmp_path,
         libraries,
         {
@@ -306,7 +308,58 @@ def test_a_list_nothing_includes_is_served_at_the_root(tmp_path, libraries):
         },
     )
 
-    assert rows == [_row("/api/a/"), _row("/home/"), _row("/o/")]
+    assert _rows(workspace) == [
+        _row("/<prefix>o/", "partial"),
+        _row("/api/a/"),
+        _row("/home/"),
+    ]
+    assert _questions(workspace, "mount_prefix") == ["/<prefix>o/"]
+
+
+def test_the_root_is_the_module_root_urlconf_names(tmp_path, libraries):
+    """The root is the `urlpatterns` of the module the written `ROOT_URLCONF` names, not a
+    module called `urls`; two written roots (two projects in one repository) are both."""
+    one = _served(
+        tmp_path / "one",
+        libraries,
+        {
+            "settings.py": "ROOT_URLCONF = 'app.site'\n",
+            "site.py": "urlpatterns = [path('s/', v)]\n",
+            "urls.py": "urlpatterns = [path('u/', v)]\n",
+        },
+    )
+    two = _served(
+        tmp_path / "two",
+        libraries,
+        {
+            "settings.py": "ROOT_URLCONF = 'app.site'\n",
+            "other_settings.py": "ROOT_URLCONF = 'app.urls'\n",
+            "site.py": "urlpatterns = [path('s/', v)]\n",
+            "urls.py": "urlpatterns = [path('u/', v)]\n",
+        },
+    )
+
+    assert one == [_row("/<prefix>u/", "partial"), _row("/s/")]
+    assert two == [_row("/s/"), _row("/u/")]
+
+
+def test_a_repository_with_no_root_urlconf_has_no_resolved_row(tmp_path, libraries):
+    """A reusable app writes no `ROOT_URLCONF`: where its lists are served is not read, so
+    every row is behind `<prefix>` at `partial`, a mounted list too."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            **_VIEWS,
+            "api_urls.py": _HEAD + "urlpatterns = [path('a/', v)]\n",
+            "urls.py": _HEAD
+            + "urlpatterns = [path('h/', v), path('api/', include('app.api_urls'))]\n",
+        },
+        settings=None,
+    )
+
+    assert _rows(workspace) == [_row("/<prefix>a/", "partial"), _row("/<prefix>h/", "partial")]
+    assert _questions(workspace, "mount_prefix") == ["/<prefix>a/", "/<prefix>h/"]
 
 
 # -- what is not read ------------------------------------------------------------------------------
@@ -335,43 +388,35 @@ def test_an_unread_prefix_row_and_its_question_carry_the_leading_slash(tmp_path,
     assert questions == [("mount_prefix", "/<prefix>e/")]
 
 
-def test_include_of_an_object_the_catalog_does_not_know_gives_no_row_and_one_question(
-    tmp_path, libraries
-):
+def test_include_of_an_object_no_code_here_builds_is_a_route_at_partial(tmp_path, libraries):
     """`include(router.urls)` on an object no catalog reads (Django REST Framework's router,
-    plan 7): its routes are not read, so no row, the mount's own included; and never silent,
-    one `mounted_router` question at the prefix as served, naming the mount, the inner call
-    and what its argument read as."""
-    workspace = _program(
+    plan 7): the router argument reads as no value, so the call is no readable mount and is
+    published as a route with no handler (design 2026-11-23 §9b, a known limit), never
+    `resolved`; `include(unknown())` of a library call no value model states the same."""
+    rows = _served(
         tmp_path,
         libraries,
         {
-            "urls.py": "class Router:\n    urls = []\n"
+            "urls.py": "from app.lib import unknown\n"
+            "class Router:\n    urls = []\n"
             "router = Router()\n"
-            "urlpatterns = [path('home/', v), path('api/', include(router.urls))]\n"
+            "urlpatterns = [path('home/', v), path('api/', include(router.urls)),"
+            " path('w/', include(unknown()))]\n"
         },
     )
 
-    assert _rows(workspace) == [_row("/home/")]
-    questions = [
-        (row["protocol"], row["method"], row["path"], row["question"])
-        for row in workspace.query("open_questions")
+    assert rows == [
+        (None, "any", "/api/", None, "partial"),
+        _row("/home/"),
+        (None, "any", "/w/", None, "partial"),
     ]
-    assert questions == [("http", None, "/api/", "mounted_router")]
-    (row,) = workspace.query("open_questions")
-    (candidate,) = json.loads(str(row["candidates"]))
-    assert candidate["mount"] == candidate["caller"] == candidate["at"]
-    assert candidate["mount"].endswith("app/urls#<clinit>(sig_dd69782a).")
-    assert candidate["at_ordinal"] != candidate["mount_ordinal"]
-    assert candidate["argument"] == 0
-    assert candidate["read"].startswith("no value")
 
 
 def test_the_app_name_of_a_tuple_is_no_module(tmp_path, libraries):
     """`include((patterns, "app"))`: only the tuple's first element is the router (probe,
     "`include`": the tuple is `(list, app_name)`). A package named like the app name, with a
-    `urlpatterns` of its own, is not mounted there: it serves at the root, as a list no
-    `include` names does."""
+    `urlpatterns` of its own, is not mounted there: no root and no mount reaches it, so it is
+    behind the hole."""
     rows = _served(
         tmp_path,
         libraries,
@@ -382,7 +427,7 @@ def test_the_app_name_of_a_tuple_is_no_module(tmp_path, libraries):
         },
     )
 
-    assert rows == [_row("/own/"), _row("/t/e/")]
+    assert rows == [_row("/<prefix>own/", "partial"), _row("/t/e/")]
 
 
 # -- `include` read by the value walk (plan 2026-11-23-python-django-redesign, Task 5) -----
@@ -460,22 +505,24 @@ def test_include_of_a_list_sum_mounts_every_operand(tmp_path, libraries):
     assert rows == [_row("/api/a/"), _row("/api/b/")]
 
 
-def test_include_of_a_module_outside_the_scan_files_the_question(tmp_path, libraries):
-    """Ruling R6 (a): `include("allauth.urls")` names a module the scan does not hold, so its
-    routes are not read: no row, one `mounted_router` question at the prefix."""
+def test_a_mount_of_a_library_module_adds_nothing(tmp_path, libraries):
+    """Ruling 7 (design 2026-11-23 §2): `include("django_scim.urls")` names a module the scan
+    does not hold: the mount adds nothing, no row and no question, as a Vert.x or FastAPI
+    mount of a library's router."""
     workspace = _program(
         tmp_path,
         libraries,
-        {"urls.py": "urlpatterns = [path('accounts/', include('allauth.urls'))]\n"},
+        {"urls.py": "urlpatterns = [path('scim/', include('django_scim.urls'))]\n"},
     )
 
     assert _rows(workspace) == []
-    assert _questions(workspace, "mounted_router") == ["/accounts/"]
+    assert workspace.query("open_questions") == []
 
 
-def test_a_list_extended_by_an_unread_value_publishes_what_is_read_and_asks(tmp_path, libraries):
-    """Ruling R6 (b): `urlpatterns += router.urls` on an unknown object: the routes read are
-    published under the prefix, and the part not read is asked about."""
+def test_a_list_extended_by_an_unread_value_publishes_what_is_read(tmp_path, libraries):
+    """Ruling R6 (b), ruling 7 of 2026-11-23: `urlpatterns += router.urls` on an object no
+    code here builds: the routes read are published under the prefix; the part not read adds
+    nothing."""
     workspace = _program(
         tmp_path,
         libraries,
@@ -487,11 +534,11 @@ def test_a_list_extended_by_an_unread_value_publishes_what_is_read_and_asks(tmp_
     )
 
     assert _rows(workspace) == [_row("/api/x/")]
-    assert _questions(workspace, "mounted_router") == ["/api/"]
+    assert workspace.query("open_questions") == []
 
 
-def test_include_of_an_unread_value_plus_a_list_publishes_the_list_and_asks(tmp_path, libraries):
-    """Ruling R6 (c): `include(router.urls + extra)`."""
+def test_include_of_an_unread_value_plus_a_list_publishes_the_list(tmp_path, libraries):
+    """Ruling R6 (c), ruling 7 of 2026-11-23: `include(router.urls + extra)`."""
     workspace = _program(
         tmp_path,
         libraries,
@@ -503,7 +550,7 @@ def test_include_of_an_unread_value_plus_a_list_publishes_the_list_and_asks(tmp_
     )
 
     assert _rows(workspace) == [_row("/api/e/")]
-    assert _questions(workspace, "mounted_router") == ["/api/"]
+    assert workspace.query("open_questions") == []
 
 
 def test_a_list_display_unpacking_a_list_holds_both(tmp_path, libraries):
@@ -537,9 +584,9 @@ def test_a_list_a_library_call_holds_is_behind_an_unread_prefix(tmp_path, librar
     assert _questions(workspace, "mount_prefix") == ["/<prefix>x/"]
 
 
-def test_include_of_a_function_result_is_behind_an_unread_prefix(tmp_path, libraries):
-    """Ruling R8: `include(extra())` where `extra()` returns a list holding a route: the route
-    is `partial` behind `<prefix>`, and the mount asks `mounted_router`."""
+def test_include_of_a_function_result_reads_what_it_returns(tmp_path, libraries):
+    """`include(extra())` where `extra()` returns a list holding a route: the value walk
+    follows the helper (design 2026-11-23 §4a step 2), so the route is under the prefix."""
     workspace = _program(
         tmp_path,
         libraries,
@@ -549,14 +596,15 @@ def test_include_of_a_function_result_is_behind_an_unread_prefix(tmp_path, libra
         },
     )
 
-    assert _rows(workspace) == [_row("/<prefix>e/", "partial")]
-    assert _questions(workspace, "mount_prefix") == ["/<prefix>e/"]
-    assert _questions(workspace, "mounted_router") == ["/api/"]
+    assert _rows(workspace) == [_row("/api/e/")]
+    assert _questions(workspace, "mount_prefix") == []
 
 
 # -- fix round 2 (ruling R9) ------------------------------------------------------------------------
 
 _INCLUDED = {"urls.py": "urlpatterns = [path('api/', include('app.api_urls'))]\n"}
+# A program whose root is `api_urls` itself.
+_API_ROOT = {"settings.py": "ROOT_URLCONF = 'app.api_urls'\n"}
 
 
 def test_an_aliased_list_is_mounted(tmp_path, libraries):
@@ -568,7 +616,6 @@ def test_an_aliased_list_is_mounted(tmp_path, libraries):
     )
 
     assert _rows(workspace) == [_row("/api/x/")]
-    assert _questions(workspace, "mounted_router") == []
     assert _questions(workspace, "mount_prefix") == []
 
 
@@ -587,20 +634,21 @@ def test_a_re_exported_list_is_mounted(tmp_path, libraries):
     )
 
     assert _rows(workspace) == [_row("/api/x/")]
-    assert _questions(workspace, "mounted_router") == []
 
 
 def test_an_aliased_or_re_exported_list_in_a_root_module_stays_at_the_root(tmp_path, libraries):
-    """R9 part 1, unchanged: the same modules used as roots serve `/x/` at `resolved`."""
+    """R9 part 1, unchanged: the same modules used as roots (`ROOT_URLCONF`) serve `/x/` at
+    `resolved`."""
     alias = _served(
         tmp_path / "alias",
         libraries,
-        {"api_urls.py": "base = [path('x/', v)]\nurlpatterns = base\n"},
+        {**_API_ROOT, "api_urls.py": "base = [path('x/', v)]\nurlpatterns = base\n"},
     )
     reexport = _served(
         tmp_path / "reexport",
         libraries,
         {
+            **_API_ROOT,
             "other.py": "urlpatterns = [path('x/', v)]\n",
             "api_urls.py": "from app.other import urlpatterns\n",
         },
@@ -661,12 +709,11 @@ def test_a_root_list_passed_nowhere_stays_at_the_root(tmp_path, libraries):
 
 
 def test_a_named_list_extended_into_an_included_list_is_mounted(tmp_path, libraries):
-    """R9 with the rule `_held_by` states: a call made on a field's value holds its arguments,
-    so `urlpatterns.extend(other)` puts `other`'s routes in `urlpatterns`: mounted with it, and
-    at the root where it is the root."""
+    """`urlpatterns.extend(other)` is the write `[*urlpatterns, *other]`, so `other`'s routes
+    are in `urlpatterns`: mounted with it, and at the root where it is the root."""
     body = "other = [path('o/', v)]\nurlpatterns = [path('x/', v)]\nurlpatterns.extend(other)\n"
     included = _served(tmp_path / "included", libraries, {**_INCLUDED, "api_urls.py": body})
-    root = _served(tmp_path / "root", libraries, {"api_urls.py": body})
+    root = _served(tmp_path / "root", libraries, {**_API_ROOT, "api_urls.py": body})
 
     assert included == [_row("/api/o/"), _row("/api/x/")]
     assert root == [_row("/o/"), _row("/x/")]
@@ -685,7 +732,6 @@ def test_a_re_export_beside_an_own_variable_is_mounted(tmp_path, libraries):
     )
 
     assert _rows(workspace) == [_row("/api/x/")]
-    assert _questions(workspace, "mounted_router") == []
 
 
 def test_an_imported_list_the_file_extends(tmp_path, libraries):
@@ -704,3 +750,93 @@ def test_an_imported_list_the_file_extends(tmp_path, libraries):
     )
 
     assert rows == [_row("/api/x/"), _row("/api/y/")]
+
+
+# -- the join, top-down (plan 2026-11-23-python-django-redesign, Task 6) -------------------
+
+
+def test_a_helper_that_returns_a_route_keeps_each_callers_path_and_prefix(tmp_path, libraries):
+    """zulip's `rest_path`: a helper builds the registration from its caller's arguments. The
+    value walk follows each caller on its own path, so each route has its own path under its
+    own list's prefix, never the other's."""
+    rows = _served(
+        tmp_path,
+        libraries,
+        {
+            "helpers.py": "def rest_path(route, view):\n    return path(route, view)\n",
+            "urls.py": "from app.helpers import rest_path\n"
+            "a = [rest_path('one/', v)]\nb = [rest_path('two/', v)]\n"
+            "urlpatterns = [path('a/', include(a)), path('b/', include(b))]\n",
+        },
+    )
+
+    assert rows == [_row("/a/one/"), _row("/b/two/")]
+
+
+def test_a_library_call_that_takes_the_list_is_no_mount(tmp_path, libraries):
+    """Design 2026-11-23 §4c M1: `i18n_patterns(*x)` adds a language prefix from a setting
+    and the request; no readable mount reaches `x`, so its routes are behind the hole."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": "from django.conf.urls.i18n import i18n_patterns\n"
+            "x = [path('a/', v)]\n"
+            "urlpatterns = [path('h/', v)]\nurlpatterns += i18n_patterns(*x)\n"
+        },
+    )
+
+    assert _rows(workspace) == [_row("/<prefix>a/", "partial"), _row("/h/")]
+    assert _questions(workspace, "mount_prefix") == ["/<prefix>a/"]
+
+
+def test_a_list_added_under_a_test_is_behind_the_hole(tmp_path, libraries):
+    """`if settings.DEVELOPMENT: urlpatterns += dev_urls.urlpatterns`: the other list's
+    routes are served only where the test holds, and no fact of theirs says so (design
+    2026-11-23 §9b): behind the hole at `partial`, never `resolved`. The list outside the
+    test is read."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            "dev_urls.py": "urlpatterns = [path('dev/', v)]\n",
+            "urls.py": "from django.conf import settings\nfrom app import dev_urls\n"
+            "urlpatterns = [path('a/', v)]\n"
+            "if settings.DEVELOPMENT:\n    urlpatterns += dev_urls.urlpatterns\n",
+        },
+    )
+
+    assert _rows(workspace) == [_row("/<prefix>dev/", "partial"), _row("/a/")]
+
+
+def test_a_call_that_may_be_a_mount_is_one_only_where_its_router_reads_as_one(tmp_path, libraries):
+    """`path(p, x)` is a mount where `x` reaches a registration or names a module; a view is
+    a route: a function, a class view, a view a stated decorator wraps."""
+    rows = _served(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": "from django.views import View\n"
+            "from django.contrib.auth.decorators import login_required\n"
+            "class Items(View):\n    def get(self, request):\n        return None\n"
+            "inner = [path('i/', v)]\n"
+            "urlpatterns = [path('f/', v), path('c/', Items.as_view()),"
+            " path('w/', login_required(v)), path('m/', include(inner))]\n"
+        },
+    )
+
+    assert rows == [
+        _row("/f/"),
+        _row("/m/i/"),
+        _row("/w/"),
+        ("GET", None, "/c/", _handler("get", "app/urls/Items"), "resolved"),
+    ]
+
+
+def test_a_route_list_of_three_hundred_members_is_read(tmp_path, libraries):
+    """bookwyrm's root list has 296 members: each is its own read, none is cut by the path
+    limit (ruling 5)."""
+    members = ", ".join(f"path('r{n}/', v)" for n in range(300))
+    rows = _served(tmp_path, libraries, {"urls.py": f"urlpatterns = [{members}]\n"})
+
+    assert sorted(rows) == sorted(_row(f"/r{n}/") for n in range(300))

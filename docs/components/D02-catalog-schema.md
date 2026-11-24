@@ -2687,29 +2687,30 @@ root (refused otherwise) and `prefix_from: receiver_path`: its prefix is that ch
 The chain's terminal is the router's producer (the producer reader stops there), and like every
 mount chain it derives no row of its own.
 
-**`mount[].router_arg.through: {owner, method, read}`** (plan 2026-11-22-python-django-core-inbound
-Task 3, design §5b capability 2): the router is an argument of a call that is itself the
-argument `router_arg` names. Where the argument written there is the result of a call of
-`owner.method`, the router is what `read` reads off that call (any argument-reference form, or
-`receiver`); where it is anything else the call mounts nothing and is no mount at all, so a
-route root that is also the mount call stays a route. Django's `path("api/", include(x))`:
-`router_arg: { arg: 1, keyword: view, through: { owner: django.urls.conf, method: include,
-read: { arg: 0, keyword: arg } } }`, and `path("x/", view)` is a route. A mount read through a
-call derives no row of its own: its route's handler capture is the router. A router a call
-MADE ON NOTHING (`invoke_kind: static`) registers on is the list value its result is an element
-of (capability 1, no word): an element of a list written to a field, an argument of a call
-made on a field's value (`urls.append(r)`, `urls.extend([r])`), or an element of a list
-written as a call's argument; a list sum unpacks its operands (D00 §5's `*` element). The
-mount's router is every list its argument reaches: a list written there, a field and the
-lists its writes unpack, and through a list or tuple written there every element it unpacks
-(`*`) and the first one it does not (`(list, app_name)`: the rest names no router). A list no
-mount reaches serves at its root (design §5d) only where a static initializer writes it to a
-variable (ruling R8); any other (one a library call holds, one a method returns) cannot be
-placed, so its routes publish behind the named hole `<prefix>` at `partial`, with the
-`mount_prefix` question. Where the argument, an unpacked value or a field it reaches is not
-read (no write in the scan, a value not read as a list), the routes read are published and
-one `mounted_router` question (D01) is filed at the mount's prefix; this is filed only for a
-mount declaring `through` or `router_named` (ruling R7).
+**A mount that is a route root too** (design 2026-11-23 §4a, §9a): a `mount` entry whose
+`method` is also one of `roots` (Django's `path("api/", include(x))` beside `path("x/", view)`)
+is a mount only where its router argument, read as a value, reaches a registration (a member of
+a list) or a string naming a module (`router_named`); a function or a class there is a view, and
+the call is a route. The router argument is read by the value walk like any value: `include(x)`
+hands back `x` (`value-models/django.yml`). Such a mount derives no row of its own: its route's
+handler capture is the router. The key `through` on a `router_arg` is removed (it was plan
+2026-11-22's; a catalog declaring it does not load). A router a call MADE ON NOTHING
+(`invoke_kind: static`) registers on is the list value its result is a member of, read
+TOP-DOWN: from each root (`root_setting` below) and through each mount, the members of the list
+are asked of the value walk, a list held in a name, a copy, a sum and a helper read as any value
+is, each caller on its own path; a member that is a mount is gone through under its own prefix
+behind its parents'. A mount of a module not in the scan adds nothing. A registration no root
+and no readable mount reaches (a library call holding the list, `i18n_patterns(*x)`; a module no
+root reaches; a repository with no written root setting) publishes behind the named hole
+`<prefix>` at `partial`, with the `mount_prefix` question, never at the root: the framework
+serves only what the root reaches.
+
+**`root_setting: <setting name>`** (approved 2026-11-23, design 2026-11-23 §2 item 12; beside
+`router_type`): the setting whose written value names the module the framework starts its
+routes from; the router there is that module's variable `router_named` names. Every write of
+the setting to a string is one root (two projects in one repository are two roots). Django:
+`root_setting: ROOT_URLCONF`. A name, not a key path; absent, the catalog's routes made on
+nothing have no root.
 
 **`mount[].router_named: {variable: name}`** (same task, capability 3): a router argument that
 names a module — a string read as its dotted name (`include("shop.api_urls")`), or the module

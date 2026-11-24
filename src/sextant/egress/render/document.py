@@ -1507,18 +1507,6 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
             f"{candidate['argument']} of call {candidate['at_ordinal']} in {candidate['at']}, "
             f"which reads as {candidate['read']}, so the prefix is not known"
         )
-    if question == "mounted_router":
-        # `mount_prefix`'s mirror (plan 2026-11-22-python-django-core-inbound Task 3): a mount
-        # whose prefix is read and whose router is not, filed by
-        # `resolve/shapes/mounts.py::MountReader.unread_routers` and verified against that
-        # writer's own `candidates` line: the mount call, the call its router is read off, the
-        # argument read there, and what that argument read as.
-        return (
-            f"registered by {candidate['caller']}; the mount at {candidate['mount']} (call "
-            f"{candidate['mount_ordinal']}) reads its router from argument "
-            f"{candidate['argument']} of call {candidate['at_ordinal']} in {candidate['at']}, "
-            f"which reads as {candidate['read']}, so the routes it mounts are not known"
-        )
     # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
     # (`record_open_questions` raises on anything outside it) — this arm list
     # is the matching enforcement at RENDER time. The two are independent

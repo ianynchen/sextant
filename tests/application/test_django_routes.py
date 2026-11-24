@@ -42,10 +42,21 @@ def libraries(orders_django_env: Path) -> tuple[LibraryRoot, ...]:
     return tuple(LibraryRoot(name, version, site) for name, version in _LOCKED.items())
 
 
+# The settings a Django project has: the root its routes are served from (`ROOT_URLCONF`).
+_SETTINGS = {"settings.py": "ROOT_URLCONF = 'app.urls'\n"}
+
+
 def _resolved(
-    tmp_path: Path, libraries: tuple[LibraryRoot, ...], files: dict[str, str]
+    tmp_path: Path,
+    libraries: tuple[LibraryRoot, ...],
+    files: dict[str, str],
+    settings: dict[str, str] | None = _SETTINGS,
 ) -> DuckDbWorkspace:
+    """`files` under `app/`, with `settings` beside them where `files` writes none; None for
+    a program with no settings module (a reusable app)."""
     source = tmp_path / "src"
+    if settings is not None and "settings.py" not in files:
+        files = {**settings, **files}
     for name, text in files.items():
         path = source / "app" / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -194,15 +205,13 @@ def test_route_and_view_by_keyword(tmp_path: Path, libraries):
     assert rows == [(None, "any", "/x/", _handler("v"), "resolved")]
 
 
-def test_a_stray_path_call_rows_at_its_own_path(tmp_path: Path, libraries):
-    """A `path` call in no list that reaches a `urlpatterns` is published at its own path, as
-    Flask's blueprint that nothing registers is (`test_flask_routes`: "A blueprint's route with
-    no prefix and no registration seen rows at its own path"). Django serves no such route;
-    the list-is-a-router rule (design §5b capability 1, Task 3) finds no list holding it, so
-    this reading stands."""
+def test_a_stray_path_call_is_behind_the_hole(tmp_path: Path, libraries):
+    """A `path` call in no list the root or a mount reaches: Django serves it nowhere this
+    code says, so it is behind `<prefix>` at `partial` (design 2026-11-23 §4a), never
+    `resolved` at its own path."""
     rows = _django(tmp_path, libraries, "stray = path('stray/', v)\n")
 
-    assert rows == [(None, "any", "/stray/", _handler("v"), "resolved")]
+    assert rows == [(None, "any", "/<prefix>stray/", _handler("v"), "partial")]
 
 
 # -- `re_path` (plan 6, Task 6; design §5c; rulings R15, R16) ---------------------------------

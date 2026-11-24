@@ -89,6 +89,7 @@ EXPECTED: dict[tuple[str | None, str], str] = {
     ("GET", "/legacy/invoices/<number>"): "shop.views.invoice",  # `(\.pdf)?`: rows doubled
     ("GET", "/legacy/invoices/<number>.pdf"): "shop.views.invoice",
     (None, "/ping/"): "shop.views.ping",
+    (None, "/promo/current/"): "shop.views.promotions",  # include(tracked(...)): a copy, read
     (None, "/debug/echo/"): "shop.views.debug_echo",  # under `if settings.DEBUG:`
 }
 
@@ -97,10 +98,10 @@ EXPECTED: dict[tuple[str | None, str], str] = {
 #   at a decorator no value model states, so the handler is NULL (`handler_pass_through`);
 # - `http_method_names = ["get"]` on a class: the list is a value not read, so the class's rows
 #   are `partial`, and Django serves GET alone;
-# - `include(partner_feeds.urls)`, a router object the catalog does not know, and
-#   `include(tracked(promo_patterns))`, a list passed through a call the catalog does not know:
-#   neither prefix is read, so the routes are served under the `<prefix>` hole, with a
-#   `mounted_router` question at the mount and a `mount_prefix` question at the row.
+# - `include(partner_feeds.urls)`, a property no read follows: the mount's router argument
+#   reads as no value, so the call is published as a route with no handler at `partial`
+#   (design 2026-11-23 §9b, a known limit), and the route the property builds is in no list
+#   the root reaches: under the `<prefix>` hole, with a `mount_prefix` question at the row.
 BOUNDARIES = {
     "exports/orders/": {(None, "/exports/orders/", None)},
     "account/wishlist/": {(None, "/account/wishlist/", None)},
@@ -108,16 +109,15 @@ BOUNDARIES = {
         ("GET", "/orders/<int:order_id>/items/archived/", "shop.orders.views.ArchivedItems.get"),
         ("POST", "/orders/<int:order_id>/items/archived/", "shop.orders.views.ArchivedItems.post"),
     },
-    "partners/feed/": {(None, "/<prefix>feed/", "shop.integrations.PartnerFeeds.feed")},
-    "promo/current/": {(None, "/<prefix>current/", "shop.views.promotions")},
+    "partners/feed/": {
+        (None, "/<prefix>feed/", "shop.integrations.PartnerFeeds.feed"),
+        (None, "/partners/", None),
+    },
 }
 QUESTIONS = {
     ("handler_pass_through", "/exports/orders/"),
     ("handler_pass_through", "/account/wishlist/"),
-    ("mounted_router", "/partners/"),
-    ("mounted_router", "/promo/"),
     ("mount_prefix", "/<prefix>feed/"),
-    ("mount_prefix", "/<prefix>current/"),
 }
 # A route expression not read exactly (`(a|b)`): one `pattern` row, compared as text.
 PATTERN_ROUTE = "^legacy/(shelf|books)/$"

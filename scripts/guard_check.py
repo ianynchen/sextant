@@ -1969,8 +1969,11 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find="            if rule.by_call and rule.matches(site) and through_site(index, site, rule) is not None:\n",
-                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+                find="                rule.by_call\n                and rule.matches(site)\n"
+                "                and (not rule.registers or mounts_a_router(index, site, rule, stops))\n",
+                replace="                False  # guard disabled by scripts/guard_check.py\n"
+                "                and rule.matches(site)\n"
+                "                and (not rule.registers or mounts_a_router(index, site, rule, stops))\n",
             ),
         ),
     ),
@@ -2184,7 +2187,7 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_FLUENT,
-                find='            if "handler" not in end.captures or mount.rule.through is not None:\n'
+                find='            if "handler" not in end.captures or mount.rule.registers:\n'
                 "                continue\n",
                 replace="            if False:  # guard disabled by scripts/guard_check.py\n"
                 "                continue\n",

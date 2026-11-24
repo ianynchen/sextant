@@ -1144,6 +1144,11 @@ approvals:
   approved_by: user
   approved_on: 2026-11-23
   reference: docs/superpowers/specs/2026-11-23-python-django-redesign.md §9a (`include`, `as_view`); plan 2026-11-23-python-django-redesign Global Constraints
+- word: root_setting
+  where: catalog key
+  approved_by: user
+  approved_on: 2026-11-23
+  reference: docs/superpowers/specs/2026-11-23-python-django-redesign.md §2 item 12
 exemptions:
   data_keyed_mappings:
     client_base.default_ports: 'D02 client model: `{scheme: port}`'
@@ -1330,6 +1335,7 @@ exemptions:
     required_when_thrown: an annotation, type or class name of the framework or the user's code
     resource_annotation: an annotation, type or class name of the framework or the user's code
     returns: an annotation, type or class name of the framework or the user's code
+    root_setting: a configuration key, key template or file pattern of the framework
     router_type: an annotation, type or class name of the framework or the user's code
     rows: a library coordinate, catalog id, version or citation
     satisfied_by: an annotation, type or class name of the framework or the user's code

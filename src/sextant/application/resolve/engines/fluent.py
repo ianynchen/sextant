@@ -159,10 +159,10 @@ from sextant.application.resolve.shapes.mounts import (
     Prefix,
     file_unread_prefix,
     mount_rules_of,
+    mounts_a_router,
     programs_of,
     router_producers,
     same_router,
-    through_site,
     unread_prefix_rows,
     weaker,
     with_heirs,
@@ -587,10 +587,15 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                     caller=end.caller,
                     handler=None,
                 )
-            # A mount read through an inner call (`through`) holds its router where a route
-            # holds its handler: the capture names the router, never a handler.
-            if "handler" not in end.captures or mount.rule.through is not None:
+            # A mount that is a route root too holds its router where a route holds its
+            # handler: the capture names the router, never a handler.
+            if "handler" not in end.captures or mount.rule.registers:
                 continue
+        elif mount_rules is not None and _unread_router(end, mount_rules, walk_index):
+            # A call that may be a mount whose router argument reads as no value at all: a
+            # route or a mount, which is not read, so the row is no surer than `partial`
+            # (design 2026-11-23 §9b).
+            end = replace(end, inexact=True)
         # A chain walked back across methods is read on the path it took (ruling 5), and a
         # client sitting at the root's receiver is read off that root.
         held = context
@@ -677,11 +682,6 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             *refusal_rows(refusals),
             *unread_rows(unread),
             *unread_prefix_rows(unread_prefixes, rows),
-            *(
-                mounts.unread_routers(catalog.protocol, verbless_serves, path_prefix)
-                if mounts is not None and catalog.direction == "inbound"
-                else []
-            ),
         ],
     )
 
@@ -2123,9 +2123,16 @@ def _mounts(
         if way not in paths:
             paths.append(way)
         ways[id(end)] = paths.index(way)
+    stops = frozenset(
+        (owner, rule.method) for rule in rules.mounts if rule.registers for owner in rule.owners
+    )
     for site in index.sites.values():
         for rule in rules.mounts:
-            if rule.by_call and rule.matches(site) and through_site(index, site, rule) is not None:
+            if (
+                rule.by_call
+                and rule.matches(site)
+                and (not rule.registers or mounts_a_router(index, site, rule, stops))
+            ):
                 slot = (
                     None
                     if rule.prefix_arg is None
@@ -2175,6 +2182,39 @@ def _mounts(
         None if entry_points is None else entry_points.programs,
     )
     return reader, mounts, ways
+
+
+def _unread_router(end: ChainEnd, rules: MountRules, index: ValueIndex) -> bool:
+    """Whether `end` is a route made by a call that may be a mount (`MountRule.registers`,
+    not one here: `mounts_a_router`) whose router argument the walk reads as no value on any
+    path (`include(router.urls)` on an object no code here builds, `include(lib.urls())`): it
+    reaches no function, as a call of it would, and no path ends at a library call a value
+    model states hands on what it wraps (`login_required(view)`, judged by the handler reader,
+    `_walked_handler`)."""
+    terminal = end.terminal
+    rule = next(
+        (
+            rule
+            for rule in rules.mounts
+            if rule.registers and terminal is not None and rule.matches(terminal)
+        ),
+        None,
+    )
+    if rule is None or terminal is None:
+        return False
+    slot = argument_slot(terminal["arguments"] or [], rule.router_arg)
+    if slot is None or slot == UNPACKED_SLOT:
+        return False
+    for producer, _ in producer_paths(index, terminal, slot, frozenset(), functions=True):
+        if producer.ended_at is not None:
+            return False
+        if producer.reason != EXTERNAL:
+            continue
+        made = producer.made_by
+        site = None if made is None else index.sites.get(made)
+        if made is None or site is None or _handed_back(index, made[0], site) is not None:
+            return False
+    return True
 
 
 def _router_reader(

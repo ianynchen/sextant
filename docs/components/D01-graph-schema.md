@@ -1101,7 +1101,7 @@ rather than an afterthought.* *And then it said NINE while the module enforced t
 this sentence, and `routing_depth` (spec 2026-09-19 §4a) is the twelfth — corrected 2026-09-20
 in the change that closed that spec's register items, the fourth drift of this one count.*
 *`web_stack` and `prefix_not_measured` (ruling 3 of the 2026-10-30 object-identity design)
-are the thirteenth and fourteenth, added here in the same change as the module.* *`refused_registration` (DR-6, Vert.x spec §3a) is the fifteenth, likewise.* *`handler_pass_through` (Vert.x spec §3b) is the sixteenth, likewise.* *`mount_prefix` (Vert.x spec §3c) is the seventeenth, likewise.* *`mounted_router` (plan 2026-11-22-python-django-core-inbound Task 3, its mirror) is the eighteenth, likewise.* *This paragraph said "two-value set" and named the first two
+are the thirteenth and fourteenth, added here in the same change as the module.* *`refused_registration` (DR-6, Vert.x spec §3a) is the fifteenth, likewise.* *`handler_pass_through` (Vert.x spec §3b) is the sixteenth, likewise.* *`mount_prefix` (Vert.x spec §3c) is the seventeenth, likewise.* *This paragraph said "two-value set" and named the first two
 alone through the whole of Phase 2O, while the module enforced five; the last of the three
 2O kinds gained its writer in Task 9, and the sentence is corrected here rather than left
 as a document a reader would have to disbelieve (§5.3).*
@@ -1157,16 +1157,7 @@ since no endpoint column carries one; a `mount_prefix` candidate holds `mount`,
 under a sub-router mount whose path was not read whole (Vert.x spec §3c), so its path holds
 the named hole `<prefix>` at `partial`: the mount call, the argument its prefix is read at and
 the call holding it, what that argument read as, and the method that registered the route —
-on ONE row per `(protocol, method, path)` of the rows it explains; a `mounted_router` candidate
-holds the same seven — `mount_prefix`'s mirror (plan 2026-11-22-python-django-core-inbound
-Task 3): a mount whose prefix is read and whose router argument reaches no router or list the
-module holds (Django's `include(router.urls)`), or reaches part of one not read (a module
-outside the scan, `urlpatterns += router.urls`), so the routes it mounts, or some of them, are
-not read and no row stands for them; filed only for a mount declaring `through` or
-`router_named` (D02): the mount call, the call its router is read off (`at`, `at_ordinal`; the
-mount call itself where it reads none) and the argument read there, what that argument read
-as, and the method that made the mount — on ONE row per prefix the mount is served at,
-`method` NULL and `path` that prefix as a row under it would be published; a `prefix_not_measured` candidate
+on ONE row per `(protocol, method, path)` of the rows it explains; a `prefix_not_measured` candidate
 holds `key`, `framework`, `module_versions` and `declared_for` — a configured prefix key the
 server model declares for the module's stack only under version ranges that do not admit the
 module, so no entry applied it — on ONE row per protocol, `method` and `path` NULL, filed only
