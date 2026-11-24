@@ -244,6 +244,7 @@ class _Writer(BodyReader):
         self.not_read: list[str] = []
         self._methods = {}
         self._bodies = {}
+        self._closures = {}
         self._lists = {}
         self._rebound = rebound
         self._module_types = module_types
@@ -525,9 +526,8 @@ class _Writer(BodyReader):
         values = self._parameter_values(node.args, scope)
         if nested:
             self._method_known(descriptor, scope.owner, name)
-        applied = self._apply(
-            callees, CallArgument(kind="lambda", symbol=descriptor, captures=0), scope
-        )
+        made_function = self._closure(node, descriptor, scope)
+        applied = self._apply(callees, made_function, scope)
         self._bind_nested(node.name, applied, scope)
         if not nested and holds_decorated_value(node, scope.types.lookup, self._context.index):
             # `f = dec(f)` (design 2026-11-06-reading-decorators §3e): the name is a field of

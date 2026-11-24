@@ -323,6 +323,184 @@ def test_nested_function_and_lambda_are_methods_of_their_own(tmp_path: Path):
     assert returned.value == CallArgument(kind="lambda", symbol=inner, captures=0)
 
 
+def _made(tree, caller: str) -> list[CallSiteFact]:
+    """The capture sites of `caller`: where it makes a function that captured values."""
+    return [
+        c
+        for c in _calls(tree, caller)
+        if c.target.owner == "types/FunctionType#" and c.target.name == "<init>"
+    ]
+
+
+def test_a_nested_function_captures_the_outer_names_it_reads_after_its_parameters(
+    tmp_path: Path,
+):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.lib import work\n"
+                "def outer(view, flag):\n"
+                "    def inner(request, *args):\n"
+                "        return flag and view(request, *args)\n"
+                "    return inner\n"
+            )
+        },
+    )
+
+    outer = f"app/m#outer({DIS})."
+    inner = f"app/m#outer$inner({DIS})."
+    (site,) = _made(tree, outer)
+    assert site.invoke_kind == "dynamic"
+    assert site.arguments == [
+        CallArgument(kind="parameter", value=1),
+        CallArgument(kind="parameter", value=0),
+    ]
+    (returned,) = _returns(tree, outer)
+    assert returned.value == CallArgument(
+        kind="lambda", symbol=inner, captures=2, source=site.result
+    )
+    # Written `(request, *args)`: `flag` is parameter 2, `view` parameter 3.
+    (view,) = [c for c in _calls(tree, inner) if c.target.name == "__call__"]
+    assert view.receiver_parameter == 3
+    assert view.arguments == [
+        CallArgument(kind="parameter", value=0),
+        CallArgument(kind="parameter", value=1, keyword="*"),
+    ]
+
+
+def test_a_lambda_captures_the_outer_name_it_reads(tmp_path: Path):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.lib import rank\n"
+                "def outer(items, by):\n"
+                "    items.sort(key=lambda i: rank(i, by))\n"
+            )
+        },
+    )
+
+    outer = f"app/m#outer({DIS})."
+    lam = f"app/m#lambda$outer$0({DIS})."
+    (site,) = _made(tree, outer)
+    assert site.arguments == [CallArgument(kind="parameter", value=1)]
+    sort = _call(tree, "sort")
+    assert sort.arguments == [
+        CallArgument(kind="lambda", symbol=lam, captures=1, source=site.result, keyword="key")
+    ]
+    assert _call(tree, "rank").arguments == [
+        CallArgument(kind="parameter", value=0),
+        CallArgument(kind="parameter", value=1),
+    ]
+
+
+def test_a_middle_function_captures_what_its_inner_function_reads(tmp_path: Path):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "def a(k):\n"
+                "    def b(f):\n"
+                "        def c(request):\n"
+                "            return f(request) if k else None\n"
+                "        return c\n"
+                "    return b\n"
+            )
+        },
+    )
+
+    a, b, c = (f"app/m#{name}({DIS})." for name in ("a", "a$b", "a$b$c"))
+    (from_a,) = _made(tree, a)
+    assert from_a.arguments == [CallArgument(kind="parameter", value=0)]
+    (made_b,) = _returns(tree, a)
+    assert made_b.value.captures == 1
+    # `b` holds `k` as its parameter 1, and hands it on to `c` beside its own `f`.
+    (from_b,) = _made(tree, b)
+    assert from_b.arguments == [
+        CallArgument(kind="parameter", value=0),
+        CallArgument(kind="parameter", value=1),
+    ]
+    (made_c,) = _returns(tree, b)
+    assert made_c.value.captures == 2
+    (f,) = [x for x in _calls(tree, c) if x.target.name == "__call__"]
+    assert f.receiver_parameter == 1
+
+
+def test_a_name_written_again_after_the_def_is_captured_unread(tmp_path: Path):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.lib import make, other\n"
+                "def outer():\n"
+                "    view = make()\n"
+                "    def inner(request):\n"
+                "        return view(request)\n"
+                "    view = other()\n"
+                "    return inner\n"
+            )
+        },
+    )
+
+    (site,) = _made(tree, f"app/m#outer({DIS}).")
+    assert site.arguments == [CallArgument(kind="unresolved")]
+
+
+def test_a_name_an_inner_function_rebinds_nonlocal_is_captured_unread(tmp_path: Path):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "def outer(count):\n"
+                "    def bump():\n"
+                "        nonlocal count\n"
+                "        count = count + 1\n"
+                "    def read():\n"
+                "        return count\n"
+                "    return read\n"
+            )
+        },
+    )
+
+    # `bump` and `read` each capture `count`; neither has one value of it.
+    sites = _made(tree, f"app/m#outer({DIS}).")
+    assert [site.arguments for site in sites] == [[CallArgument(kind="unresolved")]] * 2
+
+
+def test_a_function_with_no_capture_a_class_and_the_receiver_are_named_directly(
+    tmp_path: Path,
+):
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "from app.lib import work\n"
+                "class Box:\n"
+                "    def outer(self):\n"
+                "        def helper(x):\n"
+                "            return work(x)\n"
+                "        class Local:\n"
+                "            pass\n"
+                "        def inner(y):\n"
+                "            self.put(helper(y), Local())\n"
+                "        return inner\n"
+            )
+        },
+    )
+
+    outer = f"app/m/Box#outer({DIS})."
+    inner = f"app/m/Box#outer$inner({DIS})."
+    assert _made(tree, outer) == []
+    (returned,) = _returns(tree, outer)
+    assert returned.value == CallArgument(kind="lambda", symbol=inner, captures=0)
+    called = {(c.target.owner, c.target.name) for c in _calls(tree, inner)}
+    assert ("app/m/Box#", "outer$helper") in called
+    assert ("app/m/Box$outer$Local#", "<init>") in called
+    (put,) = [c for c in _calls(tree, inner) if c.target.name == "put"]
+    assert put.receiver_parameter is None
+
+
 def test_closed_list_receiver_is_followed_through_its_field(tmp_path: Path):
     tree = _scan(
         tmp_path,

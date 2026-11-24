@@ -1435,8 +1435,20 @@ above:
 - A nested function is a method of the same owner, named after the function that holds it
   (`outer$inner`), as kotlinc names a local function. A `lambda` is
   `lambda$<method>$<n>`, as javac names a lambda body (`static` for a module or class body,
-  `new` for `__init__`), numbered per method. Both are `lambda` arguments with `captures` 0.
-  Inside them the method's `self` is the receiver, as `this` is in a JVM lambda body.
+  `new` for `__init__`), numbered per method. Both are `lambda` arguments. Where the body
+  reads names of an enclosing function, it captures them (`captures`, approved 2026-11-23,
+  spec 2026-11-23-python-django-redesign §2 item 14): a `dynamic` call
+  `types/FunctionType#<init>` takes their values, in the order the body first reads them,
+  where the function is made; the `lambda` entry carries `captures: N` and that call's
+  `source`. A Python function is called by its written signature, so its written
+  parameters keep their places and the captured values FOLLOW them: the body reads its
+  captured name `k` as parameter `written + k` (the JVM's captured values lead). A function
+  nested deeper captures through each function between: the middle one captures the name
+  too. A name the enclosing function writes again after the `def` line has no one value
+  where the function is made, and its captured value is `unresolved`, as is a name a nested
+  function rebinds with `nonlocal`. A nested function that captures nothing and a nested
+  class are named directly (`captures` 0, no capture call), and the method's `self` is not
+  captured: inside them it is the receiver, as `this` is in a JVM lambda body.
 - A name defined twice (on two branches) is one method symbol: `ordinal`, value ids and
   `method_return.ordinal` continue from one body to the next, so no two sites of the method
   share an ordinal or a value id.

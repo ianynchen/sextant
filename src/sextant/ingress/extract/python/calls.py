@@ -169,6 +169,7 @@ _TYPE_ARGUMENTS = {
 }
 # The `dynamic` site an f-string or a string `+` is: its template is a `str.format` text.
 _STRING = "builtins/str#"
+_FUNCTION = "types/FunctionType#"
 _FORMAT = "format"
 _HOLE = "{}"
 # A keyword argument unpacked from a mapping (`f(**options)`): its names are not written.
@@ -328,6 +329,13 @@ class Frame:
     rebound: frozenset[str] = frozenset()
     # The receiver is the class the method was called through (`cls`), not an instance.
     class_receiver: bool = False
+    # The names of enclosing functions this body reads, each as the parameter that holds it
+    # (D00 §5 `captures`): they follow the written parameters.
+    captured: dict[str, int] = field(default_factory=dict)
+    # The last line each name is written on in this body.
+    last_write: dict[str, int] = field(default_factory=dict)
+    # How many parameters the body is written with, the receiver not counted.
+    parameter_count: int = 0
 
 
 @dataclass
@@ -377,6 +385,8 @@ class BodyReader:
     # One counter set per method symbol: a name defined twice is one method with two
     # bodies, whose call ordinals, value ids and returns continue across both.
     _bodies: dict[str, Body]
+    # The names each nested function or `lambda` captured, by the id of its node.
+    _closures: dict[int, list[str]]
     # The module-level names of this file the body last wrote as a list, each with the
     # elements it holds at the line being read, where the body has written it in order;
     # None where it has no one value (`_in_order`).
@@ -466,6 +476,7 @@ class BodyReader:
             return
         frame = self._frame(node.args, node.body, scope, types, name, receiver_taken)
         frame.class_receiver = class_receiver
+        self._hold_captured(node, frame)
         inner = Scope(
             owner=scope.owner,
             types=types,
@@ -520,6 +531,10 @@ class BodyReader:
         outer = {n for node in own if isinstance(node, ast.Nonlocal) for n in node.names}
         local_names = (_assigned(own) | set(values)) - global_names - outer
         rebound = _rebound_nonlocal(body) & local_names
+        last_write: dict[str, int] = {}
+        for node in own:
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store | ast.Del):
+                last_write[node.id] = max(last_write.get(node.id, 0), node.lineno)
         for shared in rebound & set(values):
             values[shared] = _UNKNOWN
         if self_name is not None:
@@ -537,6 +552,8 @@ class BodyReader:
             self_name=self_name,
             bindings=self._import_bindings(body, own),
             rebound=frozenset(rebound),
+            last_write=last_write,
+            parameter_count=len(ordered),
         )
 
     def _import_bindings(self, body: list[ast.stmt], own: list[ast.AST]) -> dict[str, Binding]:
@@ -544,6 +561,91 @@ class BodyReader:
             return {}
         context = self._context
         return bind_names(body, context.here, is_package=context.is_package, index=context.index)
+
+    def _closure(
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+        descriptor: str,
+        scope: Scope,
+    ) -> CallArgument:
+        """The function value a `def` or a `lambda` makes (D00 §5 `lambda`). Where its body
+        reads names of an enclosing function, a `dynamic` site `types/FunctionType#<init>`
+        takes their values as they are where the function is made, and the entry counts them
+        (`captures`): the body holds them as the parameters after its written ones. A name
+        written again after this line has no one value here; it is `unresolved`."""
+        names = self._free_names(node, scope.frame)
+        if not names:
+            return CallArgument(kind="lambda", symbol=descriptor, captures=0)
+        held = []
+        for name in names:
+            frame = scope.frame
+            while frame is not None and name not in frame.local_names:
+                frame = frame.enclosing
+            late = frame is not None and frame.last_write.get(name, 0) > node.lineno
+            held.append(_UNKNOWN if late else self._local(name, scope.frame) or _UNKNOWN)
+        self._closures[id(node)] = names
+        produced = self._invoke(Callee(_target(_FUNCTION, INIT), "dynamic"), held, scope)
+        return CallArgument(
+            kind="lambda", symbol=descriptor, captures=len(names), source=produced.source
+        )
+
+    def _free_names(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda, frame: Frame | None
+    ) -> list[str]:
+        """The names `node`'s body (a function nested in it too) reads that an enclosing
+        function holds as a value, in the order they are first read. A function with no
+        capture and a class are named directly, and the receiver stays the receiver."""
+        if frame is None:
+            return []
+        body = [node.body] if isinstance(node, ast.Lambda) else node.body
+        written = node.args
+        own = _assigned(_own_nodes(body)) | {
+            a.arg
+            for a in (
+                *written.posonlyargs,
+                *written.args,
+                *written.kwonlyargs,
+                *(x for x in (written.vararg, written.kwarg) if x is not None),
+            )
+        }
+        declared = {
+            n
+            for each in _own_nodes(body)
+            if isinstance(each, ast.Global | ast.Nonlocal)
+            for n in each.names
+        }
+        own -= declared
+        loads = sorted(
+            (each.lineno, each.col_offset, each.id)
+            for part in body
+            for each in ast.walk(part)
+            if isinstance(each, ast.Name) and isinstance(each.ctx, ast.Load)
+        )
+        found: list[str] = []
+        for _, _, name in loads:
+            if name in own or name in found:
+                continue
+            current: Frame | None = frame
+            while current is not None:
+                if name in current.global_names:
+                    break
+                if name in current.local_names:
+                    value = current.values.get(name, _UNKNOWN)
+                    direct = value.kind == "class" or (
+                        value.kind == "lambda" and not value.captures
+                    )
+                    if value is not _SELF and not direct:
+                        found.append(name)
+                    break
+                current = current.enclosing
+        return found
+
+    def _hold_captured(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda, frame: Frame
+    ) -> None:
+        """The body's captured names, after its written parameters."""
+        names = self._closures.get(id(node), [])
+        frame.captured = {name: frame.parameter_count + at for at, name in enumerate(names)}
 
     def _nested_name(self, node: ast.FunctionDef | ast.AsyncFunctionDef, scope: Scope) -> str:
         """A function defined inside a function is a method of the same owner, named
@@ -1300,10 +1402,11 @@ class BodyReader:
             elif isinstance(argument, ast.Starred):
                 # Unpacked into the positional arguments (D00 §5 `keyword: "*"`): how many it
                 # fills, and so where every later one lands, is not known. A name keeps its
-                # `field` (which value is unpacked, ruling R9); anything else is `unresolved`.
+                # `field` or its `parameter` (which value is unpacked, ruling R9); anything
+                # else is `unresolved`.
                 unpacked = self._value(argument.value, scope)
                 positional.append(
-                    (unpacked if unpacked.kind == "field" else _UNKNOWN).model_copy(
+                    (unpacked if unpacked.kind in ("field", "parameter") else _UNKNOWN).model_copy(
                         update={"keyword": _UNPACKED_POSITIONAL}
                     )
                 )
@@ -2275,7 +2378,9 @@ class BodyReader:
             signature=self._signature(node, scope.types, skip_first=False, values=values),
             modifiers={"abstract": False, "static": True, "varargs": node.args.vararg is not None},
         )
+        made = self._closure(node, descriptor, scope)
         frame = self._frame(node.args, [], scope, scope.types, name, receiver_taken=False)
+        self._hold_captured(node, frame)
         inner = Scope(
             owner=scope.owner,
             types=scope.types,
@@ -2285,7 +2390,7 @@ class BodyReader:
         )
         self._return(self._value(node.body, inner), inner)
         self._positions(inner)
-        return CallArgument(kind="lambda", symbol=descriptor, captures=0)
+        return made
 
     def _comprehension(
         self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp, scope: Scope
@@ -2426,8 +2531,8 @@ class BodyReader:
 
     def _local(self, name: str, frame: Frame | None) -> CallArgument | None:
         """The value of a function's own name, or None where `name` is not one. A name
-        of an enclosing function is `unresolved` (its value ids are another method's),
-        except a function or a class it defines."""
+        of an enclosing function is the parameter that holds it (`_closure`), except a
+        function with no capture or a class it defines, which is named directly."""
         current, nested = frame, False
         while current is not None:
             if name in current.global_names:
@@ -2436,6 +2541,8 @@ class BodyReader:
                 value = current.values.get(name, _UNKNOWN)
                 if value is _SELF:
                     return _UNKNOWN
+                if nested and frame is not None and name in frame.captured:
+                    return CallArgument(kind="parameter", value=frame.captured[name])
                 if nested and value.kind not in ("lambda", "class"):
                     return _UNKNOWN
                 if name in current.mutable:
