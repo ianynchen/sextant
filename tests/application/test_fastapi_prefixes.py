@@ -332,6 +332,31 @@ def test_a_factory_router_pairs_each_callers_verb_with_its_own_prefix(tmp_path: 
     assert _paths(workspace) == [("GET", "/github/callback"), ("POST", "/apple/callback")]
 
 
+def test_an_attribute_read_on_a_parameter_before_the_include_keeps_the_row_resolved(
+    tmp_path: Path, libraries
+):
+    """Plan 2026-11-23-python-django-redesign Task 7a: the scanner writes an attribute read on
+    a parameter whose class is not known as an ownerless call. A helper that reads `r.routes`
+    before it includes `r` does not change the router: the route stays `resolved` at `/api/x`.
+    (The same read on the `prefix` parameter makes the prefix a hole: OI-551.)"""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + "router = APIRouter()\n"
+            + "@router.get('/x')\n"
+            + "def x() -> str:\n    return ''\n"
+            + "def mount(target: FastAPI, r, prefix):\n"
+            + "    print(r.routes)\n"
+            + "    target.include_router(r, prefix=prefix)\n"
+            + "mount(app, router, '/api')\n"
+        },
+    )
+
+    assert [(row[0], row[1], row[3]) for row in _rows(workspace)] == [("GET", "/api/x", "resolved")]
+
+
 def test_a_router_subclass_passing_its_prefix_to_super_holds_it(tmp_path: Path, libraries):
     """mealie's `AdminAPIRouter(APIRouter)`, whose `__init__` hands `prefix` to
     `super().__init__`: the prefix is read where the base constructor is called, on the path
