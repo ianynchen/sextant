@@ -901,8 +901,11 @@ class ValueIndex:
     # (capturing method, capture site ordinal, argument slot) -> (lambda body, its parameter):
     # the capture fold's own mapping (OI-150/OI-266), read forwards (M6).
     # Each body's parameters that it CALLS with the first value it received itself
-    # (`f(request, ...)`): calling the body runs what that parameter holds.
-    hands_on: Mapping[str, tuple[tuple[int, int], ...]] = dataclass_field(default_factory=dict)
+    # (`f(request, ...)`), and whether the body returns what the call gives: calling the body
+    # runs what that parameter holds (`_Walk._runs_captured`).
+    hands_on: Mapping[str, tuple[tuple[int, int, bool], ...]] = dataclass_field(
+        default_factory=dict
+    )
     # The fields a call that may change a list is made ON (`x.remove(v)`, `x.sort()`): a
     # written method, or a `__setitem__` / `__delitem__` call. A read the language makes
     # (`for v in x`, `x[0]`, `v in x`) is none.
@@ -2196,13 +2199,13 @@ def _is_tuple(entry: Mapping[str, Any]) -> bool:
 def _hands_on(
     sites: Mapping[tuple[str, int], Mapping[str, Any]],
     returned: Mapping[str, Sequence[tuple[int, Mapping[str, Any]]]],
-) -> dict[str, tuple[tuple[int, int], ...]]:
-    """`ValueIndex.hands_on`: per method, `(called, handed)` for each of its parameters it
-    calls with another of its parameters as the first argument, written or unpacked first
-    (`f(request, *a)`, `f(*args)`), where what that call gives is a value the method
-    returns: the call answers for it (`return f(request)`). A call whose result it only
-    tests (`if allowed(request):`) is none."""
-    found: dict[str, list[tuple[int, int]]] = {}
+) -> dict[str, tuple[tuple[int, int, bool], ...]]:
+    """`ValueIndex.hands_on`: per method, `(called, handed, returned)` for each of its
+    parameters it calls with another of its parameters as the first argument, written or
+    unpacked first (`f(request, *a)`, `f(*args)`); `returned` where what that call gives is a
+    value the method returns as it is (`return f(request)`), against one whose result it tests
+    (`if allowed(request):`) or wraps (`return JsonResponse(f(request))`)."""
+    found: dict[str, list[tuple[int, int, bool]]] = {}
     results: dict[str, set[Any]] = {}
     for method, entries in returned.items():
         for _, entry in entries:
@@ -2214,15 +2217,16 @@ def _hands_on(
         arguments = site.get("arguments") or []
         if site["name"] != _CALL or held is None or not arguments:
             continue
-        if site.get("result") is None or int(str(site["result"])) not in results.get(method, ()):
-            continue
+        given = site.get("result") is not None and int(str(site["result"])) in results.get(
+            method, ()
+        )
         first = arguments[0]
         if (
             first.get("kind") == "parameter"
             and first.get("value") is not None
             and first.get("keyword") in (None, _UNPACKED_SEQUENCE)
         ):
-            found.setdefault(method, []).append((int(str(held)), int(str(first["value"]))))
+            found.setdefault(method, []).append((int(str(held)), int(str(first["value"])), given))
     return {method: tuple(dict.fromkeys(held)) for method, held in found.items()}
 
 
@@ -4264,9 +4268,13 @@ class _Walk:
         (`ValueIndex.hands_on`), calling it runs what was captured, read where the function
         was made, on this path — what a value model states of a library wrapper with
         `result_calls`, read here from the code. Each path notes the body it ran through.
-        None where the body hands nothing on to a captured value: the function is itself what
-        runs. Where it does and no path reads a function there, which function runs is
-        `not_readable`: never the wrapper, which does not answer."""
+        Where some of those calls give a value the body returns as it is, the body stands for
+        those (`if test(request): return view(request)` is `view`); else where it calls one
+        captured value, for that one (`return JsonResponse(f(request))` runs `f`: what the
+        wrapper does with the result is its own); else where it calls several, which one
+        answers is `not_readable`. None where the body hands nothing on to a captured value:
+        the function is itself what runs. Where it does and no path reads a function there,
+        which function runs is `not_readable`: never the wrapper, which does not answer."""
         count, source = int(argument.get("captures") or 0), argument.get("source")
         body = with_descriptor(method, str(argument["symbol"]))
         # Where the captured values sit, and which parameter is the first the body is GIVEN
@@ -4274,13 +4282,21 @@ class _Walk:
         # before the given ones in a JVM lambda body.
         first = len(self._index.parameters.get(body, ())) if self._index.by_name else 0
         given = 0 if self._index.by_name else count
-        handed = tuple(
-            position
-            for position, passed in self._index.hands_on.get(body, ())
+        calls = [
+            (position, returned)
+            for position, passed, returned in self._index.hands_on.get(body, ())
             if first <= position < first + count and passed == given
-        )
-        if count <= 0 or source is None or not handed:
+        ]
+        returned = tuple(dict.fromkeys(position for position, kept in calls if kept))
+        called = tuple(dict.fromkeys(position for position, _ in calls))
+        if count <= 0 or source is None or not called:
             return None
+        step = _Step((_RUNS_THROUGH, method, int(str(source))), body)
+        # The unread answer notes the body too, so a reader names the wrapper it ran through.
+        unread = _only(_combine(trail, (step,)) or trail, _unresolved(NOT_READABLE))
+        if not returned and len(called) > 1:
+            return unread
+        handed = returned or called
         runs: list[_Reached] = []
         for maker in self._index.producers.get((method, int(str(source))), ()):
             bound = (self._index.sites.get((method, maker)) or {}).get("arguments") or []
@@ -4289,7 +4305,6 @@ class _Walk:
                 at = position - first
                 if not 0 <= at < min(count, len(bound)):
                     continue
-                step = _Step((_RUNS_THROUGH, method, int(str(source))), body)
                 merged = _combine(trail, (step,))
                 if merged is None:
                     continue
@@ -4298,7 +4313,7 @@ class _Walk:
                     for reached in self._entry(bound[receiver + at], method, origin, merged, frames)
                     if called_function(reached[1]) is not None or reached[1].kind == UNRESOLVED
                 )
-        return tuple(runs) or _only(trail, _unresolved(NOT_READABLE))
+        return tuple(runs) or unread
 
     def _merged(
         self,

@@ -785,3 +785,25 @@ def test_a_function_named_after_a_module_wrapper_is_the_function_it_wraps(
 
     assert _rows(workspace) == [("GET", "/x", "app/main#f(sig_", "resolved", "string")]
     assert _questions(workspace, "handler_pass_through") == []
+
+
+def test_a_module_wrapper_that_wraps_the_result_of_the_function_names_the_function(
+    tmp_path: Path, libraries
+):
+    """Final review I1: `inner` calls the one `f` it captured and wraps what it gives
+    (`JSONResponse(await f(*a, **k))`): calling `inner` runs `f`, so the handler is `f`, never
+    the wrapper."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _ROUTER
+            + "import functools\nfrom fastapi.responses import JSONResponse\n"
+            + "def deco(f):\n    @functools.wraps(f)\n    async def inner(*a, **k):\n"
+            + "        return JSONResponse(await f(*a, **k))\n    return inner\n"
+            + "@deco\nasync def f() -> str:\n    return ''\n"
+            + "router.add_api_route('/x', f)\n"
+        },
+    )
+
+    assert _rows(workspace) == [("GET", "/x", "app/main#f(sig_", "resolved", "string")]

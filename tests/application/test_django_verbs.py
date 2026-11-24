@@ -819,3 +819,78 @@ def test_require_get_and_require_post_on_one_path_through_a_decorator_serve_no_m
     )
 
     assert [row[:2] for row in rows] == []
+
+
+# A wrapper that calls the view and does not return its result as it is (final review I1).
+
+_JSON = (
+    "import functools\n"
+    "from django.http import JsonResponse\n"
+    "def ajax(f):\n    @functools.wraps(f)\n    def inner(request, *a, **k):\n"
+    "        return JsonResponse(f(request, *a, **k))\n    return inner\n"
+)
+
+
+def test_a_json_wrapper_over_a_view_that_reads_the_method_names_the_view_partial(
+    tmp_path: Path, libraries
+):
+    rows = _view(
+        tmp_path,
+        libraries,
+        _JSON + "@ajax\ndef v(request):\n    if request.method != 'POST':\n        return None\n"
+        "    return {}\n",
+    )
+
+    assert rows == [(None, "any", "/x/", _handler("v"), "partial")]
+
+
+def test_a_json_wrapper_over_a_view_that_reads_nothing_names_the_view(tmp_path: Path, libraries):
+    rows = _view(tmp_path, libraries, _JSON + "@ajax\n" + _DEF)
+
+    assert rows == [(None, "any", "/x/", _handler("v"), "resolved")]
+
+
+def test_a_wrapper_that_changes_the_views_response_names_the_view(tmp_path: Path, libraries):
+    rows = _view(
+        tmp_path,
+        libraries,
+        "def headers(f):\n    def inner(request):\n        response = f(request)\n"
+        "        response['X'] = 1\n        return response\n    return inner\n"
+        "@headers\n" + _DEF,
+    )
+
+    assert rows == [(None, "any", "/x/", _handler("v"), "resolved")]
+
+
+def test_a_predicate_wrapper_names_the_view_it_returns(tmp_path: Path, libraries):
+    rows = _view(
+        tmp_path,
+        libraries,
+        "def check(request):\n    return True\n"
+        "def guard(test):\n    def deco(view):\n        def inner(request):\n"
+        "            if test(request):\n                return view(request)\n"
+        "            return None\n        return inner\n    return deco\n"
+        "@guard(check)\n" + _DEF,
+    )
+
+    assert rows == [(None, "any", "/x/", _handler("v"), "resolved")]
+
+
+def test_a_wrapper_that_calls_two_captured_views_and_returns_neither_names_no_handler(
+    tmp_path: Path, libraries
+):
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "def other(request):\n    return None\n"
+            + "def both(f, g):\n    def inner(request):\n"
+            + "        return merge(f(request), g(request))\n    return inner\n"
+            + _DEF
+            + "urlpatterns = [path('x/', both(v, other))]\n"
+        },
+    )
+
+    assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
+    assert len(_questions(workspace)) == 1

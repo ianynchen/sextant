@@ -7381,3 +7381,46 @@ def test_a_stated_wrapper_of_a_class_runs_the_class(tmp_path: Path):
     workspace.close()
 
     assert found == [[(None, "app/a/Box#")], [("external", None)]]
+
+
+def test_a_wrapper_that_wraps_what_its_captured_function_gives_stands_for_it(tmp_path: Path):
+    """`return JsonResponse(f(request))` (final review I1): the one captured function called
+    with the request runs; what the wrapper does with its result is the wrapper's own."""
+    source = (
+        "def deco(f):\n"
+        "    def w(request, *a, **k):\n"
+        "        return JsonResponse(f(request, *a, **k))\n"
+        "    return w\n"
+        "register(deco(page))\n"
+    )
+    assert _registered(tmp_path, source) == [["page"]]
+
+
+def test_a_wrapper_that_changes_the_response_its_captured_function_gives_stands_for_it(
+    tmp_path: Path,
+):
+    source = (
+        "def deco(f):\n"
+        "    def w(request):\n"
+        "        response = f(request)\n"
+        "        response['X'] = 1\n"
+        "        return response\n"
+        "    return w\n"
+        "register(deco(page))\n"
+    )
+    assert _registered(tmp_path, source) == [["page"]]
+
+
+def test_a_wrapper_that_calls_two_captured_functions_and_returns_neither_names_no_function(
+    tmp_path: Path,
+):
+    """Which of the two answers is not read: a reason, never the wrapper."""
+    source = (
+        "def other(request):\n    return None\n"
+        "def deco(f, g):\n"
+        "    def w(request):\n"
+        "        return merge(f(request), g(request))\n"
+        "    return w\n"
+        "register(deco(page, other))\n"
+    )
+    assert _registered(tmp_path, source) == [["not_readable"]]

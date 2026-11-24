@@ -1003,12 +1003,14 @@ def _entry_handlers(
     method_symbols: Mapping[str, str],
     within: Path | None = None,
     unread: list[str] | None = None,
+    through: list[str] | None = None,
 ) -> tuple[str, ...]:
     """The function each path of the handler argument at `site`'s `slot` reaches, as a call of
     it would (`producer_paths(..., functions=True)`), joined to its full method symbol; in
     path order, each once. Only the paths agreeing with `within`, where one is given: the
     handler one call hands a factory, read on that call (M-1). The reason of each path that
-    reached no function is added to `unread`, where one is given."""
+    reached no function is added to `unread`, and the module wrappers it ran through
+    (`Path.ran_through`) to `through`, where one is given."""
     found: list[str] = []
     for producer, path in producer_paths(index, site, slot, frozenset(), functions=True):
         if within is not None and path.joined(within) is None:
@@ -1019,6 +1021,8 @@ def _entry_handlers(
             found.append(symbol)
         elif symbol is None and unread is not None:
             unread.append(str(producer.reason or NOT_READABLE))
+            if through is not None:
+                through.extend(path.ran_through())
     return tuple(found)
 
 
@@ -4008,9 +4012,26 @@ def _walked_handler(argument: Any, context: "_DeriveContext") -> "_Judged | None
         return None
     slot = int(at[2])
     unread: list[str] = []
+    through: list[str] = []
     handlers = _entry_handlers(
-        context.values, site, slot, context.method_symbols, context.path, unread
+        context.values, site, slot, context.method_symbols, context.path, unread, through
     )
+    if not handlers and through:
+        # A module wrapper hands the request on, and what it hands it to is not read: never the
+        # wrapper (design 2026-11-23 §9a).
+        return _Judged(
+            None,
+            UNREADABLE,
+            (
+                (
+                    unread[0],
+                    (
+                        f"the handler is what the module wrapper {through[0]} hands the "
+                        "request on to, which is not read"
+                    ),
+                ),
+            ),
+        )
     if handlers and unread:
         # One path names a function and another was not read: the handler is one of those
         # read, or one that was not. No function is named as the one that answers.

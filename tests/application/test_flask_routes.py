@@ -340,3 +340,24 @@ def test_a_function_named_after_an_unstated_decorator_is_partial(
 
     assert _rows(workspace) == [("GET", "/x", None, "partial")]
     assert len(_questions(workspace, "handler_pass_through")) == 1
+
+
+def test_a_module_wrapper_that_wraps_the_result_of_the_view_names_the_view(
+    tmp_path: Path, libraries
+):
+    """Final review I1: `inner` calls the one `f` it captured and wraps what it gives
+    (`jsonify(f(*a, **k))`): calling `inner` runs `f`, so the handler is `f`, never the
+    wrapper."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + "import functools\nfrom flask import jsonify\n"
+            + "def deco(f):\n    @functools.wraps(f)\n    def inner(*a, **k):\n"
+            + "        return jsonify(f(*a, **k))\n    return inner\n"
+            + "@app.route('/x')\n@deco\ndef f():\n    return {}\n"
+        },
+    )
+
+    assert _rows(workspace) == [("GET", "/x", _handler("f"), "resolved")]
