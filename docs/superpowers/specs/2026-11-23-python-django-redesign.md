@@ -388,11 +388,22 @@ wrong; the user rejected it ("spike for proper solution, not shortcuts").
   written signature the captured positions start after the declared parameters.
 - **A wrapper stands for what it wraps.** `ValueIndex.hands_on`, from call facts: the body
   calls a captured parameter, the first argument is the first parameter the body is GIVEN
-  (written or unpacked, `f(request, *a)`, `f(*args)`), and the call's result is a value the
-  body returns. `if test_func(request):` is no hand-over. The walk then reads the captured
-  value on the same path (`_Walk._runs_captured`) and notes the body it ran through. Where
-  the body hands on and no function is read there, the answer is `not_readable`, never the
-  wrapper.
+  (written or unpacked, `f(request, *a)`, `f(*args)`), and the call's result goes into a
+  value the body returns: as it is (`return f(request)`) or inside what it returns
+  (`return JsonResponse(f(request))`). A call whose result is only tested
+  (`if test_func(request):`) or not used (`logger(request)`) is no hand-over; a body with
+  no hand-over is itself what runs. The walk then reads the captured value on the same path
+  (`_Walk._runs_captured`) and notes the body it ran through. Where the body hands on and
+  no function is read there, the answer is `not_readable`, never the wrapper. (Whole-branch
+  review, 2026-11-24: the first form asked for the result returned as it is, and named a
+  JSON wrapper as the handler of every view below it.)
+- **The methods a decorator states are read on the handler's own path** (whole-branch
+  review, 2026-11-24). The walk notes each stated library call it passes on the way to the
+  handler (`Path`'s passed calls), and the `annotations` entries among them give the
+  methods. So `def api_post(f): return csrf_exempt(require_POST(f))` and
+  `get_or_post = require_http_methods([...])` used as a decorator narrow the row, as a
+  decorator written on the `def` does. One reader serves the handler and its methods.
+  Where the paths of one handler value give different method sets, every row is `partial`.
 - **A handler read on one path and not on another names no function** (`_walked_handler`):
   the row is `partial` with the `handler_pass_through` question. `result_calls` keeps an
   unread path beside the functions it reads.

@@ -2202,9 +2202,10 @@ def _hands_on(
 ) -> dict[str, tuple[tuple[int, int, bool], ...]]:
     """`ValueIndex.hands_on`: per method, `(called, handed, returned)` for each of its
     parameters it calls with another of its parameters as the first argument, written or
-    unpacked first (`f(request, *a)`, `f(*args)`); `returned` where what that call gives is a
-    value the method returns as it is (`return f(request)`), against one whose result it tests
-    (`if allowed(request):`) or wraps (`return JsonResponse(f(request))`)."""
+    unpacked first (`f(request, *a)`, `f(*args)`); `returned` where what that call gives goes
+    into a value the method returns, as it is (`return f(request)`) or inside what it returns
+    (`return JsonResponse(f(request))`: the result of a call that took it), against one whose
+    result it only tests (`if allowed(request):`) or does not use (`log(request)`)."""
     found: dict[str, list[tuple[int, int, bool]]] = {}
     results: dict[str, set[Any]] = {}
     for method, entries in returned.items():
@@ -2212,6 +2213,24 @@ def _hands_on(
             for inner in (entry, *_nested_entries(entry)):
                 if inner.get("source") is not None:
                     results.setdefault(method, set()).add(int(str(inner["source"])))
+    # What goes into a returned value: the arguments of each call whose result does.
+    made: dict[tuple[str, int], list[int]] = {}
+    for (method, _), site in sites.items():
+        if method in results and site.get("result") is not None:
+            taken = [
+                int(str(inner["source"]))
+                for argument in site.get("arguments") or []
+                for inner in (argument, *_nested_entries(argument))
+                if inner.get("source") is not None
+            ]
+            made.setdefault((method, int(str(site["result"]))), []).extend(taken)
+    for method, reached in results.items():
+        pending = list(reached)
+        while pending:
+            for taken_in in made.get((method, pending.pop()), ()):
+                if taken_in not in reached:
+                    reached.add(taken_in)
+                    pending.append(taken_in)
     for (method, _), site in sites.items():
         held = site.get("receiver_parameter")
         arguments = site.get("arguments") or []
@@ -4268,12 +4287,11 @@ class _Walk:
         (`ValueIndex.hands_on`), calling it runs what was captured, read where the function
         was made, on this path — what a value model states of a library wrapper with
         `result_calls`, read here from the code. Each path notes the body it ran through.
-        Where some of those calls give a value the body returns as it is, the body stands for
-        those (`if test(request): return view(request)` is `view`); else where it calls one
-        captured value, for that one (`return JsonResponse(f(request))` runs `f`: what the
-        wrapper does with the result is its own); else where it calls several, which one
-        answers is `not_readable`. None where the body hands nothing on to a captured value:
-        the function is itself what runs. Where it does and no path reads a function there,
+        It stands for each captured value whose call gives a value that goes into what the
+        body returns (`return view(request)`, `return JsonResponse(f(request))`); a call
+        whose result it only tests or does not use (`if test(request):`, `log(request)`) is
+        no hand-over. None where no call of a captured value goes into what it returns: the
+        function is itself what runs. Where one does and no path reads a function there,
         which function runs is `not_readable`: never the wrapper, which does not answer."""
         count, source = int(argument.get("captures") or 0), argument.get("source")
         body = with_descriptor(method, str(argument["symbol"]))
@@ -4287,16 +4305,12 @@ class _Walk:
             for position, passed, returned in self._index.hands_on.get(body, ())
             if first <= position < first + count and passed == given
         ]
-        returned = tuple(dict.fromkeys(position for position, kept in calls if kept))
-        called = tuple(dict.fromkeys(position for position, _ in calls))
-        if count <= 0 or source is None or not called:
+        handed = tuple(dict.fromkeys(position for position, kept in calls if kept))
+        if count <= 0 or source is None or not handed:
             return None
         step = _Step((_RUNS_THROUGH, method, int(str(source))), body)
         # The unread answer notes the body too, so a reader names the wrapper it ran through.
         unread = _only(_combine(trail, (step,)) or trail, _unresolved(NOT_READABLE))
-        if not returned and len(called) > 1:
-            return unread
-        handed = returned or called
         runs: list[_Reached] = []
         for maker in self._index.producers.get((method, int(str(source))), ()):
             bound = (self._index.sites.get((method, maker)) or {}).get("arguments") or []

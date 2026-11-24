@@ -7411,10 +7411,10 @@ def test_a_wrapper_that_changes_the_response_its_captured_function_gives_stands_
     assert _registered(tmp_path, source) == [["page"]]
 
 
-def test_a_wrapper_that_calls_two_captured_functions_and_returns_neither_names_no_function(
+def test_a_wrapper_whose_return_takes_two_captured_functions_results_stands_for_both(
     tmp_path: Path,
 ):
-    """Which of the two answers is not read: a reason, never the wrapper."""
+    """What both give goes into what the wrapper returns: it stands for each, never for itself."""
     source = (
         "def other(request):\n    return None\n"
         "def deco(f, g):\n"
@@ -7423,4 +7423,27 @@ def test_a_wrapper_that_calls_two_captured_functions_and_returns_neither_names_n
         "    return w\n"
         "register(deco(page, other))\n"
     )
-    assert _registered(tmp_path, source) == [["not_readable"]]
+    assert _registered(tmp_path, source) == [["page", "other"]]
+
+
+def test_a_captured_function_whose_result_is_not_used_is_no_hand_over(tmp_path: Path):
+    """`logger(request)` and `if hook(request):` give nothing that the wrapper returns, and
+    the wrapped function is not called with the request: the wrapper is itself what runs,
+    never the logger or the hook (review of 2026-11-24)."""
+    source = (
+        "def log_it(request):\n    return None\n"
+        "def audited(f, logger=log_it):\n"
+        "    def w(request):\n"
+        "        logger(request)\n"
+        "        return make()\n"
+        "    return w\n"
+        "def hooked(f, h=log_it):\n"
+        "    def x(request):\n"
+        "        if h(request):\n"
+        "            return None\n"
+        "        return wrap(f(request.user))\n"
+        "    return x\n"
+        "register(audited(page))\n"
+        "register(hooked(page))\n"
+    )
+    assert _registered(tmp_path, source) == [["audited$w"], ["hooked$x"]]

@@ -876,7 +876,7 @@ def test_a_predicate_wrapper_names_the_view_it_returns(tmp_path: Path, libraries
     assert rows == [(None, "any", "/x/", _handler("v"), "resolved")]
 
 
-def test_a_wrapper_that_calls_two_captured_views_and_returns_neither_names_no_handler(
+def test_a_wrapper_whose_return_takes_two_captured_views_results_names_both(
     tmp_path: Path, libraries
 ):
     workspace = _resolved(
@@ -892,5 +892,22 @@ def test_a_wrapper_that_calls_two_captured_views_and_returns_neither_names_no_ha
         },
     )
 
-    assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
-    assert len(_questions(workspace)) == 1
+    assert _rows(workspace) == [
+        (None, "any", "/x/", "app/urls#other(sig_", "narrowed"),
+        (None, "any", "/x/", "app/urls#v(sig_", "narrowed"),
+    ]
+
+
+def test_a_hook_the_wrapper_calls_and_does_not_return_is_not_the_handler(tmp_path: Path, libraries):
+    """`logger(request)` gives nothing the wrapper returns and the view is never called: the
+    wrapper answers, and the row names it, never the logger (review of 2026-11-24)."""
+    rows = _view(
+        tmp_path,
+        libraries,
+        "def log_it(request):\n    return None\n"
+        "def audited(f, logger=log_it):\n    def inner(request):\n"
+        "        logger(request)\n        return None\n    return inner\n"
+        "@audited\n" + _DEF,
+    )
+
+    assert [(row[3], row[4]) for row in rows] == [("app/urls#audited$inner(sig_", "resolved")]
