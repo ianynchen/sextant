@@ -94,6 +94,9 @@ class Unresolved(NamedTuple):
 # D02 §2i's source entry naming a file by an argument of the code's call (`stages/
 # named_config_files.py` reads the name), and the one document language such a read produces.
 FROM_ARGUMENT = "from_argument"
+# D02 §2i's source entry naming the modules that hold a setting (ruling R3 of 2026-11-25):
+# no file is matched for it; `resolve/settings_modules.py` reads the modules.
+FROM_MODULE = "from_module_holding"
 NAMED_FILE_LANGUAGE = "dotenv"
 
 _DEFAULT_PLACEHOLDERS = {"open": "${", "close": "}", "default_separator": ":"}
@@ -240,6 +243,15 @@ def _validate_model(catalog: Catalog) -> None:
             f"reserved for a future model (D02 §2i) — not yet implemented, and never "
             f"silently ignored"
         )
+    for source in catalog.config_model.get("sources", []):
+        if FROM_MODULE in source and not (
+            isinstance(source[FROM_MODULE], str) and source[FROM_MODULE].isidentifier()
+        ):
+            raise CatalogError(
+                f"loading catalog {catalog.source}: config_model.sources `{FROM_MODULE}` is "
+                f"the word of `matches` a catalog names a setting with, got "
+                f"{source[FROM_MODULE]!r}"
+            )
 
 
 def _resolve_model(
@@ -278,6 +290,9 @@ def _resolve_model(
     for source_index, source in enumerate(sources):
         for document_id, document in documents.items():
             relative_path = str(document["relative_path"])
+            if FROM_MODULE in source:
+                # The modules that hold a setting: `settings_modules` writes their rows.
+                continue
             if FROM_ARGUMENT in source:
                 # A file the code names: the only documents of this language are ones a read by
                 # name produced (the walk never claims one), and a file has no profile.

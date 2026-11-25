@@ -6576,6 +6576,28 @@ variable is read by nobody; the field that reads it is `external` and `resolved_
 expression in `unresolved_detail`. A file listed in `sources` by `from_argument` is the only
 source of a **declaration-only catalog** (§1): `pydantic-settings.yml` has no `style`.
 
+**`sources` may name the MODULES that hold a setting — `{from_module_holding: <word>}`**
+(ruling R3 of 2026-11-25, design note approved 2026-11-25). `<word>` is a word of `matches`
+that a catalog names a setting with (`root_setting`; `django.yml` writes `root_setting:
+ROOT_URLCONF`). Each module that holds that setting is a source, and **its dotted module name is
+the environment** (`weblate.settings_docker`), as a profile file's name is one on the JVM. A
+module holds a name it writes and a name a `from m import *` gives it (D00 §5). Every name such
+a module holds is a key: `resolve/settings_modules.py` (after the call edges, before the
+engines) writes one `resolved_config` row per name per settings module, and an `external` row
+("`K` is not set") where another settings module holds a name this one does not, as a profile
+gets. The value is the value walk's answer at the module's own name: a written literal is its
+text (`False`, `5`), a read of the process environment its expression
+(`${WEBLATE_DEBUG:-False}`), the repository's statement and never the deployed value. A name
+with no one value has a reason of the general list and a detail: several values (a list, a
+write under a test), a class or function reference, `None` and an empty list are
+`not_readable`; a value the walk did not read keeps the walk's reason. The form matches no
+file, so the file pass skips it; a value that is no word is a `CatalogError`. It is written in
+`pydantic-settings.yml`, the Python family's one config model (`config_model_of` takes one
+model per module), and the setting's name stays in the catalog that owns it. A module with no
+such setting (Flask, FastAPI, a reusable Django app) gets no row from it and stays `default`.
+Stated limits: OI-554 (a template module is an environment; a module the repository does not
+ship is none; which module a process selects is not read), OI-568, OI-569.
+
 **`settings_form` — how a settings class names the key each field is read from** (plan 3 Task 5,
 N2, R24; one block, in `pydantic-settings.yml`, read by the value walk's settings rung,
 `resolve/settings_fields.py`). Five keys:

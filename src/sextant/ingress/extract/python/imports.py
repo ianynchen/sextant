@@ -173,6 +173,10 @@ class ProjectNames(Protocol):
         """Whether a star import of `module` may bind `name` beside the module's own writes."""
         ...
 
+    def starred_names(self, module: str) -> tuple[str, ...]:
+        """The names `module` binds by a star import alone, sorted."""
+        ...
+
     def shape_of(self, symbol: str) -> "ClassShape | None":
         """A class another file of the module defines, by its header."""
         ...

@@ -24,6 +24,7 @@ proposal that does not quote the row it checked, or say "searched: no row", is n
 | A route names no method | `verbless_serves: any`; `all_methods` |
 | A value is behind a call (`URI.create(x)`, `include(x)`, `X.as_view()`) | value-model forms `returns`, `returns_receiver`, `result_returns`, `result_calls`; `url_via`, `channel_via`, `identified_by` |
 | Something a deployment decides | rule 8, "not evaluated" |
+| A module that holds the settings of one deployment (a profile file on the JVM, `application-prod.yml`; a Django settings module) | config-model `sources`: a file pattern with `{-profile}`, or `{from_module_holding: root_setting}` (each module that holds the root setting is an environment named by the module; one `resolved_config` row per name it holds, the value read by the walk, through `from .base import *`). `tests/application/test_django_settings.py::test_each_module_holding_the_root_setting_is_an_environment`, `::test_a_settings_module_holds_what_a_star_import_gives_it` |
 | A test on a value the code fixes (a parameter each caller passes a literal for, a name written once) | "Branches": decided per path |
 | Code that is not there | reasons `external`, `escapes`. A library that a project uses IS there. |
 

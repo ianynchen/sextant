@@ -217,6 +217,26 @@ class ProjectHeaders:
                 return found
         return None
 
+    def starred_names(self, module: str, seen: frozenset[str] = frozenset()) -> tuple[str, ...]:
+        """The names `module` binds by a `from m import *` the header reads and by no
+        statement of its own, sorted: each name a source binds or takes by a star of its own,
+        that the star takes (`_starred`'s rule)."""
+        header = self.header(module)
+        if header is None or module in seen:
+            return ()
+        found: set[str] = set()
+        for base in header.stars:
+            source = self.header(base)
+            if source is None:
+                continue
+            held = {*source.names, *self.starred_names(base, seen | {module})}
+            found |= {
+                name
+                for name in held
+                if (name in source.exports if source.exports is not None else name[:1] != "_")
+            }
+        return tuple(sorted(found - set(header.names)))
+
     def star_may_rebind(self, module: str, name: str, seen: frozenset[str] = frozenset()) -> bool:
         """Whether a `from m import *` of `module` may bind `name`, beside what the module's
         own statements bind it to: a star whose source is read and binds the name, and a star

@@ -15,6 +15,17 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Added
+
+- **A Django settings module is an environment** (ruling R3 of 2026-11-25, design note approved
+  2026-11-25; OI-554). A new config-model source form, `{from_module_holding: root_setting}`:
+  each module that holds the root setting (`ROOT_URLCONF`) is a source of configuration and its
+  module name is the environment. `resolved_config` gets one row per name per settings module,
+  the value read by the value walk (`DEBUG` in `weblate.settings_docker`), through
+  `from .base import *`; a name with no one value states a reason. The Python scanner writes a
+  module-level star import of a module file as the field writes an import of one variable is
+  (no schema change). Flask and FastAPI modules stay `default`.
+
 ### Fixed
 
 - **An opted-in Python library's outbound call in a class the module extends is published**

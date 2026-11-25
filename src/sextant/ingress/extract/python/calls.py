@@ -399,6 +399,8 @@ class BodyReader:
     # The parts of an augmented element store's target, already read, by node id: the store
     # takes the object and the index its read took (`_augmented`).
     _read_once: dict[int, CallArgument]
+    # Whether the names the module's star imports bind are written (`_starred_variables`).
+    _stars_written: bool
     # The type of each module-level name, a class or a callable, by every write to it in
     # this file, as the previous reading of the file found them (`structure.file_facts`).
     # None on a first reading, which answers from the writes read so far and is kept only
@@ -1011,6 +1013,8 @@ class BodyReader:
             return
         if scope.class_path is not None:
             return
+        if any(alias.name == "*" for alias in node.names):
+            self._starred_variables(node, scope)
         for name, binding in bound.items():
             final = scope.types.names.get(name)
             # An import of one project variable is that value, decided by the import's own
@@ -1032,6 +1036,34 @@ class BodyReader:
                     modifiers={"static": True},
                 )
             self._write_field(descriptor, _reference(binding.targets[0]), scope)
+
+    def _starred_variables(self, node: ast.ImportFrom | ast.Import, scope: Scope) -> None:
+        """A module-level `from m import *` of a file of the module binds each variable it
+        takes to this module's name, as an import of one variable does (ruling R9): that
+        value, written once, for every name the module's read stars take and no statement of
+        its own binds (`ProjectHeaders.starred_names`; the last star that takes a name gives
+        it, `member`). Written at the first star no test is over, for every such star."""
+        headers = self._context.index.headers
+        if headers is None or scope.guards or self._stars_written:
+            return
+        self._stars_written = True
+        here = self._context.here
+        for name in headers.starred_names(here):
+            targets = headers.member(here, name) or ()
+            if not self._a_variable(targets):
+                continue
+            descriptor = f"{scope.owner}{name}."
+            if descriptor not in scope.fields:
+                scope.fields.add(descriptor)
+                self._symbol(
+                    descriptor,
+                    ConstructKind.FIELD,
+                    scope.owner,
+                    node.lineno,
+                    node.end_lineno or node.lineno,
+                    modifiers={"static": True},
+                )
+            self._write_field(descriptor, _reference(targets[0]), scope)
 
     def _a_variable(self, targets: tuple[Target, ...] | list[Target]) -> bool:
         """Whether one import target is a variable another file of this module defines."""

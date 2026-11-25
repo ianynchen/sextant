@@ -792,7 +792,11 @@ on it). A key the deployment sets (absent from the files, an environment variabl
 config-server or `spring.config.import` import) is `external`; a placeholder chain that
 loops is `cycle`. "Unresolved for `prod`, resolved for `dev`" is expressible and meaningful:
 the same key carries a resolved row in one environment and an unresolved one in another,
-never one row forced to answer for both.
+never one row forced to answer for both. **Python (ruling R3 of 2026-11-25):** where the
+config model names the modules that hold a setting (D02 §2i `from_module_holding`), each such
+settings module is an environment named by its dotted module name, `key` is a name the
+module holds, `value` the text the value walk reads for it (a literal, or an expression such
+as `${WEBLATE_DEBUG:-False}`) and `source` the module's file.
 
 **Peer resolution is a join, never a write.** `resolve/resolved_peers.py` joins client-side
 endpoint rows' `peer`/`path` expressions against `resolved_config`, per environment, filling

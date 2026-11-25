@@ -1486,6 +1486,15 @@ above:
 - A module-level name that branches bind to several imports (`try: import ujson as json` /
   `except ImportError: import json`) is a static field with one `field_write` per import, so
   a call on it names the field as `receiver_field`. As an argument it is a `merge`.
+- A module-level import of one variable another file of the module defines (`from app.other
+  import urlpatterns`) is a static field written once from a read of that variable. A
+  module-level `from m import *` of a file of the module is the same write for each variable
+  it takes (2026-11-25, ruling R3; no schema change, an existing fact in one more place): one
+  `field_write` per name the module's read stars take and no statement of its own binds, its
+  value the `field` where the name is defined, through a star of the source too (the last
+  star that takes a name gives it). A star inside an `if` or a `try`, a star of a library,
+  and a name bound to a function, a class or a module write none. So the names a module HOLDS
+  are its field writes, which `resolve/settings_modules.py` reads.
 - A name that two paths set to different values is a `merge` of them where they join, as a
   JVM frame slot two branches wrote; `unresolved` where a path does not set it. Only paths
   that reach the join count (a branch ending in `break`, `continue`, `return` or `raise`

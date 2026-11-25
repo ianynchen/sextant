@@ -1250,3 +1250,32 @@ def test_another_list_added_under_a_test_is_a_read_under_that_test(tmp_path: Pat
     guarded = [w.guards for w in _facts(tree, FieldWriteFact) if w.field == "app/m#A."]
     assert guarded[0] is None
     assert [[g.test for g in guards or []] for guards in guarded[1:]] == [["os.environ"]] * 3
+
+
+def test_a_star_import_of_a_variable_is_a_write_of_the_name(tmp_path: Path):
+    """`from app.base import *` binds each variable `base` holds to the importing module's
+    name, as `from app.base import DEBUG` does (ruling R9): one field write per name the
+    star takes and the module's own statements do not bind, its value a read of the name
+    where it is defined, through a second star too. A name the module writes itself keeps
+    its own write alone; a function, a class and a `_private` name are not written."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/defaults.py": "TIMEOUT = 5\n",
+            "app/base.py": "from app.defaults import *\nDEBUG = False\nROOT = 'app.urls'\n"
+            "_HIDDEN = 1\ndef helper():\n    return None\n",
+            "app/local.py": "from app.base import *\nDEBUG = True\n",
+        },
+    )
+
+    writes = {
+        bare_descriptor(w.field): (w.value.kind, w.value.symbol and bare_descriptor(w.value.symbol))
+        for w in _facts(tree, FieldWriteFact)
+        if bare_descriptor(w.field).startswith("app/local#")
+    }
+    assert writes == {
+        "app/local#DEBUG.": ("boolean", None),
+        "app/local#ROOT.": ("field", "app/base#ROOT."),
+        "app/local#TIMEOUT.": ("field", "app/defaults#TIMEOUT."),
+    }
