@@ -2733,7 +2733,12 @@ serves only what the root reaches.
 routes from; the router there is that module's variable `router_named` names. Every write of
 the setting to a string is one root (two projects in one repository are two roots). Django:
 `root_setting: ROOT_URLCONF`. A name, not a key path; absent, the catalog's routes made on
-nothing have no root.
+nothing have no root. **The routes of a root exist where the setting names it** (ruling R3 of
+2026-11-25): every row reached through a root carries the condition "`ROOT_URLCONF` is
+`<root>`" in `endpoint_existence`, kind `property`, "not evaluated" in every environment (a
+deployment selects the settings module), with what each environment's settings module sets as
+evidence. Two settings modules that name one root give one condition. No row is removed and
+none is copied per environment. A list no root reaches has no such condition.
 
 **`mount[].router_named: {variable: name}`** (same task, capability 3): a router argument that
 names a module — a string read as its dotted name (`include("shop.api_urls")`), or the module

@@ -12,6 +12,7 @@ Each test writes a small Django program and runs the real scanner and pipeline w
 shipped catalogs (`test_django_routes._resolved`).
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -197,3 +198,105 @@ def test_a_malformed_key_read_is_refused(tmp_path: Path, entries):
     )
     with pytest.raises(CatalogError, match="key_reads"):
         YamlCatalogSource(tmp_path).key_reads()
+
+
+# -- conditions: a test on a setting, and the root ---------------------------------------------
+
+
+def _existence(workspace) -> list[tuple[object, ...]]:
+    """`endpoint_existence` as (path, kind, test, keys, environment, holds, evidence)."""
+    live = {row["row_id"]: row["path"] for row in workspace.query("endpoints")}
+    found = []
+    for row in workspace.query("endpoint_existence"):
+        expression = json.loads(str(row["expression"]))
+        found.append(
+            (
+                live[row["row_id"]],
+                row["kind"],
+                expression["test"],
+                tuple(expression.get("keys", ())),
+                row["environment"],
+                row["holds"],
+                row["evidence"],
+            )
+        )
+    return sorted(found)
+
+
+_SET = "` is set by the deployment; this module's `"
+
+
+def test_a_test_on_a_setting_is_a_property_condition_never_decided(tmp_path: Path, libraries):
+    """`if settings.DEBUG: urlpatterns += [...]` with `DEBUG` written `False` in one settings
+    module and `True` in another: the route exists (it is never removed, and never copied
+    per environment), its condition is kind `property` on the key `DEBUG`, "not evaluated"
+    in every environment (the deployment sets a key, ruled 2026-10-23, as a Java
+    `@ConditionalOnProperty` is), and each environment's value is the evidence."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "ROOT_URLCONF = 'app.urls'\nDEBUG = False\n",
+            "settings_dev.py": "from app.settings import *\nDEBUG = True\n",
+            "urls.py": "from django.conf import settings\n" + _URLS + "if settings.DEBUG:\n"
+            "    urlpatterns += [path('d/', v)]\n",
+        },
+    )
+
+    assert sorted(row["path"] for row in workspace.query("endpoints")) == ["/d/", "/u/"]
+    debug = [row for row in _existence(workspace) if row[2] == "settings.DEBUG"]
+    assert debug == [
+        ("/d/", "property", "settings.DEBUG", ("DEBUG",), "app.settings", "unresolved",
+         f"`DEBUG{_SET}app.settings` configuration sets `False`"),
+        ("/d/", "property", "settings.DEBUG", ("DEBUG",), "app.settings_dev", "unresolved",
+         f"`DEBUG{_SET}app.settings_dev` configuration sets `True`"),
+    ]  # fmt: skip
+
+
+def test_the_routes_of_a_root_exist_where_the_root_setting_names_it(tmp_path: Path, libraries):
+    """Two settings modules name two roots: each root's routes carry the condition
+    "`ROOT_URLCONF` is `<root>`", kind `property`, "not evaluated" in every environment, with
+    what each environment sets as evidence. No row is removed and none is copied."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "ROOT_URLCONF = 'app.urls'\n",
+            "settings_admin.py": "ROOT_URLCONF = 'app.admin_urls'\n",
+            "urls.py": _URLS,
+            "admin_urls.py": _URLS.replace("'u/'", "'a/'"),
+        },
+    )
+
+    assert sorted(row["path"] for row in workspace.query("endpoints")) == ["/a/", "/u/"]
+    assert _existence(workspace) == [
+        ("/a/", "property", "ROOT_URLCONF == 'app.admin_urls'", ("ROOT_URLCONF",), "app.settings",
+         "unresolved", f"`ROOT_URLCONF{_SET}app.settings` configuration sets `app.urls`"),
+        ("/a/", "property", "ROOT_URLCONF == 'app.admin_urls'", ("ROOT_URLCONF",),
+         "app.settings_admin", "unresolved",
+         f"`ROOT_URLCONF{_SET}app.settings_admin` configuration sets `app.admin_urls`"),
+        ("/u/", "property", "ROOT_URLCONF == 'app.urls'", ("ROOT_URLCONF",), "app.settings",
+         "unresolved", f"`ROOT_URLCONF{_SET}app.settings` configuration sets `app.urls`"),
+        ("/u/", "property", "ROOT_URLCONF == 'app.urls'", ("ROOT_URLCONF",), "app.settings_admin",
+         "unresolved",
+         f"`ROOT_URLCONF{_SET}app.settings_admin` configuration sets `app.admin_urls`"),
+    ]  # fmt: skip
+    expression = json.loads(str(workspace.query("endpoint_existence")[0]["expression"]))
+    assert expression["having_value"] in ("app.urls", "app.admin_urls")
+
+
+def test_two_settings_modules_naming_one_root_give_one_condition(tmp_path: Path, libraries):
+    """`ROOT_URLCONF = 'app.urls'` in two settings modules is one condition of the root's
+    routes, not the same words twice."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "ROOT_URLCONF = 'app.urls'\n",
+            "settings_dev.py": "ROOT_URLCONF = 'app.urls'\n",
+            "urls.py": _URLS,
+        },
+    )
+
+    assert {int(str(row["route"])) for row in workspace.query("endpoint_existence")} == {0}
+    assert len(workspace.query("endpoint_existence")) == 2

@@ -221,7 +221,11 @@ def test_the_debug_row_is_not_evaluated(workspace):
         (live[r["row_id"]], json.loads(str(r["expression"]))["test"], r["holds"])
         for r in workspace.query("endpoint_existence")
     }
-    assert conditions == {("/debug/echo/", "settings.DEBUG", "unresolved")}
+    # Every route of the root exists where `ROOT_URLCONF` names it (ruling R3 of 2026-11-25).
+    rooted = {one for one in conditions if one[1] == "ROOT_URLCONF == 'shop.urls'"}
+    assert conditions - rooted == {("/debug/echo/", "settings.DEBUG", "unresolved")}
+    # A list no root reaches is behind `<prefix>` and has no root to name.
+    assert {path for path, _, _ in rooted} == {p for p in live.values() if "<prefix>" not in p}
 
 
 def test_the_stated_boundaries_are_published_as_today(workspace, served):

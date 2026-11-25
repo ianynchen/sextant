@@ -13,7 +13,7 @@ from sextant.application.resolve.registration_conditions import (
 )
 from sextant.application.resolve.settings_fields import SettingsKey
 
-GUARD = ("main#<clinit>", "settings.DEBUG", True, ("settings.DEBUG",), ())
+GUARD = ("main#<clinit>", "settings.DEBUG", True, ("settings.DEBUG",), (), None)
 # `helper` is called at <clinit>@1 under no test and at <clinit>@2 under `settings.DEBUG`; the
 # route is registered at helper@0.
 CONDITIONS = Conditions(
@@ -87,6 +87,7 @@ def test_a_guard_reading_only_a_settings_field_is_a_property_condition():
         True,
         ("settings.debug",),
         (("settings.debug", "app/conf/S#debug."),),
+        None,
     )
     (row,) = _guarded(guard)
     assert (row["kind"], row["holds"]) == ("property", "unresolved")
@@ -104,8 +105,9 @@ def test_a_guard_with_a_read_no_settings_field_explains_stays_a_test():
         True,
         ("settings.debug", "ready"),
         (("settings.debug", "app/conf/S#debug."),),
+        None,
     )
-    untyped = ("main#<clinit>", "x.y", True, ("x.y",), ())
+    untyped = ("main#<clinit>", "x.y", True, ("x.y",), (), None)
     for guard in (mixed, untyped):
         (row,) = _guarded(guard)
         assert row["kind"] == "test"

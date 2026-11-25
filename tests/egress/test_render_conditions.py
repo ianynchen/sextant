@@ -1279,6 +1279,34 @@ def test_a_row_registered_two_ways_under_two_tests_states_both():
     ) in block
 
 
+def test_a_condition_on_a_keys_value_reads_as_a_property_condition():
+    """A condition that states the value a configuration key has (`having_value`; the
+    routes of a Django root, ruling R3 of 2026-11-25) is said in the property condition's
+    words, before the code's test it is joined with."""
+    held = {
+        **_existence(0, "ROOT_URLCONF == 'shop.urls'", True, 0),
+        "kind": "property",
+        "expression": json.dumps(
+            {
+                "holds": True,
+                "reads": ["ROOT_URLCONF"],
+                "test": "ROOT_URLCONF == 'shop.urls'",
+                "keys": ["ROOT_URLCONF"],
+                "having_value": "shop.urls",
+            },
+            sort_keys=True,
+        ),
+    }
+    document = _document(
+        endpoints=[{**_inbound(USERS + "status()."), "row_id": 7}],
+        endpoint_existence=[held, _existence(0, "settings.DEBUG", True, 1)],
+    )
+    assert (
+        "  - Exists only when: the configuration key `ROOT_URLCONF` is `shop.urls` and the "
+        "code's test `settings.DEBUG` is true, not evaluated"
+    ) in _block(document, "Users#status")
+
+
 def test_a_row_with_no_existence_rows_has_no_condition_lines():
     document = _document(
         endpoints=[{**_inbound(USERS + "status()."), "row_id": 7}],

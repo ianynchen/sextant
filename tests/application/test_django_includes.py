@@ -279,7 +279,9 @@ def test_routes_added_with_extend_and_append_are_in_the_list(tmp_path, libraries
 def test_routes_added_under_debug_are_not_evaluated(tmp_path, libraries):
     """`if settings.DEBUG: urlpatterns += [...]`: the deployment decides the test (ruling
     2026-10-23), so the row's existence is "not evaluated"; the row itself is unchanged and
-    the route outside the test has no condition."""
+    the route outside the test has no condition of the code. The test reads a setting, so
+    its evidence is what the settings module sets for the key (ruling R3 of 2026-11-25):
+    here nothing."""
     workspace = _program(
         tmp_path,
         libraries,
@@ -301,9 +303,18 @@ def test_routes_added_under_debug_are_not_evaluated(tmp_path, libraries):
             row["evidence"],
         )
         for row in workspace.query("endpoint_existence")
+        if "having_value" not in json.loads(str(row["expression"]))
     )
     assert conditions == [
-        ("/api/dbg/", "settings.DEBUG", "unresolved", f"{_NOT_EVALUATED}`settings.DEBUG`")
+        (
+            "/api/dbg/",
+            "settings.DEBUG",
+            "unresolved",
+            (
+                "`DEBUG` is set by the deployment; this module's `app.settings` configuration "
+                "sets nothing"
+            ),
+        )
     ]
 
 
@@ -325,12 +336,7 @@ def test_a_mount_written_under_a_test_gives_its_routes_the_condition(tmp_path, l
     )
 
     assert _rows(workspace) == [_row("/a/"), _row("/legal/terms/")]
-    live = {row["row_id"]: row["path"] for row in workspace.query("endpoints")}
-    conditions = sorted(
-        (live[row["row_id"]], json.loads(str(row["expression"]))["test"], row["holds"])
-        for row in workspace.query("endpoint_existence")
-    )
-    assert conditions == [("/legal/terms/", "settings.LEGAL", "unresolved")]
+    assert _conditions(workspace) == [("/legal/terms/", "settings.LEGAL", "unresolved")]
 
 
 # -- design 2026-11-23 §4a: the roots --------------------------------------------------------------
@@ -934,10 +940,15 @@ def test_a_module_that_includes_itself_is_read_once(tmp_path, libraries):
 
 
 def _conditions(workspace) -> list[tuple[object, str, object]]:
+    """The tests of the code each row runs under. The condition every route of a root has,
+    "`ROOT_URLCONF` is `<root>`" (it states a `having_value`), is left out: it is read in
+    `test_django_settings.py`."""
     live = {row["row_id"]: row["path"] for row in workspace.query("endpoints")}
     return sorted(
-        (live[row["row_id"]], json.loads(str(row["expression"]))["test"], row["holds"])
+        (live[row["row_id"]], expression["test"], row["holds"])
         for row in workspace.query("endpoint_existence")
+        for expression in (json.loads(str(row["expression"])),)
+        if "having_value" not in expression
     )
 
 

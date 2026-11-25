@@ -866,6 +866,9 @@ class MountReader:
                     )
 
         setting = self._rules.root_setting
+        # One read per root and per tests of its write: two settings modules that name one
+        # root give its routes one condition.
+        rooted: set[tuple[str, Any]] = set()
         for symbol, writes in sorted(index.constants.items()):
             if setting is None or not symbol.endswith(f"#{setting}."):
                 continue
@@ -873,13 +876,31 @@ class MountReader:
                 if written.get("kind") != "string" or writer is None:
                     continue
                 module = type_descriptor(str(written["value"]))
+                if (module, written.get("guards")) in rooted:
+                    continue
+                rooted.add((module, written.get("guards")))
+                # The routes of a root are served where the setting names that root (ruling
+                # R3 of 2026-11-25): a condition on the key, which a deployment sets, in the
+                # spelling of a test record and with the value a property condition has.
+                held = json.dumps(
+                    [
+                        {
+                            "test": f"{setting} == {str(written['value'])!r}",
+                            "holds": True,
+                            "reads": [setting],
+                            "fields": {setting: symbol},
+                            "having_value": str(written["value"]),
+                        }
+                    ],
+                    sort_keys=True,
+                )
                 for variable in sorted(variables):
                     members(
                         named(str(writer), module, variable),
                         0,
                         ROOT,
                         # A root written under a test serves its routes where the test holds.
-                        write_path(symbol, writer, written),
+                        write_path(symbol, writer, written, held),
                         frozenset({(module, variable)}),
                     )
         return tree

@@ -38,7 +38,20 @@ the scanner's typed reads, R27; the field's key by `settings_fields`, plan 3 Tas
 stays "not evaluated" (the deployment sets a key, ruled 2026-10-23), and the repository's value
 for each key is evidence: what the module's environment configuration sets, else the field's
 class-body default. A guard with any read that is not such a field stays `test`: the part no
-key explains cannot be called a property condition.
+key explains cannot be called a property condition. A read of an attribute of an object a
+value model states is read by key (`key_reads`: `settings.DEBUG` on Django's settings object)
+and of a name of a settings module (an environment, `settings_modules`) is a read of a key
+the same way (ruling R3 of 2026-11-25): never decided, each environment's value as evidence.
+A condition a reader states itself on the value of a key (`having_value`: the routes of a
+root exist where the root setting names it, `shapes/mounts.py`) is a guard like the others.
+
+**The seam for deciding a test on a setting** (the approved note's last step, NOT built): in
+`existence_rows`, a `property` guard on one key whose value in an environment is one literal
+could be decided there (`holds` true or false, `resolution` `resolved`) where nothing a
+deployment sets is in the chain. It needs a fact the resolver does not have: whether the
+settings module takes names from code outside the repository (a star import of an absent
+module, an `exec` of a file), which only the scanner knows (`ProjectHeaders.star_may_rebind`).
+OI-570.
 
 **A test on a value the code fixes is decided** (ruling R2 of 2026-11-25). Where a test is
 one name (`if x:`), its negation, or its comparison with `None` by `is` (`guards[].value`,
@@ -75,8 +88,8 @@ from sextant.application.resolve.settings_fields import (
     SettingsKey,
     settings_keys,
 )
-from sextant.application.resolve.values import Path
-from sextant.domain.symbols import bare_descriptor
+from sextant.application.resolve.values import KEY_READ, Path
+from sextant.domain.symbols import bare_descriptor, member_name, owner_of, type_descriptor
 
 # The condition kind of a test the analysis does not evaluate (D01 `endpoint_existence.kind`).
 TEST = "test"
@@ -91,7 +104,9 @@ NOT_EVALUATED = "a condition this analysis does not evaluate: "
 
 # One guard: the method whose body holds the test, the test as written, the arm, its reads, and
 # the field symbol of each read the scanner could type (read, symbol).
-Guard = tuple[str, str, bool, tuple[str, ...], tuple[tuple[str, str], ...]]
+# Last, the value a condition on a key states the key has (`having_value`, the property
+# condition's word), None for a test of the code.
+Guard = tuple[str, str, bool, tuple[str, ...], tuple[tuple[str, str], ...], str | None]
 # The guards of one alternative, outermost first (a caller's before its callee's, an include's
 # before the routes under it), each once.
 Conjunction = tuple[Guard, ...]
@@ -241,6 +256,7 @@ def _guards_of(method: str, written: str) -> tuple[Guard, ...]:
             bool(g["holds"]),
             tuple(g.get("reads") or ()),
             tuple(sorted((g.get("fields") or {}).items())),
+            g.get("having_value"),
         )
         for g in json.loads(written)
     )
@@ -295,6 +311,18 @@ class SettingsReads:
 
     keys: Mapping[str, SettingsKey]
     config: Mapping[str, Mapping[str, str | None]]
+    # The objects whose attribute read is the key of that name (`key_reads` in
+    # `value-models/`), and the settings modules, each an environment (`settings_modules`):
+    # a read of a name of either is a read of that key (ruling R3 of 2026-11-25).
+    objects: frozenset[str] = frozenset()
+
+    def key_of(self, field: str) -> SettingsKey | None:
+        """The key the read of `field` (a bare field symbol) is a read of, None for a field
+        that is no setting."""
+        found = self.keys.get(field)
+        if found is None and owner_of(field) in self.objects:
+            return SettingsKey(member_name(field), None, None)
+        return found
 
 
 def settings_reads_of(workspace: Workspace, catalog: Catalog) -> SettingsReads:
@@ -303,7 +331,8 @@ def settings_reads_of(workspace: Workspace, catalog: Catalog) -> SettingsReads:
     model = next(
         (row for row in catalog.returns_arguments if row.get("form") == CONFIG_MODEL_FORM), None
     )
-    if model is None or not model.get("settings_form"):
+    stated = {str(row["owner"]) for row in catalog.returns_arguments if row.get("form") == KEY_READ}
+    if model is None or not (model.get("settings_form") or stated):
         return SettingsReads({}, {})
     keys = settings_keys(workspace, model, workspace.once(dispatch_of))
     config: dict[str, dict[str, str | None]] = {}
@@ -314,7 +343,10 @@ def settings_reads_of(workspace: Workspace, catalog: Catalog) -> SettingsReads:
         config.setdefault(str(row["environment"]), {})[str(row["key"])] = (
             None if value is None else str(value)
         )
-    return SettingsReads(keys, config)
+    # A settings module is named by its environment (`settings_modules`), so the module of
+    # each environment is one whose names are keys.
+    modules = {type_descriptor(environment) for environment in config}
+    return SettingsReads(keys, config, frozenset(stated | modules))
 
 
 def _settings_keys_of(guard: Guard, settings: SettingsReads) -> list[SettingsKey] | None:
@@ -323,7 +355,7 @@ def _settings_keys_of(guard: Guard, settings: SettingsReads) -> list[SettingsKey
     class), and then the guard is a `test`."""
     fields = dict(guard[4])
     found = [
-        settings.keys.get(bare_descriptor(fields[read])) if read in fields else None
+        settings.key_of(bare_descriptor(fields[read])) if read in fields else None
         for read in guard[3]
     ]
     if not found or any(one is None or one.key is None for one in found):
@@ -379,7 +411,8 @@ def existence_rows(
                 )
                 expression = json.dumps(
                     {"holds": holds, "reads": list(reads), "test": test}
-                    | ({"keys": keys} if explained is not None else {}),
+                    | ({"keys": keys} if explained is not None else {})
+                    | ({"having_value": guard[5]} if guard[5] is not None else {}),
                     sort_keys=True,
                 )
                 for environment in environments:

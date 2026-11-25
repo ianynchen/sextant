@@ -29,6 +29,12 @@ here would restate those documents rather than add anything.
   value-model list, `key_reads: [{owner, by}]`: an attribute read on a stated object is the key
   of that name. `value-models/django.yml` states `django.conf.settings`, so `settings.API_HOST`
   is the expression `${API_HOST}`, as an environment read and a pydantic settings field are.
+- **A test on a Django setting is a property condition, and the routes of a root state the
+  root** (ruling R3 of 2026-11-25). `if settings.DEBUG:` around a route is kind `property` on
+  the key `DEBUG`, "not evaluated" in every environment, with each settings module's value as
+  evidence; it is never decided in this build. Every row reached through a root carries
+  "the configuration key `ROOT_URLCONF` is `<root>`" (`endpoint_existence.expression` gains an
+  optional `having_value`). No row is removed and none is copied per environment.
 
 ### Fixed
 

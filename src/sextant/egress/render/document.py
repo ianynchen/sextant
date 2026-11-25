@@ -886,18 +886,19 @@ def _existence_entries(
     "or". Empty for a row registered under no test, which is almost every row."""
     if not rows:
         return []
-    routes: dict[int, dict[tuple[str, bool], None]] = {}
+    routes: dict[int, dict[str, None]] = {}
     for row in sorted(rows, key=lambda r: (int(str(r["route"])), int(str(r["position"])))):
         expression = json.loads(str(row["expression"]))
-        test = redactor.redact_text(str(expression["test"]))
-        routes.setdefault(int(str(row["route"])), {})[(test, bool(expression["holds"]))] = None
+        if expression.get("having_value") is not None:
+            # A condition on the value of a key (the routes of a root, ruling R3 of
+            # 2026-11-25): the property condition's own words.
+            said = _condition_words("property", redactor.redact_text(str(row["expression"])))
+        else:
+            test = redactor.redact_text(str(expression["test"]))
+            said = f"the code's test `{test}` is {'true' if expression['holds'] else 'false'}"
+        routes.setdefault(int(str(row["route"])), {})[said] = None
     # Alternatives in their numbered order, each one's tests outermost first (`position`).
-    spelled = [
-        " and ".join(
-            f"the code's test `{test}` is {'true' if holds else 'false'}" for test, holds in tests
-        )
-        for _, tests in sorted(routes.items())
-    ]
+    spelled = [" and ".join(tests) for _, tests in sorted(routes.items())]
     words = spelled[0] if len(spelled) == 1 else " or ".join(f"({one})" for one in spelled)
     per_environment: dict[str, set[str]] = {}
     for row in rows:

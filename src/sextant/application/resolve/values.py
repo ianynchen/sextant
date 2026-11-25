@@ -262,7 +262,7 @@ _RETURNS_RECEIVER = "returns_receiver"
 _ENVIRONMENT_READ = "environment_read"
 # An object whose attribute read is the configuration key of that name (`Catalog
 # .returns_arguments`, form `key_read`, ruling R3 of 2026-11-25): its value is `${NAME}`.
-_KEY_READ = "key_read"
+KEY_READ = "key_read"
 
 # D00 §5's argument grammar, read as answers. `long` answers `int` because the
 # distinction is a storage width and not a kind of value a consumer branches on; a catalog
@@ -1845,7 +1845,7 @@ def value_index(
         stated_returns={
             (str(entry["owner"]), str(entry["method"])): (str(entry["form"]), int(entry["arg"]))
             for entry in returns_arguments
-            if entry["form"] not in (_ENVIRONMENT_READ, _KEY_READ, CONFIG_MODEL_FORM)
+            if entry["form"] not in (_ENVIRONMENT_READ, KEY_READ, CONFIG_MODEL_FORM)
         },
         stated_names=frozenset(
             str(entry["method"])
@@ -1868,7 +1868,7 @@ def value_index(
             if entry["form"] == _ENVIRONMENT_READ
         },
         key_reads=frozenset(
-            str(entry["owner"]) for entry in returns_arguments if entry["form"] == _KEY_READ
+            str(entry["owner"]) for entry in returns_arguments if entry["form"] == KEY_READ
         ),
         placeholders=None if model is None else dict(model["placeholders"]),
         settings_fields=(
@@ -3431,11 +3431,18 @@ def _under(trail: _Trail, symbol: str, writer: str | None, entry: Mapping[str, A
     return trail if step in trail else (*trail, step)
 
 
-def write_path(symbol: str, writer: str | None, entry: Mapping[str, Any]) -> "Path | None":
+def write_path(
+    symbol: str, writer: str | None, entry: Mapping[str, Any], stated: str | None = None
+) -> "Path | None":
     """The path of a reader that takes the write `entry` of `symbol` straight off
     `ValueIndex.constants`: the write under its tests (`Path.written_under`), None where it
-    runs under none."""
-    trail = _under((), symbol, writer, entry)
+    runs under none. `stated` is one more record of tests, in the facts' own spelling, that
+    the reader states the value is taken under (a root setting's value is the root where the
+    setting has that value); it is named first, as the outermost."""
+    trail: _Trail = ()
+    if stated is not None and writer is not None:
+        trail = (_Step((_WRITTEN_UNDER, writer, stated), f"{symbol} read as a condition"),)
+    trail = _under(trail, symbol, writer, entry)
     return Path(trail) if trail else None
 
 

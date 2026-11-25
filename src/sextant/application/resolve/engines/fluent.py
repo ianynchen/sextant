@@ -526,7 +526,9 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     if catalog.direction == "inbound":
         # A test on a value the code fixes is decided on the row's path (ruling R2).
         conditions = conditions_of(workspace, Tests(walk_index) if walk_index is not None else None)
-        if not conditions.guards:
+        # Nothing to state where no call runs under a test, unless the routes of a root are
+        # served under the root setting's own condition (`MountReader`, ruling R3).
+        if not conditions.guards and (mount_rules is None or mount_rules.root_setting is None):
             conditions = None
     # §4d of design 2026-11-23: read once per run, for the any-method rows it may doubt.
     request_flow = (
