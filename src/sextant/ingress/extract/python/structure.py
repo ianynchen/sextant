@@ -246,6 +246,7 @@ class _Writer(BodyReader):
         self._bodies = {}
         self._closures = {}
         self._lists = {}
+        self._read_once = {}
         self._rebound = rebound
         self._module_types = module_types
         self._module_writes = {}

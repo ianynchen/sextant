@@ -513,7 +513,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-510 | SEXTANT-TBD | a held list handed to module code that changes it is read as written (plan 2026-11-23-python-django-redesign, low) |
 | OI-511 | SEXTANT-TBD | a JVM static array changed by an element store is read as known (plan 2026-11-23-python-django-redesign, low) |
 | OI-512 | SEXTANT-TBD | a read-only list method written as a call makes a held list `escapes` (plan 2026-11-23-python-django-redesign, low) |
-| OI-513 | SEXTANT-TBD | `x[f()] += v` writes the call `f()` twice (plan 2026-11-23-python-django-redesign, low) |
+| OI-513 | SEXTANT-TBD | `x[f()] += v` writes the call `f()` twice (plan 2026-11-23-python-django-redesign, low) (fixed on `fix/django-open-issues`: the target's object and index are read once, and the store takes the values the read took; `tests/ingress/extract/python/test_calls.py::test_an_augmented_element_store_reads_its_object_and_index_once`) |
 | OI-514 | SEXTANT-TBD | a value stored by `d[k] = obj` counts as handed on (plan 2026-11-23-python-django-redesign, low) |
 | OI-515 | SEXTANT-TBD | some changes to a held list record no change (plan 2026-11-23-python-django-redesign, low) |
 | OI-516 | SEXTANT-TBD | a list changed through a second name stays known by its first name (plan 2026-11-23-python-django-redesign, low) |

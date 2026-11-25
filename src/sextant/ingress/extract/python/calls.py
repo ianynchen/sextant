@@ -391,6 +391,9 @@ class BodyReader:
     # elements it holds at the line being read, where the body has written it in order;
     # None where it has no one value (`_in_order`).
     _lists: dict[str, list[CallArgument] | None]
+    # The parts of an augmented element store's target, already read, by node id: the store
+    # takes the object and the index its read took (`_augmented`).
+    _read_once: dict[int, CallArgument]
     # The type of each module-level name, a class or a callable, by every write to it in
     # this file, as the previous reading of the file found them (`structure.file_facts`).
     # None on a first reading, which answers from the writes read so far and is kept only
@@ -915,13 +918,26 @@ class BodyReader:
 
     def _augmented(self, node: ast.AugAssign, scope: Scope) -> None:
         """`x += v` is `x = x + v`, with the target's object read once. A module or class
-        name is written to its static field, as an assignment there is."""
-        loaded = _as_load(node.target)
+        name is written to its static field, as an assignment there is. An element's object
+        and index are read once too: `x[f()] += v` runs `f()` once (OI-513)."""
+        target = node.target
+        parts: list[ast.expr] = []
+        if isinstance(target, ast.Subscript):
+            index = target.slice
+            bounds = (
+                [index.lower, index.upper, index.step] if isinstance(index, ast.Slice) else [index]
+            )
+            parts = [target.value, *(b for b in bounds if b is not None)]
+        for part in parts:
+            self._read_once[id(part)] = self._value(part, scope)
+        loaded = _as_load(target)
         value = self._value(ast.BinOp(left=loaded, op=node.op, right=node.value), scope)
-        if scope.frame is None and isinstance(node.target, ast.Name):
-            self._write_field(f"{scope.owner}{node.target.id}.", value, scope)
+        if scope.frame is None and isinstance(target, ast.Name):
+            self._write_field(f"{scope.owner}{target.id}.", value, scope)
         else:
-            self._store(node.target, value, scope, evaluate=False)
+            self._store(target, value, scope, evaluate=False)
+        for part in parts:
+            self._read_once.pop(id(part), None)
 
     def _import(self, node: ast.Import | ast.ImportFrom, scope: Scope) -> None:
         """An import inside a function binds a local name. A module-level name that
@@ -1273,9 +1289,7 @@ class BodyReader:
                 self._value(target.value, scope)
         elif isinstance(target, ast.Subscript):
             # `x[i] = v` is `x.__setitem__(i, v)`; after `x[i] += v`'s read, its object and
-            # index are read again here.
-            # shortcut: a call inside the target of `x[f()] += v` is written twice; split the
-            # read and the store if a real tree shows one.
+            # index are the ones that read took (`_augmented`).
             self._subscript(target, scope, _SETITEM, value)
 
     def _field_target(self, target: ast.Attribute, scope: Scope) -> str | None:
@@ -2078,6 +2092,8 @@ class BodyReader:
 
     def _value(self, node: ast.expr, scope: Scope) -> CallArgument:
         """One value as D00 §5's argument grammar, writing every call in it."""
+        if id(node) in self._read_once:
+            return self._read_once[id(node)]
         if isinstance(node, ast.Constant):
             return _constant(node.value)
         if (

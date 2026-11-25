@@ -826,6 +826,33 @@ def test_an_element_store_and_delete_are_the_calls_the_language_makes(tmp_path: 
     ]
 
 
+def test_an_augmented_element_store_reads_its_object_and_index_once(tmp_path: Path):
+    """`x[f()] += v` runs `f()` once (OI-513): the store takes the object and the index the
+    read took."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "def at():\n    return 0\n"
+                "def table():\n    return VERBS\n"
+                "VERBS = ['get']\n"
+                "table()[at()] += 'z'\n"
+                "def f():\n"
+                "    table()[at():at()] += ['q']\n"
+            )
+        },
+    )
+
+    for caller in (f"app/m#<clinit>({DIS}).", f"app/m#f({DIS})."):
+        calls = _calls(tree, caller)
+        named = [c.target.name for c in calls]
+        assert named.count("table") == 1, caller
+        assert named.count("at") == (1 if "clinit" in caller else 2), caller
+        (read,) = [c for c in calls if c.target.name == "__getitem__"]
+        (store,) = [c for c in calls if c.target.name == "__setitem__"]
+        assert (store.receiver, store.arguments[0]) == (read.receiver, read.arguments[0])
+
+
 def _writes(tree, field: str) -> list[CallArgument | None]:
     return [w.value for w in _facts(tree, FieldWriteFact) if w.field == field]
 
