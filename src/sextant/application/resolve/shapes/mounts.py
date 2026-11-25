@@ -793,13 +793,22 @@ class MountReader:
             }
 
         def members(
-            source: Mapping[str, Any], slot: int, parent: Prefix, within: Path | None
+            source: Mapping[str, Any],
+            slot: int,
+            parent: Prefix,
+            within: Path | None,
+            open_: frozenset[Any],
         ) -> None:
+            # `open_`: the calls and modules the read is inside on this path. One met again is
+            # not entered again (the walk's `cycle`): a name whose write hands it to a call
+            # reads that write too, and a module may include itself.
             for producer, path in producer_paths(index, source, slot, stops, which_object=True):
                 joined = path if within is None else within.joined(path)
                 if joined is None:
                     continue
                 if producer.caller is None and producer.made_by in sites:
+                    if producer.made_by in open_:
+                        continue
                     # A call into code that is not read, its result a member (ruled 2026-11-24,
                     # OI-550): a mount whose prefix is not read; the lists it takes are served
                     # behind the hole naming it.
@@ -810,7 +819,7 @@ class MountReader:
                         seen.add(taking)
                         behind = self._behind(parent, hole, MountPath(None, None), None)
                         for taken in range(len(made["arguments"] or [])):
-                            members(made, taken, behind, joined)
+                            members(made, taken, behind, joined, open_ | {producer.made_by})
                     continue
                 if producer.caller is None:
                     module = _named_module(index, producer.ended_at, variables)
@@ -818,10 +827,14 @@ class MountReader:
                         continue
                     for variable in sorted(variables):
                         read = (module, variable, parent.text, parent.resolution)
-                        if read not in seen:
+                        if read not in seen and (module, variable) not in open_:
                             seen.add(read)
                             members(
-                                named(str(source["caller"]), module, variable), 0, parent, joined
+                                named(str(source["caller"]), module, variable),
+                                0,
+                                parent,
+                                joined,
+                                open_ | {(module, variable)},
                             )
                     continue
                 key = (str(producer.caller), int(str(producer.ordinal)))
@@ -833,12 +846,20 @@ class MountReader:
                 router = argument_slot(made["arguments"] or [], mount.rule.router_arg)
                 if router is None or router == UNPACKED_SLOT:
                     continue
+                if key in open_:
+                    continue
                 for own in self._prefixes(mount, 0, joined):
                     reached = (key, own.text, parent.text, parent.resolution)
                     if reached in seen:
                         continue
                     seen.add(reached)
-                    members(made, router, self._behind(parent, own, mount.paths[0], None), joined)
+                    members(
+                        made,
+                        router,
+                        self._behind(parent, own, mount.paths[0], None),
+                        joined,
+                        open_ | {key},
+                    )
 
         setting = self._rules.root_setting
         for symbol, writes in sorted(index.constants.items()):
@@ -849,7 +870,13 @@ class MountReader:
                     continue
                 module = type_descriptor(str(written["value"]))
                 for variable in sorted(variables):
-                    members(named(str(writer), module, variable), 0, ROOT, None)
+                    members(
+                        named(str(writer), module, variable),
+                        0,
+                        ROOT,
+                        None,
+                        frozenset({(module, variable)}),
+                    )
         return tree
 
     def refusals(self, mount: Mount) -> tuple[tuple[int, str, str], ...]:

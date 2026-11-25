@@ -883,6 +883,56 @@ def test_two_holes_with_one_text_keep_both_mounts_in_the_question(tmp_path, libr
         assert read is None or {candidate["read"] for candidate in candidates} == {read}, name
 
 
+def test_a_call_already_open_on_the_read_is_not_entered_again(tmp_path, libraries):
+    """`urlpatterns = format_suffix_patterns(urlpatterns)` (the DRF tutorial shape): the
+    argument reads every write of the name, the call's own too. A call already open on the
+    path the read took is not entered again (the walk's `cycle`): the earlier write's route
+    keeps its `resolved` row, and the call adds it once behind its one hole."""
+    for name, written, rows in (
+        (
+            "suffix",
+            (
+                "from rest_framework.urlpatterns import format_suffix_patterns\n"
+                "urlpatterns = [path('a/', v)]\n"
+                "urlpatterns = format_suffix_patterns(urlpatterns)\n"
+            ),
+            [_row("/<prefix>a/", "partial"), _row("/a/")],
+        ),
+        (
+            "i18n",
+            (
+                "from django.conf.urls.i18n import i18n_patterns\n"
+                "urlpatterns = [path('a/', v)]\nurlpatterns = i18n_patterns(*urlpatterns)\n"
+            ),
+            [_row("/<prefix>a/", "partial"), _row("/a/")],
+        ),
+        (
+            "include",
+            (
+                "from nolib import wrap\nother = [path('a/', v)]\nother = wrap(other)\n"
+                "urlpatterns = [path('p/', include(other))]\n"
+            ),
+            [_row("/p/<prefix>a/", "partial"), _row("/p/a/")],
+        ),
+    ):
+        workspace = _program(tmp_path / name, libraries, {"urls.py": written})
+
+        assert _rows(workspace) == rows, name
+
+
+def test_a_module_that_includes_itself_is_read_once(tmp_path, libraries):
+    """OI-530: `path('x/', include('app.urls'))` inside `app/urls.py`. Django fails at start;
+    the read stops where the module comes back on its own path (the walk's `cycle`): the
+    analysis ends, with the module's own rows and none through the mount of itself."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {"urls.py": "urlpatterns = [path('a/', v), path('x/', include('app.urls'))]\n"},
+    )
+
+    assert _rows(workspace) == [_row("/a/")]
+
+
 def test_a_list_added_under_a_test_is_behind_the_hole(tmp_path, libraries):
     """`if settings.DEVELOPMENT: urlpatterns += dev_urls.urlpatterns`: the other list's
     routes are served only where the test holds, and no fact of theirs says so (design
