@@ -175,6 +175,7 @@ class ProjectHeaders:
         self._hashes: dict[str, str | None] = {}
         # Each answer, with the modules whose headers it read.
         self._canonical: dict[str, tuple[str, frozenset[str]]] = {}
+        self._starred_names: dict[str, tuple[tuple[str, ...], frozenset[str]]] = {}
         # The questions of the file being read (`ModuleIndex.asked`), set by the scan.
         self.asked: set[tuple[str, str]] | None = None
 
@@ -250,6 +251,25 @@ class ProjectHeaders:
         """The names `module` binds by a `from m import *` the header reads and by no
         statement of its own, sorted: each name a source binds or takes by a star of its own,
         that the star takes (`_starred`'s rule)."""
+        if seen:
+            return self._starred_names_of(module, seen)
+        cached = self._starred_names.get(module)
+        if cached is not None:
+            # The headers its answer read are read again by every file that asks.
+            if self.asked is not None:
+                self.asked.update((HEADER, base) for base in cached[1])
+            return cached[0]
+        outer, self.asked = self.asked, set()
+        try:
+            found = self._starred_names_of(module, seen)
+        finally:
+            consulted, self.asked = self.asked, outer
+        self._starred_names[module] = (found, frozenset(base for _, base in consulted))
+        if self.asked is not None:
+            self.asked.update(consulted)
+        return found
+
+    def _starred_names_of(self, module: str, seen: frozenset[str]) -> tuple[str, ...]:
         header = self.header(module)
         if header is None or module in seen:
             return ()
