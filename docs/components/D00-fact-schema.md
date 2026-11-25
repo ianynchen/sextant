@@ -1521,9 +1521,12 @@ above:
   `!=`) guards nothing either: it chooses how the module starts, not what exists (ruled
   2026-11-09); `reads`
   are the names and dotted names the test reads (`settings.ENV`, `os.path.exists`), each once,
-  in the order it reads them. A test the language decides writes nothing: a constant,
-  `typing.TYPE_CHECKING` (with `not` either way), and a library's version test read for a known
-  Python (whose dead arm is not read at all). A nested function or `lambda` starts with none:
+  in the order it reads them. A test the language decides (a constant, `typing.TYPE_CHECKING`,
+  with `not` either way) writes nothing on the arm that runs; on the arm that never runs it
+  writes `{test, holds, value: {kind: boolean, value: <what the test is>}, when: "true"}`
+  (OI-562, fact schema 24), which the resolver decides false, so what that arm holds gives
+  nothing. A library's version test read for a known Python writes nothing (its dead arm is
+  not read at all). A nested function or `lambda` starts with none:
   its calls run when it is called, and whoever calls it is the resolver's to follow. Absent
   where a call runs under no test, and on every JVM site. A fact set of an older vintage has no
   guards and is refused and re-extracted. **`fields`** (fact schema 16, plan 3 R27): an optional

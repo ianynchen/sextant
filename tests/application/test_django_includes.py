@@ -998,6 +998,25 @@ def test_a_list_added_under_a_test_the_code_fixes_is_decided(tmp_path, libraries
         assert _conditions(workspace) == conditions
 
 
+def test_a_list_added_under_a_test_the_language_decides_false_gives_nothing(tmp_path, libraries):
+    """`if False: urlpatterns += dev_urls.urlpatterns` (OI-562): the arm never runs, so the
+    write gives nothing, as a write under a test the resolver decides false. The other list is
+    one no root reaches."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            "dev_urls.py": "urlpatterns = [path('dev/', v)]\n",
+            "urls.py": "from app import dev_urls\n"
+            "urlpatterns = [path('a/', v)]\n"
+            "if False:\n    urlpatterns += dev_urls.urlpatterns\n",
+        },
+    )
+
+    assert _rows(workspace) == [_row("/<prefix>dev/", "partial"), _row("/a/")]
+    assert _conditions(workspace) == []
+
+
 def test_a_list_added_under_a_test_in_a_mounted_module_keeps_the_mount_and_the_test(
     tmp_path, libraries
 ):

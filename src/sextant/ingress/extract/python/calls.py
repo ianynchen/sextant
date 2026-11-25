@@ -701,8 +701,23 @@ class BodyReader:
     def _guard(self, test: ast.expr, holds: bool, scope: Scope) -> CallGuard | None:
         """The guard an undecided test puts on the calls of its arm `holds` (D00 §5
         `call_site.guards`); None where the language decides the test (`_runs`)."""
-        if self._runs(test, scope) is not None or _entry_point_test(test):
+        if _entry_point_test(test):
             return None
+        runs = self._runs(test, scope)
+        if runs is not None:
+            # The arm the language never runs (OI-562) is under a test whose value is
+            # written: the resolver decides it false, and what the arm holds gives nothing.
+            # The arm that runs is under no test.
+            return (
+                None
+                if runs == holds
+                else CallGuard(
+                    test=ast.unparse(test),
+                    holds=holds,
+                    value=CallArgument(kind="boolean", value=runs),
+                    when="true",
+                )
+            )
         reads = _reads(test)
         value, when = self._tested(test, scope)
         return CallGuard(

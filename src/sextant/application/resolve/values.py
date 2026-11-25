@@ -7586,6 +7586,8 @@ class _Walk:
             value = guard.get("value")
             if not isinstance(value, dict):
                 continue
+            if written(value):
+                return True
             if value.get("kind") == "field" and value.get("symbol") is not None:
                 writes = self._index.constants.get(str(value["symbol"]), ())
                 if any(written(entry) for _, entry in writes):

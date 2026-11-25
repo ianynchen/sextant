@@ -103,7 +103,9 @@ def test_a_test_whose_arm_raises_guards_nothing(tmp_path: Path):
     assert _guards({name: sites[name] for name in ("a", "b")}) == {"a": None, "b": None}
 
 
-def test_a_test_the_language_decides_writes_nothing(tmp_path: Path):
+def test_a_test_the_language_decides_guards_only_the_arm_that_never_runs(tmp_path: Path):
+    """The arm that runs is under no test. The arm that never runs (OI-562) is under the test
+    with its written value (`value`: false, `when`: true), which the resolver decides false."""
     facts = _scan(
         tmp_path,
         "import typing\n"
@@ -118,7 +120,15 @@ def test_a_test_the_language_decides_writes_nothing(tmp_path: Path):
         "        d()\n",
     )
 
-    assert _guards(_sites(facts)) == {"a": None, "b": None, "c": None, "d": None}
+    sites = _sites(facts)
+    assert _guards(sites) == {
+        "a": [("typing.TYPE_CHECKING", True, [])],
+        "b": None,
+        "c": None,
+        "d": None,
+    }
+    (dead,) = sites["a"].guards
+    assert (dead.value.kind, dead.value.value, dead.when) == ("boolean", False, "true")
 
 
 def test_a_nested_function_starts_with_no_guard(tmp_path: Path):
