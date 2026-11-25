@@ -338,7 +338,8 @@ def environments_of(workspace: Workspace) -> tuple[str, ...]:
 class SettingsReads:
     """What a guard that reads settings fields is explained by: each settings field's key by
     bare field symbol (`settings_fields.settings_keys`), and what each environment's
-    configuration sets for a key (None: a placeholder the module does not fill)."""
+    configuration sets for a key (None: no value read; `details` holds why, the row's own
+    `unresolved_detail`)."""
 
     keys: Mapping[str, SettingsKey]
     config: Mapping[str, Mapping[str, str | None]]
@@ -346,6 +347,7 @@ class SettingsReads:
     # `value-models/`), and the settings modules, each an environment (`settings_modules`):
     # a read of a name of either is a read of that key (ruling R3 of 2026-11-25).
     objects: frozenset[str] = frozenset()
+    details: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     def key_of(self, field: str) -> SettingsKey | None:
         """The key the read of `field` (a bare field symbol) is a read of, None for a field
@@ -367,6 +369,7 @@ def settings_reads_of(workspace: Workspace, catalog: Catalog) -> SettingsReads:
         return SettingsReads({}, {})
     keys = settings_keys(workspace, model, workspace.once(dispatch_of))
     config: dict[str, dict[str, str | None]] = {}
+    details: dict[str, dict[str, str]] = {}
     for row in workspace.query("resolved_config"):
         value = row["value"]
         if value is None and row.get("source") is None:
@@ -374,10 +377,14 @@ def settings_reads_of(workspace: Workspace, catalog: Catalog) -> SettingsReads:
         config.setdefault(str(row["environment"]), {})[str(row["key"])] = (
             None if value is None else str(value)
         )
+        if value is None and row.get("unresolved_detail") is not None:
+            details.setdefault(str(row["environment"]), {})[str(row["key"])] = str(
+                row["unresolved_detail"]
+            )
     # A settings module is named by its environment (`settings_modules`), so the module of
     # each environment is one whose names are keys.
     modules = {type_descriptor(environment) for environment in config}
-    return SettingsReads(keys, config, frozenset(stated | modules))
+    return SettingsReads(keys, config, frozenset(stated | modules), details)
 
 
 def _settings_keys_of(guard: Guard, settings: SettingsReads) -> list[SettingsKey] | None:
@@ -486,6 +493,8 @@ def _evidence(found: Sequence[SettingsKey], environment: str, settings: Settings
     config = settings.config.get(environment, {})
     keys = list(dict.fromkeys(str(one.key) for one in found))
     defaults = {str(one.key): one.default for one in found if one.default is not None}
-    text = property_evidence(keys, environment, config, defaults)
+    text = property_evidence(
+        keys, environment, config, defaults, settings.details.get(environment, {})
+    )
     named = [one.file_detail() for one in found if one.file is not None and one.key not in config]
     return "; ".join([text, *dict.fromkeys(named)])

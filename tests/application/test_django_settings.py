@@ -357,6 +357,35 @@ def test_a_setting_a_star_import_alone_gives_is_decided_on_its_source(tmp_path: 
     assert _verdicts(workspace, "settings.DEBUG") == {"app.settings": ("true", "resolved")}
 
 
+def test_a_setting_written_with_no_one_value_says_why_in_the_evidence(tmp_path: Path, libraries):
+    """A setting the settings module writes, but with no one value (a list, a name written
+    twice, `None`): the evidence of a test on it says what the `resolved_config` row says.
+    The module does write the name, so it is no placeholder the module does not fill."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "import sys\nROOT_URLCONF = 'app.urls'\nAPPS = ['one', 'two']\n"
+            "MODE = 'a'\nif len(sys.argv) > 1:\n    MODE = 'b'\nNOTHING = None\n",
+            "urls.py": "from django.conf import settings\n" + _URLS + "if 'one' in settings.APPS:\n"
+            "    urlpatterns += [path('a/', v)]\n"
+            "if settings.MODE:\n    urlpatterns += [path('m/', v)]\n"
+            "if settings.NOTHING:\n    urlpatterns += [path('n/', v)]\n",
+        },
+    )
+
+    details = {
+        str(row["key"]): str(row["unresolved_detail"]) for row in workspace.query("resolved_config")
+    }
+    evidence = {row[3]: row[6] for row in _existence(workspace) if row[3] != ("ROOT_URLCONF",)}
+    assert evidence == {
+        (key,): f"`{key}{_SET}app.settings` configuration sets no readable value: {details[key]}"
+        for key in ("APPS", "MODE", "NOTHING")
+    }
+    assert details["APPS"].endswith("not one value")
+    assert "placeholder" not in "".join(evidence.values())
+
+
 def test_the_routes_of_a_root_exist_where_the_root_setting_names_it(tmp_path: Path, libraries):
     """Two settings modules name two roots: each root's routes carry the condition
     "`ROOT_URLCONF` is `<root>`", kind `property`, "not evaluated" in every environment, with

@@ -1341,11 +1341,14 @@ def property_evidence(
     environment: str,
     config: Mapping[str, str | None],
     defaults: Mapping[str, str] | None = None,
+    details: Mapping[str, str] | None = None,
 ) -> str:
     """The evidence of a property condition in one environment: per key, what the module's
     configuration for it sets (masked by the key, `_REDACTOR`) — nothing, a placeholder it does
     not fill, or the value. Where it sets nothing and `defaults` holds the key's, the default is
-    said after it, masked the same way (a key's default is the repository's value for it)."""
+    said after it, masked the same way (a key's default is the repository's value for it).
+    Where `details` holds a key with no value, the row's own detail is said in place of the
+    placeholder phrase (a settings module writes the name: a list is no placeholder)."""
     return "; ".join(
         f"`{key}{_SET_BY_THE_DEPLOYMENT}{environment}{_CONFIGURATION_SETS}"
         + (
@@ -1358,7 +1361,11 @@ def property_evidence(
                 )
             )
             if key not in config
-            else "a placeholder this module does not fill"
+            else (
+                f"no readable value: {details[key]}"
+                if details and key in details
+                else "a placeholder this module does not fill"
+            )
             if config[key] is None
             else f"`{_REDACTOR.redact_value(key, str(config[key]))}`"
         )
