@@ -7135,6 +7135,7 @@ _CHANGES = (
     "__delitem__",
 )
 _MANY_MEMBERS = 300
+_FEW_WRITES = 200
 
 
 def _py_site(
@@ -7235,7 +7236,35 @@ def _py_held_facts() -> list[Fact]:
         )
         for n in range(_MANY_MEMBERS)
     )
-    for name in (*lists, "renamed", "long", "branchy"):
+    # A second name for `long`; a name with fewer alternative writes than `PATH_CAP`; and a
+    # name written as it and with as many more alternatives as take the sum past the cap.
+    facts.append(
+        FieldWriteFact(
+            document_id="doc_held",
+            field=_HELD_PY + "long_alias.",
+            value=CallArgument(kind="field", symbol=_HELD_PY + "long."),
+            written_by=_PY_BODY,
+        )
+    )
+    for name, count in (("half", _FEW_WRITES), ("doubled", _FEW_WRITES)):
+        facts.extend(
+            FieldWriteFact(
+                document_id="doc_held",
+                field=_HELD_PY + name + ".",
+                value=CallArgument(kind="string", value=f"{name}{n}"),
+                written_by=_PY_BODY,
+            )
+            for n in range(count)
+        )
+    facts.append(
+        FieldWriteFact(
+            document_id="doc_held",
+            field=_HELD_PY + "doubled.",
+            value=CallArgument(kind="field", symbol=_HELD_PY + "half."),
+            written_by=_PY_BODY,
+        )
+    )
+    for name in (*lists, "renamed", "long", "branchy", "long_alias", "half", "doubled"):
         reader = _PY + _HELD_PY + "read_" + name + _PY_DIS
         facts.append(
             SymbolFact(
@@ -7348,6 +7377,22 @@ def test_the_members_of_one_held_list_do_not_count_against_the_path_cap(held_py)
     answers = _held_answers(held_py, "long")
     assert len(answers) == _MANY_MEMBERS
     assert all(reason is None for _, reason in answers)
+
+
+def test_a_second_name_for_a_long_list_reads_every_member(held_py):
+    """`Y = X` with `X` one written list longer than `PATH_CAP`: still one list."""
+    answers = _held_answers(held_py, "long_alias")
+    assert len(answers) == _MANY_MEMBERS
+    assert all(reason is None for _, reason in answers)
+
+
+def test_the_alternatives_a_second_name_reads_count_against_the_path_cap(held_py):
+    """`Y = X` where `X` has alternative writes under the cap, and `Y` as many more of its
+    own: the alternatives `X` gives are no members of one list, so the sum is past the cap
+    (OI-517)."""
+    assert 2 * _FEW_WRITES > values.PATH_CAP >= _FEW_WRITES
+    assert len(_held_answers(held_py, "half")) == _FEW_WRITES
+    assert _held_answers(held_py, "doubled") == [(None, "non_enumerable")]
 
 
 def test_more_alternative_writes_than_the_path_cap_are_non_enumerable(held_py):

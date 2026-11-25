@@ -3339,6 +3339,12 @@ def _call_of(row: Mapping[str, Any]) -> tuple[str, str, str]:
     return (str(row.get("owner")), str(row["name"]), str(row.get("descriptor")))
 
 
+def _through_element(path: _Trail, trail: _Trail) -> bool:
+    """Whether `path`, read on from `trail`, chose an element of a list or a tuple."""
+    known = set(trail)
+    return any(step.context[0] == _ELEMENT_OF and step not in known for step in path)
+
+
 def _only(trail: _Trail, answer: Answer) -> tuple[_Reached, ...]:
     return ((trail, answer),)
 
@@ -4648,11 +4654,9 @@ class _Walk:
         reached = self._entry(element, method, origin, trail, frames)
         if element.get("keyword") != _UNPACKED_SEQUENCE:
             return reached
-        known = set(trail)
         return tuple(
             (path, _unresolved(NOT_READABLE))
-            if answer.kind in (LITERAL, EXPRESSION)
-            and not any(s.context[0] == _ELEMENT_OF and s not in known for s in path)
+            if answer.kind in (LITERAL, EXPRESSION) and not _through_element(path, trail)
             else (path, answer)
             for path, answer in reached
         )
@@ -7358,7 +7362,9 @@ class _Walk:
                     reached.append((trail, _unresolved(ESCAPES)))
                     continue
                 held = self._entry(entry, writer, (_BINDING, symbol, writer), trail, frames)
-                members += len(held)
+                # Only the members of a list it names are exempt from the path cap: the
+                # other name's alternative writes are alternatives here too (OI-517).
+                members += sum(1 for path, _ in held if _through_element(path, trail))
                 reached.extend(held)
             elif entry.get("kind") == "array" and writer is not None:
                 if symbol in self._index.changed_lists:
