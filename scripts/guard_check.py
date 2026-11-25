@@ -2044,6 +2044,31 @@ GUARDS: dict[str, Guard] = {
             ),
         ),
     ),
+    "inbound_routes.a-doubted-any-method-row-files-its-reason": Guard(
+        what="an any-method row the code doubts files a `not_read` question naming the column, "
+        "the reason and the code (ruled 2026-11-25, R4; OI-540)",
+        why="without it a `partial` row with no method says nothing of what to open",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find="            if doubt is not None and verb is None:\n",
+                replace="            if False:  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
+    "inbound_routes.a-registration-in-a-loop-files-its-reason": Guard(
+        what="a registration in a loop or a comprehension whose path is not read files a "
+        "`not_read` question naming the registration (ruled 2026-11-25, R4; OI-502)",
+        why="without it a row with no path stands for many routes and names no code",
+        edits=(
+            Edit(
+                path=_FLUENT,
+                find='                and (context.values.sites.get(at) or {}).get("loop_group") '
+                "is not None\n",
+                replace="                and False  # guard disabled by scripts/guard_check.py\n",
+            ),
+        ),
+    ),
     "inbound_routes.a-path-join-other-than-leading-slash-is-refused": Guard(
         what="`path_join` is `leading_slash`, absent, or (fluent) `concatenate`, refused "
         "otherwise, for every engine "
@@ -12798,6 +12823,8 @@ def copy_tree(destination: Path) -> Path:
         # The Python fixture's locked environment: the Python readers' tests scan against the
         # libraries installed in it (`orders_fastapi_env`), so a pinned one needs it.
         "orders-fastapi",
+        # The Django fixture's locked environment, for the same reason (`orders_django_env`).
+        "orders-django",
     ):
         # `orders-pathprefixes` is here for one guard: the prefix/pattern PAIRING, whose
         # failure shape is two real packages served under each other's prefix. Nothing

@@ -1081,6 +1081,52 @@ def test_a_mount_prefix_question_names_the_mount_and_the_unread_argument():
     ) in text
 
 
+def test_a_not_read_question_names_the_column_the_reason_and_the_code():
+    """Ruling R4 (2026-11-25)'s arm. Candidate shape matches what
+    `inbound_routes.file_not_read` writes: the column, the reason, the code that decides it
+    and the method that registered the route."""
+    report = ResolveReport(facts_loaded=0, endpoints=[], coverage={"documents": 0})
+    open_questions = [
+        {
+            "protocol": "http",
+            "method": None,
+            "method_kind": "any",
+            "path": "/x/",
+            "question": "not_read",
+            "candidates": json.dumps(
+                [
+                    {
+                        "at": "app/urls#v().",
+                        "caller": "app/urls#<clinit>().",
+                        "column": "method",
+                        "handler": "app/urls#v().",
+                        "ordinal": 0,
+                        "reason": "not_readable",
+                    },
+                    {
+                        "at": "lib/views#V#dispatch().",
+                        "caller": "app/urls#<clinit>().",
+                        "column": "method",
+                        "handler": "lib/views#V#dispatch().",
+                        "ordinal": None,
+                        "reason": "external",
+                    },
+                ]
+            ),
+            "evidence": "app/urls#v().",
+        }
+    ]
+    text = render_module_document(MODULE, report, "a3f91c", open_questions=open_questions)
+    assert (
+        "registered by app/urls#<clinit>().; the method is not read (not_readable) at "
+        "app/urls#v(). (call 0)"
+    ) in text
+    assert (
+        "registered by app/urls#<clinit>().; the method is not read (external) at "
+        "lib/views#V#dispatch()."
+    ) in text
+
+
 def test_a_handler_pass_through_question_names_the_handler_and_the_unread_code():
     """Vert.x spec §3b's arm. Candidate shape (`handler`, `caller`, `unread` entries of `how`
     and `name`) matches what `pass_through.file_unread` writes: a context handed to an

@@ -139,6 +139,23 @@ def _rows(workspace: DuckDbWorkspace) -> list[tuple[object, ...]]:
     return sorted(rows, key=lambda row: tuple("" if part is None else str(part) for part in row))
 
 
+def _not_read(workspace: DuckDbWorkspace) -> list[tuple[object, ...]]:
+    """The `not_read` questions: the row's method and path, and each candidate's column,
+    reason, the code it names (`at`, bare) and the method that registered the route."""
+    return [
+        (
+            row["method"],
+            row["path"],
+            [
+                (c["column"], c["reason"], _bare(c["at"]), _bare(c["caller"]))
+                for c in json.loads(row["candidates"])
+            ],
+        )
+        for row in workspace.query("open_questions")
+        if row["question"] == "not_read"
+    ]
+
+
 _HEAD = "from django.urls import path\n\ndef v(request):\n    return None\n\n"
 
 
@@ -463,3 +480,60 @@ def test_an_f_string_piece_from_another_module_is_read(tmp_path: Path, libraries
     )
 
     assert _rows(workspace) == [(None, "any", "/b/<id>/", _handler("v"), "resolved")]
+
+
+_ROUTES_IN_A_LOOP = {
+    "for": "RS = ['a/', 'b/']\nurlpatterns = []\nfor r in RS:\n    urlpatterns += [path(r, v)]\n",
+    "comprehension": "RS = ['a/', 'b/']\nurlpatterns = [path(r, v) for r in RS]\n",
+}
+
+
+@pytest.mark.pins("inbound_routes.a-registration-in-a-loop-files-its-reason")
+@pytest.mark.parametrize("written", list(_ROUTES_IN_A_LOOP))
+def test_a_registration_in_a_loop_whose_path_is_not_read_files_a_question(
+    tmp_path: Path, libraries, written: str
+):
+    """Ruled not supported (2026-11-23): the row keeps no path, `unresolved`. The question
+    names the registration (ruled 2026-11-25, R4, OI-502): column `path`, `non_enumerable`."""
+    workspace = _resolved(tmp_path, libraries, {"urls.py": _HEAD + _ROUTES_IN_A_LOOP[written]})
+
+    assert _rows(workspace) == [(None, "any", None, _handler("v"), "unresolved")]
+    assert _not_read(workspace) == [
+        (
+            None,
+            None,
+            [("path", "non_enumerable", "app/urls#<clinit>(sig_", "app/urls#<clinit>(sig_")],
+        )
+    ]
+    (question,) = [r for r in workspace.query("open_questions") if r["question"] == "not_read"]
+    (candidate,) = json.loads(question["candidates"])
+    site = next(
+        row
+        for row in workspace.query("call_sites")
+        if row["name"] == "path" and row["caller"] == candidate["at"]
+    )
+    assert candidate["ordinal"] == site["ordinal"]
+
+
+def test_two_loops_of_one_wire_identity_share_one_question(tmp_path: Path, libraries):
+    """One question per wire identity, each registration a candidate of it."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HEAD + "def w(request):\n    return None\nRS = ['a/', 'b/']\n"
+            "urlpatterns = [path(r, v) for r in RS] + [path(r, w) for r in RS]\n"
+        },
+    )
+
+    ((method, path, candidates),) = _not_read(workspace)
+    assert (method, path, len(candidates)) == (None, None, 2)
+
+
+def test_a_route_whose_path_is_read_files_no_not_read_question(tmp_path: Path, libraries):
+    workspace = _resolved(
+        tmp_path, libraries, {"urls.py": _HEAD + "urlpatterns = [path('x/', v)]\n"}
+    )
+
+    assert _rows(workspace) == [(None, "any", "/x/", _handler("v"), "resolved")]
+    assert _not_read(workspace) == []

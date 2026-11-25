@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 import test_django_routes
-from test_django_routes import _handler, _resolved, _rows
+from test_django_routes import _handler, _not_read, _resolved, _rows
 
 libraries = test_django_routes.libraries
 orders_django_env = test_django_routes.orders_django_env
@@ -1037,3 +1037,42 @@ def test_a_return_under_a_test_not_decided_stays_one_path_per_return(tmp_path: P
     )
 
     assert sorted(row[3] for row in _rows(workspace)) == [_handler("other"), _handler("v")]
+
+
+def _doubted(tmp_path: Path, libraries, body: str) -> list[tuple[object, ...]]:
+    return _not_read(
+        _resolved(
+            tmp_path, libraries, {"urls.py": _HTTP + body + "urlpatterns = [path('x/', v)]\n"}
+        )
+    )
+
+
+@pytest.mark.pins("inbound_routes.a-doubted-any-method-row-files-its-reason")
+def test_a_view_that_reads_request_method_files_a_not_read_question(tmp_path: Path, libraries):
+    """The doubted any-method row says why (ruled 2026-11-25, R4, OI-540): column `method`,
+    `not_readable`, at the body that reads the method."""
+    found = _doubted(
+        tmp_path,
+        libraries,
+        "def v(request):\n    if request.method == 'POST':\n        return 1\n    return None\n",
+    )
+
+    assert found == [
+        (None, "/x/", [("method", "not_readable", _handler("v"), "app/urls#<clinit>(sig_")])
+    ]
+
+
+def test_a_helper_that_reads_the_method_is_the_code_the_question_names(tmp_path: Path, libraries):
+    found = _doubted(
+        tmp_path,
+        libraries,
+        "def helper(r):\n    return r.method\ndef v(request):\n    return helper(request)\n",
+    )
+
+    assert found == [
+        (None, "/x/", [("method", "not_readable", _handler("helper"), "app/urls#<clinit>(sig_")])
+    ]
+
+
+def test_a_view_no_code_doubts_files_no_not_read_question(tmp_path: Path, libraries):
+    assert _doubted(tmp_path, libraries, _DEF) == []

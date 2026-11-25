@@ -1081,11 +1081,11 @@ name nothing outside this run); `question`; `candidates`, a JSON array; `evidenc
 `method_kind`/`path_kind`, the endpoint row's own markers where the question is filed against
 one (since 13), so a question on a row serving every verb reads `any`, not an unread verb.
 
-`question` is a **closed SEVENTEEN-value set — `payload_binding`, `format_conflict`,
+`question` is a **closed EIGHTEEN-value set — `payload_binding`, `format_conflict`,
 `channel_destination`, `service_identity`, `environment_divergence`, `binder_protocol`,
 `unselected_binding`, `handler_protocol`, `registration_activation`, `self_exchange`,
 `routing_conflict`, `routing_depth`, `web_stack`, `prefix_not_measured`, `refused_registration`,
-`handler_pass_through` and `mount_prefix`** — checked by the single owning module before any row is inserted,
+`handler_pass_through`, `mount_prefix` and `not_read`** — checked by the single owning module before any row is inserted,
 because the value is bound straight into a published artifact where a typo is
 indistinguishable from a kind of question nobody implemented. Adding a kind is a schema
 change (NFR-5): the RENDERER switches on it, and the export carries the rows through
@@ -1101,7 +1101,7 @@ rather than an afterthought.* *And then it said NINE while the module enforced t
 this sentence, and `routing_depth` (spec 2026-09-19 §4a) is the twelfth — corrected 2026-09-20
 in the change that closed that spec's register items, the fourth drift of this one count.*
 *`web_stack` and `prefix_not_measured` (ruling 3 of the 2026-10-30 object-identity design)
-are the thirteenth and fourteenth, added here in the same change as the module.* *`refused_registration` (DR-6, Vert.x spec §3a) is the fifteenth, likewise.* *`handler_pass_through` (Vert.x spec §3b) is the sixteenth, likewise.* *`mount_prefix` (Vert.x spec §3c) is the seventeenth, likewise.* *This paragraph said "two-value set" and named the first two
+are the thirteenth and fourteenth, added here in the same change as the module.* *`refused_registration` (DR-6, Vert.x spec §3a) is the fifteenth, likewise.* *`handler_pass_through` (Vert.x spec §3b) is the sixteenth, likewise.* *`mount_prefix` (Vert.x spec §3c) is the seventeenth, likewise.* *`not_read` (ruled 2026-11-25, R4) is the eighteenth, likewise.* *This paragraph said "two-value set" and named the first two
 alone through the whole of Phase 2O, while the module enforced five; the last of the three
 2O kinds gained its writer in Task 9, and the sentence is corrected here rather than left
 as a document a reader would have to disbelieve (§5.3).*
@@ -1157,7 +1157,18 @@ since no endpoint column carries one; a `mount_prefix` candidate holds `mount`,
 under a sub-router mount whose path was not read whole (Vert.x spec §3c), so its path holds
 the named hole `<prefix>` at `partial`: the mount call, the argument its prefix is read at and
 the call holding it, what that argument read as, and the method that registered the route —
-on ONE row per `(protocol, method, path)` of the rows it explains; a `prefix_not_measured` candidate
+on ONE row per `(protocol, method, path)` of the rows it explains; a `not_read` candidate
+holds `column`, `reason`, `at`, `ordinal`, `caller` and `handler` — an inbound row one of whose
+columns was not read whole, where nothing on the row says why (ruled 2026-11-25): `column` is
+`method` or `path`, `reason` one word of the general list (`values._REASONS`), `at` the code
+that decides it with the call in it (`ordinal`, NULL where it is a whole body), `caller` the
+method that registered the route and `handler` the row's. Filed for a row serving any method
+that the code a request runs through gives a reason to doubt (`method`: `not_readable` at the
+call that reads the method off the request or hands the request to another handler, or at the
+registration where the row names no handler; `external` at a handler whose body is a
+library's and was not read), and for a registration in a loop or a comprehension whose path
+is not read (`path`: `non_enumerable`, at the registration) — on ONE row per
+`(protocol, method, path)` of the rows it explains; a `prefix_not_measured` candidate
 holds `key`, `framework`, `module_versions` and `declared_for` — a configured prefix key the
 server model declares for the module's stack only under version ranges that do not admit the
 module, so no entry applied it — on ONE row per protocol, `method` and `path` NULL, filed only

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import test_django_routes
 from test_django_includes import _SINK, _sunk
-from test_django_routes import _handler, _resolved, _rows
+from test_django_routes import _handler, _not_read, _resolved, _rows
 
 from sextant.application.ports.detector import LibraryRoot
 
@@ -519,6 +519,35 @@ def test_an_unread_library_dispatch_on_a_class_of_no_verbs_is_its_any_method_row
     )
 
     assert rows == [(None, "any", "/x/", _STUB + "Answering#dispatch(sig_", "partial")]
+
+
+def test_an_unread_library_dispatch_files_a_not_read_question(tmp_path: Path, libraries):
+    """The any-method row of a library `dispatch` whose body was not read says why (ruled
+    2026-11-25, R4, OI-540): column `method`, `external`, at that `dispatch`."""
+    workspace = _resolved(
+        tmp_path,
+        (
+            *libraries,
+            _stub(
+                tmp_path,
+                "from django.views import View\n"
+                "class Answering(View):\n"
+                "    def dispatch(self, request, *a, **k):\n        return None\n",
+            ),
+        ),
+        {
+            "urls.py": _HEAD
+            + "from stubviews import Answering\nurlpatterns = [path('x/', Answering.as_view())]\n"
+        },
+    )
+
+    assert _not_read(workspace) == [
+        (
+            None,
+            "/x/",
+            [("method", "external", _STUB + "Answering#dispatch(sig_", "app/urls#<clinit>(sig_")],
+        )
+    ]
 
 
 def test_a_narrowing_wrapper_narrows_the_class_rows(tmp_path: Path, libraries):

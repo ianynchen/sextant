@@ -1507,6 +1507,16 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
             f"{candidate['argument']} of call {candidate['at_ordinal']} in {candidate['at']}, "
             f"which reads as {candidate['read']}, so the prefix is not known"
         )
+    if question == "not_read":
+        # Ruled 2026-11-25 (R4): a row one of whose columns was not read whole, filed by
+        # `resolve/shapes/inbound_routes.py::file_not_read` and verified against that
+        # writer's own `candidates` line: the column, the walk's reason, and the code that
+        # decides it, which is what a reader opens.
+        call = "" if candidate["ordinal"] is None else f" (call {candidate['ordinal']})"
+        return (
+            f"registered by {candidate['caller']}; the {candidate['column']} is not read "
+            f"({candidate['reason']}) at {candidate['at']}{call}"
+        )
     # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
     # (`record_open_questions` raises on anything outside it) — this arm list
     # is the matching enforcement at RENDER time. The two are independent

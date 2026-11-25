@@ -134,10 +134,12 @@ from sextant.application.resolve.shapes.inbound_routes import (
     UNROOTED_PATH,
     WORDS,
     fallback_word,
+    file_not_read,
     file_refusal,
     is_unrooted,
     join_prefix,
     media_columns,
+    not_read_rows,
     refusal_rows,
     validated_verbless_serves,
     validated_word_fallback,
@@ -190,6 +192,7 @@ from sextant.application.resolve.values import (
     EXTERNAL,
     INT,
     LITERAL,
+    NON_ENUMERABLE,
     NOT_READABLE,
     RECEIVER,
     STRING,
@@ -503,6 +506,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     ways: dict[int, int] = {}
     # Why a row's path holds `<prefix>` (`mount_prefix`), filed once the rows are settled.
     unread_prefixes: dict[tuple[str, str | None, str], dict[str, Any]] = {}
+    # Why a row's method or path was not read (`not_read`), filed for the rows the run keeps.
+    not_read: dict[tuple[str, str | None, str | None], dict[str, Any]] = {}
     if mount_rules is not None:
         mounts, mounted, ways = _mounts(
             read_whole, mount_rules, walk_index, workspace, refuses_unrooted, catalog
@@ -573,6 +578,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 mounts=mounts,
                 routers=routers,
                 unread_prefixes=unread_prefixes,
+                not_read=not_read,
                 response_fallback=response_fallback,
                 parameter_rules=parameters,
                 recipe_roots=recipe_roots,
@@ -699,6 +705,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             *refusal_rows(_own_candidates(refusals, borrowed)),
             *unread_rows(_own_candidates(unread, borrowed)),
             *unread_prefix_rows(_own_candidates(unread_prefixes, borrowed), rows),
+            *not_read_rows(_own_candidates(not_read, borrowed), rows),
         ],
     )
 
@@ -889,9 +896,10 @@ class _RequestFlow:
     and parameters it is handed to, and whether it is handed to a value that is called and is
     no parameter of the method (`View.as_view()(request)`: another handler)."""
 
-    reads: frozenset[tuple[str, int]]
+    # Each with the first call that does it (its ordinal), for the question that names it.
+    reads: Mapping[tuple[str, int], int]
     hands: Mapping[tuple[str, int], tuple[tuple[str, int], ...]]
-    calls: frozenset[tuple[str, int]]
+    calls: Mapping[tuple[str, int], int]
 
 
 def _request_flow(
@@ -909,10 +917,10 @@ def _request_flow(
         return None
     dispatch = workspace.once(dispatch_of)
     names = {name for _, name in named}
-    reads: set[tuple[str, int]] = set()
-    calls: set[tuple[str, int]] = set()
+    reads: dict[tuple[str, int], int] = {}
+    calls: dict[tuple[str, int], int] = {}
     hands: dict[tuple[str, int], list[tuple[str, int]]] = {}
-    for (method, _), site in index.sites.items():
+    for (method, ordinal), site in sorted(index.sites.items()):
         on = site.get("receiver_parameter")
         owner = site.get("owner")
         if (
@@ -926,7 +934,7 @@ def _request_flow(
                 )
             )
         ):
-            reads.add((method, int(str(on))))
+            reads.setdefault((method, int(str(on))), ordinal)
         given = (site["arguments"] or [None])[0]
         if (
             site["name"] == "__call__"
@@ -935,7 +943,7 @@ def _request_flow(
             and given.get("kind") == "parameter"
             and given.get("value") is not None
         ):
-            calls.add((method, int(str(given["value"]))))
+            calls.setdefault((method, int(str(given["value"]))), ordinal)
     for (callee, position), callers in index.callers.items():
         for caller, ordinal, slot in callers:
             made = index.sites.get((caller, ordinal)) or {}
@@ -949,9 +957,7 @@ def _request_flow(
                 and entry.get("value") is not None
             ):
                 hands.setdefault((caller, int(str(entry["value"]))), []).append((callee, position))
-    return _RequestFlow(
-        frozenset(reads), {key: tuple(value) for key, value in hands.items()}, frozenset(calls)
-    )
+    return _RequestFlow(reads, {key: tuple(value) for key, value in hands.items()}, calls)
 
 
 def _any_method_doubted(
@@ -959,9 +965,12 @@ def _any_method_doubted(
     judged: "_Judged | None",
     context: "_DeriveContext",
     paths: Sequence[tuple[Producer, Path]],
-) -> bool:
-    """Whether the code a request to this any-method row runs through gives a reason to doubt
-    that every method is answered (design 2026-11-23 §4d): the row names no handler; the
+    registered: tuple[str, int],
+) -> tuple[str, str, int | None] | None:
+    """The reason the code a request to this any-method row runs through gives to doubt that
+    every method is answered, with the code that gives it (`not_read`'s `reason`, `at` and
+    `ordinal`: the registration at `registered`, a body, or the call in a body that reads the
+    method), or None where it gives none (design 2026-11-23 §4d): the row names no handler; the
     handler's body was not read (a library's); or the handler, or a module wrapper the walk ran
     through to reach it, reads the method off the request it received, in its own body or in
     module code it hands that request to, as far as the module's code goes, or hands the
@@ -969,11 +978,11 @@ def _any_method_doubted(
     are the handler value's (`_handler_paths`)."""
     flow, index = context.request_flow, context.values
     if flow is None or index is None:
-        return False
+        return None
     if judged is None or judged.symbol is None:
-        return True
+        return NOT_READABLE, registered[0], registered[1]
     if context.method_symbols.get(bare_descriptor(judged.symbol)) != judged.symbol:
-        return True
+        return EXTERNAL, judged.symbol, None
     through = [body for _, path in paths for body in path.ran_through()]
     # The request is each body's parameter 0.
     pending = [(body, 0) for body in dict.fromkeys([judged.symbol, *through])]
@@ -984,9 +993,9 @@ def _any_method_doubted(
             continue
         seen.add(at_body)
         if at_body in flow.reads or at_body in flow.calls:
-            return True
+            return NOT_READABLE, at_body[0], flow.reads.get(at_body, flow.calls.get(at_body))
         pending.extend(flow.hands.get(at_body, ()))
-    return False
+    return None
 
 
 def _handler_paths(handler: Any, context: "_DeriveContext") -> tuple[tuple[Producer, Path], ...]:
@@ -1236,6 +1245,9 @@ class _DeriveContext:
     # ordered as if on one router.
     routers: MountReader | None = None
     unread_prefixes: dict[tuple[str, str | None, str], dict[str, Any]] | None = None
+    # Why a row's method or path was not read (`not_read`, ruled 2026-11-25), filed for the
+    # rows the run keeps. None for a caller that files none.
+    not_read: dict[tuple[str, str | None, str | None], dict[str, Any]] | None = None
     # The root call of the end being derived (`ChainEnd.root`), for a `client_base` whose client
     # is that call's receiver (`client_arg: receiver`, Vert.x spec §3d). None otherwise.
     root: Mapping[str, Any] | None = None
@@ -1449,13 +1461,14 @@ def _derive_captured(
     # A row serving any method says the endpoint answers every method (design 2026-11-23 §4d):
     # where the code a request to it runs through gives a reason to doubt that, the row is no
     # surer than `partial`.
-    if (
-        verbless
-        and direction == "inbound"
-        and context.request_flow is not None
-        and not end.inexact
-        and _any_method_doubted(captures.get("handler"), answering, context, handler_paths)
-    ):
+    doubt = (
+        _any_method_doubted(
+            captures.get("handler"), answering, context, handler_paths, _registered_at(end)
+        )
+        if verbless and direction == "inbound" and context.request_flow is not None
+        else None
+    )
+    if doubt is not None:
         end = replace(end, inexact=True)
     # A verbless route of a framework that serves it for every verb says so on the row
     # (`method_kind`, Vert.x spec §3a), never by the NULL method alone, which reads as "nobody
@@ -2053,6 +2066,33 @@ def _derive_captured(
             "path_kind": path_kind if path is not None else None,
             "method_kind": method_kind,
         }
+        # A column not read says why where nothing on the row does (`not_read`, ruled
+        # 2026-11-25): the doubt of an any-method row, and a path not read of a registration
+        # in a loop, whose values no rule lists.
+        if direction == "inbound" and context.not_read is not None:
+            if doubt is not None and verb is None:
+                file_not_read(
+                    context.not_read,
+                    row,
+                    column="method",
+                    reason=doubt[0],
+                    at=doubt[1],
+                    ordinal=doubt[2],
+                )
+            at = _registered_at(end)
+            if (
+                path is None
+                and context.values is not None
+                and (context.values.sites.get(at) or {}).get("loop_group") is not None
+            ):
+                file_not_read(
+                    context.not_read,
+                    row,
+                    column="path",
+                    reason=NON_ENUMERABLE,
+                    at=at[0],
+                    ordinal=at[1],
+                )
         # Dispatch that can run several bodies (`_Judged.alternatives`) is the narrowed case
         # several handlers on one route already are: one row per answering body, each judged
         # on its own, `narrowed` among them (`_settle`). The route's metadata goes with the

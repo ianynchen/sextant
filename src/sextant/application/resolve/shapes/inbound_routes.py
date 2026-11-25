@@ -9,7 +9,7 @@ this module and neither keeps a version of its own.
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from sextant.application.ports.catalogs import CatalogError
@@ -267,6 +267,73 @@ def file_refusal(
     candidate = {"caller": caller, "handler": handler, "reason": reason}
     if candidate not in row["candidates"]:
         row["candidates"].append(candidate)
+
+
+# The `open_questions` kind a row with a column not read whole is filed under
+# (`resolve/open_questions.py` owns the closed set; this is the one name it holds for it).
+NOT_READ = "not_read"
+
+
+def file_not_read(
+    not_read: dict[tuple[str, str | None, str | None], dict[str, Any]],
+    row: Mapping[str, Any],
+    *,
+    column: str,
+    reason: str,
+    at: str,
+    ordinal: int | None,
+) -> None:
+    """Notes why `column` of one row was not read (`not_read`, D01), against the row's wire
+    identity: the reason and the code that decides it (`at`, and the call `ordinal` in it
+    where one call does). Rows sharing one identity share one question, each a candidate of
+    it; written by `not_read_rows`."""
+    question = not_read.setdefault(
+        (str(row["protocol"]), row["method"], row["path"]),
+        {
+            "method_kind": row.get("method_kind"),
+            "path_kind": row.get("path_kind"),
+            "candidates": [],
+        },
+    )
+    candidate = {
+        "column": column,
+        "reason": reason,
+        "at": at,
+        "ordinal": ordinal,
+        "caller": row["caller"],
+        "handler": row["handler"],
+    }
+    if candidate not in question["candidates"]:
+        question["candidates"].append(candidate)
+
+
+def not_read_rows(
+    not_read: Mapping[tuple[str, str | None, str | None], dict[str, Any]],
+    rows: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """The `open_questions` rows of the columns not read, for the rows the run kept, in a
+    stable order (NFR-1)."""
+    kept = {(row["protocol"], row["method"], row["path"]) for row in rows}
+    found = []
+    for key in sorted(not_read, key=lambda k: (k[0], k[1] or "", k[2] or "")):
+        if key not in kept:
+            continue
+        candidates = sorted(
+            not_read[key]["candidates"], key=lambda c: json.dumps(c, sort_keys=True)
+        )
+        found.append(
+            {
+                "protocol": key[0],
+                "method": key[1],
+                "path": key[2],
+                "method_kind": not_read[key]["method_kind"],
+                "path_kind": not_read[key]["path_kind"],
+                "question": NOT_READ,
+                "candidates": json.dumps(candidates, sort_keys=True, separators=(",", ":")),
+                "evidence": "; and ".join(sorted({str(c["at"]) for c in candidates})),
+            }
+        )
+    return found
 
 
 def refusal_rows(

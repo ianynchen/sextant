@@ -263,7 +263,13 @@ read, when the handler or a wrapper the path ran through reads the request's met
 module code it hands the request to; when it hands the request to another view; or when its
 body was not read. A request handed only to a library function (`render(request, ...)`) is
 no doubt. Example: `def v(request): if request.method == "POST": ...` gives one row, method
-NULL, `partial`. No question is filed for such a row yet (OI-540). Tests:
+NULL, `partial`. The row's question `not_read` (ruled 2026-11-25, R4) names the column
+`method`, the reason and the code: `not_readable` at the call that reads the method (or at
+the registration, where the row names no handler), `external` at a library handler whose
+body was not read. One question per wire identity. Tests:
+`tests/application/test_django_verbs.py::test_a_view_that_reads_request_method_files_a_not_read_question`,
+`::test_a_helper_that_reads_the_method_is_the_code_the_question_names`,
+`tests/application/test_django_class_views.py::test_an_unread_library_dispatch_files_a_not_read_question`,
 `tests/application/test_django_verbs.py::test_a_view_that_reads_request_method_is_partial`,
 `::test_a_view_that_hands_its_request_to_a_helper_that_reads_the_method_is_partial`,
 `::test_a_view_that_calls_another_view_with_its_request_is_partial`,
@@ -354,7 +360,7 @@ table; they are ruled and built now (rows in "Lists and arrays" and "Constants a
 
 | Case | Example | Seen in |
 |---|---|---|
-| A registration call inside a loop or a comprehension | `for r in REDIRECTS: urls += [path(r.old_url, ...)]` | **RULED 2026-11-23: not supported.** Counted in 14 Python projects: about 15 places, 9 over a run-time registry, 6 over written values (zulip 4, redash 1, home-assistant 1). Measured 2026-11-24 on zulip: 22 rows with no path stand for 149 Django patterns. The ruling asks for a question that names the line; none is filed today (OI-502) |
+| A registration call inside a loop or a comprehension | `for r in REDIRECTS: urls += [path(r.old_url, ...)]` | **RULED 2026-11-23: not supported.** Counted in 14 Python projects: about 15 places, 9 over a run-time registry, 6 over written values (zulip 4, redash 1, home-assistant 1). Measured 2026-11-24 on zulip: 22 rows with no path stand for 149 Django patterns. The question that names the registration is filed (ruled 2026-11-25, R4): `not_read`, column `path`, `non_enumerable`, the registering method and its call (`tests/application/test_django_routes.py::test_a_registration_in_a_loop_whose_path_is_not_read_files_a_question`). A path not read outside a loop files none (OI-566) |
 | A map or dict as a value source, a lookup by key | `handlers[request.method]`; `Map.of(...)`; `switch` | **RULED 2026-11-23: not supported.** zulip `rest_dispatch`: 295 routes, 829 Django (method, route) pairs (OI-504) |
 | A `**kwargs` parameter (the left-over keywords) | `rest_path("realm", GET=f, PATCH=g)` | **RULED 2026-11-23: not supported.** zulip, the same 295 routes: one any-method row each, `partial` (OI-503) |
 | A constant read from another class (Java) | `Other.TOPIC` | no test found (the "Static field" row is the nearest rule) |

@@ -17,6 +17,17 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A row whose method or path was not read says why** (ruling R4 of 2026-11-25, OI-540,
+  OI-502). A new open-question kind, `not_read`, the eighteenth: one question per wire identity,
+  each candidate the column (`method` or `path`), the reason (a word of the value walk's list)
+  and the code that decides it. Filed for an inbound row serving any method that the code
+  doubts (`not_readable` at the call that reads `request.method`, `external` at a library
+  handler whose body was not read) and for a registration in a loop or a comprehension whose
+  path is not read (`non_enumerable`, at the registration). The rows themselves do not change.
+- **A value read through a helper the path entered on two calls is not read, for every reader**
+  (ruling R6 of 2026-11-25, OI-537, OI-558). The guard was the verb reader's alone; it is the
+  value walk's now (`resolve_positions_on_paths`), so a mount prefix or a schedule read within
+  such a path answers `not_readable` too, never the first call's value for both entries.
 - **A test on a value the code fixes is decided, and a decorator usable bare or with arguments
   names the view** (rulings R2 and R5 of 2026-11-25, OI-532, OI-557; fact schema 24). A Python
   test that is one name, `not x`, `x is None` or `x is not None` is decided where the value walk
