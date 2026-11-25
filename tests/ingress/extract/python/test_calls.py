@@ -427,6 +427,30 @@ def test_a_middle_function_captures_what_its_inner_function_reads(tmp_path: Path
     assert f.receiver_parameter == 1
 
 
+def test_a_name_a_deeper_function_holds_itself_is_no_capture_of_the_middle(tmp_path: Path):
+    """`c` reads its own parameter `request` and `b` holds none: `b` captures nothing of `a`,
+    though `a` has a `request` too; `c` captures `b`'s `f` alone (OI-536)."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "def a(request):\n"
+                "    def b(f):\n"
+                "        def c(request):\n"
+                "            def d():\n"
+                "                return None\n"
+                "            return f(request) or d\n"
+                "        return c\n"
+                "    return b\n"
+            )
+        },
+    )
+
+    assert _made(tree, f"app/m#a({DIS}).") == []
+    (from_b,) = _made(tree, f"app/m#a$b({DIS}).")
+    assert from_b.arguments == [CallArgument(kind="parameter", value=0)]
+
+
 def test_a_name_written_again_after_the_def_is_captured_unread(tmp_path: Path):
     tree = _scan(
         tmp_path,
@@ -445,6 +469,31 @@ def test_a_name_written_again_after_the_def_is_captured_unread(tmp_path: Path):
 
     (site,) = _made(tree, f"app/m#outer({DIS}).")
     assert site.arguments == [CallArgument(kind="unresolved")]
+
+
+def test_a_name_a_loop_writes_is_captured_unread_by_a_def_in_the_loop(tmp_path: Path):
+    """`for name in NAMES: def view(...)`: the loop writes `name` again on its next pass, after
+    the `def`, so the capture has no one value (OI-535); a name the loop does not write keeps
+    its value."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "def outer():\n"
+                "    kept = 'k'\n"
+                "    for name in ['a', 'b']:\n"
+                "        def view(request):\n"
+                "            return (name, kept)\n"
+                "        register(view)\n"
+            )
+        },
+    )
+
+    (site,) = _made(tree, f"app/m#outer({DIS}).")
+    assert site.arguments == [
+        CallArgument(kind="unresolved"),
+        CallArgument(kind="string", value="k"),
+    ]
 
 
 def test_a_name_an_inner_function_rebinds_nonlocal_is_captured_unread(tmp_path: Path):
@@ -826,6 +875,58 @@ def test_an_element_store_and_delete_are_the_calls_the_language_makes(tmp_path: 
     ]
 
 
+def test_an_element_inside_a_tuple_target_is_stored_or_deleted(tmp_path: Path):
+    """`x[0], b = v` stores into the element at module level as in a function, and
+    `del (x[0], b)` deletes it (OI-515)."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "VERBS = ['get']\n"
+                "VERBS[0], b = 'post', 1\n"
+                "del (VERBS[0], b)\n"
+                "def f():\n"
+                "    VERBS[0], c = 'post', 1\n"
+                "    del (VERBS[0], c)\n"
+            )
+        },
+    )
+
+    for caller in (f"app/m#<clinit>({DIS}).", f"app/m#f({DIS})."):
+        assert [
+            c.target.name
+            for c in _calls(tree, caller)
+            if c.receiver_field == "app/m#VERBS." and c.target.owner == "builtins/list#"
+        ] == ["__setitem__", "__delitem__"], caller
+
+
+def test_an_augmented_element_store_reads_its_object_and_index_once(tmp_path: Path):
+    """`x[f()] += v` runs `f()` once (OI-513): the store takes the object and the index the
+    read took."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "def at():\n    return 0\n"
+                "def table():\n    return VERBS\n"
+                "VERBS = ['get']\n"
+                "table()[at()] += 'z'\n"
+                "def f():\n"
+                "    table()[at():at()] += ['q']\n"
+            )
+        },
+    )
+
+    for caller in (f"app/m#<clinit>({DIS}).", f"app/m#f({DIS})."):
+        calls = _calls(tree, caller)
+        named = [c.target.name for c in calls]
+        assert named.count("table") == 1, caller
+        assert named.count("at") == (1 if "clinit" in caller else 2), caller
+        (read,) = [c for c in calls if c.target.name == "__getitem__"]
+        (store,) = [c for c in calls if c.target.name == "__setitem__"]
+        assert (store.receiver, store.arguments[0]) == (read.receiver, read.arguments[0])
+
+
 def _writes(tree, field: str) -> list[CallArgument | None]:
     return [w.value for w in _facts(tree, FieldWriteFact) if w.field == field]
 
@@ -1049,6 +1150,27 @@ def test_format_the_reader_does_not_model_is_unread(tmp_path: Path):
         assert not [s for s in _calls(tree, method) if s.invoke_kind == "dynamic"], shape
 
 
+def test_a_template_whose_text_holds_braces_that_are_no_hole(tmp_path: Path):
+    """`{{` and `}}` are a brace of the text. Where the text then holds `{}`, the template
+    (whose holes are `{}`) cannot tell it from a hole: the value is unread (OI-519). Other
+    braces of the text are kept as they are."""
+    shapes = ["'/x/{{}}/{}'.format(x)", "f'/x/{{}}/{x}'"]
+    kept = "'/x/{{id}}/{}'.format(x)"
+    text = "".join(
+        f"def f{at}(x):\n    return {shape}\n" for at, shape in enumerate([*shapes, kept])
+    )
+    tree = _scan(tmp_path, {"app/m.py": text})
+
+    for at, shape in enumerate(shapes):
+        method = f"app/m#f{at}({DIS})."
+        (returned,) = _returns(tree, method)
+        assert returned.value is not None and returned.value.kind == "unresolved", shape
+        assert not [s for s in _calls(tree, method) if s.invoke_kind == "dynamic"], shape
+    (returned,) = _returns(tree, f"app/m#f{len(shapes)}({DIS}).")
+    assert returned.value is not None
+    assert (returned.value.kind, returned.value.value) == ("concat", "/x/{id}/{}")
+
+
 # -- held lists in order (plan 2026-11-23 Task 6) -----------------------------------------
 
 _A = CallArgument(kind="string", value="a")
@@ -1094,11 +1216,11 @@ def test_a_name_written_under_a_test_or_in_a_loop_keeps_its_read(tmp_path: Path)
     assert _writes(tree, "app/m#G.") == [_list(_star("app/m#F."))]
 
 
-def test_another_list_added_under_a_test_is_one_unread_member(tmp_path: Path):
+def test_another_list_added_under_a_test_is_a_read_under_that_test(tmp_path: Path):
     """`if X: A += other.B`: the members of `other.B` are served only where the test holds,
-    and no fact says so. They are one unread member (spec §9b), never read as members, even
-    where this body holds them in order. A registration-like call's result added under a
-    test stays a member."""
+    and the write says so (`field_write.guards`, ruling R1 of 2026-11-25, OI-508): they stay a
+    read of the other name, never the elements this body holds in order. A registration-like
+    call's result added under a test stays a member."""
     tree = _scan(
         tmp_path,
         {
@@ -1118,11 +1240,92 @@ def test_another_list_added_under_a_test_is_one_unread_member(tmp_path: Path):
     )
 
     first, under, local, call = _writes(tree, "app/m#A.")
-    unread = CallArgument(kind="unresolved", keyword="*")
     assert first == _list(_A)
-    assert under == _list(_A, unread)
-    assert local == _list(_star("app/m#A."), unread)
+    assert under == _list(_star("app/m#A."), _star("app/other#B."))
+    assert local == _list(_star("app/m#A."), _star("app/m#L."))
     assert call is not None and call.elements is not None
     own, member = call.elements
     assert own == _star("app/m#A.")
     assert member.kind == "unresolved" and member.source is not None and member.keyword is None
+    guarded = [w.guards for w in _facts(tree, FieldWriteFact) if w.field == "app/m#A."]
+    assert guarded[0] is None
+    assert [[g.test for g in guards or []] for guards in guarded[1:]] == [["os.environ"]] * 3
+
+
+def test_a_star_import_of_a_variable_is_a_write_of_the_name(tmp_path: Path):
+    """`from app.base import *` binds each variable `base` holds to the importing module's
+    name, as `from app.base import DEBUG` does (ruling R9): one field write per name the
+    star takes and the module's own statements do not bind, its value a read of the name
+    where it is defined, through a second star too. A name the module writes itself keeps
+    its own write alone; a function, a class and a `_private` name are not written."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/defaults.py": "TIMEOUT = 5\n",
+            "app/base.py": "from app.defaults import *\nDEBUG = False\nROOT = 'app.urls'\n"
+            "_HIDDEN = 1\ndef helper():\n    return None\n",
+            "app/local.py": "from app.base import *\nDEBUG = True\n",
+        },
+    )
+
+    writes = {
+        bare_descriptor(w.field): (w.value.kind, w.value.symbol and bare_descriptor(w.value.symbol))
+        for w in _facts(tree, FieldWriteFact)
+        if bare_descriptor(w.field).startswith("app/local#")
+    }
+    assert writes == {
+        "app/local#DEBUG.": ("boolean", None),
+        "app/local#ROOT.": ("field", "app/base#ROOT."),
+        "app/local#TIMEOUT.": ("field", "app/defaults#TIMEOUT."),
+    }
+
+
+def test_a_write_of_a_name_a_star_import_can_replace_says_so(tmp_path: Path):
+    """D00 §5 `field_write.replaceable` (fact schema 25, ruling R10 of 2026-11-25): a write of
+    a module name carries the mark where a star import of that module can replace the name.
+    A name the module writes itself: a star that binds it too, a star whose source is not
+    read, a star in a `try`. A name star imports alone give: where a star of the module is
+    not read, or the name is replaceable where the last star takes it from. A star source
+    that is read and does not bind the name replaces nothing. A read from another file of a
+    marked name a star alone gives names that module's name, not the one where it is defined
+    (`reader#A`); the write of a star itself names where the name is defined, and has the
+    mark where any module on the way can replace it (`over`)."""
+    absent = "try:\n    from app.absent import *\nexcept ImportError:\n    pass\n"
+    tree = _scan(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/defaults.py": "TIMEOUT = 5\nDEBUG = True\n",
+            "app/base.py": "from app.defaults import *\nDEBUG = False\nROOT = 'app.urls'\n",
+            "app/local.py": "from app.base import *\nONLY = 1\n" + absent,
+            "app/over.py": "from app.local import *\n",
+            "app/reader.py": "from app import base, local\nA = local.ROOT\nB = base.TIMEOUT\n",
+        },
+    )
+
+    marked = {
+        bare_descriptor(w.field): (
+            w.replaceable,
+            w.value.symbol and bare_descriptor(w.value.symbol),
+        )
+        for w in _facts(tree, FieldWriteFact)
+        if bare_descriptor(w.field).startswith("app/")
+    }
+    assert marked == {
+        "app/defaults#TIMEOUT.": (None, None),
+        "app/defaults#DEBUG.": (None, None),
+        "app/base#DEBUG.": (True, None),
+        "app/base#ROOT.": (None, None),
+        "app/base#TIMEOUT.": (None, "app/defaults#TIMEOUT."),
+        "app/local#ONLY.": (True, None),
+        "app/local#DEBUG.": (True, "app/base#DEBUG."),
+        "app/local#ROOT.": (True, "app/base#ROOT."),
+        "app/local#TIMEOUT.": (True, "app/defaults#TIMEOUT."),
+        "app/over#ONLY.": (True, "app/local#ONLY."),
+        "app/over#DEBUG.": (True, "app/base#DEBUG."),
+        "app/over#ROOT.": (True, "app/base#ROOT."),
+        "app/over#TIMEOUT.": (True, "app/defaults#TIMEOUT."),
+        "app/reader#A.": (None, "app/local#ROOT."),
+        "app/reader#B.": (None, "app/defaults#TIMEOUT."),
+    }

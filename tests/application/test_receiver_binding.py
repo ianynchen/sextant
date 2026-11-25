@@ -707,10 +707,10 @@ def test_a_class_name_the_module_rebinds_is_a_variable_not_the_class(tmp_path: P
     workspace.close()
 
 
-def test_a_path_the_walk_cannot_hold_keeps_the_site_open(tmp_path: Path):
+def test_a_value_through_one_helper_on_two_calls_binds_the_site(tmp_path: Path):
     """One caller hands `h` a `Client`; the other a value that went through one helper on
-    two calls, which no path can hold. The `Client` row is not the whole list: `partial`,
-    beside a `not_readable` row saying why."""
+    two calls (`wrap(wrap(Session()))`), each entry its own call on one path (OI-537): both
+    types, one row each."""
     workspace = _resolved(
         tmp_path,
         {
@@ -724,8 +724,10 @@ def test_a_path_the_walk_cannot_hold_keeps_the_site_open(tmp_path: Path):
     )
     site = _site(workspace, "app/b#h(sig_dd69782a).", "get")
     rows = _bound(workspace, site)
-    assert (_CLIENT, "partial") in {(row["owner"], row["resolution"]) for row in rows}
-    assert any(row["reason"] == "not_readable" for row in rows)
+    assert {(row["owner"], row["resolution"]) for row in rows} == {
+        (_CLIENT, "narrowed"),
+        (_SESSION, "narrowed"),
+    }
     workspace.close()
 
 

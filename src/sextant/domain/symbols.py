@@ -304,6 +304,13 @@ _BASE_TYPES = {
 }
 
 
+def dotted_type(descriptor: str) -> str:
+    """`type_descriptor`'s inverse: the dotted name a catalog and a program write for the
+    type or module `descriptor` names (`weblate/settings_docker#` is
+    `weblate.settings_docker`)."""
+    return descriptor.removesuffix("#").replace("/", ".")
+
+
 def method_type_descriptor(parameters: Sequence[str], returns: str) -> str:
     """A catalog's dotted parameter and return types as the JVM method descriptor a call
     site carries (JVMS 4.3.3): `([org.quartz.JobExecutionContext], void)` is

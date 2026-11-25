@@ -4680,6 +4680,9 @@ def test_every_resolve_pass_logs_its_seconds_at_info(
         # Spec 2026-11-06 §3b: the owners of calls the facts leave to the resolver, bound
         # from their receivers, with the edges redrawn after each round that bound one.
         "bind_receivers",
+        # Ruling R3 of 2026-11-25: the settings modules' configuration rows, read by the
+        # value walk over the edges above, before the engines read the environments.
+        "record_module_config",
         "derive_endpoints",
         # A client of a gRPC service this module serves is a hop, not an outbound row
         # (spec 2026-10-25 §3c): directly after the engines, before anything keys on a row.

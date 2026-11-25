@@ -1,0 +1,438 @@
+"""Django settings modules are the module's environments (ruling R3 of 2026-11-25, design note
+approved 2026-11-25).
+
+Each module that holds the root setting (`root_setting`, Django's `ROOT_URLCONF`) is a source
+of configuration, and its module name is the environment: one `resolved_config` row per
+setting name per settings module, the value read by the value walk, through `from .base
+import *`. A read of `settings.X` on `django.conf.settings` is the configuration key `X`. A
+test on a setting is a `property` condition with each environment's value as evidence,
+decided in an environment whose settings module fixes the key, and the routes of a root exist
+where `ROOT_URLCONF` is that root.
+
+Each test writes a small Django program and runs the real scanner and pipeline with the
+shipped catalogs (`test_django_routes._resolved`).
+"""
+
+import json
+from pathlib import Path
+
+import pytest
+import test_django_routes
+from test_django_routes import _resolved
+
+from sextant.application.ports.catalogs import CatalogError
+from sextant.application.resolve.values import resolve_site, value_index
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
+
+libraries = test_django_routes.libraries
+orders_django_env = test_django_routes.orders_django_env
+
+_URLS = (
+    "from django.urls import path\n\ndef v(request):\n    return None\n\n"
+    "urlpatterns = [path('u/', v)]\n"
+)
+
+
+def _config(workspace) -> dict[tuple[str, str], tuple[object, object]]:
+    """`resolved_config` as (environment, key) -> (value, reason)."""
+    return {
+        (str(row["environment"]), str(row["key"])): (row["value"], row["unresolved_reason"])
+        for row in workspace.query("resolved_config")
+    }
+
+
+def test_each_module_holding_the_root_setting_is_an_environment(tmp_path: Path, libraries):
+    """Two settings modules are two environments named by the module; a module with no root
+    setting (`urls`, `helpers`) is none. Each name the module writes is a key: a literal is
+    its text, an environment read its expression, with the default where one is written."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "import os\nROOT_URLCONF = 'app.urls'\nDEBUG = False\n"
+            "HOST = os.environ.get('APP_HOST', 'localhost')\nLIMIT = 5\n",
+            "settings_dev.py": "ROOT_URLCONF = 'app.urls'\nDEBUG = True\n",
+            "helpers.py": "OTHER = 1\n",
+            "urls.py": _URLS,
+        },
+    )
+
+    config = _config(workspace)
+    assert sorted({environment for environment, _ in config}) == [
+        "app.settings",
+        "app.settings_dev",
+    ]
+    assert config[("app.settings", "DEBUG")] == ("False", None)
+    assert config[("app.settings", "LIMIT")] == ("5", None)
+    assert config[("app.settings", "HOST")] == ("${APP_HOST:-localhost}", None)
+    assert config[("app.settings", "ROOT_URLCONF")] == ("app.urls", None)
+    assert config[("app.settings_dev", "DEBUG")] == ("True", None)
+    # A key another environment sets and this one does not: `external`, as a profile's is.
+    assert config[("app.settings_dev", "LIMIT")] == (None, "external")
+    assert not [key for _, key in config if key in ("OTHER", "urlpatterns")]
+
+
+def test_a_settings_module_holds_what_a_star_import_gives_it(tmp_path: Path, libraries):
+    """`from app.settings import *`, then one name written again (weblate's `settings_test`; a file a test runner collects is not read):
+    the module holds the root setting through the star, so it is an environment; its own
+    write wins, every other name has the value of the module it comes from."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "ROOT_URLCONF = 'app.urls'\nDEBUG = False\nLIMIT = 5\n",
+            "settings_ci.py": "from app.settings import *\nDEBUG = True\n",
+            "urls.py": _URLS,
+        },
+    )
+
+    config = _config(workspace)
+    assert config[("app.settings_ci", "ROOT_URLCONF")] == ("app.urls", None)
+    assert config[("app.settings_ci", "DEBUG")] == ("True", None)
+    assert config[("app.settings_ci", "LIMIT")] == ("5", None)
+    assert config[("app.settings", "DEBUG")] == ("False", None)
+
+
+def test_a_setting_with_no_one_value_states_a_reason(tmp_path: Path, libraries):
+    """A name written twice (one write under a test), a list, `None`, and a value a library
+    call makes: no one value, so the row is unresolved with a reason, never a guess."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "import sys\nimport socket\nROOT_URLCONF = 'app.urls'\n"
+            "MODE = 'a'\nif len(sys.argv) > 1:\n    MODE = 'b'\n"
+            "APPS = ['one', 'two']\nNAME = socket.gethostname()\nNOTHING = None\n",
+            "urls.py": _URLS,
+        },
+    )
+
+    config = _config(workspace)
+    assert config[("app.settings", "MODE")] == (None, "not_readable")
+    assert config[("app.settings", "APPS")] == (None, "not_readable")
+    assert config[("app.settings", "NAME")][0] is None
+    assert config[("app.settings", "NAME")][1] is not None
+    assert config[("app.settings", "NOTHING")] == (None, "not_readable")
+
+
+def test_a_program_with_no_root_setting_has_no_environment(tmp_path: Path, libraries):
+    """A reusable app writes no `ROOT_URLCONF`: no settings module, no row, `default`."""
+    workspace = _resolved(
+        tmp_path, libraries, {"conf.py": "DEBUG = True\n", "urls.py": _URLS}, None
+    )
+
+    assert _config(workspace) == {}
+
+
+# -- a read of `settings.X` is the configuration key `X` ---------------------------------------
+
+
+def _sunk(tmp_path: Path, libraries, files: dict[str, str]) -> list[list[tuple[object, ...]]]:
+    """What each `sink(...)` call is handed, in the order written: the value walk's answers,
+    `(kind, value, reason)`, read with the shipped value models."""
+    workspace = _resolved(tmp_path, libraries, files)
+    index = value_index(
+        workspace,
+        returns_arguments=YamlCatalogSource(catalogs_dir()).load()[0].returns_arguments,
+    )
+    sites = sorted(
+        (row for row in workspace.query("call_sites") if row["name"] == "sink"),
+        key=lambda row: row["ordinal"],
+    )
+    return [
+        [
+            (binding.slots[0].kind, binding.slots[0].value, binding.slots[0].reason)
+            for binding in resolve_site(workspace, dict(row), index)
+        ]
+        for row in sites
+    ]
+
+
+def test_a_read_of_a_django_setting_is_its_key(tmp_path: Path, libraries):
+    """`settings.API_HOST` on `django.conf.settings` is the configuration key `API_HOST`,
+    the expression `${API_HOST}` (`key_reads` in `value-models/django.yml`; the role of
+    `@Value("${k}")` and of a pydantic settings field): which settings module gives the
+    value is the deployment's, so no module's literal is the answer. In a text it is a hole
+    of that text. An attribute of another object is not a key."""
+    sunk = _sunk(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "ROOT_URLCONF = 'app.urls'\nAPI_HOST = 'billing.internal'\n",
+            "urls.py": _URLS,
+            "client.py": "from django.conf import settings\nfrom app import other\n\n"
+            "def sink(x):\n    return None\n\n"
+            "def run():\n    sink(settings.API_HOST)\n"
+            "    sink('https://' + settings.API_HOST + '/pay')\n    sink(other.API_HOST)\n",
+            "other.py": "API_HOST = 'plain'\n",
+        },
+    )
+
+    assert sunk == [
+        [("expression", "${API_HOST}", None)],
+        [("expression", "https://${API_HOST}/pay", None)],
+        [("literal", "plain", None)],
+    ]
+
+
+def test_the_shipped_key_read_is_djangos_settings_object():
+    found = [
+        (entry["owner"], entry["form"]) for entry in YamlCatalogSource(catalogs_dir()).key_reads()
+    ]
+    assert found == [("django/conf/settings#", "key_read")]
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        "{ owner: a.b }",  # no probe
+        "{ owner: a.b, method: get, by: x.md }",  # unknown key
+        "{ by: x.md }",  # no owner
+        "{ owner: a.b, by: x.md }\n  - { owner: a.b, by: x.md }",  # stated twice
+    ],
+)
+def test_a_malformed_key_read_is_refused(tmp_path: Path, entries):
+    (tmp_path / "value-models").mkdir()
+    (tmp_path / "value-models" / "invented.yml").write_text(
+        f"id: invented\nkey_reads:\n  - {entries}\n", encoding="utf-8"
+    )
+    with pytest.raises(CatalogError, match="key_reads"):
+        YamlCatalogSource(tmp_path).key_reads()
+
+
+# -- conditions: a test on a setting, and the root ---------------------------------------------
+
+
+def _existence(workspace) -> list[tuple[object, ...]]:
+    """`endpoint_existence` as (path, kind, test, keys, environment, holds, evidence)."""
+    live = {row["row_id"]: row["path"] for row in workspace.query("endpoints")}
+    found = []
+    for row in workspace.query("endpoint_existence"):
+        expression = json.loads(str(row["expression"]))
+        found.append(
+            (
+                live[row["row_id"]],
+                row["kind"],
+                expression["test"],
+                tuple(expression.get("keys", ())),
+                row["environment"],
+                row["holds"],
+                row["evidence"],
+            )
+        )
+    return sorted(found)
+
+
+_SET = "` is set by the deployment; this module's `"
+
+
+_DEBUG_URLS = (
+    "from django.conf import settings\n" + _URLS + "if settings.DEBUG:\n"
+    "    urlpatterns += [path('d/', v)]\n"
+)
+
+
+def _verdicts(workspace, test: str) -> dict[str, tuple[object, object]]:
+    """Each environment's (holds, resolution) of the condition `test`."""
+    return {
+        str(row["environment"]): (row["holds"], row["resolution"])
+        for row in workspace.query("endpoint_existence")
+        if json.loads(str(row["expression"]))["test"] == test
+    }
+
+
+def test_a_test_on_a_setting_is_decided_per_environment(tmp_path: Path, libraries):
+    """`if settings.DEBUG: urlpatterns += [...]` with `DEBUG` written `False` in one settings
+    module and `True` in another (the approved note of R3, 2026-11-25): the condition is kind
+    `property` on the key `DEBUG`, and it is decided in each environment on that settings
+    module's one written value, as a Java `@Profile` condition is decided in its own
+    environment: false in one, true in the other. The route exists once: it is never removed
+    and never copied per environment. Each environment's value is the evidence."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "ROOT_URLCONF = 'app.urls'\nDEBUG = False\n",
+            "settings_dev.py": "ROOT_URLCONF = 'app.urls'\nDEBUG = True\n",
+            "urls.py": _DEBUG_URLS,
+        },
+    )
+
+    assert sorted(row["path"] for row in workspace.query("endpoints")) == ["/d/", "/u/"]
+    debug = [row for row in _existence(workspace) if row[2] == "settings.DEBUG"]
+    assert debug == [
+        ("/d/", "property", "settings.DEBUG", ("DEBUG",), "app.settings", "false",
+         f"`DEBUG{_SET}app.settings` configuration sets `False`"),
+        ("/d/", "property", "settings.DEBUG", ("DEBUG",), "app.settings_dev", "true",
+         f"`DEBUG{_SET}app.settings_dev` configuration sets `True`"),
+    ]  # fmt: skip
+    assert _verdicts(workspace, "settings.DEBUG") == {
+        "app.settings": ("false", "resolved"),
+        "app.settings_dev": ("true", "resolved"),
+    }
+
+
+def test_a_test_on_a_setting_is_decided_in_the_forms_of_a_decided_test(tmp_path: Path, libraries):
+    """The forms of ruling R2: `x`, `not x`, `x is None`, `x is not None`, by the language's
+    truth of the written literal (the text `'False'` is true). Every other form (`==`) stays
+    "not evaluated", though the environment's value is one literal."""
+    tests = ["not settings.A", "settings.A is None", "settings.A is not None", "settings.T",
+             "settings.A == False"]  # fmt: skip
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "ROOT_URLCONF = 'app.urls'\nA = False\nT = 'False'\n",
+            "urls.py": "from django.conf import settings\n"
+            + _URLS
+            + "".join(
+                f"if {test}:\n    urlpatterns += [path('p{n}/', v)]\n"
+                for n, test in enumerate(tests)
+            ),
+        },
+    )
+
+    assert {test: _verdicts(workspace, test)["app.settings"] for test in tests} == {
+        "not settings.A": ("true", "resolved"),
+        "settings.A is None": ("false", "resolved"),
+        "settings.A is not None": ("true", "resolved"),
+        "settings.T": ("true", "resolved"),
+        "settings.A == False": ("unresolved", "unresolved"),
+    }
+    assert len(workspace.query("endpoints")) == 6
+
+
+_ABSENT = "try:\n    from .local_settings import *\nexcept ImportError:\n    pass\n"
+_ROOT = "ROOT_URLCONF = 'app.urls'\n"
+_DOORS = {
+    "an environment read": {"settings.py": "import os\n" + _ROOT + "DEBUG = os.environ.get('D')\n"},
+    "a star import of a file that is absent": {"settings.py": _ROOT + "DEBUG = False\n" + _ABSENT},
+    "a text run as the module's code": {
+        "settings.py": _ROOT + "DEBUG = False\nwith open('/etc/app.py') as handle:\n"
+        "    exec(handle.read())\n"
+    },
+    "a text run in the module's names it is handed": {
+        "settings.py": _ROOT + "DEBUG = False\nexec(open('/etc/app.py').read(), globals())\n"
+    },
+    "two written values": {"settings.py": "import sys\n" + _ROOT + "DEBUG = False\n"
+                           "if sys.argv:\n    DEBUG = True\n"},
+    "a door in the module the star takes it from": {
+        "base.py": "DEBUG = False\n" + _ABSENT,
+        "settings.py": "from app.base import *\n" + _ROOT,
+    },
+    "a write beside a star import that binds it": {
+        "base.py": "DEBUG = False\n",
+        "settings.py": "from app.base import *\n" + _ROOT + "DEBUG = True\n",
+    },
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("door", sorted(_DOORS))
+def test_a_test_on_a_setting_with_a_door_in_its_chain_is_not_evaluated(
+    tmp_path: Path, libraries, door: str
+):
+    """Not decided, "not evaluated" as before, where the environment's value is not one
+    written literal or something outside the repository can give the key another value: an
+    environment read, a write a star import can replace (ruling R10) anywhere in the chain
+    of settings modules the key is read through, a text the module runs as its own code
+    (`exec`), a name with two values. The last case is the limit of OI-565: the order of a
+    write and a star import is not read."""
+    workspace = _resolved(tmp_path, libraries, {**_DOORS[door], "urls.py": _DEBUG_URLS})
+
+    assert sorted(row["path"] for row in workspace.query("endpoints")) == ["/d/", "/u/"]
+    assert _verdicts(workspace, "settings.DEBUG") == {"app.settings": ("unresolved", "unresolved")}
+
+
+def test_a_setting_a_star_import_alone_gives_is_decided_on_its_source(tmp_path: Path, libraries):
+    """`from app.base import *` with no write of `DEBUG` in the settings module: the key has
+    the one value the source writes, and the test is decided in that environment."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "base.py": "DEBUG = True\n",
+            "settings.py": "from app.base import *\n" + _ROOT,
+            "urls.py": _DEBUG_URLS,
+        },
+    )
+
+    assert _verdicts(workspace, "settings.DEBUG") == {"app.settings": ("true", "resolved")}
+
+
+def test_a_setting_written_with_no_one_value_says_why_in_the_evidence(tmp_path: Path, libraries):
+    """A setting the settings module writes, but with no one value (a list, a name written
+    twice, `None`): the evidence of a test on it says what the `resolved_config` row says.
+    The module does write the name, so it is no placeholder the module does not fill."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "import sys\nROOT_URLCONF = 'app.urls'\nAPPS = ['one', 'two']\n"
+            "MODE = 'a'\nif len(sys.argv) > 1:\n    MODE = 'b'\nNOTHING = None\n",
+            "urls.py": "from django.conf import settings\n" + _URLS + "if 'one' in settings.APPS:\n"
+            "    urlpatterns += [path('a/', v)]\n"
+            "if settings.MODE:\n    urlpatterns += [path('m/', v)]\n"
+            "if settings.NOTHING:\n    urlpatterns += [path('n/', v)]\n",
+        },
+    )
+
+    details = {
+        str(row["key"]): str(row["unresolved_detail"]) for row in workspace.query("resolved_config")
+    }
+    evidence = {row[3]: row[6] for row in _existence(workspace) if row[3] != ("ROOT_URLCONF",)}
+    assert evidence == {
+        (key,): f"`{key}{_SET}app.settings` configuration sets no readable value: {details[key]}"
+        for key in ("APPS", "MODE", "NOTHING")
+    }
+    assert details["APPS"].endswith("not one value")
+    assert "placeholder" not in "".join(evidence.values())
+
+
+def test_the_routes_of_a_root_exist_where_the_root_setting_names_it(tmp_path: Path, libraries):
+    """Two settings modules name two roots: each root's routes carry the condition
+    "`ROOT_URLCONF` is `<root>`", kind `property`, "not evaluated" in every environment, with
+    what each environment sets as evidence. No row is removed and none is copied."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "ROOT_URLCONF = 'app.urls'\n",
+            "settings_admin.py": "ROOT_URLCONF = 'app.admin_urls'\n",
+            "urls.py": _URLS,
+            "admin_urls.py": _URLS.replace("'u/'", "'a/'"),
+        },
+    )
+
+    assert sorted(row["path"] for row in workspace.query("endpoints")) == ["/a/", "/u/"]
+    assert _existence(workspace) == [
+        ("/a/", "property", "ROOT_URLCONF == 'app.admin_urls'", ("ROOT_URLCONF",), "app.settings",
+         "unresolved", f"`ROOT_URLCONF{_SET}app.settings` configuration sets `app.urls`"),
+        ("/a/", "property", "ROOT_URLCONF == 'app.admin_urls'", ("ROOT_URLCONF",),
+         "app.settings_admin", "unresolved",
+         f"`ROOT_URLCONF{_SET}app.settings_admin` configuration sets `app.admin_urls`"),
+        ("/u/", "property", "ROOT_URLCONF == 'app.urls'", ("ROOT_URLCONF",), "app.settings",
+         "unresolved", f"`ROOT_URLCONF{_SET}app.settings` configuration sets `app.urls`"),
+        ("/u/", "property", "ROOT_URLCONF == 'app.urls'", ("ROOT_URLCONF",), "app.settings_admin",
+         "unresolved",
+         f"`ROOT_URLCONF{_SET}app.settings_admin` configuration sets `app.admin_urls`"),
+    ]  # fmt: skip
+    expression = json.loads(str(workspace.query("endpoint_existence")[0]["expression"]))
+    assert expression["having_value"] in ("app.urls", "app.admin_urls")
+
+
+def test_two_settings_modules_naming_one_root_give_one_condition(tmp_path: Path, libraries):
+    """`ROOT_URLCONF = 'app.urls'` in two settings modules is one condition of the root's
+    routes, not the same words twice."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "ROOT_URLCONF = 'app.urls'\n",
+            "settings_dev.py": "ROOT_URLCONF = 'app.urls'\n",
+            "urls.py": _URLS,
+        },
+    )
+
+    assert {int(str(row["route"])) for row in workspace.query("endpoint_existence")} == {0}
+    assert len(workspace.query("endpoint_existence")) == 2

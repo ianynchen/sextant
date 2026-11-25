@@ -515,6 +515,8 @@ def test_the_loader_refuses_root_kind_on_another_style(tmp_path: Path):
         "{ owner: a.b, method: f, returns: { arg: 0 }, by: p.md }",
         "{ owner: a.b, method: f, returns: { arg: 0, element: -1 }, by: p.md }",
         "{ owner: a.b, method: f, result_returns: { arg: 0, element: 0 }, by: p.md }",
+        "{ owner: a.b, method: f, result_calls: arg0, result_returns: arg1, by: p.md }",
+        "{ owner: a.b, method: f, returns: arg0, result_returns: arg0, by: p.md }",
     ],
 )
 def test_the_loader_refuses_a_malformed_returns_argument(tmp_path: Path, entry: str):
@@ -523,6 +525,29 @@ def test_the_loader_refuses_a_malformed_returns_argument(tmp_path: Path, entry: 
     (models / "m.yml").write_text(f"id: m\nreturns_argument:\n  - {entry}\n", encoding="utf-8")
     with pytest.raises(CatalogError, match="returns_argument"):
         YamlCatalogSource(tmp_path).returns_arguments()
+
+
+def test_the_loader_reads_the_two_uses_of_one_argument(tmp_path: Path):
+    """Ruling R5/A1 of 2026-11-25: one entry may state `result_calls` and `result_returns` of
+    ONE argument, for a decorator usable bare or with arguments: the first where the call
+    writes the argument, the second (`unwritten`) where it does not."""
+    models = tmp_path / "value-models"
+    models.mkdir()
+    (models / "m.yml").write_text(
+        "id: m\nreturns_argument:\n"
+        "  - { owner: a.b, method: f, result_calls: arg0, result_returns: arg0, by: p.md }\n"
+        "  - { owner: a.b, method: g, result_calls: arg0, by: p.md }\n",
+        encoding="utf-8",
+    )
+
+    stated = {
+        row["method"]: (row["form"], row["arg"], row["unwritten"])
+        for row in YamlCatalogSource(tmp_path).returns_arguments()
+    }
+    assert stated == {
+        "f": ("result_calls", 0, "result_returns"),
+        "g": ("result_calls", 0, None),
+    }
 
 
 def test_the_loader_refuses_one_call_stated_twice(tmp_path: Path):

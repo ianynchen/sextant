@@ -219,6 +219,17 @@ Optional pieces, alternation and mixed joins (section 7b of the script, plan 6, 
 - Parameter 0 of a function view, and parameter 1 (after `self`) of a class verb method, is the
   `HttpRequest`; it is the same object as `self.request`.
 
+## Settings reads
+
+Measured in section 11 of the script (ruling R3 of 2026-11-25).
+
+- `django.conf.settings` is one `LazySettings` object, bound in `django/conf/__init__.py`. An
+  attribute read `settings.X` gives the value the selected settings module binds to its
+  module-level name `X` (`Settings("m").ROOT_URLCONF` is `m.ROOT_URLCONF`): the read is by
+  the name of the setting.
+- Only upper-case names of the module are settings (`lower_name` is no attribute).
+- A name the module does not write has Django's global default (`DEBUG` is `False`).
+
 ## View decorators that hand the view on
 
 Measured in section 9 of the script (plan 6, Task 4 fix round 1, ruling R13). Each decorator
@@ -252,6 +263,10 @@ variable that holds a decorator, not a `def` of that name.
 
 - `login_required` and `staff_member_required` also accept keyword arguments alone
   (`login_required(login_url=...)`). That call returns the decorator, not a wrapped view.
+  That decorator, applied to the view (`login_required(login_url=...)(view)`), wraps the view
+  and calls it as the bare use does: over `require_POST(ok)`, GET gave 405 and POST 200, for
+  both names (measured 2026-11-25). So each has two uses: argument 0 written, the "decorator"
+  form; argument 0 not written, the "factory" form.
 - What each decorator answers when its own check fails (a redirect to the login page, 403 on
   a missing CSRF token, 304 on a matching ETag) was not measured. That is the view's own
   behaviour, not a route.

@@ -495,6 +495,21 @@ def test_a_declared_from_key_prefix_mechanism_is_refused_as_reserved_unimplement
     workspace.close()
 
 
+def test_a_module_source_naming_no_catalog_word_is_refused(tmp_path: Path):
+    """`{from_module_holding: <word>}` (ruling R3 of 2026-11-25) names the word of `matches`
+    a catalog names a setting with; anything else is a broken file, named. A well-formed one
+    matches no file, so this pass writes no row for it (`settings_modules` reads the
+    modules)."""
+    _write(tmp_path, "app.yml", [("k", "v", 0)])
+    workspace = DuckDbWorkspace(tmp_path / "ws.duckdb")
+    workspace.load_facts(tmp_path / "facts")
+    with pytest.raises(CatalogError, match="from_module_holding"):
+        resolve_config(workspace, [_catalog({"sources": [{"from_module_holding": 3}]})])
+    resolve_config(workspace, [_catalog({"sources": [{"from_module_holding": "root_setting"}]})])
+    assert workspace.query("resolved_config") == []
+    workspace.close()
+
+
 _DOLLAR_BRACES = {"open": "${", "close": "}", "default_separator": ":"}
 
 

@@ -488,14 +488,17 @@ workspace's `open_questions`. Each limit is an open issue (`docs/open-issues.md`
   - **Not found by Task 10**: zulip's 66 language-prefixed (`en-us/`) copies have no row
     (OI-550); zulip's 6 `re_path` routes to `SCIMView.as_view(implemented=False)`
     (`zproject/urls.py:936-951`) have no row (OI-549).
-- **One helper entered twice on one path** (the walk's existing bound, M-1): the same
-  decorator factory twice on one view gives handler not read. healthchecks: 5 routes (OI-537).
-- **A list added under a test** (`if settings.DEVELOPMENT: urls += dev_urls.urls`): the
-  members are behind the hole at `partial`. A row with the condition (M5) needs the guard of
-  a field write in the facts; not built (OI-508). A MOUNT written under a test gives its
-  routes the condition (controller fix b1c75286).
-- **A root setting written twice, or under a test**: two roots, both `resolved`, with no
-  condition (zulip `zproject.tornado_urls` under `if RUNNING_INSIDE_TORNADO`) (OI-509).
+- **One helper entered twice on one path**: built (OI-537, ruled 2026-11-25): the same
+  decorator factory twice on one view names the view (healthchecks: 5 routes). The path holds
+  the first call of the helper alone, so a value read through it on that path is
+  `not_readable`, for every reader (the walk's guard; the exact answer is OI-558).
+- **A list added under a test** (`if settings.DEVELOPMENT: urls += dev_urls.urls`): built
+  2026-11-25 (ruling R1, fact schema 23, OI-508): the write carries its tests
+  (`field_write.guards`) and the members are rows at their address with the condition (M5).
+  A MOUNT written under a test gives its routes the condition (controller fix b1c75286).
+- **A root setting written under a test** (zulip `zproject.tornado_urls` under
+  `if RUNNING_INSIDE_TORNADO`): built 2026-11-25 (ruling R1, OI-509): its routes carry the
+  test. Two roots each written under no test are two roots with no condition.
 - **A library `dispatch` body** is now read (§2 item 9, Task 8).
 - **A mount whose router argument is not read** is published as a route with no handler, at
   `partial`: nothing says it is a mount (OI-548).

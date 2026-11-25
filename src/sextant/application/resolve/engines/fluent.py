@@ -33,6 +33,7 @@ from sextant.application.resolve.registration_conditions import (
     Conditions,
     Conjunction,
     Existence,
+    Site,
     conditions_of,
     environments_of,
     existence_rows,
@@ -133,10 +134,12 @@ from sextant.application.resolve.shapes.inbound_routes import (
     UNROOTED_PATH,
     WORDS,
     fallback_word,
+    file_not_read,
     file_refusal,
     is_unrooted,
     join_prefix,
     media_columns,
+    not_read_rows,
     refusal_rows,
     validated_verbless_serves,
     validated_word_fallback,
@@ -189,6 +192,7 @@ from sextant.application.resolve.values import (
     EXTERNAL,
     INT,
     LITERAL,
+    NON_ENUMERABLE,
     NOT_READABLE,
     RECEIVER,
     STRING,
@@ -197,14 +201,17 @@ from sextant.application.resolve.values import (
     Answer,
     Path,
     Producer,
+    Tests,
     ValueIndex,
     argument_slot,
+    bound_owner,
     cached_value_index,
     called_function,
     decorators_passed,
     producer_paths,
     recipe_bodies,
     resolve_positions,
+    resolve_positions_on_paths,
     undecorated_maker,
 )
 from sextant.domain.closed_sets import (
@@ -499,6 +506,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     ways: dict[int, int] = {}
     # Why a row's path holds `<prefix>` (`mount_prefix`), filed once the rows are settled.
     unread_prefixes: dict[tuple[str, str | None, str], dict[str, Any]] = {}
+    # Why a row's method or path was not read (`not_read`), filed for the rows the run keeps.
+    not_read: dict[tuple[str, str | None, str | None], dict[str, Any]] = {}
     if mount_rules is not None:
         mounts, mounted, ways = _mounts(
             read_whole, mount_rules, walk_index, workspace, refuses_unrooted, catalog
@@ -515,8 +524,11 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     conditions: Conditions | None = None
     registrations: list[tuple[dict[str, Any], Existence]] = []
     if catalog.direction == "inbound":
-        conditions = conditions_of(workspace)
-        if not conditions.guards:
+        # A test on a value the code fixes is decided on the row's path (ruling R2).
+        conditions = conditions_of(workspace, Tests(walk_index) if walk_index is not None else None)
+        # Nothing to state where no call runs under a test, unless the routes of a root are
+        # served under the root setting's own condition (`MountReader`, ruling R3).
+        if not conditions.guards and (mount_rules is None or mount_rules.root_setting is None):
             conditions = None
     # §4d of design 2026-11-23: read once per run, for the any-method rows it may doubt.
     request_flow = (
@@ -568,6 +580,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
                 mounts=mounts,
                 routers=routers,
                 unread_prefixes=unread_prefixes,
+                not_read=not_read,
                 response_fallback=response_fallback,
                 parameter_rules=parameters,
                 recipe_roots=recipe_roots,
@@ -651,7 +664,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # After the rows, never before: each entry is bound to its row's `row_id` as it is
         # written (`insert_endpoint_existence.sql`), the `endpoint_metadata` discipline.
         existence = existence_rows(
-            registrations, environments_of(workspace), settings_reads_of(workspace, catalog)
+            registrations,
+            environments_of(workspace),
+            settings_reads_of(workspace, catalog),
+            conditions,
         )
         if existence:
             workspace.derive("endpoint_existence_insert", rows=existence)
@@ -694,6 +710,7 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
             *refusal_rows(_own_candidates(refusals, borrowed)),
             *unread_rows(_own_candidates(unread, borrowed)),
             *unread_prefix_rows(_own_candidates(unread_prefixes, borrowed), rows),
+            *not_read_rows(_own_candidates(not_read, borrowed), rows),
         ],
     )
 
@@ -884,9 +901,10 @@ class _RequestFlow:
     and parameters it is handed to, and whether it is handed to a value that is called and is
     no parameter of the method (`View.as_view()(request)`: another handler)."""
 
-    reads: frozenset[tuple[str, int]]
+    # Each with the first call that does it (its ordinal), for the question that names it.
+    reads: Mapping[tuple[str, int], int]
     hands: Mapping[tuple[str, int], tuple[tuple[str, int], ...]]
-    calls: frozenset[tuple[str, int]]
+    calls: Mapping[tuple[str, int], int]
 
 
 def _request_flow(
@@ -904,10 +922,10 @@ def _request_flow(
         return None
     dispatch = workspace.once(dispatch_of)
     names = {name for _, name in named}
-    reads: set[tuple[str, int]] = set()
-    calls: set[tuple[str, int]] = set()
+    reads: dict[tuple[str, int], int] = {}
+    calls: dict[tuple[str, int], int] = {}
     hands: dict[tuple[str, int], list[tuple[str, int]]] = {}
-    for (method, _), site in index.sites.items():
+    for (method, ordinal), site in sorted(index.sites.items()):
         on = site.get("receiver_parameter")
         owner = site.get("owner")
         if (
@@ -921,7 +939,7 @@ def _request_flow(
                 )
             )
         ):
-            reads.add((method, int(str(on))))
+            reads.setdefault((method, int(str(on))), ordinal)
         given = (site["arguments"] or [None])[0]
         if (
             site["name"] == "__call__"
@@ -930,7 +948,7 @@ def _request_flow(
             and given.get("kind") == "parameter"
             and given.get("value") is not None
         ):
-            calls.add((method, int(str(given["value"]))))
+            calls.setdefault((method, int(str(given["value"]))), ordinal)
     for (callee, position), callers in index.callers.items():
         for caller, ordinal, slot in callers:
             made = index.sites.get((caller, ordinal)) or {}
@@ -944,9 +962,7 @@ def _request_flow(
                 and entry.get("value") is not None
             ):
                 hands.setdefault((caller, int(str(entry["value"]))), []).append((callee, position))
-    return _RequestFlow(
-        frozenset(reads), {key: tuple(value) for key, value in hands.items()}, frozenset(calls)
-    )
+    return _RequestFlow(reads, {key: tuple(value) for key, value in hands.items()}, calls)
 
 
 def _any_method_doubted(
@@ -954,9 +970,12 @@ def _any_method_doubted(
     judged: "_Judged | None",
     context: "_DeriveContext",
     paths: Sequence[tuple[Producer, Path]],
-) -> bool:
-    """Whether the code a request to this any-method row runs through gives a reason to doubt
-    that every method is answered (design 2026-11-23 §4d): the row names no handler; the
+    registered: tuple[str, int],
+) -> tuple[str, str, int | None] | None:
+    """The reason the code a request to this any-method row runs through gives to doubt that
+    every method is answered, with the code that gives it (`not_read`'s `reason`, `at` and
+    `ordinal`: the registration at `registered`, a body, or the call in a body that reads the
+    method), or None where it gives none (design 2026-11-23 §4d): the row names no handler; the
     handler's body was not read (a library's); or the handler, or a module wrapper the walk ran
     through to reach it, reads the method off the request it received, in its own body or in
     module code it hands that request to, as far as the module's code goes, or hands the
@@ -964,11 +983,11 @@ def _any_method_doubted(
     are the handler value's (`_handler_paths`)."""
     flow, index = context.request_flow, context.values
     if flow is None or index is None:
-        return False
+        return None
     if judged is None or judged.symbol is None:
-        return True
+        return NOT_READABLE, registered[0], registered[1]
     if context.method_symbols.get(bare_descriptor(judged.symbol)) != judged.symbol:
-        return True
+        return EXTERNAL, judged.symbol, None
     through = [body for _, path in paths for body in path.ran_through()]
     # The request is each body's parameter 0.
     pending = [(body, 0) for body in dict.fromkeys([judged.symbol, *through])]
@@ -979,9 +998,9 @@ def _any_method_doubted(
             continue
         seen.add(at_body)
         if at_body in flow.reads or at_body in flow.calls:
-            return True
+            return NOT_READABLE, at_body[0], flow.reads.get(at_body, flow.calls.get(at_body))
         pending.extend(flow.hands.get(at_body, ()))
-    return False
+    return None
 
 
 def _handler_paths(handler: Any, context: "_DeriveContext") -> tuple[tuple[Producer, Path], ...]:
@@ -1015,7 +1034,11 @@ def _entry_handlers(
     for producer, path in producer_paths(index, site, slot, frozenset(), functions=True):
         if within is not None and path.joined(within) is None:
             continue
-        body = None if producer.ended_at is None else called_function(producer.ended_at)
+        body = (
+            None
+            if producer.ended_at is None
+            else called_function(producer.ended_at) or _called_object(index, producer.ended_at)
+        )
         symbol = None if body is None else method_symbols.get(body)
         if symbol is not None and symbol not in found:
             found.append(symbol)
@@ -1024,6 +1047,24 @@ def _entry_handlers(
             if through is not None:
                 through.extend(path.ran_through())
     return tuple(found)
+
+
+def _called_object(index: ValueIndex, answer: Answer) -> str | None:
+    """The body a call of an OBJECT runs (design 2026-11-23 §4d, OI-539): its class's
+    `__call__`, the first in the class's lookup order (`Dispatch.order_through_headers`), a
+    library base's whose body was read too, bare. None for anything else, a class among them,
+    and where the order meets a type whose methods were not read before it finds one."""
+    dispatch = index.dispatch
+    owner = bound_owner(answer)
+    if owner is None or answer.class_object or dispatch is None:
+        return None
+    for type_ in dispatch.order_through_headers(owner)[0]:
+        body = method_descriptor(type_, "__call__", PY_SIGNATURE)
+        if body in dispatch.declared:
+            return body
+        if type_ not in dispatch.scanned and not dispatch.declared_names.get(type_):
+            return None
+    return None
 
 
 def _entry_paths(
@@ -1209,6 +1250,9 @@ class _DeriveContext:
     # ordered as if on one router.
     routers: MountReader | None = None
     unread_prefixes: dict[tuple[str, str | None, str], dict[str, Any]] | None = None
+    # Why a row's method or path was not read (`not_read`, ruled 2026-11-25), filed for the
+    # rows the run keeps. None for a caller that files none.
+    not_read: dict[tuple[str, str | None, str | None], dict[str, Any]] | None = None
     # The root call of the end being derived (`ChainEnd.root`), for a `client_base` whose client
     # is that call's receiver (`client_arg: receiver`, Vert.x spec §3d). None otherwise.
     root: Mapping[str, Any] | None = None
@@ -1375,8 +1419,11 @@ def _derive_captured(
     # root's default.
     declared_verb = captures.get("http_method")
     # A verb list the call does not write as literals (N8): read through the value walk.
+    # The writes under a test each walked verb was read through (`Path.written_under`), one
+    # entry per path that read it: the verb's rows are served where those tests hold.
+    verb_writes: dict[Any, tuple[tuple[tuple[str, str], ...], ...]] = {}
     if _unread_verbs(declared_verb):
-        declared_verb = _walked_verbs(declared_verb, context)
+        declared_verb, verb_writes = _walked_verbs(declared_verb, context)
     # Several verbs accumulated on one chain (`repeats`) are one row each (Vert.x spec §3f:
     # `method(GET).method(DELETE)` serves both), in call order, a repeated verb once. One
     # nobody could read is a row of its own, `unresolved` with `method` NULL, so the list
@@ -1397,12 +1444,14 @@ def _derive_captured(
     # the row below is then `unresolved` with `method` NULL rather than
     # carrying whichever literal an earlier step happened to seed.
     verbless = "http_method" not in captures
-    # The handler value's paths, read once for the two readers below.
+    # The handler value's paths, read once for the readers below.
     handler_paths = (
-        _handler_paths(captures.get("handler"), context)
-        if verbless and direction == "inbound"
-        else ()
+        _handler_paths(captures.get("handler"), context) if direction == "inbound" else ()
     )
+    # The module wrappers a request runs through before the handler (`Path.ran_through`): each
+    # starts work at the row's address as a recipe the framework runs first does, so its own
+    # calls are on the route's trace (OI-534).
+    through = tuple(dict.fromkeys(body for _, path in handler_paths for body in path.ran_through()))
     # A verbless route whose handler passed a decorator the catalog's `annotations` state the
     # methods of serves exactly those methods, one row each.
     narrowed, unsure = (
@@ -1417,13 +1466,14 @@ def _derive_captured(
     # A row serving any method says the endpoint answers every method (design 2026-11-23 §4d):
     # where the code a request to it runs through gives a reason to doubt that, the row is no
     # surer than `partial`.
-    if (
-        verbless
-        and direction == "inbound"
-        and context.request_flow is not None
-        and not end.inexact
-        and _any_method_doubted(captures.get("handler"), answering, context, handler_paths)
-    ):
+    doubt = (
+        _any_method_doubted(
+            captures.get("handler"), answering, context, handler_paths, _registered_at(end)
+        )
+        if verbless and direction == "inbound" and context.request_flow is not None
+        else None
+    )
+    if doubt is not None:
         end = replace(end, inexact=True)
     # A verbless route of a framework that serves it for every verb says so on the row
     # (`method_kind`, Vert.x spec §3a), never by the NULL method alone, which reads as "nobody
@@ -1604,15 +1654,20 @@ def _derive_captured(
         prefixes = context.routers.of_route(end.root, end.path)
     # OI-368: where the calls making the row run, per prefix (the includes and mounts it is
     # served through), read once per prefix.
-    existing: dict[int, Existence | None] = {}
+    existing: dict[tuple[int, Any], Existence | None] = {}
     for verb, (peer, path, url_resolution), prefix in product(verbs, destinations, prefixes):
         path_kind = expression_kinds.get((peer, path, url_resolution), declared_path_kind)
         # An address nobody read takes no prefix: one row for it, not one per prefix.
         if path is None and prefix is not prefixes[0]:
             continue
-        if id(prefix) not in existing:
-            existing[id(prefix)] = _existence(end, prefix, direction, context)
-        alternatives = existing[id(prefix)]
+        under = verb_writes.get(verb, ((),))
+        if (id(prefix), under) not in existing:
+            existing[(id(prefix), under)] = _existence(end, prefix, direction, context, under)
+        alternatives = existing[(id(prefix), under)]
+        # A test decided false on every path the row's calls run on: they register nothing
+        # (ruling R2 of 2026-11-25), as calls under `if False:` do.
+        if alternatives is not None and not alternatives.tied:
+            continue
         # 2O design §8, folded in from single_call: identity is the URL the
         # framework serves, canonicalized before the dedup key below is built
         # from it (`domain/paths.py`). Inert for every fluent catalog shipped
@@ -1899,7 +1954,7 @@ def _derive_captured(
                 entries,
             )
             seen = context.seen.get(key)
-            _recipe_roots(context, recipes, verb, path, method_kind, path_kind)
+            _recipe_roots(context, (*recipes, *through), verb, path, method_kind, path_kind)
             if seen is not None:
                 seen.merged(published, resolution)
                 _registered(context, seen.rows, alternatives)
@@ -1941,7 +1996,7 @@ def _derive_captured(
                 entries,
             )
             seen = context.exact.get(one_call)
-            _recipe_roots(context, recipes, verb, path, method_kind, path_kind)
+            _recipe_roots(context, (*recipes, *through), verb, path, method_kind, path_kind)
             if seen is not None:
                 seen.merged(published, resolution)
                 _registered(context, seen.rows, alternatives)
@@ -2016,6 +2071,33 @@ def _derive_captured(
             "path_kind": path_kind if path is not None else None,
             "method_kind": method_kind,
         }
+        # A column not read says why where nothing on the row does (`not_read`, ruled
+        # 2026-11-25): the doubt of an any-method row, and a path not read of a registration
+        # in a loop, whose values no rule lists.
+        if direction == "inbound" and context.not_read is not None:
+            if doubt is not None and verb is None:
+                file_not_read(
+                    context.not_read,
+                    row,
+                    column="method",
+                    reason=doubt[0],
+                    at=doubt[1],
+                    ordinal=doubt[2],
+                )
+            at = _registered_at(end)
+            if (
+                path is None
+                and context.values is not None
+                and (context.values.sites.get(at) or {}).get("loop_group") is not None
+            ):
+                file_not_read(
+                    context.not_read,
+                    row,
+                    column="path",
+                    reason=NON_ENUMERABLE,
+                    at=at[0],
+                    ordinal=at[1],
+                )
         # Dispatch that can run several bodies (`_Judged.alternatives`) is the narrowed case
         # several handlers on one route already are: one row per answering body, each judged
         # on its own, `narrowed` among them (`_settle`). The route's metadata goes with the
@@ -2053,7 +2135,11 @@ def _derive_captured(
 
 
 def _existence(
-    end: ChainEnd, prefix: Prefix, direction: str, context: "_DeriveContext"
+    end: ChainEnd,
+    prefix: Prefix,
+    direction: str,
+    context: "_DeriveContext",
+    through: tuple[tuple[tuple[str, str], ...], ...] = ((),),
 ) -> Existence | None:
     """Where the calls making an inbound row run (OI-368, `registration_conditions`): every
     include or mount on one serving place of `prefix`, outermost first, then the route's root
@@ -2061,7 +2147,9 @@ def _existence(
     the row was derived in: the calls its own path and its routers' paths chose (review Major
     1), and the paths its prefix's words were read on (re-review R1-1). A place whose router
     was reached on a path that disagrees with the row's is not one the row was served
-    through. None for an outbound row, and where no call of the module is
+    through. `through` holds the writes under a test another value of the row was read
+    through (a verb list), one entry per path that read it: each is one more way the row is
+    served. None for an outbound row, and where no call of the module is
     under a test."""
     if context.conditions is None or direction != "inbound":
         return None
@@ -2070,6 +2158,7 @@ def _existence(
     found: set[Conjunction] = set()
     untied: set[Conjunction] = set()
     places = prefix.places or (ANY_ROUTER,)
+    read = False
     for place in places:
         paths = [router[1] for router, _ in place if router is not None]
         joined = walked
@@ -2091,14 +2180,21 @@ def _existence(
             contexts = [one for one in contexts if one is not None]
         for context_path in contexts:
             chosen = context_path.calls_into() if context_path is not None else {}
-            found |= context.conditions.of_sites([*mounts, *own], chosen)
-            untied |= context.conditions.of_sites([*mounts, *own], chosen, untied=True)
-    if not found:
+            # A write under a test the row's lists were read through (`field_write.guards`,
+            # ruling R1 of 2026-11-25) is one more thing its registration ran through.
+            writes = context_path.written_under() if context_path is not None else ()
+            for more in through:
+                sites: list[Site] = [*mounts, *writes, *more, *own]
+                read = True
+                found |= context.conditions.of_sites(sites, chosen, on=context_path)
+                untied |= context.conditions.of_sites(sites, chosen, untied=True, on=context_path)
+    if not read:
         # Every place disagreed with the row's path: read them in no calling context.
         for place in places:
             mounts = [at[0] for _, at in place if at is not None]
-            found |= context.conditions.of_sites([*mounts, *own])
-            untied |= context.conditions.of_sites([*mounts, *own], untied=True)
+            for more in through:
+                found |= context.conditions.of_sites([*mounts, *more, *own])
+                untied |= context.conditions.of_sites([*mounts, *more, *own], untied=True)
     return Existence(frozenset(found), frozenset(untied), tuple(own))
 
 
@@ -4169,17 +4265,14 @@ def _handed_back(index: "ValueIndex", method: str, row: Mapping[str, Any]) -> in
     """The position of the argument a value model states `row` hands on (`returns_argument`),
     in the spelling the call is written in: a `__call__` whose receiver a `result_returns`
     call made, or a call stated `returns` or `result_calls` itself. None for any other call,
-    a stated one written in the other spelling among them (`login_required(login_url=...)`,
-    stated for `login_required(view)`, makes a decorator nothing states)."""
+    a stated one written in the other spelling among them (`lru_cache(maxsize=8)`, stated for
+    `lru_cache(f)`, makes a decorator nothing states). An entry of two uses is read by the
+    spelling the call is written in (`ValueIndex.stated_of`)."""
     if row["name"] == "__call__":
         maker = _maker(index, method, row)
-        stated = (
-            None
-            if maker is None
-            else index.stated_returns.get((str(maker.get("owner")), str(maker["name"])))
-        )
+        stated = None if maker is None else index.stated_of(maker)
         return stated[1] if stated is not None and stated[0] == "result_returns" else None
-    stated = index.stated_returns.get((str(row.get("owner")), str(row["name"])))
+    stated = index.stated_of(row)
     return stated[1] if stated is not None and stated[0] in ("returns", "result_calls") else None
 
 
@@ -4294,6 +4387,9 @@ def _class_view(
     # catalog's `supertype` (`X.as_view()` is `X`, a value model's `returns_receiver`) answers
     # by its methods.
     owners: list[str] = []
+    # The stated calls each class's paths passed (`Path.passed`: a helper's
+    # `as_view(http_method_names=...)` changes the table as one in the registration does).
+    passed: dict[str, list[tuple[str, int]]] = {}
     other = False
     paths = producer_paths(index, site, int(at[2]), frozenset(), functions=True)
     for producer, path in paths:
@@ -4302,6 +4398,10 @@ def _class_view(
         held = producer.ended_at
         if held is not None and _view_class(held, rule.owners, dispatch):
             owners.append(str(held.value))
+            # A class read `inexact` (a type not read may define `as_view`, OI-541) leaves
+            # every row unsure, as a path that names no class does.
+            other = other or held.inexact
+            passed.setdefault(str(held.value), []).extend(path.passed())
         else:
             other = True
     stack = _decorator_stack(index, str(at[0]), argument, context.method_symbols)
@@ -4329,13 +4429,18 @@ def _class_view(
     )
     # The arguments of the calls the handler was made through (`as_view(http_method_names=...)`
     # changes the table: `_class_rows`).
-    made = {
-        "arguments": tuple(
-            argument for _, row in stack.calls for argument in row["arguments"] or ()
-        )
-    }
+    written = tuple(argument for _, row in stack.calls for argument in row["arguments"] or ())
     rows: list[tuple[dict[str, Any], _Judged | None, bool]] = []
     for owner in dict.fromkeys(owners):
+        made = {
+            "arguments": written
+            + tuple(
+                argument
+                for call in dict.fromkeys(passed[owner])
+                if (named := index.sites.get(call)) is not None
+                for argument in named["arguments"] or ()
+            )
+        }
         for filled, handled, inexact in _class_rows(
             owner, made, captures, rule.owners, context, narrowed
         ):
@@ -4404,7 +4509,10 @@ def _class_rows(
     order, unread = dispatch.order_through_headers(owner)
     if unread is None:
         unread = next((type_ for type_ in order if type_ not in read), None)
-        order = order if unread is None else order[: order.index(unread)]
+    if unread is not None:
+        # Past a type not read the order is not known: the read types' own order stands for
+        # it, every row `partial`, since that type may define the members itself (OI-541).
+        order = [type_ for type_ in dispatch.order_past_unread(owner) if type_ in read]
     inexact = (unread is not None and unread not in framework) or any(
         name in {argument.get("keyword") for argument in row["arguments"] or ()}
         or any(f"{type_}{name}." in fields for type_ in order if type_ not in framework)
@@ -4454,7 +4562,7 @@ def _class_rows(
         if symbol is not None
     ]
     if not rows and unread is not None and unread not in framework:
-        return [({**base, "http_method": None}, _Judged(None, ANSWERS), False)]
+        return _narrowed_rows([(base, _Judged(None, ANSWERS), True)], narrowed)
     if not rows and unread_bypass is not None:
         return _narrowed_rows([(base, _Judged(unread_bypass, ANSWERS), True)], narrowed)
     return _narrowed_rows(rows, narrowed)
@@ -4579,7 +4687,7 @@ def _narrowed_verbs(
                 )
             )
             if entry is not None and named is not None:
-                sets.append(_narrowing_verbs(entry["http_method"], named, context))
+                sets.append(_narrowing_verbs(entry["http_method"], named, context, path))
         found.append(
             None
             if not sets
@@ -4596,17 +4704,18 @@ def _narrowed_verbs(
 
 
 def _narrowing_verbs(
-    declared: Any, row: Mapping[str, Any], context: "_DeriveContext"
+    declared: Any, row: Mapping[str, Any], context: "_DeriveContext", path: Path
 ) -> tuple[str | None, ...]:
     """One `annotations` entry's methods on the call `row`: its literal verb or verbs, or the
-    list its argument reference reads, as written (the list form's read, `_listed_verbs`)."""
+    list its argument reference reads, as written (the list form's read, `_listed_verbs`), read
+    on `path`, the path the walk took to the handler through that call."""
     if isinstance(declared, str):
         return (declared,)
     if isinstance(declared, list):
         return tuple(declared)
     listed = _listed_verbs(declared, dict(row))
     if _unread_verbs(listed):
-        listed = _walked_verbs(listed, replace(context, path=None))
+        listed, _ = _walked_verbs(listed, replace(context, path=path))
     values = listed if isinstance(listed, tuple) else (listed,)
     return tuple(dict.fromkeys(_verb_of(each, context) for each in values)) or (None,)
 
@@ -4655,11 +4764,16 @@ def _unread_verbs(declared: Any) -> bool:
     return isinstance(declared, dict) and VERBS_TO_READ in declared
 
 
-def _walked_verbs(declared: Any, context: "_DeriveContext") -> Any:
+def _walked_verbs(
+    declared: Any, context: "_DeriveContext"
+) -> tuple[Any, dict[Any, tuple[tuple[tuple[str, str], ...], ...]]]:
     """A verb list read through the value walk (N8, M1): one verb per value the walk reads
     (a module constant's elements, a parameter's arguments), respelled; the `absent` verb for
     an explicit `None`; no verb at all where every value is an empty list (a refusal); and an
-    unread argument (no verb) for each value not read, beside the rest."""
+    unread argument (no verb) for each value not read, beside the rest (one read through a
+    callee the path entered on two calls is not read: the walk's rule,
+    `resolve_positions_on_paths`). Beside the verbs, the writes under a test each was read through,
+    one entry per path that read it (`Path.written_under`)."""
     case, absent = declared[VERBS_TO_READ]
     at = declared.get(_CAPTURED_AT)
     site = (
@@ -4668,9 +4782,10 @@ def _walked_verbs(declared: Any, context: "_DeriveContext") -> Any:
         else context.values.sites.get((str(at[0]), int(str(at[1]))))
     )
     if site is None or at is None or context.workspace is None:
-        return None
+        return None, {}
     verbs: list[Any] = []
-    for answers in resolve_positions(
+    under: dict[Any, list[tuple[tuple[str, str], ...]]] = {}
+    for read, answers in resolve_positions_on_paths(
         context.workspace, {"verb": (site, int(at[2]))}, context.values, within=context.path
     ):
         answer = answers["verb"]
@@ -4682,7 +4797,10 @@ def _walked_verbs(declared: Any, context: "_DeriveContext") -> Any:
             continue
         else:
             verbs.append(None)
-    return tuple(dict.fromkeys(verbs))
+        under.setdefault(verbs[-1], []).append(read.written_under())
+    return tuple(dict.fromkeys(verbs)), {
+        verb: tuple(dict.fromkeys(writes)) for verb, writes in under.items()
+    }
 
 
 def _per_call(

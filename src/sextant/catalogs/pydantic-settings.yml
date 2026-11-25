@@ -23,6 +23,13 @@ config_model:
     # source, so its rows are the `default` environment. A name written through a variable is
     # read by nobody: the field that reads it is `external`.
     - { from_argument: env_file }
+    # A SETTINGS MODULE (ruling R3 of 2026-11-25, design note approved 2026-11-25; D02 §2i).
+    # Each module that holds the setting a catalog names with the word `root_setting`
+    # (Django's `ROOT_URLCONF`, `django.yml`) is a source, and its module name is the
+    # environment: one row per name the module holds, the value read by the value walk,
+    # through `from .base import *`. This model is the Python family's one config model, so
+    # the form is written here and the setting's name stays in the catalog that owns it.
+    - { from_module_holding: root_setting }
   # How a settings class is written: the class-body field holding the config call, and the calls
   # that make it (`SettingsConfigDict(...)`, or a dict display, which the scanner writes as the
   # `dict(...)` it builds). The same forms `shape-models/pydantic.yml` reads in its own context.

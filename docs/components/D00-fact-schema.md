@@ -392,7 +392,7 @@ Fifteen. Every one exists because a stated requirement consumes it (NFR-6).
 | `type_header` | **A DEPENDENCY type's place in the hierarchy, read from its class-file header in the resolved classpath** (2026-10-21, user decision A): symbol (the library's own coordinate and version), construct kind, superclass, interfaces, class-level annotations in the `annotation` fact's own `use` shape, and the `origin` jar. Emitted for every type the module's own classes refer to and did not compile, then transitively up each one's superclass and interfaces; a type in no jar on the classpath (the JDK's) gets none, so the catalog's declared roots stay the JDK boundary. **No member of the type is read** — no method, field, body or call site — so method lookup is untouched and the type stays "not scanned" to every consumer asking about its methods (on the JVM; a Python library class a module class extends has its method bodies read, below). **A kind of its own, deliberately**: were these `symbol`/`annotation` facts, the engines minting endpoint rows would see a library's `@RestController` or `CrudRepository` as this module's (measured risk). Only the type lattice reads them: `superclasses`, `implementations`, and `error_advice`'s class-annotation lookup. **Python (2026-11-06, ruled A, "like Java"):** the same fact and the same meaning, read from the installed environment and the pinned typeshed copy instead of a classpath (M03 "Libraries"): a header for every library type the module's facts name (a class, or a module, which is a type, ruling R4), and for every library class a `static` call names as a member of its module (`fastapi/applications#FastAPI` gives `fastapi/applications/FastAPI#`; a member that is no class gets none and is not counted unlocated, ruling R17), then up each one's bases; `superclass` is the first written base and `interfaces` the rest, in written order, as the scanner maps a module class's (`object` is not written, and is the boundary, as the JVM's root type is); no `annotations` (a decorator is a call); `origin` is the distribution's PEP 503 name, or `typeshed@<commit>/<stub package>@<version>` where the type file is typeshed's (`typeshed@13ffe24…/requests@~=2.33.0`; the standard library is the stub package `stdlib`, at the environment's Python version), and `version` the installed version (`.` for the standard library). A library class whose bases are not all read (§5a `parents_unread`) gets no header, since the fact has no key to say so: a lookup reaching it ends there. The `c3` lookup reads a header's parents to place it, and ends at it where its methods are not read. **A Python header's class body is read (fact schema 12, plan 2026-11-08 task 9c and its review C2):** by the scanner's own reader (`file_facts`) over the library module with every function body left out and only the module-level names the header classes use, so its names, their values, the calls that made them and the module-level names they use are ordinary `symbol` (field and `<clinit>`), `field_write` and `call_site` facts of the header document, read by every consumer as a module class's are. No class `symbol` is written. **A library class a module class has in its lookup order (one of the bases the module's classes write, or up their bases) has its functions' bodies read (fact schema 22, ruling 2026-11-23 option B):** each method, and each nested function and `lambda` in one, is an ordinary method `symbol` of the header document with its `call_site`, `method_return` and `field_write` facts, in the shapes a module method's body gets, so a consumer reads it as a module method (`super().dispatch(...)` is its `special` call). The methods of every other header class stay unread: no method `symbol`. The header itself carries `methods` (`{name, returns, parameters}`, each function and constructor the body defines, `parameters` their types with the receiver taken; absent where the body was not read, which is how a reader tells "declares nothing" from "not read") and `keywords` (the class statement's keyword arguments, as a module class's `symbol` fact carries them, `symbol.keywords`). A class only a whole-module read answers, and every JVM header, carries neither. A class a read body calls gets a header, as one a module's call names does. No other method body is read. **The rows rule:** a row a derivation mints from a read library body (an endpoint whose caller, or else whose handler, is in that body) is the library's, not the module's, and `drop_borrowed_endpoints.sql` drops it, as it drops a sibling's (F4 §5.2) | `type_hierarchy`, `supertype_dispatch`, the throwable walk, `@ResponseStatus` on a handled exception's class |
 | `call_site` | Caller, target (owner, name, descriptor), `invoke_kind`, `ordinal` — the v1 control-flow position — `receiver`/`result` value ids, `receiver_parameter` (the receiver as the enclosing method's parameter N where it is one, absent otherwise), `receiver_field` (the static field a `getstatic` receiver was read from, absent otherwise), `dominator`, `on_every_exit`, `post_dominator`, `reaches_return` and `loop_group` (the call's place in the method's control flow, rule 9), structured `arguments`, and on a Python site `guards` (the undecided tests it runs under within its body, fact schema 13) | Call edges, dispatch, traces, endpoints |
 | — | The invoke-kind set includes **`throw`**: a throw site is a call-site-shaped observation whose target is the thrown exception type. It is what gives traces their `throws` terminal. | Trace terminals, blast radius |
-| `field_write` | The writing method's symbol, the assigned field's symbol, and EITHER the source parameter's ordinal OR the value it was written from — a constant, or the call whose result it is | The field resolution ladder (2F), the value walk's sixth edge |
+| `field_write` | The writing method's symbol, the assigned field's symbol, EITHER the source parameter's ordinal OR the value it was written from — a constant, or the call whose result it is — and, on Python, the `guards` the write runs under and `replaceable` | The field resolution ladder (2F), the value walk's sixth edge |
 | `constant` | Symbol, value | Topic and URL resolution. **`value` keeps the type the class file recorded** — a JSON string, number or boolean — because a consumer resolving an address needs the string and one reading a port needs the number, and flattening either to text would put a re-parse between the reader and the class file. **A non-finite double or float arrives as its Java spelling in a STRING** (`"NaN"`, `"Infinity"`, `"-Infinity"`): RFC 8259 has no literal for them, so writing one unquoted makes the fact file invalid for a conforming reader. The field's own descriptor distinguishes that from a String constant reading `NaN` |
 | `string_literal` | Document, range, enclosing symbol, value | Endpoint literals, log-line search |
 | `config_entry` | `key_raw`, `key_path`, `value`, source document, `doc_index` (§5c) | Configuration resolution |
@@ -1486,6 +1486,15 @@ above:
 - A module-level name that branches bind to several imports (`try: import ujson as json` /
   `except ImportError: import json`) is a static field with one `field_write` per import, so
   a call on it names the field as `receiver_field`. As an argument it is a `merge`.
+- A module-level import of one variable another file of the module defines (`from app.other
+  import urlpatterns`) is a static field written once from a read of that variable. A
+  module-level `from m import *` of a file of the module is the same write for each variable
+  it takes (2026-11-25, ruling R3; an existing fact in one more place, fact schema 25): one
+  `field_write` per name the module's read stars take and no statement of its own binds, its
+  value the `field` where the name is defined, through a star of the source too (the last
+  star that takes a name gives it). A star inside an `if` or a `try`, a star of a library,
+  and a name bound to a function, a class or a module write none. So the names a module HOLDS
+  are its field writes, which `resolve/settings_modules.py` reads.
 - A name that two paths set to different values is a `merge` of them where they join, as a
   JVM frame slot two branches wrote; `unresolved` where a path does not set it. Only paths
   that reach the join count (a branch ending in `break`, `continue`, `return` or `raise`
@@ -1521,9 +1530,12 @@ above:
   `!=`) guards nothing either: it chooses how the module starts, not what exists (ruled
   2026-11-09); `reads`
   are the names and dotted names the test reads (`settings.ENV`, `os.path.exists`), each once,
-  in the order it reads them. A test the language decides writes nothing: a constant,
-  `typing.TYPE_CHECKING` (with `not` either way), and a library's version test read for a known
-  Python (whose dead arm is not read at all). A nested function or `lambda` starts with none:
+  in the order it reads them. A test the language decides (a constant, `typing.TYPE_CHECKING`,
+  with `not` either way) writes nothing on the arm that runs; on the arm that never runs it
+  writes `{test, holds, value: {kind: boolean, value: <what the test is>}, when: "true"}`
+  (OI-562, fact schema 24), which the resolver decides false, so what that arm holds gives
+  nothing. A library's version test read for a known Python writes nothing (its dead arm is
+  not read at all). A nested function or `lambda` starts with none:
   its calls run when it is called, and whoever calls it is the resolver's to follow. Absent
   where a call runs under no test, and on every JVM site. A fact set of an older vintage has no
   guards and is refused and re-extracted. **`fields`** (fact schema 16, plan 3 R27): an optional
@@ -1531,6 +1543,15 @@ above:
   name for it, in the same spelling (`settings.support_routes` to `app/settings/Settings#support_routes.`).
   A read the scanner cannot type is absent from the map, never guessed. Absent where no read is
   typed and on every JVM site; a fact set of the older vintage is refused and re-extracted.
+  **`value` and `when`** (fact schema 24, ruling R2 of 2026-11-25): where the test is ONE
+  value, a name or a dotted name (`x`), its negation (`not x`), or its comparison with `None`
+  by `is` (`x is None`, `x is not None`), `value` is that value as an argument at that place
+  would name it (this grammar: a `parameter`, a `field`, a literal, a call's result by
+  `source`), read where the test is, and `when` is what of it makes the test true: `true`
+  (the value is true), `false`, `null` (it is `None`), `not_null`. The resolver decides such
+  a test where the value is one written literal on the path (D01 `endpoint_existence`).
+  Both absent on every other form of test (`==`, `in`, `isinstance`, `and`, `or`, a call),
+  where the scanner names no value, and on the JVM (OI-553).
 
 **`method_return` is a fact of its own, one per return instruction** (capability 9.18) —
 what a method hands back:
@@ -1588,6 +1609,13 @@ as FastAPI hands a yield dependency's first yield to the parameter it fills. `yi
 on another iterator's values and is no value here. `yielded` is false on every other return: the JVM
 extractor writes none, which reads as false. An `@overload` stub, and an abstract or `Protocol` method
 whose body is only `...`, `pass` or a docstring, has no `method_return`: it has no body.
+**`guards`** (fact schema 24, ruling R5 of 2026-11-25, OI-532): the tests the return runs under
+within its own body that the scanner does not decide, outermost first, in the format and by
+every rule of `call_site.guards` above; so the `return` after an arm that always returns is
+under that arm's test, the other way (`if f: return a(f)` then `return a`: the second is
+`{test: "f", holds: false}`). The value walk does not take a return whose test is decided
+false on the path. Absent where a return runs under no test, and on every JVM return. A fact
+set of an older vintage has no such key and is refused and re-extracted.
 
 **`field_write` is a fact of its own, ANY method, direct traces only** — a method assigns a
 parameter, a constant, or a call's result directly to field F. The JVM mapping: a `PUTFIELD`
@@ -1623,6 +1651,32 @@ too.
 write that type's field, and a `global` name written in a function writes the module's
 field. A write to an attribute of any other object is not reported, as on the JVM. `v` is
 written as it reads in an argument slot; a parameter is `from_parameter`.
+**`guards`** (fact schema 23, ruling R1 of 2026-11-25, OI-508, OI-509): the tests the write
+runs under within its own body that the scanner does not decide, outermost first, each
+`{test, holds, reads, fields}` — the format and every rule of `call_site.guards` above (an arm
+that always raises, the entry-point test and a test the language decides write nothing; a
+nested function starts with none). Written on every Python `field_write`: a module name, a
+`global` name, `self.x`, `C.x`, a decorated function's name. A class body's writes carry none
+(its statements are read with no test). Absent where a write runs under no test, and on every
+JVM write (OI-552). With it, a list another name holds that is added to a module name under a
+test (`if T: A += other.B`) is written as the read `*other.B`, where it was one unread member,
+and a write under a test holds only what it adds (`[*A, ...]`), never the elements `A` held
+before it. A fact set of an older vintage has no such key and is refused and re-extracted.
+**`replaceable`** (fact schema 25, ruling R10 of 2026-11-25): `true` on a write of a module
+name that a star import of that module can replace, so the value written is not the one value
+the name holds (`DOCS = False`, then `try: from .local_config import *`). For a name the
+module's own statements bind: a `from m import *` of the module whose source is read and
+binds the name, whose source is not read (a library, a file that is absent), or that sits in
+an `if` or a `try`; where the star is written, before or after the write, is not read
+(OI-565). For a name star imports alone give (the write per variable a star takes, above):
+a star of the module that is not read, or the name being replaceable in the module the last
+star takes it from. A module whose body runs a text as its own code (`exec(code)`, with or without a second argument such as `globals()`, outside a function or a class) is read as a module with a star that is not read: every name it writes carries the mark (the approved note of R3). Every write of such a name carries it, from any file. A read from another
+file of a marked name that a star alone gives names that module's own field
+(`app/config#DOCS.`), not the field where the name is defined, so the read goes through the
+marked write. Absent where no star can replace the name, on a class's or an object's field,
+and on every JVM write. One reader: the step that decides a test (D01 `endpoint_existence`);
+every other read of the value is as it was. A fact set of an older vintage has no such key and
+no write for a star import; it is refused and re-extracted.
 
 Three things it deliberately does not report, each because reporting them would be a claim
 nobody can check:

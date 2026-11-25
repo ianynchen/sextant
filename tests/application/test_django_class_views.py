@@ -14,7 +14,7 @@ from pathlib import Path
 
 import test_django_routes
 from test_django_includes import _SINK, _sunk
-from test_django_routes import _handler, _resolved, _rows
+from test_django_routes import _handler, _not_read, _resolved, _rows
 
 from sextant.application.ports.detector import LibraryRoot
 
@@ -121,9 +121,9 @@ def test_a_class_imported_from_another_file(tmp_path: Path, libraries):
 
 def test_a_class_whose_base_is_not_read_is_partial(tmp_path: Path, libraries):
     """A base this analysis cannot read (a library not installed) comes first in the lookup
-    order, so it may define `as_view` itself: the value walk does not read `Items.as_view()` as
-    `Items` (design 2026-11-23 §9a, the handler value read by the value walk). The path is
-    published, no handler and no method named, never `resolved`."""
+    order, so it may define `as_view` itself: the value walk reads `Items.as_view()` as
+    `Items`, `inexact`, through `View`, the one stated type among the ancestors read (OI-541).
+    The verb rows name their handlers and are never `resolved`."""
     rows = _views(
         tmp_path,
         libraries,
@@ -131,7 +131,7 @@ def test_a_class_whose_base_is_not_read_is_partial(tmp_path: Path, libraries):
         "class Items(Mixin, View):\n    def get(self, request):\n        return None\n",
     )
 
-    assert rows == [(None, "any", "/x/", None, "partial")]
+    assert rows == [("GET", None, "/x/", _handler("get", "app/urls/Items"), "partial")]
 
 
 def test_an_own_head_is_a_row_and_an_own_options_is_a_row(tmp_path: Path, libraries):
@@ -521,6 +521,35 @@ def test_an_unread_library_dispatch_on_a_class_of_no_verbs_is_its_any_method_row
     assert rows == [(None, "any", "/x/", _STUB + "Answering#dispatch(sig_", "partial")]
 
 
+def test_an_unread_library_dispatch_files_a_not_read_question(tmp_path: Path, libraries):
+    """The any-method row of a library `dispatch` whose body was not read says why (ruled
+    2026-11-25, R4, OI-540): column `method`, `external`, at that `dispatch`."""
+    workspace = _resolved(
+        tmp_path,
+        (
+            *libraries,
+            _stub(
+                tmp_path,
+                "from django.views import View\n"
+                "class Answering(View):\n"
+                "    def dispatch(self, request, *a, **k):\n        return None\n",
+            ),
+        ),
+        {
+            "urls.py": _HEAD
+            + "from stubviews import Answering\nurlpatterns = [path('x/', Answering.as_view())]\n"
+        },
+    )
+
+    assert _not_read(workspace) == [
+        (
+            None,
+            "/x/",
+            [("method", "external", _STUB + "Answering#dispatch(sig_", "app/urls#<clinit>(sig_")],
+        )
+    ]
+
+
 def test_a_narrowing_wrapper_narrows_the_class_rows(tmp_path: Path, libraries):
     """`require_POST(V.as_view())`: Django answers 405 to every method but POST before the view
     runs (probe, "Function views"), so only the class's POST row stays."""
@@ -555,7 +584,8 @@ def test_a_class_handed_through_a_helper_serves_its_verbs(tmp_path: Path, librar
 
 def test_no_member_found_past_a_base_not_read_names_no_method(tmp_path: Path, libraries):
     """A class with no verb method of its own, below a base not read, may serve anything that
-    base defines, `as_view` included: one row naming no handler, never `resolved`."""
+    base defines, `as_view` included: one row serving any method and naming no handler, never
+    `resolved` (`_class_rows`, OI-541)."""
     rows = _views(
         tmp_path,
         libraries,
@@ -563,6 +593,20 @@ def test_no_member_found_past_a_base_not_read_names_no_method(tmp_path: Path, li
     )
 
     assert rows == [(None, "any", "/x/", None, "partial")]
+
+
+def test_a_verb_of_a_library_base_past_a_base_not_read_is_partial(tmp_path: Path, libraries):
+    """`TemplateView` defines `get`, past `Mixin`, which was not read: the read types' order
+    past `Mixin` gives the GET row, its handler `TemplateView.get`; `partial`, since `Mixin`
+    may define `get` itself (OI-541)."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        "from not_installed import Mixin\nfrom django.views.generic import TemplateView\n"
+        "class Items(Mixin, TemplateView):\n    template_name = 'a.html'\n",
+    )
+
+    assert rows == [("GET", None, "/x/", f"{_LIBRARY}TemplateView#get(sig_", "partial")]
 
 
 # -- `as_view` read by the value walk (plan 2026-11-23-python-django-redesign, Task 5) ------
@@ -674,3 +718,86 @@ def test_a_class_narrowed_through_a_project_helper_keeps_the_allowed_rows(
     )
 
     assert rows == [("POST", None, "/x/", _handler("post", "app/urls/Items"), "resolved")]
+
+
+def test_an_http_method_names_initkwarg_in_a_helper_leaves_the_verbs_partial(
+    tmp_path: Path, libraries
+):
+    """OI-505: the `as_view` call the value walk passed through inside a helper is on the path
+    (`Path.passed`), so its `http_method_names` keyword changes the table as one written in the
+    registration does: every row `partial`, never a `resolved` DELETE Django refuses."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        _ITEMS + "def get_only():\n    return Items.as_view(http_method_names=['get'])\n",
+        "path('x/', get_only())",
+    )
+
+    assert rows == [
+        ("DELETE", None, "/x/", _handler("delete", "app/urls/Items"), "partial"),
+        ("GET", None, "/x/", _handler("get", "app/urls/Items"), "partial"),
+    ]
+
+
+def test_a_view_object_names_its_class_call_method(tmp_path: Path, libraries):
+    """OI-539 (design 2026-11-23 §4d): `path('x/', Feed())` hands Django an object, and calling
+    an object runs its class's `__call__`, found by the class lookup (a base's too). That method
+    is the handler of the any-method row; its body reads no method, so the row is `resolved`."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        "class Base:\n    def __call__(self, request):\n        return None\n"
+        "class Feed(Base):\n    pass\n",
+        "path('x/', Feed())",
+    )
+
+    assert rows == [(None, "any", "/x/", _handler("__call__", "app/urls/Base"), "resolved")]
+
+
+def test_a_view_object_of_a_library_class_names_the_librarys_call_method(tmp_path: Path, libraries):
+    """OI-539: the `__call__` a library base defines (bookwyrm's `RssFeed(Feed)`), its body read
+    because a module class extends the class."""
+    rows = _stub_rows(
+        tmp_path,
+        libraries,
+        "class Feed:\n    def __call__(self, request, *a, **k):\n        return None\n",
+        "from stubviews import Feed\n"
+        "class Rss(Feed):\n    pass\n"
+        "urlpatterns = [path('x/', Rss())]\n",
+    )
+
+    assert rows == [(None, "any", "/x/", _STUB + "Feed#__call__(sig_", "resolved")]
+
+
+def test_a_view_object_below_a_base_not_read_names_no_handler(tmp_path: Path, libraries):
+    """OI-539: where the lookup meets a type not read before a `__call__`, that type may define
+    the one that runs: no handler, `partial`, as before."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        "from not_installed import Base\nclass Feed(Base):\n    pass\n",
+        "path('x/', Feed())",
+    )
+
+    assert rows == [(None, "any", "/x/", None, "partial")]
+
+
+def test_a_library_override_of_a_stated_method_stops_the_ancestor_match(tmp_path: Path, libraries):
+    """OI-521: the entry is on `View`; `LibSub(View)`, a library class no module class extends,
+    defines its own `as_view` (its header lists it, its body is not read). That one runs, so
+    the entry does not apply: the value is what code not read gives, never `LibSub`."""
+    sunk = _sunk(
+        tmp_path,
+        (
+            *libraries,
+            _stub(
+                tmp_path,
+                "from django.views import View\n"
+                "class LibSub(View):\n"
+                "    @classmethod\n    def as_view(cls, **kw):\n        return 'lib'\n",
+            ),
+        ),
+        _HEAD + _SINK + "from stubviews import LibSub\ndef read():\n    sink(LibSub.as_view())\n",
+    )
+
+    assert sunk == [[(None, "external")]]

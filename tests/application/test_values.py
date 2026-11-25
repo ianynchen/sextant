@@ -7135,6 +7135,7 @@ _CHANGES = (
     "__delitem__",
 )
 _MANY_MEMBERS = 300
+_FEW_WRITES = 200
 
 
 def _py_site(
@@ -7162,6 +7163,7 @@ def _py_held_facts() -> list[Fact]:
         **{f"read_by_{name}": [(name, [])] for name in _READS},
         **{f"changed_by_{name}": [(name, [])] for name in _CHANGES},
         "handed": [("keep", "whole")],
+        "base": [],
     }
     facts: list[Fact] = [
         SymbolFact(
@@ -7200,12 +7202,12 @@ def _py_held_facts() -> list[Fact]:
                     _py_site(_PY_BODY, ordinal, ("builtins/list#", called, "(*)"), [], field)
                 )
             ordinal += 1
-    # A second name for `plain`'s list, changed through that second name.
+    # A second name for `base`'s list, changed through that second name.
     facts.append(
         FieldWriteFact(
             document_id="doc_held",
             field=_HELD_PY + "renamed.",
-            value=CallArgument(kind="field", symbol=_HELD_PY + "plain."),
+            value=CallArgument(kind="field", symbol=_HELD_PY + "base."),
             written_by=_PY_BODY,
         )
     )
@@ -7234,7 +7236,35 @@ def _py_held_facts() -> list[Fact]:
         )
         for n in range(_MANY_MEMBERS)
     )
-    for name in (*lists, "renamed", "long", "branchy"):
+    # A second name for `long`; a name with fewer alternative writes than `PATH_CAP`; and a
+    # name written as it and with as many more alternatives as take the sum past the cap.
+    facts.append(
+        FieldWriteFact(
+            document_id="doc_held",
+            field=_HELD_PY + "long_alias.",
+            value=CallArgument(kind="field", symbol=_HELD_PY + "long."),
+            written_by=_PY_BODY,
+        )
+    )
+    for name, count in (("half", _FEW_WRITES), ("doubled", _FEW_WRITES)):
+        facts.extend(
+            FieldWriteFact(
+                document_id="doc_held",
+                field=_HELD_PY + name + ".",
+                value=CallArgument(kind="string", value=f"{name}{n}"),
+                written_by=_PY_BODY,
+            )
+            for n in range(count)
+        )
+    facts.append(
+        FieldWriteFact(
+            document_id="doc_held",
+            field=_HELD_PY + "doubled.",
+            value=CallArgument(kind="field", symbol=_HELD_PY + "half."),
+            written_by=_PY_BODY,
+        )
+    )
+    for name in (*lists, "renamed", "long", "branchy", "long_alias", "half", "doubled"):
         reader = _PY + _HELD_PY + "read_" + name + _PY_DIS
         facts.append(
             SymbolFact(
@@ -7323,15 +7353,21 @@ def test_a_read_the_language_makes_on_a_held_list_keeps_its_members(held_py, cal
 def test_a_held_list_handed_to_a_call_is_still_read(held_py):
     """`keep(VERBS)`: a list handed to a call is still read (ruled 2026-11-23): the walk reads
     a field's writes and tracks no hand-over of a field, in Python as in Java. A list handed
-    to module code that changes it is a known limit (plan Task 10)."""
+    to module code seen to change it is not known (OI-510,
+    `test_fastapi_routes.py::test_a_verb_list_held_in_a_module_name_is_read`)."""
     assert _held_answers(held_py, "handed") == [("a", None), ("b", None)]
 
 
 def test_a_list_changed_through_a_second_name_is_not_known_by_that_name(held_py):
     """`VERBS = BASE` then `VERBS.remove(v)`: the call names `VERBS`, the list is written
-    under `BASE`. Read by the name the call was made on, the list is not exactly known;
-    read by `BASE` it is the same object, a limit the facts do not show."""
+    under `BASE`. Read by the name the call was made on, the list is not exactly known."""
     assert _held_answers(held_py, "renamed") == [(None, "escapes")]
+
+
+def test_a_list_changed_through_a_second_name_is_not_known_by_its_first(held_py):
+    """Read by `BASE` it is the same object, changed through `VERBS` (OI-516): not exactly
+    known either."""
+    assert _held_answers(held_py, "base") == [(None, "escapes")]
 
 
 def test_the_members_of_one_held_list_do_not_count_against_the_path_cap(held_py):
@@ -7341,6 +7377,22 @@ def test_the_members_of_one_held_list_do_not_count_against_the_path_cap(held_py)
     answers = _held_answers(held_py, "long")
     assert len(answers) == _MANY_MEMBERS
     assert all(reason is None for _, reason in answers)
+
+
+def test_a_second_name_for_a_long_list_reads_every_member(held_py):
+    """`Y = X` with `X` one written list longer than `PATH_CAP`: still one list."""
+    answers = _held_answers(held_py, "long_alias")
+    assert len(answers) == _MANY_MEMBERS
+    assert all(reason is None for _, reason in answers)
+
+
+def test_the_alternatives_a_second_name_reads_count_against_the_path_cap(held_py):
+    """`Y = X` where `X` has alternative writes under the cap, and `Y` as many more of its
+    own: the alternatives `X` gives are no members of one list, so the sum is past the cap
+    (OI-517)."""
+    assert 2 * _FEW_WRITES > values.PATH_CAP >= _FEW_WRITES
+    assert len(_held_answers(held_py, "half")) == _FEW_WRITES
+    assert _held_answers(held_py, "doubled") == [(None, "non_enumerable")]
 
 
 def test_more_alternative_writes_than_the_path_cap_are_non_enumerable(held_py):
@@ -7418,6 +7470,102 @@ def test_a_wrapper_that_calls_what_a_call_on_its_captured_function_gives_stands_
         "register(admin(other))\n"
     )
     assert _registered(tmp_path, source) == [["page"], ["other"]]
+
+
+def test_one_wrapper_entered_twice_on_one_path_stands_for_the_view(tmp_path: Path):
+    """`log` wraps `admin`'s wrapper and is called again inside it (zulip's
+    `require_server_admin` under `zulip_login_required`, OI-537): the second entry of `log`'s
+    body is on another call of it, never a cycle; each registration runs its own view."""
+    source = (
+        "def log(f):\n"
+        "    def w(request, *a, **k):\n"
+        "        return f(request, *a, **k)\n"
+        "    return w\n"
+        "def admin(view):\n"
+        "    @log\n"
+        "    def x(request, *a, **k):\n"
+        "        return log(view)(request, *a, **k)\n"
+        "    return x\n"
+        "def other(request):\n    return None\n"
+        "register(admin(page))\n"
+        "register(admin(other))\n"
+    )
+    assert _registered(tmp_path, source) == [["page"], ["other"]]
+
+
+def test_one_decorator_factory_applied_twice_stands_for_the_view(tmp_path: Path):
+    """`@setting('A') @setting('B') def page` (healthchecks' `require_setting`, OI-537): the
+    one wrapper body is entered once per application, each its own call."""
+    source = (
+        "def setting(key):\n"
+        "    def decorator(f):\n"
+        "        def wrapper(request, *a, **k):\n"
+        "            if not key:\n"
+        "                return None\n"
+        "            return f(request, *a, **k)\n"
+        "        return wrapper\n"
+        "    return decorator\n"
+        "@setting('A')\n"
+        "@setting('B')\n"
+        "def view(request):\n    return None\n"
+        "register(view)\n"
+    )
+    assert _registered(tmp_path, source) == [["view"]]
+
+
+@pytest.mark.parametrize(
+    ("registered", "read"),
+    [
+        ("register(only(['GET'])(page))\n", [(values.LITERAL, "GET")]),
+        (
+            "register(only(['GET'])(only(['POST'])(page)))\n",
+            [(values.UNRESOLVED, values.NOT_READABLE)],
+        ),
+    ],
+    ids=["one-call", "two-calls"],
+)
+def test_a_value_read_through_a_helper_the_path_entered_on_two_calls_is_not_read(
+    tmp_path: Path, registered: str, read: list[tuple[str, str]]
+):
+    """`only(['GET'])(only(['POST'])(page))`: the path to `page` enters `only` on two calls and
+    holds the first alone, so `ms` read within it would be `GET` for both entries. Every reader
+    of a value on that path gets `not_readable` (ruled 2026-11-25, R6; the guard is the
+    walk's, `resolve_positions_on_paths`); a path that entered it once reads its own call."""
+    import test_receiver_binding
+
+    source = (
+        "def note(v):\n    return None\n"
+        "def only(ms):\n    def d(f):\n        note(ms)\n        return f\n    return d\n"
+    )
+    workspace = test_receiver_binding._resolved(
+        tmp_path, {"a.py": _REGISTER + _PAGE + source + registered}
+    )
+    index = value_index(workspace)
+    sites = {row["name"]: dict(row) for row in workspace.query("call_sites")}
+    found = [
+        (answers["v"].kind, answers["v"].reason or answers["v"].value)
+        for _, path in producer_paths(index, sites["register"], 0, frozenset(), functions=True)
+        for answers in values.resolve_positions(
+            workspace, {"v": (sites["note"], 0)}, index, within=path
+        )
+    ]
+    workspace.close()
+
+    assert found == read
+
+
+def test_a_recursive_wrapper_is_a_cycle(tmp_path: Path):
+    """A wrapper that calls its own decorator again on the call it was made by is a real
+    recursion: the same body entered again under the same call is `cycle`, never the view
+    (OI-537 keeps the bound)."""
+    source = (
+        "def deco(f):\n"
+        "    def w(request):\n"
+        "        return deco(f)(request)\n"
+        "    return w\n"
+        "register(deco(page))\n"
+    )
+    assert _registered(tmp_path, source) == [["cycle"]]
 
 
 def test_a_wrapper_that_calls_what_an_unread_call_on_its_captured_function_gives_is_a_reason(

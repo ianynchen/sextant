@@ -1566,6 +1566,28 @@ def test_an_attribute_of_a_library_variable_is_a_call_on_its_defining_class(tmp_
     assert all(name != "method" or owner != base for owner, name, _, _ in calls)
 
 
+def test_a_library_attribute_read_in_an_if_test_is_written_once(tmp_path: Path):
+    """`if request.args:` with an early `return`: the test's guard reads it again for each arm
+    and for what follows (`_fields`), and writes no call of its own: one `args` call (OI-542)."""
+    web = _install(tmp_path / "site", "web", "1.0.0", _WEB)
+
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/main.py": (
+                "from web import request\n"
+                "def handler():\n"
+                "    if request.args:\n"
+                "        return None\n"
+                "    print('x')\n"
+            )
+        },
+        (web,),
+    )
+
+    assert [s.target.name for s in _sites(tree, "app/main#handler")].count("args") == 1
+
+
 def _bad_library(tmp_path: Path, table_cap: int | None = None) -> Libraries:
     broken = _install(tmp_path / "site", "broken", "1.0", {"broken/__init__.py": "def (:\n"})
     return Libraries((broken,), typeshed_dir(), tmp_path / "site", table_cap=table_cap)
@@ -1686,3 +1708,31 @@ def test_a_library_class_in_a_lookup_order_has_its_method_bodies_read(tmp_path: 
         (fact.invoke_kind, fact.target.name) for fact in library if fact.invoke_kind == "special"
     ] == [("special", "dispatch")]
     assert not _sites(tree, "views/base/Typed#")
+
+
+def test_a_nested_library_class_in_a_lookup_order_has_its_method_bodies_read(tmp_path: Path):
+    """OI-545: `Mine(Outer.Inner)`: the nested class's method bodies are read as a top-level
+    one's are; `Outer`'s own methods, in no lookup order, stay unread."""
+    nested = {
+        "views/py.typed": "",
+        "views/__init__.py": "",
+        "views/base.py": (
+            "class Outer:\n"
+            "    def own(self):\n        return self.x()\n"
+            "    class Inner:\n"
+            "        def dispatch(self, request, *args):\n"
+            "            return super().dispatch(request, *args)\n"
+        ),
+    }
+    views = _install(tmp_path / "site", "views", "1.0", nested)
+    _, tree = _scan(
+        tmp_path,
+        {"app/main.py": "from views.base import Outer\nclass Mine(Outer.Inner): ...\n"},
+        (views,),
+    )
+
+    library = _sites(tree, "views/base/Outer$Inner#dispatch(")
+    assert [
+        (fact.invoke_kind, fact.target.name) for fact in library if fact.invoke_kind == "special"
+    ] == [("special", "dispatch")]
+    assert not _sites(tree, "views/base/Outer#own(")

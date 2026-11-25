@@ -72,6 +72,8 @@ def declared_identities() -> dict[str, list[dict[str, object]]]:
             *(document.get("hand_off_effects") or []),
             *(document.get("returns_argument") or []),
             *(document.get("environment_reads") or []),
+            # `key_reads` (ruling R3 of 2026-11-25) states an object read by key.
+            *(document.get("key_reads") or []),
         ]
     return found
 

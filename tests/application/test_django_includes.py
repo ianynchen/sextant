@@ -187,6 +187,22 @@ def test_include_a_list_and_app_name_tuple(tmp_path, libraries):
     assert rows == [_row("/t/e/")]
 
 
+def test_include_a_list_and_app_name_tuple_held_in_a_name(tmp_path, libraries):
+    """OI-526: `x = (extra, 'app.other')`, `include(x)`: the app name is no member, also
+    where it is a module's dotted name; only the list is mounted."""
+    rows = _served(
+        tmp_path,
+        libraries,
+        {
+            "other.py": "urlpatterns = [path('o/', v)]\n",
+            "urls.py": "extra = [path('e/', v)]\nx = (extra, 'app.other')\n"
+            "urlpatterns = [path('t/', include(x))]\n",
+        },
+    )
+
+    assert rows == [_row("/<prefix>o/", "partial"), _row("/t/e/")]
+
+
 def test_include_with_a_namespace(tmp_path, libraries):
     """`namespace=` names the instance; it changes no path."""
     rows = _served(
@@ -263,7 +279,9 @@ def test_routes_added_with_extend_and_append_are_in_the_list(tmp_path, libraries
 def test_routes_added_under_debug_are_not_evaluated(tmp_path, libraries):
     """`if settings.DEBUG: urlpatterns += [...]`: the deployment decides the test (ruling
     2026-10-23), so the row's existence is "not evaluated"; the row itself is unchanged and
-    the route outside the test has no condition."""
+    the route outside the test has no condition of the code. The test reads a setting, so
+    its evidence is what the settings module sets for the key (ruling R3 of 2026-11-25):
+    here nothing."""
     workspace = _program(
         tmp_path,
         libraries,
@@ -285,9 +303,18 @@ def test_routes_added_under_debug_are_not_evaluated(tmp_path, libraries):
             row["evidence"],
         )
         for row in workspace.query("endpoint_existence")
+        if "having_value" not in json.loads(str(row["expression"]))
     )
     assert conditions == [
-        ("/api/dbg/", "settings.DEBUG", "unresolved", f"{_NOT_EVALUATED}`settings.DEBUG`")
+        (
+            "/api/dbg/",
+            "settings.DEBUG",
+            "unresolved",
+            (
+                "`DEBUG` is set by the deployment; this module's `app.settings` configuration "
+                "sets nothing"
+            ),
+        )
     ]
 
 
@@ -309,12 +336,7 @@ def test_a_mount_written_under_a_test_gives_its_routes_the_condition(tmp_path, l
     )
 
     assert _rows(workspace) == [_row("/a/"), _row("/legal/terms/")]
-    live = {row["row_id"]: row["path"] for row in workspace.query("endpoints")}
-    conditions = sorted(
-        (live[row["row_id"]], json.loads(str(row["expression"]))["test"], row["holds"])
-        for row in workspace.query("endpoint_existence")
-    )
-    assert conditions == [("/legal/terms/", "settings.LEGAL", "unresolved")]
+    assert _conditions(workspace) == [("/legal/terms/", "settings.LEGAL", "unresolved")]
 
 
 # -- design 2026-11-23 §4a: the roots --------------------------------------------------------------
@@ -685,7 +707,8 @@ def test_an_aliased_or_re_exported_list_in_a_root_module_stays_at_the_root(tmp_p
 
 def test_a_list_handed_to_a_call_no_catalog_reads_is_behind_an_unread_prefix(tmp_path, libraries):
     """R9 part 2: `urlpatterns = copy.copy(base)` included at `api/`: `base` is handed to a
-    call no catalog reads, so it cannot be placed; nothing is `resolved` at the root."""
+    call that is not read, a mount whose prefix is not read (ruled 2026-11-24, OI-550): its
+    routes are behind `api/` and the hole; nothing is `resolved`."""
     workspace = _program(
         tmp_path,
         libraries,
@@ -695,8 +718,8 @@ def test_a_list_handed_to_a_call_no_catalog_reads_is_behind_an_unread_prefix(tmp
         },
     )
 
-    assert _rows(workspace) == [_row("/<prefix>x/", "partial")]
-    assert _questions(workspace, "mount_prefix") == ["/<prefix>x/"]
+    assert _rows(workspace) == [_row("/api/<prefix>x/", "partial")]
+    assert _questions(workspace, "mount_prefix") == ["/api/<prefix>x/"]
 
 
 def test_a_list_of_a_list_is_mounted(tmp_path, libraries):
@@ -799,40 +822,326 @@ def test_a_helper_that_returns_a_route_keeps_each_callers_path_and_prefix(tmp_pa
     assert rows == [_row("/a/one/"), _row("/b/two/")]
 
 
-def test_a_library_call_that_takes_the_list_is_no_mount(tmp_path, libraries):
-    """Design 2026-11-23 §4c M1: `i18n_patterns(*x)` adds a language prefix from a setting
-    and the request; no readable mount reaches `x`, so its routes are behind the hole."""
+def test_a_library_call_that_takes_the_list_is_a_mount_whose_prefix_is_not_read(
+    tmp_path, libraries
+):
+    """Ruled 2026-11-24 (OI-550, option A): `i18n_patterns(*x)` takes a route list and its
+    result is a member of a route list, so it is a mount whose prefix is not read: `x`'s
+    routes are behind the hole at `partial`, with the `mount_prefix` question naming the
+    call, also where a root reaches `x` another way (`urls = list(x)`)."""
+    for written, rows in (
+        (
+            "urlpatterns = [path('h/', v)]\nurlpatterns += i18n_patterns(*x)\n",
+            [_row("/<prefix>a/", "partial"), _row("/h/")],
+        ),
+        (
+            "urls = list(x)\nurlpatterns = i18n_patterns(*x) + urls\n",
+            [_row("/<prefix>a/", "partial"), _row("/a/")],
+        ),
+        (
+            "urlpatterns = i18n_patterns(*x) + x\n",
+            [_row("/<prefix>a/", "partial"), _row("/a/")],
+        ),
+    ):
+        workspace = _program(
+            tmp_path / str(len(written)),
+            libraries,
+            {
+                "urls.py": "from django.conf.urls.i18n import i18n_patterns\n"
+                "x = [path('a/', v)]\n" + written
+            },
+        )
+
+        assert _rows(workspace) == rows, written
+        assert _questions(workspace, "mount_prefix") == ["/<prefix>a/"], written
+        call = next(row for row in workspace.query("call_sites") if row["name"] == "i18n_patterns")
+        assert [
+            (candidate["mount"], candidate["mount_ordinal"])
+            for row in workspace.query("open_questions")
+            for candidate in json.loads(row["candidates"])
+        ] == [(call["caller"], call["ordinal"])], written
+
+
+def test_two_holes_with_one_text_keep_both_mounts_in_the_question(tmp_path, libraries):
+    """OI-527: two lists behind `<prefix>` give one row `/<prefix>x/`; its `mount_prefix`
+    question names both, for lists no root reaches and for two mounts not read."""
+    for name, written, read in (
+        ("unplaced", "urlpatterns = []\n", "a list no readable mount and no root reaches"),
+        (
+            "unread",
+            (
+                "urlpatterns = [path(os.environ['P'], include(a)),"
+                " path(os.environ['Q'], include(b))]\n"
+            ),
+            None,
+        ),
+    ):
+        workspace = _program(
+            tmp_path / name,
+            libraries,
+            {"urls.py": "import os\na = [path('x/', v)]\nb = [path('x/', v)]\n" + written},
+        )
+
+        assert _rows(workspace) == [_row("/<prefix>x/", "partial")], name
+        (question,) = workspace.query("open_questions")
+        candidates = json.loads(question["candidates"])
+        assert len({candidate["mount_ordinal"] for candidate in candidates}) == 2, name
+        assert read is None or {candidate["read"] for candidate in candidates} == {read}, name
+
+
+def test_a_call_already_open_on_the_read_is_not_entered_again(tmp_path, libraries):
+    """`urlpatterns = format_suffix_patterns(urlpatterns)` (the DRF tutorial shape): the
+    argument reads every write of the name, the call's own too. A call already open on the
+    path the read took is not entered again (the walk's `cycle`): the earlier write's route
+    keeps its `resolved` row, and the call adds it once behind its one hole."""
+    for name, written, rows in (
+        (
+            "suffix",
+            (
+                "from rest_framework.urlpatterns import format_suffix_patterns\n"
+                "urlpatterns = [path('a/', v)]\n"
+                "urlpatterns = format_suffix_patterns(urlpatterns)\n"
+            ),
+            [_row("/<prefix>a/", "partial"), _row("/a/")],
+        ),
+        (
+            "i18n",
+            (
+                "from django.conf.urls.i18n import i18n_patterns\n"
+                "urlpatterns = [path('a/', v)]\nurlpatterns = i18n_patterns(*urlpatterns)\n"
+            ),
+            [_row("/<prefix>a/", "partial"), _row("/a/")],
+        ),
+        (
+            "include",
+            (
+                "from nolib import wrap\nother = [path('a/', v)]\nother = wrap(other)\n"
+                "urlpatterns = [path('p/', include(other))]\n"
+            ),
+            [_row("/p/<prefix>a/", "partial"), _row("/p/a/")],
+        ),
+    ):
+        workspace = _program(tmp_path / name, libraries, {"urls.py": written})
+
+        assert _rows(workspace) == rows, name
+
+
+def test_a_module_that_includes_itself_is_read_once(tmp_path, libraries):
+    """OI-530: `path('x/', include('app.urls'))` inside `app/urls.py`. Django fails at start;
+    the read stops where the module comes back on its own path (the walk's `cycle`): the
+    analysis ends, with the module's own rows and none through the mount of itself."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {"urls.py": "urlpatterns = [path('a/', v), path('x/', include('app.urls'))]\n"},
+    )
+
+    assert _rows(workspace) == [_row("/a/")]
+
+
+def _conditions(workspace) -> list[tuple[object, str, object]]:
+    """The tests of the code each row runs under. The condition every route of a root has,
+    "`ROOT_URLCONF` is `<root>`" (it states a `having_value`), is left out: it is read in
+    `test_django_settings.py`."""
+    live = {row["row_id"]: row["path"] for row in workspace.query("endpoints")}
+    return sorted(
+        (live[row["row_id"]], expression["test"], row["holds"])
+        for row in workspace.query("endpoint_existence")
+        for expression in (json.loads(str(row["expression"])),)
+        if "having_value" not in expression
+    )
+
+
+def test_a_list_added_under_a_test_gives_its_routes_the_condition(tmp_path, libraries):
+    """`if settings.DEVELOPMENT: urlpatterns += dev_urls.urlpatterns`: the other list's
+    routes are served only where the test holds, and the write says so (`field_write.guards`,
+    ruling R1 of 2026-11-25, OI-508): each is at its real address and "not evaluated", as a
+    route under a mount written under a test is. The list outside the test has no condition.
+    `urlpatterns = urlpatterns + other` is the same write."""
+    for added in (
+        "urlpatterns += dev_urls.urlpatterns",
+        "urlpatterns = urlpatterns + dev_urls.urlpatterns",
+    ):
+        workspace = _program(
+            tmp_path / str(len(added)),
+            libraries,
+            {
+                "dev_urls.py": "urlpatterns = [path('dev/', v)]\n",
+                "urls.py": "from django.conf import settings\nfrom app import dev_urls\n"
+                "urlpatterns = [path('a/', v)]\n"
+                f"if settings.DEVELOPMENT:\n    {added}\n",
+            },
+        )
+
+        assert _rows(workspace) == [_row("/a/"), _row("/dev/")]
+        assert _conditions(workspace) == [("/dev/", "settings.DEVELOPMENT", "unresolved")]
+        assert _questions(workspace, "mount_prefix") == []
+
+
+def test_a_list_added_under_a_test_the_code_fixes_is_decided(tmp_path, libraries):
+    """Ruling R2 of 2026-11-25: `DEV = True`, `if DEV: urlpatterns += ...`: the test is one
+    name with one written value, so it is decided. Decided true, the routes have no condition
+    from it; decided false, the write gives nothing: the list is one no root reaches. A name
+    read from the environment is not decided."""
+    for position, (fixed, rows, conditions) in enumerate(
+        (
+            ("DEV = True\n", [_row("/a/"), _row("/dev/")], []),
+            # No root reaches the other list now: it is the list no mount reaches, the hole.
+            ("DEV = False\n", [_row("/<prefix>dev/", "partial"), _row("/a/")], []),
+            (
+                "import os\nDEV = os.environ.get('DEV')\n",
+                [_row("/a/"), _row("/dev/")],
+                [("/dev/", "DEV", "unresolved")],
+            ),
+        )
+    ):
+        workspace = _program(
+            tmp_path / str(position),
+            libraries,
+            {
+                "dev_urls.py": "urlpatterns = [path('dev/', v)]\n",
+                "urls.py": "from app import dev_urls\n" + fixed + "urlpatterns = [path('a/', v)]\n"
+                "if DEV:\n    urlpatterns += dev_urls.urlpatterns\n",
+            },
+        )
+
+        assert _rows(workspace) == rows
+        assert _conditions(workspace) == conditions
+
+
+def test_a_test_on_a_list_written_more_than_once_is_not_decided(tmp_path, libraries):
+    """Ruling R2: a name with several writes on one path is not decided, and an addition to a
+    held list is a write. `api = []`, then an addition, then `if api:`: the test is not
+    evaluated and the routes under it stay, with the condition. The list tested can be the one
+    the rows are in, or the list of another module."""
+    condition = [("/x/p/", "api", "unresolved")]
+    for position, (urls, extra, rows, conditions) in enumerate(
+        (
+            (
+                (
+                    "api = []\napi.append(path('p/', v))\nurlpatterns = [path('a/', v)]\n"
+                    "if api:\n    urlpatterns += [path('x/', include(api))]\n"
+                ),
+                {},
+                [_row("/a/"), _row("/x/p/")],
+                condition,
+            ),
+            (
+                (
+                    "api = []\napi += [path('p/', v)]\nurlpatterns = [path('a/', v)]\n"
+                    "if api:\n    urlpatterns += [path('x/', include(api))]\n"
+                ),
+                {},
+                [_row("/a/"), _row("/x/p/")],
+                condition,
+            ),
+            (
+                (
+                    "urlpatterns = []\nurlpatterns += [path('a/', v)]\n"
+                    "if urlpatterns:\n    urlpatterns += [path('b/', v)]\n"
+                ),
+                {},
+                [_row("/a/"), _row("/b/")],
+                [("/b/", "urlpatterns", "unresolved")],
+            ),
+            (
+                (
+                    "from app import api\nurlpatterns = [path('a/', v)]\n"
+                    "if api.urlpatterns:\n    urlpatterns += [path('x/', include(api.urlpatterns))]\n"
+                ),
+                {"api.py": "urlpatterns = []\nurlpatterns += [path('p/', v)]\n"},
+                [_row("/a/"), _row("/x/p/")],
+                [("/x/p/", "api.urlpatterns", "unresolved")],
+            ),
+        )
+    ):
+        workspace = _program(tmp_path / str(position), libraries, {**extra, "urls.py": urls})
+
+        assert _rows(workspace) == rows, position
+        assert _conditions(workspace) == conditions, position
+
+
+def test_a_test_on_an_empty_list_never_written_again_is_decided(tmp_path, libraries):
+    """The control: `api = []` and no other write, `if api:` is decided false, the write under
+    it gives nothing."""
     workspace = _program(
         tmp_path,
         libraries,
         {
-            "urls.py": "from django.conf.urls.i18n import i18n_patterns\n"
-            "x = [path('a/', v)]\n"
-            "urlpatterns = [path('h/', v)]\nurlpatterns += i18n_patterns(*x)\n"
+            "urls.py": "api = []\nurlpatterns = [path('a/', v)]\n"
+            "if api:\n    urlpatterns += [path('x/', v)]\n",
         },
     )
 
-    assert _rows(workspace) == [_row("/<prefix>a/", "partial"), _row("/h/")]
-    assert _questions(workspace, "mount_prefix") == ["/<prefix>a/"]
+    assert _rows(workspace) == [_row("/a/")]
+    assert _conditions(workspace) == []
 
 
-def test_a_list_added_under_a_test_is_behind_the_hole(tmp_path, libraries):
-    """`if settings.DEVELOPMENT: urlpatterns += dev_urls.urlpatterns`: the other list's
-    routes are served only where the test holds, and no fact of theirs says so (design
-    2026-11-23 §9b): behind the hole at `partial`, never `resolved`. The list outside the
-    test is read."""
+def test_a_list_added_under_a_test_the_language_decides_false_gives_nothing(tmp_path, libraries):
+    """`if False: urlpatterns += dev_urls.urlpatterns` (OI-562): the arm never runs, so the
+    write gives nothing, as a write under a test the resolver decides false. The other list is
+    one no root reaches."""
     workspace = _program(
         tmp_path,
         libraries,
         {
             "dev_urls.py": "urlpatterns = [path('dev/', v)]\n",
-            "urls.py": "from django.conf import settings\nfrom app import dev_urls\n"
+            "urls.py": "from app import dev_urls\n"
             "urlpatterns = [path('a/', v)]\n"
-            "if settings.DEVELOPMENT:\n    urlpatterns += dev_urls.urlpatterns\n",
+            "if False:\n    urlpatterns += dev_urls.urlpatterns\n",
         },
     )
 
     assert _rows(workspace) == [_row("/<prefix>dev/", "partial"), _row("/a/")]
+    assert _conditions(workspace) == []
+
+
+def test_a_list_added_under_a_test_in_a_mounted_module_keeps_the_mount_and_the_test(
+    tmp_path, libraries
+):
+    """The write under a test is one more thing the row's registration ran through: behind a
+    mount under another test, the row carries both, the mount's first."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            "dev_urls.py": "urlpatterns = [path('dev/', v)]\n",
+            "api_urls.py": "from django.conf import settings\nfrom app import dev_urls\n"
+            "urlpatterns = [path('a/', v)]\n"
+            "if settings.DEVELOPMENT:\n    urlpatterns += dev_urls.urlpatterns\n",
+            "urls.py": "from django.conf import settings\n"
+            "urlpatterns = []\n"
+            "if settings.API:\n    urlpatterns += [path('api/', include('app.api_urls'))]\n",
+        },
+    )
+
+    assert _rows(workspace) == [_row("/api/a/"), _row("/api/dev/")]
+    assert _conditions(workspace) == [
+        ("/api/a/", "settings.API", "unresolved"),
+        ("/api/dev/", "settings.API", "unresolved"),
+        ("/api/dev/", "settings.DEVELOPMENT", "unresolved"),
+    ]
+
+
+def test_a_root_setting_written_under_a_test_gives_its_routes_the_condition(tmp_path, libraries):
+    """`ROOT_URLCONF = "app.urls"`, then `if T: ROOT_URLCONF = "app.other_urls"` (zulip's
+    `RUNNING_INSIDE_TORNADO`): the routes served from the root written under the test carry
+    the test, "not evaluated" (ruling R1 of 2026-11-25, OI-509); the routes of the other root
+    keep what they have."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "import sys\nROOT_URLCONF = 'app.urls'\n"
+            "TORNADO = len(sys.argv) > 1\n"
+            "if TORNADO:\n    ROOT_URLCONF = 'app.other_urls'\n",
+            "urls.py": "urlpatterns = [path('u/', v)]\n",
+            "other_urls.py": "urlpatterns = [path('o/', v)]\n",
+        },
+    )
+
+    assert _rows(workspace) == [_row("/o/"), _row("/u/")]
+    assert _conditions(workspace) == [("/o/", "TORNADO", "unresolved")]
 
 
 def test_a_call_that_may_be_a_mount_is_one_only_where_its_router_reads_as_one(tmp_path, libraries):

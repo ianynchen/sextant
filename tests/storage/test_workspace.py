@@ -14,6 +14,7 @@ from sextant.domain.facts import (
     AnnotationFact,
     AnnotationUse,
     CallArgument,
+    CallGuard,
     CallSiteFact,
     CallTarget,
     ConfigEntryFact,
@@ -1257,8 +1258,10 @@ def test_the_method_returns_view_keeps_a_void_return_distinct_from_an_unread_one
     rows = reopened.execute("SELECT * FROM method_returns ORDER BY ordinal").fetchall()
     reopened.close()
     assert len(rows) == 2
-    document_id, returned_by, ordinal, value = rows[0]
+    document_id, returned_by, ordinal, value, guards = rows[0]
     assert (document_id, returned_by, ordinal) == ("doc_2", method, 0)
+    # A JVM return carries no test record (`method_returns.guards`, fact schema 24).
+    assert guards is None
     assert json.loads(value)["source"] == 13
     # The void return. `-> 'value'` over an explicit JSON null gives DuckDB's
     # JSON scalar `null`, not SQL NULL — so a reader tells the two apart by the
@@ -2432,6 +2435,9 @@ def test_the_three_unpinned_redaction_joins_actually_mask(tmp_path: Path):
                 field="com/acme/A#endpoint.",
                 value=CallArgument(kind="string", value=secret),
                 written_by="mod com/acme/A#<init>(sig_1).",
+                # The same credential in the test the write is under (`field_writes.guards`,
+                # fact schema 23).
+                guards=[CallGuard(test=f"url == '{secret}'", holds=True)],
             ),
         ],
     )

@@ -102,11 +102,11 @@ _NAMED_QUERIES = {
     # the ladder's own reader skips them. NULLS LAST keeps the parameter writes — the rung
     # that reads this — ahead of the constant ones in the tie-break order (NFR-1).
     "field_writes": (
-        "SELECT field, from_parameter, value, written_by FROM field_writes "
+        "SELECT field, from_parameter, value, written_by, guards, replaceable FROM field_writes "
         # `value` is in the key as well: one method can write one field from several
         # constants, and the other three columns are equal on those rows, so without it the
         # order between them is whatever the engine happens to produce (NFR-1).
-        "ORDER BY field, from_parameter NULLS LAST, value::VARCHAR, written_by"
+        "ORDER BY field, from_parameter NULLS LAST, value::VARCHAR, written_by, guards"
     ),
     # D00 §5's `method_return` (capability 9.18): what each method hands back,
     # one row per return instruction. 2Q's `G3` — cross-method return
@@ -121,7 +121,9 @@ _NAMED_QUERIES = {
     # method with two `return` statements reads its two answers in
     # instruction order, twice (NFR-1) — the same total ordering
     # `call_sites` takes for the same reason.
-    "method_returns": "SELECT method, ordinal, value FROM method_returns ORDER BY method, ordinal",
+    "method_returns": (
+        "SELECT method, ordinal, value, guards FROM method_returns ORDER BY method, ordinal"
+    ),
     # What each generator yields (`method_return.yielded`, plan 2026-11-08 N10), which the
     # `method_returns` view leaves out: one row per `yield`, in the same order and grammar.
     "method_yields": (
@@ -739,12 +741,14 @@ _NAMED_QUERIES = {
     # Every symbol of the header document (D00 §5 `type_header`): the library bodies a module
     # class's lookup order has read (fact schema 22). F4 §5.2 (W24): nobody asked for them, so
     # a row registered in one is the library's, never published (`drop_borrowed_endpoints.sql`,
-    # and at source where a row carries no caller).
+    # and at source where a row carries no caller). Not a symbol the library's own document
+    # holds too: the module opted into that library, and its rows were asked for (R9).
     "header_symbols": """
         SELECT s.symbol AS symbol
         FROM symbols s
         JOIN documents d ON d.document_id = s.document_id
-        WHERE d.header_only
+        GROUP BY s.symbol
+        HAVING bool_and(d.header_only)
         ORDER BY symbol
     """,
     # The two NON-WIRE tables (2O design §4). Ordered on their whole content
@@ -1091,6 +1095,20 @@ _NAMED_QUERIES = {
     "call_site_guards": """
         SELECT caller, ordinal, guards FROM call_sites WHERE guards IS NOT NULL
         ORDER BY caller, ordinal
+    """,
+    # Fact schema 23 (OI-508, OI-509): the tests a field write runs under, each set once per
+    # writing method (D00 §5 `field_write.guards`), read beside `call_site_guards`.
+    "field_write_guards": """
+        SELECT DISTINCT written_by, guards FROM field_writes
+        WHERE guards IS NOT NULL AND written_by IS NOT NULL
+        ORDER BY written_by, guards
+    """,
+    # Fact schema 24 (OI-532): the tests a return runs under, each set once per method (D00 §5
+    # `method_return.guards`), read beside `field_write_guards`.
+    "method_return_guards": """
+        SELECT DISTINCT method, guards FROM method_returns
+        WHERE guards IS NOT NULL
+        ORDER BY method, guards
     """,
     "calls_running": """
         SELECT DISTINCT callee, caller, ordinal FROM call_edges WHERE callee IS NOT NULL
@@ -1793,11 +1811,13 @@ _EXPORT_QUERIES = {
     # `field_writes.parquet` in the clear while `raw_facts.parquet` carried it masked.
     "field_writes": f"""
         SELECT w.document_id, w.field, w.from_parameter,
-               coalesce(j.masked::JSON, w.value) AS value, w.written_by
+               coalesce(j.masked::JSON, w.value) AS value, w.written_by,
+               coalesce(g.masked, w.guards) AS guards, w.replaceable
         FROM field_writes w
         LEFT JOIN {_REDACTED_JSON} j ON j.original = w.value::VARCHAR
+        LEFT JOIN {_REDACTED_JSON} g ON g.original = w.guards
         ORDER BY w.document_id, w.field, w.from_parameter NULLS LAST, w.value::VARCHAR,
-                 w.written_by
+                 w.written_by, w.guards
     """,
     # Worth carrying rather than recomputable: without it a consumer sees the
     # tagged copies in `documents` and cannot tell which one the derived rows
@@ -1827,9 +1847,11 @@ _EXPORT_QUERIES = {
     """,
     "method_returns": f"""
         SELECT mr.document_id, mr.method, mr.ordinal,
-               coalesce(j.masked::JSON, mr.value) AS value
+               coalesce(j.masked::JSON, mr.value) AS value,
+               coalesce(g.masked, mr.guards) AS guards
         FROM method_returns mr
         LEFT JOIN {_REDACTED_JSON} j ON j.original = mr.value::VARCHAR
+        LEFT JOIN {_REDACTED_JSON} g ON g.original = mr.guards
         ORDER BY mr.document_id, mr.method, mr.ordinal
     """,
     # The raw half of `resolved_config` — a configuration value as the file
@@ -1876,6 +1898,10 @@ _FACT_ONLY = frozenset(
         "documents",
         # The call sites under a test of their own body (OI-368): `call_sites` alone.
         "call_site_guards",
+        # The field writes under a test of their own body: `field_writes` alone.
+        "field_write_guards",
+        # The returns under a test of their own body: `method_returns` alone.
+        "method_return_guards",
         # The class-level annotations of header-read dependency types (D00 §5
         # `type_header`): a read over `raw_facts` alone, so cached per load like every
         # other fact query — the cache rule test is what said so.
@@ -2933,6 +2959,8 @@ class DuckDbWorkspace:
             "UNION SELECT DISTINCT expression FROM bean_conditions WHERE expression IS NOT NULL "
             # OI-368: a code test's text, quoted in a guard and in a row's existence entry.
             "UNION SELECT DISTINCT guards FROM call_sites WHERE guards IS NOT NULL "
+            "UNION SELECT DISTINCT guards FROM field_writes WHERE guards IS NOT NULL "
+            "UNION SELECT DISTINCT guards FROM method_returns WHERE guards IS NOT NULL "
             "UNION SELECT DISTINCT expression FROM endpoint_existence WHERE expression IS NOT NULL"
         ).fetchall()
         self._stage_map(

@@ -1293,9 +1293,7 @@ class Libraries:
         source = table.source
         here = source.module
         owners = {type_symbol(Target(here, path)) for path in paths}
-        # shortcut: a nested class (`Outer.Inner`) keeps its bodies left out; read it whole
-        # once a lookup order is seen to need one.
-        full = frozenset(path for path in whole if "." not in path)
+        full = frozenset(whole)
         read_owners = {type_symbol(Target(here, path)) for path in full}
         module_type = type_symbol(Target(here))
         tree, names = header_body_tree(table.tree, paths, self._index, here, full)

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 import test_django_routes
-from test_django_routes import _handler, _resolved, _rows
+from test_django_routes import _handler, _not_read, _resolved, _rows
 
 libraries = test_django_routes.libraries
 orders_django_env = test_django_routes.orders_django_env
@@ -330,8 +330,9 @@ def test_a_project_wrapper_in_the_registration_is_followed_into(tmp_path: Path, 
 
 def test_a_handler_read_on_one_path_and_not_on_another_names_no_function(tmp_path: Path, libraries):
     """`deco` hands back `wrap(f)` on one path and what a library call no value model states
-    makes on another: the handler is the wrapped `v`, or what was not read. No function is
-    named as the one that answers (spec 2026-11-23 §9a); naming `v` would be a guess."""
+    makes on another, under a test that is not decided (`==`, ruling R2 of 2026-11-25): the
+    handler is the wrapped `v`, or what was not read. No function is named as the one that
+    answers (spec 2026-11-23 §9a); naming `v` would be a guess."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -340,7 +341,8 @@ def test_a_handler_read_on_one_path_and_not_on_another_names_no_function(tmp_pat
             + "from lib import fallback\n"
             + "def wrap(f):\n    def inner(request):\n        return f(request)\n"
             + "    return inner\n"
-            + "def deco(f=None):\n    if f:\n        return wrap(f)\n    return fallback()\n"
+            + "def deco(f=None, n=1):\n    if n == 1:\n        return wrap(f)\n"
+            + "    return fallback()\n"
             + "@deco\n"
             + _DEF
             + "urlpatterns = [path('x/', v)]\n"
@@ -354,9 +356,10 @@ def test_a_handler_read_on_one_path_and_not_on_another_names_no_function(tmp_pat
 def test_a_decorator_that_hands_back_a_bare_function_on_one_path_names_both(
     tmp_path: Path, libraries
 ):
-    """`deco` hands back `wrap(f)` on one path and the bare `wrap` on another (the shape of a
-    decorator usable with and without arguments): the walk does not evaluate `if f`, so the
-    handler is the wrapped `v` or `wrap` itself, both read, one alternative each."""
+    """`deco` hands back `wrap(f)` on one path and the bare `wrap` on another, under a test
+    that is not decided (`==`, ruling R2 of 2026-11-25): the handler is the wrapped `v` or
+    `wrap` itself, both read, one alternative each. Under `if f:` the test is decided
+    (`test_a_decorator_usable_bare_or_with_arguments_names_the_view`)."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -364,7 +367,7 @@ def test_a_decorator_that_hands_back_a_bare_function_on_one_path_names_both(
             "urls.py": _HTTP
             + "def wrap(f):\n    def inner(request):\n        return f(request)\n"
             + "    return inner\n"
-            + "def deco(f=None):\n    if f:\n        return wrap(f)\n    return wrap\n"
+            + "def deco(f=None, n=1):\n    if n == 1:\n        return wrap(f)\n    return wrap\n"
             + "@deco\n"
             + _DEF
             + "urlpatterns = [path('x/', v)]\n"
@@ -377,10 +380,10 @@ def test_a_decorator_that_hands_back_a_bare_function_on_one_path_names_both(
     ]
 
 
-def test_one_decorator_factory_applied_twice_to_one_view_is_not_read(tmp_path: Path, libraries):
-    """A known limit (spec 2026-11-23 §9b): the walk enters one helper once on a path, so the
-    second application of `guard` on the same view is not followed, and the handler is not
-    read: `partial`, never the wrapper."""
+def test_one_decorator_factory_applied_twice_to_one_view_names_the_view(tmp_path: Path, libraries):
+    """`guard`'s wrapper is entered once per application, each under its own call (OI-537,
+    healthchecks' `require_setting`): the second entry is no cycle, and the handler is the
+    view, never the wrapper."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -395,7 +398,33 @@ def test_one_decorator_factory_applied_twice_to_one_view_is_not_read(tmp_path: P
         },
     )
 
-    assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
+    assert _rows(workspace) == [(None, "any", "/x/", _handler("v"), "resolved")]
+
+
+def test_a_module_wrapper_the_view_runs_through_is_a_root_at_the_address(tmp_path: Path, libraries):
+    """`@track def v`: the request runs `track`'s wrapper before the view, so the wrapper's own
+    calls are on the route's trace: one `roots` row for it at the route's address, as for a
+    recipe the framework runs first (OI-534); the view keeps its own."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "def track(f):\n    def inner(request):\n        print(request)\n"
+            + "        return f(request)\n    return inner\n"
+            + "@track\n"
+            + _DEF
+            + "urlpatterns = [path('x/', v)]\n"
+        },
+    )
+
+    assert sorted(
+        (test_django_routes._bare(row["handler"]), row["root_kind"], row["path"])
+        for row in workspace.query("roots")
+    ) == [
+        (_handler("track$inner"), "inbound_endpoint", "/x/"),
+        (_handler("v"), "inbound_endpoint", "/x/"),
+    ]
 
 
 def test_an_unknown_wrapper_over_a_narrowing_call_is_partial_and_narrowed(
@@ -460,21 +489,22 @@ _KEYWORD_ONLY = [
 
 
 @pytest.mark.parametrize("decorator", _KEYWORD_ONLY)
-def test_a_stated_decorator_called_without_the_view_ends_the_handler_walk(
+def test_a_stated_decorator_called_without_the_view_hands_the_view_on(
     tmp_path: Path, libraries, decorator: str
 ):
-    """Fix round 2: `login_required(login_url=...)` writes no argument 0, so the value model's
-    `result_calls: arg0` (the `d(view)` spelling) states nothing for it, and one entry per call
-    cannot state the other spelling too. It ends the handler walk like any unstated decorator:
-    `partial`, handler NULL, one question; never `resolved` with no handler."""
+    """Ruling R5/A1 of 2026-11-25 (OI-557): `login_required(login_url=...)` writes no argument
+    0, and the value-model entry states that use too (`result_returns: arg0` beside
+    `result_calls: arg0`): the call made a decorator, and what it is applied to is the view.
+    The handler is the view, as with the bare `@login_required` (probe, "View decorators that
+    hand the view on")."""
     workspace = _resolved(
         tmp_path,
         libraries,
         {"urls.py": _HTTP + decorator + _DEF + "urlpatterns = [path('x/', v)]\n"},
     )
 
-    assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
-    assert len(_questions(workspace)) == 1
+    assert _rows(workspace) == [(None, "any", "/x/", _handler("v"), "resolved")]
+    assert _questions(workspace) == []
 
 
 @pytest.mark.parametrize("decorator", _KEYWORD_ONLY)
@@ -493,8 +523,8 @@ def test_a_stated_decorator_called_without_the_view_still_lets_require_post_narr
         },
     )
 
-    assert _rows(workspace) == [("POST", None, "/x/", None, "partial")]
-    assert len(_questions(workspace)) == 1
+    assert _rows(workspace) == [("POST", None, "/x/", _handler("v"), "resolved")]
+    assert _questions(workspace) == []
 
 
 @pytest.mark.parametrize(
@@ -519,8 +549,8 @@ def test_the_registration_spelling_of_a_decorator_without_the_view_gives_the_sam
         },
     )
 
-    assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
-    assert len(_questions(workspace)) == 1
+    assert _rows(workspace) == [(None, "any", "/x/", _handler("v"), "resolved")]
+    assert _questions(workspace) == []
 
 
 def test_any_stated_decorator_called_without_its_function_is_never_resolved_without_a_handler(
@@ -692,10 +722,9 @@ def test_a_class_whose_own_dispatch_reads_the_method_is_partial(tmp_path: Path, 
     assert rows == [(None, "any", "/x/", _handler("dispatch", "app/urls/Items"), "partial")]
 
 
-def test_a_view_object_names_no_handler_and_is_partial(tmp_path: Path, libraries):
-    """`path("rss", Feed())`: calling an object runs its class's `__call__` (design §4d). The
-    handler reader does not name that method today, so the row names no handler: `partial`,
-    never a `resolved` any-method row (Task 7a, rule 1)."""
+def test_a_view_object_names_its_call_method(tmp_path: Path, libraries):
+    """`path("rss", Feed())`: calling an object runs its class's `__call__` (design §4d), the
+    handler of the any-method row (OI-539). Its body reads no method: `resolved`."""
     rows = _view(
         tmp_path,
         libraries,
@@ -703,7 +732,7 @@ def test_a_view_object_names_no_handler_and_is_partial(tmp_path: Path, libraries
         "path('x/', Feed())",
     )
 
-    assert rows == [(None, "any", "/x/", None, "partial")]
+    assert rows == [(None, "any", "/x/", _handler("__call__", "app/urls/Feed"), "resolved")]
 
 
 # One reader of one path (final review, C1): the methods are read from the stated calls the
@@ -735,6 +764,51 @@ def test_a_held_require_http_methods_decorator_narrows(tmp_path: Path, libraries
         ("GET", None, "/x/", _handler("v"), "resolved"),
         ("POST", None, "/x/", _handler("v"), "resolved"),
     ]
+
+
+_ONLY = "def only(ms):\n    def d(f):\n        return require_http_methods(ms)(f)\n    return d\n"
+
+
+def test_one_project_decorator_factory_on_two_views_narrows_each_by_its_own_list(
+    tmp_path: Path, libraries
+):
+    """`only(ms)` applies `require_http_methods(ms)`: each view's list is read on the path the
+    walk took to that view, never every caller's list."""
+    rows = _view(
+        tmp_path,
+        libraries,
+        _ONLY
+        + "@only(['GET'])\ndef a(request):\n    return None\n"
+        + "@only(['POST'])\ndef b(request):\n    return None\n",
+        "path('a/', a), path('b/', b)",
+    )
+
+    assert rows == [
+        ("GET", None, "/a/", _handler("a"), "resolved"),
+        ("POST", None, "/b/", _handler("b"), "resolved"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("decorated", "handler"),
+    [
+        ("@only(['GET'])\n@only(['POST'])\n" + _DEF, _handler("v")),
+        ("@only(['GET', 'POST'])\n@only(['POST'])\n" + _DEF, _handler("v")),
+        (_DEF + "v = only(['GET', 'POST'])(only(['POST'])(v))\n", None),
+    ],
+    ids=["no-common-method", "intersection", "nested-call"],
+)
+def test_one_project_decorator_factory_applied_twice_reads_no_method(
+    tmp_path: Path, libraries, decorated: str, handler: str | None
+):
+    """One path passes the one `require_http_methods(ms)` site twice, under two calls of `only`
+    with two lists. The path holds the first call of `only` alone (`Path.entered_twice`), so
+    which list each pass read is not on it: the list is not read, one row naming no method,
+    never a method the code refuses `resolved` (Django serves the intersection: none, POST,
+    POST)."""
+    rows = _view(tmp_path, libraries, _ONLY + decorated)
+
+    assert rows == [(None, None, "/x/", handler, "unresolved")]
 
 
 def test_a_wrapper_returned_through_require_post_narrows(tmp_path: Path, libraries):
@@ -911,3 +985,94 @@ def test_a_hook_the_wrapper_calls_and_does_not_return_is_not_the_handler(tmp_pat
     )
 
     assert [(row[3], row[4]) for row in rows] == [("app/urls#audited$inner(sig_", "resolved")]
+
+
+_TWO_USES = {
+    "def": "    def actual(f):\n        def inner(request):\n            return f(request)\n"
+    "        return inner\n",
+    "lambda": "    actual = lambda f: (lambda request: f(request))\n",
+}
+
+
+@pytest.mark.parametrize("form", ["def", "lambda"])
+@pytest.mark.parametrize("use", ["@lr\n", "@lr(x=2)\n", "@lr()\n"])
+def test_a_decorator_usable_bare_or_with_arguments_names_the_view(
+    tmp_path: Path, libraries, form: str, use: str
+):
+    """`def lr(function=None, x=1): ...; if function: return actual(function); return actual`
+    (OI-532, ruling R5 of 2026-11-25, zulip's `zulip_login_required`): which `return` runs is
+    decided on the path (`method_return.guards`, ruling R2). With `@lr` the parameter holds
+    the view, a function, so the first runs; with `@lr(x=2)` it holds its default `None`, so
+    the second does. Each use gives the view alone, never the decorator's own function."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "def lr(function=None, x=1):\n"
+            + _TWO_USES[form]
+            + "    if function:\n        return actual(function)\n    return actual\n"
+            + use
+            + _DEF
+            + "urlpatterns = [path('x/', v)]\n"
+        },
+    )
+
+    assert _rows(workspace) == [(None, "any", "/x/", _handler("v"), "resolved")]
+
+
+def test_a_return_under_a_test_not_decided_stays_one_path_per_return(tmp_path: Path, libraries):
+    """A test that reads more than one value is not decided (ruling R2: `and`, `==`, `in` stay
+    "not evaluated"): each `return` is a path, as before."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "def other(request):\n    return None\n"
+            + "def pick(f, n=1):\n    if n == 1:\n        return f\n    return other\n"
+            + "urlpatterns = [path('x/', pick(v))]\n"
+            + _DEF
+        },
+    )
+
+    assert sorted(row[3] for row in _rows(workspace)) == [_handler("other"), _handler("v")]
+
+
+def _doubted(tmp_path: Path, libraries, body: str) -> list[tuple[object, ...]]:
+    return _not_read(
+        _resolved(
+            tmp_path, libraries, {"urls.py": _HTTP + body + "urlpatterns = [path('x/', v)]\n"}
+        )
+    )
+
+
+@pytest.mark.pins("inbound_routes.a-doubted-any-method-row-files-its-reason")
+def test_a_view_that_reads_request_method_files_a_not_read_question(tmp_path: Path, libraries):
+    """The doubted any-method row says why (ruled 2026-11-25, R4, OI-540): column `method`,
+    `not_readable`, at the body that reads the method."""
+    found = _doubted(
+        tmp_path,
+        libraries,
+        "def v(request):\n    if request.method == 'POST':\n        return 1\n    return None\n",
+    )
+
+    assert found == [
+        (None, "/x/", [("method", "not_readable", _handler("v"), "app/urls#<clinit>(sig_")])
+    ]
+
+
+def test_a_helper_that_reads_the_method_is_the_code_the_question_names(tmp_path: Path, libraries):
+    found = _doubted(
+        tmp_path,
+        libraries,
+        "def helper(r):\n    return r.method\ndef v(request):\n    return helper(request)\n",
+    )
+
+    assert found == [
+        (None, "/x/", [("method", "not_readable", _handler("helper"), "app/urls#<clinit>(sig_")])
+    ]
+
+
+def test_a_view_no_code_doubts_files_no_not_read_question(tmp_path: Path, libraries):
+    assert _doubted(tmp_path, libraries, _DEF) == []

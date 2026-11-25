@@ -775,6 +775,14 @@ not, that it is genuinely a constructor rather than an ordinary void call.
 - **`result_calls: argN`** — calling the call's result runs the call's OWN argument N with the
   same arguments: a wrapper. `python-wrappers.yml` states `functools.cache` and `lru_cache`,
   `contextlib.contextmanager` and `asynccontextmanager`, and `tenacity.retry`.
+- **`result_calls: argN` and `result_returns: argN` on ONE entry, the same N** (ruling R5/A1
+  of 2026-11-25, OI-557) — the two uses of a decorator usable bare or with arguments. Where
+  the call writes argument N (`login_required(view)`), the entry is read as `result_calls`;
+  where it does not (`login_required(login_url="/x")`, `login_required()`), as
+  `result_returns`: the call made a decorator, and what that is applied to is the function.
+  An argument an unpacked `*` value may be is read as written. `value-models/django.yml`
+  states `login_required` and `staff_member_required` this way. No other two forms go
+  together, and two different positions are refused.
 - **`returns_receiver: true`** — the call returns the object it is called on (ruling 4 of spec
   2026-10-30, the `fluent` step's word, here in a value model; plan 3 R13).
   `value-models/python-clients.yml` states httpx's `Client.__enter__` and
@@ -819,6 +827,25 @@ own text, as plan 2's R17 types a project module's). The entries ride the stated
 (`Catalog.returns_arguments`, form `environment_read`) to `values._Walk._environment_read`, which
 runs where `_stated_value` does. Refused naming the file: a missing `key_arg` or `by`, an
 unknown key, an argument that is no reference, and one call stated twice.
+
+**`key_reads` — an object whose attribute read is a configuration key** (ruling R3 of
+2026-11-25, design note approved 2026-11-25). A `value-models/` file may declare `key_reads:
+[{owner, by}]`, `owner` the object as the facts name it (the module that binds it, then its
+name). A read of an attribute `NAME` on that object is the configuration key `NAME`: the
+expression `${NAME}`, read before any write of the name, as a settings field is (the role of
+`@Value("${k}")` on the JVM). `value-models/django.yml` states `django.conf.settings` (probe
+`django_rules.md`, "Settings reads"): `settings.API_HOST` is `${API_HOST}`, and a text built
+from it keeps the hole (`https://${API_HOST}/pay`). No settings module's literal is the answer,
+because the deployment selects the module; what each one sets is `resolved_config`, per
+environment (§2i `from_module_holding`). The entries ride the stated-call table
+(`Catalog.returns_arguments`, form `key_read`) to `values._Walk._value`. Not read:
+`getattr(settings, 'NAME', default)`. A settings module imported directly (`from proj import
+settings`) is an ordinary module name to the value walk: a value read of `settings.NAME` is
+what that one module writes, and a test the code fixes is decided on it (OI-563 (1)). In a
+test that is not decided so (the name has no one value there), a name of a settings module is
+the key `NAME` too, and the condition is kind `property` (`registration_conditions.
+SettingsReads.objects`: each environment's module is such an object). Refused naming the
+file: a missing `owner` or `by`, an unknown key, and one object stated twice.
 
 An edit here moves `_catalog_hash` (`api._MODEL_DIRECTORIES`), like an edit to any of the
 other four directories: it is knowledge a run was produced with.
@@ -2710,7 +2737,12 @@ serves only what the root reaches.
 routes from; the router there is that module's variable `router_named` names. Every write of
 the setting to a string is one root (two projects in one repository are two roots). Django:
 `root_setting: ROOT_URLCONF`. A name, not a key path; absent, the catalog's routes made on
-nothing have no root.
+nothing have no root. **The routes of a root exist where the setting names it** (ruling R3 of
+2026-11-25): every row reached through a root carries the condition "`ROOT_URLCONF` is
+`<root>`" in `endpoint_existence`, kind `property`, "not evaluated" in every environment (a
+deployment selects the settings module), with what each environment's settings module sets as
+evidence. Two settings modules that name one root give one condition. No row is removed and
+none is copied per environment. A list no root reaches has no such condition.
 
 **`mount[].router_named: {variable: name}`** (same task, capability 3): a router argument that
 names a module — a string read as its dotted name (`include("shop.api_urls")`), or the module
@@ -6567,6 +6599,28 @@ directory, so the two agree only where the service runs from its module root). A
 variable is read by nobody; the field that reads it is `external` and `resolved_peers` names the
 expression in `unresolved_detail`. A file listed in `sources` by `from_argument` is the only
 source of a **declaration-only catalog** (§1): `pydantic-settings.yml` has no `style`.
+
+**`sources` may name the MODULES that hold a setting — `{from_module_holding: <word>}`**
+(ruling R3 of 2026-11-25, design note approved 2026-11-25). `<word>` is a word of `matches`
+that a catalog names a setting with (`root_setting`; `django.yml` writes `root_setting:
+ROOT_URLCONF`). Each module that holds that setting is a source, and **its dotted module name is
+the environment** (`weblate.settings_docker`), as a profile file's name is one on the JVM. A
+module holds a name it writes and a name a `from m import *` gives it (D00 §5). Every name such
+a module holds is a key: `resolve/settings_modules.py` (after the call edges, before the
+engines) writes one `resolved_config` row per name per settings module, and an `external` row
+("`K` is not set") where another settings module holds a name this one does not, as a profile
+gets. The value is the value walk's answer at the module's own name: a written literal is its
+text (`False`, `5`), a read of the process environment its expression
+(`${WEBLATE_DEBUG:-False}`), the repository's statement and never the deployed value. A name
+with no one value has a reason of the general list and a detail: several values (a list, a
+write under a test), a class or function reference, `None` and an empty list are
+`not_readable`; a value the walk did not read keeps the walk's reason. The form matches no
+file, so the file pass skips it; a value that is no word is a `CatalogError`. It is written in
+`pydantic-settings.yml`, the Python family's one config model (`config_model_of` takes one
+model per module), and the setting's name stays in the catalog that owns it. A module with no
+such setting (Flask, FastAPI, a reusable Django app) gets no row from it and stays `default`.
+Stated limits: OI-554 (a template module is an environment; a module the repository does not
+ship is none; which module a process selects is not read), OI-568, OI-569.
 
 **`settings_form` — how a settings class names the key each field is read from** (plan 3 Task 5,
 N2, R24; one block, in `pydantic-settings.yml`, read by the value walk's settings rung,

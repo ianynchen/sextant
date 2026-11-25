@@ -51,8 +51,9 @@ list. A mount of a module that is not in the workspace adds nothing. A call that
 route root and a mount (`path(p, include(x))`, `path(p, view)`) is a mount only where its
 router argument reads as a router (`mounts_a_router`). A registration that no root and no
 readable mount reaches is behind the named hole `<prefix>`, at `partial`, never at the root:
-the framework serves only what the root reaches (a library call holding the list,
-`i18n_patterns(*x)`, is no readable mount).
+the framework serves only what the root reaches. A call into code that is not read whose
+result is a member (`i18n_patterns(*x)`) is a mount whose prefix is not read: the lists it
+takes are behind the hole naming it (ruled 2026-11-24, OI-550).
 
 **Cost** (spec §5): one producer read per route-root receiver and one per mount argument and
 mount receiver, each cached here and run on the resolve's shared index; one `within=` read of
@@ -108,6 +109,7 @@ from sextant.application.resolve.values import (
     producer_paths,
     resolve_positions,
     resolve_positions_on_paths,
+    write_path,
 )
 from sextant.domain.closed_sets import Resolution
 from sextant.domain.symbols import returned_type, type_descriptor
@@ -792,22 +794,51 @@ class MountReader:
             }
 
         def members(
-            source: Mapping[str, Any], slot: int, parent: Prefix, within: Path | None
+            source: Mapping[str, Any],
+            slot: int,
+            parent: Prefix,
+            within: Path | None,
+            open_: frozenset[Any],
         ) -> None:
+            # `open_`: the calls and modules the read is inside on this path. One met again is
+            # not entered again (the walk's `cycle`): a name whose write hands it to a call
+            # reads that write too, and a module may include itself.
             for producer, path in producer_paths(index, source, slot, stops, which_object=True):
                 joined = path if within is None else within.joined(path)
                 if joined is None:
+                    continue
+                # The writes under a test the read came through: a list reached again through
+                # another of them is read again, for that write's condition.
+                under = joined.written_under()
+                if producer.caller is None and producer.made_by in sites:
+                    if producer.made_by in open_:
+                        continue
+                    # A call into code that is not read, its result a member (ruled 2026-11-24,
+                    # OI-550): a mount whose prefix is not read; the lists it takes are served
+                    # behind the hole naming it.
+                    made = sites[producer.made_by]
+                    hole = self._hole_at(made, MountPath(None, None), "a call that is not read")
+                    taking = (producer.made_by, parent.text, parent.resolution, under)
+                    if taking not in seen:
+                        seen.add(taking)
+                        behind = self._behind(parent, hole, MountPath(None, None), None)
+                        for taken in range(len(made["arguments"] or [])):
+                            members(made, taken, behind, joined, open_ | {producer.made_by})
                     continue
                 if producer.caller is None:
                     module = _named_module(index, producer.ended_at, variables)
                     if module is None:
                         continue
                     for variable in sorted(variables):
-                        read = (module, variable, parent.text, parent.resolution)
-                        if read not in seen:
+                        read = (module, variable, parent.text, parent.resolution, under)
+                        if read not in seen and (module, variable) not in open_:
                             seen.add(read)
                             members(
-                                named(str(source["caller"]), module, variable), 0, parent, joined
+                                named(str(source["caller"]), module, variable),
+                                0,
+                                parent,
+                                joined,
+                                open_ | {(module, variable)},
                             )
                     continue
                 key = (str(producer.caller), int(str(producer.ordinal)))
@@ -819,14 +850,25 @@ class MountReader:
                 router = argument_slot(made["arguments"] or [], mount.rule.router_arg)
                 if router is None or router == UNPACKED_SLOT:
                     continue
+                if key in open_:
+                    continue
                 for own in self._prefixes(mount, 0, joined):
-                    reached = (key, own.text, parent.text, parent.resolution)
+                    reached = (key, own.text, parent.text, parent.resolution, under)
                     if reached in seen:
                         continue
                     seen.add(reached)
-                    members(made, router, self._behind(parent, own, mount.paths[0], None), joined)
+                    members(
+                        made,
+                        router,
+                        self._behind(parent, own, mount.paths[0], None),
+                        joined,
+                        open_ | {key},
+                    )
 
         setting = self._rules.root_setting
+        # One read per root and per tests of its write: two settings modules that name one
+        # root give its routes one condition.
+        rooted: set[tuple[str, Any]] = set()
         for symbol, writes in sorted(index.constants.items()):
             if setting is None or not symbol.endswith(f"#{setting}."):
                 continue
@@ -834,8 +876,33 @@ class MountReader:
                 if written.get("kind") != "string" or writer is None:
                     continue
                 module = type_descriptor(str(written["value"]))
+                if (module, written.get("guards")) in rooted:
+                    continue
+                rooted.add((module, written.get("guards")))
+                # The routes of a root are served where the setting names that root (ruling
+                # R3 of 2026-11-25): a condition on the key, which a deployment sets, in the
+                # spelling of a test record and with the value a property condition has.
+                held = json.dumps(
+                    [
+                        {
+                            "test": f"{setting} == {str(written['value'])!r}",
+                            "holds": True,
+                            "reads": [setting],
+                            "fields": {setting: symbol},
+                            "having_value": str(written["value"]),
+                        }
+                    ],
+                    sort_keys=True,
+                )
                 for variable in sorted(variables):
-                    members(named(str(writer), module, variable), 0, ROOT, None)
+                    members(
+                        named(str(writer), module, variable),
+                        0,
+                        ROOT,
+                        # A root written under a test serves its routes where the test holds.
+                        write_path(symbol, writer, written, held),
+                        frozenset({(module, variable)}),
+                    )
         return tree
 
     def refusals(self, mount: Mount) -> tuple[tuple[int, str, str], ...]:

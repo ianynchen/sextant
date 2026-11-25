@@ -532,6 +532,10 @@ class CallTarget(BaseModel):
     descriptor: str | None = None
 
 
+# What of its one value makes a test true (`CallGuard.when`).
+GuardWhen = Literal["true", "false", "null", "not_null"]
+
+
 class CallGuard(BaseModel):
     """One test a call runs under within its own body (D00 §5 `call_site.guards`, OI-368,
     approved by the user 2026-11-09): an `if` test, or a conditional expression's, that the
@@ -549,6 +553,13 @@ class CallGuard(BaseModel):
     # Each read the scanner can type, to the field symbol a call argument would name for it
     # (plan 3 ruling R27); a read it cannot type is absent, never guessed.
     fields: dict[str, str] = Field(default_factory=dict)
+    # Ruling R2 of 2026-11-25 (fact schema 24): where the test is one value (`x`), its
+    # negation (`not x`) or its comparison with `None` by `is`, the value it reads, as an
+    # argument at that place would name it, and what of the value makes the test true:
+    # `true` (the value is true), `false`, `null` (it is `None`), `not_null`. Absent on every
+    # other form, and where the scanner names no value.
+    value: CallArgument | None = Field(default=None, exclude_if=lambda held: held is None)
+    when: GuardWhen | None = Field(default=None, exclude_if=lambda held: held is None)
 
 
 class CallSiteFact(BaseModel):
@@ -693,6 +704,10 @@ class MethodReturnFact(BaseModel):
     # written: the JVM extractor never writes it, so a JVM fact file rewritten whole keeps its
     # bytes (plan 2 final review Minor 1).
     yielded: bool = Field(default=False, exclude_if=lambda held: not held)
+    # Ruling R5 of 2026-11-25 (OI-532, fact schema 24): the tests this return runs under
+    # within its own body, outermost first, in the format and by the rules of
+    # `CallSiteFact.guards`; absent where it runs under none, and on every JVM return.
+    guards: list[CallGuard] | None = Field(default=None, exclude_if=lambda held: held is None)
 
 
 class FieldWriteFact(BaseModel):
@@ -736,6 +751,15 @@ class FieldWriteFact(BaseModel):
     # The writing method's own symbol, in the form `call_sites.caller` carries, so a write
     # and a call name their method identically and the walk needs no reconstruction.
     written_by: str | None = None
+    # Ruling R1 of 2026-11-25 (OI-508, OI-509, fact schema 23): the tests this write runs
+    # under within its own body, outermost first, in the format and by the rules of
+    # `CallSiteFact.guards`; absent where it runs under none, and on every JVM write (OI-552).
+    guards: list[CallGuard] | None = None
+    # Ruling R10 of 2026-11-25 (fact schema 25): a star import of the written name's module
+    # can replace this name, so the value written here is not the one value the name holds
+    # (`DOCS = False`, then `from .local_config import *`). True or absent; absent on every
+    # JVM write. Read by the step that decides a test alone (`values._Walk._decided`).
+    replaceable: bool | None = None
 
     @model_validator(mode="after")
     def _one_source(self) -> "FieldWriteFact":

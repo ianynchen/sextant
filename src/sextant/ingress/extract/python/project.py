@@ -21,7 +21,7 @@ once per scan, whichever files import it.
 
 import ast
 import hashlib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -40,6 +40,7 @@ from sextant.ingress.extract.python.imports import (
     ModuleIndex,
     Target,
     bind_names,
+    every_statement,
     star_bases,
     star_exports,
 )
@@ -71,6 +72,10 @@ class ModuleHeader:
     # names its `__all__` lists (None where it writes none): what a star import takes from it.
     stars: tuple[str, ...] = ()
     exports: tuple[str, ...] | None = None
+    # A `from m import *` the header does not read: one inside an `if` or a `try`
+    # (`star_bases`' shortcut). What it binds is not known. Also set where the module body
+    # runs a text as its own code (`_runs_a_text`): that binds names nothing here reads.
+    stars_unread: bool = False
 
 
 def header_digest(tree: ast.Module) -> str:
@@ -82,10 +87,36 @@ def header_digest(tree: ast.Module) -> str:
     return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 
 
+def _runs_a_text(node: ast.AST) -> bool:
+    """Whether a statement is the built-in `exec` (`exec(code)`, `exec(code, globals())`): in
+    a module body it runs that text in the module's own names, so it may bind any of them, as
+    a star import of a file that is not read may (the approved note of R3, 2026-11-25). The
+    names a second argument holds are not read, so every form is the door."""
+    return (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "exec"
+    )
+
+
+def _module_statements(body: list[ast.stmt]) -> Iterator[ast.AST]:
+    """Every statement the module body itself runs: `every_statement`, not into a function
+    or a class."""
+    for node in body:
+        yield node
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            for field in ("body", "orelse", "finalbody", "handlers"):
+                yield from _module_statements(getattr(node, field, None) or [])
+
+
 def _strip(body: list[ast.stmt]) -> None:
     kept: list[ast.stmt] = []
     for node in body:
-        if isinstance(node, ast.Expr | ast.Pass | ast.Raise | ast.Return | ast.Delete):
+        # A text run as the module's code stays: the header says so (`stars_unread`).
+        if isinstance(
+            node, ast.Expr | ast.Pass | ast.Raise | ast.Return | ast.Delete
+        ) and not _runs_a_text(node):
             continue
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             node.body = [ast.Pass()]
@@ -139,9 +170,12 @@ class ProjectHeaders:
         # written from (handed in, as `structure` is the module that reads files).
         self._read = read
         self._headers: dict[str, ModuleHeader | None] = {}
+        # Each module file by its type symbol (`replaceable_field`), built when first asked.
+        self._by_symbol: dict[str, str] | None = None
         self._hashes: dict[str, str | None] = {}
         # Each answer, with the modules whose headers it read.
         self._canonical: dict[str, tuple[str, frozenset[str]]] = {}
+        self._starred_names: dict[str, tuple[tuple[str, ...], frozenset[str]]] = {}
         # The questions of the file being read (`ModuleIndex.asked`), set by the scan.
         self.asked: set[tuple[str, str]] | None = None
 
@@ -212,6 +246,111 @@ class ProjectHeaders:
             if found is not None:
                 return found
         return None
+
+    def starred_names(self, module: str, seen: frozenset[str] = frozenset()) -> tuple[str, ...]:
+        """The names `module` binds by a `from m import *` the header reads and by no
+        statement of its own, sorted: each name a source binds or takes by a star of its own,
+        that the star takes (`_starred`'s rule)."""
+        if seen:
+            return self._starred_names_of(module, seen)
+        cached = self._starred_names.get(module)
+        if cached is not None:
+            # The headers its answer read are read again by every file that asks.
+            if self.asked is not None:
+                self.asked.update((HEADER, base) for base in cached[1])
+            return cached[0]
+        outer, self.asked = self.asked, set()
+        try:
+            found = self._starred_names_of(module, seen)
+        finally:
+            consulted, self.asked = self.asked, outer
+        self._starred_names[module] = (found, frozenset(base for _, base in consulted))
+        if self.asked is not None:
+            self.asked.update(consulted)
+        return found
+
+    def _starred_names_of(self, module: str, seen: frozenset[str]) -> tuple[str, ...]:
+        header = self.header(module)
+        if header is None or module in seen:
+            return ()
+        found: set[str] = set()
+        for base in header.stars:
+            source = self.header(base)
+            if source is None:
+                continue
+            held = {*source.names, *self.starred_names(base, seen | {module})}
+            found |= {
+                name
+                for name in held
+                if (name in source.exports if source.exports is not None else name[:1] != "_")
+            }
+        return tuple(sorted(found - set(header.names)))
+
+    def star_may_rebind(self, module: str, name: str, seen: frozenset[str] = frozenset()) -> bool:
+        """Whether a `from m import *` of `module` may bind `name`, beside what the module's
+        own statements bind it to: a star whose source is read and binds the name, and a star
+        whose source is not read (a library, a file that is absent, a star inside an `if` or
+        a `try`). Where the star is written, before or after the module's own write, is not
+        read (OI-565): the name then has no one value this reading can state."""
+        header = self.header(module)
+        if header is None or module in seen:
+            return False
+        if header.stars_unread:
+            return True
+        for base in header.stars:
+            source = self.header(base)
+            if source is None:
+                return True
+            if name not in source.exports if source.exports is not None else name.startswith("_"):
+                continue
+            if name in source.names or self.star_may_rebind(base, name, seen | {module}):
+                return True
+        return False
+
+    def replaceable(self, module: str, name: str, seen: frozenset[str] = frozenset()) -> bool:
+        """Whether a star import can give `module.name` another value than the one a write of
+        it states (ruling R10 of 2026-11-25, `field_write.replaceable`). A name the module's
+        own statements bind: where a star may bind it too (`star_may_rebind`). A name the
+        module takes by a star alone (`starred_names`, the last star that gives it, as
+        `_starred` reads it): where a star of the module is not read, or the name is
+        replaceable in the module that gives it."""
+        header = self.header(module)
+        if header is None or module in seen:
+            return False
+        if name in header.names:
+            return self.star_may_rebind(module, name)
+        if header.stars_unread or any(self.header(base) is None for base in header.stars):
+            return True
+        for base in reversed(header.stars):
+            source = self.header(base)
+            assert source is not None
+            if name not in source.exports if source.exports is not None else name.startswith("_"):
+                continue
+            if name in source.names or name in self.starred_names(base):
+                return self.replaceable(base, name, seen | {module})
+        return False
+
+    def replaceable_field(self, owner: str, name: str) -> bool:
+        """`replaceable`, for the name `name` of the module file whose type symbol is `owner`;
+        false for any other owner (a class)."""
+        if self._by_symbol is None:
+            self._by_symbol = {type_symbol(Target(module)): module for module in self._files}
+        module = self._by_symbol.get(owner)
+        return module is not None and self.replaceable(module, name)
+
+    def replaced_star(self, module: str, name: str, defined: tuple[Target, ...]) -> bool:
+        """Whether `module.name`, defined at `defined` (`member`), is a variable `module` takes
+        by a star import alone and another star import can replace (`replaceable`): a read of
+        it is then a read of `module`'s own name, never of the name where it is defined."""
+        header = self.header(module)
+        return (
+            header is not None
+            and name not in header.names
+            and len(defined) == 1
+            and defined[0].member is not None
+            and self.replaceable(module, name)
+            and self.names_a_variable(defined[0].module, defined[0].member)
+        )
 
     def names_a_value(self, module: str, name: str) -> bool:
         """Whether `module.name`, followed to where it is defined, is bound to a value, a
@@ -500,6 +639,12 @@ class ProjectHeaders:
         # Read before the digest: it strips the tree.
         bases = star_bases(tree.body, module, is_package=is_package)
         exports = star_exports(tree.body)
+        written = sum(
+            alias.name == "*"
+            for node in every_statement(tree.body)
+            if isinstance(node, ast.ImportFrom)
+            for alias in node.names
+        )
         return ModuleHeader(
             names,
             classes,
@@ -510,4 +655,5 @@ class ProjectHeaders:
             factories,
             bases,
             exports,
+            written != len(bases) or any(map(_runs_a_text, _module_statements(tree.body))),
         )

@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS open_questions (
     -- `binder_protocol`, `unselected_binding`, `handler_protocol`,
     -- `registration_activation`, `self_exchange`, `routing_conflict`,
     -- `routing_depth`, `web_stack`, `prefix_not_measured`,
-    -- `refused_registration`, `handler_pass_through` and `mount_prefix` - checked in
+    -- `refused_registration`, `handler_pass_through`, `mount_prefix` and `not_read` - checked in
     -- `resolve/open_questions.py`, which
     -- owns the set (its `QUESTIONS`, with each kind's reason) and refuses
     -- anything outside it. This list is kept equal to that tuple.
@@ -695,8 +695,10 @@ CREATE TABLE IF NOT EXISTS interface_beans (
 -- before the routes under it). `via` is the method whose body holds the test. `kind` is
 -- `test`; `expression` is JSON `{test, holds, reads}` — the test as the code writes it, the arm the registration is in, the names it
 -- reads (`call_site.guards`, D00 §5). `holds` is `unresolved` and `resolution` `unresolved`:
--- no test is evaluated. `evidence` says so, quoting the test. A row registered under no test
--- has no entry here. Replaced whole per resolve.
+-- the test is not evaluated, and `evidence` says so, quoting the test. A `property` condition
+-- on one key is `true` or `false` and `resolved` in an environment whose settings module
+-- fixes the key (ruling R3 of 2026-11-25, D01). A row registered under no test has no entry
+-- here. Replaced whole per resolve.
 CREATE TABLE IF NOT EXISTS endpoint_existence (
     row_id      BIGINT,
     protocol    TEXT,
@@ -1463,7 +1465,10 @@ CREATE OR REPLACE VIEW method_returns AS
 SELECT document_id,
        payload ->> 'method'                    AS method,
        (payload ->> 'ordinal')::INTEGER        AS ordinal,
-       payload ->  'value'                     AS value
+       payload ->  'value'                     AS value,
+       -- D00 §5 (fact schema 24, OI-532): the tests the return runs under within
+       -- its own body, as `call_sites.guards`; NULL where under none and on the JVM.
+       payload ->> 'guards'                    AS guards
 FROM raw_facts WHERE kind = 'method_return'
   AND NOT coalesce((payload ->> 'yielded')::BOOLEAN, false)
   AND document_id IN (SELECT document_id FROM selected_documents);
@@ -1509,7 +1514,13 @@ SELECT document_id,
        -- carries, and the walk reads it with the same reader, so a second spelling here
        -- would be a second thing to keep in step.
        payload -> 'value'                      AS value,
-       payload ->> 'written_by'                AS written_by
+       payload ->> 'written_by'                AS written_by,
+       -- D00 §5 (fact schema 23, OI-508, OI-509): the undecided tests the write runs under
+       -- within its own body, as `call_sites.guards`; NULL where under none and on the JVM.
+       payload ->> 'guards'                    AS guards,
+       -- D00 §5 (fact schema 25, ruling R10 of 2026-11-25): a star import of the name's module
+       -- can replace the name; NULL where none can and on the JVM.
+       (payload ->> 'replaceable')::BOOLEAN    AS replaceable
 FROM raw_facts WHERE kind = 'field_write'
   AND document_id IN (SELECT document_id FROM selected_documents);
 

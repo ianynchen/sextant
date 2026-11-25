@@ -34,6 +34,7 @@ from sextant.application.resolve.rpc_hops import record_rpc_hops
 from sextant.application.resolve.self_calls import record_self_calls
 from sextant.application.resolve.self_exchange import record_self_exchange
 from sextant.application.resolve.service_identity import record_service_identity_gaps
+from sextant.application.resolve.settings_modules import record_module_config
 from sextant.application.resolve.shadow import record_value_resolutions
 from sextant.application.resolve.shapes import derive_endpoint_shapes
 from sextant.application.resolve.shapes.parse_binding import bind_parse_calls
@@ -231,6 +232,11 @@ def resolve(
         record_call_edges(workspace, declared)
     with _timed("bind_receivers"):
         bind_until_settled(workspace, declared)
+    # Ruling R3 of 2026-11-25: the settings modules' rows of `resolved_config`, read by the
+    # value walk, which needs the edges above; before every engine, which reads the
+    # environments from that table.
+    with _timed("record_module_config"):
+        record_module_config(workspace, declared)
     # F5 §6.2 (W29): emptied once, here, ahead of every engine that writes it — the
     # `open_questions`/`resolved_config` discipline. More than one catalog contributes
     # entries, so a reset owned by an engine would erase whichever ran first, and a

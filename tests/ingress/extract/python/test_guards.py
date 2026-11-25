@@ -12,7 +12,7 @@ from pathlib import Path
 
 from test_flow import _scan, _sites
 
-from sextant.domain.facts import CallSiteFact
+from sextant.domain.facts import CallSiteFact, FieldWriteFact, MethodReturnFact
 
 
 def _guards(sites) -> dict[str, list[tuple[str, bool, list[str]]] | None]:
@@ -103,7 +103,9 @@ def test_a_test_whose_arm_raises_guards_nothing(tmp_path: Path):
     assert _guards({name: sites[name] for name in ("a", "b")}) == {"a": None, "b": None}
 
 
-def test_a_test_the_language_decides_writes_nothing(tmp_path: Path):
+def test_a_test_the_language_decides_guards_only_the_arm_that_never_runs(tmp_path: Path):
+    """The arm that runs is under no test. The arm that never runs (OI-562) is under the test
+    with its written value (`value`: false, `when`: true), which the resolver decides false."""
     facts = _scan(
         tmp_path,
         "import typing\n"
@@ -118,7 +120,15 @@ def test_a_test_the_language_decides_writes_nothing(tmp_path: Path):
         "        d()\n",
     )
 
-    assert _guards(_sites(facts)) == {"a": None, "b": None, "c": None, "d": None}
+    sites = _sites(facts)
+    assert _guards(sites) == {
+        "a": [("typing.TYPE_CHECKING", True, [])],
+        "b": None,
+        "c": None,
+        "d": None,
+    }
+    (dead,) = sites["a"].guards
+    assert (dead.value.kind, dead.value.value, dead.when) == ("boolean", False, "true")
 
 
 def test_a_nested_function_starts_with_no_guard(tmp_path: Path):
@@ -194,3 +204,124 @@ def test_the_main_block_test_guards_nothing(tmp_path: Path):
 
     sites = _sites(facts)
     assert _guards({name: sites[name] for name in ("a", "b")}) == {"a": None, "b": None}
+
+
+def test_a_field_write_carries_the_tests_it_runs_under(tmp_path: Path):
+    """D00 §5 `field_write.guards` (fact schema 23, ruling R1 of 2026-11-25, OI-508, OI-509):
+    a write to a name carries the tests it runs under within its own body, outermost first, by
+    the rules of a call's. A write under none, and one under a test the language decides,
+    carries none."""
+    facts = _scan(
+        tmp_path,
+        "import os\n"
+        "from typing import TYPE_CHECKING\n"
+        "A = ['a']\n"
+        "if os.environ:\n"
+        "    A += ['b']\n"
+        "    if os.sep:\n"
+        "        B = 1\n"
+        "else:\n"
+        "    C = 2\n"
+        "if not TYPE_CHECKING:\n"
+        "    D = 3\n"
+        "def f(flag):\n"
+        "    global E\n"
+        "    if flag:\n"
+        "        return\n"
+        "    E = 4\n"
+        "class K:\n"
+        "    def __init__(self, flag):\n"
+        "        if flag:\n"
+        "            self.x = 5\n",
+    )
+
+    written = [
+        (
+            fact.field.rsplit("#", 1)[1],
+            None
+            if fact.guards is None
+            else [(guard.test, guard.holds, list(guard.reads)) for guard in fact.guards],
+        )
+        for fact in facts
+        if isinstance(fact, FieldWriteFact)
+    ]
+    outer = ("os.environ", True, ["os.environ"])
+    assert written == [
+        ("A.", None),
+        ("A.", [outer]),
+        ("B.", [outer, ("os.sep", True, ["os.sep"])]),
+        ("C.", [("os.environ", False, ["os.environ"])]),
+        ("D.", None),
+        ("E.", [("flag", False, ["flag"])]),
+        ("x.", [("flag", True, ["flag"])]),
+    ]
+
+
+def test_a_return_carries_the_tests_it_runs_under(tmp_path: Path):
+    """D00 §5 `method_return.guards` (fact schema 24, ruling R5 of 2026-11-25, OI-532): a
+    `return` carries the tests it runs under within its own body, by the rules of a call's:
+    the return after an arm that always returns is under that arm's test, the other way."""
+    facts = _scan(
+        tmp_path,
+        "def d(function=None, x=1):\n"
+        "    if function:\n"
+        "        return wrap(function)\n"
+        "    return wrap\n"
+        "def plain():\n"
+        "    return 1\n",
+    )
+
+    returned = {
+        (fact.method.rsplit("#", 1)[1].split("(")[0], fact.ordinal): None
+        if fact.guards is None
+        else [(guard.test, guard.holds) for guard in fact.guards]
+        for fact in facts
+        if isinstance(fact, MethodReturnFact)
+    }
+    assert returned == {
+        ("d", 0): [("function", True)],
+        ("d", 1): [("function", False)],
+        ("plain", 0): None,
+    }
+
+
+def test_a_test_of_one_value_states_the_value_and_when_it_is_true(tmp_path: Path):
+    """D00 §5 `guards[].value` and `when` (fact schema 24, ruling R2 of 2026-11-25): a test
+    that is one value (`x`), its negation (`not x`), or its comparison with `None` by `is`
+    states the value it reads, in the argument grammar, and what of it makes the test true.
+    Every other form states neither."""
+    facts = _scan(
+        tmp_path,
+        "FLAG = True\n"
+        "def f(p, q):\n"
+        "    if p:\n"
+        "        a()\n"
+        "    if not q:\n"
+        "        b()\n"
+        "    if p is None:\n"
+        "        c()\n"
+        "    if q is not None:\n"
+        "        d()\n"
+        "    if FLAG:\n"
+        "        e()\n"
+        "    if p == 1:\n"
+        "        g()\n"
+        "    if p and q:\n"
+        "        h()\n"
+        "    if p in (1, 2):\n"
+        "        k()\n",
+    )
+
+    stated = {
+        name: [
+            (guard.when, None if guard.value is None else (guard.value.kind, guard.value.value))
+            for guard in site.guards
+        ]
+        for name, site in _sites(facts).items()
+    }
+    assert stated["a"] == [("true", ("parameter", 0))]
+    assert stated["b"] == [("false", ("parameter", 1))]
+    assert stated["c"] == [("null", ("parameter", 0))]
+    assert stated["d"] == [("not_null", ("parameter", 1))]
+    assert stated["e"] == [("true", ("field", None))]
+    assert stated["g"] == stated["h"] == stated["k"] == [(None, None)]

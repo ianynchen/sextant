@@ -557,14 +557,25 @@ def _not_yet(held: str, expected: list[tuple[object, ...]], task: str) -> Any:
         # An element store or delete is a call on the list (`__setitem__`, `__delitem__`).
         ("VERBS = ['get']\nVERBS[0] = 'delete'\n", [_NOT_KNOWN]),
         ("VERBS = ['get']\ndel VERBS[0]\n", [_NOT_KNOWN]),
-        pytest.param(
-            "VERBS = ['get']\ndef keep(v):\n    v.append('post')\nkeep(VERBS)\n",
-            [_NOT_KNOWN],
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="a held list handed to module code that changes it: logged as an issue "
-                "in plan Task 10",
+        # So is a store into an element inside a tuple target (OI-515).
+        ("VERBS = ['get']\nVERBS[0], b = 'post', 1\n", [_NOT_KNOWN]),
+        # A list changed through a second name is not known by its first (OI-516).
+        ("VERBS = ['get']\nOTHER = VERBS\nOTHER.remove('get')\n", [_NOT_KNOWN]),
+        ("VERBS = ['get']\nOTHER = VERBS\nTHIRD = OTHER\nTHIRD.clear()\n", [_NOT_KNOWN]),
+        # A copy of a string is the list of its characters, which no fact names (OI-520).
+        ("VERB = 'get'\nVERBS = list(VERB)\n", [_NOT_KNOWN]),
+        ("VERB = 'get'\nVERBS = ['post', *VERB]\n", [_NOT_KNOWN, _POST]),
+        ("OTHER = ['get']\nVERBS = [*OTHER]\n", [_GET]),
+        # A list handed to module code is still read; where that code is seen to change the
+        # parameter it fills, there or in code it hands it on to, it is not known (OI-510).
+        ("VERBS = ['get']\ndef keep(v):\n    return len(v)\nkeep(VERBS)\n", [_GET]),
+        ("VERBS = ['get']\ndef keep(v):\n    v.append('post')\nkeep(VERBS)\n", [_NOT_KNOWN]),
+        (
+            (
+                "VERBS = ['get']\ndef add(v):\n    v.append('post')\n"
+                "def keep(n, v):\n    add(v)\nkeep(1, v=VERBS)\n"
             ),
+            [_NOT_KNOWN],
         ),
     ],
 )

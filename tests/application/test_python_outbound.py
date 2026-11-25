@@ -16,10 +16,13 @@ from test_fastapi_routes import _LOCKED, _bare, _resolved
 from fixture_python import FIXTURES
 from sextant.application.ports.catalogs import CatalogError
 from sextant.application.ports.detector import LibraryRoot
+from sextant.application.ports.scanner import ScanRequest
 from sextant.application.resolve import values
 from sextant.application.resolve.engines import single_call
 from sextant.application.resolve.shapes.client_base import APPEND_TO_BASE, join_url
+from sextant.domain.factfile import library_fact_root
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.ingress.extract.python.scanner import PythonScanner
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -197,6 +200,22 @@ def test_a_relative_address_joins_the_base_the_client_was_built_with(tmp_path, l
     ]
 
 
+def test_a_client_subclass_joins_the_base_its_construction_was_handed(tmp_path, libraries):
+    """OI-525: `Api(httpx.Client)` defines no `__init__`, so `Api(base_url=...)` runs
+    `Client.__init__`: the construction is the declared rung's (`Dispatch.heirs`), and a
+    relative address joins its base. (Through `with … as`, the call on the name is not bound
+    to the class yet: OI-525 stays open for it.)"""
+    assert _outbound(
+        tmp_path,
+        libraries,
+        "import httpx\n"
+        "class Api(httpx.Client):\n"
+        "    pass\n"
+        "def listed() -> None:\n"
+        "    Api(base_url='https://a.example/v1').get('/w')\n",
+    ) == [("GET", "a.example", "/v1/w", "app/main#listed", "resolved", None)]
+
+
 def test_a_client_a_with_statement_opens_is_the_client_it_built(tmp_path, libraries):
     """Plan 3 R13: `Client.__enter__`, `AsyncClient.__aenter__` and `Session.__enter__` return
     the client itself (`value-models/python-clients.yml`), so the name `with … as` binds is
@@ -262,6 +281,38 @@ def test_a_with_statement_on_a_client_subclass_is_the_client_it_built(tmp_path, 
     ]
     workspace.close()
     assert sunk == [["app/main/Api#"], ["own"]]
+
+
+def test_an_unbound_call_through_a_client_subclass_is_its_first_argument(tmp_path, libraries):
+    """OI-522: `Api.__enter__(client)` calls `httpx.Client.__enter__`, a method that takes
+    `self`, through the class: its receiver is the first argument, the instance, never the
+    class `Api`."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": "import httpx\n"
+            "class Api(httpx.Client):\n"
+            "    pass\n"
+            "def sink(x: object) -> None: ...\n"
+            "def run(client: Api) -> None:\n"
+            "    sink(Api.__enter__(client))\n"
+            "def main() -> None:\n"
+            "    run(Api())\n",
+            "models.py": _MODELS,
+        },
+        locked=_CLIENTS,
+    )
+    index = values.value_index(
+        workspace, returns_arguments=YamlCatalogSource(catalogs_dir()).returns_arguments()
+    )
+    (site,) = (row for row in workspace.query("call_sites") if row["name"] == "sink")
+    sunk = [
+        (b.slots[0].value, b.slots[0].class_object)
+        for b in values.resolve_site(workspace, dict(site), index)
+    ]
+    workspace.close()
+    assert sunk == [("app/main/Api#", False)]
 
 
 @pytest.mark.parametrize(
@@ -598,3 +649,54 @@ def test_a_session_subclass_publishes_only_the_modules_own_calls(tmp_path, libra
     )
 
     assert rows == [("GET", "a.example", "/w", "app/main#send", "resolved", None)]
+
+
+_STUB_CLIENT = (
+    "import requests\n"
+    "class Base:\n"
+    "    def fetch(self):\n"
+    "        return requests.get('https://a.example/w')\n"
+)
+
+
+_STUB_FETCH = "sextant-python pypi stubclient 1 stubclient/Base#fetch"
+
+
+def _stub_client(tmp_path: Path) -> LibraryRoot:
+    """A distribution `stubclient` whose class `Base` calls `requests.get` in a method."""
+    site = tmp_path / "stub-site"
+    (site / "stubclient").mkdir(parents=True)
+    (site / "stubclient" / "__init__.py").write_text(_STUB_CLIENT, encoding="utf-8")
+    info = site / "stubclient-1.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text("Name: stubclient\nVersion: 1\n", encoding="utf-8")
+    (info / "RECORD").write_text("stubclient/__init__.py,,\n", encoding="utf-8")
+    return LibraryRoot("stubclient", "1", site)
+
+
+@pytest.mark.parametrize("opted_in", [False, True], ids=["not-opted-in", "opted-in"])
+def test_an_opted_in_librarys_outbound_call_is_published(tmp_path, libraries, opted_in: bool):
+    """`class Mine(Base)`: the library `Base`'s bodies are read because a module class extends
+    it, and its `requests.get(...)` is the library's row, not published (F4 §5.2). Where the
+    module opts into the library (`extract_libraries`, D04 §2a) the body is also in the
+    library's own document, which the person asked for: the row is published, as an opted-in
+    JVM library's is (ruled 2026-11-25, R9; OI-560, OI-543)."""
+    stub = _stub_client(tmp_path)
+    if opted_in:
+        PythonScanner().scan(
+            ScanRequest(
+                module_id="shop",
+                coordinates=stub.coordinate,
+                version=stub.version,
+                classes_dir=stub.archive,
+                out_dir=library_fact_root(tmp_path / "facts", stub.coordinate),
+                origin=stub.coordinate,
+            )
+        )
+    rows = _outbound(
+        tmp_path,
+        (*libraries, stub),
+        "from stubclient import Base\nclass Mine(Base):\n    pass\n",
+    )
+
+    assert rows == ([("GET", "a.example", "/w", _STUB_FETCH, "resolved", None)] if opted_in else [])

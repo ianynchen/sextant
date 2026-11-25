@@ -427,6 +427,44 @@ class YamlCatalogSource:
                 stated[key] = read
         return tuple(read for _, read in sorted(stated.items()))
 
+    def key_reads(self) -> tuple[dict[str, Any], ...]:
+        """Every entry `value-models/*.yml` declares under `key_reads` (ruling R3 of
+        2026-11-25, design note approved 2026-11-25): an object whose attribute read is the
+        configuration key of that name, so the read's value is the expression `${NAME}`.
+        Each entry is `{owner, by}`, `owner` the object as the facts name it (the module that
+        binds it, then its name). Returned in the `returns_arguments` row shape with form
+        `key_read`, so it rides the same plumbing to the value walk. An owner stated twice is
+        refused naming the file."""
+        stated: dict[str, dict[str, Any]] = {}
+        for path in sorted((self._directory / "value-models").glob("*.yml")):
+            raw = _load(path.read_text(encoding="utf-8"))
+            declared = raw.get("key_reads") if isinstance(raw, dict) else None
+            if declared is None:
+                continue
+            if not isinstance(declared, list) or not declared:
+                raise CatalogError(
+                    f"loading value model {path}: `key_reads` must be a non-empty list"
+                )
+            for entry in declared:
+                if (
+                    not isinstance(entry, dict)
+                    or set(entry) - {"owner", "by"}
+                    or not isinstance(entry.get("owner"), str)
+                    or not entry.get("by")
+                ):
+                    raise CatalogError(
+                        f"loading value model {path}: a `key_reads` entry is `{{owner, by}}`, "
+                        f"got {entry!r}"
+                    )
+                owner = type_descriptor(str(entry["owner"]))
+                if owner in stated:
+                    raise CatalogError(
+                        f"loading value model {path}: `key_reads` states `{entry['owner']}` "
+                        f"twice — one object is stated once"
+                    )
+                stated[owner] = {"owner": owner, "form": KEY_READ, "by": str(entry["by"])}
+        return tuple(read for _, read in sorted(stated.items()))
+
     def value_model(self) -> list[dict[str, Any]]:
         """The identity of every PRODUCING call this source knows (spec 2026-09-22 §2,
         D02 §1f): which argument of a call carries the value its result stands for.
@@ -521,7 +559,7 @@ class YamlCatalogSource:
         hand_off_effects = self.hand_off_effects()
         # What a stated library call does with one of its arguments (`value-models/`'s
         # `returns_argument`, design 2026-11-06-reading-decorators §3d), read once likewise.
-        returns_arguments = self.returns_arguments() + self.environment_reads()
+        returns_arguments = self.returns_arguments() + self.environment_reads() + self.key_reads()
         # The conformance table, read once per source for the same reason: it is
         # knowledge about TYPES rather than about any one catalog, and the engines need
         # it to refuse a producer whose return type cannot be the declared parameter
@@ -2143,6 +2181,11 @@ def _hand_off_effect(entry: Any, path: Path) -> dict[str, Any]:
 # The three things a `returns_argument` entry may say a call does with its argument N
 # (design 2026-11-06-reading-decorators §3d, §3e).
 _RETURNS_FORMS = ("returns", "result_returns", "result_calls", "returns_receiver")
+# The two forms one entry may state together (ruling R5/A1 of 2026-11-25): a decorator usable
+# bare or with arguments (`login_required(view)`, `login_required(login_url=...)(view)`).
+# Where the call writes argument N, `result_calls`: the result runs it. Where it does not,
+# `result_returns`: the result is a decorator that hands back what it is applied to.
+_TWO_USES = ("result_returns", "result_calls")
 # The form that names no argument: the call returns its receiver, written `returns_receiver:
 # true` as a `fluent` step writes it (ruling 4, spec 2026-10-30; plan 3 R13).
 _RETURNS_RECEIVER = "returns_receiver"
@@ -2151,12 +2194,21 @@ _RETURNS_RECEIVER = "returns_receiver"
 def _returns_argument(entry: Any, path: Path) -> dict[str, Any]:
     """One `returns_argument` entry, checked and converted: the owner as a type symbol (the
     facts' spelling, a module's included: `click.decorators` is `click/decorators#`), the one
-    form it states, and its `argN` as the position N."""
+    form it states, and its `argN` as the position N. The two-use form (`_TWO_USES`) states
+    `result_calls` and, under `unwritten`, `result_returns`."""
     where = f"loading value model {path}: a `returns_argument` entry"
     if not isinstance(entry, dict):
         raise CatalogError(f"{where} is a mapping, got {entry!r}")
     forms = [form for form in _RETURNS_FORMS if form in entry]
     unknown = sorted(set(entry) - {"owner", "method", "by", *_RETURNS_FORMS})
+    two_uses = tuple(forms) == _TWO_USES
+    if two_uses and entry[forms[0]] != entry[forms[1]]:
+        raise CatalogError(
+            f"{where}: `result_calls` and `result_returns` on one entry state the two uses of "
+            f"ONE argument, written and not written, got {entry!r}"
+        )
+    if two_uses:
+        forms = ["result_calls"]
     if (
         unknown
         or len(forms) != 1
@@ -2190,12 +2242,16 @@ def _returns_argument(entry: Any, path: Path) -> dict[str, Any]:
         # The receiver is no argument: the position is unused for that form.
         "arg": 0 if forms[0] == _RETURNS_RECEIVER else _arg_index(stated, where),
         "element": element,
+        # The two-use form: what the entry states of a call that does not write the argument.
+        "unwritten": "result_returns" if two_uses else None,
         "by": str(entry["by"]),
     }
 
 
 # The `returns_arguments` form an `environment_reads` entry is read as (`values.ENVIRONMENT_READ`).
 ENVIRONMENT_READ = "environment_read"
+# The `returns_arguments` form a `key_reads` entry is read as (`values._KEY_READ`).
+KEY_READ = "key_read"
 
 
 def _environment_read(entry: Any, path: Path) -> dict[str, Any]:

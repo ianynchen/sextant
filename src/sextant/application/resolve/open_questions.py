@@ -170,6 +170,20 @@ QUESTIONS = (
     # The row's own reason, for `handler_pass_through`'s reason: the hole says WHAT is
     # missing, and only this says where to look for it.
     "mount_prefix",
+    # Ruled 2026-11-25 (R4; OI-540, OI-502). An inbound row one of whose columns was not read
+    # whole, where nothing on the row says why: a row serving any method that the code a
+    # request runs through gives a reason to doubt (`method`: `not_readable` where the
+    # handler, a wrapper or module code it hands the request to reads the method, or the
+    # registration names no handler; `external` where the handler's body is a library's and
+    # was not read), and a registration in a loop or a comprehension whose path is not read
+    # (`path`: `non_enumerable`). Candidates: one per registration of the identity, the column
+    # (`column`), the reason (`reason`, one word of the value walk's list), the code that
+    # decides it (`at`, with the call in it, `ordinal`, where one call does), the registering
+    # method (`caller`) and the row's handler (`handler`).
+    #
+    # One general kind, for `handler_pass_through`'s reason: no endpoint column carries a
+    # reason, and a NULL method or path names nothing to open.
+    "not_read",
 )
 
 

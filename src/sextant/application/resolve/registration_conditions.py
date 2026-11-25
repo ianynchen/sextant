@@ -13,7 +13,11 @@ are all under tests exists "not evaluated" — never decided from the repository
 The answer is a set of ALTERNATIVES, each a conjunction of guards: the row exists where every
 guard of one alternative holds. Two callers under two tests are two alternatives; a call under
 two nested tests is one alternative of two guards. An alternative with no guard means the row
-exists unconditionally, and then nothing is written. A row's calls are its registration (the
+exists unconditionally, and then nothing is written. A write to a name under a test
+(`field_write.guards`, ruling R1 of 2026-11-25) that a row's lists were read through
+(`Path.written_under`) counts as one of the row's calls: a route list added under a test, a
+root setting written under one. So does a `return` under a test not decided that a value of
+the row was read through (`method_return.guards`): the path names the tests still open. A row's calls are its registration (the
 route's root and terminal calls) and every include or mount its router is served through, all
 of which must run, so their alternatives are combined (each choice of one alternative per call,
 joined). Where the row was derived through one call of a helper (its path chose that call,
@@ -34,23 +38,47 @@ the scanner's typed reads, R27; the field's key by `settings_fields`, plan 3 Tas
 stays "not evaluated" (the deployment sets a key, ruled 2026-10-23), and the repository's value
 for each key is evidence: what the module's environment configuration sets, else the field's
 class-body default. A guard with any read that is not such a field stays `test`: the part no
-key explains cannot be called a property condition.
+key explains cannot be called a property condition. A read of an attribute of an object a
+value model states is read by key (`key_reads`: `settings.DEBUG` on Django's settings object)
+and of a name of a settings module (an environment, `settings_modules`) is a read of a key
+the same way (ruling R3 of 2026-11-25), each environment's value as evidence.
+A condition a reader states itself on the value of a key (`having_value`: the routes of a
+root exist where the root setting names it, `shapes/mounts.py`) is a guard like the others.
+
+**A test on a setting is decided per environment** (the approved note's last step): in
+`existence_rows`, a `property` guard on one key whose test has one of the forms below is
+decided in an environment whose settings module gives the key exactly one written literal
+(`holds` true or false, `resolution` `resolved`; `Conditions.setting_holds`), the way a
+profile condition is decided in its own environment. Nothing a deployment sets may be in the
+chain: an environment read, a value that is not one literal, and a write a star import can
+replace (ruling R10, `field_write.replaceable`; a module that runs a text as its own code
+writes the same mark) leave it "not evaluated". No row is removed or copied. OI-570.
+
+**A test on a value the code fixes is decided** (ruling R2 of 2026-11-25). Where a test is
+one name (`if x:`), its negation, or its comparison with `None` by `is` (`guards[].value`,
+`when`), and the value walk gives that name exactly one written literal on the row's path
+(`values.Tests`, per caller, rule 1), the test is true or false there, and no deployment can
+change it: decided true, the guard is no condition of the row on that path; decided false,
+the call does not run on that path, and a row no path registers is not written (as under
+`if False:`). A name an environment read, a configuration key or a settings field gives, a
+name with several values on the path, and every other form of test (`==`, `in`,
+`isinstance`, `and`, `or`) are not decided: "not evaluated", as before. The JVM writes no
+guards, so nothing is decided there (OI-553).
 
 **Stated limits.** A function in a cycle of calls is taken to run unconditionally while the
-cycle is being followed (the old answer, never a dropped row). A test is never evaluated, even
-where its value is written in the repository. A read the scanner cannot type is not linked to a
+cycle is being followed (the old answer, never a dropped row). A read the scanner cannot type is not linked to a
 settings field, so its guard stays `test`. A class body's statements are read with no test the module body puts them
 under.
 
-Cost (GUIDELINES §8.7): per inbound catalog run, one read of the guarded call sites (a fact
-query, cached per load) and, only where some call is guarded, one read of the call edges; each
+Cost (GUIDELINES §8.7): per inbound catalog run, one read of the guarded call sites and one of the
+guarded field writes (fact queries, cached per load) and, only where some is guarded, one read of the call edges; each
 method's alternatives are computed once.
 """
 
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
@@ -61,7 +89,8 @@ from sextant.application.resolve.settings_fields import (
     SettingsKey,
     settings_keys,
 )
-from sextant.domain.symbols import bare_descriptor
+from sextant.application.resolve.values import KEY_READ, Path
+from sextant.domain.symbols import bare_descriptor, member_name, owner_of, type_descriptor
 
 # The condition kind of a test the analysis does not evaluate (D01 `endpoint_existence.kind`).
 TEST = "test"
@@ -76,32 +105,69 @@ NOT_EVALUATED = "a condition this analysis does not evaluate: "
 
 # One guard: the method whose body holds the test, the test as written, the arm, its reads, and
 # the field symbol of each read the scanner could type (read, symbol).
-Guard = tuple[str, str, bool, tuple[str, ...], tuple[tuple[str, str], ...]]
+# Last, the value a condition on a key states the key has (`having_value`, the property
+# condition's word), None for a test of the code.
+Guard = tuple[str, str, bool, tuple[str, ...], tuple[tuple[str, str], ...], str | None]
 # The guards of one alternative, outermost first (a caller's before its callee's, an include's
 # before the routes under it), each once.
 Conjunction = tuple[Guard, ...]
 Alternatives = frozenset[Conjunction]
 UNCONDITIONAL: Alternatives = frozenset({()})
+# What a registration ran through: a call `(method, ordinal)`, or a write under a test
+# `(writing method, its tests)` as `Path.written_under` names one.
+Site = tuple[str, int | str]
 # The call a row's own path chose for a method (`Path.calls_into`): the calling context it was
 # derived in.
 Chosen = Mapping[str, tuple[str, int]]
 
 
+class Decider(Protocol):
+    """What decides the tests of one record on a path (`values.Tests`): the paths its call
+    or write runs on, each with the positions of the guards not decided there."""
+
+    def ran(
+        self, method: str, guards: str, within: Path | None
+    ) -> tuple[tuple[Path | None, tuple[int, ...]], ...]: ...
+
+    def setting(self, name: str, when: str, method: str) -> bool | None: ...
+
+
 @dataclass
 class Conditions:
     """The guarded calls and who calls whom, read once per resolve, and each method's
-    alternatives as they are asked for."""
+    alternatives as they are asked for. `tests` holds the record of each site one of whose
+    tests states the value it reads (`guards[].value`), as the facts write it, for `decider`
+    to decide (ruling R2 of 2026-11-25); with no decider every test stays open."""
 
-    guards: dict[tuple[str, int], tuple[Guard, ...]]
+    guards: dict[Site, tuple[Guard, ...]]
     callers: dict[str, tuple[tuple[str, int], ...]]
+    tests: dict[Site, str] = field(default_factory=dict)
+    decider: Decider | None = None
+    # What of its one value makes a guard's test true (`guards[].when`), for each guard whose
+    # test is that one read (`x`, `not x`, `x is None`, `x is not None`): the forms a test on
+    # a setting is decided in (`setting_holds`).
+    whens: dict[Guard, str] = field(default_factory=dict)
     _methods: dict[tuple[str, bool], Alternatives] = field(default_factory=dict)
     _entered: set[str] = field(default_factory=set)
 
+    def setting_holds(self, guard: Guard, key: str, environment: str) -> bool | None:
+        """Whether `guard`, a test on the one key `key`, goes its way in `environment` (the
+        approved note of R3, 2026-11-25): decided where the test has one of the R2 forms and
+        the environment's settings module gives the key one written literal with no door
+        (`Decider.setting`). None where it is not decided: "not evaluated", as before."""
+        when = self.whens.get(guard)
+        if when is None or self.decider is None:
+            return None
+        name = f"{type_descriptor(environment)}{key}."
+        true = self.decider.setting(name, when, guard[0])
+        return None if true is None else true == guard[2]
+
     def of_sites(
         self,
-        sites: Iterable[tuple[str, int]],
+        sites: Iterable[Site],
         chosen: Chosen | None = None,
         untied: bool = False,
+        on: Path | None = None,
     ) -> Alternatives:
         """Where every call of `sites` runs, outermost first: one alternative per choice of
         one alternative of each call, joined. A method `chosen` names a call of is run by
@@ -112,28 +178,49 @@ class Conditions:
         that method's calls register different rows (re-review ruling, part 2). Then a method
         some calls run under a test and some under none is taken to run under its tests only:
         the row is "not evaluated", never served on the strength of a call that may have
-        registered another row."""
+        registered another row.
+
+        `on` is the path the row was derived on, where a test is decided (the module
+        docstring): no alternative at all where a call of `sites` runs on no path."""
         found = UNCONDITIONAL
         for site in dict.fromkeys(sites):
             found = _simplest(
                 frozenset(
                     _joined(left, right)
                     for left in found
-                    for right in self._of_site(site, chosen or {}, frozenset(), untied)
+                    for right in self._of_site(site, chosen or {}, frozenset(), untied, on)
                 )
             )
         return found
 
     def _of_site(
-        self, site: tuple[str, int], chosen: Chosen, followed: frozenset[str], untied: bool
+        self,
+        site: Site,
+        chosen: Chosen,
+        followed: frozenset[str],
+        untied: bool,
+        on: Path | None = None,
     ) -> Alternatives:
-        own = self.guards.get(site, ())
         method = site[0]
-        if method in chosen and method not in followed:
-            outer = self._of_site(chosen[method], chosen, followed | {method}, untied)
-        else:
-            outer = self._of_method(method, untied)
-        return frozenset(_joined(conjunction, own) for conjunction in outer)
+        own = self.guards.get(site)
+        if own is None:
+            # A `return` under tests a path read a value through names its tests itself
+            # (`Path.written_under`): the ones still open on that path.
+            own = _guards_of(method, site[1]) if isinstance(site[1], str) else ()
+        ran: tuple[tuple[Path | None, tuple[int, ...]], ...] = ((on, tuple(range(len(own)))),)
+        if self.decider is not None and site in self.tests:
+            ran = self.decider.ran(method, self.tests[site], on)
+        found: set[Conjunction] = set()
+        for path, kept in ran:
+            # A test decided per caller chose that caller: the method runs by that call.
+            calls = chosen if path is on or path is None else {**chosen, **path.calls_into()}
+            if method in calls and method not in followed:
+                outer = self._of_site(calls[method], calls, followed | {method}, untied, path)
+            else:
+                outer = self._of_method(method, untied)
+            still = tuple(own[position] for position in kept)
+            found |= {_joined(conjunction, still) for conjunction in outer}
+        return frozenset(found)
 
     def _of_method(self, method: str, untied: bool = False) -> Alternatives:
         """Where `method` runs: wherever any call of it runs; everywhere where nothing in the
@@ -179,29 +266,66 @@ def _simplest(alternatives: Alternatives) -> Alternatives:
     )
 
 
-def conditions_of(workspace: Workspace) -> Conditions:
-    """The guarded calls, and the callers of each method where any call is guarded. Read by the
-    engine once per run: `call_edges` is derived, so it is never kept across passes."""
-    guards: dict[tuple[str, int], tuple[Guard, ...]] = {}
-    for row in workspace.query("call_site_guards"):
-        caller = str(row["caller"])
-        guards[(caller, int(str(row["ordinal"])))] = tuple(
-            (
-                caller,
-                str(g["test"]),
-                bool(g["holds"]),
-                tuple(g.get("reads") or ()),
-                tuple(sorted((g.get("fields") or {}).items())),
-            )
-            for g in json.loads(str(row["guards"]))
+def _guards_of(method: str, written: str) -> tuple[Guard, ...]:
+    """The tests of one record of `method`'s body, as the facts write them."""
+    return tuple(
+        (
+            method,
+            str(g["test"]),
+            bool(g["holds"]),
+            tuple(g.get("reads") or ()),
+            tuple(sorted((g.get("fields") or {}).items())),
+            g.get("having_value"),
         )
+        for g in json.loads(written)
+    )
+
+
+def conditions_of(workspace: Workspace, decider: Decider | None = None) -> Conditions:
+    """The guarded calls and the guarded field writes, and the callers of each method where
+    any is guarded. Read by the engine once per run: `call_edges` is derived, so it is never
+    kept across passes."""
+    guards: dict[Site, tuple[Guard, ...]] = {}
+    tests: dict[Site, str] = {}
+    guarded: list[tuple[Site, str]] = [
+        ((str(row["caller"]), int(str(row["ordinal"]))), str(row["guards"]))
+        for row in workspace.query("call_site_guards")
+    ]
+    # A write is named by its method and its tests, as a path that read it names it.
+    guarded += [
+        ((str(row["written_by"]), str(row["guards"])), str(row["guards"]))
+        for row in workspace.query("field_write_guards")
+    ]
+    # A return is named as a write is: by its method and its tests.
+    guarded += [
+        ((str(row["method"]), str(row["guards"])), str(row["guards"]))
+        for row in workspace.query("method_return_guards")
+    ]
+    whens: dict[Guard, str] = {}
+    for site, written in guarded:
+        guards[site] = _guards_of(site[0], written)
+        parsed = json.loads(written)
+        if any(g.get("value") is not None for g in parsed):
+            tests[site] = written
+        for guard, g in zip(guards[site], parsed, strict=True):
+            value, fields = g.get("value"), g.get("fields") or {}
+            if (
+                isinstance(value, dict)
+                and g.get("when") is not None
+                and len(guard[3]) == 1
+                and value.get("kind") == "field"
+                and [value.get("symbol")] == list(fields.values())
+            ):
+                whens[guard] = str(g["when"])
     callers: dict[str, list[tuple[str, int]]] = {}
     if guards:
         for row in workspace.query("calls_running"):
             callers.setdefault(str(row["callee"]), []).append(
                 (str(row["caller"]), int(str(row["ordinal"])))
             )
-    return Conditions(guards, {callee: tuple(sites) for callee, sites in callers.items()})
+    return Conditions(
+        guards, {callee: tuple(sites) for callee, sites in callers.items()}, tests, decider, whens
+    )
 
 
 def environments_of(workspace: Workspace) -> tuple[str, ...]:
@@ -214,10 +338,24 @@ def environments_of(workspace: Workspace) -> tuple[str, ...]:
 class SettingsReads:
     """What a guard that reads settings fields is explained by: each settings field's key by
     bare field symbol (`settings_fields.settings_keys`), and what each environment's
-    configuration sets for a key (None: a placeholder the module does not fill)."""
+    configuration sets for a key (None: no value read; `details` holds why, the row's own
+    `unresolved_detail`)."""
 
     keys: Mapping[str, SettingsKey]
     config: Mapping[str, Mapping[str, str | None]]
+    # The objects whose attribute read is the key of that name (`key_reads` in
+    # `value-models/`), and the settings modules, each an environment (`settings_modules`):
+    # a read of a name of either is a read of that key (ruling R3 of 2026-11-25).
+    objects: frozenset[str] = frozenset()
+    details: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+
+    def key_of(self, field: str) -> SettingsKey | None:
+        """The key the read of `field` (a bare field symbol) is a read of, None for a field
+        that is no setting."""
+        found = self.keys.get(field)
+        if found is None and owner_of(field) in self.objects:
+            return SettingsKey(member_name(field), None, None)
+        return found
 
 
 def settings_reads_of(workspace: Workspace, catalog: Catalog) -> SettingsReads:
@@ -226,10 +364,12 @@ def settings_reads_of(workspace: Workspace, catalog: Catalog) -> SettingsReads:
     model = next(
         (row for row in catalog.returns_arguments if row.get("form") == CONFIG_MODEL_FORM), None
     )
-    if model is None or not model.get("settings_form"):
+    stated = {str(row["owner"]) for row in catalog.returns_arguments if row.get("form") == KEY_READ}
+    if model is None or not (model.get("settings_form") or stated):
         return SettingsReads({}, {})
     keys = settings_keys(workspace, model, workspace.once(dispatch_of))
     config: dict[str, dict[str, str | None]] = {}
+    details: dict[str, dict[str, str]] = {}
     for row in workspace.query("resolved_config"):
         value = row["value"]
         if value is None and row.get("source") is None:
@@ -237,7 +377,14 @@ def settings_reads_of(workspace: Workspace, catalog: Catalog) -> SettingsReads:
         config.setdefault(str(row["environment"]), {})[str(row["key"])] = (
             None if value is None else str(value)
         )
-    return SettingsReads(keys, config)
+        if value is None and row.get("unresolved_detail") is not None:
+            details.setdefault(str(row["environment"]), {})[str(row["key"])] = str(
+                row["unresolved_detail"]
+            )
+    # A settings module is named by its environment (`settings_modules`), so the module of
+    # each environment is one whose names are keys.
+    modules = {type_descriptor(environment) for environment in config}
+    return SettingsReads(keys, config, frozenset(stated | modules), details)
 
 
 def _settings_keys_of(guard: Guard, settings: SettingsReads) -> list[SettingsKey] | None:
@@ -246,7 +393,7 @@ def _settings_keys_of(guard: Guard, settings: SettingsReads) -> list[SettingsKey
     class), and then the guard is a `test`."""
     fields = dict(guard[4])
     found = [
-        settings.keys.get(bare_descriptor(fields[read])) if read in fields else None
+        settings.key_of(bare_descriptor(fields[read])) if read in fields else None
         for read in guard[3]
     ]
     if not found or any(one is None or one.key is None for one in found):
@@ -270,6 +417,7 @@ def existence_rows(
     registrations: Sequence[tuple[Mapping[str, Any], Existence]],
     environments: Sequence[str],
     settings: SettingsReads | None = None,
+    conditions: Conditions | None = None,
 ) -> list[dict[str, Any]]:
     """The `endpoint_existence` rows of each registered row: its alternatives OR-ed across
     every registration that made it, nothing for a row one of them makes unconditionally.
@@ -302,10 +450,18 @@ def existence_rows(
                 )
                 expression = json.dumps(
                     {"holds": holds, "reads": list(reads), "test": test}
-                    | ({"keys": keys} if explained is not None else {}),
+                    | ({"keys": keys} if explained is not None else {})
+                    | ({"having_value": guard[5]} if guard[5] is not None else {}),
                     sort_keys=True,
                 )
                 for environment in environments:
+                    # A test on one setting is decided per environment, as a profile
+                    # condition is in its own environment (`Conditions.setting_holds`).
+                    decided = (
+                        conditions.setting_holds(guard, keys[0], environment)
+                        if conditions is not None and len(keys) == 1 and guard[5] is None
+                        else None
+                    )
                     written.append(
                         {
                             "protocol": row["protocol"],
@@ -320,8 +476,8 @@ def existence_rows(
                             "kind": TEST if explained is None else PROPERTY,
                             "expression": expression,
                             "environment": environment,
-                            "holds": "unresolved",
-                            "resolution": "unresolved",
+                            "holds": "unresolved" if decided is None else str(decided).lower(),
+                            "resolution": "unresolved" if decided is None else "resolved",
                             "evidence": f"{NOT_EVALUATED}`{test}`"
                             if explained is None or settings is None
                             else _evidence(explained, environment, settings),
@@ -337,6 +493,8 @@ def _evidence(found: Sequence[SettingsKey], environment: str, settings: Settings
     config = settings.config.get(environment, {})
     keys = list(dict.fromkeys(str(one.key) for one in found))
     defaults = {str(one.key): one.default for one in found if one.default is not None}
-    text = property_evidence(keys, environment, config, defaults)
+    text = property_evidence(
+        keys, environment, config, defaults, settings.details.get(environment, {})
+    )
     named = [one.file_detail() for one in found if one.file is not None and one.key not in config]
     return "; ".join([text, *dict.fromkeys(named)])

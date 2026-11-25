@@ -284,6 +284,32 @@ class Dispatch:
             order.append(type_)
         return order, None
 
+    def order_past_unread(self, owner: str) -> list[str]:
+        """`order_through_headers`'s order continued past each type whose parents were not
+        read, as if it had none: the read types' own C3 order, where the true order may place
+        that type's unknown parents between them."""
+        return self._linear_past(owner, set()) or [owner]
+
+    def _linear_past(self, type_: str, visiting: set[str]) -> list[str] | None:
+        """`_linear` with no `_Unread` mark: a type whose parents were not read has none."""
+        if type_ in visiting:
+            return None
+        if type_ not in self.scanned and type_ not in self.headers:
+            return [type_]
+        visiting.add(type_)
+        parents: _Linear = [str(ancestor) for ancestor, _, _ in self.ancestors.get(type_, ())]
+        lists: list[_Linear] = []
+        for parent in parents:
+            found = self._linear_past(str(parent), visiting)
+            if found is None:
+                visiting.discard(type_)
+                return None
+            lists.append(list(found))
+        lists.append(list(parents))
+        visiting.discard(type_)
+        merged = _merge(lists)
+        return None if merged is None else [type_, *(str(one) for one in merged)]
+
     def _order(self, owner: str) -> tuple[list[str], str | None]:
         """`lookup_order`, and the type the order left the workspace at (None where it
         read every type it reached)."""

@@ -80,6 +80,7 @@ from sextant.domain.facts import (
     CallTarget,
     Fact,
     FieldWriteFact,
+    GuardWhen,
     MethodReturnFact,
     Signature,
     TypeRef,
@@ -192,6 +193,8 @@ _COMPREHENSION_CLASSES: dict[type[ast.expr], str] = {
 }
 
 _UNKNOWN = CallArgument(kind="unresolved")
+# What makes a test true (`CallGuard.when`), and what makes its negation true.
+_OPPOSITE: dict[GuardWhen, GuardWhen] = {"true": "false", "false": "true"}
 # The receiver of a method (`self`, `cls`). It is never a parameter (D00 §5 numbering) and
 # reads as `unresolved` where it is used as a value; only its identity is tested.
 _SELF = CallArgument(kind="unresolved")
@@ -344,6 +347,8 @@ class LoopJumps:
 
     breaks: list[dict[str, CallArgument]] = field(default_factory=list)
     continues: list[dict[str, CallArgument]] = field(default_factory=list)
+    # The names the loop writes, its target's and its body's: written again on its next pass.
+    written: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -391,6 +396,11 @@ class BodyReader:
     # elements it holds at the line being read, where the body has written it in order;
     # None where it has no one value (`_in_order`).
     _lists: dict[str, list[CallArgument] | None]
+    # The parts of an augmented element store's target, already read, by node id: the store
+    # takes the object and the index its read took (`_augmented`).
+    _read_once: dict[int, CallArgument]
+    # Whether the names the module's star imports bind are written (`_starred_variables`).
+    _stars_written: bool
     # The type of each module-level name, a class or a callable, by every write to it in
     # this file, as the previous reading of the file found them (`structure.file_facts`).
     # None on a first reading, which answers from the writes read so far and is kept only
@@ -417,6 +427,8 @@ class BodyReader:
     _own_fields: dict[str, TypeRef]
     # Set while a guard's dotted reads are typed again (`_fields`): reading them writes no call.
     _rereading: bool = False
+    # What each test read (`_tested`), by the id of its node.
+    _tests: dict[int, tuple[CallArgument | None, GuardWhen | None]]
 
     def _body(self, caller: str) -> Body:
         return self._bodies.setdefault(caller, Body(caller))
@@ -574,7 +586,8 @@ class BodyReader:
         reads names of an enclosing function, a `dynamic` site `types/FunctionType#<init>`
         takes their values as they are where the function is made, and the entry counts them
         (`captures`): the body holds them as the parameters after its written ones. A name
-        written again after this line has no one value here; it is `unresolved`."""
+        written again after this line, or by a loop the line is in, has no one value here; it is
+        `unresolved`."""
         names = self._free_names(node, scope.frame)
         if not names:
             return CallArgument(kind="lambda", symbol=descriptor, captures=0)
@@ -583,7 +596,11 @@ class BodyReader:
             frame = scope.frame
             while frame is not None and name not in frame.local_names:
                 frame = frame.enclosing
-            late = frame is not None and frame.last_write.get(name, 0) > node.lineno
+            # A loop the `def` is in writes its names again on the next pass (OI-535).
+            late = frame is not None and (
+                frame.last_write.get(name, 0) > node.lineno
+                or any(name in jumps.written for jumps in frame.jumps)
+            )
             held.append(_UNKNOWN if late else self._local(name, scope.frame) or _UNKNOWN)
         self._closures[id(node)] = names
         produced = self._invoke(Callee(_target(_FUNCTION, INIT), "dynamic"), held, scope)
@@ -601,29 +618,8 @@ class BodyReader:
         if frame is None:
             return []
         body = [node.body] if isinstance(node, ast.Lambda) else node.body
-        written = node.args
-        own = _assigned(_own_nodes(body)) | {
-            a.arg
-            for a in (
-                *written.posonlyargs,
-                *written.args,
-                *written.kwonlyargs,
-                *(x for x in (written.vararg, written.kwarg) if x is not None),
-            )
-        }
-        declared = {
-            n
-            for each in _own_nodes(body)
-            if isinstance(each, ast.Global | ast.Nonlocal)
-            for n in each.names
-        }
-        own -= declared
-        loads = sorted(
-            (each.lineno, each.col_offset, each.id)
-            for part in body
-            for each in ast.walk(part)
-            if isinstance(each, ast.Name) and isinstance(each.ctx, ast.Load)
-        )
+        own = _held(node)
+        loads = sorted((each.lineno, each.col_offset, each.id) for each in _reads_within(body))
         found: list[str] = []
         for _, _, name in loads:
             if name in own or name in found or name == getattr(node, "name", None):
@@ -671,6 +667,7 @@ class BodyReader:
                 ordinal=scope.body.returns,
                 value=value,
                 yielded=yielded,
+                guards=list(scope.guards) or None,
             )
         )
         scope.body.returns += 1
@@ -706,12 +703,65 @@ class BodyReader:
     def _guard(self, test: ast.expr, holds: bool, scope: Scope) -> CallGuard | None:
         """The guard an undecided test puts on the calls of its arm `holds` (D00 §5
         `call_site.guards`); None where the language decides the test (`_runs`)."""
-        if self._runs(test, scope) is not None or _entry_point_test(test):
+        if _entry_point_test(test):
             return None
+        runs = self._runs(test, scope)
+        if runs is not None:
+            # The arm the language never runs (OI-562) is under a test whose value is
+            # written: the resolver decides it false, and what the arm holds gives nothing.
+            # The arm that runs is under no test.
+            return (
+                None
+                if runs == holds
+                else CallGuard(
+                    test=ast.unparse(test),
+                    holds=holds,
+                    value=CallArgument(kind="boolean", value=runs),
+                    when="true",
+                )
+            )
         reads = _reads(test)
+        value, when = self._tested(test, scope)
         return CallGuard(
-            test=ast.unparse(test), holds=holds, reads=reads, fields=self._fields(reads, scope)
+            test=ast.unparse(test),
+            holds=holds,
+            reads=reads,
+            fields=self._fields(reads, scope),
+            value=value,
+            when=when,
         )
+
+    def _tested(self, test: ast.expr, scope: Scope) -> tuple[CallArgument | None, GuardWhen | None]:
+        """The one value a test reads and what of it makes the test true (`CallGuard.value`,
+        `when`): `x`, `not x`, `x is None`, `x is not None`, with `x` a name or a dotted name.
+        Read once per test, where the test is first read: the statements after an arm that
+        always returns are under the value the test read, not one an arm wrote since."""
+        if id(test) in self._tests:
+            return self._tests[id(test)]
+        operand: ast.expr = test
+        when: GuardWhen = "true"
+        while isinstance(operand, ast.UnaryOp) and isinstance(operand.op, ast.Not):
+            operand, when = operand.operand, _OPPOSITE[when]
+        if (
+            isinstance(operand, ast.Compare)
+            and len(operand.ops) == 1
+            and isinstance(operand.ops[0], ast.Is | ast.IsNot)
+            and isinstance(operand.comparators[0], ast.Constant)
+            and operand.comparators[0].value is None
+        ):
+            is_none = isinstance(operand.ops[0], ast.Is) == (when == "true")
+            operand, when = operand.left, "null" if is_none else "not_null"
+        found: tuple[CallArgument | None, GuardWhen | None] = (None, None)
+        if _is_dotted(operand):
+            self._rereading, held = True, self._rereading
+            try:
+                value = self._value(operand, scope)
+            finally:
+                self._rereading = held
+            if value.kind != _UNKNOWN.kind:
+                found = (value, when)
+        self._tests[id(test)] = found
+        return found
 
     def _fields(self, reads: list[str], scope: Scope) -> dict[str, str]:
         """Each dotted read of a test that is a read of a field, to that field's symbol, as the
@@ -905,7 +955,7 @@ class BodyReader:
             scope.flow.raises()
             scope.flow.join([skipped, passed])
         elif isinstance(node, ast.Delete):
-            for target in node.targets:
+            for target in _deleted(node.targets):
                 if isinstance(target, ast.Subscript):
                     self._subscript(target, scope, _DELITEM)
                 else:
@@ -915,13 +965,26 @@ class BodyReader:
 
     def _augmented(self, node: ast.AugAssign, scope: Scope) -> None:
         """`x += v` is `x = x + v`, with the target's object read once. A module or class
-        name is written to its static field, as an assignment there is."""
-        loaded = _as_load(node.target)
+        name is written to its static field, as an assignment there is. An element's object
+        and index are read once too: `x[f()] += v` runs `f()` once (OI-513)."""
+        target = node.target
+        parts: list[ast.expr] = []
+        if isinstance(target, ast.Subscript):
+            index = target.slice
+            bounds = (
+                [index.lower, index.upper, index.step] if isinstance(index, ast.Slice) else [index]
+            )
+            parts = [target.value, *(b for b in bounds if b is not None)]
+        for part in parts:
+            self._read_once[id(part)] = self._value(part, scope)
+        loaded = _as_load(target)
         value = self._value(ast.BinOp(left=loaded, op=node.op, right=node.value), scope)
-        if scope.frame is None and isinstance(node.target, ast.Name):
-            self._write_field(f"{scope.owner}{node.target.id}.", value, scope)
+        if scope.frame is None and isinstance(target, ast.Name):
+            self._write_field(f"{scope.owner}{target.id}.", value, scope)
         else:
-            self._store(node.target, value, scope, evaluate=False)
+            self._store(target, value, scope, evaluate=False)
+        for part in parts:
+            self._read_once.pop(id(part), None)
 
     def _import(self, node: ast.Import | ast.ImportFrom, scope: Scope) -> None:
         """An import inside a function binds a local name. A module-level name that
@@ -943,6 +1006,8 @@ class BodyReader:
             return
         if scope.class_path is not None:
             return
+        if any(alias.name == "*" for alias in node.names):
+            self._starred_variables(node, scope)
         for name, binding in bound.items():
             final = scope.types.names.get(name)
             # An import of one project variable is that value, decided by the import's own
@@ -964,6 +1029,34 @@ class BodyReader:
                     modifiers={"static": True},
                 )
             self._write_field(descriptor, _reference(binding.targets[0]), scope)
+
+    def _starred_variables(self, node: ast.ImportFrom | ast.Import, scope: Scope) -> None:
+        """A module-level `from m import *` of a file of the module binds each variable it
+        takes to this module's name, as an import of one variable does (ruling R9): that
+        value, written once, for every name the module's read stars take and no statement of
+        its own binds (`ProjectHeaders.starred_names`; the last star that takes a name gives
+        it, `member`). Written at the first star no test is over, for every such star."""
+        headers = self._context.index.headers
+        if headers is None or scope.guards or self._stars_written:
+            return
+        self._stars_written = True
+        here = self._context.here
+        for name in headers.starred_names(here):
+            targets = headers.member(here, name) or ()
+            if not self._a_variable(targets):
+                continue
+            descriptor = f"{scope.owner}{name}."
+            if descriptor not in scope.fields:
+                scope.fields.add(descriptor)
+                self._symbol(
+                    descriptor,
+                    ConstructKind.FIELD,
+                    scope.owner,
+                    node.lineno,
+                    node.end_lineno or node.lineno,
+                    modifiers={"static": True},
+                )
+            self._write_field(descriptor, _reference(targets[0]), scope)
 
     def _a_variable(self, targets: tuple[Target, ...] | list[Target]) -> bool:
         """Whether one import target is a variable another file of this module defines."""
@@ -1129,7 +1222,12 @@ class BodyReader:
         frame = scope.frame
         flow = scope.flow
         before = dict(frame.values) if frame is not None else {}
-        jumps = LoopJumps()
+        jumps = LoopJumps(
+            written=frozenset(
+                _assigned(_own_nodes(body))
+                | ({n.id for n in ast.walk(target) if isinstance(n, ast.Name)} if target else set())
+            )
+        )
         if frame is not None:
             for name in _assigned(_own_nodes(body)) & set(frame.values):
                 frame.values[name] = _UNKNOWN
@@ -1273,9 +1371,7 @@ class BodyReader:
                 self._value(target.value, scope)
         elif isinstance(target, ast.Subscript):
             # `x[i] = v` is `x.__setitem__(i, v)`; after `x[i] += v`'s read, its object and
-            # index are read again here.
-            # shortcut: a call inside the target of `x[f()] += v` is written twice; split the
-            # read and the store if a real tree shows one.
+            # index are the ones that read took (`_augmented`).
             self._subscript(target, scope, _SETITEM, value)
 
     def _field_target(self, target: ast.Attribute, scope: Scope) -> str | None:
@@ -1300,8 +1396,18 @@ class BodyReader:
                 from_parameter=parameter if isinstance(parameter, int) else None,
                 value=None if isinstance(parameter, int) else value,
                 written_by=scope.body.caller,
+                guards=list(scope.guards) or None,
+                replaceable=self._replaceable(written),
             )
         )
+
+    def _replaceable(self, written: str) -> bool | None:
+        """`field_write.replaceable` of a write to the field `written`: true for a name of a
+        module that a star import of that module can replace (ruling R10 of 2026-11-25)."""
+        headers, owner = self._context.index.headers, owner_of(written)
+        if headers is None or owner is None:
+            return None
+        return headers.replaceable_field(owner, member_name(written)) or None
 
     def _in_order(self, written: str, value: CallArgument, scope: Scope) -> CallArgument:
         """A write to a module-level name, read in the order the body runs: the name is a
@@ -1311,8 +1417,8 @@ class BodyReader:
         a copy taken here does not hold what is added to the name later (`a = list(b)`, then
         `b += [...]`). A name written under a test or in a loop has no one value from there
         on, and its `*name` stays a read of the name (every write of it). Another list added
-        under a test is one unread member: its members are served only where the test holds,
-        and no fact of theirs says so (design 2026-11-23 §9b)."""
+        under a test stays a read of that name too: its members are served only where the test
+        holds, which the write's own `guards` say (ruling R1 of 2026-11-25, OI-508)."""
         if scope.frame is not None or scope.class_path is not None:
             return value
         if value.kind != "array" or value.symbol != _LITERAL_CLASSES[ast.List]:
@@ -1321,10 +1427,8 @@ class BodyReader:
         elements: list[CallArgument] = []
         for element in value.elements or []:
             other = element.keyword == _UNPACKED_POSITIONAL and element.kind == "field"
-            if other and scope.guards and element.symbol != written:
-                elements.append(_UNKNOWN.model_copy(update={"keyword": _UNPACKED_POSITIONAL}))
-                continue
-            held = self._lists.get(str(element.symbol)) if other else None
+            # A write under a test holds what it adds, never what a name held before it.
+            held = self._lists.get(str(element.symbol)) if other and not scope.guards else None
             if held is not None:
                 elements.extend(held)
             else:
@@ -1649,6 +1753,9 @@ class BodyReader:
         if found is None:
             return None
         defining, typed = found
+        if self._rereading:
+            # A test read again for its guard (`_fields`) wrote its calls the first time.
+            return _UNKNOWN
         callee = self._on_value(self._value(node.value, scope), node.attr, scope, declared=held)
         made = self._invoke(replace(callee, target=_target(defining, node.attr)), [], scope)
         if made.source is not None:
@@ -2078,6 +2185,8 @@ class BodyReader:
 
     def _value(self, node: ast.expr, scope: Scope) -> CallArgument:
         """One value as D00 §5's argument grammar, writing every call in it."""
+        if id(node) in self._read_once:
+            return self._read_once[id(node)]
         if isinstance(node, ast.Constant):
             return _constant(node.value)
         if (
@@ -2277,7 +2386,8 @@ class BodyReader:
     def _concat(self, parts: list[ast.expr], scope: Scope) -> CallArgument:
         """A string the code assembles: the template with `{}` for each value, and the
         `dynamic` site whose arguments are those values (D00 §5 `concat`). With no value
-        in it, it is the string itself, as javac folds a constant concatenation."""
+        in it, it is the string itself, as javac folds a constant concatenation. Where its
+        text holds `{}` beside a value, the template cannot tell it from a hole: unread."""
         template: list[str] = []
         operands: list[CallArgument] = []
         for part in parts:
@@ -2292,6 +2402,9 @@ class BodyReader:
         text = "".join(template)
         if not operands:
             return CallArgument(kind="string", value=text)
+        if text.count(_HOLE) != len(operands):
+            # The text holds a `{}` (`{{}}`), which the template cannot tell from a hole.
+            return _UNKNOWN
         site = Callee(_target(_STRING, _FORMAT), "dynamic")
         produced = self._invoke(site, operands, scope)
         return CallArgument(kind="concat", value=text, source=produced.source)
@@ -2303,7 +2416,8 @@ class BodyReader:
         field has a conversion, a format spec, an attribute or an index, where automatic and
         numbered fields are mixed, where an argument is unpacked, or where a field has no
         argument: Python raises for the last two of those, and the others make text this
-        reader does not model."""
+        reader does not model. So is a text that holds `{}` (`{{}}`) beside a field: the
+        template cannot tell it from a hole (OI-519)."""
         func = node.func
         if not (
             isinstance(func, ast.Attribute)
@@ -2343,6 +2457,9 @@ class BodyReader:
                 return None
             holes.append(filled)
             template.append(_HOLE)
+        if "".join(template).count(_HOLE) != len(holes):
+            # The text holds a `{}` (`{{}}`), which the template cannot tell from a hole.
+            return None
         # Python evaluates every argument, in the order written, before it formats.
         values = {id(a): self._value(a, scope) for a in [*node.args, *named.values()]}
         text = "".join(template)
@@ -3254,6 +3371,17 @@ def _added(node: ast.expr) -> list[ast.expr]:
     return [node]
 
 
+def _deleted(targets: list[ast.expr]) -> list[ast.expr]:
+    """The targets `del` deletes, a tuple's or a list's taken apart (`del (x[0], y)`)."""
+    return [
+        part
+        for target in targets
+        for part in (
+            _deleted(target.elts) if isinstance(target, ast.Tuple | ast.List) else [target]
+        )
+    ]
+
+
 def _as_load(node: ast.expr) -> ast.expr:
     """`node` read rather than written, for `x += v`."""
     if isinstance(node, ast.Name):
@@ -3263,6 +3391,47 @@ def _as_load(node: ast.expr) -> ast.expr:
     if isinstance(node, ast.Subscript):
         return ast.Subscript(value=node.value, slice=node.slice, ctx=ast.Load())
     return node
+
+
+def _held(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) -> set[str]:
+    """The names a function holds itself: its parameters and what its own scope writes, but a
+    name it declares `global` or `nonlocal`."""
+    body = [node.body] if isinstance(node, ast.Lambda) else node.body
+    written = node.args
+    own = _assigned(_own_nodes(body)) | {
+        a.arg
+        for a in (
+            *written.posonlyargs,
+            *written.args,
+            *written.kwonlyargs,
+            *(x for x in (written.vararg, written.kwarg) if x is not None),
+        )
+    }
+    declared = {
+        n
+        for each in _own_nodes(body)
+        if isinstance(each, ast.Global | ast.Nonlocal)
+        for n in each.names
+    }
+    return own - declared
+
+
+def _reads_within(nodes: Iterable[ast.AST]) -> Iterator[ast.Name]:
+    """Every name read in `nodes`, in the functions nested in them too, but a nested function's
+    or `lambda`'s reads of the names it holds itself (`_held`, OI-536)."""
+    stack = list(nodes)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            yield node
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+            inner = [node.body] if isinstance(node, ast.Lambda) else node.body
+            held = _held(node)
+            yield from (read for read in _reads_within(inner) if read.id not in held)
+            # Its decorators, defaults and annotations are read where it is made.
+            stack.extend(child for child in ast.iter_child_nodes(node) if child not in inner)
+            continue
+        stack.extend(ast.iter_child_nodes(node))
 
 
 def _own_nodes(body: Iterable[ast.AST]) -> Iterator[ast.AST]:

@@ -15,7 +15,89 @@ here would restate those documents rather than add anything.
 
 ## [Unreleased]
 
+### Added
+
+- **A Django settings module is an environment** (ruling R3 of 2026-11-25, design note approved
+  2026-11-25; OI-554). A new config-model source form, `{from_module_holding: root_setting}`:
+  each module that holds the root setting (`ROOT_URLCONF`) is a source of configuration and its
+  module name is the environment. `resolved_config` gets one row per name per settings module,
+  the value read by the value walk (`DEBUG` in `weblate.settings_docker`), through
+  `from .base import *`; a name with no one value states a reason. The Python scanner writes a
+  module-level star import of a module file as the field writes an import of one variable is
+  (no schema change). Flask and FastAPI modules stay `default`.
+- **A read of a Django setting is its configuration key** (ruling R3 of 2026-11-25). A new
+  value-model list, `key_reads: [{owner, by}]`: an attribute read on a stated object is the key
+  of that name. `value-models/django.yml` states `django.conf.settings`, so `settings.API_HOST`
+  is the expression `${API_HOST}`, as an environment read and a pydantic settings field are.
+- **A test on a Django setting is a property condition, and the routes of a root state the
+  root** (ruling R3 of 2026-11-25). `if settings.DEBUG:` around a route is kind `property` on
+  the key `DEBUG`, "not evaluated" in every environment, with each settings module's value as
+  evidence; it is never decided in this build. Every row reached through a root carries
+  "the configuration key `ROOT_URLCONF` is `<root>`" (`endpoint_existence.expression` gains an
+  optional `having_value`). No row is removed and none is copied per environment.
+
 ### Fixed
+
+- **A test on a Django setting is decided per environment** (ruling R3 of 2026-11-25, the last
+  step of the approved note; OI-570). `if settings.DEBUG: urlpatterns += [...]` with `DEBUG =
+  False` in `settings.py` and `DEBUG = True` in `settings_dev.py` was "not evaluated" in both
+  environments. Its `endpoint_existence` rows now say `false` in `app.settings` and `true` in
+  `app.settings_dev` (`resolved`), where the test is one name, its negation or its comparison
+  with `None`, and the settings module gives the key one written literal. An environment
+  read, a write a star import can replace, a settings module that runs `exec(code)`, and a
+  key with no one value stay "not evaluated". The row is never removed or copied, and the
+  document's "Of this module's environments" line states the verdicts.
+
+- **A value a star import can replace decides no test, at any depth** (ruling R10 of
+  2026-11-25; fact schema 25). `config.py`: `DOCS = False`, then `try: from .local_config
+  import *` with no such file in the repository. A test on `config.DOCS` itself was already
+  not decided; `create_app(config.DOCS)` with `if docs:` inside, and `docs = config.DOCS`
+  then `if docs:`, were decided false and the route under the test got no row. The scanner now
+  writes one mark on the write of such a name (`field_write.replaceable`), and the step that
+  decides a test reads it wherever the value travelled: the row exists, "not evaluated". No
+  other read of the value changes. A name star imports alone give is decided on the last star
+  that gives it. Fact sets of the older schema are re-extracted, which also gives a workspace
+  analysed before the settings-module build its star-import writes.
+
+- **An opted-in Python library's outbound call in a class the module extends is published**
+  (ruling R9 of 2026-11-25, OI-560). The bodies of a library class a module class extends are
+  in the header document, and with `extract_libraries` naming the library they are in its own
+  document too; the borrowed-rows rule deleted the row by the header document's symbol. A
+  symbol a document that is not the header document holds too is not borrowed. A call an
+  opted-in library makes into another library outside such a class is still not typed (OI-567).
+- **A row whose method or path was not read says why** (ruling R4 of 2026-11-25, OI-540,
+  OI-502). A new open-question kind, `not_read`, the eighteenth: one question per wire identity,
+  each candidate the column (`method` or `path`), the reason (a word of the value walk's list)
+  and the code that decides it. Filed for an inbound row serving any method that the code
+  doubts (`not_readable` at the call that reads `request.method`, `external` at a library
+  handler whose body was not read) and for a registration in a loop or a comprehension whose
+  path is not read (`non_enumerable`, at the registration). The rows themselves do not change.
+- **A value read through a helper the path entered on two calls is not read, for every reader**
+  (ruling R6 of 2026-11-25, OI-537, OI-558). The guard was the verb reader's alone; it is the
+  value walk's now (`resolve_positions_on_paths`), so a mount prefix or a schedule read within
+  such a path answers `not_readable` too, never the first call's value for both entries.
+- **A test on a value the code fixes is decided, and a decorator usable bare or with arguments
+  names the view** (rulings R2 and R5 of 2026-11-25, OI-532, OI-557; fact schema 24). A Python
+  test that is one name, `not x`, `x is None` or `x is not None` is decided where the value walk
+  gives the name exactly one written literal on the path, per caller: `create_app(True)` serves
+  the routes under `if database:` with no condition, `create_app(False)` registers nothing
+  there. Nothing a deployment sets is decided. The scanner writes the tests a `return` runs
+  under (`method_return.guards`) and the value a test reads (`guards[].value`, `when`), so
+  `def d(function=None, ...)` with `if function: return actual(function)` gives the view alone
+  for `@d` and for `@d(x=2)`. A value-model entry may state the two uses of one argument
+  (`result_calls: arg0, result_returns: arg0`): `@login_required(login_url=...)` and
+  `@staff_member_required(...)` now name the view. Fact sets of the older schema are
+  re-extracted.
+
+- **A Django route list or root written under a test gives its routes that condition** (ruling
+  R1 of 2026-11-25, OI-508, OI-509; fact schema 23). `if settings.DEVELOPMENT: urlpatterns +=
+  dev_urls.urlpatterns` published the added routes behind the `<prefix>` hole at `partial`, and
+  `if T: ROOT_URLCONF = "b"` published the routes of `b` with no condition. The Python scanner
+  now writes the tests a write to a name runs under (`field_write.guards`, the format of
+  `call_site.guards`), and the routes are at their real address, "not evaluated". Fact sets of
+  the older schema are re-extracted. The JVM extractor is not changed (OI-552).
+  A verb read through a list added under a test (`if T: VERBS += MORE`, `methods=VERBS`) gives
+  its row the condition too.
 
 - **A Python project that declares its dependencies under `[dependency-groups]` (PEP 735, what
   uv writes) is read.** Sextant took dependency names from `[project].dependencies`, Poetry,

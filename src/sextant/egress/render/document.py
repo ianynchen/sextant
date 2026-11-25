@@ -886,31 +886,57 @@ def _existence_entries(
     "or". Empty for a row registered under no test, which is almost every row."""
     if not rows:
         return []
-    routes: dict[int, dict[tuple[str, bool], None]] = {}
+    routes: dict[int, dict[str, None]] = {}
     for row in sorted(rows, key=lambda r: (int(str(r["route"])), int(str(r["position"])))):
         expression = json.loads(str(row["expression"]))
-        test = redactor.redact_text(str(expression["test"]))
-        routes.setdefault(int(str(row["route"])), {})[(test, bool(expression["holds"]))] = None
+        if expression.get("having_value") is not None:
+            # A condition on the value of a key (the routes of a root, ruling R3 of
+            # 2026-11-25): the property condition's own words.
+            said = _condition_words("property", redactor.redact_text(str(row["expression"])))
+        else:
+            test = redactor.redact_text(str(expression["test"]))
+            said = f"the code's test `{test}` is {'true' if expression['holds'] else 'false'}"
+        routes.setdefault(int(str(row["route"])), {})[said] = None
     # Alternatives in their numbered order, each one's tests outermost first (`position`).
-    spelled = [
-        " and ".join(
-            f"the code's test `{test}` is {'true' if holds else 'false'}" for test, holds in tests
-        )
-        for _, tests in sorted(routes.items())
-    ]
+    spelled = [" and ".join(tests) for _, tests in sorted(routes.items())]
     words = spelled[0] if len(spelled) == 1 else " or ".join(f"({one})" for one in spelled)
     per_environment: dict[str, set[str]] = {}
+    # Each environment's verdicts, per alternative: a test on a setting is decided in an
+    # environment whose settings module fixes the key (ruling R3 of 2026-11-25).
+    decided: dict[str, dict[int, set[str]]] = {}
     for row in rows:
         evidence = redact_condition_evidence(redactor, str(row["evidence"]))
         per_environment.setdefault(str(row["environment"]), set()).add(evidence)
+        decided.setdefault(str(row["environment"]), {}).setdefault(
+            int(str(row["route"])), set()
+        ).add(str(row["holds"]))
+    # The row exists where every test of one alternative holds, and nowhere where one test
+    # of each fails; else the environment is not evaluated.
+    holds = {
+        environment: "true"
+        if any(verdicts == {"true"} for verdicts in by_route.values())
+        else "false"
+        if all("false" in verdicts for verdicts in by_route.values())
+        else "unresolved"
+        for environment, by_route in decided.items()
+    }
     verdict = _presence_verdict(
         [
-            {"environment": environment, "holds": "unresolved", "evidence": "; ".join(sorted(why))}
+            {
+                "environment": environment,
+                "holds": holds[environment],
+                "evidence": "; ".join(sorted(why)),
+            }
             for environment, why in sorted(per_environment.items())
         ]
     )
+    open_somewhere = "unresolved" in holds.values()
     return [
-        DetailEntry(_text("Exists only when"), _runs(f"{words}, not evaluated"), None),
+        DetailEntry(
+            _text("Exists only when"),
+            _runs(f"{words}, not evaluated" if open_somewhere else words),
+            None,
+        ),
         DetailEntry(_text("Of this module's environments"), _runs(verdict), None),
     ]
 
@@ -1506,6 +1532,16 @@ def _candidate_line(question: str, candidate: dict[str, object]) -> str:
             f"{candidate['mount_ordinal']}) reads its prefix from argument "
             f"{candidate['argument']} of call {candidate['at_ordinal']} in {candidate['at']}, "
             f"which reads as {candidate['read']}, so the prefix is not known"
+        )
+    if question == "not_read":
+        # Ruled 2026-11-25 (R4): a row one of whose columns was not read whole, filed by
+        # `resolve/shapes/inbound_routes.py::file_not_read` and verified against that
+        # writer's own `candidates` line: the column, the walk's reason, and the code that
+        # decides it, which is what a reader opens.
+        call = "" if candidate["ordinal"] is None else f" (call {candidate['ordinal']})"
+        return (
+            f"registered by {candidate['caller']}; the {candidate['column']} is not read "
+            f"({candidate['reason']}) at {candidate['at']}{call}"
         )
     # `open_questions.py`'s QUESTIONS is a closed set enforced at WRITE time
     # (`record_open_questions` raises on anything outside it) — this arm list

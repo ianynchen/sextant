@@ -169,6 +169,20 @@ class ProjectNames(Protocol):
         """The digest of `module`'s header, for the reuse key."""
         ...
 
+    def replaceable_field(self, owner: str, name: str) -> bool:
+        """Whether `owner` is a file of the module (by its type symbol) and a star import can
+        give its name `name` another value than a write states."""
+        ...
+
+    def replaced_star(self, module: str, name: str, defined: tuple[Target, ...]) -> bool:
+        """Whether `module.name`, defined at `defined`, is a variable `module` takes by a star
+        import alone and another star import can replace."""
+        ...
+
+    def starred_names(self, module: str) -> tuple[str, ...]:
+        """The names `module` binds by a star import alone, sorted."""
+        ...
+
     def shape_of(self, symbol: str) -> "ClassShape | None":
         """A class another file of the module defines, by its header."""
         ...
@@ -460,6 +474,10 @@ def member_of(
         # library's is (round 1, item 3), read off that file's header.
         defined = index.headers.member(target.module, name)
         if defined is not None:
+            if index.headers.replaced_star(target.module, name, defined):
+                # The read stays this module's own name, whose write carries the mark
+                # (`field_write.replaceable`): where the name is defined is not what it holds.
+                return (Target(target.module, name),)
             return defined
     if target.member is not None and not index.owns(target.module):
         submodule = f"{target.module}/{target.member.replace('.', '/')}"

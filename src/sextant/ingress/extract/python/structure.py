@@ -246,6 +246,8 @@ class _Writer(BodyReader):
         self._bodies = {}
         self._closures = {}
         self._lists = {}
+        self._read_once = {}
+        self._stars_written = False
         self._rebound = rebound
         self._module_types = module_types
         self._module_writes = {}
@@ -255,6 +257,7 @@ class _Writer(BodyReader):
         # The statements of a class body's arm that never runs (`if TYPE_CHECKING:`), by id,
         # and the fields only such a statement declared, to the index of their fact.
         self._never_runs: set[int] = set()
+        self._tests = {}
         self._dead_fields: dict[str, int] = {}
         self._own_returns = {}
         self._own_fields = {}
@@ -437,6 +440,11 @@ class _Writer(BodyReader):
                 self._store(target, value, scope)
                 continue
             named = target if isinstance(target, ast.Name) else None
+            if value is not None:
+                # An element or an attribute inside an unpacking takes a part of the value
+                # this scanner does not split, stored as a target of its own is (OI-515).
+                for part in _parts_stored(target):
+                    self._store(part, CallArgument(kind="unresolved"), scope)
             for name in _names(target):
                 descriptor = f"{scope.owner}{name}."
                 dead = id(node) in self._never_runs
@@ -492,6 +500,8 @@ class _Writer(BodyReader):
                             scope,
                         ),
                         written_by=scope.body.caller,
+                        guards=list(scope.guards) or None,
+                        replaceable=self._replaceable(descriptor),
                     )
                 )
 
@@ -585,6 +595,8 @@ class _Writer(BodyReader):
                 field=descriptor,
                 value=applied,
                 written_by=scope.body.caller,
+                guards=list(scope.guards) or None,
+                replaceable=self._replaceable(descriptor),
             )
         )
 
@@ -787,17 +799,14 @@ def header_body_tree(
     those classes use, followed through the names those assignments use in turn. Also those
     module-level names. A version test's arm the read does not run is left out, as
     `file_facts` leaves it. The top-level classes named in `whole` (a module class's lookup
-    order holds them) keep their functions' bodies, and the names those bodies use count as
-    used. Nothing of `tree` itself is changed."""
+    order holds them), and the classes nested in them it names (`Outer.Inner`), keep their
+    functions' bodies, and the names those bodies use count as used. Nothing of `tree` itself
+    is changed."""
     tops = {path.partition(".")[0] for path in paths}
     used: set[str] = set()
     for node in _scope_statements(tree.body, index, here):
         if isinstance(node, ast.ClassDef) and node.name in tops:
-            used |= (
-                {name.id for name in ast.walk(node) if isinstance(name, ast.Name)}
-                if node.name in whole
-                else _names_used(node)
-            )
+            used |= _class_names_used(node, node.name, whole)
     assignments = [
         node
         for node in _scope_statements(tree.body, index, here)
@@ -813,6 +822,43 @@ def header_body_tree(
         used = grown
     body = _kept_statements(tree.body, used, index, here, tops, whole)
     return ast.Module(body=body or [ast.Pass()], type_ignores=[]), frozenset(used)
+
+
+def _class_names_used(node: ast.ClassDef, path: str, whole: frozenset[str]) -> set[str]:
+    """Every name the class `node` at `path` reads: its functions' bodies too where `whole`
+    names it, and so for a class nested in it that `whole` names (OI-545)."""
+    if path in whole:
+        return {name.id for name in ast.walk(node) if isinstance(name, ast.Name)}
+    if not any(one.startswith(path + ".") for one in whole):
+        return _names_used(node)
+    found: set[str] = set()
+    for part in (*node.bases, *node.keywords, *node.decorator_list):
+        found |= _names_used(part)
+    for item in node.body:
+        found |= (
+            _class_names_used(item, f"{path}.{item.name}", whole)
+            if isinstance(item, ast.ClassDef)
+            else _names_used(item)
+        )
+    return found
+
+
+def _class_kept(node: ast.ClassDef, path: str, whole: frozenset[str]) -> ast.ClassDef:
+    """The class `node` at `path` as a header reads it: whole where `whole` names it, its
+    functions' bodies left out otherwise, except a class nested in it that `whole` names, kept
+    by this same rule (OI-545)."""
+    if path in whole:
+        return node
+    if not any(one.startswith(path + ".") for one in whole):
+        return _without_function_bodies(node)
+    copied = copy.copy(node)
+    copied.body = [
+        _class_kept(item, f"{path}.{item.name}", whole)
+        if isinstance(item, ast.ClassDef)
+        else _without_function_bodies(item)
+        for item in node.body
+    ]
+    return copied
 
 
 def _names_used(node: ast.AST) -> set[str]:
@@ -854,7 +900,7 @@ def _kept_statements(
         if isinstance(node, ast.Import | ast.ImportFrom):
             kept.append(node)
         elif isinstance(node, ast.ClassDef) and node.name in tops:
-            kept.append(node if node.name in whole else _without_function_bodies(node))
+            kept.append(_class_kept(node, node.name, whole))
         elif isinstance(node, ast.ClassDef):
             # Another class binds its name and nothing a header class's body reads.
             kept.append(
@@ -1210,6 +1256,17 @@ def _is_setter(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
         and decorator.value.id == node.name
         for decorator in node.decorator_list
     )
+
+
+def _parts_stored(target: ast.expr) -> list[ast.expr]:
+    """The elements and attributes inside an unpacking target, in order."""
+    if isinstance(target, ast.Tuple | ast.List):
+        return [part for element in target.elts for part in _parts_stored(element)]
+    if isinstance(target, ast.Starred):
+        return _parts_stored(target.value)
+    if isinstance(target, ast.Subscript | ast.Attribute):
+        return [target]
+    return []
 
 
 def _names(target: ast.expr) -> list[str]:

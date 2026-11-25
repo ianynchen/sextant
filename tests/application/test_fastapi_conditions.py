@@ -16,6 +16,7 @@ catalogs (`test_fastapi_routes._resolved`)."""
 import json
 from pathlib import Path
 
+import pytest
 import test_fastapi_routes
 from test_fastapi_routes import _resolved, _rows
 
@@ -404,3 +405,436 @@ def test_a_helper_with_no_arguments_called_both_ways_is_served(tmp_path: Path, l
 
     assert [(row[0], row[1]) for row in _rows(workspace)] == [("GET", "/same")]
     assert _existence(workspace) == {}
+
+
+def test_a_verb_added_to_a_held_list_under_a_test_carries_the_test(tmp_path: Path, libraries):
+    """A value a reader takes through a write under a test is served only where the test holds
+    (`field_write.guards`): the verb the write adds is a row with that condition, never a
+    `resolved` row with none, and the verb written under no test has none."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": "import os\n"
+            + _APP
+            + "MORE = ['post']\nVERBS = ['get']\n"
+            + "if os.environ.get('W'):\n    VERBS += MORE\n"
+            + "@app.api_route('/c', methods=VERBS)\ndef c() -> str:\n    return ''\n"
+        },
+    )
+
+    assert [(row[0], row[1], row[3]) for row in _rows(workspace)] == [
+        ("GET", "/c", "resolved"),
+        ("POST", "/c", "resolved"),
+    ]
+    assert _existence(workspace) == {
+        ("POST", "/c"): [_open(0, "os.environ.get('W')")],
+    }
+
+
+_BY_FLAG = (
+    "def create_app(database):\n"
+    "    made = FastAPI()\n"
+    "    @made.get('/health')\n    def health() -> str:\n        return ''\n"
+    "    if database:\n"
+    "        @made.get('/db')\n        def db() -> str:\n            return ''\n"
+    "    return made\n"
+)
+
+
+def test_a_test_on_a_value_each_caller_fixes_is_decided_per_caller(tmp_path: Path, libraries):
+    """Ruling R2 of 2026-11-25 (polar's `create_app(database: bool)`): a test that is one name
+    is decided where the value walk gives that name exactly one written value on the path.
+    One caller passes `True`: the route under the test is served, with no condition from it.
+    The caller that passes `False` registers nothing there."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {"main.py": _APP + _BY_FLAG + "a = create_app(True)\nb = create_app(False)\n"},
+    )
+
+    assert [(row[0], row[1], row[3]) for row in _rows(workspace)] == [
+        ("GET", "/db", "resolved"),
+        ("GET", "/health", "resolved"),
+    ]
+    assert _existence(workspace) == {}
+
+
+def test_a_registration_under_a_test_decided_false_on_every_path_gives_no_row(
+    tmp_path: Path, libraries
+):
+    """Under a test decided false on every path the registration gives nothing, as under
+    `if False:`; `not x`, `x is None` and `x is not None` are decided the same way, and a
+    module name with one written value is decided as a parameter is."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + _BY_FLAG
+            + "a = create_app(False)\n"
+            + "OFF = False\nON = 'x'\n"
+            + "if OFF:\n    @app.get('/off')\n    def off() -> str:\n        return ''\n"
+            + "if not OFF:\n    @app.get('/not-off')\n    def n() -> str:\n        return ''\n"
+            + "if OFF is None:\n    @app.get('/none')\n    def o() -> str:\n        return ''\n"
+            + "if ON is not None:\n    @app.get('/on')\n    def p() -> str:\n        return ''\n"
+            + "if ON is None:\n    @app.get('/gone')\n    def q() -> str:\n        return ''\n"
+        },
+    )
+
+    assert [(row[0], row[1], row[3]) for row in _rows(workspace)] == [
+        ("GET", "/health", "resolved"),
+        ("GET", "/not-off", "resolved"),
+        ("GET", "/on", "resolved"),
+    ]
+    assert _existence(workspace) == {}
+
+
+def test_a_test_on_a_value_not_fixed_stays_not_evaluated(tmp_path: Path, libraries):
+    """Not decided, exactly as before (ruling R2): a name the environment gives, a name with
+    two written values, a loop variable (redash's `for blueprint in [...]: if blueprint:`),
+    and every wider form (`==`, `in`, `and`) though each name in it has one value."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": "import os\n"
+            + _APP
+            + "ENV = os.environ.get('E')\n"
+            + "TWO = None\nTWO = 'x'\n"
+            + "ONE = 'x'\n"
+            + "if ENV:\n    @app.get('/env')\n    def e() -> str:\n        return ''\n"
+            + "if TWO:\n    @app.get('/two')\n    def t() -> str:\n        return ''\n"
+            + "if ONE == 'y':\n    @app.get('/eq')\n    def q() -> str:\n        return ''\n"
+            + "if ONE in ['y']:\n    @app.get('/in')\n    def i() -> str:\n        return ''\n"
+            + "if ONE and ENV:\n    @app.get('/and')\n    def a() -> str:\n        return ''\n"
+            + "for each in [None, app]:\n"
+            + "    if each:\n"
+            + "        @app.get('/loop')\n        def l() -> str:\n            return ''\n"
+        },
+    )
+
+    assert _existence(workspace) == {
+        ("GET", "/and"): [_open(0, "ONE and ENV")],
+        ("GET", "/env"): [_open(0, "ENV")],
+        ("GET", "/eq"): [_open(0, "ONE == 'y'")],
+        ("GET", "/in"): [_open(0, "ONE in ['y']")],
+        ("GET", "/loop"): [_open(0, "each")],
+        ("GET", "/two"): [_open(0, "TWO")],
+    }
+
+
+_BY_CONFIG = (
+    "from app import config\n"
+    + _APP
+    + "if config.DOCS:\n    @app.get('/x')\n    def x() -> str:\n        return ''\n"
+    + "if not config.DOCS:\n    @app.get('/nx')\n    def nx() -> str:\n        return ''\n"
+)
+
+
+def test_a_star_import_that_binds_the_tested_name_decides_nothing(tmp_path: Path, libraries):
+    """A test is decided only on the value the name holds when the test runs. `DOCS = False`,
+    then `from .local_config import *` with `DOCS = True` there, leaves `DOCS` true: the star
+    replaces the module's own write. Which of the two is written last is not read (OI-565),
+    so the name has no one value here and nothing is decided: both routes exist "not
+    evaluated". Never the row under `if config.DOCS:` removed."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "local_config.py": "DOCS = True\n",
+            "config.py": "DOCS = False\nfrom .local_config import *\n",
+            "main.py": _BY_CONFIG,
+        },
+    )
+
+    assert _existence(workspace) == {
+        ("GET", "/nx"): [_open(0, "not config.DOCS")],
+        ("GET", "/x"): [_open(0, "config.DOCS")],
+    }
+
+
+@pytest.mark.xfail(strict=True, reason="OI-565: a star import after the write is not the value")
+def test_a_name_a_later_star_import_rebinds_is_read_as_the_star_gives_it(tmp_path: Path, libraries):
+    """The walk fault behind the rule above, in a plain read: `VERB = 'get'`, then `from
+    .local_config import *` with `VERB = 'post'` there. Python serves POST."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "local_config.py": "VERB = 'post'\n",
+            "config.py": "VERB = 'get'\nfrom .local_config import *\n",
+            "main.py": "from app import config\n"
+            + _APP
+            + "@app.api_route('/v', methods=[config.VERB])\ndef v() -> str:\n    return ''\n",
+        },
+    )
+
+    assert [(row[0], row[1]) for row in _rows(workspace)] == [("POST", "/v")]
+
+
+def test_a_star_import_of_a_module_not_read_decides_nothing(tmp_path: Path, libraries):
+    """`try: from .local_config import *` with no `local_config` in the repository: the star
+    import may replace the name, and what it binds is not read. Nothing is decided: both
+    routes exist "not evaluated", each under its test."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "config.py": "DOCS = False\n"
+            "try:\n    from .local_config import *\nexcept ImportError:\n    pass\n",
+            "main.py": _BY_CONFIG,
+        },
+    )
+
+    assert _existence(workspace) == {
+        ("GET", "/nx"): [_open(0, "not config.DOCS")],
+        ("GET", "/x"): [_open(0, "config.DOCS")],
+    }
+
+
+def test_a_star_import_that_does_not_bind_the_tested_name_leaves_it_decided(
+    tmp_path: Path, libraries
+):
+    """A star import of a module that is read and binds no `DOCS` replaces nothing: the test
+    is decided on the one written value."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "local_config.py": "OTHER = True\n",
+            "config.py": "DOCS = False\nfrom .local_config import *\n",
+            "main.py": _BY_CONFIG,
+        },
+    )
+
+    assert [(row[0], row[1], row[3]) for row in _rows(workspace)] == [("GET", "/nx", "resolved")]
+    assert _existence(workspace) == {}
+
+
+def test_a_value_read_through_a_return_under_a_test_carries_the_test(tmp_path: Path, libraries):
+    """A value a reader takes through a `return` under a test that is not decided is served
+    only where the test holds (`method_return.guards`), as one read through a write under a
+    test is: never a `resolved` row with no condition."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": "import os\n"
+            + _APP
+            + "def verbs(w):\n    if w:\n        return ['get', 'post']\n    return ['get']\n"
+            + "@app.api_route('/e', methods=verbs(os.getenv('W')))\ndef e() -> str:\n"
+            + "    return ''\n"
+        },
+    )
+
+    assert [(row[0], row[1], row[3]) for row in _rows(workspace)] == [
+        ("GET", "/e", "resolved"),
+        ("POST", "/e", "resolved"),
+    ]
+    existence = _existence(workspace)
+    assert existence[("POST", "/e")] == [_open(0, "w")]
+    # `GET` is in both arms: it is served either way, and carries both arms' tests where it
+    # should carry none (OI-564, the same for a write in both arms).
+    assert existence[("GET", "/e")] == [_open(0, "w", holds=False), _open(1, "w")]
+
+
+_MAY_BE_REPLACED = (
+    "DOCS = False\ntry:\n    from .local_config import *\nexcept ImportError:\n    pass\n"
+)
+_X = "def x() -> str:\n    return ''\n"
+_THROUGH = {
+    "a parameter": (
+        (
+            "def create_app(docs):\n"
+            "    made = FastAPI()\n"
+            "    if docs:\n"
+            "        made.add_api_route('/x', x)\n"
+            "    return made\n"
+            "made = create_app(config.DOCS)\n"
+        ),
+        "docs",
+    ),
+    "a local name": (
+        (
+            "def reg():\n"
+            "    docs = config.DOCS\n"
+            "    if docs:\n"
+            "        app.add_api_route('/x', x)\n"
+            "reg()\n"
+        ),
+        "docs",
+    ),
+    "a second module name": (
+        "SHOW = config.DOCS\nif SHOW:\n    app.add_api_route('/x', x)\n",
+        "SHOW",
+    ),
+    "a return": (
+        (
+            "def docs():\n    return config.DOCS\n"
+            "def reg():\n"
+            "    shown = docs()\n"
+            "    if shown:\n"
+            "        app.add_api_route('/x', x)\n"
+            "reg()\n"
+        ),
+        "shown",
+    ),
+    "a parameter of a parameter": (
+        (
+            "def inner(shown):\n"
+            "    if shown:\n"
+            "        app.add_api_route('/x', x)\n"
+            "def outer(docs):\n    inner(docs)\n"
+            "outer(config.DOCS)\n"
+        ),
+        "shown",
+    ),
+}
+
+
+@pytest.mark.parametrize("through", sorted(_THROUGH))
+def test_a_value_a_star_import_can_replace_decides_nothing_at_any_depth(
+    tmp_path: Path, libraries, through: str
+):
+    """Ruling R10 of 2026-11-25: `DOCS = False`, then `try: from .local_config import *` with
+    no `local_config` in the repository. The deployment's file may give `DOCS` another value,
+    so a test whose value comes from that write is not decided, however far the value
+    travelled to the test: the row exists, "not evaluated". Never the row removed."""
+    body, test = _THROUGH[through]
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {"config.py": _MAY_BE_REPLACED, "main.py": "from app import config\n" + _APP + _X + body},
+    )
+
+    assert [(row[0], row[1]) for row in _rows(workspace)] == [("GET", "/x")]
+    assert _existence(workspace) == {("GET", "/x"): [_open(0, test)]}
+
+
+@pytest.mark.parametrize("through", sorted(_THROUGH))
+def test_a_value_no_star_import_can_replace_is_decided_at_any_depth(
+    tmp_path: Path, libraries, through: str
+):
+    """The controls of R10: with no star import the same test is decided on the one written
+    value. `True`: the row, no condition. `False`: no row. A star import of a module that is
+    read and does not bind the name replaces nothing."""
+    if through == "a return":
+        pytest.skip("a value a local name takes from a call is no test value (never decided)")
+    body, _ = _THROUGH[through]
+    main = "from app import config\n" + _APP + _X + body
+
+    served = _resolved(tmp_path / "on", libraries, {"config.py": "DOCS = True\n", "main.py": main})
+    assert [(row[0], row[1], row[3]) for row in _rows(served)] == [("GET", "/x", "resolved")]
+    assert _existence(served) == {}
+
+    off = _resolved(tmp_path / "off", libraries, {"config.py": "DOCS = False\n", "main.py": main})
+    assert _rows(off) == []
+
+    unbound = _resolved(
+        tmp_path / "unbound",
+        libraries,
+        {
+            "local_config.py": "OTHER = True\n",
+            "config.py": "DOCS = False\nfrom .local_config import *\n",
+            "main.py": main,
+        },
+    )
+    assert _rows(unbound) == []
+
+
+def test_a_name_star_imports_alone_give_is_decided_on_the_last_that_gives_it(
+    tmp_path: Path, libraries
+):
+    """A name a module takes by star imports alone has the value of the last star that gives
+    it (Python's rule): decided. Where that source's own value can be replaced, or a star of
+    the module is not read, the name has no one value this reading can state: not decided."""
+    served = [("GET", "/x", "resolved")]
+    one = _resolved(
+        tmp_path / "one",
+        libraries,
+        {"base.py": "DOCS = True\n", "config.py": "from .base import *\n", "main.py": _BY_CONFIG},
+    )
+    assert [(row[0], row[1], row[3]) for row in _rows(one)] == served
+    assert _existence(one) == {}
+
+    two = _resolved(
+        tmp_path / "two",
+        libraries,
+        {
+            "base.py": "DOCS = False\n",
+            "more.py": "DOCS = True\n",
+            "config.py": "from .base import *\nfrom .more import *\n",
+            "main.py": _BY_CONFIG,
+        },
+    )
+    assert [(row[0], row[1], row[3]) for row in _rows(two)] == served
+    assert _existence(two) == {}
+
+    both = {
+        ("GET", "/nx"): [_open(0, "not config.DOCS")],
+        ("GET", "/x"): [_open(0, "config.DOCS")],
+    }
+    absent = "try:\n    from .local import *\nexcept ImportError:\n    pass\n"
+    replaced = _resolved(
+        tmp_path / "replaced",
+        libraries,
+        {
+            "base.py": "DOCS = True\n" + absent,
+            "config.py": "from .base import *\n",
+            "main.py": _BY_CONFIG,
+        },
+    )
+    assert _existence(replaced) == both
+
+    unread = _resolved(
+        tmp_path / "unread",
+        libraries,
+        {
+            "base.py": "DOCS = True\n",
+            "config.py": "from .base import *\n" + absent,
+            "main.py": _BY_CONFIG,
+        },
+    )
+    assert _existence(unread) == both
+
+    library = _resolved(
+        tmp_path / "library",
+        libraries,
+        {
+            "base.py": "DOCS = True\n",
+            "config.py": "from .base import *\nfrom fastapi import *\n",
+            "main.py": _BY_CONFIG,
+        },
+    )
+    assert _existence(library) == both
+
+
+def test_a_plain_read_of_a_value_a_star_import_can_replace_is_not_changed(
+    tmp_path: Path, libraries
+):
+    """Only the step that decides a test reads the mark (R10): a verb read from a name a star
+    import can replace is the written value, as before (the fault of that read is OI-565)."""
+    absent = "try:\n    from .local import *\nexcept ImportError:\n    pass\n"
+    main = (
+        "from app import config\n"
+        + _APP
+        + "@app.api_route('/v', methods=[config.VERB])\ndef v() -> str:\n    return ''\n"
+    )
+    own = _resolved(
+        tmp_path / "own", libraries, {"config.py": "VERB = 'put'\n" + absent, "main.py": main}
+    )
+    assert [(row[0], row[1], row[3]) for row in _rows(own)] == [("PUT", "/v", "resolved")]
+    assert _existence(own) == {}
+
+    taken = _resolved(
+        tmp_path / "taken",
+        libraries,
+        {
+            "base.py": "VERB = 'put'\n",
+            "config.py": "from .base import *\n" + absent,
+            "main.py": main,
+        },
+    )
+    assert [(row[0], row[1], row[3]) for row in _rows(taken)] == [("PUT", "/v", "resolved")]
+    assert _existence(taken) == {}

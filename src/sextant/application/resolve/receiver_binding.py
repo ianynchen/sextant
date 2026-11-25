@@ -60,7 +60,6 @@ from sextant.application.resolve.values import (
     READ_REACHED,
     RECEIVER,
     Kept,
-    Producer,
     ValueIndex,
     bind_by_name,
     bound_owner,
@@ -493,7 +492,6 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
             return _Walked(_members(name, union), frozenset())
     found: list[_Found] = []
     depends_on: set[Any] = set()
-    dropped: list[Producer] = []
     handed_on = context.handed_on
     functions: list[str] = []
     for producer, path in producer_paths(
@@ -502,7 +500,6 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
         RECEIVER,
         frozenset(),
         which_object=True,
-        dropped=dropped,
         functions=True,
         declared_types=True,
         shared=_RECEIVER_READER,
@@ -602,24 +599,7 @@ def _paths(index: ValueIndex, site: Mapping[str, Any], context: _Context) -> _Wa
         for method in through:
             if _function(method) in handed_on:
                 found.append(_escapes(name, method))
-    if dropped:
-        # `producer_paths` holds no path that enters one function through two of its calls
-        # (`Path.two_calls_of_one_helper`'s bound), so the paths it returns may not be all of
-        # them: the site is never a complete list while one is missing.
-        found.append(
-            (
-                "",
-                None,
-                NOT_READABLE,
-                (
-                    f"receiver of {name} not followed on every path: a path to it enters one "
-                    "function through two of its calls"
-                ),
-            )
-        )
-    return _Walked(
-        tuple(dict.fromkeys(found)), None if dropped else frozenset(depends_on), tuple(functions)
-    )
+    return _Walked(tuple(dict.fromkeys(found)), frozenset(depends_on), tuple(functions))
 
 
 def _members(name: str, union: _Union) -> tuple[_Found, ...]:

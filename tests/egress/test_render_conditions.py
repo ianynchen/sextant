@@ -1279,6 +1279,68 @@ def test_a_row_registered_two_ways_under_two_tests_states_both():
     ) in block
 
 
+def test_a_condition_on_a_keys_value_reads_as_a_property_condition():
+    """A condition that states the value a configuration key has (`having_value`; the
+    routes of a Django root, ruling R3 of 2026-11-25) is said in the property condition's
+    words, before the code's test it is joined with."""
+    held = {
+        **_existence(0, "ROOT_URLCONF == 'shop.urls'", True, 0),
+        "kind": "property",
+        "expression": json.dumps(
+            {
+                "holds": True,
+                "reads": ["ROOT_URLCONF"],
+                "test": "ROOT_URLCONF == 'shop.urls'",
+                "keys": ["ROOT_URLCONF"],
+                "having_value": "shop.urls",
+            },
+            sort_keys=True,
+        ),
+    }
+    document = _document(
+        endpoints=[{**_inbound(USERS + "status()."), "row_id": 7}],
+        endpoint_existence=[held, _existence(0, "settings.DEBUG", True, 1)],
+    )
+    assert (
+        "  - Exists only when: the configuration key `ROOT_URLCONF` is `shop.urls` and the "
+        "code's test `settings.DEBUG` is true, not evaluated"
+    ) in _block(document, "Users#status")
+
+
+def test_a_test_decided_in_an_environment_states_where_the_row_exists():
+    """A test on a setting is decided in an environment whose settings module fixes the key
+    (ruling R3 of 2026-11-25): the row's line says where it exists, where it does not and
+    where it is not evaluated, as a conditional bean's does."""
+
+    def row(environment: str, holds: str) -> dict[str, object]:
+        return {
+            **_existence(0, "settings.DEBUG", True),
+            "kind": "property",
+            "environment": environment,
+            "holds": holds,
+            "resolution": "unresolved" if holds == "unresolved" else "resolved",
+            "evidence": f"`DEBUG` is set by the deployment; this module's `{environment}` "
+            "configuration sets `x`",
+        }
+
+    document = _document(
+        endpoints=[{**_inbound(USERS + "status()."), "row_id": 7}],
+        endpoint_existence=[row("a", "true"), row("b", "false"), row("c", "unresolved")],
+    )
+    block = _block(document, "Users#status")
+    assert "  - Exists only when: the code's test `settings.DEBUG` is true, not evaluated" in block
+    assert "  - Of this module's environments: holds in 1 of 3 environments — not in `b`; " in block
+    assert "not evaluated in `c`" in block
+
+    decided = _document(
+        endpoints=[{**_inbound(USERS + "status()."), "row_id": 7}],
+        endpoint_existence=[row("a", "true"), row("b", "false")],
+    )
+    block = _block(decided, "Users#status")
+    assert "  - Exists only when: the code's test `settings.DEBUG` is true\n" in block + "\n"
+    assert "  - Of this module's environments: holds in 1 of 2 environments — not in `b`" in block
+
+
 def test_a_row_with_no_existence_rows_has_no_condition_lines():
     document = _document(
         endpoints=[{**_inbound(USERS + "status()."), "row_id": 7}],
