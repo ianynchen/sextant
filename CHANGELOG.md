@@ -24,6 +24,8 @@ here would restate those documents rather than add anything.
   now writes the tests a write to a name runs under (`field_write.guards`, the format of
   `call_site.guards`), and the routes are at their real address, "not evaluated". Fact sets of
   the older schema are re-extracted. The JVM extractor is not changed (OI-552).
+  A verb read through a list added under a test (`if T: VERBS += MORE`, `methods=VERBS`) gives
+  its row the condition too.
 
 - **A Python project that declares its dependencies under `[dependency-groups]` (PEP 735, what
   uv writes) is read.** Sextant took dependency names from `[project].dependencies`, Poetry,

@@ -404,3 +404,28 @@ def test_a_helper_with_no_arguments_called_both_ways_is_served(tmp_path: Path, l
 
     assert [(row[0], row[1]) for row in _rows(workspace)] == [("GET", "/same")]
     assert _existence(workspace) == {}
+
+
+def test_a_verb_added_to_a_held_list_under_a_test_carries_the_test(tmp_path: Path, libraries):
+    """A value a reader takes through a write under a test is served only where the test holds
+    (`field_write.guards`): the verb the write adds is a row with that condition, never a
+    `resolved` row with none, and the verb written under no test has none."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": "import os\n"
+            + _APP
+            + "MORE = ['post']\nVERBS = ['get']\n"
+            + "if os.environ.get('W'):\n    VERBS += MORE\n"
+            + "@app.api_route('/c', methods=VERBS)\ndef c() -> str:\n    return ''\n"
+        },
+    )
+
+    assert [(row[0], row[1], row[3]) for row in _rows(workspace)] == [
+        ("GET", "/c", "resolved"),
+        ("POST", "/c", "resolved"),
+    ]
+    assert _existence(workspace) == {
+        ("POST", "/c"): [_open(0, "os.environ.get('W')")],
+    }

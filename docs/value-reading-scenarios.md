@@ -119,7 +119,7 @@ Two marks on an answer: `inexact` (a URL publishes at `partial`; a channel is re
 | Two literals on two branches | both, each `narrowed` | `TV:3361` |
 | A literal and a non-literal | ONE `non_enumerable` | `TV:3444` |
 | `x` or `f(x)` | the root `x`, `inexact` | `TV:3346` |
-| A registration under a test a deployment decides | row exists, condition "not evaluated"; each call of a helper takes its own test. A write to a name under a test carries the same record as a call (`field_write.guards`, ruled 2026-11-25): a value read through that write is read on a path that names it (`Path.written_under`) | `tests/application/test_fastapi_conditions.py:59`, `:260`; `tests/ingress/extract/python/test_guards.py::test_a_field_write_carries_the_tests_it_runs_under` (Python only; the JVM writes no test record, OI-552) |
+| A registration under a test a deployment decides | row exists, condition "not evaluated"; each call of a helper takes its own test. A write to a name under a test carries the same record as a call (`field_write.guards`, ruled 2026-11-25): a value read through that write is read on a path that names it (`Path.written_under`). A verb read through such a write (`if T: VERBS += MORE`, `methods=VERBS`) gives its row that condition, never a `resolved` row with none | `tests/application/test_fastapi_conditions.py:59`, `:260`, `::test_a_verb_added_to_a_held_list_under_a_test_carries_the_test`; `tests/ingress/extract/python/test_guards.py::test_a_field_write_carries_the_tests_it_runs_under` (Python only; the JVM writes no test record, OI-552) |
 
 ### Lists and arrays
 

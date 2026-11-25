@@ -33,6 +33,7 @@ from sextant.application.resolve.registration_conditions import (
     Conditions,
     Conjunction,
     Existence,
+    Site,
     conditions_of,
     environments_of,
     existence_rows,
@@ -1399,8 +1400,11 @@ def _derive_captured(
     # root's default.
     declared_verb = captures.get("http_method")
     # A verb list the call does not write as literals (N8): read through the value walk.
+    # The writes under a test each walked verb was read through (`Path.written_under`), one
+    # entry per path that read it: the verb's rows are served where those tests hold.
+    verb_writes: dict[Any, tuple[tuple[tuple[str, str], ...], ...]] = {}
     if _unread_verbs(declared_verb):
-        declared_verb = _walked_verbs(declared_verb, context)
+        declared_verb, verb_writes = _walked_verbs(declared_verb, context)
     # Several verbs accumulated on one chain (`repeats`) are one row each (Vert.x spec §3f:
     # `method(GET).method(DELETE)` serves both), in call order, a repeated verb once. One
     # nobody could read is a row of its own, `unresolved` with `method` NULL, so the list
@@ -1630,15 +1634,16 @@ def _derive_captured(
         prefixes = context.routers.of_route(end.root, end.path)
     # OI-368: where the calls making the row run, per prefix (the includes and mounts it is
     # served through), read once per prefix.
-    existing: dict[int, Existence | None] = {}
+    existing: dict[tuple[int, Any], Existence | None] = {}
     for verb, (peer, path, url_resolution), prefix in product(verbs, destinations, prefixes):
         path_kind = expression_kinds.get((peer, path, url_resolution), declared_path_kind)
         # An address nobody read takes no prefix: one row for it, not one per prefix.
         if path is None and prefix is not prefixes[0]:
             continue
-        if id(prefix) not in existing:
-            existing[id(prefix)] = _existence(end, prefix, direction, context)
-        alternatives = existing[id(prefix)]
+        under = verb_writes.get(verb, ((),))
+        if (id(prefix), under) not in existing:
+            existing[(id(prefix), under)] = _existence(end, prefix, direction, context, under)
+        alternatives = existing[(id(prefix), under)]
         # 2O design §8, folded in from single_call: identity is the URL the
         # framework serves, canonicalized before the dedup key below is built
         # from it (`domain/paths.py`). Inert for every fluent catalog shipped
@@ -2079,7 +2084,11 @@ def _derive_captured(
 
 
 def _existence(
-    end: ChainEnd, prefix: Prefix, direction: str, context: "_DeriveContext"
+    end: ChainEnd,
+    prefix: Prefix,
+    direction: str,
+    context: "_DeriveContext",
+    through: tuple[tuple[tuple[str, str], ...], ...] = ((),),
 ) -> Existence | None:
     """Where the calls making an inbound row run (OI-368, `registration_conditions`): every
     include or mount on one serving place of `prefix`, outermost first, then the route's root
@@ -2087,7 +2096,9 @@ def _existence(
     the row was derived in: the calls its own path and its routers' paths chose (review Major
     1), and the paths its prefix's words were read on (re-review R1-1). A place whose router
     was reached on a path that disagrees with the row's is not one the row was served
-    through. None for an outbound row, and where no call of the module is
+    through. `through` holds the writes under a test another value of the row was read
+    through (a verb list), one entry per path that read it: each is one more way the row is
+    served. None for an outbound row, and where no call of the module is
     under a test."""
     if context.conditions is None or direction != "inbound":
         return None
@@ -2120,14 +2131,17 @@ def _existence(
             # A write under a test the row's lists were read through (`field_write.guards`,
             # ruling R1 of 2026-11-25) is one more thing its registration ran through.
             writes = context_path.written_under() if context_path is not None else ()
-            found |= context.conditions.of_sites([*mounts, *writes, *own], chosen)
-            untied |= context.conditions.of_sites([*mounts, *writes, *own], chosen, untied=True)
+            for more in through:
+                sites: list[Site] = [*mounts, *writes, *more, *own]
+                found |= context.conditions.of_sites(sites, chosen)
+                untied |= context.conditions.of_sites(sites, chosen, untied=True)
     if not found:
         # Every place disagreed with the row's path: read them in no calling context.
         for place in places:
             mounts = [at[0] for _, at in place if at is not None]
-            found |= context.conditions.of_sites([*mounts, *own])
-            untied |= context.conditions.of_sites([*mounts, *own], untied=True)
+            for more in through:
+                found |= context.conditions.of_sites([*mounts, *more, *own])
+                untied |= context.conditions.of_sites([*mounts, *more, *own], untied=True)
     return Existence(frozenset(found), frozenset(untied), tuple(own))
 
 
@@ -4651,7 +4665,7 @@ def _narrowing_verbs(
         return tuple(declared)
     listed = _listed_verbs(declared, dict(row))
     if _unread_verbs(listed):
-        listed = _walked_verbs(listed, replace(context, path=path))
+        listed, _ = _walked_verbs(listed, replace(context, path=path))
     values = listed if isinstance(listed, tuple) else (listed,)
     return tuple(dict.fromkeys(_verb_of(each, context) for each in values)) or (None,)
 
@@ -4700,13 +4714,16 @@ def _unread_verbs(declared: Any) -> bool:
     return isinstance(declared, dict) and VERBS_TO_READ in declared
 
 
-def _walked_verbs(declared: Any, context: "_DeriveContext") -> Any:
+def _walked_verbs(
+    declared: Any, context: "_DeriveContext"
+) -> tuple[Any, dict[Any, tuple[tuple[tuple[str, str], ...], ...]]]:
     """A verb list read through the value walk (N8, M1): one verb per value the walk reads
     (a module constant's elements, a parameter's arguments), respelled; the `absent` verb for
     an explicit `None`; no verb at all where every value is an empty list (a refusal); and an
     unread argument (no verb) for each value not read, beside the rest. A value read through a
     callee the path entered on two calls (`Path.entered_twice`) is the first call's alone, so
-    it is not read (OI-537)."""
+    it is not read (OI-537). Beside the verbs, the writes under a test each was read through,
+    one entry per path that read it (`Path.written_under`)."""
     case, absent = declared[VERBS_TO_READ]
     at = declared.get(_CAPTURED_AT)
     site = (
@@ -4715,8 +4732,9 @@ def _walked_verbs(declared: Any, context: "_DeriveContext") -> Any:
         else context.values.sites.get((str(at[0]), int(str(at[1]))))
     )
     if site is None or at is None or context.workspace is None:
-        return None
+        return None, {}
     verbs: list[Any] = []
+    under: dict[Any, list[tuple[tuple[str, str], ...]]] = {}
     twice = frozenset() if context.path is None else context.path.entered_twice()
     for read, answers in resolve_positions_on_paths(
         context.workspace, {"verb": (site, int(at[2]))}, context.values, within=context.path
@@ -4732,7 +4750,10 @@ def _walked_verbs(declared: Any, context: "_DeriveContext") -> Any:
             continue
         else:
             verbs.append(None)
-    return tuple(dict.fromkeys(verbs))
+        under.setdefault(verbs[-1], []).append(read.written_under())
+    return tuple(dict.fromkeys(verbs)), {
+        verb: tuple(dict.fromkeys(writes)) for verb, writes in under.items()
+    }
 
 
 def _per_call(
