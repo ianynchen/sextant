@@ -344,6 +344,8 @@ class LoopJumps:
 
     breaks: list[dict[str, CallArgument]] = field(default_factory=list)
     continues: list[dict[str, CallArgument]] = field(default_factory=list)
+    # The names the loop writes, its target's and its body's: written again on its next pass.
+    written: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -577,7 +579,8 @@ class BodyReader:
         reads names of an enclosing function, a `dynamic` site `types/FunctionType#<init>`
         takes their values as they are where the function is made, and the entry counts them
         (`captures`): the body holds them as the parameters after its written ones. A name
-        written again after this line has no one value here; it is `unresolved`."""
+        written again after this line, or by a loop the line is in, has no one value here; it is
+        `unresolved`."""
         names = self._free_names(node, scope.frame)
         if not names:
             return CallArgument(kind="lambda", symbol=descriptor, captures=0)
@@ -586,7 +589,11 @@ class BodyReader:
             frame = scope.frame
             while frame is not None and name not in frame.local_names:
                 frame = frame.enclosing
-            late = frame is not None and frame.last_write.get(name, 0) > node.lineno
+            # A loop the `def` is in writes its names again on the next pass (OI-535).
+            late = frame is not None and (
+                frame.last_write.get(name, 0) > node.lineno
+                or any(name in jumps.written for jumps in frame.jumps)
+            )
             held.append(_UNKNOWN if late else self._local(name, scope.frame) or _UNKNOWN)
         self._closures[id(node)] = names
         produced = self._invoke(Callee(_target(_FUNCTION, INIT), "dynamic"), held, scope)
@@ -1145,7 +1152,12 @@ class BodyReader:
         frame = scope.frame
         flow = scope.flow
         before = dict(frame.values) if frame is not None else {}
-        jumps = LoopJumps()
+        jumps = LoopJumps(
+            written=frozenset(
+                _assigned(_own_nodes(body))
+                | ({n.id for n in ast.walk(target) if isinstance(n, ast.Name)} if target else set())
+            )
+        )
         if frame is not None:
             for name in _assigned(_own_nodes(body)) & set(frame.values):
                 frame.values[name] = _UNKNOWN

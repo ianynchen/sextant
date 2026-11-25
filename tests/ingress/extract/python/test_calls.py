@@ -447,6 +447,31 @@ def test_a_name_written_again_after_the_def_is_captured_unread(tmp_path: Path):
     assert site.arguments == [CallArgument(kind="unresolved")]
 
 
+def test_a_name_a_loop_writes_is_captured_unread_by_a_def_in_the_loop(tmp_path: Path):
+    """`for name in NAMES: def view(...)`: the loop writes `name` again on its next pass, after
+    the `def`, so the capture has no one value (OI-535); a name the loop does not write keeps
+    its value."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "def outer():\n"
+                "    kept = 'k'\n"
+                "    for name in ['a', 'b']:\n"
+                "        def view(request):\n"
+                "            return (name, kept)\n"
+                "        register(view)\n"
+            )
+        },
+    )
+
+    (site,) = _made(tree, f"app/m#outer({DIS}).")
+    assert site.arguments == [
+        CallArgument(kind="unresolved"),
+        CallArgument(kind="string", value="k"),
+    ]
+
+
 def test_a_name_an_inner_function_rebinds_nonlocal_is_captured_unread(tmp_path: Path):
     tree = _scan(
         tmp_path,
