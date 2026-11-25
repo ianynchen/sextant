@@ -51,6 +51,7 @@ _STARTS_A_WALK = frozenset(
 _NOT_A_CACHE = {
     "_deps": "the read stack itself",
     "_pending": "the positions the current path is in the middle of: a cycle guard",
+    "_pending_in": "the innermost call each pending position was entered under: the same guard",
     "_open": "the pending positions a result below answered `cycle` about",
     "_entered": "the positions each compute in progress entered: a stack, like `_deps`",
     "_reads": "what an object walk read of its asker's frames, kept with its answer",
