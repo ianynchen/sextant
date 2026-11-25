@@ -1765,7 +1765,7 @@ def value_index(
         unread_receivers={key: tuple(value) for key, value in shapes.unread_receivers.items()},
         captured_as=shapes.captured_as,
         hands_on=_hands_on(sites, returned_values),
-        changed_lists=_changed_lists(sites) if by_name else frozenset(),
+        changed_lists=_changed_lists(sites, constants) if by_name else frozenset(),
         lambda_types=frozenset(shapes.lambda_types),
         not_hand_offs=shapes.not_hand_offs,
         stated=frozenset(
@@ -2166,20 +2166,33 @@ def _nested_entries(argument: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return found
 
 
-def _changed_lists(sites: Mapping[tuple[str, int], Mapping[str, Any]]) -> frozenset[str]:
+def _changed_lists(
+    sites: Mapping[tuple[str, int], Mapping[str, Any]],
+    constants: Mapping[str, Sequence[tuple[str | None, Mapping[str, Any]]]],
+) -> frozenset[str]:
     """`ValueIndex.changed_lists`: the fields whose list is not exactly known from its writes,
     because a call is made ON the field that the facts do not state as a write: a written
     method, or a store or a delete of an element. A read the language makes is none. A list
     handed to a call is still read (ruled 2026-11-23): the walk reads a field's writes and
-    tracks no hand-over of a field."""
-    return frozenset(
+    tracks no hand-over of a field. A field written as another name's list (`VERBS = BASE`)
+    is that list, so a call that changes it through the second name changes the first too
+    (`VERBS.remove(v)`: `BASE` is changed, OI-516)."""
+    changed = {
         str(site["receiver_field"])
         for site in sites.values()
         if site.get("receiver_field") is not None
         and (
             not str(site["name"]).startswith("__") or site["name"] in ("__setitem__", "__delitem__")
         )
-    )
+    }
+    pending = list(changed)
+    while pending:
+        for _, entry in constants.get(pending.pop(), ()):
+            other = entry.get("symbol")
+            if entry.get("kind") == "field" and other is not None and str(other) not in changed:
+                changed.add(str(other))
+                pending.append(str(other))
+    return frozenset(changed)
 
 
 def _record_store(

@@ -559,6 +559,9 @@ def _not_yet(held: str, expected: list[tuple[object, ...]], task: str) -> Any:
         ("VERBS = ['get']\ndel VERBS[0]\n", [_NOT_KNOWN]),
         # So is a store into an element inside a tuple target (OI-515).
         ("VERBS = ['get']\nVERBS[0], b = 'post', 1\n", [_NOT_KNOWN]),
+        # A list changed through a second name is not known by its first (OI-516).
+        ("VERBS = ['get']\nOTHER = VERBS\nOTHER.remove('get')\n", [_NOT_KNOWN]),
+        ("VERBS = ['get']\nOTHER = VERBS\nTHIRD = OTHER\nTHIRD.clear()\n", [_NOT_KNOWN]),
         # A copy of a string is the list of its characters, which no fact names (OI-520).
         ("VERB = 'get'\nVERBS = list(VERB)\n", [_NOT_KNOWN]),
         ("VERB = 'get'\nVERBS = ['post', *VERB]\n", [_NOT_KNOWN, _POST]),

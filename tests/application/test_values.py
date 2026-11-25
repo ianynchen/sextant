@@ -7162,6 +7162,7 @@ def _py_held_facts() -> list[Fact]:
         **{f"read_by_{name}": [(name, [])] for name in _READS},
         **{f"changed_by_{name}": [(name, [])] for name in _CHANGES},
         "handed": [("keep", "whole")],
+        "base": [],
     }
     facts: list[Fact] = [
         SymbolFact(
@@ -7200,12 +7201,12 @@ def _py_held_facts() -> list[Fact]:
                     _py_site(_PY_BODY, ordinal, ("builtins/list#", called, "(*)"), [], field)
                 )
             ordinal += 1
-    # A second name for `plain`'s list, changed through that second name.
+    # A second name for `base`'s list, changed through that second name.
     facts.append(
         FieldWriteFact(
             document_id="doc_held",
             field=_HELD_PY + "renamed.",
-            value=CallArgument(kind="field", symbol=_HELD_PY + "plain."),
+            value=CallArgument(kind="field", symbol=_HELD_PY + "base."),
             written_by=_PY_BODY,
         )
     )
@@ -7329,9 +7330,14 @@ def test_a_held_list_handed_to_a_call_is_still_read(held_py):
 
 def test_a_list_changed_through_a_second_name_is_not_known_by_that_name(held_py):
     """`VERBS = BASE` then `VERBS.remove(v)`: the call names `VERBS`, the list is written
-    under `BASE`. Read by the name the call was made on, the list is not exactly known;
-    read by `BASE` it is the same object, a limit the facts do not show."""
+    under `BASE`. Read by the name the call was made on, the list is not exactly known."""
     assert _held_answers(held_py, "renamed") == [(None, "escapes")]
+
+
+def test_a_list_changed_through_a_second_name_is_not_known_by_its_first(held_py):
+    """Read by `BASE` it is the same object, changed through `VERBS` (OI-516): not exactly
+    known either."""
+    assert _held_answers(held_py, "base") == [(None, "escapes")]
 
 
 def test_the_members_of_one_held_list_do_not_count_against_the_path_cap(held_py):
