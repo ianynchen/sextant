@@ -856,6 +856,33 @@ def test_a_library_call_that_takes_the_list_is_a_mount_whose_prefix_is_not_read(
         ] == [(call["caller"], call["ordinal"])], written
 
 
+def test_two_holes_with_one_text_keep_both_mounts_in_the_question(tmp_path, libraries):
+    """OI-527: two lists behind `<prefix>` give one row `/<prefix>x/`; its `mount_prefix`
+    question names both, for lists no root reaches and for two mounts not read."""
+    for name, written, read in (
+        ("unplaced", "urlpatterns = []\n", "a list no readable mount and no root reaches"),
+        (
+            "unread",
+            (
+                "urlpatterns = [path(os.environ['P'], include(a)),"
+                " path(os.environ['Q'], include(b))]\n"
+            ),
+            None,
+        ),
+    ):
+        workspace = _program(
+            tmp_path / name,
+            libraries,
+            {"urls.py": "import os\na = [path('x/', v)]\nb = [path('x/', v)]\n" + written},
+        )
+
+        assert _rows(workspace) == [_row("/<prefix>x/", "partial")], name
+        (question,) = workspace.query("open_questions")
+        candidates = json.loads(question["candidates"])
+        assert len({candidate["mount_ordinal"] for candidate in candidates}) == 2, name
+        assert read is None or {candidate["read"] for candidate in candidates} == {read}, name
+
+
 def test_a_list_added_under_a_test_is_behind_the_hole(tmp_path, libraries):
     """`if settings.DEVELOPMENT: urlpatterns += dev_urls.urlpatterns`: the other list's
     routes are served only where the test holds, and no fact of theirs says so (design
