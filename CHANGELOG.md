@@ -25,6 +25,10 @@ here would restate those documents rather than add anything.
   `from .base import *`; a name with no one value states a reason. The Python scanner writes a
   module-level star import of a module file as the field writes an import of one variable is
   (no schema change). Flask and FastAPI modules stay `default`.
+- **A read of a Django setting is its configuration key** (ruling R3 of 2026-11-25). A new
+  value-model list, `key_reads: [{owner, by}]`: an attribute read on a stated object is the key
+  of that name. `value-models/django.yml` states `django.conf.settings`, so `settings.API_HOST`
+  is the expression `${API_HOST}`, as an environment read and a pydantic settings field are.
 
 ### Fixed
 

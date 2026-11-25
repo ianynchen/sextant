@@ -42,3 +42,13 @@ returns_argument:
   - { owner: django.contrib.admin.views.decorators, method: staff_member_required, result_calls: arg0, result_returns: arg0, by: scripts/probes/django_rules.md }
   - { owner: django.urls.conf, method: include, returns: { arg: 0, element: 0 }, by: scripts/probes/django_rules.md }
   - { owner: django.views.generic.base.View, method: as_view, returns_receiver: true, by: scripts/probes/django_rules.md }
+
+# A READ OF A SETTING (ruling R3 of 2026-11-25, design note approved 2026-11-25; D02 §1f
+# `key_reads`). `django.conf.settings` is one object, and an attribute read on it,
+# `settings.X`, gives the value the selected settings module binds to its name `X` (probe,
+# "Settings reads"). Which module is selected is the deployment's (`DJANGO_SETTINGS_MODULE`),
+# so the read is the configuration key `X`, the expression `${X}`: the role of
+# `@Value("${k}")` on the JVM and of a pydantic settings field. What each settings module of
+# the repository sets for the key is `resolved_config`, per environment.
+key_reads:
+  - { owner: django.conf.settings, by: scripts/probes/django_rules.md }

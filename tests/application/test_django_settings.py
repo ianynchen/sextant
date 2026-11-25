@@ -14,8 +14,14 @@ shipped catalogs (`test_django_routes._resolved`).
 
 from pathlib import Path
 
+import pytest
 import test_django_routes
 from test_django_routes import _resolved
+
+from sextant.application.ports.catalogs import CatalogError
+from sextant.application.resolve.values import resolve_site, value_index
+from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.resources import catalogs_dir
 
 libraries = test_django_routes.libraries
 orders_django_env = test_django_routes.orders_django_env
@@ -115,3 +121,79 @@ def test_a_program_with_no_root_setting_has_no_environment(tmp_path: Path, libra
     )
 
     assert _config(workspace) == {}
+
+
+# -- a read of `settings.X` is the configuration key `X` ---------------------------------------
+
+
+def _sunk(tmp_path: Path, libraries, files: dict[str, str]) -> list[list[tuple[object, ...]]]:
+    """What each `sink(...)` call is handed, in the order written: the value walk's answers,
+    `(kind, value, reason)`, read with the shipped value models."""
+    workspace = _resolved(tmp_path, libraries, files)
+    index = value_index(
+        workspace,
+        returns_arguments=YamlCatalogSource(catalogs_dir()).load()[0].returns_arguments,
+    )
+    sites = sorted(
+        (row for row in workspace.query("call_sites") if row["name"] == "sink"),
+        key=lambda row: row["ordinal"],
+    )
+    return [
+        [
+            (binding.slots[0].kind, binding.slots[0].value, binding.slots[0].reason)
+            for binding in resolve_site(workspace, dict(row), index)
+        ]
+        for row in sites
+    ]
+
+
+def test_a_read_of_a_django_setting_is_its_key(tmp_path: Path, libraries):
+    """`settings.API_HOST` on `django.conf.settings` is the configuration key `API_HOST`,
+    the expression `${API_HOST}` (`key_reads` in `value-models/django.yml`; the role of
+    `@Value("${k}")` and of a pydantic settings field): which settings module gives the
+    value is the deployment's, so no module's literal is the answer. In a text it is a hole
+    of that text. An attribute of another object is not a key."""
+    sunk = _sunk(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "ROOT_URLCONF = 'app.urls'\nAPI_HOST = 'billing.internal'\n",
+            "urls.py": _URLS,
+            "client.py": "from django.conf import settings\nfrom app import other\n\n"
+            "def sink(x):\n    return None\n\n"
+            "def run():\n    sink(settings.API_HOST)\n"
+            "    sink('https://' + settings.API_HOST + '/pay')\n    sink(other.API_HOST)\n",
+            "other.py": "API_HOST = 'plain'\n",
+        },
+    )
+
+    assert sunk == [
+        [("expression", "${API_HOST}", None)],
+        [("expression", "https://${API_HOST}/pay", None)],
+        [("literal", "plain", None)],
+    ]
+
+
+def test_the_shipped_key_read_is_djangos_settings_object():
+    found = [
+        (entry["owner"], entry["form"]) for entry in YamlCatalogSource(catalogs_dir()).key_reads()
+    ]
+    assert found == [("django/conf/settings#", "key_read")]
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        "{ owner: a.b }",  # no probe
+        "{ owner: a.b, method: get, by: x.md }",  # unknown key
+        "{ by: x.md }",  # no owner
+        "{ owner: a.b, by: x.md }\n  - { owner: a.b, by: x.md }",  # stated twice
+    ],
+)
+def test_a_malformed_key_read_is_refused(tmp_path: Path, entries):
+    (tmp_path / "value-models").mkdir()
+    (tmp_path / "value-models" / "invented.yml").write_text(
+        f"id: invented\nkey_reads:\n  - {entries}\n", encoding="utf-8"
+    )
+    with pytest.raises(CatalogError, match="key_reads"):
+        YamlCatalogSource(tmp_path).key_reads()

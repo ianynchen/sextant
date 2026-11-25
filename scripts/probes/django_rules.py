@@ -966,4 +966,27 @@ rule(
     "DELETE 405, the verbs of the class kept"
 )
 
+
+# 11. Settings reads (ruling R3 of 2026-11-25).
+import django.conf
+
+assert type(settings) is django.conf.LazySettings and django.conf.settings is settings
+assert settings.SECRET_KEY == "probe"
+_probe_settings = types.ModuleType("probe_settings_module")
+_probe_settings.SECRET_KEY = "from-module"
+_probe_settings.ROOT_URLCONF = "from_module_urls"
+_probe_settings.lower_name = 1
+sys.modules["probe_settings_module"] = _probe_settings
+_read = django.conf.Settings("probe_settings_module")
+assert _read.ROOT_URLCONF == "from_module_urls" and _read.SECRET_KEY == "from-module"
+assert not hasattr(_read, "lower_name")
+assert _read.DEBUG is False  # a name the module does not write: Django's global default
+rule(
+    "django.conf.settings is one LazySettings object bound in django/conf/__init__.py; an "
+    "attribute read settings.X gives the value the selected settings module binds to the "
+    "module-level name X (Settings('m').ROOT_URLCONF is m.ROOT_URLCONF), read by name; only "
+    "upper-case names are taken (lower_name is no attribute), and a name the module does not "
+    "write has Django's global default (DEBUG False)"
+)
+
 print("OK")

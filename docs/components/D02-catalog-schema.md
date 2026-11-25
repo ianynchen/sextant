@@ -828,6 +828,21 @@ own text, as plan 2's R17 types a project module's). The entries ride the stated
 runs where `_stated_value` does. Refused naming the file: a missing `key_arg` or `by`, an
 unknown key, an argument that is no reference, and one call stated twice.
 
+**`key_reads` — an object whose attribute read is a configuration key** (ruling R3 of
+2026-11-25, design note approved 2026-11-25). A `value-models/` file may declare `key_reads:
+[{owner, by}]`, `owner` the object as the facts name it (the module that binds it, then its
+name). A read of an attribute `NAME` on that object is the configuration key `NAME`: the
+expression `${NAME}`, read before any write of the name, as a settings field is (the role of
+`@Value("${k}")` on the JVM). `value-models/django.yml` states `django.conf.settings` (probe
+`django_rules.md`, "Settings reads"): `settings.API_HOST` is `${API_HOST}`, and a text built
+from it keeps the hole (`https://${API_HOST}/pay`). No settings module's literal is the answer,
+because the deployment selects the module; what each one sets is `resolved_config`, per
+environment (§2i `from_module_holding`). The entries ride the stated-call table
+(`Catalog.returns_arguments`, form `key_read`) to `values._Walk._value`. Not read: `getattr(
+settings, 'NAME', default)`, and a settings module imported directly (`from proj import
+settings`), which is an ordinary module name (OI-563 (1)). Refused naming the file: a missing
+`owner` or `by`, an unknown key, and one object stated twice.
+
 An edit here moves `_catalog_hash` (`api._MODEL_DIRECTORIES`), like an edit to any of the
 other four directories: it is knowledge a run was produced with.
 

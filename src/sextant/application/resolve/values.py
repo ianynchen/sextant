@@ -156,6 +156,7 @@ from sextant.domain.symbols import (
     descriptor_slots,
     field_type,
     is_type_descriptor,
+    member_name,
     method_descriptor,
     method_name,
     owner_of,
@@ -259,6 +260,9 @@ _RETURNS_RECEIVER = "returns_receiver"
 # A call that reads a deployment-set key by name (`Catalog.returns_arguments`, form
 # `environment_read`, plan 3 Task 3): its value is the expression `${KEY}`.
 _ENVIRONMENT_READ = "environment_read"
+# An object whose attribute read is the configuration key of that name (`Catalog
+# .returns_arguments`, form `key_read`, ruling R3 of 2026-11-25): its value is `${NAME}`.
+_KEY_READ = "key_read"
 
 # D00 §5's argument grammar, read as answers. `long` answers `int` because the
 # distinction is a storage width and not a kind of value a consumer branches on; a catalog
@@ -1004,6 +1008,10 @@ class ValueIndex:
     environment_reads: Mapping[tuple[str, str], tuple[Any, Any]] = dataclass_field(
         default_factory=dict
     )
+    # The objects whose attribute read is the configuration key of that name (`key_reads` in
+    # `value-models/`), by the descriptor the facts give the object. Read by `_Walk._value`
+    # before any write of the field: the deployment selects what gives the value.
+    key_reads: frozenset[str] = frozenset()
     # The delimiters of the module's config model (`config.with_config_model`), None where it
     # has none: an environment read's literal default renders after its `default_separator`
     # (plan 3 ruling R25), so `resolved_peers` reads it back with the same rule.
@@ -1837,7 +1845,7 @@ def value_index(
         stated_returns={
             (str(entry["owner"]), str(entry["method"])): (str(entry["form"]), int(entry["arg"]))
             for entry in returns_arguments
-            if entry["form"] not in (_ENVIRONMENT_READ, CONFIG_MODEL_FORM)
+            if entry["form"] not in (_ENVIRONMENT_READ, _KEY_READ, CONFIG_MODEL_FORM)
         },
         stated_names=frozenset(
             str(entry["method"])
@@ -1859,6 +1867,9 @@ def value_index(
             for entry in returns_arguments
             if entry["form"] == _ENVIRONMENT_READ
         },
+        key_reads=frozenset(
+            str(entry["owner"]) for entry in returns_arguments if entry["form"] == _KEY_READ
+        ),
         placeholders=None if model is None else dict(model["placeholders"]),
         settings_fields=(
             {}
@@ -4490,6 +4501,11 @@ class _Walk:
             setting = self._index.settings_fields.get(bare_descriptor(str(symbol)))
             if setting is not None:
                 return _only(trail, setting)
+            # A read on an object a value model states is read by key (`key_reads`, ruling
+            # R3 of 2026-11-25) is that key, as an environment read is: `${NAME}`.
+            read = bare_descriptor(str(symbol))
+            if owner_of(read) in self._index.key_reads:
+                return _only(trail, Answer(kind=EXPRESSION, value="${" + member_name(read) + "}"))
             # The unseen-object rule (`_binding`, OI-222) is decided HERE, where the reading
             # method is known, and marks the position only when it applies: every other read
             # keeps the one position a binding has always had, so memo and cycle detection

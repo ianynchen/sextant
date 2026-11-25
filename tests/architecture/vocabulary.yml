@@ -685,6 +685,8 @@ baseline:
     - annotation_value
     - bean_name
     - handler_return
+    from_module_holding:
+    - root_setting
     gather:
     - list
     - list_tail_flag
@@ -1170,6 +1172,16 @@ approvals:
   approved_by: user
   approved_on: 2026-11-23
   reference: docs/superpowers/specs/2026-11-23-python-django-redesign.md §2 item 13 (a `request_reads` entry that reads the request's method)
+- word: from_module_holding
+  where: catalog key
+  approved_by: user
+  approved_on: 2026-11-25
+  reference: .superpowers/fixes/rulings-2026-11-25.md R3, "DESIGN NOTE APPROVED", new thing 1 (a settings module is a source of configuration; D02 §2i)
+- word: key_reads
+  where: catalog key
+  approved_by: user
+  approved_on: 2026-11-25
+  reference: .superpowers/fixes/rulings-2026-11-25.md R3, "DESIGN NOTE APPROVED", new thing 2 (a value-model entry on `django.conf.settings`; the read gives the expression `${X}`; D02 §1f)
 exemptions:
   data_keyed_mappings:
     client_base.default_ports: 'D02 client model: `{scheme: port}`'

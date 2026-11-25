@@ -38,7 +38,7 @@ from sextant.application.resolve.values import (
     cached_value_index,
     resolve_site,
 )
-from sextant.domain.symbols import bare_descriptor, member_name, owner_of
+from sextant.domain.symbols import bare_descriptor, dotted_type, member_name, owner_of
 
 
 def record_module_config(workspace: Workspace, catalogs: Sequence[Catalog]) -> None:
@@ -86,7 +86,7 @@ def record_module_config(workspace: Workspace, catalogs: Sequence[Catalog]) -> N
     keys = sorted({name for module in modules for name in held[module]})
     rows: list[dict[str, object]] = []
     for module in modules:
-        environment = module.removesuffix("#").replace("/", ".")
+        environment = dotted_type(module)
         for key in keys:
             if key not in held[module]:
                 rows.append(_row(key, environment, None, None, EXTERNAL, not_set(key)))
