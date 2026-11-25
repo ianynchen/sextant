@@ -264,8 +264,6 @@ def test_a_with_statement_on_a_client_subclass_is_the_client_it_built(tmp_path, 
     assert sunk == [["app/main/Api#"], ["own"]]
 
 
-@pytest.mark.declines("requests")
-@pytest.mark.declines("httpx")
 def test_an_unbound_call_through_a_client_subclass_is_its_first_argument(tmp_path, libraries):
     """OI-522: `Api.__enter__(client)` calls `httpx.Client.__enter__`, a method that takes
     `self`, through the class: its receiver is the first argument, the instance, never the
