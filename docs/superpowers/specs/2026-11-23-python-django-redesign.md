@@ -490,12 +490,13 @@ workspace's `open_questions`. Each limit is an open issue (`docs/open-issues.md`
     (`zproject/urls.py:936-951`) have no row (OI-549).
 - **One helper entered twice on one path** (the walk's existing bound, M-1): the same
   decorator factory twice on one view gives handler not read. healthchecks: 5 routes (OI-537).
-- **A list added under a test** (`if settings.DEVELOPMENT: urls += dev_urls.urls`): the
-  members are behind the hole at `partial`. A row with the condition (M5) needs the guard of
-  a field write in the facts; not built (OI-508). A MOUNT written under a test gives its
-  routes the condition (controller fix b1c75286).
-- **A root setting written twice, or under a test**: two roots, both `resolved`, with no
-  condition (zulip `zproject.tornado_urls` under `if RUNNING_INSIDE_TORNADO`) (OI-509).
+- **A list added under a test** (`if settings.DEVELOPMENT: urls += dev_urls.urls`): built
+  2026-11-25 (ruling R1, fact schema 23, OI-508): the write carries its tests
+  (`field_write.guards`) and the members are rows at their address with the condition (M5).
+  A MOUNT written under a test gives its routes the condition (controller fix b1c75286).
+- **A root setting written under a test** (zulip `zproject.tornado_urls` under
+  `if RUNNING_INSIDE_TORNADO`): built 2026-11-25 (ruling R1, OI-509): its routes carry the
+  test. Two roots each written under no test are two roots with no condition.
 - **A library `dispatch` body** is now read (§2 item 9, Task 8).
 - **A mount whose router argument is not read** is published as a route with no handler, at
   `partial`: nothing says it is a mount (OI-548).

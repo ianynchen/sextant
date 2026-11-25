@@ -109,6 +109,7 @@ from sextant.application.resolve.values import (
     producer_paths,
     resolve_positions,
     resolve_positions_on_paths,
+    write_path,
 )
 from sextant.domain.closed_sets import Resolution
 from sextant.domain.symbols import returned_type, type_descriptor
@@ -806,6 +807,9 @@ class MountReader:
                 joined = path if within is None else within.joined(path)
                 if joined is None:
                     continue
+                # The writes under a test the read came through: a list reached again through
+                # another of them is read again, for that write's condition.
+                under = joined.written_under()
                 if producer.caller is None and producer.made_by in sites:
                     if producer.made_by in open_:
                         continue
@@ -814,7 +818,7 @@ class MountReader:
                     # behind the hole naming it.
                     made = sites[producer.made_by]
                     hole = self._hole_at(made, MountPath(None, None), "a call that is not read")
-                    taking = (producer.made_by, parent.text, parent.resolution)
+                    taking = (producer.made_by, parent.text, parent.resolution, under)
                     if taking not in seen:
                         seen.add(taking)
                         behind = self._behind(parent, hole, MountPath(None, None), None)
@@ -826,7 +830,7 @@ class MountReader:
                     if module is None:
                         continue
                     for variable in sorted(variables):
-                        read = (module, variable, parent.text, parent.resolution)
+                        read = (module, variable, parent.text, parent.resolution, under)
                         if read not in seen and (module, variable) not in open_:
                             seen.add(read)
                             members(
@@ -849,7 +853,7 @@ class MountReader:
                 if key in open_:
                     continue
                 for own in self._prefixes(mount, 0, joined):
-                    reached = (key, own.text, parent.text, parent.resolution)
+                    reached = (key, own.text, parent.text, parent.resolution, under)
                     if reached in seen:
                         continue
                     seen.add(reached)
@@ -874,7 +878,8 @@ class MountReader:
                         named(str(writer), module, variable),
                         0,
                         ROOT,
-                        None,
+                        # A root written under a test serves its routes where the test holds.
+                        write_path(symbol, writer, written),
                         frozenset({(module, variable)}),
                     )
         return tree

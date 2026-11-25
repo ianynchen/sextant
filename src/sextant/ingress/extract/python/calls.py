@@ -1305,6 +1305,7 @@ class BodyReader:
                 from_parameter=parameter if isinstance(parameter, int) else None,
                 value=None if isinstance(parameter, int) else value,
                 written_by=scope.body.caller,
+                guards=list(scope.guards) or None,
             )
         )
 
@@ -1316,8 +1317,8 @@ class BodyReader:
         a copy taken here does not hold what is added to the name later (`a = list(b)`, then
         `b += [...]`). A name written under a test or in a loop has no one value from there
         on, and its `*name` stays a read of the name (every write of it). Another list added
-        under a test is one unread member: its members are served only where the test holds,
-        and no fact of theirs says so (design 2026-11-23 §9b)."""
+        under a test stays a read of that name too: its members are served only where the test
+        holds, which the write's own `guards` say (ruling R1 of 2026-11-25, OI-508)."""
         if scope.frame is not None or scope.class_path is not None:
             return value
         if value.kind != "array" or value.symbol != _LITERAL_CLASSES[ast.List]:
@@ -1326,10 +1327,8 @@ class BodyReader:
         elements: list[CallArgument] = []
         for element in value.elements or []:
             other = element.keyword == _UNPACKED_POSITIONAL and element.kind == "field"
-            if other and scope.guards and element.symbol != written:
-                elements.append(_UNKNOWN.model_copy(update={"keyword": _UNPACKED_POSITIONAL}))
-                continue
-            held = self._lists.get(str(element.symbol)) if other else None
+            # A write under a test holds what it adds, never what a name held before it.
+            held = self._lists.get(str(element.symbol)) if other and not scope.guards else None
             if held is not None:
                 elements.extend(held)
             else:

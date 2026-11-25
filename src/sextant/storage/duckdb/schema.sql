@@ -1509,7 +1509,10 @@ SELECT document_id,
        -- carries, and the walk reads it with the same reader, so a second spelling here
        -- would be a second thing to keep in step.
        payload -> 'value'                      AS value,
-       payload ->> 'written_by'                AS written_by
+       payload ->> 'written_by'                AS written_by,
+       -- D00 §5 (fact schema 23, OI-508, OI-509): the undecided tests the write runs under
+       -- within its own body, as `call_sites.guards`; NULL where under none and on the JVM.
+       payload ->> 'guards'                    AS guards
 FROM raw_facts WHERE kind = 'field_write'
   AND document_id IN (SELECT document_id FROM selected_documents);
 

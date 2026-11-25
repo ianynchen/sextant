@@ -14,6 +14,7 @@ from sextant.domain.facts import (
     AnnotationFact,
     AnnotationUse,
     CallArgument,
+    CallGuard,
     CallSiteFact,
     CallTarget,
     ConfigEntryFact,
@@ -2432,6 +2433,9 @@ def test_the_three_unpinned_redaction_joins_actually_mask(tmp_path: Path):
                 field="com/acme/A#endpoint.",
                 value=CallArgument(kind="string", value=secret),
                 written_by="mod com/acme/A#<init>(sig_1).",
+                # The same credential in the test the write is under (`field_writes.guards`,
+                # fact schema 23).
+                guards=[CallGuard(test=f"url == '{secret}'", holds=True)],
             ),
         ],
     )

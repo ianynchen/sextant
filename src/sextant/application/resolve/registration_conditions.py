@@ -13,7 +13,10 @@ are all under tests exists "not evaluated" — never decided from the repository
 The answer is a set of ALTERNATIVES, each a conjunction of guards: the row exists where every
 guard of one alternative holds. Two callers under two tests are two alternatives; a call under
 two nested tests is one alternative of two guards. An alternative with no guard means the row
-exists unconditionally, and then nothing is written. A row's calls are its registration (the
+exists unconditionally, and then nothing is written. A write to a name under a test
+(`field_write.guards`, ruling R1 of 2026-11-25) that a row's lists were read through
+(`Path.written_under`) counts as one of the row's calls: a route list added under a test, a
+root setting written under one. A row's calls are its registration (the
 route's root and terminal calls) and every include or mount its router is served through, all
 of which must run, so their alternatives are combined (each choice of one alternative per call,
 joined). Where the row was derived through one call of a helper (its path chose that call,
@@ -42,8 +45,8 @@ where its value is written in the repository. A read the scanner cannot type is 
 settings field, so its guard stays `test`. A class body's statements are read with no test the module body puts them
 under.
 
-Cost (GUIDELINES §8.7): per inbound catalog run, one read of the guarded call sites (a fact
-query, cached per load) and, only where some call is guarded, one read of the call edges; each
+Cost (GUIDELINES §8.7): per inbound catalog run, one read of the guarded call sites and one of the
+guarded field writes (fact queries, cached per load) and, only where some is guarded, one read of the call edges; each
 method's alternatives are computed once.
 """
 
@@ -82,6 +85,9 @@ Guard = tuple[str, str, bool, tuple[str, ...], tuple[tuple[str, str], ...]]
 Conjunction = tuple[Guard, ...]
 Alternatives = frozenset[Conjunction]
 UNCONDITIONAL: Alternatives = frozenset({()})
+# What a registration ran through: a call `(method, ordinal)`, or a write under a test
+# `(writing method, its tests)` as `Path.written_under` names one.
+Site = tuple[str, int | str]
 # The call a row's own path chose for a method (`Path.calls_into`): the calling context it was
 # derived in.
 Chosen = Mapping[str, tuple[str, int]]
@@ -92,14 +98,14 @@ class Conditions:
     """The guarded calls and who calls whom, read once per resolve, and each method's
     alternatives as they are asked for."""
 
-    guards: dict[tuple[str, int], tuple[Guard, ...]]
+    guards: dict[Site, tuple[Guard, ...]]
     callers: dict[str, tuple[tuple[str, int], ...]]
     _methods: dict[tuple[str, bool], Alternatives] = field(default_factory=dict)
     _entered: set[str] = field(default_factory=set)
 
     def of_sites(
         self,
-        sites: Iterable[tuple[str, int]],
+        sites: Iterable[Site],
         chosen: Chosen | None = None,
         untied: bool = False,
     ) -> Alternatives:
@@ -125,7 +131,7 @@ class Conditions:
         return found
 
     def _of_site(
-        self, site: tuple[str, int], chosen: Chosen, followed: frozenset[str], untied: bool
+        self, site: Site, chosen: Chosen, followed: frozenset[str], untied: bool
     ) -> Alternatives:
         own = self.guards.get(site, ())
         method = site[0]
@@ -180,20 +186,29 @@ def _simplest(alternatives: Alternatives) -> Alternatives:
 
 
 def conditions_of(workspace: Workspace) -> Conditions:
-    """The guarded calls, and the callers of each method where any call is guarded. Read by the
-    engine once per run: `call_edges` is derived, so it is never kept across passes."""
-    guards: dict[tuple[str, int], tuple[Guard, ...]] = {}
-    for row in workspace.query("call_site_guards"):
-        caller = str(row["caller"])
-        guards[(caller, int(str(row["ordinal"])))] = tuple(
+    """The guarded calls and the guarded field writes, and the callers of each method where
+    any is guarded. Read by the engine once per run: `call_edges` is derived, so it is never
+    kept across passes."""
+    guards: dict[Site, tuple[Guard, ...]] = {}
+    guarded: list[tuple[Site, str]] = [
+        ((str(row["caller"]), int(str(row["ordinal"]))), str(row["guards"]))
+        for row in workspace.query("call_site_guards")
+    ]
+    # A write is named by its method and its tests, as a path that read it names it.
+    guarded += [
+        ((str(row["written_by"]), str(row["guards"])), str(row["guards"]))
+        for row in workspace.query("field_write_guards")
+    ]
+    for site, written in guarded:
+        guards[site] = tuple(
             (
-                caller,
+                site[0],
                 str(g["test"]),
                 bool(g["holds"]),
                 tuple(g.get("reads") or ()),
                 tuple(sorted((g.get("fields") or {}).items())),
             )
-            for g in json.loads(str(row["guards"]))
+            for g in json.loads(written)
         )
     callers: dict[str, list[tuple[str, int]]] = {}
     if guards:

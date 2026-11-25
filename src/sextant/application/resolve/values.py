@@ -325,6 +325,13 @@ READ_CALLED_AT = "called_at"
 _OBJECT_OF = "object-of"
 _WRITE_OF = "write-of"
 _ELEMENT_OF = "element-of"
+# A write of a binding the path read its value from, where that write runs under tests of its
+# own body (D00 §5 `field_write.guards`, ruling R1 of 2026-11-25): one context per writing
+# method and test set, so two paths through one such write agree and two writes never
+# conflict (`Path.written_under`). `_GUARDS` is the key the index keeps those tests under, on
+# the written entry.
+_WRITTEN_UNDER = "written-under"
+_GUARDS = "guards"
 # Which candidate of a merge with no root a path took (ruling 7, `_Walk._branched`).
 _BRANCH_OF = "branch-of"
 # Which body a hand-off with several callees ran (spec 2026-11-02 rule 1, `_Walk._handed_to`):
@@ -1672,6 +1679,8 @@ def value_index(
         entry = json.loads(str(written)) if isinstance(written, str) else written
         if not isinstance(entry, dict):
             continue
+        if row.get(_GUARDS) is not None:
+            entry = {**entry, _GUARDS: str(row[_GUARDS])}
         # **A `source` makes the entry a value of the WRITER's frame**, which is the one
         # thing that separates the two maps: a constant is a value anywhere, a call's result
         # is a value id that only the method that produced it can resolve. A write naming no
@@ -2657,6 +2666,15 @@ class Path:
             if step.context[0] == _PASSED
         )
 
+    def written_under(self) -> tuple[tuple[str, str], ...]:
+        """The writes under a test this path read a value through (`_WRITTEN_UNDER`), each as
+        `(writing method, its tests)`, the tests as `field_writes.guards` spells them."""
+        return tuple(
+            (str(step.context[1]), str(step.context[2]))
+            for step in self.trail
+            if step.context[0] == _WRITTEN_UNDER
+        )
+
     def entered_twice(self) -> frozenset[str]:
         """The callees this path descended into the return of on two calls (`log(log(v))`).
         `_entered` holds the first call of each (OI-537), so a value read in one of them on
@@ -3347,6 +3365,24 @@ def _passing(trail: _Trail, site: tuple[str, int]) -> _Trail:
     so two paths through one call agree and two calls never conflict."""
     step = _Step((_PASSED, *site), _PASSED)
     return trail if step in trail else (*trail, step)
+
+
+def _under(trail: _Trail, symbol: str, writer: str | None, entry: Mapping[str, Any]) -> _Trail:
+    """`trail` with the write `entry` of `symbol` read through, where that write runs under
+    tests of its own body (`Path.written_under`); `trail` itself where it runs under none."""
+    guards = entry.get(_GUARDS)
+    if guards is None or writer is None:
+        return trail
+    step = _Step((_WRITTEN_UNDER, writer, str(guards)), f"{symbol} written under a test")
+    return trail if step in trail else (*trail, step)
+
+
+def write_path(symbol: str, writer: str | None, entry: Mapping[str, Any]) -> "Path | None":
+    """The path of a reader that takes the write `entry` of `symbol` straight off
+    `ValueIndex.constants`: the write under its tests (`Path.written_under`), None where it
+    runs under none."""
+    trail = _under((), symbol, writer, entry)
+    return Path(trail) if trail else None
 
 
 def _path(trail: _Trail) -> tuple[str, ...]:
@@ -7406,6 +7442,8 @@ class _Walk:
         reached: list[_Reached] = []
         members = 0
         for writer, entry in constants:
+            # The write under its tests, where it runs under any (`_under`).
+            here = _under(trail, symbol, writer, entry)
             # **A CONSTANT write needs no crossing** (`OI-138` cause 2): the value is in the
             # fact, so the answer is that literal on the path already travelled.
             #
@@ -7430,12 +7468,12 @@ class _Walk:
             )
             if literal_kind is not None and entry.get("value") is not None:
                 reached.append(
-                    (trail, Answer(kind=LITERAL, value=entry["value"], literal_kind=literal_kind))
+                    (here, Answer(kind=LITERAL, value=entry["value"], literal_kind=literal_kind))
                 )
             elif named is not None:
                 reached.append(
                     (
-                        trail,
+                        here,
                         Answer(kind=LITERAL, value=named, literal_kind=SYMBOL, class_object=True),
                     )
                 )
@@ -7455,16 +7493,16 @@ class _Walk:
                 if symbol in self._index.changed_lists and self._names_a_list(
                     str(entry["symbol"]), {symbol}
                 ):
-                    reached.append((trail, _unresolved(ESCAPES)))
+                    reached.append((here, _unresolved(ESCAPES)))
                     continue
-                held = self._entry(entry, writer, (_BINDING, symbol, writer), trail, frames)
+                held = self._entry(entry, writer, (_BINDING, symbol, writer), here, frames)
                 # Only the members of a list it names are exempt from the path cap: the
                 # other name's alternative writes are alternatives here too (OI-517).
-                members += sum(1 for path, _ in held if _through_element(path, trail))
+                members += sum(1 for path, _ in held if _through_element(path, here))
                 reached.extend(held)
             elif entry.get("kind") == "array" and writer is not None:
                 if symbol in self._index.changed_lists:
-                    reached.append((trail, _unresolved(ESCAPES)))
+                    reached.append((here, _unresolved(ESCAPES)))
                     continue
                 own = {
                     **entry,
@@ -7478,13 +7516,13 @@ class _Walk:
                         )
                     ],
                 }
-                held = self._entry(own, writer, (_BINDING, symbol, writer), trail, frames)
+                held = self._entry(own, writer, (_BINDING, symbol, writer), here, frames)
                 # The members of one written list are one value, not alternatives: they do
                 # not count against the path cap (ruled 2026-11-23).
                 members += len(held)
                 reached.extend(held)
             else:
-                reached.append((trail, _unresolved(NOT_READABLE)))
+                reached.append((here, _unresolved(NOT_READABLE)))
         for method, index in written:
             if len(reached) - members > PATH_CAP:
                 return _only(trail, _unresolved(NON_ENUMERABLE))
@@ -7493,7 +7531,15 @@ class _Walk:
             # The origin names the write and has no ordinal, so `_through`'s `escapes` window
             # is the whole of the writing method after the call: a call made on the stored
             # object anywhere there changes what every later reader of the field sees.
-            reached.extend(self._entry(entry, method, (_BINDING, symbol, method), trail, frames))
+            reached.extend(
+                self._entry(
+                    entry,
+                    method,
+                    (_BINDING, symbol, method),
+                    _under(trail, symbol, method, entry),
+                    frames,
+                )
+            )
         if len(reached) - members > PATH_CAP:
             return _only(trail, _unresolved(NON_ENUMERABLE))
         return self._distinct(reached)

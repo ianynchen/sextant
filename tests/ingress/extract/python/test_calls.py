@@ -1216,11 +1216,11 @@ def test_a_name_written_under_a_test_or_in_a_loop_keeps_its_read(tmp_path: Path)
     assert _writes(tree, "app/m#G.") == [_list(_star("app/m#F."))]
 
 
-def test_another_list_added_under_a_test_is_one_unread_member(tmp_path: Path):
+def test_another_list_added_under_a_test_is_a_read_under_that_test(tmp_path: Path):
     """`if X: A += other.B`: the members of `other.B` are served only where the test holds,
-    and no fact says so. They are one unread member (spec §9b), never read as members, even
-    where this body holds them in order. A registration-like call's result added under a
-    test stays a member."""
+    and the write says so (`field_write.guards`, ruling R1 of 2026-11-25, OI-508): they stay a
+    read of the other name, never the elements this body holds in order. A registration-like
+    call's result added under a test stays a member."""
     tree = _scan(
         tmp_path,
         {
@@ -1240,11 +1240,13 @@ def test_another_list_added_under_a_test_is_one_unread_member(tmp_path: Path):
     )
 
     first, under, local, call = _writes(tree, "app/m#A.")
-    unread = CallArgument(kind="unresolved", keyword="*")
     assert first == _list(_A)
-    assert under == _list(_A, unread)
-    assert local == _list(_star("app/m#A."), unread)
+    assert under == _list(_star("app/m#A."), _star("app/other#B."))
+    assert local == _list(_star("app/m#A."), _star("app/m#L."))
     assert call is not None and call.elements is not None
     own, member = call.elements
     assert own == _star("app/m#A.")
     assert member.kind == "unresolved" and member.source is not None and member.keyword is None
+    guarded = [w.guards for w in _facts(tree, FieldWriteFact) if w.field == "app/m#A."]
+    assert guarded[0] is None
+    assert [[g.test for g in guards or []] for guards in guarded[1:]] == [["os.environ"]] * 3

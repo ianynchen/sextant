@@ -183,6 +183,13 @@ SEXTANT_VERSION = version("sextant")
 #             `symbol`, its call sites, returns and field writes; ruling 2026-11-23, option B),
 #             and `type_header.methods` loses `calls_super`, which that read replaces. A fact
 #             set of the older vintage holds no such body; it is refused and re-extracted.
+#     23      a Python `field_write` gains `guards`: the tests the write runs under within its
+#             own body that the scanner does not decide, in the format and by the rules of
+#             `call_site.guards` (ruling R1 of 2026-11-25, OI-508, OI-509); and a list another
+#             name holds, added to a module name under a test, stays a read of that name where
+#             it was one unread member. A fact set of the older vintage has none, so a reader
+#             would take a route list or a root written under a test for one written wherever
+#             the module runs; it is refused and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -327,6 +334,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 22
+FACT_SCHEMA_VERSION = 23
 GRAPH_SCHEMA_VERSION = 18
 BOUNDARY_VOCABULARY_VERSION = 5

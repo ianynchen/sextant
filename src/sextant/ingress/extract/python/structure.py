@@ -498,6 +498,7 @@ class _Writer(BodyReader):
                             scope,
                         ),
                         written_by=scope.body.caller,
+                        guards=list(scope.guards) or None,
                     )
                 )
 
@@ -591,6 +592,7 @@ class _Writer(BodyReader):
                 field=descriptor,
                 value=applied,
                 written_by=scope.body.caller,
+                guards=list(scope.guards) or None,
             )
         )
 

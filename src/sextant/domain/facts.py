@@ -736,6 +736,10 @@ class FieldWriteFact(BaseModel):
     # The writing method's own symbol, in the form `call_sites.caller` carries, so a write
     # and a call name their method identically and the walk needs no reconstruction.
     written_by: str | None = None
+    # Ruling R1 of 2026-11-25 (OI-508, OI-509, fact schema 23): the tests this write runs
+    # under within its own body, outermost first, in the format and by the rules of
+    # `CallSiteFact.guards`; absent where it runs under none, and on every JVM write (OI-552).
+    guards: list[CallGuard] | None = None
 
     @model_validator(mode="after")
     def _one_source(self) -> "FieldWriteFact":

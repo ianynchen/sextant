@@ -17,6 +17,14 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A Django route list or root written under a test gives its routes that condition** (ruling
+  R1 of 2026-11-25, OI-508, OI-509; fact schema 23). `if settings.DEVELOPMENT: urlpatterns +=
+  dev_urls.urlpatterns` published the added routes behind the `<prefix>` hole at `partial`, and
+  `if T: ROOT_URLCONF = "b"` published the routes of `b` with no condition. The Python scanner
+  now writes the tests a write to a name runs under (`field_write.guards`, the format of
+  `call_site.guards`), and the routes are at their real address, "not evaluated". Fact sets of
+  the older schema are re-extracted. The JVM extractor is not changed (OI-552).
+
 - **A Python project that declares its dependencies under `[dependency-groups]` (PEP 735, what
   uv writes) is read.** Sextant took dependency names from `[project].dependencies`, Poetry,
   `setup.cfg`, `requirements*.txt` and `Pipfile` only, so zulip (everything under

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from test_flow import _scan, _sites
 
-from sextant.domain.facts import CallSiteFact
+from sextant.domain.facts import CallSiteFact, FieldWriteFact
 
 
 def _guards(sites) -> dict[str, list[tuple[str, bool, list[str]]] | None]:
@@ -194,3 +194,54 @@ def test_the_main_block_test_guards_nothing(tmp_path: Path):
 
     sites = _sites(facts)
     assert _guards({name: sites[name] for name in ("a", "b")}) == {"a": None, "b": None}
+
+
+def test_a_field_write_carries_the_tests_it_runs_under(tmp_path: Path):
+    """D00 §5 `field_write.guards` (fact schema 23, ruling R1 of 2026-11-25, OI-508, OI-509):
+    a write to a name carries the tests it runs under within its own body, outermost first, by
+    the rules of a call's. A write under none, and one under a test the language decides,
+    carries none."""
+    facts = _scan(
+        tmp_path,
+        "import os\n"
+        "from typing import TYPE_CHECKING\n"
+        "A = ['a']\n"
+        "if os.environ:\n"
+        "    A += ['b']\n"
+        "    if os.sep:\n"
+        "        B = 1\n"
+        "else:\n"
+        "    C = 2\n"
+        "if not TYPE_CHECKING:\n"
+        "    D = 3\n"
+        "def f(flag):\n"
+        "    global E\n"
+        "    if flag:\n"
+        "        return\n"
+        "    E = 4\n"
+        "class K:\n"
+        "    def __init__(self, flag):\n"
+        "        if flag:\n"
+        "            self.x = 5\n",
+    )
+
+    written = [
+        (
+            fact.field.rsplit("#", 1)[1],
+            None
+            if fact.guards is None
+            else [(guard.test, guard.holds, list(guard.reads)) for guard in fact.guards],
+        )
+        for fact in facts
+        if isinstance(fact, FieldWriteFact)
+    ]
+    outer = ("os.environ", True, ["os.environ"])
+    assert written == [
+        ("A.", None),
+        ("A.", [outer]),
+        ("B.", [outer, ("os.sep", True, ["os.sep"])]),
+        ("C.", [("os.environ", False, ["os.environ"])]),
+        ("D.", None),
+        ("E.", [("flag", False, ["flag"])]),
+        ("x.", [("flag", True, ["flag"])]),
+    ]

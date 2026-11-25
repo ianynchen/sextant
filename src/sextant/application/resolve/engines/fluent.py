@@ -2117,8 +2117,11 @@ def _existence(
             contexts = [one for one in contexts if one is not None]
         for context_path in contexts:
             chosen = context_path.calls_into() if context_path is not None else {}
-            found |= context.conditions.of_sites([*mounts, *own], chosen)
-            untied |= context.conditions.of_sites([*mounts, *own], chosen, untied=True)
+            # A write under a test the row's lists were read through (`field_write.guards`,
+            # ruling R1 of 2026-11-25) is one more thing its registration ran through.
+            writes = context_path.written_under() if context_path is not None else ()
+            found |= context.conditions.of_sites([*mounts, *writes, *own], chosen)
+            untied |= context.conditions.of_sites([*mounts, *writes, *own], chosen, untied=True)
     if not found:
         # Every place disagreed with the row's path: read them in no calling context.
         for place in places:

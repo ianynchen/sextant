@@ -4707,9 +4707,9 @@ GUARDS: dict[str, Guard] = {
             Edit(
                 path=_VALUES,
                 find="            else:\n"
-                "                reached.append((trail, _unresolved(NOT_READABLE)))",
+                "                reached.append((here, _unresolved(NOT_READABLE)))",
                 replace="            elif False:  # guard disabled by scripts/guard_check.py\n"
-                "                reached.append((trail, _unresolved(NOT_READABLE)))",
+                "                reached.append((here, _unresolved(NOT_READABLE)))",
             ),
         ),
     ),

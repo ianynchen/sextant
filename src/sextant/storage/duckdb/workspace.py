@@ -102,11 +102,11 @@ _NAMED_QUERIES = {
     # the ladder's own reader skips them. NULLS LAST keeps the parameter writes — the rung
     # that reads this — ahead of the constant ones in the tie-break order (NFR-1).
     "field_writes": (
-        "SELECT field, from_parameter, value, written_by FROM field_writes "
+        "SELECT field, from_parameter, value, written_by, guards FROM field_writes "
         # `value` is in the key as well: one method can write one field from several
         # constants, and the other three columns are equal on those rows, so without it the
         # order between them is whatever the engine happens to produce (NFR-1).
-        "ORDER BY field, from_parameter NULLS LAST, value::VARCHAR, written_by"
+        "ORDER BY field, from_parameter NULLS LAST, value::VARCHAR, written_by, guards"
     ),
     # D00 §5's `method_return` (capability 9.18): what each method hands back,
     # one row per return instruction. 2Q's `G3` — cross-method return
@@ -1092,6 +1092,13 @@ _NAMED_QUERIES = {
         SELECT caller, ordinal, guards FROM call_sites WHERE guards IS NOT NULL
         ORDER BY caller, ordinal
     """,
+    # Fact schema 23 (OI-508, OI-509): the tests a field write runs under, each set once per
+    # writing method (D00 §5 `field_write.guards`), read beside `call_site_guards`.
+    "field_write_guards": """
+        SELECT DISTINCT written_by, guards FROM field_writes
+        WHERE guards IS NOT NULL AND written_by IS NOT NULL
+        ORDER BY written_by, guards
+    """,
     "calls_running": """
         SELECT DISTINCT callee, caller, ordinal FROM call_edges WHERE callee IS NOT NULL
         ORDER BY callee, caller, ordinal
@@ -1793,11 +1800,13 @@ _EXPORT_QUERIES = {
     # `field_writes.parquet` in the clear while `raw_facts.parquet` carried it masked.
     "field_writes": f"""
         SELECT w.document_id, w.field, w.from_parameter,
-               coalesce(j.masked::JSON, w.value) AS value, w.written_by
+               coalesce(j.masked::JSON, w.value) AS value, w.written_by,
+               coalesce(g.masked, w.guards) AS guards
         FROM field_writes w
         LEFT JOIN {_REDACTED_JSON} j ON j.original = w.value::VARCHAR
+        LEFT JOIN {_REDACTED_JSON} g ON g.original = w.guards
         ORDER BY w.document_id, w.field, w.from_parameter NULLS LAST, w.value::VARCHAR,
-                 w.written_by
+                 w.written_by, w.guards
     """,
     # Worth carrying rather than recomputable: without it a consumer sees the
     # tagged copies in `documents` and cannot tell which one the derived rows
@@ -1876,6 +1885,8 @@ _FACT_ONLY = frozenset(
         "documents",
         # The call sites under a test of their own body (OI-368): `call_sites` alone.
         "call_site_guards",
+        # The field writes under a test of their own body: `field_writes` alone.
+        "field_write_guards",
         # The class-level annotations of header-read dependency types (D00 §5
         # `type_header`): a read over `raw_facts` alone, so cached per load like every
         # other fact query — the cache rule test is what said so.
@@ -2933,6 +2944,7 @@ class DuckDbWorkspace:
             "UNION SELECT DISTINCT expression FROM bean_conditions WHERE expression IS NOT NULL "
             # OI-368: a code test's text, quoted in a guard and in a row's existence entry.
             "UNION SELECT DISTINCT guards FROM call_sites WHERE guards IS NOT NULL "
+            "UNION SELECT DISTINCT guards FROM field_writes WHERE guards IS NOT NULL "
             "UNION SELECT DISTINCT expression FROM endpoint_existence WHERE expression IS NOT NULL"
         ).fetchall()
         self._stage_map(

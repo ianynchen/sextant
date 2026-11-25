@@ -933,23 +933,86 @@ def test_a_module_that_includes_itself_is_read_once(tmp_path, libraries):
     assert _rows(workspace) == [_row("/a/")]
 
 
-def test_a_list_added_under_a_test_is_behind_the_hole(tmp_path, libraries):
+def _conditions(workspace) -> list[tuple[object, str, object]]:
+    live = {row["row_id"]: row["path"] for row in workspace.query("endpoints")}
+    return sorted(
+        (live[row["row_id"]], json.loads(str(row["expression"]))["test"], row["holds"])
+        for row in workspace.query("endpoint_existence")
+    )
+
+
+def test_a_list_added_under_a_test_gives_its_routes_the_condition(tmp_path, libraries):
     """`if settings.DEVELOPMENT: urlpatterns += dev_urls.urlpatterns`: the other list's
-    routes are served only where the test holds, and no fact of theirs says so (design
-    2026-11-23 §9b): behind the hole at `partial`, never `resolved`. The list outside the
-    test is read."""
+    routes are served only where the test holds, and the write says so (`field_write.guards`,
+    ruling R1 of 2026-11-25, OI-508): each is at its real address and "not evaluated", as a
+    route under a mount written under a test is. The list outside the test has no condition.
+    `urlpatterns = urlpatterns + other` is the same write."""
+    for added in (
+        "urlpatterns += dev_urls.urlpatterns",
+        "urlpatterns = urlpatterns + dev_urls.urlpatterns",
+    ):
+        workspace = _program(
+            tmp_path / str(len(added)),
+            libraries,
+            {
+                "dev_urls.py": "urlpatterns = [path('dev/', v)]\n",
+                "urls.py": "from django.conf import settings\nfrom app import dev_urls\n"
+                "urlpatterns = [path('a/', v)]\n"
+                f"if settings.DEVELOPMENT:\n    {added}\n",
+            },
+        )
+
+        assert _rows(workspace) == [_row("/a/"), _row("/dev/")]
+        assert _conditions(workspace) == [("/dev/", "settings.DEVELOPMENT", "unresolved")]
+        assert _questions(workspace, "mount_prefix") == []
+
+
+def test_a_list_added_under_a_test_in_a_mounted_module_keeps_the_mount_and_the_test(
+    tmp_path, libraries
+):
+    """The write under a test is one more thing the row's registration ran through: behind a
+    mount under another test, the row carries both, the mount's first."""
     workspace = _program(
         tmp_path,
         libraries,
         {
             "dev_urls.py": "urlpatterns = [path('dev/', v)]\n",
-            "urls.py": "from django.conf import settings\nfrom app import dev_urls\n"
+            "api_urls.py": "from django.conf import settings\nfrom app import dev_urls\n"
             "urlpatterns = [path('a/', v)]\n"
             "if settings.DEVELOPMENT:\n    urlpatterns += dev_urls.urlpatterns\n",
+            "urls.py": "from django.conf import settings\n"
+            "urlpatterns = []\n"
+            "if settings.API:\n    urlpatterns += [path('api/', include('app.api_urls'))]\n",
         },
     )
 
-    assert _rows(workspace) == [_row("/<prefix>dev/", "partial"), _row("/a/")]
+    assert _rows(workspace) == [_row("/api/a/"), _row("/api/dev/")]
+    assert _conditions(workspace) == [
+        ("/api/a/", "settings.API", "unresolved"),
+        ("/api/dev/", "settings.API", "unresolved"),
+        ("/api/dev/", "settings.DEVELOPMENT", "unresolved"),
+    ]
+
+
+def test_a_root_setting_written_under_a_test_gives_its_routes_the_condition(tmp_path, libraries):
+    """`ROOT_URLCONF = "app.urls"`, then `if T: ROOT_URLCONF = "app.other_urls"` (zulip's
+    `RUNNING_INSIDE_TORNADO`): the routes served from the root written under the test carry
+    the test, "not evaluated" (ruling R1 of 2026-11-25, OI-509); the routes of the other root
+    keep what they have."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "import sys\nROOT_URLCONF = 'app.urls'\n"
+            "TORNADO = len(sys.argv) > 1\n"
+            "if TORNADO:\n    ROOT_URLCONF = 'app.other_urls'\n",
+            "urls.py": "urlpatterns = [path('u/', v)]\n",
+            "other_urls.py": "urlpatterns = [path('o/', v)]\n",
+        },
+    )
+
+    assert _rows(workspace) == [_row("/o/"), _row("/u/")]
+    assert _conditions(workspace) == [("/o/", "TORNADO", "unresolved")]
 
 
 def test_a_call_that_may_be_a_mount_is_one_only_where_its_router_reads_as_one(tmp_path, libraries):
