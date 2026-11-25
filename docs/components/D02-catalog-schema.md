@@ -838,10 +838,14 @@ expression `${NAME}`, read before any write of the name, as a settings field is 
 from it keeps the hole (`https://${API_HOST}/pay`). No settings module's literal is the answer,
 because the deployment selects the module; what each one sets is `resolved_config`, per
 environment (§2i `from_module_holding`). The entries ride the stated-call table
-(`Catalog.returns_arguments`, form `key_read`) to `values._Walk._value`. Not read: `getattr(
-settings, 'NAME', default)`, and a settings module imported directly (`from proj import
-settings`), which is an ordinary module name (OI-563 (1)). Refused naming the file: a missing
-`owner` or `by`, an unknown key, and one object stated twice.
+(`Catalog.returns_arguments`, form `key_read`) to `values._Walk._value`. Not read:
+`getattr(settings, 'NAME', default)`. A settings module imported directly (`from proj import
+settings`) is an ordinary module name to the value walk: a value read of `settings.NAME` is
+what that one module writes, and a test the code fixes is decided on it (OI-563 (1)). In a
+test that is not decided so (the name has no one value there), a name of a settings module is
+the key `NAME` too, and the condition is kind `property` (`registration_conditions.
+SettingsReads.objects`: each environment's module is such an object). Refused naming the
+file: a missing `owner` or `by`, an unknown key, and one object stated twice.
 
 An edit here moves `_catalog_hash` (`api._MODEL_DIRECTORIES`), like an edit to any of the
 other four directories: it is knowledge a run was produced with.
