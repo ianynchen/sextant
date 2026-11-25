@@ -741,12 +741,14 @@ _NAMED_QUERIES = {
     # Every symbol of the header document (D00 §5 `type_header`): the library bodies a module
     # class's lookup order has read (fact schema 22). F4 §5.2 (W24): nobody asked for them, so
     # a row registered in one is the library's, never published (`drop_borrowed_endpoints.sql`,
-    # and at source where a row carries no caller).
+    # and at source where a row carries no caller). Not a symbol the library's own document
+    # holds too: the module opted into that library, and its rows were asked for (R9).
     "header_symbols": """
         SELECT s.symbol AS symbol
         FROM symbols s
         JOIN documents d ON d.document_id = s.document_id
-        WHERE d.header_only
+        GROUP BY s.symbol
+        HAVING bool_and(d.header_only)
         ORDER BY symbol
     """,
     # The two NON-WIRE tables (2O design §4). Ordered on their whole content

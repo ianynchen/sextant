@@ -16,10 +16,13 @@ from test_fastapi_routes import _LOCKED, _bare, _resolved
 from fixture_python import FIXTURES
 from sextant.application.ports.catalogs import CatalogError
 from sextant.application.ports.detector import LibraryRoot
+from sextant.application.ports.scanner import ScanRequest
 from sextant.application.resolve import values
 from sextant.application.resolve.engines import single_call
 from sextant.application.resolve.shapes.client_base import APPEND_TO_BASE, join_url
+from sextant.domain.factfile import library_fact_root
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
+from sextant.ingress.extract.python.scanner import PythonScanner
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -646,3 +649,54 @@ def test_a_session_subclass_publishes_only_the_modules_own_calls(tmp_path, libra
     )
 
     assert rows == [("GET", "a.example", "/w", "app/main#send", "resolved", None)]
+
+
+_STUB_CLIENT = (
+    "import requests\n"
+    "class Base:\n"
+    "    def fetch(self):\n"
+    "        return requests.get('https://a.example/w')\n"
+)
+
+
+_STUB_FETCH = "sextant-python pypi stubclient 1 stubclient/Base#fetch"
+
+
+def _stub_client(tmp_path: Path) -> LibraryRoot:
+    """A distribution `stubclient` whose class `Base` calls `requests.get` in a method."""
+    site = tmp_path / "stub-site"
+    (site / "stubclient").mkdir(parents=True)
+    (site / "stubclient" / "__init__.py").write_text(_STUB_CLIENT, encoding="utf-8")
+    info = site / "stubclient-1.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text("Name: stubclient\nVersion: 1\n", encoding="utf-8")
+    (info / "RECORD").write_text("stubclient/__init__.py,,\n", encoding="utf-8")
+    return LibraryRoot("stubclient", "1", site)
+
+
+@pytest.mark.parametrize("opted_in", [False, True], ids=["not-opted-in", "opted-in"])
+def test_an_opted_in_librarys_outbound_call_is_published(tmp_path, libraries, opted_in: bool):
+    """`class Mine(Base)`: the library `Base`'s bodies are read because a module class extends
+    it, and its `requests.get(...)` is the library's row, not published (F4 §5.2). Where the
+    module opts into the library (`extract_libraries`, D04 §2a) the body is also in the
+    library's own document, which the person asked for: the row is published, as an opted-in
+    JVM library's is (ruled 2026-11-25, R9; OI-560, OI-543)."""
+    stub = _stub_client(tmp_path)
+    if opted_in:
+        PythonScanner().scan(
+            ScanRequest(
+                module_id="shop",
+                coordinates=stub.coordinate,
+                version=stub.version,
+                classes_dir=stub.archive,
+                out_dir=library_fact_root(tmp_path / "facts", stub.coordinate),
+                origin=stub.coordinate,
+            )
+        )
+    rows = _outbound(
+        tmp_path,
+        (*libraries, stub),
+        "from stubclient import Base\nclass Mine(Base):\n    pass\n",
+    )
+
+    assert rows == ([("GET", "a.example", "/w", _STUB_FETCH, "resolved", None)] if opted_in else [])

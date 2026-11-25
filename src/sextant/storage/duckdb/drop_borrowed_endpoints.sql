@@ -50,10 +50,18 @@ WHERE coalesce(handler, caller) IN (
 -- `coalesce(handler, caller)` as above: a module's own route may name a library method as its
 -- handler (`path("x/", RedirectView.as_view())` gives `RedirectView.get`), and that row is the
 -- module's. A JVM header document holds no method, so this reaches nothing there.
+--
+-- **Consent is the difference here too** (ruled 2026-11-25, R9): a body the header document
+-- holds is ALSO in the library's own document where the module opts into that library
+-- (`extract_libraries`), and then its rows are what the person asked for, as an opted-in JVM
+-- library's are. So a symbol a document that is not the header document holds too is not
+-- borrowed. Measured on zulip with `social-auth-core` opted in: `BaseAuth#request`'s
+-- `requests.request(...)` row was derived and deleted here.
 DELETE FROM endpoints
 WHERE coalesce(caller, handler) IN (
     SELECT s.symbol
     FROM symbols s
     JOIN documents d ON d.document_id = s.document_id
-    WHERE d.header_only
+    GROUP BY s.symbol
+    HAVING bool_and(d.header_only)
 );

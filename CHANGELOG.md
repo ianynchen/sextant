@@ -17,6 +17,12 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **An opted-in Python library's outbound call in a class the module extends is published**
+  (ruling R9 of 2026-11-25, OI-560). The bodies of a library class a module class extends are
+  in the header document, and with `extract_libraries` naming the library they are in its own
+  document too; the borrowed-rows rule deleted the row by the header document's symbol. A
+  symbol a document that is not the header document holds too is not borrowed. A call an
+  opted-in library makes into another library outside such a class is still not typed (OI-567).
 - **A row whose method or path was not read says why** (ruling R4 of 2026-11-25, OI-540,
   OI-502). A new open-question kind, `not_read`, the eighteenth: one question per wire identity,
   each candidate the column (`method` or `path`), the reason (a word of the value walk's list)
