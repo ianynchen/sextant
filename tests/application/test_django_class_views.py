@@ -737,3 +737,24 @@ def test_a_view_object_below_a_base_not_read_names_no_handler(tmp_path: Path, li
     )
 
     assert rows == [(None, "any", "/x/", None, "partial")]
+
+
+def test_a_library_override_of_a_stated_method_stops_the_ancestor_match(tmp_path: Path, libraries):
+    """OI-521: the entry is on `View`; `LibSub(View)`, a library class no module class extends,
+    defines its own `as_view` (its header lists it, its body is not read). That one runs, so
+    the entry does not apply: the value is what code not read gives, never `LibSub`."""
+    sunk = _sunk(
+        tmp_path,
+        (
+            *libraries,
+            _stub(
+                tmp_path,
+                "from django.views import View\n"
+                "class LibSub(View):\n"
+                "    @classmethod\n    def as_view(cls, **kw):\n        return 'lib'\n",
+            ),
+        ),
+        _HEAD + _SINK + "from stubviews import LibSub\ndef read():\n    sink(LibSub.as_view())\n",
+    )
+
+    assert sunk == [[(None, "external")]]

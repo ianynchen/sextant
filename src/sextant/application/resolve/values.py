@@ -1009,6 +1009,10 @@ class ValueIndex:
     function_returns: Mapping[tuple[str, str], Mapping[str, Any]] = dataclass_field(
         default_factory=dict
     )
+    # Each method a library class's type header lists, `(owner, name)`, its body read or not:
+    # a method the class defines, which a stated entry on an ancestor does not reach past
+    # (`_Walk._stated_on_ancestor`, OI-521).
+    header_methods: frozenset[tuple[str, str]] = frozenset()
     # Each class's type parameters by name, in order (D00 §5a `type_parameters`), and its
     # written parents with their type arguments (`supertype`, `generic_interfaces`), by bare
     # class symbol, for a `c3` module: what a generic class's parameters are on a subclass
@@ -1845,7 +1849,8 @@ _CALLABLES = frozenset({"typing/Callable#", "collections/abc/Callable#"})
 
 
 def _descriptor_tables(workspace: Workspace) -> dict[str, Any]:
-    """`ValueIndex.descriptors`, `module_types` and `function_returns` (task 9c re-review N1),
+    """`ValueIndex.descriptors`, `module_types`, `function_returns` (task 9c re-review N1) and
+    `header_methods`,
     from the module's method facts and the library classes whose header read their body."""
     gets: dict[str, Mapping[str, Any] | None] = {}
     conflicting: set[str] = set()
@@ -1897,6 +1902,7 @@ def _descriptor_tables(workspace: Workspace) -> dict[str, Any]:
                 None,
                 [one.get("type") for one in signature.get("parameters") or []],
             )
+    header_methods: set[tuple[str, str]] = set()
     for row in workspace.query("type_header_bodies"):
         owner = bare_descriptor(str(row["symbol"]))
         raw = row["methods"]
@@ -1904,6 +1910,7 @@ def _descriptor_tables(workspace: Workspace) -> dict[str, Any]:
         if not isinstance(listed, list):
             continue
         for entry in listed:
+            header_methods.add((owner, str(entry["name"])))
             method(owner, str(entry["name"]), entry.get("returns"), entry.get("parameters") or [])
     return {
         "descriptors": {
@@ -1914,6 +1921,7 @@ def _descriptor_tables(workspace: Workspace) -> dict[str, Any]:
             bare_descriptor(str(row["symbol"])) for row in workspace.query("module_types")
         ),
         "function_returns": returns,
+        "header_methods": frozenset(header_methods),
     }
 
 
@@ -5917,8 +5925,8 @@ class _Walk:
         (`Sub.as_view()` for an entry on `View`): the language's own lookup. The receiver, read
         on each path, names the type; its lookup order (`Dispatch.order_through_headers`) is
         searched for the first type the entry is stated on, and a type nearer in the order
-        whose own body of that method was read wins over the entry (None: the body is followed
-        as any call is). Where the order meets a type not read first, the one stated type among
+        that defines that method, its body read or its header listing it (OI-521), wins over
+        the entry (None: the call is followed as any call is). Where the order meets a type not read first, the one stated type among
         the ancestors read beyond it, with no other body of the name there, gives the value,
         `inexact`: the type not read may define the method (OI-541). `returns` and
         `returns_receiver` alone; None where no path's receiver reaches a stated type. Python modules only (`lookup` `c3`): the JVM's order is not
@@ -5929,7 +5937,11 @@ class _Walk:
         if row.get("receiver") is None and row.get("owner") is None:
             return None
         stated, name = self._index.stated_returns, str(row["name"])
-        defined = self._index.named_functions
+        named, listed = self._index.named_functions, self._index.header_methods
+
+        def defined(key: tuple[str, str]) -> bool:
+            """Whether the type defines the method: a body read, or a header that lists it."""
+            return bool(named.get(key)) or key in listed
 
         def entry_of(owner: str) -> tuple[str, tuple[str, int], bool] | None:
             """The type the entry is stated on, the entry, and whether a type not read comes
@@ -5940,7 +5952,7 @@ class _Walk:
                 own = stated.get((type_, name))
                 if own is not None:
                     return (type_, own, False) if own[0] in (_RETURNS, _RETURNS_RECEIVER) else None
-                if defined.get((type_, name)):
+                if defined((type_, name)):
                     return None
             if unread is None:
                 return None
@@ -5955,7 +5967,7 @@ class _Walk:
                         pending.append(ancestor)
             found = {type_ for type_ in beyond if (type_, name) in stated}
             if len(found) != 1 or any(
-                defined.get((type_, name)) for type_ in beyond if type_ not in found
+                defined((type_, name)) for type_ in beyond if type_ not in found
             ):
                 return None
             (type_,) = found
