@@ -5918,8 +5918,10 @@ class _Walk:
         on each path, names the type; its lookup order (`Dispatch.order_through_headers`) is
         searched for the first type the entry is stated on, and a type nearer in the order
         whose own body of that method was read wins over the entry (None: the body is followed
-        as any call is). `returns` and `returns_receiver` alone; None where no path's receiver
-        reaches a stated type. Python modules only (`lookup` `c3`): the JVM's order is not
+        as any call is). Where the order meets a type not read first, the one stated type among
+        the ancestors read beyond it, with no other body of the name there, gives the value,
+        `inexact`: the type not read may define the method (OI-541). `returns` and
+        `returns_receiver` alone; None where no path's receiver reaches a stated type. Python modules only (`lookup` `c3`): the JVM's order is not
         searched here."""
         dispatch = self._index.dispatch
         if dispatch is None or dispatch.lookup != "c3":
@@ -5929,19 +5931,50 @@ class _Walk:
         stated, name = self._index.stated_returns, str(row["name"])
         defined = self._index.named_functions
 
-        def entry_of(owner: str) -> tuple[str, tuple[str, int]] | None:
-            """The type the entry is stated on, and the entry; None where a body wins."""
-            for type_ in dispatch.order_through_headers(owner)[0]:
+        def entry_of(owner: str) -> tuple[str, tuple[str, int], bool] | None:
+            """The type the entry is stated on, the entry, and whether a type not read comes
+            before it in the order (it may define the method: OI-541); None where a body
+            wins."""
+            order, unread = dispatch.order_through_headers(owner)
+            for type_ in order:
                 own = stated.get((type_, name))
                 if own is not None:
-                    return (type_, own) if own[0] in (_RETURNS, _RETURNS_RECEIVER) else None
+                    return (type_, own, False) if own[0] in (_RETURNS, _RETURNS_RECEIVER) else None
                 if defined.get((type_, name)):
                     return None
-            return None
+            if unread is None:
+                return None
+            # Past the type not read, the order is not known: the ancestors read beyond it
+            # stand for it, one stated type among them and no other body of the name.
+            beyond: set[str] = set()
+            pending = [owner]
+            while pending:
+                for ancestor, _, _ in dispatch.ancestors.get(pending.pop(), ()):
+                    if ancestor not in beyond and ancestor not in order:
+                        beyond.add(ancestor)
+                        pending.append(ancestor)
+            found = {type_ for type_ in beyond if (type_, name) in stated}
+            if len(found) != 1 or any(
+                defined.get((type_, name)) for type_ in beyond if type_ not in found
+            ):
+                return None
+            (type_,) = found
+            own = stated[(type_, name)]
+            return (type_, own, True) if own[0] in (_RETURNS, _RETURNS_RECEIVER) else None
 
-        def stated_slot(found: tuple[str, tuple[str, int]], path: _Trail) -> tuple[_Reached, ...]:
+        def stated_slot(
+            found: tuple[str, tuple[str, int], bool], path: _Trail
+        ) -> tuple[_Reached, ...]:
             element = self._index.stated_elements.get((found[0], name))
             return self._stated_slot(site, row, found[1][1], path, frames, element)
+
+        def marked(
+            found: tuple[str, tuple[str, int], bool], reached: Sequence[_Reached]
+        ) -> tuple[_Reached, ...]:
+            return tuple(
+                (path, replace(answer, inexact=True) if found[2] else answer)
+                for path, answer in reached
+            )
 
         if row.get("owner") is not None:
             found = entry_of(str(row["owner"]))
@@ -5949,19 +5982,22 @@ class _Walk:
                 return None
             passed = _passing(trail, site)
             if found[1][0] == _RETURNS:
-                return stated_slot(found, passed)
+                return marked(found, stated_slot(found, passed))
             if row.get("receiver") is None and site in self._index.class_receivers:
                 # Called through the class (`Sub.as_view()`): its receiver is that class.
-                return _only(
-                    passed,
-                    Answer(
-                        kind=LITERAL,
-                        value=str(row["owner"]),
-                        literal_kind=SYMBOL,
-                        class_object=True,
+                return marked(
+                    found,
+                    _only(
+                        passed,
+                        Answer(
+                            kind=LITERAL,
+                            value=str(row["owner"]),
+                            literal_kind=SYMBOL,
+                            class_object=True,
+                        ),
                     ),
                 )
-            return self._resolve((_SLOT, site[0], site[1], RECEIVER), passed, frames)
+            return marked(found, self._resolve((_SLOT, site[0], site[1], RECEIVER), passed, frames))
         reached: list[_Reached] = []
         matched = False
         for path, answer in self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames):
@@ -5971,9 +6007,9 @@ class _Walk:
                 return None
             matched = True
             if found[1][0] == _RETURNS:
-                reached.extend(stated_slot(found, _passing(path, site)))
+                reached.extend(marked(found, stated_slot(found, _passing(path, site))))
             else:
-                reached.append((_passing(path, site), answer))
+                reached.extend(marked(found, ((_passing(path, site), answer),)))
         return tuple(reached) if matched else None
 
     def _stated_slot(

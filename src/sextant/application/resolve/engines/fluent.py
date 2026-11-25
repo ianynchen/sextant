@@ -4328,6 +4328,9 @@ def _class_view(
         held = producer.ended_at
         if held is not None and _view_class(held, rule.owners, dispatch):
             owners.append(str(held.value))
+            # A class read `inexact` (a type not read may define `as_view`, OI-541) leaves
+            # every row unsure, as a path that names no class does.
+            other = other or held.inexact
             passed.setdefault(str(held.value), []).extend(path.passed())
         else:
             other = True

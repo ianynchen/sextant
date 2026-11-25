@@ -541,7 +541,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-538 | SEXTANT-TBD | some reads of the request method are missed, so an any-method row stays `resolved` (plan 2026-11-23-python-django-redesign, high) |
 | OI-539 | SEXTANT-TBD | a view object names no handler (plan 2026-11-23-python-django-redesign, low) (fixed on `fix/django-open-issues`: the handler is the class's `__call__`, found in its lookup order; `tests/application/test_django_class_views.py::test_a_view_object_names_its_class_call_method`) |
 | OI-540 | SEXTANT-TBD | a doubted any-method row gets no question (plan 2026-11-23-python-django-redesign, medium) |
-| OI-541 | SEXTANT-TBD | a class below an unread base names no handler (plan 2026-11-23-python-django-redesign, low) |
+| OI-541 | SEXTANT-TBD | a class below an unread base names no handler (plan 2026-11-23-python-django-redesign, low) (fixed on `fix/django-open-issues`: past the type not read, the one stated type among the ancestors read gives the call's value, `inexact`; the class's rows name their handlers, `partial`; `tests/application/test_django_class_views.py::test_a_class_whose_base_is_not_read_is_partial`) |
 | OI-542 | SEXTANT-TBD | a library attribute read in an `if` test is written twice (plan 2026-11-23-python-django-redesign, low) |
 | OI-543 | SEXTANT-TBD | a library body's outbound call is dropped with the library's rows (plan 2026-11-23-python-django-redesign, low) |
 | OI-544 | SEXTANT-TBD | DRF `APIView` rows under `path()` name no handler (plan 2026-11-23-python-django-redesign, low) |
