@@ -1765,7 +1765,13 @@ def value_index(
         unread_receivers={key: tuple(value) for key, value in shapes.unread_receivers.items()},
         captured_as=shapes.captured_as,
         hands_on=_hands_on(sites, returned_values),
-        changed_lists=_changed_lists(sites, constants) if by_name else frozenset(),
+        changed_lists=(
+            _changed_lists(
+                sites, constants, callees, call_parameters, class_receivers, instance_methods
+            )
+            if by_name
+            else frozenset()
+        ),
         lambda_types=frozenset(shapes.lambda_types),
         not_hand_offs=shapes.not_hand_offs,
         stated=frozenset(
@@ -2169,22 +2175,67 @@ def _nested_entries(argument: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 def _changed_lists(
     sites: Mapping[tuple[str, int], Mapping[str, Any]],
     constants: Mapping[str, Sequence[tuple[str | None, Mapping[str, Any]]]],
+    callees: Mapping[tuple[str, int], Sequence[str]],
+    call_parameters: Mapping[str, tuple[tuple[str | None, str | None], ...]],
+    class_receivers: frozenset[tuple[str, int]],
+    instance_methods: AbstractSet[str],
 ) -> frozenset[str]:
     """`ValueIndex.changed_lists`: the fields whose list is not exactly known from its writes,
     because a call is made ON the field that the facts do not state as a write: a written
     method, or a store or a delete of an element. A read the language makes is none. A list
     handed to a call is still read (ruled 2026-11-23): the walk reads a field's writes and
-    tracks no hand-over of a field. A field written as another name's list (`VERBS = BASE`)
-    is that list, so a call that changes it through the second name changes the first too
-    (`VERBS.remove(v)`: `BASE` is changed, OI-516)."""
+    tracks no hand-over of a field. Where the body the call enters is read and makes such a
+    call on the parameter the field fills, there or in a body it hands that parameter on to,
+    the field is changed too (`keep(VERBS)`, `def keep(v): v.append(x)`, OI-510). A field
+    written as another name's list (`VERBS = BASE`) is that list, so a call that changes it
+    through the second name changes the first too (`VERBS.remove(v)`: `BASE` is changed,
+    OI-516)."""
+
+    def changes(site: Mapping[str, Any]) -> bool:
+        name = str(site["name"])
+        return not name.startswith("__") or name in ("__setitem__", "__delitem__")
+
     changed = {
         str(site["receiver_field"])
         for site in sites.values()
-        if site.get("receiver_field") is not None
-        and (
-            not str(site["name"]).startswith("__") or site["name"] in ("__setitem__", "__delitem__")
-        )
+        if site.get("receiver_field") is not None and changes(site)
     }
+    parameters = {
+        (method, int(str(site["receiver_parameter"])))
+        for (method, _), site in sites.items()
+        if site.get("receiver_parameter") is not None and changes(site)
+    }
+    # The calls that hand a field or a parameter whole to a body, with the parameter it fills.
+    handed: list[tuple[str, int, Mapping[str, Any], str]] = []
+    if parameters:
+        for key, site in sites.items():
+            arguments = site.get("arguments") or []
+            if not any(
+                a.get("kind") in ("field", "parameter") and a.get("keyword") != _UNPACKED_SEQUENCE
+                for a in arguments
+            ):
+                continue
+            for callee in callees.get(key, ()):
+                declared = call_parameters.get(callee)
+                if declared is None:
+                    continue
+                through = key in class_receivers and callee in instance_methods
+                for position, slot in enumerate(call_slots(arguments, declared, through)):
+                    if slot != UNFILLED and arguments[slot].get("keyword") != _UNPACKED_SEQUENCE:
+                        handed.append((callee, position, arguments[slot], key[0]))
+    grown = True
+    while grown:
+        grown = False
+        for callee, position, entry, caller in handed:
+            if (callee, position) not in parameters:
+                continue
+            if entry.get("kind") == "field" and entry.get("symbol") is not None:
+                changed.add(str(entry["symbol"]))
+            elif entry.get("kind") == "parameter" and entry.get("value") is not None:
+                giver = (caller, int(str(entry["value"])))
+                if giver not in parameters:
+                    parameters.add(giver)
+                    grown = True
     pending = list(changed)
     while pending:
         for _, entry in constants.get(pending.pop(), ()):

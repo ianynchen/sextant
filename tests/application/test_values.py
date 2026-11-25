@@ -7324,7 +7324,8 @@ def test_a_read_the_language_makes_on_a_held_list_keeps_its_members(held_py, cal
 def test_a_held_list_handed_to_a_call_is_still_read(held_py):
     """`keep(VERBS)`: a list handed to a call is still read (ruled 2026-11-23): the walk reads
     a field's writes and tracks no hand-over of a field, in Python as in Java. A list handed
-    to module code that changes it is a known limit (plan Task 10)."""
+    to module code seen to change it is not known (OI-510,
+    `test_fastapi_routes.py::test_a_verb_list_held_in_a_module_name_is_read`)."""
     assert _held_answers(held_py, "handed") == [("a", None), ("b", None)]
 
 

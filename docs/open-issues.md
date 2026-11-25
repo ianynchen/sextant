@@ -510,7 +510,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-507 | SEXTANT-TBD | Django admin routes are not read (plan 2026-11-23-python-django-redesign, medium) |
 | OI-508 | SEXTANT-TBD | a route list added under a test is published behind the `<prefix>` hole, without its condition (plan 2026-11-23-python-django-redesign, medium) |
 | OI-509 | SEXTANT-TBD | a root setting written twice, or under a test, gives two roots with no condition (plan 2026-11-23-python-django-redesign, high) |
-| OI-510 | SEXTANT-TBD | a held list handed to module code that changes it is read as written (plan 2026-11-23-python-django-redesign, low) |
+| OI-510 | SEXTANT-TBD | a held list handed to module code that changes it is read as written (plan 2026-11-23-python-django-redesign, low) (fixed on `fix/django-open-issues`: the list stays read when handed on; where the body it is handed to is read and makes a changing call on the parameter it fills, there or in a body it hands that parameter on to, it is `escapes`; `tests/application/test_fastapi_routes.py::test_a_verb_list_held_in_a_module_name_is_read`) |
 | OI-511 | SEXTANT-TBD | a JVM static array changed by an element store is read as known (plan 2026-11-23-python-django-redesign, low) |
 | OI-512 | SEXTANT-TBD | a read-only list method written as a call makes a held list `escapes` (plan 2026-11-23-python-django-redesign, low) |
 | OI-513 | SEXTANT-TBD | `x[f()] += v` writes the call `f()` twice (plan 2026-11-23-python-django-redesign, low) (fixed on `fix/django-open-issues`: the target's object and index are read once, and the store takes the values the read took; `tests/ingress/extract/python/test_calls.py::test_an_augmented_element_store_reads_its_object_and_index_once`) |

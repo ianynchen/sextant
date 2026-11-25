@@ -566,14 +566,16 @@ def _not_yet(held: str, expected: list[tuple[object, ...]], task: str) -> Any:
         ("VERB = 'get'\nVERBS = list(VERB)\n", [_NOT_KNOWN]),
         ("VERB = 'get'\nVERBS = ['post', *VERB]\n", [_NOT_KNOWN, _POST]),
         ("OTHER = ['get']\nVERBS = [*OTHER]\n", [_GET]),
-        pytest.param(
-            "VERBS = ['get']\ndef keep(v):\n    v.append('post')\nkeep(VERBS)\n",
-            [_NOT_KNOWN],
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="a held list handed to module code that changes it: logged as an issue "
-                "in plan Task 10",
+        # A list handed to module code is still read; where that code is seen to change the
+        # parameter it fills, there or in code it hands it on to, it is not known (OI-510).
+        ("VERBS = ['get']\ndef keep(v):\n    return len(v)\nkeep(VERBS)\n", [_GET]),
+        ("VERBS = ['get']\ndef keep(v):\n    v.append('post')\nkeep(VERBS)\n", [_NOT_KNOWN]),
+        (
+            (
+                "VERBS = ['get']\ndef add(v):\n    v.append('post')\n"
+                "def keep(n, v):\n    add(v)\nkeep(1, v=VERBS)\n"
             ),
+            [_NOT_KNOWN],
         ),
     ],
 )
