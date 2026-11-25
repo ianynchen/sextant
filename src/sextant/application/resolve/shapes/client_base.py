@@ -498,6 +498,15 @@ class _Ladder:
         self._rungs = [
             {**rung, "owner": type_descriptor(str(rung["owner"]))} for rung in declared["ladder"]
         ]
+        # A call through a module type that inherits a rung's method runs that method
+        # (`Dispatch.heirs`): `Api(base_url=...)` with `Api(httpx.Client)` (OI-525).
+        dispatch = values.dispatch
+        self._rungs += [
+            {**rung, "owner": heir}
+            for rung in self._rungs
+            if dispatch is not None
+            for heir in dispatch.heirs(rung["owner"], str(rung["method"]))
+        ]
         setter = declared.get("setter")
         self._setter = (
             None if setter is None else {**setter, "owner": type_descriptor(str(setter["owner"]))}

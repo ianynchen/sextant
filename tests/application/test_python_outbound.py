@@ -197,6 +197,22 @@ def test_a_relative_address_joins_the_base_the_client_was_built_with(tmp_path, l
     ]
 
 
+def test_a_client_subclass_joins_the_base_its_construction_was_handed(tmp_path, libraries):
+    """OI-525: `Api(httpx.Client)` defines no `__init__`, so `Api(base_url=...)` runs
+    `Client.__init__`: the construction is the declared rung's (`Dispatch.heirs`), and a
+    relative address joins its base. (Through `with … as`, the call on the name is not bound
+    to the class yet: OI-525 stays open for it.)"""
+    assert _outbound(
+        tmp_path,
+        libraries,
+        "import httpx\n"
+        "class Api(httpx.Client):\n"
+        "    pass\n"
+        "def listed() -> None:\n"
+        "    Api(base_url='https://a.example/v1').get('/w')\n",
+    ) == [("GET", "a.example", "/v1/w", "app/main#listed", "resolved", None)]
+
+
 def test_a_client_a_with_statement_opens_is_the_client_it_built(tmp_path, libraries):
     """Plan 3 R13: `Client.__enter__`, `AsyncClient.__aenter__` and `Session.__enter__` return
     the client itself (`value-models/python-clients.yml`), so the name `with … as` binds is
