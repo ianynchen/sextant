@@ -901,10 +901,11 @@ class ValueIndex:
     # (capturing method, capture site ordinal, argument slot) -> (lambda body, its parameter):
     # the capture fold's own mapping (OI-150/OI-266), read forwards (M6).
     # Each body's parameters that it CALLS with the first value it received itself
-    # (`f(request, ...)`), and whether the body returns what the call gives: calling the body
-    # runs what that parameter holds (`_Walk._runs_captured`).
-    hands_on: Mapping[str, tuple[tuple[int, int, bool], ...]] = dataclass_field(
-        default_factory=dict
+    # (`f(request, ...)`, or what a call on it gives: `log(f)(request)`), and whether the body
+    # returns what the call gives: calling the body runs what that parameter holds
+    # (`_Walk._runs_captured`).
+    hands_on: Mapping[str, tuple[tuple[int, int, bool, tuple[int, int] | None], ...]] = (
+        dataclass_field(default_factory=dict)
     )
     # The fields a call that may change a list is made ON (`x.remove(v)`, `x.sort()`): a
     # written method, or a `__setitem__` / `__delitem__` call. A read the language makes
@@ -1541,6 +1542,22 @@ def value_index(
         parameters[str(row["symbol"])] = tuple(named)
         parameter_types[str(row["symbol"])] = tuple(typed)
 
+    returned_values: dict[str, tuple[tuple[int, Mapping[str, Any]], ...]] = {}
+    returning: set[str] = set()
+    for row in workspace.query("method_returns"):
+        returning.add(bare_descriptor(str(row["method"])))
+        # DuckDB hands an explicit JSON null back as the four-character text `null`, not
+        # as SQL NULL — the projection's own comment says so — so a void return is read
+        # here rather than assumed away.
+        text = row["value"]
+        entry = None if text is None else json.loads(str(text))
+        if not isinstance(entry, dict):
+            continue
+        method = str(row["method"])
+        returned_values[method] = returned_values.get(method, ()) + (
+            (int(str(row["ordinal"])), entry),
+        )
+
     # **The seventh edge: a lambda's CAPTURE** (`OI-150`). A lambda body is a synthetic
     # method whose leading parameters are the values the enclosing method closed over, and
     # nothing in `value_edges` binds them — `callers` held no entry for any lambda body's
@@ -1565,8 +1582,14 @@ def value_index(
     # the lambda's own arguments, handed in by whoever invokes it, and `external` is the true
     # answer for them. A bound method reference (`captures` 0) binds none: its one argument
     # is the receiver.
-    for (method, _), site in sites.items():
-        for captured in _captures(site["arguments"]):
+    # A function made and returned (`def w(...): ...; return w`) is captured where it is made,
+    # as one handed to a call is.
+    made_in = [
+        *((method, site["arguments"]) for (method, _), site in sites.items()),
+        *((method, [entry for _, entry in entries]) for method, entries in returned_values.items()),
+    ]
+    for method, arguments in made_in:
+        for captured in _captures(arguments):
             # The entry names its body BARE, and every index here is keyed on full symbols.
             # The body is declared in the same class as the method that captured it, so its
             # coordinates are that method's — exact, where a bare-to-full map would be
@@ -1583,9 +1606,10 @@ def value_index(
                 # AFTER its written parameters, which keep their places (D00 §5 `captures`).
                 first = len(parameters.get(body, ())) if by_name else 0
                 for position in range(min(count, len(bound))):
-                    callers.setdefault((body, first + position), []).append(
-                        (method, maker, receiver + position)
-                    )
+                    held = callers.setdefault((body, first + position), [])
+                    # One function both handed to a call and returned is one capture.
+                    if (method, maker, receiver + position) not in held:
+                        held.append((method, maker, receiver + position))
                     shapes.captured_as[(method, maker, receiver + position)] = (
                         body,
                         first + position,
@@ -1656,22 +1680,6 @@ def value_index(
             constants.setdefault(str(row["field"]), []).append(
                 (None if writer is None else str(writer), entry)
             )
-
-    returned_values: dict[str, tuple[tuple[int, Mapping[str, Any]], ...]] = {}
-    returning: set[str] = set()
-    for row in workspace.query("method_returns"):
-        returning.add(bare_descriptor(str(row["method"])))
-        # DuckDB hands an explicit JSON null back as the four-character text `null`, not
-        # as SQL NULL — the projection's own comment says so — so a void return is read
-        # here rather than assumed away.
-        text = row["value"]
-        entry = None if text is None else json.loads(str(text))
-        if not isinstance(entry, dict):
-            continue
-        method = str(row["method"])
-        returned_values[method] = returned_values.get(method, ()) + (
-            (int(str(row["ordinal"])), entry),
-        )
 
     yielded_values: dict[str, tuple[tuple[int, Mapping[str, Any]], ...]] = {}
     for row in workspace.query("method_yields"):
@@ -2199,14 +2207,16 @@ def _is_tuple(entry: Mapping[str, Any]) -> bool:
 def _hands_on(
     sites: Mapping[tuple[str, int], Mapping[str, Any]],
     returned: Mapping[str, Sequence[tuple[int, Mapping[str, Any]]]],
-) -> dict[str, tuple[tuple[int, int, bool], ...]]:
-    """`ValueIndex.hands_on`: per method, `(called, handed, returned)` for each of its
+) -> dict[str, tuple[tuple[int, int, bool, tuple[int, int] | None], ...]]:
+    """`ValueIndex.hands_on`: per method, `(called, handed, returned, through)` for each of its
     parameters it calls with another of its parameters as the first argument, written or
     unpacked first (`f(request, *a)`, `f(*args)`); `returned` where what that call gives goes
     into a value the method returns, as it is (`return f(request)`) or inside what it returns
     (`return JsonResponse(f(request))`: the result of a call that took it), against one whose
-    result it only tests (`if allowed(request):`) or does not use (`log(request)`)."""
-    found: dict[str, list[tuple[int, int, bool]]] = {}
+    result it only tests (`if allowed(request):`) or does not use (`log(request)`). `through`
+    is `(value, ordinal)` where the value called is what a call on the parameter gives
+    (`log(f)(request)`), read at that call: None where the parameter itself is called."""
+    found: dict[str, list[tuple[int, int, bool, tuple[int, int] | None]]] = {}
     results: dict[str, set[Any]] = {}
     for method, entries in returned.items():
         for _, entry in entries:
@@ -2231,10 +2241,29 @@ def _hands_on(
                 if taken_in not in reached:
                     reached.add(taken_in)
                     pending.append(taken_in)
+    # The parameters each call takes, by the value it gives: `log(view)(request)` calls what
+    # a call on `view` gives.
+    taking: dict[tuple[str, int], list[int]] = {}
     for (method, _), site in sites.items():
+        if site.get("result") is not None:
+            taking[(method, int(str(site["result"])))] = [
+                int(str(argument["value"]))
+                for argument in site.get("arguments") or []
+                if argument.get("kind") == "parameter" and argument.get("value") is not None
+            ]
+    for (method, ordinal), site in sites.items():
         held = site.get("receiver_parameter")
         arguments = site.get("arguments") or []
-        if site["name"] != _CALL or held is None or not arguments:
+        if site["name"] != _CALL or not arguments:
+            continue
+        through = None
+        if held is None and site.get("receiver") is not None:
+            through = (int(str(site["receiver"])), ordinal)
+        if through is not None:
+            called = tuple(taking.get((method, through[0]), ()))
+        else:
+            called = () if held is None else (int(str(held)),)
+        if not called:
             continue
         given = site.get("result") is not None and int(str(site["result"])) in results.get(
             method, ()
@@ -2245,7 +2274,9 @@ def _hands_on(
             and first.get("value") is not None
             and first.get("keyword") in (None, _UNPACKED_SEQUENCE)
         ):
-            found.setdefault(method, []).append((int(str(held)), int(str(first["value"])), given))
+            found.setdefault(method, []).extend(
+                (position, int(str(first["value"])), given, through) for position in called
+            )
     return {method: tuple(dict.fromkeys(held)) for method, held in found.items()}
 
 
@@ -4288,7 +4319,8 @@ class _Walk:
         was made, on this path — what a value model states of a library wrapper with
         `result_calls`, read here from the code. Each path notes the body it ran through.
         It stands for each captured value whose call gives a value that goes into what the
-        body returns (`return view(request)`, `return JsonResponse(f(request))`); a call
+        body returns (`return view(request)`, `return JsonResponse(f(request))`), or for what
+        a call on it gives where that is what is called (`return log(view)(request)`); a call
         whose result it only tests or does not use (`if test(request):`, `log(request)`) is
         no hand-over. None where no call of a captured value goes into what it returns: the
         function is itself what runs. Where one does and no path reads a function there,
@@ -4301,21 +4333,36 @@ class _Walk:
         first = len(self._index.parameters.get(body, ())) if self._index.by_name else 0
         given = 0 if self._index.by_name else count
         calls = [
-            (position, returned)
-            for position, passed, returned in self._index.hands_on.get(body, ())
+            (position, returned, through)
+            for position, passed, returned, through in self._index.hands_on.get(body, ())
             if first <= position < first + count and passed == given
         ]
-        handed = tuple(dict.fromkeys(position for position, kept in calls if kept))
+        handed = tuple(dict.fromkeys(position for position, kept, through in calls if kept))
         if count <= 0 or source is None or not handed:
             return None
         step = _Step((_RUNS_THROUGH, method, int(str(source))), body)
         # The unread answer notes the body too, so a reader names the wrapper it ran through.
         unread = _only(_combine(trail, (step,)) or trail, _unresolved(NOT_READABLE))
         runs: list[_Reached] = []
+        # What a call on the captured value gives is called (`log(f)(request)`): read in the
+        # body, where each captured value crosses to where the function was made.
+        merged = _combine(trail, (step,))
+        for value, ordinal in dict.fromkeys(
+            through for _, kept, through in calls if kept and through is not None
+        ):
+            if merged is not None:
+                runs.extend(
+                    reached
+                    for reached in self._through(body, value, ordinal, merged, frames)
+                    if called_function(reached[1]) is not None or reached[1].kind == UNRESOLVED
+                )
+        direct = tuple(
+            dict.fromkeys(position for position, kept, through in calls if kept and through is None)
+        )
         for maker in self._index.producers.get((method, int(str(source))), ()):
             bound = (self._index.sites.get((method, maker)) or {}).get("arguments") or []
             receiver = max(len(bound) - count, 0)
-            for position in handed:
+            for position in direct:
                 at = position - first
                 if not 0 <= at < min(count, len(bound)):
                     continue

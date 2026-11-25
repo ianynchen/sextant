@@ -4408,9 +4408,9 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="    for (method, _), site in sites.items():\n"
-                '        for captured in _captures(site["arguments"]):',
-                replace="    for (method, _), site in sites.items():\n"
+                find="    for method, arguments in made_in:\n"
+                "        for captured in _captures(arguments):",
+                replace="    for method, arguments in made_in:\n"
                 "        for captured in ():  # guard disabled by scripts/guard_check.py",
             ),
         ),

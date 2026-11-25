@@ -533,7 +533,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-530 | SEXTANT-TBD | a module that includes itself recurses (plan 2026-11-23-python-django-redesign, low) |
 | OI-531 | SEXTANT-TBD | `include(module_object)` of a module not in the scan is a route at `partial` (plan 2026-11-23-python-django-redesign, low) |
 | OI-532 | SEXTANT-TBD | a decorator usable bare or with arguments gives `narrowed` rows naming the view and the wrapper (plan 2026-11-23-python-django-redesign, medium) |
-| OI-533 | SEXTANT-TBD | a wrapper that calls `helper(view_func)(request)` is not looked through (plan 2026-11-23-python-django-redesign, medium) |
+| OI-533 | SEXTANT-TBD | a wrapper that calls `helper(view_func)(request)` is not looked through (plan 2026-11-23-python-django-redesign, medium) (fixed on `fix/django-open-issues`: what a call on the captured function gives is what runs, and a function made and returned is captured where it is made; zulip's 13 `require_server_admin` rows now name no wrapper, but stay `partial` with no handler, because `add_logging_data` is entered twice on their path, OI-537, and `@zulip_login_required` sits on top, OI-532) |
 | OI-534 | SEXTANT-TBD | a wrapper's own calls are not in the call graph (plan 2026-11-23-python-django-redesign, medium) |
 | OI-535 | SEXTANT-TBD | a function defined in a loop captures the iteration's value (plan 2026-11-23-python-django-redesign, low) |
 | OI-536 | SEXTANT-TBD | a capture of a deeper function's own name is recorded (plan 2026-11-23-python-django-redesign, low) |
