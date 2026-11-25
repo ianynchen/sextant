@@ -8,7 +8,7 @@
   "notes": "Compared row by row with Django's resolver on 2026-11-24 (ROOT_URLCONF `zproject.urls`): 1,366 (method, route) pairs Django serves. A: 38 rows (40 pairs). B: 0. E: 0. Not resolved at a served route: 287 any-method rows doubted (259 `rest_path` routes, whose methods are the `**kwargs` keywords `rest_dispatch` looks up by `request.method`; 9 `@require_post` views; 19 others), 22 `narrowed` rows (the view and `zulip_login_required`'s lambda), 2 naming no handler, 6 per-method rows partial. 182 rows behind the `<prefix>` hole (`i18n_patterns`, lists added under a test or in the `EXTRA_INSTALLED_APPS` loop). 22 rows with no path: registrations in a loop or comprehension. D: 477 patterns; 202 of them have a row behind the hole (prefix \"\" or \"en-us/\"). Questions: mount_prefix 155, handler_pass_through 5. 25 outbound rows. Cold analyze 38.3 s (scan 16.7 s, resolve 19.9 s), median of three, 2026-11-24.",
   "endpoints": {
     "inbound": {
-      "http": 581
+      "http": 574
     },
     "outbound": {
       "http": 25
@@ -96,18 +96,11 @@
       "any /",
       "any /<prefix>accounts/login/local/",
       "any /<prefix>activity",
-      "any /<prefix>activity",
-      "any /<prefix>activity/integrations",
       "any /<prefix>activity/integrations",
       "any /<prefix>activity/plan_ledger/<plan_id>/",
-      "any /<prefix>activity/plan_ledger/<plan_id>/",
-      "any /<prefix>activity/remote",
       "any /<prefix>activity/remote",
       "any /<prefix>activity/remote/logs/server/<uuid>/",
-      "any /<prefix>activity/remote/logs/server/<uuid>/",
       "any /<prefix>activity/remote/support",
-      "any /<prefix>activity/remote/support",
-      "any /<prefix>activity/support",
       "any /<prefix>activity/support",
       "any /<prefix>apps/",
       "any /<prefix>apps/<platform>",
@@ -198,7 +191,6 @@
       "any /<prefix>realm/<realm_uuid>/sponsorship/",
       "any /<prefix>realm/<realm_uuid>/upgrade/",
       "any /<prefix>realm_activity/<realm_str>/",
-      "any /<prefix>realm_activity/<realm_str>/",
       "any /<prefix>remote-billing-login/<signed_billing_access_token>",
       "any /<prefix>remote-billing-login/<signed_billing_access_token>/confirm/",
       "any /<prefix>remote-billing-login/do_confirm/<confirmation_key>",
@@ -238,12 +230,8 @@
       "any /<prefix>stats",
       "any /<prefix>stats",
       "any /<prefix>stats/installation",
-      "any /<prefix>stats/installation",
-      "any /<prefix>stats/realm/<realm_str>/",
       "any /<prefix>stats/realm/<realm_str>/",
       "any /<prefix>stats/remote/<int:remote_server_id>/installation",
-      "any /<prefix>stats/remote/<int:remote_server_id>/installation",
-      "any /<prefix>stats/remote/<int:remote_server_id>/realm/<int:remote_realm_id>/",
       "any /<prefix>stats/remote/<int:remote_server_id>/realm/<int:remote_realm_id>/",
       "any /<prefix>stripe/webhook/",
       "any /<prefix>support/",
@@ -253,7 +241,6 @@
       "any /<prefix>upgrade/",
       "any /<prefix>upgrade/",
       "any /<prefix>use-cases/",
-      "any /<prefix>user_activity/<user_profile_id>/",
       "any /<prefix>user_activity/<user_profile_id>/",
       "any /<prefix>values/",
       "any /<prefix>why-zulip/",
@@ -587,6 +574,9 @@
       "any /realm/register/",
       "any /register/",
       "any /saml/metadata.xml",
+      "any /scim/v2/Bulk",
+      "any /scim/v2/Me",
+      "any /scim/v2/ServiceProviderConfig",
       "any /self-hosted-billing/",
       "any /self-hosted-billing/",
       "any /self-hosted-billing/not-configured/",
@@ -596,7 +586,10 @@
       "any /user_uploads/<realm_id_str>/<path:filename>",
       "any /user_uploads/download/<realm_id_str>/<path:filename>",
       "any /user_uploads/temporary/<token>/<filename>",
-      "any /user_uploads/thumbnail/<realm_id_str>/<path:filename>/<str:thumbnail_format>"
+      "any /user_uploads/thumbnail/<realm_id_str>/<path:filename>/<str:thumbnail_format>",
+      "any ^scim/v2/Groups/.search$ (pattern)",
+      "any ^scim/v2/ResourceTypes(?:/(?P<uuid>[^/]+))?$ (pattern)",
+      "any ^scim/v2/Schemas(?:/(?P<uuid>[^/]+))?$ (pattern)"
     ],
     "outbound": [
       "(unresolved) (unresolved)",
