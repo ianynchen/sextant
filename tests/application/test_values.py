@@ -7396,6 +7396,45 @@ def test_a_wrapper_that_wraps_what_its_captured_function_gives_stands_for_it(tmp
     assert _registered(tmp_path, source) == [["page"]]
 
 
+def test_a_wrapper_that_calls_what_a_call_on_its_captured_function_gives_stands_for_it(
+    tmp_path: Path,
+):
+    """`return log(view)(request)` (OI-533, zulip's `require_server_admin`): what is called is
+    what a call on the captured function gives, read through `log`; each registration runs
+    its own view, never the wrapper."""
+    source = (
+        "def log(f):\n"
+        "    def w(request, *a, **k):\n"
+        "        return f(request, *a, **k)\n"
+        "    return w\n"
+        "def admin(view):\n"
+        "    def x(request, *a, **k):\n"
+        "        if not request.user:\n"
+        "            return None\n"
+        "        return log(view)(request, *a, **k)\n"
+        "    return x\n"
+        "def other(request):\n    return None\n"
+        "register(admin(page))\n"
+        "register(admin(other))\n"
+    )
+    assert _registered(tmp_path, source) == [["page"], ["other"]]
+
+
+def test_a_wrapper_that_calls_what_an_unread_call_on_its_captured_function_gives_is_a_reason(
+    tmp_path: Path,
+):
+    """`return unseen(view)(request)`: what runs is what the unread call gives, so the answer
+    is the reason, never the wrapper."""
+    source = (
+        "def admin(view):\n"
+        "    def x(request):\n"
+        "        return unseen(view)(request)\n"
+        "    return x\n"
+        "register(admin(page))\n"
+    )
+    assert _registered(tmp_path, source) == [["not_readable"]]
+
+
 def test_a_wrapper_that_changes_the_response_its_captured_function_gives_stands_for_it(
     tmp_path: Path,
 ):

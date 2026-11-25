@@ -967,12 +967,9 @@ def test_a_decorator_whose_wrapper_calls_what_it_captured_runs_the_wrapped_funct
     workspace.close()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the receiver of the wrapper's `fn(*a)` is a captured parameter, which the receiver "
-    "reader answers `escapes` (the module hands it on as a value): not followed to `f`",
-)
 def test_the_wrappers_call_of_its_argument_reaches_the_decorated_function(tmp_path: Path):
+    """`fn` is captured where `w` is made, and `w` is returned rather than handed to a call:
+    the capture still crosses to `deco`'s argument, so `fn(*a)` runs `f` (OI-533)."""
     workspace = _resolved(tmp_path, {"a.py": _WRAPPING})
     inner = _site(workspace, "app/a#deco$w(sig_dd69782a).", "__call__")
     assert [row["callee"] for row in _edges(workspace, inner)] == [

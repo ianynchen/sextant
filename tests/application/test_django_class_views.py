@@ -502,6 +502,25 @@ def test_a_library_class_no_module_class_extends_keeps_its_dispatch_unread(
     assert rows == [("GET", None, "/x/", _STUB + "Answering#get(sig_", "partial")]
 
 
+def test_an_unread_library_dispatch_on_a_class_of_no_verbs_is_its_any_method_row(
+    tmp_path: Path, libraries
+):
+    """zulip's `SCIMView.as_view(implemented=False)` (OI-549): a library class no module class
+    extends, with a `dispatch` and no verb method. Its `dispatch` is what Django calls, and
+    whether it hands the request back is not read: the any-method row naming that `dispatch`,
+    `partial`, never no row at all."""
+    rows = _stub_rows(
+        tmp_path,
+        libraries,
+        "from django.views import View\n"
+        "class Answering(View):\n"
+        "    def dispatch(self, request, *a, **k):\n        return None\n",
+        "from stubviews import Answering\nurlpatterns = [path('x/', Answering.as_view())]\n",
+    )
+
+    assert rows == [(None, "any", "/x/", _STUB + "Answering#dispatch(sig_", "partial")]
+
+
 def test_a_narrowing_wrapper_narrows_the_class_rows(tmp_path: Path, libraries):
     """`require_POST(V.as_view())`: Django answers 405 to every method but POST before the view
     runs (probe, "Function views"), so only the class's POST row stays."""
