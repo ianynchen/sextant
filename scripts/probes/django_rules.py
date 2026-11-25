@@ -894,6 +894,14 @@ rule(
     "login_required and staff_member_required are decorators that also take keyword arguments "
     "alone (login_required(login_url=...)), which returns the decorator instead"
 )
+for decorator in (auth_decorators.login_required, admin_decorators.staff_member_required):
+    applied = decorator(login_url="/l")(inner)
+    assert applied is not inner and _reached(applied) == (405, 200), _reached(applied)
+rule(
+    "the decorator that login_required(login_url=...) and staff_member_required(login_url=...) "
+    "return wraps the view it is applied to and calls it: GET 405 and POST 200 over "
+    "require_POST(ok), as the bare use"
+)
 
 # 10. The auth mixins over a class view (plan 6, Task 5 fix round 1, ruling R14).
 from django.contrib.auth.mixins import (

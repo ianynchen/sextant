@@ -78,6 +78,7 @@ EXPECTED: dict[tuple[str | None, str], str] = {
     ("GET", "/api/v2/cart/"): "shop.views.cart",
     ("POST", "/api/v2/cart/"): "shop.views.cart",
     (None, "/account/profile/"): "shop.views.profile",  # login_required
+    (None, "/account/wishlist/"): "shop.views.wishlist",  # login_required(login_url=...)
     ("POST", "/account/password/"): "shop.views.change_password",  # login_required + require_POST
     (None, "/help/faq/"): "shop.views.faq",
     (None, "/support/faq/"): "shop.views.faq",
@@ -95,8 +96,6 @@ EXPECTED: dict[tuple[str | None, str], str] = {
 }
 
 # STATED BOUNDARIES: Django's route, Sextant's row (method, path, handler) at `partial`.
-# - `@login_required(login_url=...)`: the handler walk ends at a decorator no value model
-#   states, so the handler is NULL (`handler_pass_through`);
 # - `http_method_names = ["get"]` on a class: the list is a value not read, so the class's rows
 #   are `partial`, and Django serves GET alone;
 # - `include(partner_feeds.urls)`, a property no read follows: the mount's router argument
@@ -104,7 +103,6 @@ EXPECTED: dict[tuple[str | None, str], str] = {
 #   (design 2026-11-23 §9b, a known limit), and the route the property builds is in no list
 #   the root reaches: under the `<prefix>` hole, with a `mount_prefix` question at the row.
 BOUNDARIES = {
-    "account/wishlist/": {(None, "/account/wishlist/", None)},
     "orders/<int:order_id>/items/archived/": {
         ("GET", "/orders/<int:order_id>/items/archived/", "shop.orders.views.ArchivedItems.get"),
         ("POST", "/orders/<int:order_id>/items/archived/", "shop.orders.views.ArchivedItems.post"),
@@ -115,7 +113,6 @@ BOUNDARIES = {
     },
 }
 QUESTIONS = {
-    ("handler_pass_through", "/account/wishlist/"),
     ("mount_prefix", "/<prefix>feed/"),
 }
 # A route expression not read exactly (`(a|b)`): one `pattern` row, compared as text.
@@ -227,7 +224,6 @@ def test_the_debug_row_is_not_evaluated(workspace):
 def test_the_stated_boundaries_are_published_as_today(workspace, served):
     """Each boundary named at `BOUNDARIES`: what Django serves there, and what Sextant says."""
     django = {p["route"]: p for p in served}
-    assert set(django["account/wishlist/"]["allowed"]) == EVERY
     assert django["orders/<int:order_id>/items/archived/"]["allowed"] == ["GET"]
     assert set(django["partners/feed/"]["allowed"]) == EVERY
     assert set(django["promo/current/"]["allowed"]) == EVERY

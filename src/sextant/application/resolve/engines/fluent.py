@@ -198,6 +198,7 @@ from sextant.application.resolve.values import (
     Answer,
     Path,
     Producer,
+    Tests,
     ValueIndex,
     argument_slot,
     bound_owner,
@@ -518,7 +519,8 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
     conditions: Conditions | None = None
     registrations: list[tuple[dict[str, Any], Existence]] = []
     if catalog.direction == "inbound":
-        conditions = conditions_of(workspace)
+        # A test on a value the code fixes is decided on the row's path (ruling R2).
+        conditions = conditions_of(workspace, Tests(walk_index) if walk_index is not None else None)
         if not conditions.guards:
             conditions = None
     # §4d of design 2026-11-23: read once per run, for the any-method rows it may doubt.
@@ -1644,6 +1646,10 @@ def _derive_captured(
         if (id(prefix), under) not in existing:
             existing[(id(prefix), under)] = _existence(end, prefix, direction, context, under)
         alternatives = existing[(id(prefix), under)]
+        # A test decided false on every path the row's calls run on: they register nothing
+        # (ruling R2 of 2026-11-25), as calls under `if False:` do.
+        if alternatives is not None and not alternatives.tied:
+            continue
         # 2O design §8, folded in from single_call: identity is the URL the
         # framework serves, canonicalized before the dedup key below is built
         # from it (`domain/paths.py`). Inert for every fluent catalog shipped
@@ -2107,6 +2113,7 @@ def _existence(
     found: set[Conjunction] = set()
     untied: set[Conjunction] = set()
     places = prefix.places or (ANY_ROUTER,)
+    read = False
     for place in places:
         paths = [router[1] for router, _ in place if router is not None]
         joined = walked
@@ -2133,9 +2140,10 @@ def _existence(
             writes = context_path.written_under() if context_path is not None else ()
             for more in through:
                 sites: list[Site] = [*mounts, *writes, *more, *own]
-                found |= context.conditions.of_sites(sites, chosen)
-                untied |= context.conditions.of_sites(sites, chosen, untied=True)
-    if not found:
+                read = True
+                found |= context.conditions.of_sites(sites, chosen, on=context_path)
+                untied |= context.conditions.of_sites(sites, chosen, untied=True, on=context_path)
+    if not read:
         # Every place disagreed with the row's path: read them in no calling context.
         for place in places:
             mounts = [at[0] for _, at in place if at is not None]
@@ -4212,17 +4220,14 @@ def _handed_back(index: "ValueIndex", method: str, row: Mapping[str, Any]) -> in
     """The position of the argument a value model states `row` hands on (`returns_argument`),
     in the spelling the call is written in: a `__call__` whose receiver a `result_returns`
     call made, or a call stated `returns` or `result_calls` itself. None for any other call,
-    a stated one written in the other spelling among them (`login_required(login_url=...)`,
-    stated for `login_required(view)`, makes a decorator nothing states)."""
+    a stated one written in the other spelling among them (`lru_cache(maxsize=8)`, stated for
+    `lru_cache(f)`, makes a decorator nothing states). An entry of two uses is read by the
+    spelling the call is written in (`ValueIndex.stated_of`)."""
     if row["name"] == "__call__":
         maker = _maker(index, method, row)
-        stated = (
-            None
-            if maker is None
-            else index.stated_returns.get((str(maker.get("owner")), str(maker["name"])))
-        )
+        stated = None if maker is None else index.stated_of(maker)
         return stated[1] if stated is not None and stated[0] == "result_returns" else None
-    stated = index.stated_returns.get((str(row.get("owner")), str(row["name"])))
+    stated = index.stated_of(row)
     return stated[1] if stated is not None and stated[0] in ("returns", "result_calls") else None
 
 

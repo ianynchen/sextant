@@ -256,6 +256,7 @@ class _Writer(BodyReader):
         # The statements of a class body's arm that never runs (`if TYPE_CHECKING:`), by id,
         # and the fields only such a statement declared, to the index of their fact.
         self._never_runs: set[int] = set()
+        self._tests = {}
         self._dead_fields: dict[str, int] = {}
         self._own_returns = {}
         self._own_fields = {}

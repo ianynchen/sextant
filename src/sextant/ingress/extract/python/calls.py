@@ -80,6 +80,7 @@ from sextant.domain.facts import (
     CallTarget,
     Fact,
     FieldWriteFact,
+    GuardWhen,
     MethodReturnFact,
     Signature,
     TypeRef,
@@ -192,6 +193,8 @@ _COMPREHENSION_CLASSES: dict[type[ast.expr], str] = {
 }
 
 _UNKNOWN = CallArgument(kind="unresolved")
+# What makes a test true (`CallGuard.when`), and what makes its negation true.
+_OPPOSITE: dict[GuardWhen, GuardWhen] = {"true": "false", "false": "true"}
 # The receiver of a method (`self`, `cls`). It is never a parameter (D00 §5 numbering) and
 # reads as `unresolved` where it is used as a value; only its identity is tested.
 _SELF = CallArgument(kind="unresolved")
@@ -422,6 +425,8 @@ class BodyReader:
     _own_fields: dict[str, TypeRef]
     # Set while a guard's dotted reads are typed again (`_fields`): reading them writes no call.
     _rereading: bool = False
+    # What each test read (`_tested`), by the id of its node.
+    _tests: dict[int, tuple[CallArgument | None, GuardWhen | None]]
 
     def _body(self, caller: str) -> Body:
         return self._bodies.setdefault(caller, Body(caller))
@@ -660,6 +665,7 @@ class BodyReader:
                 ordinal=scope.body.returns,
                 value=value,
                 yielded=yielded,
+                guards=list(scope.guards) or None,
             )
         )
         scope.body.returns += 1
@@ -698,9 +704,47 @@ class BodyReader:
         if self._runs(test, scope) is not None or _entry_point_test(test):
             return None
         reads = _reads(test)
+        value, when = self._tested(test, scope)
         return CallGuard(
-            test=ast.unparse(test), holds=holds, reads=reads, fields=self._fields(reads, scope)
+            test=ast.unparse(test),
+            holds=holds,
+            reads=reads,
+            fields=self._fields(reads, scope),
+            value=value,
+            when=when,
         )
+
+    def _tested(self, test: ast.expr, scope: Scope) -> tuple[CallArgument | None, GuardWhen | None]:
+        """The one value a test reads and what of it makes the test true (`CallGuard.value`,
+        `when`): `x`, `not x`, `x is None`, `x is not None`, with `x` a name or a dotted name.
+        Read once per test, where the test is first read: the statements after an arm that
+        always returns are under the value the test read, not one an arm wrote since."""
+        if id(test) in self._tests:
+            return self._tests[id(test)]
+        operand: ast.expr = test
+        when: GuardWhen = "true"
+        while isinstance(operand, ast.UnaryOp) and isinstance(operand.op, ast.Not):
+            operand, when = operand.operand, _OPPOSITE[when]
+        if (
+            isinstance(operand, ast.Compare)
+            and len(operand.ops) == 1
+            and isinstance(operand.ops[0], ast.Is | ast.IsNot)
+            and isinstance(operand.comparators[0], ast.Constant)
+            and operand.comparators[0].value is None
+        ):
+            is_none = isinstance(operand.ops[0], ast.Is) == (when == "true")
+            operand, when = operand.left, "null" if is_none else "not_null"
+        found: tuple[CallArgument | None, GuardWhen | None] = (None, None)
+        if _is_dotted(operand):
+            self._rereading, held = True, self._rereading
+            try:
+                value = self._value(operand, scope)
+            finally:
+                self._rereading = held
+            if value.kind != _UNKNOWN.kind:
+                found = (value, when)
+        self._tests[id(test)] = found
+        return found
 
     def _fields(self, reads: list[str], scope: Scope) -> dict[str, str]:
         """Each dotted read of a test that is a read of a field, to that field's symbol, as the

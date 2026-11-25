@@ -17,6 +17,19 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A test on a value the code fixes is decided, and a decorator usable bare or with arguments
+  names the view** (rulings R2 and R5 of 2026-11-25, OI-532, OI-557; fact schema 24). A Python
+  test that is one name, `not x`, `x is None` or `x is not None` is decided where the value walk
+  gives the name exactly one written literal on the path, per caller: `create_app(True)` serves
+  the routes under `if database:` with no condition, `create_app(False)` registers nothing
+  there. Nothing a deployment sets is decided. The scanner writes the tests a `return` runs
+  under (`method_return.guards`) and the value a test reads (`guards[].value`, `when`), so
+  `def d(function=None, ...)` with `if function: return actual(function)` gives the view alone
+  for `@d` and for `@d(x=2)`. A value-model entry may state the two uses of one argument
+  (`result_calls: arg0, result_returns: arg0`): `@login_required(login_url=...)` and
+  `@staff_member_required(...)` now name the view. Fact sets of the older schema are
+  re-extracted.
+
 - **A Django route list or root written under a test gives its routes that condition** (ruling
   R1 of 2026-11-25, OI-508, OI-509; fact schema 23). `if settings.DEVELOPMENT: urlpatterns +=
   dev_urls.urlpatterns` published the added routes behind the `<prefix>` hole at `partial`, and

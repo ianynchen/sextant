@@ -24,6 +24,7 @@ proposal that does not quote the row it checked, or say "searched: no row", is n
 | A route names no method | `verbless_serves: any`; `all_methods` |
 | A value is behind a call (`URI.create(x)`, `include(x)`, `X.as_view()`) | value-model forms `returns`, `returns_receiver`, `result_returns`, `result_calls`; `url_via`, `channel_via`, `identified_by` |
 | Something a deployment decides | rule 8, "not evaluated" |
+| A test on a value the code fixes (a parameter each caller passes a literal for, a name written once) | "Branches": decided per path |
 | Code that is not there | reasons `external`, `escapes`. A library that a project uses IS there. |
 
 Sextant reads code. It does not run it. Each answer below is what the engine says today, with
@@ -72,7 +73,8 @@ Two marks on an answer: `inexact` (a URL publishes at `partial`; a channel is re
    a hand-off (`TV:5562`, `TV:5599`).
 8. **What a deployment can change is "not evaluated"**: the row exists and its condition is
    stated (`tests/application/test_bean_conditions.py:2826`†; Python
-   `tests/application/test_fastapi_conditions.py:59`).
+   `tests/application/test_fastapi_conditions.py:59`). A test on a value the code fixes is
+   not something a deployment can change: it is decided (ruled 2026-11-25, row in "Branches").
 9. **Framework behaviour is mirrored, measured by a probe** (a refused mount gives no row).
 10. **Caps answer `non_enumerable`**: 256 paths in one window, 25,000 computes per root, depth
     80 (`values.py:349-371`; `TV:6558`; `tests/application/test_walk_cost.py:170`, `:237`).
@@ -105,7 +107,7 @@ Two marks on an answer: `inexact` (a URL publishes at `partial`; a channel is re
 | Recursion | `cycle` | `TV:2965` |
 | Parameter left to its default | Python: the default value (`tests/application/test_values_defaults.py:43`). Kotlin bridge: a reason, never the pushed mask (`TV:3110`) | both |
 | Helper returns the value | the value | `TV:2040` |
-| Several returns | one path per return | `TV:1981` |
+| Several returns | one path per return. A return under a test decided false on the path is not taken (Python, `method_return.guards`, ruled 2026-11-25; row "A test on a value the code fixes" in "Branches") | `TV:1981`; `tests/application/test_django_verbs.py::test_a_return_under_a_test_not_decided_stays_one_path_per_return` |
 | Helper changes the value, then returns it | `escapes` for a plain value | `TV:2025` |
 | Factory sets a part on one branch, then returns | two exact rows | `TV:6464` |
 | Helper builds, mounts and returns a router; called twice | each route under its own caller's prefix | `TM:223`; `FP:313`, `:429` |
@@ -120,6 +122,7 @@ Two marks on an answer: `inexact` (a URL publishes at `partial`; a channel is re
 | A literal and a non-literal | ONE `non_enumerable` | `TV:3444` |
 | `x` or `f(x)` | the root `x`, `inexact` | `TV:3346` |
 | A registration under a test a deployment decides | row exists, condition "not evaluated"; each call of a helper takes its own test. A write to a name under a test carries the same record as a call (`field_write.guards`, ruled 2026-11-25): a value read through that write is read on a path that names it (`Path.written_under`). A verb read through such a write (`if T: VERBS += MORE`, `methods=VERBS`) gives its row that condition, never a `resolved` row with none | `tests/application/test_fastapi_conditions.py:59`, `:260`, `::test_a_verb_added_to_a_held_list_under_a_test_carries_the_test`; `tests/ingress/extract/python/test_guards.py::test_a_field_write_carries_the_tests_it_runs_under` (Python only; the JVM writes no test record, OI-552) |
+| A test on a value the code fixes (`def create_app(database)`: `if database: ...`, callers pass `True` and `False`; `DEV = False`, `if DEV: urlpatterns += ...`) | decided (ruled 2026-11-25, R2), per path: where the test is one name (`if x:`), `not x`, `x is None` or `x is not None` (`guards[].value`, `when`), and the walk gives the name exactly ONE written literal on the path (each caller is its own path, rule 1). The truth is the language's: `None`, `False`, `0`, `""`, an empty written list are false; a function or a class is true. Decided true: no condition from that test on that path. Decided false: the call, the write or the `return` gives nothing on that path. NOT decided, "not evaluated" as before: a name an environment read, a configuration key, a settings field or `${...}` gives; a name with several values on one path (two writes, a branch, a loop variable); a member of a list; an object built from a class; a value read through a write under a test; every other form (`==`, `in`, `isinstance`, `and`, `or`). A parameter is read as the method was entered with it; an empty list in a parameter decides nothing. A module name written `None` is not decided (its write reads `not_readable`). The test of a WRITE is decided within cost bounds (OI-563): for a name read on the shared upward path, where a caller or a write gives the tested value a literal one step away | `tests/application/test_fastapi_conditions.py::test_a_test_on_a_value_each_caller_fixes_is_decided_per_caller`, `::test_a_registration_under_a_test_decided_false_on_every_path_gives_no_row`, `::test_a_test_on_a_value_not_fixed_stays_not_evaluated`; `tests/application/test_django_includes.py::test_a_list_added_under_a_test_the_code_fixes_is_decided`; `tests/ingress/extract/python/test_guards.py::test_a_test_of_one_value_states_the_value_and_when_it_is_true` (Python only; Java is OI-553) |
 
 ### Lists and arrays
 
@@ -167,6 +170,7 @@ Two marks on an answer: `inexact` (a URL publishes at `partial`; a channel is re
 | Handler as a method reference with two implementations | one `narrowed` row each | `tests/application/test_pass_through.py:971`† |
 | A decorator written in the module that returns its function | walked into; handler `resolved` | `FR:438` (Python only) |
 | A library wrapper a value model states (`functools.wraps`) | `result_returns` / `result_calls` in `value-models/python-wrappers.yml` | model file |
+| A decorator usable bare or with arguments (`def lr(function=None, x=1)`: `if function: return actual(function)`; `return actual`) | the view alone, both uses (ruled 2026-11-25, R5). Project copy: which `return` runs is decided on the path (`method_return.guards`, the row "A test on a value the code fixes"): with `@lr` the parameter holds the view, a function, true; with `@lr(x=2)` or `@lr()` it holds its default `None`, false. `actual` as a `def` or a `lambda`. Library copy (`login_required`, `staff_member_required`): the value-model entry states both forms of argument 0, `result_calls` where the call writes it and `result_returns` where it does not (D02 §1f). A test not decided keeps one path per return | `tests/application/test_django_verbs.py::test_a_decorator_usable_bare_or_with_arguments_names_the_view`, `::test_a_decorator_that_hands_back_a_bare_function_on_one_path_names_both`, `::test_a_stated_decorator_called_without_the_view_hands_the_view_on`; `tests/application/test_entry_point_roots.py::test_the_loader_reads_the_two_uses_of_one_argument`; `tests/ingress/extract/python/test_guards.py::test_a_return_carries_the_tests_it_runs_under` (Python only) |
 | A library decorator no model states | row `partial`, handler NULL, question `handler_pass_through` | `FR:602` |
 | Inherited mappings | each concrete class's rows, each with its own prefix | `tests/e2e/test_rest_inbound_delivered.py:2059`† |
 

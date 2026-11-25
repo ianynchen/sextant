@@ -121,7 +121,9 @@ _NAMED_QUERIES = {
     # method with two `return` statements reads its two answers in
     # instruction order, twice (NFR-1) — the same total ordering
     # `call_sites` takes for the same reason.
-    "method_returns": "SELECT method, ordinal, value FROM method_returns ORDER BY method, ordinal",
+    "method_returns": (
+        "SELECT method, ordinal, value, guards FROM method_returns ORDER BY method, ordinal"
+    ),
     # What each generator yields (`method_return.yielded`, plan 2026-11-08 N10), which the
     # `method_returns` view leaves out: one row per `yield`, in the same order and grammar.
     "method_yields": (
@@ -1836,9 +1838,11 @@ _EXPORT_QUERIES = {
     """,
     "method_returns": f"""
         SELECT mr.document_id, mr.method, mr.ordinal,
-               coalesce(j.masked::JSON, mr.value) AS value
+               coalesce(j.masked::JSON, mr.value) AS value,
+               coalesce(g.masked, mr.guards) AS guards
         FROM method_returns mr
         LEFT JOIN {_REDACTED_JSON} j ON j.original = mr.value::VARCHAR
+        LEFT JOIN {_REDACTED_JSON} g ON g.original = mr.guards
         ORDER BY mr.document_id, mr.method, mr.ordinal
     """,
     # The raw half of `resolved_config` — a configuration value as the file
@@ -2945,6 +2949,7 @@ class DuckDbWorkspace:
             # OI-368: a code test's text, quoted in a guard and in a row's existence entry.
             "UNION SELECT DISTINCT guards FROM call_sites WHERE guards IS NOT NULL "
             "UNION SELECT DISTINCT guards FROM field_writes WHERE guards IS NOT NULL "
+            "UNION SELECT DISTINCT guards FROM method_returns WHERE guards IS NOT NULL "
             "UNION SELECT DISTINCT expression FROM endpoint_existence WHERE expression IS NOT NULL"
         ).fetchall()
         self._stage_map(

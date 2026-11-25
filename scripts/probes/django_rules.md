@@ -252,6 +252,10 @@ variable that holds a decorator, not a `def` of that name.
 
 - `login_required` and `staff_member_required` also accept keyword arguments alone
   (`login_required(login_url=...)`). That call returns the decorator, not a wrapped view.
+  That decorator, applied to the view (`login_required(login_url=...)(view)`), wraps the view
+  and calls it as the bare use does: over `require_POST(ok)`, GET gave 405 and POST 200, for
+  both names (measured 2026-11-25). So each has two uses: argument 0 written, the "decorator"
+  form; argument 0 not written, the "factory" form.
 - What each decorator answers when its own check fails (a redirect to the login page, 403 on
   a missing CSRF token, 304 on a matching ETag) was not measured. That is the view's own
   behaviour, not a route.

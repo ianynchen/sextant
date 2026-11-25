@@ -429,3 +429,95 @@ def test_a_verb_added_to_a_held_list_under_a_test_carries_the_test(tmp_path: Pat
     assert _existence(workspace) == {
         ("POST", "/c"): [_open(0, "os.environ.get('W')")],
     }
+
+
+_BY_FLAG = (
+    "def create_app(database):\n"
+    "    made = FastAPI()\n"
+    "    @made.get('/health')\n    def health() -> str:\n        return ''\n"
+    "    if database:\n"
+    "        @made.get('/db')\n        def db() -> str:\n            return ''\n"
+    "    return made\n"
+)
+
+
+def test_a_test_on_a_value_each_caller_fixes_is_decided_per_caller(tmp_path: Path, libraries):
+    """Ruling R2 of 2026-11-25 (polar's `create_app(database: bool)`): a test that is one name
+    is decided where the value walk gives that name exactly one written value on the path.
+    One caller passes `True`: the route under the test is served, with no condition from it.
+    The caller that passes `False` registers nothing there."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {"main.py": _APP + _BY_FLAG + "a = create_app(True)\nb = create_app(False)\n"},
+    )
+
+    assert [(row[0], row[1], row[3]) for row in _rows(workspace)] == [
+        ("GET", "/db", "resolved"),
+        ("GET", "/health", "resolved"),
+    ]
+    assert _existence(workspace) == {}
+
+
+def test_a_registration_under_a_test_decided_false_on_every_path_gives_no_row(
+    tmp_path: Path, libraries
+):
+    """Under a test decided false on every path the registration gives nothing, as under
+    `if False:`; `not x`, `x is None` and `x is not None` are decided the same way, and a
+    module name with one written value is decided as a parameter is."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": _APP
+            + _BY_FLAG
+            + "a = create_app(False)\n"
+            + "OFF = False\nON = 'x'\n"
+            + "if OFF:\n    @app.get('/off')\n    def off() -> str:\n        return ''\n"
+            + "if not OFF:\n    @app.get('/not-off')\n    def n() -> str:\n        return ''\n"
+            + "if OFF is None:\n    @app.get('/none')\n    def o() -> str:\n        return ''\n"
+            + "if ON is not None:\n    @app.get('/on')\n    def p() -> str:\n        return ''\n"
+            + "if ON is None:\n    @app.get('/gone')\n    def q() -> str:\n        return ''\n"
+        },
+    )
+
+    assert [(row[0], row[1], row[3]) for row in _rows(workspace)] == [
+        ("GET", "/health", "resolved"),
+        ("GET", "/not-off", "resolved"),
+        ("GET", "/on", "resolved"),
+    ]
+    assert _existence(workspace) == {}
+
+
+def test_a_test_on_a_value_not_fixed_stays_not_evaluated(tmp_path: Path, libraries):
+    """Not decided, exactly as before (ruling R2): a name the environment gives, a name with
+    two written values, a loop variable (redash's `for blueprint in [...]: if blueprint:`),
+    and every wider form (`==`, `in`, `and`) though each name in it has one value."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": "import os\n"
+            + _APP
+            + "ENV = os.environ.get('E')\n"
+            + "TWO = None\nTWO = 'x'\n"
+            + "ONE = 'x'\n"
+            + "if ENV:\n    @app.get('/env')\n    def e() -> str:\n        return ''\n"
+            + "if TWO:\n    @app.get('/two')\n    def t() -> str:\n        return ''\n"
+            + "if ONE == 'y':\n    @app.get('/eq')\n    def q() -> str:\n        return ''\n"
+            + "if ONE in ['y']:\n    @app.get('/in')\n    def i() -> str:\n        return ''\n"
+            + "if ONE and ENV:\n    @app.get('/and')\n    def a() -> str:\n        return ''\n"
+            + "for each in [None, app]:\n"
+            + "    if each:\n"
+            + "        @app.get('/loop')\n        def l() -> str:\n            return ''\n"
+        },
+    )
+
+    assert _existence(workspace) == {
+        ("GET", "/and"): [_open(0, "ONE and ENV")],
+        ("GET", "/env"): [_open(0, "ENV")],
+        ("GET", "/eq"): [_open(0, "ONE == 'y'")],
+        ("GET", "/in"): [_open(0, "ONE in ['y']")],
+        ("GET", "/loop"): [_open(0, "each")],
+        ("GET", "/two"): [_open(0, "TWO")],
+    }

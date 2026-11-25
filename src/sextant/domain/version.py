@@ -190,6 +190,13 @@ SEXTANT_VERSION = version("sextant")
 #             it was one unread member. A fact set of the older vintage has none, so a reader
 #             would take a route list or a root written under a test for one written wherever
 #             the module runs; it is refused and re-extracted.
+#     24      a Python `method_return` gains `guards`, the tests the return runs under within
+#             its own body, in the format and by the rules of `call_site.guards` (ruling R5 of
+#             2026-11-25, OI-532); and a guard gains `value` and `when` where its test is one
+#             value, its negation or its comparison with `None` (ruling R2 of 2026-11-25): the
+#             value the test reads and what of it makes the test true. A fact set of the older
+#             vintage has neither, so a reader would take every return of a function for one
+#             that may run and decide no test; it is refused and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -334,6 +341,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 23
+FACT_SCHEMA_VERSION = 24
 GRAPH_SCHEMA_VERSION = 18
 BOUNDARY_VOCABULARY_VERSION = 5

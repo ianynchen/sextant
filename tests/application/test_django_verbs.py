@@ -330,8 +330,9 @@ def test_a_project_wrapper_in_the_registration_is_followed_into(tmp_path: Path, 
 
 def test_a_handler_read_on_one_path_and_not_on_another_names_no_function(tmp_path: Path, libraries):
     """`deco` hands back `wrap(f)` on one path and what a library call no value model states
-    makes on another: the handler is the wrapped `v`, or what was not read. No function is
-    named as the one that answers (spec 2026-11-23 §9a); naming `v` would be a guess."""
+    makes on another, under a test that is not decided (`==`, ruling R2 of 2026-11-25): the
+    handler is the wrapped `v`, or what was not read. No function is named as the one that
+    answers (spec 2026-11-23 §9a); naming `v` would be a guess."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -340,7 +341,8 @@ def test_a_handler_read_on_one_path_and_not_on_another_names_no_function(tmp_pat
             + "from lib import fallback\n"
             + "def wrap(f):\n    def inner(request):\n        return f(request)\n"
             + "    return inner\n"
-            + "def deco(f=None):\n    if f:\n        return wrap(f)\n    return fallback()\n"
+            + "def deco(f=None, n=1):\n    if n == 1:\n        return wrap(f)\n"
+            + "    return fallback()\n"
             + "@deco\n"
             + _DEF
             + "urlpatterns = [path('x/', v)]\n"
@@ -354,9 +356,10 @@ def test_a_handler_read_on_one_path_and_not_on_another_names_no_function(tmp_pat
 def test_a_decorator_that_hands_back_a_bare_function_on_one_path_names_both(
     tmp_path: Path, libraries
 ):
-    """`deco` hands back `wrap(f)` on one path and the bare `wrap` on another (the shape of a
-    decorator usable with and without arguments): the walk does not evaluate `if f`, so the
-    handler is the wrapped `v` or `wrap` itself, both read, one alternative each."""
+    """`deco` hands back `wrap(f)` on one path and the bare `wrap` on another, under a test
+    that is not decided (`==`, ruling R2 of 2026-11-25): the handler is the wrapped `v` or
+    `wrap` itself, both read, one alternative each. Under `if f:` the test is decided
+    (`test_a_decorator_usable_bare_or_with_arguments_names_the_view`)."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -364,7 +367,7 @@ def test_a_decorator_that_hands_back_a_bare_function_on_one_path_names_both(
             "urls.py": _HTTP
             + "def wrap(f):\n    def inner(request):\n        return f(request)\n"
             + "    return inner\n"
-            + "def deco(f=None):\n    if f:\n        return wrap(f)\n    return wrap\n"
+            + "def deco(f=None, n=1):\n    if n == 1:\n        return wrap(f)\n    return wrap\n"
             + "@deco\n"
             + _DEF
             + "urlpatterns = [path('x/', v)]\n"
@@ -486,21 +489,22 @@ _KEYWORD_ONLY = [
 
 
 @pytest.mark.parametrize("decorator", _KEYWORD_ONLY)
-def test_a_stated_decorator_called_without_the_view_ends_the_handler_walk(
+def test_a_stated_decorator_called_without_the_view_hands_the_view_on(
     tmp_path: Path, libraries, decorator: str
 ):
-    """Fix round 2: `login_required(login_url=...)` writes no argument 0, so the value model's
-    `result_calls: arg0` (the `d(view)` spelling) states nothing for it, and one entry per call
-    cannot state the other spelling too. It ends the handler walk like any unstated decorator:
-    `partial`, handler NULL, one question; never `resolved` with no handler."""
+    """Ruling R5/A1 of 2026-11-25 (OI-557): `login_required(login_url=...)` writes no argument
+    0, and the value-model entry states that use too (`result_returns: arg0` beside
+    `result_calls: arg0`): the call made a decorator, and what it is applied to is the view.
+    The handler is the view, as with the bare `@login_required` (probe, "View decorators that
+    hand the view on")."""
     workspace = _resolved(
         tmp_path,
         libraries,
         {"urls.py": _HTTP + decorator + _DEF + "urlpatterns = [path('x/', v)]\n"},
     )
 
-    assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
-    assert len(_questions(workspace)) == 1
+    assert _rows(workspace) == [(None, "any", "/x/", _handler("v"), "resolved")]
+    assert _questions(workspace) == []
 
 
 @pytest.mark.parametrize("decorator", _KEYWORD_ONLY)
@@ -519,8 +523,8 @@ def test_a_stated_decorator_called_without_the_view_still_lets_require_post_narr
         },
     )
 
-    assert _rows(workspace) == [("POST", None, "/x/", None, "partial")]
-    assert len(_questions(workspace)) == 1
+    assert _rows(workspace) == [("POST", None, "/x/", _handler("v"), "resolved")]
+    assert _questions(workspace) == []
 
 
 @pytest.mark.parametrize(
@@ -545,8 +549,8 @@ def test_the_registration_spelling_of_a_decorator_without_the_view_gives_the_sam
         },
     )
 
-    assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
-    assert len(_questions(workspace)) == 1
+    assert _rows(workspace) == [(None, "any", "/x/", _handler("v"), "resolved")]
+    assert _questions(workspace) == []
 
 
 def test_any_stated_decorator_called_without_its_function_is_never_resolved_without_a_handler(
@@ -981,3 +985,55 @@ def test_a_hook_the_wrapper_calls_and_does_not_return_is_not_the_handler(tmp_pat
     )
 
     assert [(row[3], row[4]) for row in rows] == [("app/urls#audited$inner(sig_", "resolved")]
+
+
+_TWO_USES = {
+    "def": "    def actual(f):\n        def inner(request):\n            return f(request)\n"
+    "        return inner\n",
+    "lambda": "    actual = lambda f: (lambda request: f(request))\n",
+}
+
+
+@pytest.mark.parametrize("form", ["def", "lambda"])
+@pytest.mark.parametrize("use", ["@lr\n", "@lr(x=2)\n", "@lr()\n"])
+def test_a_decorator_usable_bare_or_with_arguments_names_the_view(
+    tmp_path: Path, libraries, form: str, use: str
+):
+    """`def lr(function=None, x=1): ...; if function: return actual(function); return actual`
+    (OI-532, ruling R5 of 2026-11-25, zulip's `zulip_login_required`): which `return` runs is
+    decided on the path (`method_return.guards`, ruling R2). With `@lr` the parameter holds
+    the view, a function, so the first runs; with `@lr(x=2)` it holds its default `None`, so
+    the second does. Each use gives the view alone, never the decorator's own function."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "def lr(function=None, x=1):\n"
+            + _TWO_USES[form]
+            + "    if function:\n        return actual(function)\n    return actual\n"
+            + use
+            + _DEF
+            + "urlpatterns = [path('x/', v)]\n"
+        },
+    )
+
+    assert _rows(workspace) == [(None, "any", "/x/", _handler("v"), "resolved")]
+
+
+def test_a_return_under_a_test_not_decided_stays_one_path_per_return(tmp_path: Path, libraries):
+    """A test that reads more than one value is not decided (ruling R2: `and`, `==`, `in` stay
+    "not evaluated"): each `return` is a path, as before."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "def other(request):\n    return None\n"
+            + "def pick(f, n=1):\n    if n == 1:\n        return f\n    return other\n"
+            + "urlpatterns = [path('x/', pick(v))]\n"
+            + _DEF
+        },
+    )
+
+    assert sorted(row[3] for row in _rows(workspace)) == [_handler("other"), _handler("v")]

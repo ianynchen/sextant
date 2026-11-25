@@ -39,9 +39,19 @@ for each key is evidence: what the module's environment configuration sets, else
 class-body default. A guard with any read that is not such a field stays `test`: the part no
 key explains cannot be called a property condition.
 
+**A test on a value the code fixes is decided** (ruling R2 of 2026-11-25). Where a test is
+one name (`if x:`), its negation, or its comparison with `None` by `is` (`guards[].value`,
+`when`), and the value walk gives that name exactly one written literal on the row's path
+(`values.Tests`, per caller, rule 1), the test is true or false there, and no deployment can
+change it: decided true, the guard is no condition of the row on that path; decided false,
+the call does not run on that path, and a row no path registers is not written (as under
+`if False:`). A name an environment read, a configuration key or a settings field gives, a
+name with several values on the path, and every other form of test (`==`, `in`,
+`isinstance`, `and`, `or`) are not decided: "not evaluated", as before. The JVM writes no
+guards, so nothing is decided there (OI-553).
+
 **Stated limits.** A function in a cycle of calls is taken to run unconditionally while the
-cycle is being followed (the old answer, never a dropped row). A test is never evaluated, even
-where its value is written in the repository. A read the scanner cannot type is not linked to a
+cycle is being followed (the old answer, never a dropped row). A read the scanner cannot type is not linked to a
 settings field, so its guard stays `test`. A class body's statements are read with no test the module body puts them
 under.
 
@@ -53,7 +63,7 @@ method's alternatives are computed once.
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
@@ -64,6 +74,7 @@ from sextant.application.resolve.settings_fields import (
     SettingsKey,
     settings_keys,
 )
+from sextant.application.resolve.values import Path
 from sextant.domain.symbols import bare_descriptor
 
 # The condition kind of a test the analysis does not evaluate (D01 `endpoint_existence.kind`).
@@ -93,13 +104,26 @@ Site = tuple[str, int | str]
 Chosen = Mapping[str, tuple[str, int]]
 
 
+class Decider(Protocol):
+    """What decides the tests of one record on a path (`values.Tests`): the paths its call
+    or write runs on, each with the positions of the guards not decided there."""
+
+    def ran(
+        self, method: str, guards: str, within: Path | None
+    ) -> tuple[tuple[Path | None, tuple[int, ...]], ...]: ...
+
+
 @dataclass
 class Conditions:
     """The guarded calls and who calls whom, read once per resolve, and each method's
-    alternatives as they are asked for."""
+    alternatives as they are asked for. `tests` holds the record of each site one of whose
+    tests states the value it reads (`guards[].value`), as the facts write it, for `decider`
+    to decide (ruling R2 of 2026-11-25); with no decider every test stays open."""
 
     guards: dict[Site, tuple[Guard, ...]]
     callers: dict[str, tuple[tuple[str, int], ...]]
+    tests: dict[Site, str] = field(default_factory=dict)
+    decider: Decider | None = None
     _methods: dict[tuple[str, bool], Alternatives] = field(default_factory=dict)
     _entered: set[str] = field(default_factory=set)
 
@@ -108,6 +132,7 @@ class Conditions:
         sites: Iterable[Site],
         chosen: Chosen | None = None,
         untied: bool = False,
+        on: Path | None = None,
     ) -> Alternatives:
         """Where every call of `sites` runs, outermost first: one alternative per choice of
         one alternative of each call, joined. A method `chosen` names a call of is run by
@@ -118,28 +143,45 @@ class Conditions:
         that method's calls register different rows (re-review ruling, part 2). Then a method
         some calls run under a test and some under none is taken to run under its tests only:
         the row is "not evaluated", never served on the strength of a call that may have
-        registered another row."""
+        registered another row.
+
+        `on` is the path the row was derived on, where a test is decided (the module
+        docstring): no alternative at all where a call of `sites` runs on no path."""
         found = UNCONDITIONAL
         for site in dict.fromkeys(sites):
             found = _simplest(
                 frozenset(
                     _joined(left, right)
                     for left in found
-                    for right in self._of_site(site, chosen or {}, frozenset(), untied)
+                    for right in self._of_site(site, chosen or {}, frozenset(), untied, on)
                 )
             )
         return found
 
     def _of_site(
-        self, site: Site, chosen: Chosen, followed: frozenset[str], untied: bool
+        self,
+        site: Site,
+        chosen: Chosen,
+        followed: frozenset[str],
+        untied: bool,
+        on: Path | None = None,
     ) -> Alternatives:
         own = self.guards.get(site, ())
         method = site[0]
-        if method in chosen and method not in followed:
-            outer = self._of_site(chosen[method], chosen, followed | {method}, untied)
-        else:
-            outer = self._of_method(method, untied)
-        return frozenset(_joined(conjunction, own) for conjunction in outer)
+        ran: tuple[tuple[Path | None, tuple[int, ...]], ...] = ((on, tuple(range(len(own)))),)
+        if self.decider is not None and site in self.tests:
+            ran = self.decider.ran(method, self.tests[site], on)
+        found: set[Conjunction] = set()
+        for path, kept in ran:
+            # A test decided per caller chose that caller: the method runs by that call.
+            calls = chosen if path is on or path is None else {**chosen, **path.calls_into()}
+            if method in calls and method not in followed:
+                outer = self._of_site(calls[method], calls, followed | {method}, untied, path)
+            else:
+                outer = self._of_method(method, untied)
+            still = tuple(own[position] for position in kept)
+            found |= {_joined(conjunction, still) for conjunction in outer}
+        return frozenset(found)
 
     def _of_method(self, method: str, untied: bool = False) -> Alternatives:
         """Where `method` runs: wherever any call of it runs; everywhere where nothing in the
@@ -185,11 +227,12 @@ def _simplest(alternatives: Alternatives) -> Alternatives:
     )
 
 
-def conditions_of(workspace: Workspace) -> Conditions:
+def conditions_of(workspace: Workspace, decider: Decider | None = None) -> Conditions:
     """The guarded calls and the guarded field writes, and the callers of each method where
     any is guarded. Read by the engine once per run: `call_edges` is derived, so it is never
     kept across passes."""
     guards: dict[Site, tuple[Guard, ...]] = {}
+    tests: dict[Site, str] = {}
     guarded: list[tuple[Site, str]] = [
         ((str(row["caller"]), int(str(row["ordinal"]))), str(row["guards"]))
         for row in workspace.query("call_site_guards")
@@ -200,6 +243,7 @@ def conditions_of(workspace: Workspace) -> Conditions:
         for row in workspace.query("field_write_guards")
     ]
     for site, written in guarded:
+        parsed = json.loads(written)
         guards[site] = tuple(
             (
                 site[0],
@@ -208,15 +252,19 @@ def conditions_of(workspace: Workspace) -> Conditions:
                 tuple(g.get("reads") or ()),
                 tuple(sorted((g.get("fields") or {}).items())),
             )
-            for g in json.loads(written)
+            for g in parsed
         )
+        if any(g.get("value") is not None for g in parsed):
+            tests[site] = written
     callers: dict[str, list[tuple[str, int]]] = {}
     if guards:
         for row in workspace.query("calls_running"):
             callers.setdefault(str(row["callee"]), []).append(
                 (str(row["caller"]), int(str(row["ordinal"])))
             )
-    return Conditions(guards, {callee: tuple(sites) for callee, sites in callers.items()})
+    return Conditions(
+        guards, {callee: tuple(sites) for callee, sites in callers.items()}, tests, decider
+    )
 
 
 def environments_of(workspace: Workspace) -> tuple[str, ...]:

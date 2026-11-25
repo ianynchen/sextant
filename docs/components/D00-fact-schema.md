@@ -1531,6 +1531,15 @@ above:
   name for it, in the same spelling (`settings.support_routes` to `app/settings/Settings#support_routes.`).
   A read the scanner cannot type is absent from the map, never guessed. Absent where no read is
   typed and on every JVM site; a fact set of the older vintage is refused and re-extracted.
+  **`value` and `when`** (fact schema 24, ruling R2 of 2026-11-25): where the test is ONE
+  value, a name or a dotted name (`x`), its negation (`not x`), or its comparison with `None`
+  by `is` (`x is None`, `x is not None`), `value` is that value as an argument at that place
+  would name it (this grammar: a `parameter`, a `field`, a literal, a call's result by
+  `source`), read where the test is, and `when` is what of it makes the test true: `true`
+  (the value is true), `false`, `null` (it is `None`), `not_null`. The resolver decides such
+  a test where the value is one written literal on the path (D01 `endpoint_existence`).
+  Both absent on every other form of test (`==`, `in`, `isinstance`, `and`, `or`, a call),
+  where the scanner names no value, and on the JVM (OI-553).
 
 **`method_return` is a fact of its own, one per return instruction** (capability 9.18) —
 what a method hands back:
@@ -1588,6 +1597,13 @@ as FastAPI hands a yield dependency's first yield to the parameter it fills. `yi
 on another iterator's values and is no value here. `yielded` is false on every other return: the JVM
 extractor writes none, which reads as false. An `@overload` stub, and an abstract or `Protocol` method
 whose body is only `...`, `pass` or a docstring, has no `method_return`: it has no body.
+**`guards`** (fact schema 24, ruling R5 of 2026-11-25, OI-532): the tests the return runs under
+within its own body that the scanner does not decide, outermost first, in the format and by
+every rule of `call_site.guards` above; so the `return` after an arm that always returns is
+under that arm's test, the other way (`if f: return a(f)` then `return a`: the second is
+`{test: "f", holds: false}`). The value walk does not take a return whose test is decided
+false on the path. Absent where a return runs under no test, and on every JVM return. A fact
+set of an older vintage has no such key and is refused and re-extracted.
 
 **`field_write` is a fact of its own, ANY method, direct traces only** — a method assigns a
 parameter, a constant, or a call's result directly to field F. The JVM mapping: a `PUTFIELD`

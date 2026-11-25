@@ -967,6 +967,37 @@ def test_a_list_added_under_a_test_gives_its_routes_the_condition(tmp_path, libr
         assert _questions(workspace, "mount_prefix") == []
 
 
+def test_a_list_added_under_a_test_the_code_fixes_is_decided(tmp_path, libraries):
+    """Ruling R2 of 2026-11-25: `DEV = True`, `if DEV: urlpatterns += ...`: the test is one
+    name with one written value, so it is decided. Decided true, the routes have no condition
+    from it; decided false, the write gives nothing: the list is one no root reaches. A name
+    read from the environment is not decided."""
+    for position, (fixed, rows, conditions) in enumerate(
+        (
+            ("DEV = True\n", [_row("/a/"), _row("/dev/")], []),
+            # No root reaches the other list now: it is the list no mount reaches, the hole.
+            ("DEV = False\n", [_row("/<prefix>dev/", "partial"), _row("/a/")], []),
+            (
+                "import os\nDEV = os.environ.get('DEV')\n",
+                [_row("/a/"), _row("/dev/")],
+                [("/dev/", "DEV", "unresolved")],
+            ),
+        )
+    ):
+        workspace = _program(
+            tmp_path / str(position),
+            libraries,
+            {
+                "dev_urls.py": "urlpatterns = [path('dev/', v)]\n",
+                "urls.py": "from app import dev_urls\n" + fixed + "urlpatterns = [path('a/', v)]\n"
+                "if DEV:\n    urlpatterns += dev_urls.urlpatterns\n",
+            },
+        )
+
+        assert _rows(workspace) == rows
+        assert _conditions(workspace) == conditions
+
+
 def test_a_list_added_under_a_test_in_a_mounted_module_keeps_the_mount_and_the_test(
     tmp_path, libraries
 ):

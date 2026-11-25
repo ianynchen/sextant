@@ -1463,7 +1463,10 @@ CREATE OR REPLACE VIEW method_returns AS
 SELECT document_id,
        payload ->> 'method'                    AS method,
        (payload ->> 'ordinal')::INTEGER        AS ordinal,
-       payload ->  'value'                     AS value
+       payload ->  'value'                     AS value,
+       -- D00 §5 (fact schema 24, OI-532): the undecided tests the return runs under within
+       -- its own body, as `call_sites.guards`; NULL where under none and on the JVM.
+       payload ->> 'guards'                    AS guards
 FROM raw_facts WHERE kind = 'method_return'
   AND NOT coalesce((payload ->> 'yielded')::BOOLEAN, false)
   AND document_id IN (SELECT document_id FROM selected_documents);

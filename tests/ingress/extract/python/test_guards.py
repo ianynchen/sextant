@@ -12,7 +12,7 @@ from pathlib import Path
 
 from test_flow import _scan, _sites
 
-from sextant.domain.facts import CallSiteFact, FieldWriteFact
+from sextant.domain.facts import CallSiteFact, FieldWriteFact, MethodReturnFact
 
 
 def _guards(sites) -> dict[str, list[tuple[str, bool, list[str]]] | None]:
@@ -245,3 +245,73 @@ def test_a_field_write_carries_the_tests_it_runs_under(tmp_path: Path):
         ("E.", [("flag", False, ["flag"])]),
         ("x.", [("flag", True, ["flag"])]),
     ]
+
+
+def test_a_return_carries_the_tests_it_runs_under(tmp_path: Path):
+    """D00 §5 `method_return.guards` (fact schema 24, ruling R5 of 2026-11-25, OI-532): a
+    `return` carries the tests it runs under within its own body, by the rules of a call's:
+    the return after an arm that always returns is under that arm's test, the other way."""
+    facts = _scan(
+        tmp_path,
+        "def d(function=None, x=1):\n"
+        "    if function:\n"
+        "        return wrap(function)\n"
+        "    return wrap\n"
+        "def plain():\n"
+        "    return 1\n",
+    )
+
+    returned = {
+        (fact.method.rsplit("#", 1)[1].split("(")[0], fact.ordinal): None
+        if fact.guards is None
+        else [(guard.test, guard.holds) for guard in fact.guards]
+        for fact in facts
+        if isinstance(fact, MethodReturnFact)
+    }
+    assert returned == {
+        ("d", 0): [("function", True)],
+        ("d", 1): [("function", False)],
+        ("plain", 0): None,
+    }
+
+
+def test_a_test_of_one_value_states_the_value_and_when_it_is_true(tmp_path: Path):
+    """D00 §5 `guards[].value` and `when` (fact schema 24, ruling R2 of 2026-11-25): a test
+    that is one value (`x`), its negation (`not x`), or its comparison with `None` by `is`
+    states the value it reads, in the argument grammar, and what of it makes the test true.
+    Every other form states neither."""
+    facts = _scan(
+        tmp_path,
+        "FLAG = True\n"
+        "def f(p, q):\n"
+        "    if p:\n"
+        "        a()\n"
+        "    if not q:\n"
+        "        b()\n"
+        "    if p is None:\n"
+        "        c()\n"
+        "    if q is not None:\n"
+        "        d()\n"
+        "    if FLAG:\n"
+        "        e()\n"
+        "    if p == 1:\n"
+        "        g()\n"
+        "    if p and q:\n"
+        "        h()\n"
+        "    if p in (1, 2):\n"
+        "        k()\n",
+    )
+
+    stated = {
+        name: [
+            (guard.when, None if guard.value is None else (guard.value.kind, guard.value.value))
+            for guard in site.guards
+        ]
+        for name, site in _sites(facts).items()
+    }
+    assert stated["a"] == [("true", ("parameter", 0))]
+    assert stated["b"] == [("false", ("parameter", 1))]
+    assert stated["c"] == [("null", ("parameter", 0))]
+    assert stated["d"] == [("not_null", ("parameter", 1))]
+    assert stated["e"] == [("true", ("field", None))]
+    assert stated["g"] == stated["h"] == stated["k"] == [(None, None)]

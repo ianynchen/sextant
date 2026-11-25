@@ -9,10 +9,13 @@ displayName: Django's view decorators, which hand the view on
 # variable (`csrf_protect`, `gzip_page`) names that module too, as `path` does.
 #
 # - Applied to the view (`d(view)`, the table's "decorator"): `result_calls: arg0`, calling the
-#   result runs the view. `login_required(login_url=...)` and `staff_member_required(...)` with
-#   keyword arguments alone write no argument 0, so they state nothing here and end the walk.
+#   result runs the view.
 # - Called first, the result applied to the view (`d(args)(view)`, the table's "factory"):
 #   `result_returns: arg0`, the decorator's result stands for the view.
+# - Both uses (`login_required`, `staff_member_required`; ruled 2026-11-25, OI-557): the entry
+#   states the two forms of argument 0. Where the call writes it (`login_required(view)`),
+#   `result_calls`; where it does not (`login_required(login_url=...)`, `login_required()`),
+#   `result_returns`: the call made a decorator that hands the view on. Both measured.
 
 returns_argument:
   - { owner: django.views.decorators.http, method: require_GET, result_calls: arg0, by: scripts/probes/django_rules.md }
@@ -33,9 +36,9 @@ returns_argument:
   - { owner: django.views.decorators.clickjacking, method: xframe_options_exempt, result_calls: arg0, by: scripts/probes/django_rules.md }
   - { owner: django.views.decorators.debug, method: sensitive_post_parameters, result_returns: arg0, by: scripts/probes/django_rules.md }
   - { owner: django.views.decorators.gzip, method: gzip_page, result_calls: arg0, by: scripts/probes/django_rules.md }
-  - { owner: django.contrib.auth.decorators, method: login_required, result_calls: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.contrib.auth.decorators, method: login_required, result_calls: arg0, result_returns: arg0, by: scripts/probes/django_rules.md }
   - { owner: django.contrib.auth.decorators, method: permission_required, result_returns: arg0, by: scripts/probes/django_rules.md }
   - { owner: django.contrib.auth.decorators, method: user_passes_test, result_returns: arg0, by: scripts/probes/django_rules.md }
-  - { owner: django.contrib.admin.views.decorators, method: staff_member_required, result_calls: arg0, by: scripts/probes/django_rules.md }
+  - { owner: django.contrib.admin.views.decorators, method: staff_member_required, result_calls: arg0, result_returns: arg0, by: scripts/probes/django_rules.md }
   - { owner: django.urls.conf, method: include, returns: { arg: 0, element: 0 }, by: scripts/probes/django_rules.md }
   - { owner: django.views.generic.base.View, method: as_view, returns_receiver: true, by: scripts/probes/django_rules.md }

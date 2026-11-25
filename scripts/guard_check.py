@@ -4551,8 +4551,8 @@ GUARDS: dict[str, Guard] = {
         edits=(
             Edit(
                 path=_VALUES,
-                find="        for writer, entry in constants:",
-                replace="        for writer, entry in ():  # guard disabled by scripts/guard_check.py",
+                find="            for by, held in constants\n",
+                replace="            for by, held in ()  # guard disabled by scripts/guard_check.py\n",
             ),
         ),
     ),

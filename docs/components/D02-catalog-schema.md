@@ -775,6 +775,14 @@ not, that it is genuinely a constructor rather than an ordinary void call.
 - **`result_calls: argN`** — calling the call's result runs the call's OWN argument N with the
   same arguments: a wrapper. `python-wrappers.yml` states `functools.cache` and `lru_cache`,
   `contextlib.contextmanager` and `asynccontextmanager`, and `tenacity.retry`.
+- **`result_calls: argN` and `result_returns: argN` on ONE entry, the same N** (ruling R5/A1
+  of 2026-11-25, OI-557) — the two uses of a decorator usable bare or with arguments. Where
+  the call writes argument N (`login_required(view)`), the entry is read as `result_calls`;
+  where it does not (`login_required(login_url="/x")`, `login_required()`), as
+  `result_returns`: the call made a decorator, and what that is applied to is the function.
+  An argument an unpacked `*` value may be is read as written. `value-models/django.yml`
+  states `login_required` and `staff_member_required` this way. No other two forms go
+  together, and two different positions are refused.
 - **`returns_receiver: true`** — the call returns the object it is called on (ruling 4 of spec
   2026-10-30, the `fluent` step's word, here in a value model; plan 3 R13).
   `value-models/python-clients.yml` states httpx's `Client.__enter__` and
