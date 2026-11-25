@@ -685,7 +685,8 @@ def test_an_aliased_or_re_exported_list_in_a_root_module_stays_at_the_root(tmp_p
 
 def test_a_list_handed_to_a_call_no_catalog_reads_is_behind_an_unread_prefix(tmp_path, libraries):
     """R9 part 2: `urlpatterns = copy.copy(base)` included at `api/`: `base` is handed to a
-    call no catalog reads, so it cannot be placed; nothing is `resolved` at the root."""
+    call that is not read, a mount whose prefix is not read (ruled 2026-11-24, OI-550): its
+    routes are behind `api/` and the hole; nothing is `resolved`."""
     workspace = _program(
         tmp_path,
         libraries,
@@ -695,8 +696,8 @@ def test_a_list_handed_to_a_call_no_catalog_reads_is_behind_an_unread_prefix(tmp
         },
     )
 
-    assert _rows(workspace) == [_row("/<prefix>x/", "partial")]
-    assert _questions(workspace, "mount_prefix") == ["/<prefix>x/"]
+    assert _rows(workspace) == [_row("/api/<prefix>x/", "partial")]
+    assert _questions(workspace, "mount_prefix") == ["/api/<prefix>x/"]
 
 
 def test_a_list_of_a_list_is_mounted(tmp_path, libraries):
@@ -799,21 +800,44 @@ def test_a_helper_that_returns_a_route_keeps_each_callers_path_and_prefix(tmp_pa
     assert rows == [_row("/a/one/"), _row("/b/two/")]
 
 
-def test_a_library_call_that_takes_the_list_is_no_mount(tmp_path, libraries):
-    """Design 2026-11-23 §4c M1: `i18n_patterns(*x)` adds a language prefix from a setting
-    and the request; no readable mount reaches `x`, so its routes are behind the hole."""
-    workspace = _program(
-        tmp_path,
-        libraries,
-        {
-            "urls.py": "from django.conf.urls.i18n import i18n_patterns\n"
-            "x = [path('a/', v)]\n"
-            "urlpatterns = [path('h/', v)]\nurlpatterns += i18n_patterns(*x)\n"
-        },
-    )
+def test_a_library_call_that_takes_the_list_is_a_mount_whose_prefix_is_not_read(
+    tmp_path, libraries
+):
+    """Ruled 2026-11-24 (OI-550, option A): `i18n_patterns(*x)` takes a route list and its
+    result is a member of a route list, so it is a mount whose prefix is not read: `x`'s
+    routes are behind the hole at `partial`, with the `mount_prefix` question naming the
+    call, also where a root reaches `x` another way (`urls = list(x)`)."""
+    for written, rows in (
+        (
+            "urlpatterns = [path('h/', v)]\nurlpatterns += i18n_patterns(*x)\n",
+            [_row("/<prefix>a/", "partial"), _row("/h/")],
+        ),
+        (
+            "urls = list(x)\nurlpatterns = i18n_patterns(*x) + urls\n",
+            [_row("/<prefix>a/", "partial"), _row("/a/")],
+        ),
+        (
+            "urlpatterns = i18n_patterns(*x) + x\n",
+            [_row("/<prefix>a/", "partial"), _row("/a/")],
+        ),
+    ):
+        workspace = _program(
+            tmp_path / str(len(written)),
+            libraries,
+            {
+                "urls.py": "from django.conf.urls.i18n import i18n_patterns\n"
+                "x = [path('a/', v)]\n" + written
+            },
+        )
 
-    assert _rows(workspace) == [_row("/<prefix>a/", "partial"), _row("/h/")]
-    assert _questions(workspace, "mount_prefix") == ["/<prefix>a/"]
+        assert _rows(workspace) == rows, written
+        assert _questions(workspace, "mount_prefix") == ["/<prefix>a/"], written
+        call = next(row for row in workspace.query("call_sites") if row["name"] == "i18n_patterns")
+        assert [
+            (candidate["mount"], candidate["mount_ordinal"])
+            for row in workspace.query("open_questions")
+            for candidate in json.loads(row["candidates"])
+        ] == [(call["caller"], call["ordinal"])], written
 
 
 def test_a_list_added_under_a_test_is_behind_the_hole(tmp_path, libraries):

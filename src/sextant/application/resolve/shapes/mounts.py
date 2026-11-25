@@ -51,8 +51,9 @@ list. A mount of a module that is not in the workspace adds nothing. A call that
 route root and a mount (`path(p, include(x))`, `path(p, view)`) is a mount only where its
 router argument reads as a router (`mounts_a_router`). A registration that no root and no
 readable mount reaches is behind the named hole `<prefix>`, at `partial`, never at the root:
-the framework serves only what the root reaches (a library call holding the list,
-`i18n_patterns(*x)`, is no readable mount).
+the framework serves only what the root reaches. A call into code that is not read whose
+result is a member (`i18n_patterns(*x)`) is a mount whose prefix is not read: the lists it
+takes are behind the hole naming it (ruled 2026-11-24, OI-550).
 
 **Cost** (spec §5): one producer read per route-root receiver and one per mount argument and
 mount receiver, each cached here and run on the resolve's shared index; one `within=` read of
@@ -797,6 +798,19 @@ class MountReader:
             for producer, path in producer_paths(index, source, slot, stops, which_object=True):
                 joined = path if within is None else within.joined(path)
                 if joined is None:
+                    continue
+                if producer.caller is None and producer.made_by in sites:
+                    # A call into code that is not read, its result a member (ruled 2026-11-24,
+                    # OI-550): a mount whose prefix is not read; the lists it takes are served
+                    # behind the hole naming it.
+                    made = sites[producer.made_by]
+                    hole = self._hole_at(made, MountPath(None, None), "a call that is not read")
+                    taking = (producer.made_by, parent.text, parent.resolution)
+                    if taking not in seen:
+                        seen.add(taking)
+                        behind = self._behind(parent, hole, MountPath(None, None), None)
+                        for taken in range(len(made["arguments"] or [])):
+                            members(made, taken, behind, joined)
                     continue
                 if producer.caller is None:
                     module = _named_module(index, producer.ended_at, variables)

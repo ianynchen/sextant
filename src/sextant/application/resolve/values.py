@@ -4708,10 +4708,15 @@ class _Walk:
         """
         reached: list[_Reached] = []
         unread: str | None = None
+        made_by: tuple[str, int] | None = None
         for index, answers in members:
             step = _Step((_ELEMENT_OF, *origin), f"{label} {index}")
             for path, answer in answers:
                 if answer.kind == UNRESOLVED:
+                    if unread is None:
+                        # The library call the first unread member ended at, for the producer
+                        # reader (`Answer.made_by`, OI-550).
+                        made_by = answer.made_by
                     unread = unread or answer.reason or NOT_READABLE
                     continue
                 merged = _combine(path, (step,))
@@ -4720,7 +4725,12 @@ class _Walk:
         if unread is not None:
             trailing = _Step((_ELEMENT_OF, *origin), f"unread {label}")
             merged = _combine(trail, (trailing,))
-            reached.append((merged if merged is not None else trail, _unresolved(unread)))
+            reached.append(
+                (
+                    merged if merged is not None else trail,
+                    replace(_unresolved(unread), made_by=made_by),
+                )
+            )
         return tuple(reached)
 
     def _joined(
