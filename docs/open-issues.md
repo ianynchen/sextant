@@ -520,7 +520,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-517 | SEXTANT-TBD | an alias write adds its members to the PATH_CAP exemption (plan 2026-11-23-python-django-redesign, low) |
 | OI-518 | SEXTANT-TBD | the scanner's list-name table does not follow `global X` or a function body's order (plan 2026-11-23-python-django-redesign, low) |
 | OI-519 | SEXTANT-TBD | `{{` and `}}` in a template become plain braces (plan 2026-11-23-python-django-redesign, low) |
-| OI-520 | SEXTANT-TBD | `list(S)` of a string name is written as a copy of a list (plan 2026-11-23-python-django-redesign, low) |
+| OI-520 | SEXTANT-TBD | `list(S)` of a string name is written as a copy of a list (plan 2026-11-23-python-django-redesign, low) (fixed on `fix/django-open-issues`: an unpacked element that reaches a value through no list or tuple element is `not_readable`, its characters named by no fact; `tests/application/test_fastapi_routes.py::test_a_verb_list_held_in_a_module_name_is_read`) |
 | OI-521 | SEXTANT-TBD | a library override of a stated method does not stop the ancestor match (plan 2026-11-23-python-django-redesign, low) |
 | OI-522 | SEXTANT-TBD | an unbound call through a subclass answers the class object (plan 2026-11-23-python-django-redesign, low) |
 | OI-523 | SEXTANT-TBD | `as_view` on an instance, through `super()` or through `cls` is not read (plan 2026-11-23-python-django-redesign, low) |

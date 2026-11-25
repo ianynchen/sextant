@@ -557,6 +557,10 @@ def _not_yet(held: str, expected: list[tuple[object, ...]], task: str) -> Any:
         # An element store or delete is a call on the list (`__setitem__`, `__delitem__`).
         ("VERBS = ['get']\nVERBS[0] = 'delete'\n", [_NOT_KNOWN]),
         ("VERBS = ['get']\ndel VERBS[0]\n", [_NOT_KNOWN]),
+        # A copy of a string is the list of its characters, which no fact names (OI-520).
+        ("VERB = 'get'\nVERBS = list(VERB)\n", [_NOT_KNOWN]),
+        ("VERB = 'get'\nVERBS = ['post', *VERB]\n", [_NOT_KNOWN, _POST]),
+        ("OTHER = ['get']\nVERBS = [*OTHER]\n", [_GET]),
         pytest.param(
             "VERBS = ['get']\ndef keep(v):\n    v.append('post')\nkeep(VERBS)\n",
             [_NOT_KNOWN],

@@ -4561,12 +4561,36 @@ class _Walk:
             return _only(trail, Answer(kind=ABSENT))
         return self._enumerated(
             [
-                (index, self._entry(element, method, origin, trail, frames))
+                (index, self._unpacked(element, method, origin, trail, frames))
                 for index, element in enumerate(elements)
             ],
             origin,
             trail,
             "element",
+        )
+
+    def _unpacked(
+        self,
+        element: Mapping[str, Any],
+        method: str,
+        origin: _Position,
+        trail: _Trail,
+        frames: "_Frames",
+    ) -> tuple[_Reached, ...]:
+        """One element's answers. An unpacked one (`[*x]`, D00 §5 `keyword: "*"`) stands for
+        the members of what it unpacks: an answer reached through an element of a list or a
+        tuple is one. A value reached as it is (a string, `list("abc")`) is no member, and
+        the members it gives (its characters) no fact names: `not_readable` (OI-520)."""
+        reached = self._entry(element, method, origin, trail, frames)
+        if element.get("keyword") != _UNPACKED_SEQUENCE:
+            return reached
+        known = set(trail)
+        return tuple(
+            (path, _unresolved(NOT_READABLE))
+            if answer.kind in (LITERAL, EXPRESSION)
+            and not any(s.context[0] == _ELEMENT_OF and s not in known for s in path)
+            else (path, answer)
+            for path, answer in reached
         )
 
     def _enumerated(
