@@ -2657,6 +2657,16 @@ class Path:
             if step.context[0] == _PASSED
         )
 
+    def entered_twice(self) -> frozenset[str]:
+        """The callees this path descended into the return of on two calls (`log(log(v))`).
+        `_entered` holds the first call of each (OI-537), so a value read in one of them on
+        this path is the first call's alone."""
+        seen: dict[str, set[Any]] = {}
+        for step in self.trail:
+            if step.context[0] == _RETURN_OF:
+                seen.setdefault(step.label.rsplit(" returns ", 1)[0], set()).add(step.context)
+        return frozenset(callee for callee, contexts in seen.items() if len(contexts) > 1)
+
     def calls_into(self) -> dict[str, tuple[str, int]]:
         """The call this path chose for each method it crossed into or out of, `{method:
         (caller, ordinal)}`: the calling context it was read in (task 10b review, Major 1). A
@@ -2874,9 +2884,11 @@ def producer_paths(
     ran the helper — so the path carries both spellings, and a later read within it
     (`resolve_positions(..., within=)`) reaching the helper's parameter agrees only with the
     call the descent came through. A path that descends into ONE helper on two different
-    calls cannot be held by one binding, which is the M-1 ruling's own bound; the path
-    records which steps were written for an entry (`Path.entered`), so a reader can tell
-    that bound from two paths through different callers (`Path.two_calls_of_one_helper`).
+    calls holds the first call's crossing alone (`_entered`, OI-537), so a read within it of
+    that helper's parameter is the first call's (`Path.entered_twice` names such helpers);
+    the path records which steps were written for an entry (`Path.entered`), so a reader can
+    tell two paths that differ only by the call of one helper from two paths through
+    different callers (`Path.two_calls_of_one_helper`).
 
     **`which_object` is for a reader asking "which object is this"** (Vert.x spec 2026-10-30
     §3c), the object reader's own switch (`_Walk._objects`): a call made ON the value does not
@@ -2941,8 +2953,8 @@ def producer_paths(
         if entered is not None:
             found.append((producer, Path(entered, frozenset(entered) - frozenset(trail))))
         elif dropped is not None:
-            # A path no `Path` can hold (one helper entered through two calls) is left out of
-            # the answer; a caller that must know the answer is incomplete asks for these.
+            # A path no `Path` can hold is left out of the answer; a caller that must know the
+            # answer is incomplete asks for these.
             dropped.append(producer)
     # Keyed with `made_by`, which is outside `Producer`'s equality: two paths ending at two
     # library calls are two ends to this reader (`_Walk._distinct`).

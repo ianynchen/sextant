@@ -206,6 +206,7 @@ from sextant.application.resolve.values import (
     producer_paths,
     recipe_bodies,
     resolve_positions,
+    resolve_positions_on_paths,
     undecorated_maker,
 )
 from sextant.domain.closed_sets import (
@@ -4619,7 +4620,7 @@ def _narrowed_verbs(
                 )
             )
             if entry is not None and named is not None:
-                sets.append(_narrowing_verbs(entry["http_method"], named, context))
+                sets.append(_narrowing_verbs(entry["http_method"], named, context, path))
         found.append(
             None
             if not sets
@@ -4636,17 +4637,18 @@ def _narrowed_verbs(
 
 
 def _narrowing_verbs(
-    declared: Any, row: Mapping[str, Any], context: "_DeriveContext"
+    declared: Any, row: Mapping[str, Any], context: "_DeriveContext", path: Path
 ) -> tuple[str | None, ...]:
     """One `annotations` entry's methods on the call `row`: its literal verb or verbs, or the
-    list its argument reference reads, as written (the list form's read, `_listed_verbs`)."""
+    list its argument reference reads, as written (the list form's read, `_listed_verbs`), read
+    on `path`, the path the walk took to the handler through that call."""
     if isinstance(declared, str):
         return (declared,)
     if isinstance(declared, list):
         return tuple(declared)
     listed = _listed_verbs(declared, dict(row))
     if _unread_verbs(listed):
-        listed = _walked_verbs(listed, replace(context, path=None))
+        listed = _walked_verbs(listed, replace(context, path=path))
     values = listed if isinstance(listed, tuple) else (listed,)
     return tuple(dict.fromkeys(_verb_of(each, context) for each in values)) or (None,)
 
@@ -4699,7 +4701,9 @@ def _walked_verbs(declared: Any, context: "_DeriveContext") -> Any:
     """A verb list read through the value walk (N8, M1): one verb per value the walk reads
     (a module constant's elements, a parameter's arguments), respelled; the `absent` verb for
     an explicit `None`; no verb at all where every value is an empty list (a refusal); and an
-    unread argument (no verb) for each value not read, beside the rest."""
+    unread argument (no verb) for each value not read, beside the rest. A value read through a
+    callee the path entered on two calls (`Path.entered_twice`) is the first call's alone, so
+    it is not read (OI-537)."""
     case, absent = declared[VERBS_TO_READ]
     at = declared.get(_CAPTURED_AT)
     site = (
@@ -4710,11 +4714,14 @@ def _walked_verbs(declared: Any, context: "_DeriveContext") -> Any:
     if site is None or at is None or context.workspace is None:
         return None
     verbs: list[Any] = []
-    for answers in resolve_positions(
+    twice = frozenset() if context.path is None else context.path.entered_twice()
+    for read, answers in resolve_positions_on_paths(
         context.workspace, {"verb": (site, int(at[2]))}, context.values, within=context.path
     ):
         answer = answers["verb"]
-        if answer.kind == LITERAL and answer.literal_kind == STRING and not answer.inexact:
+        if twice & set(read.calls_into()):
+            verbs.append(None)
+        elif answer.kind == LITERAL and answer.literal_kind == STRING and not answer.inexact:
             verbs.append(respell_verb(str(answer.value), case))
         elif answer.kind == ABSENT and answer.null:
             verbs.append(absent)

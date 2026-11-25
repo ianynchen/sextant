@@ -762,6 +762,51 @@ def test_a_held_require_http_methods_decorator_narrows(tmp_path: Path, libraries
     ]
 
 
+_ONLY = "def only(ms):\n    def d(f):\n        return require_http_methods(ms)(f)\n    return d\n"
+
+
+def test_one_project_decorator_factory_on_two_views_narrows_each_by_its_own_list(
+    tmp_path: Path, libraries
+):
+    """`only(ms)` applies `require_http_methods(ms)`: each view's list is read on the path the
+    walk took to that view, never every caller's list."""
+    rows = _view(
+        tmp_path,
+        libraries,
+        _ONLY
+        + "@only(['GET'])\ndef a(request):\n    return None\n"
+        + "@only(['POST'])\ndef b(request):\n    return None\n",
+        "path('a/', a), path('b/', b)",
+    )
+
+    assert rows == [
+        ("GET", None, "/a/", _handler("a"), "resolved"),
+        ("POST", None, "/b/", _handler("b"), "resolved"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("decorated", "handler"),
+    [
+        ("@only(['GET'])\n@only(['POST'])\n" + _DEF, _handler("v")),
+        ("@only(['GET', 'POST'])\n@only(['POST'])\n" + _DEF, _handler("v")),
+        (_DEF + "v = only(['GET', 'POST'])(only(['POST'])(v))\n", None),
+    ],
+    ids=["no-common-method", "intersection", "nested-call"],
+)
+def test_one_project_decorator_factory_applied_twice_reads_no_method(
+    tmp_path: Path, libraries, decorated: str, handler: str | None
+):
+    """One path passes the one `require_http_methods(ms)` site twice, under two calls of `only`
+    with two lists. The path holds the first call of `only` alone (`Path.entered_twice`), so
+    which list each pass read is not on it: the list is not read, one row naming no method,
+    never a method the code refuses `resolved` (Django serves the intersection: none, POST,
+    POST)."""
+    rows = _view(tmp_path, libraries, _ONLY + decorated)
+
+    assert rows == [(None, None, "/x/", handler, "unresolved")]
+
+
 def test_a_wrapper_returned_through_require_post_narrows(tmp_path: Path, libraries):
     rows = _view(
         tmp_path,
