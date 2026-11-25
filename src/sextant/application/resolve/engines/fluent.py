@@ -4394,7 +4394,8 @@ def _class_rows(
     more), where a bypass is a library's whose body was not read, or where the class writes a
     `bypassed_by` member as a value or the call passes one as a keyword (the table is changed
     in a way not read here). A class read of no row past such a type is one row naming no
-    method."""
+    method. A class of no method row whose bypass was not read is that bypass's any-method row,
+    `partial`."""
     assert context.workspace is not None and context.class_dispatch is not None
     assert context.values is not None
     dispatch = context.workspace.once(dispatch_of)
@@ -4419,6 +4420,9 @@ def _class_rows(
     base = {
         key: value for key, value in captures.items() if key not in (HANDLER_THROUGH, NARROWED_BY)
     }
+    # The first bypass whose body was not read: where the class serves no method row, it is
+    # what runs, and may answer every method itself (OI-549).
+    unread_bypass: str | None = None
     for name in table.bypassed:
         # Every override on the chain, in lookup order, down to the `supertype`'s own: each
         # one that hands the request back (`super().<name>(...)` on some path; what it answers
@@ -4439,6 +4443,7 @@ def _class_rows(
                 )
             else:
                 inexact = True
+                unread_bypass = unread_bypass or symbol
                 continue
             if not delegates:
                 return _narrowed_rows([(base, _Judged(symbol, ANSWERS), inexact)], narrowed)
@@ -4450,6 +4455,8 @@ def _class_rows(
     ]
     if not rows and unread is not None and unread not in framework:
         return [({**base, "http_method": None}, _Judged(None, ANSWERS), False)]
+    if not rows and unread_bypass is not None:
+        return _narrowed_rows([(base, _Judged(unread_bypass, ANSWERS), True)], narrowed)
     return _narrowed_rows(rows, narrowed)
 
 

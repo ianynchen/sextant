@@ -549,7 +549,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-546 | SEXTANT-TBD | `APIRouter(...)` in a project that subclasses the router gives `narrowed` call edges (plan 2026-11-23-python-django-redesign, low) |
 | OI-547 | SEXTANT-TBD | reading library bodies grows the export and the traces; their cost is not measured (plan 2026-11-23-python-django-redesign, low) |
 | OI-548 | SEXTANT-TBD | a mount whose router argument is not read is published as a route with no handler (plan 2026-11-23-python-django-redesign, low) |
-| OI-549 | SEXTANT-TBD | zulip's six `re_path` routes to `SCIMView.as_view(implemented=False)` publish no row (plan 2026-11-23-python-django-redesign, medium) |
+| OI-549 | SEXTANT-TBD | zulip's six `re_path` routes to `SCIMView.as_view(implemented=False)` publish no row (plan 2026-11-23-python-django-redesign, medium) (fixed on `fix/django-open-issues`: a library class of no verb method whose `dispatch` was not read is that `dispatch`'s any-method row, `partial`) |
 | OI-550 | SEXTANT-TBD | zulip's language-prefixed (`en-us/`) route copies have no row (plan 2026-11-23-python-django-redesign, medium) |
 | OI-551 | SEXTANT-TBD | an attribute read on an untyped parameter makes a string value a hole (plan 2026-11-23-python-django-redesign, low) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
