@@ -312,6 +312,9 @@ _DOORS = {
         "settings.py": _ROOT + "DEBUG = False\nwith open('/etc/app.py') as handle:\n"
         "    exec(handle.read())\n"
     },
+    "a text run in the module's names it is handed": {
+        "settings.py": _ROOT + "DEBUG = False\nexec(open('/etc/app.py').read(), globals())\n"
+    },
     "two written values": {"settings.py": "import sys\n" + _ROOT + "DEBUG = False\n"
                            "if sys.argv:\n    DEBUG = True\n"},
     "a door in the module the star takes it from": {

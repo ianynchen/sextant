@@ -88,17 +88,15 @@ def header_digest(tree: ast.Module) -> str:
 
 
 def _runs_a_text(node: ast.AST) -> bool:
-    """Whether a statement is the built-in `exec` of one value (`exec(code)`): in a module
-    body it runs that text in the module's own names, so it may bind any of them, as a star
-    import of a file that is not read may (the approved note of R3, 2026-11-25). With a second
-    argument the text runs in the names that argument holds."""
+    """Whether a statement is the built-in `exec` (`exec(code)`, `exec(code, globals())`): in
+    a module body it runs that text in the module's own names, so it may bind any of them, as
+    a star import of a file that is not read may (the approved note of R3, 2026-11-25). The
+    names a second argument holds are not read, so every form is the door."""
     return (
         isinstance(node, ast.Expr)
         and isinstance(node.value, ast.Call)
         and isinstance(node.value.func, ast.Name)
         and node.value.func.id == "exec"
-        and len(node.value.args) == 1
-        and not node.value.keywords
     )
 
 

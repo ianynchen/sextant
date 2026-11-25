@@ -1670,7 +1670,7 @@ binds the name, whose source is not read (a library, a file that is absent), or 
 an `if` or a `try`; where the star is written, before or after the write, is not read
 (OI-565). For a name star imports alone give (the write per variable a star takes, above):
 a star of the module that is not read, or the name being replaceable in the module the last
-star takes it from. A module whose body runs a text as its own code (`exec(code)`, one argument, outside a function or a class) is read as a module with a star that is not read: every name it writes carries the mark (the approved note of R3). Every write of such a name carries it, from any file. A read from another
+star takes it from. A module whose body runs a text as its own code (`exec(code)`, with or without a second argument such as `globals()`, outside a function or a class) is read as a module with a star that is not read: every name it writes carries the mark (the approved note of R3). Every write of such a name carries it, from any file. A read from another
 file of a marked name that a star alone gives names that module's own field
 (`app/config#DOCS.`), not the field where the name is defined, so the read goes through the
 marked write. Absent where no star can replace the name, on a class's or an object's field,
