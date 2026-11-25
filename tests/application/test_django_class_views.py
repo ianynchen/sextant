@@ -674,3 +674,22 @@ def test_a_class_narrowed_through_a_project_helper_keeps_the_allowed_rows(
     )
 
     assert rows == [("POST", None, "/x/", _handler("post", "app/urls/Items"), "resolved")]
+
+
+def test_an_http_method_names_initkwarg_in_a_helper_leaves_the_verbs_partial(
+    tmp_path: Path, libraries
+):
+    """OI-505: the `as_view` call the value walk passed through inside a helper is on the path
+    (`Path.passed`), so its `http_method_names` keyword changes the table as one written in the
+    registration does: every row `partial`, never a `resolved` DELETE Django refuses."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        _ITEMS + "def get_only():\n    return Items.as_view(http_method_names=['get'])\n",
+        "path('x/', get_only())",
+    )
+
+    assert rows == [
+        ("DELETE", None, "/x/", _handler("delete", "app/urls/Items"), "partial"),
+        ("GET", None, "/x/", _handler("get", "app/urls/Items"), "partial"),
+    ]

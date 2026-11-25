@@ -4294,6 +4294,9 @@ def _class_view(
     # catalog's `supertype` (`X.as_view()` is `X`, a value model's `returns_receiver`) answers
     # by its methods.
     owners: list[str] = []
+    # The stated calls each class's paths passed (`Path.passed`: a helper's
+    # `as_view(http_method_names=...)` changes the table as one in the registration does).
+    passed: dict[str, list[tuple[str, int]]] = {}
     other = False
     paths = producer_paths(index, site, int(at[2]), frozenset(), functions=True)
     for producer, path in paths:
@@ -4302,6 +4305,7 @@ def _class_view(
         held = producer.ended_at
         if held is not None and _view_class(held, rule.owners, dispatch):
             owners.append(str(held.value))
+            passed.setdefault(str(held.value), []).extend(path.passed())
         else:
             other = True
     stack = _decorator_stack(index, str(at[0]), argument, context.method_symbols)
@@ -4329,13 +4333,18 @@ def _class_view(
     )
     # The arguments of the calls the handler was made through (`as_view(http_method_names=...)`
     # changes the table: `_class_rows`).
-    made = {
-        "arguments": tuple(
-            argument for _, row in stack.calls for argument in row["arguments"] or ()
-        )
-    }
+    written = tuple(argument for _, row in stack.calls for argument in row["arguments"] or ())
     rows: list[tuple[dict[str, Any], _Judged | None, bool]] = []
     for owner in dict.fromkeys(owners):
+        made = {
+            "arguments": written
+            + tuple(
+                argument
+                for call in dict.fromkeys(passed[owner])
+                if (named := index.sites.get(call)) is not None
+                for argument in named["arguments"] or ()
+            )
+        }
         for filled, handled, inexact in _class_rows(
             owner, made, captures, rule.owners, context, narrowed
         ):

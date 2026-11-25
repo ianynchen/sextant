@@ -505,7 +505,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-502 | SEXTANT-TBD | a registration in a loop or a comprehension is not read, and no question names its line (plan 2026-11-23-python-django-redesign, medium) |
 | OI-503 | SEXTANT-TBD | the keywords of a `**kwargs` parameter are not read (zulip `rest_path`) (plan 2026-11-23-python-django-redesign, medium) |
 | OI-504 | SEXTANT-TBD | a lookup by key in a dict is not read (zulip `rest_dispatch`) (plan 2026-11-23-python-django-redesign, medium) |
-| OI-505 | SEXTANT-TBD | `as_view(http_method_names=...)` and an overridden `as_view` are not read (plan 2026-11-23-python-django-redesign, low) |
+| OI-505 | SEXTANT-TBD | `as_view(http_method_names=...)` and an overridden `as_view` are not read (plan 2026-11-23-python-django-redesign, low) (helper case fixed on `fix/django-open-issues`: a `returns_receiver` call the value walk passes is on the path (`Path.passed`), so an `as_view(http_method_names=...)` made in a helper leaves the rows `partial`; `tests/application/test_django_class_views.py::test_an_http_method_names_initkwarg_in_a_helper_leaves_the_verbs_partial`. The keyword's value is still not read (a stated boundary); an overridden `as_view` stays open with OI-523) |
 | OI-506 | SEXTANT-TBD | Django's first-match order for two patterns with one path is not modelled (plan 2026-11-23-python-django-redesign, low) |
 | OI-507 | SEXTANT-TBD | Django admin routes are not read (plan 2026-11-23-python-django-redesign, medium) |
 | OI-508 | SEXTANT-TBD | a route list added under a test is published behind the `<prefix>` hole, without its condition (plan 2026-11-23-python-django-redesign, medium) |

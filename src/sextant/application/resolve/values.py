@@ -288,8 +288,8 @@ _TUPLE = "builtins/tuple#"
 # A function value stood for the function its body hands the request on to
 # (`_Walk._runs_captured`): the label is the body the call runs through.
 _RUNS_THROUGH = "runs-through"
-# A call a value model states hands its argument on (`returns`, `result_calls`, a decorator
-# made by a `result_returns` call), passed on the way to the value (`_Walk._stated_value`):
+# A call a value model states hands its argument or receiver on (`returns`, `returns_receiver`,
+# `result_calls`, a decorator made by a `result_returns` call), passed on the way to the value (`_Walk._stated_value`):
 # the context names the call that STATES it, so a reader of what that call states (the methods
 # a `require_POST` allows) reads the calls of this path (`Path.passed`).
 _PASSED = "passed"
@@ -5778,8 +5778,9 @@ class _Walk:
             return self._stated_slot(site, row, own[1], _passing(trail, site), frames, element)
         if own is not None and own[0] == _RETURNS_RECEIVER:
             # The call returns the object it is called on (`with httpx.Client() as c`: `c` is
-            # the client `__enter__` was called on, plan 3 R13): the value is its receiver.
-            return self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames)
+            # the client `__enter__` was called on, plan 3 R13): the value is its receiver,
+            # the call passed on the way (`as_view(http_method_names=...)` changes the view).
+            return self._resolve((_SLOT, site[0], site[1], RECEIVER), _passing(trail, site), frames)
         if own is not None and own[0] == _RESULT_CALLS and self._functions:
             # A path of the argument that was not read stays beside the functions read: the
             # wrapper runs one of them, or what was not read. A class is called as a function
@@ -5946,12 +5947,13 @@ class _Walk:
             found = entry_of(str(row["owner"]))
             if found is None:
                 return None
+            passed = _passing(trail, site)
             if found[1][0] == _RETURNS:
-                return stated_slot(found, _passing(trail, site))
+                return stated_slot(found, passed)
             if row.get("receiver") is None and site in self._index.class_receivers:
                 # Called through the class (`Sub.as_view()`): its receiver is that class.
                 return _only(
-                    trail,
+                    passed,
                     Answer(
                         kind=LITERAL,
                         value=str(row["owner"]),
@@ -5959,7 +5961,7 @@ class _Walk:
                         class_object=True,
                     ),
                 )
-            return self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames)
+            return self._resolve((_SLOT, site[0], site[1], RECEIVER), passed, frames)
         reached: list[_Reached] = []
         matched = False
         for path, answer in self._resolve((_SLOT, site[0], site[1], RECEIVER), trail, frames):
@@ -5971,7 +5973,7 @@ class _Walk:
             if found[1][0] == _RETURNS:
                 reached.extend(stated_slot(found, _passing(path, site)))
             else:
-                reached.append((path, answer))
+                reached.append((_passing(path, site), answer))
         return tuple(reached) if matched else None
 
     def _stated_slot(
