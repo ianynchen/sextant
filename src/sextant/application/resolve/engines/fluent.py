@@ -1420,12 +1420,14 @@ def _derive_captured(
     # the row below is then `unresolved` with `method` NULL rather than
     # carrying whichever literal an earlier step happened to seed.
     verbless = "http_method" not in captures
-    # The handler value's paths, read once for the two readers below.
+    # The handler value's paths, read once for the readers below.
     handler_paths = (
-        _handler_paths(captures.get("handler"), context)
-        if verbless and direction == "inbound"
-        else ()
+        _handler_paths(captures.get("handler"), context) if direction == "inbound" else ()
     )
+    # The module wrappers a request runs through before the handler (`Path.ran_through`): each
+    # starts work at the row's address as a recipe the framework runs first does, so its own
+    # calls are on the route's trace (OI-534).
+    through = tuple(dict.fromkeys(body for _, path in handler_paths for body in path.ran_through()))
     # A verbless route whose handler passed a decorator the catalog's `annotations` state the
     # methods of serves exactly those methods, one row each.
     narrowed, unsure = (
@@ -1922,7 +1924,7 @@ def _derive_captured(
                 entries,
             )
             seen = context.seen.get(key)
-            _recipe_roots(context, recipes, verb, path, method_kind, path_kind)
+            _recipe_roots(context, (*recipes, *through), verb, path, method_kind, path_kind)
             if seen is not None:
                 seen.merged(published, resolution)
                 _registered(context, seen.rows, alternatives)
@@ -1964,7 +1966,7 @@ def _derive_captured(
                 entries,
             )
             seen = context.exact.get(one_call)
-            _recipe_roots(context, recipes, verb, path, method_kind, path_kind)
+            _recipe_roots(context, (*recipes, *through), verb, path, method_kind, path_kind)
             if seen is not None:
                 seen.merged(published, resolution)
                 _registered(context, seen.rows, alternatives)

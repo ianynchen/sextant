@@ -398,6 +398,32 @@ def test_one_decorator_factory_applied_twice_to_one_view_names_the_view(tmp_path
     assert _rows(workspace) == [(None, "any", "/x/", _handler("v"), "resolved")]
 
 
+def test_a_module_wrapper_the_view_runs_through_is_a_root_at_the_address(tmp_path: Path, libraries):
+    """`@track def v`: the request runs `track`'s wrapper before the view, so the wrapper's own
+    calls are on the route's trace: one `roots` row for it at the route's address, as for a
+    recipe the framework runs first (OI-534); the view keeps its own."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": _HTTP
+            + "def track(f):\n    def inner(request):\n        print(request)\n"
+            + "        return f(request)\n    return inner\n"
+            + "@track\n"
+            + _DEF
+            + "urlpatterns = [path('x/', v)]\n"
+        },
+    )
+
+    assert sorted(
+        (test_django_routes._bare(row["handler"]), row["root_kind"], row["path"])
+        for row in workspace.query("roots")
+    ) == [
+        (_handler("track$inner"), "inbound_endpoint", "/x/"),
+        (_handler("v"), "inbound_endpoint", "/x/"),
+    ]
+
+
 def test_an_unknown_wrapper_over_a_narrowing_call_is_partial_and_narrowed(
     tmp_path: Path, libraries
 ):
