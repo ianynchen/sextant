@@ -21,7 +21,7 @@ once per scan, whichever files import it.
 
 import ast
 import hashlib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -73,7 +73,8 @@ class ModuleHeader:
     stars: tuple[str, ...] = ()
     exports: tuple[str, ...] | None = None
     # A `from m import *` the header does not read: one inside an `if` or a `try`
-    # (`star_bases`' shortcut). What it binds is not known.
+    # (`star_bases`' shortcut). What it binds is not known. Also set where the module body
+    # runs a text as its own code (`_runs_a_text`): that binds names nothing here reads.
     stars_unread: bool = False
 
 
@@ -86,10 +87,38 @@ def header_digest(tree: ast.Module) -> str:
     return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 
 
+def _runs_a_text(node: ast.AST) -> bool:
+    """Whether a statement is the built-in `exec` of one value (`exec(code)`): in a module
+    body it runs that text in the module's own names, so it may bind any of them, as a star
+    import of a file that is not read may (the approved note of R3, 2026-11-25). With a second
+    argument the text runs in the names that argument holds."""
+    return (
+        isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "exec"
+        and len(node.value.args) == 1
+        and not node.value.keywords
+    )
+
+
+def _module_statements(body: list[ast.stmt]) -> Iterator[ast.AST]:
+    """Every statement the module body itself runs: `every_statement`, not into a function
+    or a class."""
+    for node in body:
+        yield node
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            for field in ("body", "orelse", "finalbody", "handlers"):
+                yield from _module_statements(getattr(node, field, None) or [])
+
+
 def _strip(body: list[ast.stmt]) -> None:
     kept: list[ast.stmt] = []
     for node in body:
-        if isinstance(node, ast.Expr | ast.Pass | ast.Raise | ast.Return | ast.Delete):
+        # A text run as the module's code stays: the header says so (`stars_unread`).
+        if isinstance(
+            node, ast.Expr | ast.Pass | ast.Raise | ast.Return | ast.Delete
+        ) and not _runs_a_text(node):
             continue
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             node.body = [ast.Pass()]
@@ -608,5 +637,5 @@ class ProjectHeaders:
             factories,
             bases,
             exports,
-            written != len(bases),
+            written != len(bases) or any(map(_runs_a_text, _module_statements(tree.body))),
         )

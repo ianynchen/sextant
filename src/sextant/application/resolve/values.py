@@ -3490,6 +3490,27 @@ class Tests:
 
     def __init__(self, index: ValueIndex, identities: "Identities" = ()) -> None:
         self._walk = _Walk(index, identities, functions=True, deps=[])
+        # Each written name by its bare symbol (`setting`), built when first asked.
+        self._written: dict[str, str] | None = None
+
+    def setting(self, name: str, when: str, method: str) -> bool | None:
+        """Whether a test of `method` on the module name `name` (a bare field symbol: a
+        setting, in the settings module of one environment) is true there, by the rule of
+        every decided test (`_Walk._decided`, rulings R2, R3 and R10 of 2026-11-25): where
+        the walk gives the name exactly one written literal and nothing a deployment sets is
+        in its chain (an environment read, a write a star import can replace). None where it
+        is not decided, and for a name nothing writes."""
+        if self._written is None:
+            index = self._walk._index
+            self._written = {
+                bare_descriptor(symbol): symbol for symbol in (*index.constants, *index.produced)
+            }
+        symbol, judged = self._written.get(name), _WHEN.get(when)
+        if symbol is None or judged is None:
+            return None
+        self._walk._computes = 0
+        found = self._walk._decided({"kind": "field", "symbol": symbol}, judged, method, (), ())
+        return found[0][1] if len(found) == 1 else None
 
     def ran(
         self, method: str, guards: str, within: "Path | None"

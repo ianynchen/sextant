@@ -901,17 +901,42 @@ def _existence_entries(
     spelled = [" and ".join(tests) for _, tests in sorted(routes.items())]
     words = spelled[0] if len(spelled) == 1 else " or ".join(f"({one})" for one in spelled)
     per_environment: dict[str, set[str]] = {}
+    # Each environment's verdicts, per alternative: a test on a setting is decided in an
+    # environment whose settings module fixes the key (ruling R3 of 2026-11-25).
+    decided: dict[str, dict[int, set[str]]] = {}
     for row in rows:
         evidence = redact_condition_evidence(redactor, str(row["evidence"]))
         per_environment.setdefault(str(row["environment"]), set()).add(evidence)
+        decided.setdefault(str(row["environment"]), {}).setdefault(
+            int(str(row["route"])), set()
+        ).add(str(row["holds"]))
+    # The row exists where every test of one alternative holds, and nowhere where one test
+    # of each fails; else the environment is not evaluated.
+    holds = {
+        environment: "true"
+        if any(verdicts == {"true"} for verdicts in by_route.values())
+        else "false"
+        if all("false" in verdicts for verdicts in by_route.values())
+        else "unresolved"
+        for environment, by_route in decided.items()
+    }
     verdict = _presence_verdict(
         [
-            {"environment": environment, "holds": "unresolved", "evidence": "; ".join(sorted(why))}
+            {
+                "environment": environment,
+                "holds": holds[environment],
+                "evidence": "; ".join(sorted(why)),
+            }
             for environment, why in sorted(per_environment.items())
         ]
     )
+    open_somewhere = "unresolved" in holds.values()
     return [
-        DetailEntry(_text("Exists only when"), _runs(f"{words}, not evaluated"), None),
+        DetailEntry(
+            _text("Exists only when"),
+            _runs(f"{words}, not evaluated" if open_somewhere else words),
+            None,
+        ),
         DetailEntry(_text("Of this module's environments"), _runs(verdict), None),
     ]
 

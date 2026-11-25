@@ -41,16 +41,18 @@ class-body default. A guard with any read that is not such a field stays `test`:
 key explains cannot be called a property condition. A read of an attribute of an object a
 value model states is read by key (`key_reads`: `settings.DEBUG` on Django's settings object)
 and of a name of a settings module (an environment, `settings_modules`) is a read of a key
-the same way (ruling R3 of 2026-11-25): never decided, each environment's value as evidence.
+the same way (ruling R3 of 2026-11-25), each environment's value as evidence.
 A condition a reader states itself on the value of a key (`having_value`: the routes of a
 root exist where the root setting names it, `shapes/mounts.py`) is a guard like the others.
 
-**The seam for deciding a test on a setting** (the approved note's last step, NOT built): in
-`existence_rows`, a `property` guard on one key whose value in an environment is one literal
-could be decided there (`holds` true or false, `resolution` `resolved`) where nothing a
-deployment sets is in the chain. Whether a settings module takes a name from code outside
-the repository (a star import of an absent module) is the mark on the write since ruling R10
-(`field_write.replaceable`, `ValueIndex.replaceable`). OI-570.
+**A test on a setting is decided per environment** (the approved note's last step): in
+`existence_rows`, a `property` guard on one key whose test has one of the forms below is
+decided in an environment whose settings module gives the key exactly one written literal
+(`holds` true or false, `resolution` `resolved`; `Conditions.setting_holds`), the way a
+profile condition is decided in its own environment. Nothing a deployment sets may be in the
+chain: an environment read, a value that is not one literal, and a write a star import can
+replace (ruling R10, `field_write.replaceable`; a module that runs a text as its own code
+writes the same mark) leave it "not evaluated". No row is removed or copied. OI-570.
 
 **A test on a value the code fixes is decided** (ruling R2 of 2026-11-25). Where a test is
 one name (`if x:`), its negation, or its comparison with `None` by `is` (`guards[].value`,
@@ -127,6 +129,8 @@ class Decider(Protocol):
         self, method: str, guards: str, within: Path | None
     ) -> tuple[tuple[Path | None, tuple[int, ...]], ...]: ...
 
+    def setting(self, name: str, when: str, method: str) -> bool | None: ...
+
 
 @dataclass
 class Conditions:
@@ -139,8 +143,24 @@ class Conditions:
     callers: dict[str, tuple[tuple[str, int], ...]]
     tests: dict[Site, str] = field(default_factory=dict)
     decider: Decider | None = None
+    # What of its one value makes a guard's test true (`guards[].when`), for each guard whose
+    # test is that one read (`x`, `not x`, `x is None`, `x is not None`): the forms a test on
+    # a setting is decided in (`setting_holds`).
+    whens: dict[Guard, str] = field(default_factory=dict)
     _methods: dict[tuple[str, bool], Alternatives] = field(default_factory=dict)
     _entered: set[str] = field(default_factory=set)
+
+    def setting_holds(self, guard: Guard, key: str, environment: str) -> bool | None:
+        """Whether `guard`, a test on the one key `key`, goes its way in `environment` (the
+        approved note of R3, 2026-11-25): decided where the test has one of the R2 forms and
+        the environment's settings module gives the key one written literal with no door
+        (`Decider.setting`). None where it is not decided: "not evaluated", as before."""
+        when = self.whens.get(guard)
+        if when is None or self.decider is None:
+            return None
+        name = f"{type_descriptor(environment)}{key}."
+        true = self.decider.setting(name, when, guard[0])
+        return None if true is None else true == guard[2]
 
     def of_sites(
         self,
@@ -281,10 +301,22 @@ def conditions_of(workspace: Workspace, decider: Decider | None = None) -> Condi
         ((str(row["method"]), str(row["guards"])), str(row["guards"]))
         for row in workspace.query("method_return_guards")
     ]
+    whens: dict[Guard, str] = {}
     for site, written in guarded:
         guards[site] = _guards_of(site[0], written)
-        if any(g.get("value") is not None for g in json.loads(written)):
+        parsed = json.loads(written)
+        if any(g.get("value") is not None for g in parsed):
             tests[site] = written
+        for guard, g in zip(guards[site], parsed, strict=True):
+            value, fields = g.get("value"), g.get("fields") or {}
+            if (
+                isinstance(value, dict)
+                and g.get("when") is not None
+                and len(guard[3]) == 1
+                and value.get("kind") == "field"
+                and [value.get("symbol")] == list(fields.values())
+            ):
+                whens[guard] = str(g["when"])
     callers: dict[str, list[tuple[str, int]]] = {}
     if guards:
         for row in workspace.query("calls_running"):
@@ -292,7 +324,7 @@ def conditions_of(workspace: Workspace, decider: Decider | None = None) -> Condi
                 (str(row["caller"]), int(str(row["ordinal"])))
             )
     return Conditions(
-        guards, {callee: tuple(sites) for callee, sites in callers.items()}, tests, decider
+        guards, {callee: tuple(sites) for callee, sites in callers.items()}, tests, decider, whens
     )
 
 
@@ -378,6 +410,7 @@ def existence_rows(
     registrations: Sequence[tuple[Mapping[str, Any], Existence]],
     environments: Sequence[str],
     settings: SettingsReads | None = None,
+    conditions: Conditions | None = None,
 ) -> list[dict[str, Any]]:
     """The `endpoint_existence` rows of each registered row: its alternatives OR-ed across
     every registration that made it, nothing for a row one of them makes unconditionally.
@@ -415,6 +448,13 @@ def existence_rows(
                     sort_keys=True,
                 )
                 for environment in environments:
+                    # A test on one setting is decided per environment, as a profile
+                    # condition is in its own environment (`Conditions.setting_holds`).
+                    decided = (
+                        conditions.setting_holds(guard, keys[0], environment)
+                        if conditions is not None and len(keys) == 1 and guard[5] is None
+                        else None
+                    )
                     written.append(
                         {
                             "protocol": row["protocol"],
@@ -429,8 +469,8 @@ def existence_rows(
                             "kind": TEST if explained is None else PROPERTY,
                             "expression": expression,
                             "environment": environment,
-                            "holds": "unresolved",
-                            "resolution": "unresolved",
+                            "holds": "unresolved" if decided is None else str(decided).lower(),
+                            "resolution": "unresolved" if decided is None else "resolved",
                             "evidence": f"{NOT_EVALUATED}`{test}`"
                             if explained is None or settings is None
                             else _evidence(explained, environment, settings),

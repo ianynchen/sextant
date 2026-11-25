@@ -664,7 +664,10 @@ def run(workspace: Workspace, catalog: Catalog) -> None:
         # After the rows, never before: each entry is bound to its row's `row_id` as it is
         # written (`insert_endpoint_existence.sql`), the `endpoint_metadata` discipline.
         existence = existence_rows(
-            registrations, environments_of(workspace), settings_reads_of(workspace, catalog)
+            registrations,
+            environments_of(workspace),
+            settings_reads_of(workspace, catalog),
+            conditions,
         )
         if existence:
             workspace.derive("endpoint_existence_insert", rows=existence)

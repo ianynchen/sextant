@@ -695,8 +695,10 @@ CREATE TABLE IF NOT EXISTS interface_beans (
 -- before the routes under it). `via` is the method whose body holds the test. `kind` is
 -- `test`; `expression` is JSON `{test, holds, reads}` — the test as the code writes it, the arm the registration is in, the names it
 -- reads (`call_site.guards`, D00 §5). `holds` is `unresolved` and `resolution` `unresolved`:
--- no test is evaluated. `evidence` says so, quoting the test. A row registered under no test
--- has no entry here. Replaced whole per resolve.
+-- the test is not evaluated, and `evidence` says so, quoting the test. A `property` condition
+-- on one key is `true` or `false` and `resolved` in an environment whose settings module
+-- fixes the key (ruling R3 of 2026-11-25, D01). A row registered under no test has no entry
+-- here. Replaced whole per resolve.
 CREATE TABLE IF NOT EXISTS endpoint_existence (
     row_id      BIGINT,
     protocol    TEXT,

@@ -38,6 +38,16 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A test on a Django setting is decided per environment** (ruling R3 of 2026-11-25, the last
+  step of the approved note; OI-570). `if settings.DEBUG: urlpatterns += [...]` with `DEBUG =
+  False` in `settings.py` and `DEBUG = True` in `settings_dev.py` was "not evaluated" in both
+  environments. Its `endpoint_existence` rows now say `false` in `app.settings` and `true` in
+  `app.settings_dev` (`resolved`), where the test is one name, its negation or its comparison
+  with `None`, and the settings module gives the key one written literal. An environment
+  read, a write a star import can replace, a settings module that runs `exec(code)`, and a
+  key with no one value stay "not evaluated". The row is never removed or copied, and the
+  document's "Of this module's environments" line states the verdicts.
+
 - **A value a star import can replace decides no test, at any depth** (ruling R10 of
   2026-11-25; fact schema 25). `config.py`: `DOCS = False`, then `try: from .local_config
   import *` with no such file in the repository. A test on `config.DOCS` itself was already
