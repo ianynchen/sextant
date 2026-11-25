@@ -1566,6 +1566,28 @@ def test_an_attribute_of_a_library_variable_is_a_call_on_its_defining_class(tmp_
     assert all(name != "method" or owner != base for owner, name, _, _ in calls)
 
 
+def test_a_library_attribute_read_in_an_if_test_is_written_once(tmp_path: Path):
+    """`if request.args:` with an early `return`: the test's guard reads it again for each arm
+    and for what follows (`_fields`), and writes no call of its own: one `args` call (OI-542)."""
+    web = _install(tmp_path / "site", "web", "1.0.0", _WEB)
+
+    _, tree = _scan(
+        tmp_path,
+        {
+            "app/main.py": (
+                "from web import request\n"
+                "def handler():\n"
+                "    if request.args:\n"
+                "        return None\n"
+                "    print('x')\n"
+            )
+        },
+        (web,),
+    )
+
+    assert [s.target.name for s in _sites(tree, "app/main#handler")].count("args") == 1
+
+
 def _bad_library(tmp_path: Path, table_cap: int | None = None) -> Libraries:
     broken = _install(tmp_path / "site", "broken", "1.0", {"broken/__init__.py": "def (:\n"})
     return Libraries((broken,), typeshed_dir(), tmp_path / "site", table_cap=table_cap)

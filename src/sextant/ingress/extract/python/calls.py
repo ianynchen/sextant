@@ -1663,6 +1663,9 @@ class BodyReader:
         if found is None:
             return None
         defining, typed = found
+        if self._rereading:
+            # A test read again for its guard (`_fields`) wrote its calls the first time.
+            return _UNKNOWN
         callee = self._on_value(self._value(node.value, scope), node.attr, scope, declared=held)
         made = self._invoke(replace(callee, target=_target(defining, node.attr)), [], scope)
         if made.source is not None:
