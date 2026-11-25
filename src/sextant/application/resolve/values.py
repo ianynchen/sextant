@@ -5996,6 +5996,14 @@ class _Walk:
             if found[1][0] == _RETURNS:
                 return marked(found, stated_slot(found, passed))
             if row.get("receiver") is None and site in self._index.class_receivers:
+                if any(
+                    full in self._index.instance_methods
+                    for method in named.get((found[0], name), ())
+                    for full in dispatch.bodies.get(method, ())
+                ):
+                    # Through the class to a method that takes `self` (`Api.__enter__(c)`):
+                    # its receiver is the first argument, as `call_slots` binds it (OI-522).
+                    return marked(found, self._stated_slot(site, row, 0, passed, frames))
                 # Called through the class (`Sub.as_view()`): its receiver is that class.
                 return marked(
                     found,

@@ -264,6 +264,40 @@ def test_a_with_statement_on_a_client_subclass_is_the_client_it_built(tmp_path, 
     assert sunk == [["app/main/Api#"], ["own"]]
 
 
+@pytest.mark.declines("requests")
+@pytest.mark.declines("httpx")
+def test_an_unbound_call_through_a_client_subclass_is_its_first_argument(tmp_path, libraries):
+    """OI-522: `Api.__enter__(client)` calls `httpx.Client.__enter__`, a method that takes
+    `self`, through the class: its receiver is the first argument, the instance, never the
+    class `Api`."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": "import httpx\n"
+            "class Api(httpx.Client):\n"
+            "    pass\n"
+            "def sink(x: object) -> None: ...\n"
+            "def run(client: Api) -> None:\n"
+            "    sink(Api.__enter__(client))\n"
+            "def main() -> None:\n"
+            "    run(Api())\n",
+            "models.py": _MODELS,
+        },
+        locked=_CLIENTS,
+    )
+    index = values.value_index(
+        workspace, returns_arguments=YamlCatalogSource(catalogs_dir()).returns_arguments()
+    )
+    (site,) = (row for row in workspace.query("call_sites") if row["name"] == "sink")
+    sunk = [
+        (b.slots[0].value, b.slots[0].class_object)
+        for b in values.resolve_site(workspace, dict(site), index)
+    ]
+    workspace.close()
+    assert sunk == [("app/main/Api#", False)]
+
+
 @pytest.mark.parametrize(
     ("base", "path", "sent"),
     [
