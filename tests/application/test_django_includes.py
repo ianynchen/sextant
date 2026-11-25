@@ -187,6 +187,22 @@ def test_include_a_list_and_app_name_tuple(tmp_path, libraries):
     assert rows == [_row("/t/e/")]
 
 
+def test_include_a_list_and_app_name_tuple_held_in_a_name(tmp_path, libraries):
+    """OI-526: `x = (extra, 'app.other')`, `include(x)`: the app name is no member, also
+    where it is a module's dotted name; only the list is mounted."""
+    rows = _served(
+        tmp_path,
+        libraries,
+        {
+            "other.py": "urlpatterns = [path('o/', v)]\n",
+            "urls.py": "extra = [path('e/', v)]\nx = (extra, 'app.other')\n"
+            "urlpatterns = [path('t/', include(x))]\n",
+        },
+    )
+
+    assert rows == [_row("/<prefix>o/", "partial"), _row("/t/e/")]
+
+
 def test_include_with_a_namespace(tmp_path, libraries):
     """`namespace=` names the instance; it changes no path."""
     rows = _served(
