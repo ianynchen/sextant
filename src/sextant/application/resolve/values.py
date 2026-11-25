@@ -2703,7 +2703,9 @@ class Path:
 
     def written_under(self) -> tuple[tuple[str, str], ...]:
         """The writes under a test this path read a value through (`_WRITTEN_UNDER`), each as
-        `(writing method, its tests)`, the tests as `field_writes.guards` spells them."""
+        `(writing method, its tests)`, the tests as `field_writes.guards` spells them; and the
+        returns under tests not decided it read one through, each as `(returning method, the
+        tests still open)`."""
         return tuple(
             (str(step.context[1]), str(step.context[2]))
             for step in self.trail
@@ -7633,7 +7635,23 @@ class _Walk:
             if not self._may_decide(str(guards), method):
                 return [trail]
             frames = ()
-        return [path for path, _ in self._tested(str(guards), method, trail, frames)]
+        ran = self._tested(str(guards), method, trail, frames)
+        if not returned:
+            return [path for path, _ in ran]
+        # A value read through a `return` under tests not decided is read only where they
+        # hold: the path names the return's method and those tests, as a write under a test
+        # is named (`Path.written_under`), for the reader to give its row the condition.
+        written = _guards(str(guards))
+        found: list[_Trail] = []
+        for path, kept in ran:
+            still = (
+                str(guards)
+                if len(kept) == len(written)
+                else json.dumps([written[position] for position in kept], sort_keys=True)
+            )
+            step = _Step((_WRITTEN_UNDER, method, still), f"{method} returned under a test")
+            found.append(path if not kept or step in path else (*path, step))
+        return found
 
     def _binding_writes(
         self,

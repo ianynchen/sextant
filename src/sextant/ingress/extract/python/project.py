@@ -40,6 +40,7 @@ from sextant.ingress.extract.python.imports import (
     ModuleIndex,
     Target,
     bind_names,
+    every_statement,
     star_bases,
     star_exports,
 )
@@ -71,6 +72,9 @@ class ModuleHeader:
     # names its `__all__` lists (None where it writes none): what a star import takes from it.
     stars: tuple[str, ...] = ()
     exports: tuple[str, ...] | None = None
+    # A `from m import *` the header does not read: one inside an `if` or a `try`
+    # (`star_bases`' shortcut). What it binds is not known.
+    stars_unread: bool = False
 
 
 def header_digest(tree: ast.Module) -> str:
@@ -212,6 +216,27 @@ class ProjectHeaders:
             if found is not None:
                 return found
         return None
+
+    def star_may_rebind(self, module: str, name: str, seen: frozenset[str] = frozenset()) -> bool:
+        """Whether a `from m import *` of `module` may bind `name`, beside what the module's
+        own statements bind it to: a star whose source is read and binds the name, and a star
+        whose source is not read (a library, a file that is absent, a star inside an `if` or
+        a `try`). Where the star is written, before or after the module's own write, is not
+        read (OI-565): the name then has no one value this reading can state."""
+        header = self.header(module)
+        if header is None or module in seen:
+            return False
+        if header.stars_unread:
+            return True
+        for base in header.stars:
+            source = self.header(base)
+            if source is None:
+                return True
+            if name not in source.exports if source.exports is not None else name.startswith("_"):
+                continue
+            if name in source.names or self.star_may_rebind(base, name, seen | {module}):
+                return True
+        return False
 
     def names_a_value(self, module: str, name: str) -> bool:
         """Whether `module.name`, followed to where it is defined, is bound to a value, a
@@ -500,6 +525,12 @@ class ProjectHeaders:
         # Read before the digest: it strips the tree.
         bases = star_bases(tree.body, module, is_package=is_package)
         exports = star_exports(tree.body)
+        written = sum(
+            alias.name == "*"
+            for node in every_statement(tree.body)
+            if isinstance(node, ast.ImportFrom)
+            for alias in node.names
+        )
         return ModuleHeader(
             names,
             classes,
@@ -510,4 +541,5 @@ class ProjectHeaders:
             factories,
             bases,
             exports,
+            written != len(bases),
         )

@@ -16,6 +16,7 @@ catalogs (`test_fastapi_routes._resolved`)."""
 import json
 from pathlib import Path
 
+import pytest
 import test_fastapi_routes
 from test_fastapi_routes import _resolved, _rows
 
@@ -521,3 +522,118 @@ def test_a_test_on_a_value_not_fixed_stays_not_evaluated(tmp_path: Path, librari
         ("GET", "/loop"): [_open(0, "each")],
         ("GET", "/two"): [_open(0, "TWO")],
     }
+
+
+_BY_CONFIG = (
+    "from app import config\n"
+    + _APP
+    + "if config.DOCS:\n    @app.get('/x')\n    def x() -> str:\n        return ''\n"
+    + "if not config.DOCS:\n    @app.get('/nx')\n    def nx() -> str:\n        return ''\n"
+)
+
+
+def test_a_star_import_that_binds_the_tested_name_decides_nothing(tmp_path: Path, libraries):
+    """A test is decided only on the value the name holds when the test runs. `DOCS = False`,
+    then `from .local_config import *` with `DOCS = True` there, leaves `DOCS` true: the star
+    replaces the module's own write. Which of the two is written last is not read (OI-565),
+    so the name has no one value here and nothing is decided: both routes exist "not
+    evaluated". Never the row under `if config.DOCS:` removed."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "local_config.py": "DOCS = True\n",
+            "config.py": "DOCS = False\nfrom .local_config import *\n",
+            "main.py": _BY_CONFIG,
+        },
+    )
+
+    assert _existence(workspace) == {
+        ("GET", "/nx"): [_open(0, "not config.DOCS")],
+        ("GET", "/x"): [_open(0, "config.DOCS")],
+    }
+
+
+@pytest.mark.xfail(strict=True, reason="OI-565: a star import after the write is not the value")
+def test_a_name_a_later_star_import_rebinds_is_read_as_the_star_gives_it(tmp_path: Path, libraries):
+    """The walk fault behind the rule above, in a plain read: `VERB = 'get'`, then `from
+    .local_config import *` with `VERB = 'post'` there. Python serves POST."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "local_config.py": "VERB = 'post'\n",
+            "config.py": "VERB = 'get'\nfrom .local_config import *\n",
+            "main.py": "from app import config\n"
+            + _APP
+            + "@app.api_route('/v', methods=[config.VERB])\ndef v() -> str:\n    return ''\n",
+        },
+    )
+
+    assert [(row[0], row[1]) for row in _rows(workspace)] == [("POST", "/v")]
+
+
+def test_a_star_import_of_a_module_not_read_decides_nothing(tmp_path: Path, libraries):
+    """`try: from .local_config import *` with no `local_config` in the repository: the star
+    import may replace the name, and what it binds is not read. Nothing is decided: both
+    routes exist "not evaluated", each under its test."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "config.py": "DOCS = False\n"
+            "try:\n    from .local_config import *\nexcept ImportError:\n    pass\n",
+            "main.py": _BY_CONFIG,
+        },
+    )
+
+    assert _existence(workspace) == {
+        ("GET", "/nx"): [_open(0, "not config.DOCS")],
+        ("GET", "/x"): [_open(0, "config.DOCS")],
+    }
+
+
+def test_a_star_import_that_does_not_bind_the_tested_name_leaves_it_decided(
+    tmp_path: Path, libraries
+):
+    """A star import of a module that is read and binds no `DOCS` replaces nothing: the test
+    is decided on the one written value."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "local_config.py": "OTHER = True\n",
+            "config.py": "DOCS = False\nfrom .local_config import *\n",
+            "main.py": _BY_CONFIG,
+        },
+    )
+
+    assert [(row[0], row[1], row[3]) for row in _rows(workspace)] == [("GET", "/nx", "resolved")]
+    assert _existence(workspace) == {}
+
+
+def test_a_value_read_through_a_return_under_a_test_carries_the_test(tmp_path: Path, libraries):
+    """A value a reader takes through a `return` under a test that is not decided is served
+    only where the test holds (`method_return.guards`), as one read through a write under a
+    test is: never a `resolved` row with no condition."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "main.py": "import os\n"
+            + _APP
+            + "def verbs(w):\n    if w:\n        return ['get', 'post']\n    return ['get']\n"
+            + "@app.api_route('/e', methods=verbs(os.getenv('W')))\ndef e() -> str:\n"
+            + "    return ''\n"
+        },
+    )
+
+    assert [(row[0], row[1], row[3]) for row in _rows(workspace)] == [
+        ("GET", "/e", "resolved"),
+        ("POST", "/e", "resolved"),
+    ]
+    existence = _existence(workspace)
+    assert existence[("POST", "/e")] == [_open(0, "w")]
+    # `GET` is in both arms: it is served either way, and carries both arms' tests where it
+    # should carry none (OI-564, the same for a write in both arms).
+    assert existence[("GET", "/e")] == [_open(0, "w", holds=False), _open(1, "w")]

@@ -16,7 +16,8 @@ two nested tests is one alternative of two guards. An alternative with no guard 
 exists unconditionally, and then nothing is written. A write to a name under a test
 (`field_write.guards`, ruling R1 of 2026-11-25) that a row's lists were read through
 (`Path.written_under`) counts as one of the row's calls: a route list added under a test, a
-root setting written under one. A row's calls are its registration (the
+root setting written under one. So does a `return` under a test not decided that a value of
+the row was read through (`method_return.guards`): the path names the tests still open. A row's calls are its registration (the
 route's root and terminal calls) and every include or mount its router is served through, all
 of which must run, so their alternatives are combined (each choice of one alternative per call,
 joined). Where the row was derived through one call of a helper (its path chose that call,
@@ -166,8 +167,12 @@ class Conditions:
         untied: bool,
         on: Path | None = None,
     ) -> Alternatives:
-        own = self.guards.get(site, ())
         method = site[0]
+        own = self.guards.get(site)
+        if own is None:
+            # A `return` under tests a path read a value through names its tests itself
+            # (`Path.written_under`): the ones still open on that path.
+            own = _guards_of(method, site[1]) if isinstance(site[1], str) else ()
         ran: tuple[tuple[Path | None, tuple[int, ...]], ...] = ((on, tuple(range(len(own)))),)
         if self.decider is not None and site in self.tests:
             ran = self.decider.ran(method, self.tests[site], on)
@@ -227,6 +232,20 @@ def _simplest(alternatives: Alternatives) -> Alternatives:
     )
 
 
+def _guards_of(method: str, written: str) -> tuple[Guard, ...]:
+    """The tests of one record of `method`'s body, as the facts write them."""
+    return tuple(
+        (
+            method,
+            str(g["test"]),
+            bool(g["holds"]),
+            tuple(g.get("reads") or ()),
+            tuple(sorted((g.get("fields") or {}).items())),
+        )
+        for g in json.loads(written)
+    )
+
+
 def conditions_of(workspace: Workspace, decider: Decider | None = None) -> Conditions:
     """The guarded calls and the guarded field writes, and the callers of each method where
     any is guarded. Read by the engine once per run: `call_edges` is derived, so it is never
@@ -242,19 +261,14 @@ def conditions_of(workspace: Workspace, decider: Decider | None = None) -> Condi
         ((str(row["written_by"]), str(row["guards"])), str(row["guards"]))
         for row in workspace.query("field_write_guards")
     ]
+    # A return is named as a write is: by its method and its tests.
+    guarded += [
+        ((str(row["method"]), str(row["guards"])), str(row["guards"]))
+        for row in workspace.query("method_return_guards")
+    ]
     for site, written in guarded:
-        parsed = json.loads(written)
-        guards[site] = tuple(
-            (
-                site[0],
-                str(g["test"]),
-                bool(g["holds"]),
-                tuple(g.get("reads") or ()),
-                tuple(sorted((g.get("fields") or {}).items())),
-            )
-            for g in parsed
-        )
-        if any(g.get("value") is not None for g in parsed):
+        guards[site] = _guards_of(site[0], written)
+        if any(g.get("value") is not None for g in json.loads(written)):
             tests[site] = written
     callers: dict[str, list[tuple[str, int]]] = {}
     if guards:

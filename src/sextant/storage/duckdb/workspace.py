@@ -1101,6 +1101,13 @@ _NAMED_QUERIES = {
         WHERE guards IS NOT NULL AND written_by IS NOT NULL
         ORDER BY written_by, guards
     """,
+    # Fact schema 24 (OI-532): the tests a return runs under, each set once per method (D00 §5
+    # `method_return.guards`), read beside `field_write_guards`.
+    "method_return_guards": """
+        SELECT DISTINCT method, guards FROM method_returns
+        WHERE guards IS NOT NULL
+        ORDER BY method, guards
+    """,
     "calls_running": """
         SELECT DISTINCT callee, caller, ordinal FROM call_edges WHERE callee IS NOT NULL
         ORDER BY callee, caller, ordinal
@@ -1891,6 +1898,8 @@ _FACT_ONLY = frozenset(
         "call_site_guards",
         # The field writes under a test of their own body: `field_writes` alone.
         "field_write_guards",
+        # The returns under a test of their own body: `method_returns` alone.
+        "method_return_guards",
         # The class-level annotations of header-read dependency types (D00 §5
         # `type_header`): a read over `raw_facts` alone, so cached per load like every
         # other fact query — the cache rule test is what said so.

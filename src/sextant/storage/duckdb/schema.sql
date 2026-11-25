@@ -1464,7 +1464,7 @@ SELECT document_id,
        payload ->> 'method'                    AS method,
        (payload ->> 'ordinal')::INTEGER        AS ordinal,
        payload ->  'value'                     AS value,
-       -- D00 §5 (fact schema 24, OI-532): the undecided tests the return runs under within
+       -- D00 §5 (fact schema 24, OI-532): the tests the return runs under within
        -- its own body, as `call_sites.guards`; NULL where under none and on the JVM.
        payload ->> 'guards'                    AS guards
 FROM raw_facts WHERE kind = 'method_return'

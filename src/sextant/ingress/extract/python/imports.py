@@ -169,6 +169,10 @@ class ProjectNames(Protocol):
         """The digest of `module`'s header, for the reuse key."""
         ...
 
+    def star_may_rebind(self, module: str, name: str) -> bool:
+        """Whether a star import of `module` may bind `name` beside the module's own writes."""
+        ...
+
     def shape_of(self, symbol: str) -> "ClassShape | None":
         """A class another file of the module defines, by its header."""
         ...

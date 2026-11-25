@@ -741,7 +741,14 @@ class BodyReader:
                 value = self._value(operand, scope)
             finally:
                 self._rereading = held
-            if value.kind != _UNKNOWN.kind:
+            # A name a star import of its module may bind too has no one value this reading
+            # can state: the star may replace what the module wrote. Nothing is decided.
+            headers = self._context.index.headers
+            replaced = headers is not None and any(
+                target.member is not None and headers.star_may_rebind(target.module, target.member)
+                for target in self._targets(operand, scope) or ()
+            )
+            if value.kind != _UNKNOWN.kind and not replaced:
                 found = (value, when)
         self._tests[id(test)] = found
         return found
