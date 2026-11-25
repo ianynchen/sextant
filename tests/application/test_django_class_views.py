@@ -555,15 +555,29 @@ def test_a_class_handed_through_a_helper_serves_its_verbs(tmp_path: Path, librar
 
 def test_no_member_found_past_a_base_not_read_names_no_method(tmp_path: Path, libraries):
     """A class with no verb method of its own, below a base not read, may serve anything that
-    base defines, `as_view` included: one row naming no handler and no method, never
-    `resolved` (`_class_rows`, as for a class whose verbs are past such a base, OI-541)."""
+    base defines, `as_view` included: one row serving any method and naming no handler, never
+    `resolved` (`_class_rows`, OI-541)."""
     rows = _views(
         tmp_path,
         libraries,
         "from not_installed import Mixin\nclass Items(Mixin, View):\n    pass\n",
     )
 
-    assert rows == [(None, None, "/x/", None, "unresolved")]
+    assert rows == [(None, "any", "/x/", None, "partial")]
+
+
+def test_a_verb_of_a_library_base_past_a_base_not_read_is_partial(tmp_path: Path, libraries):
+    """`TemplateView` defines `get`, past `Mixin`, which was not read: the read types' order
+    past `Mixin` gives the GET row, its handler `TemplateView.get`; `partial`, since `Mixin`
+    may define `get` itself (OI-541)."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        "from not_installed import Mixin\nfrom django.views.generic import TemplateView\n"
+        "class Items(Mixin, TemplateView):\n    template_name = 'a.html'\n",
+    )
+
+    assert rows == [("GET", None, "/x/", f"{_LIBRARY}TemplateView#get(sig_", "partial")]
 
 
 # -- `as_view` read by the value walk (plan 2026-11-23-python-django-redesign, Task 5) ------

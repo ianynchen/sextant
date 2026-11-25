@@ -4439,7 +4439,10 @@ def _class_rows(
     order, unread = dispatch.order_through_headers(owner)
     if unread is None:
         unread = next((type_ for type_ in order if type_ not in read), None)
-        order = order if unread is None else order[: order.index(unread)]
+    if unread is not None:
+        # Past a type not read the order is not known: the read types' own order stands for
+        # it, every row `partial`, since that type may define the members itself (OI-541).
+        order = [type_ for type_ in dispatch.order_past_unread(owner) if type_ in read]
     inexact = (unread is not None and unread not in framework) or any(
         name in {argument.get("keyword") for argument in row["arguments"] or ()}
         or any(f"{type_}{name}." in fields for type_ in order if type_ not in framework)
@@ -4489,7 +4492,7 @@ def _class_rows(
         if symbol is not None
     ]
     if not rows and unread is not None and unread not in framework:
-        return [({**base, "http_method": None}, _Judged(None, ANSWERS), False)]
+        return _narrowed_rows([(base, _Judged(None, ANSWERS), True)], narrowed)
     if not rows and unread_bypass is not None:
         return _narrowed_rows([(base, _Judged(unread_bypass, ANSWERS), True)], narrowed)
     return _narrowed_rows(rows, narrowed)
