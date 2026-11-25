@@ -112,8 +112,11 @@ BOUNDARIES = {
         (None, "/partners/", None),
     },
 }
+# The `/partners/` row names no handler, so which methods it answers is not read: its
+# `not_read` question names the registration (ruled 2026-11-25, R4).
 QUESTIONS = {
     ("mount_prefix", "/<prefix>feed/"),
+    ("not_read", "/partners/"),
 }
 # A route expression not read exactly (`(a|b)`): one `pattern` row, compared as text.
 PATTERN_ROUTE = "^legacy/(shelf|books)/$"
