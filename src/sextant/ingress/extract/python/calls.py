@@ -611,29 +611,8 @@ class BodyReader:
         if frame is None:
             return []
         body = [node.body] if isinstance(node, ast.Lambda) else node.body
-        written = node.args
-        own = _assigned(_own_nodes(body)) | {
-            a.arg
-            for a in (
-                *written.posonlyargs,
-                *written.args,
-                *written.kwonlyargs,
-                *(x for x in (written.vararg, written.kwarg) if x is not None),
-            )
-        }
-        declared = {
-            n
-            for each in _own_nodes(body)
-            if isinstance(each, ast.Global | ast.Nonlocal)
-            for n in each.names
-        }
-        own -= declared
-        loads = sorted(
-            (each.lineno, each.col_offset, each.id)
-            for part in body
-            for each in ast.walk(part)
-            if isinstance(each, ast.Name) and isinstance(each.ctx, ast.Load)
-        )
+        own = _held(node)
+        loads = sorted((each.lineno, each.col_offset, each.id) for each in _reads_within(body))
         found: list[str] = []
         for _, _, name in loads:
             if name in own or name in found or name == getattr(node, "name", None):
@@ -3313,6 +3292,47 @@ def _as_load(node: ast.expr) -> ast.expr:
     if isinstance(node, ast.Subscript):
         return ast.Subscript(value=node.value, slice=node.slice, ctx=ast.Load())
     return node
+
+
+def _held(node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda) -> set[str]:
+    """The names a function holds itself: its parameters and what its own scope writes, but a
+    name it declares `global` or `nonlocal`."""
+    body = [node.body] if isinstance(node, ast.Lambda) else node.body
+    written = node.args
+    own = _assigned(_own_nodes(body)) | {
+        a.arg
+        for a in (
+            *written.posonlyargs,
+            *written.args,
+            *written.kwonlyargs,
+            *(x for x in (written.vararg, written.kwarg) if x is not None),
+        )
+    }
+    declared = {
+        n
+        for each in _own_nodes(body)
+        if isinstance(each, ast.Global | ast.Nonlocal)
+        for n in each.names
+    }
+    return own - declared
+
+
+def _reads_within(nodes: Iterable[ast.AST]) -> Iterator[ast.Name]:
+    """Every name read in `nodes`, in the functions nested in them too, but a nested function's
+    or `lambda`'s reads of the names it holds itself (`_held`, OI-536)."""
+    stack = list(nodes)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            yield node
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+            inner = [node.body] if isinstance(node, ast.Lambda) else node.body
+            held = _held(node)
+            yield from (read for read in _reads_within(inner) if read.id not in held)
+            # Its decorators, defaults and annotations are read where it is made.
+            stack.extend(child for child in ast.iter_child_nodes(node) if child not in inner)
+            continue
+        stack.extend(ast.iter_child_nodes(node))
 
 
 def _own_nodes(body: Iterable[ast.AST]) -> Iterator[ast.AST]:

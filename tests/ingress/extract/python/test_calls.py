@@ -427,6 +427,30 @@ def test_a_middle_function_captures_what_its_inner_function_reads(tmp_path: Path
     assert f.receiver_parameter == 1
 
 
+def test_a_name_a_deeper_function_holds_itself_is_no_capture_of_the_middle(tmp_path: Path):
+    """`c` reads its own parameter `request` and `b` holds none: `b` captures nothing of `a`,
+    though `a` has a `request` too; `c` captures `b`'s `f` alone (OI-536)."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "def a(request):\n"
+                "    def b(f):\n"
+                "        def c(request):\n"
+                "            def d():\n"
+                "                return None\n"
+                "            return f(request) or d\n"
+                "        return c\n"
+                "    return b\n"
+            )
+        },
+    )
+
+    assert _made(tree, f"app/m#a({DIS}).") == []
+    (from_b,) = _made(tree, f"app/m#a$b({DIS}).")
+    assert from_b.arguments == [CallArgument(kind="parameter", value=0)]
+
+
 def test_a_name_written_again_after_the_def_is_captured_unread(tmp_path: Path):
     tree = _scan(
         tmp_path,
