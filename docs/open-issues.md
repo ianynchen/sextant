@@ -545,7 +545,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-542 | SEXTANT-TBD | a library attribute read in an `if` test is written twice (plan 2026-11-23-python-django-redesign, low) |
 | OI-543 | SEXTANT-TBD | a library body's outbound call is dropped with the library's rows (plan 2026-11-23-python-django-redesign, low) |
 | OI-544 | SEXTANT-TBD | DRF `APIView` rows under `path()` name no handler (plan 2026-11-23-python-django-redesign, low) |
-| OI-545 | SEXTANT-TBD | a nested library class's bodies are not read (plan 2026-11-23-python-django-redesign, low) |
+| OI-545 | SEXTANT-TBD | a nested library class's bodies are not read (plan 2026-11-23-python-django-redesign, low) (fixed on `fix/django-open-issues`: a nested class a lookup order holds keeps its functions' bodies, the class around it its header alone; `tests/ingress/extract/python/test_libraries.py::test_a_nested_library_class_in_a_lookup_order_has_its_method_bodies_read`) |
 | OI-546 | SEXTANT-TBD | `APIRouter(...)` in a project that subclasses the router gives `narrowed` call edges (plan 2026-11-23-python-django-redesign, low) |
 | OI-547 | SEXTANT-TBD | reading library bodies grows the export and the traces; their cost is not measured (plan 2026-11-23-python-django-redesign, low) |
 | OI-548 | SEXTANT-TBD | a mount whose router argument is not read is published as a route with no handler (plan 2026-11-23-python-django-redesign, low) |

@@ -793,17 +793,14 @@ def header_body_tree(
     those classes use, followed through the names those assignments use in turn. Also those
     module-level names. A version test's arm the read does not run is left out, as
     `file_facts` leaves it. The top-level classes named in `whole` (a module class's lookup
-    order holds them) keep their functions' bodies, and the names those bodies use count as
-    used. Nothing of `tree` itself is changed."""
+    order holds them), and the classes nested in them it names (`Outer.Inner`), keep their
+    functions' bodies, and the names those bodies use count as used. Nothing of `tree` itself
+    is changed."""
     tops = {path.partition(".")[0] for path in paths}
     used: set[str] = set()
     for node in _scope_statements(tree.body, index, here):
         if isinstance(node, ast.ClassDef) and node.name in tops:
-            used |= (
-                {name.id for name in ast.walk(node) if isinstance(name, ast.Name)}
-                if node.name in whole
-                else _names_used(node)
-            )
+            used |= _class_names_used(node, node.name, whole)
     assignments = [
         node
         for node in _scope_statements(tree.body, index, here)
@@ -819,6 +816,43 @@ def header_body_tree(
         used = grown
     body = _kept_statements(tree.body, used, index, here, tops, whole)
     return ast.Module(body=body or [ast.Pass()], type_ignores=[]), frozenset(used)
+
+
+def _class_names_used(node: ast.ClassDef, path: str, whole: frozenset[str]) -> set[str]:
+    """Every name the class `node` at `path` reads: its functions' bodies too where `whole`
+    names it, and so for a class nested in it that `whole` names (OI-545)."""
+    if path in whole:
+        return {name.id for name in ast.walk(node) if isinstance(name, ast.Name)}
+    if not any(one.startswith(path + ".") for one in whole):
+        return _names_used(node)
+    found: set[str] = set()
+    for part in (*node.bases, *node.keywords, *node.decorator_list):
+        found |= _names_used(part)
+    for item in node.body:
+        found |= (
+            _class_names_used(item, f"{path}.{item.name}", whole)
+            if isinstance(item, ast.ClassDef)
+            else _names_used(item)
+        )
+    return found
+
+
+def _class_kept(node: ast.ClassDef, path: str, whole: frozenset[str]) -> ast.ClassDef:
+    """The class `node` at `path` as a header reads it: whole where `whole` names it, its
+    functions' bodies left out otherwise, except a class nested in it that `whole` names, kept
+    by this same rule (OI-545)."""
+    if path in whole:
+        return node
+    if not any(one.startswith(path + ".") for one in whole):
+        return _without_function_bodies(node)
+    copied = copy.copy(node)
+    copied.body = [
+        _class_kept(item, f"{path}.{item.name}", whole)
+        if isinstance(item, ast.ClassDef)
+        else _without_function_bodies(item)
+        for item in node.body
+    ]
+    return copied
 
 
 def _names_used(node: ast.AST) -> set[str]:
@@ -860,7 +894,7 @@ def _kept_statements(
         if isinstance(node, ast.Import | ast.ImportFrom):
             kept.append(node)
         elif isinstance(node, ast.ClassDef) and node.name in tops:
-            kept.append(node if node.name in whole else _without_function_bodies(node))
+            kept.append(_class_kept(node, node.name, whole))
         elif isinstance(node, ast.ClassDef):
             # Another class binds its name and nothing a header class's body reads.
             kept.append(

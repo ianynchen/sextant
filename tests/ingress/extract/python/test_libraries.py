@@ -1686,3 +1686,31 @@ def test_a_library_class_in_a_lookup_order_has_its_method_bodies_read(tmp_path: 
         (fact.invoke_kind, fact.target.name) for fact in library if fact.invoke_kind == "special"
     ] == [("special", "dispatch")]
     assert not _sites(tree, "views/base/Typed#")
+
+
+def test_a_nested_library_class_in_a_lookup_order_has_its_method_bodies_read(tmp_path: Path):
+    """OI-545: `Mine(Outer.Inner)`: the nested class's method bodies are read as a top-level
+    one's are; `Outer`'s own methods, in no lookup order, stay unread."""
+    nested = {
+        "views/py.typed": "",
+        "views/__init__.py": "",
+        "views/base.py": (
+            "class Outer:\n"
+            "    def own(self):\n        return self.x()\n"
+            "    class Inner:\n"
+            "        def dispatch(self, request, *args):\n"
+            "            return super().dispatch(request, *args)\n"
+        ),
+    }
+    views = _install(tmp_path / "site", "views", "1.0", nested)
+    _, tree = _scan(
+        tmp_path,
+        {"app/main.py": "from views.base import Outer\nclass Mine(Outer.Inner): ...\n"},
+        (views,),
+    )
+
+    library = _sites(tree, "views/base/Outer$Inner#dispatch(")
+    assert [
+        (fact.invoke_kind, fact.target.name) for fact in library if fact.invoke_kind == "special"
+    ] == [("special", "dispatch")]
+    assert not _sites(tree, "views/base/Outer#own(")
