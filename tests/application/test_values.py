@@ -7472,6 +7472,61 @@ def test_a_wrapper_that_calls_what_a_call_on_its_captured_function_gives_stands_
     assert _registered(tmp_path, source) == [["page"], ["other"]]
 
 
+def test_one_wrapper_entered_twice_on_one_path_stands_for_the_view(tmp_path: Path):
+    """`log` wraps `admin`'s wrapper and is called again inside it (zulip's
+    `require_server_admin` under `zulip_login_required`, OI-537): the second entry of `log`'s
+    body is on another call of it, never a cycle; each registration runs its own view."""
+    source = (
+        "def log(f):\n"
+        "    def w(request, *a, **k):\n"
+        "        return f(request, *a, **k)\n"
+        "    return w\n"
+        "def admin(view):\n"
+        "    @log\n"
+        "    def x(request, *a, **k):\n"
+        "        return log(view)(request, *a, **k)\n"
+        "    return x\n"
+        "def other(request):\n    return None\n"
+        "register(admin(page))\n"
+        "register(admin(other))\n"
+    )
+    assert _registered(tmp_path, source) == [["page"], ["other"]]
+
+
+def test_one_decorator_factory_applied_twice_stands_for_the_view(tmp_path: Path):
+    """`@setting('A') @setting('B') def page` (healthchecks' `require_setting`, OI-537): the
+    one wrapper body is entered once per application, each its own call."""
+    source = (
+        "def setting(key):\n"
+        "    def decorator(f):\n"
+        "        def wrapper(request, *a, **k):\n"
+        "            if not key:\n"
+        "                return None\n"
+        "            return f(request, *a, **k)\n"
+        "        return wrapper\n"
+        "    return decorator\n"
+        "@setting('A')\n"
+        "@setting('B')\n"
+        "def view(request):\n    return None\n"
+        "register(view)\n"
+    )
+    assert _registered(tmp_path, source) == [["view"]]
+
+
+def test_a_recursive_wrapper_is_a_cycle(tmp_path: Path):
+    """A wrapper that calls its own decorator again on the call it was made by is a real
+    recursion: the same body entered again under the same call is `cycle`, never the view
+    (OI-537 keeps the bound)."""
+    source = (
+        "def deco(f):\n"
+        "    def w(request):\n"
+        "        return deco(f)(request)\n"
+        "    return w\n"
+        "register(deco(page))\n"
+    )
+    assert _registered(tmp_path, source) == [["cycle"]]
+
+
 def test_a_wrapper_that_calls_what_an_unread_call_on_its_captured_function_gives_is_a_reason(
     tmp_path: Path,
 ):

@@ -377,10 +377,10 @@ def test_a_decorator_that_hands_back_a_bare_function_on_one_path_names_both(
     ]
 
 
-def test_one_decorator_factory_applied_twice_to_one_view_is_not_read(tmp_path: Path, libraries):
-    """A known limit (spec 2026-11-23 §9b): the walk enters one helper once on a path, so the
-    second application of `guard` on the same view is not followed, and the handler is not
-    read: `partial`, never the wrapper."""
+def test_one_decorator_factory_applied_twice_to_one_view_names_the_view(tmp_path: Path, libraries):
+    """`guard`'s wrapper is entered once per application, each under its own call (OI-537,
+    healthchecks' `require_setting`): the second entry is no cycle, and the handler is the
+    view, never the wrapper."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -395,7 +395,7 @@ def test_one_decorator_factory_applied_twice_to_one_view_is_not_read(tmp_path: P
         },
     )
 
-    assert _rows(workspace) == [(None, "any", "/x/", None, "partial")]
+    assert _rows(workspace) == [(None, "any", "/x/", _handler("v"), "resolved")]
 
 
 def test_an_unknown_wrapper_over_a_narrowing_call_is_partial_and_narrowed(

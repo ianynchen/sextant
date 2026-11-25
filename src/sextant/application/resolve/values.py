@@ -2886,9 +2886,9 @@ def producer_paths(
     from it ends at that call, so the identity ends there. Off, the default, every reader
     keeps the window it had.
 
-    `dropped`, where handed a list, receives the end of every path left out because it
-    entered one helper through two of its calls — so a reader can tell a complete answer
-    from one missing a path.
+    `dropped`, where handed a list, receives the end of every path `_entered` cannot hold
+    (none since a helper entered through two of its calls is held, OI-537) — so a reader can
+    tell a complete answer from one missing a path.
 
     `functions` is for the reader asking what a CALL of the value runs (ruling R29, task 9a
     fix round 2): a function value (`lambda`) ends its path as a `symbol` literal naming the
@@ -3018,7 +3018,8 @@ def _stated_decorators(
 
 def _entered(trail: "_Trail", index: ValueIndex) -> "_Trail | None":
     """`trail` with each descent into a callee's return also written as the caller crossing
-    that call is (`producer_paths`); None where it entered one callee on two calls."""
+    that call is (`producer_paths`). A callee entered on two calls keeps the first crossing;
+    the second is on the path as its own return step (OI-537)."""
     entered: _Trail = trail
     for step in trail:
         if step.context[0] != _RETURN_OF:
@@ -3030,7 +3031,9 @@ def _entered(trail: "_Trail", index: ValueIndex) -> "_Trail | None":
                 continue
             merged = _combine(entered, (_Step((_CALLER_OF, callee), f"{method}@{ordinal}"),))
             if merged is None:
-                return None
+                # Entered again through another call (`log(log(view))`, OI-537): its own return
+                # step names that call; the crossing the path holds stays the first.
+                continue
             entered = merged
     return entered
 
@@ -4017,8 +4020,11 @@ class _Walk:
         self._computes = 0
         self._cuts = 0
         # The positions the current path is IN THE MIDDLE OF resolving. §1d's `cycle` is
-        # exactly a return to one of them.
+        # exactly a return to one of them in the call it was entered in: the innermost frame
+        # each was entered under (`_guarded`; one helper entered again by another call of it
+        # on one path is no cycle, OI-537).
         self._pending: set[_Position] = set()
+        self._pending_in: dict[_Position, list[tuple[str, tuple[str, int]] | None]] = {}
         # The hole spellings of the template `_joined` is assembling, one per operand. Held
         # on the walk rather than threaded through `product` because the text is built in a
         # comprehension whose shape the coherence rule owns.
@@ -4082,9 +4088,15 @@ class _Walk:
         if self._computes > WALK_BUDGET or len(self._entered) >= DEPTH_CAP:
             self._cuts += 1
             return _only(trail, _unresolved(NON_ENUMERABLE)), False
-        if position in self._pending:
+        call = frames[-1] if frames else None
+        calls = self._pending_in.setdefault(position, [])
+        if call in calls:
             self._open.add(position)
             return _only(trail, _unresolved(CYCLE)), False
+        # Entered again by another call on this path: its answer is that call's alone, and a
+        # cycle below it may rest on the outer entry, so it is not kept.
+        again = bool(calls)
+        calls.append(call)
         self._pending.add(position)
         self._entered.append({position})
         cuts = self._cuts
@@ -4093,8 +4105,12 @@ class _Walk:
         entered = self._entered.pop()
         if self._entered:
             self._entered[-1] |= entered
-        unresolved_back_edges = self._open - {position}
+        unresolved_back_edges = self._open - ({position} if not again else set())
         self._open = outer | unresolved_back_edges
+        calls.pop()
+        if again:
+            return reached, False
+        del self._pending_in[position]
         self._pending.discard(position)
         self._memo.release(position)
         self._suffixes.release(position)
