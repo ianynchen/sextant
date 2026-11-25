@@ -488,8 +488,10 @@ workspace's `open_questions`. Each limit is an open issue (`docs/open-issues.md`
   - **Not found by Task 10**: zulip's 66 language-prefixed (`en-us/`) copies have no row
     (OI-550); zulip's 6 `re_path` routes to `SCIMView.as_view(implemented=False)`
     (`zproject/urls.py:936-951`) have no row (OI-549).
-- **One helper entered twice on one path** (the walk's existing bound, M-1): the same
-  decorator factory twice on one view gives handler not read. healthchecks: 5 routes (OI-537).
+- **One helper entered twice on one path**: built (OI-537, ruled 2026-11-25): the same
+  decorator factory twice on one view names the view (healthchecks: 5 routes). The path holds
+  the first call of the helper alone, so a value read through it on that path is
+  `not_readable`, for every reader (the walk's guard; the exact answer is OI-558).
 - **A list added under a test** (`if settings.DEVELOPMENT: urls += dev_urls.urls`): built
   2026-11-25 (ruling R1, fact schema 23, OI-508): the write carries its tests
   (`field_write.guards`) and the members are rows at their address with the condition (M5).

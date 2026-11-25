@@ -25,7 +25,9 @@ BillingWorker}` — four combinations, two of which no code path produces, recor
 **memoisation is keyed on (position, path) and never on position alone**: a per-position
 memo is precisely what discards the correlation and mints the fabrication back. The key
 is complete because the path records every crossing the walk made, and a crossing is the
-only thing that can change a position's answer.
+only thing that can change a position's answer. One bound (OI-537, OI-558): a path that
+enters one helper on two calls holds the first call's crossing alone, and a value read
+through that helper on that path is not read (`resolve_positions_on_paths`).
 
 **Multiplicity has exactly one rule, and it is about paths (§1c).** Several paths are
 several bindings — several callers, several returns in one callee, several enumerable
@@ -2540,18 +2542,30 @@ def resolve_positions_on_paths(
 ) -> list[tuple["Path", dict[str, Answer]]]:
     """`resolve_positions`, each dict with the path it was read on, for a reader that reads
     another value later on that same path (`resolve_positions(..., within=)`): a router's
-    held prefix and a route's verb list one factory call gives (plan 2026-11-08 Task 6)."""
+    held prefix and a route's verb list one factory call gives (plan 2026-11-08 Task 6).
+
+    **A value read through a helper `within` entered on two calls is not read** (ruled
+    2026-11-25, R6): the path holds the first call of that helper alone
+    (`Path.entered_twice`), so a read that crosses out of it would be answered with the first
+    call's value for both entries. It answers `not_readable`, for every reader (OI-558 is the
+    exact answer, each entry with its own call)."""
     fold = index if index is not None else value_index(workspace)
     walk = _Walk(fold, identities, branches=branches, deps=[])
     combined: list[tuple[_Trail, dict[str, Answer]]] = [
         (within.trail if within is not None else (), {})
     ]
+    twice = within.entered_twice() if within is not None else frozenset()
     for label, (named, slot) in positions.items():
         # Projected for the reason `resolve_site` states: a caller that hands in a raw
         # `call_sites` row for a bridge call is otherwise answered with the bridge's own
         # arguments.
         site = fold.sites.get((str(named["caller"]), int(str(named["ordinal"]))), named)
         reached = walk.at(site, slot)
+        if twice:
+            reached = tuple(
+                (path, _unresolved(NOT_READABLE) if _crosses_out_of(path, twice) else answer)
+                for path, answer in reached
+            )
         combined = [
             (merged, {**answers, label: answer})
             for trail, answers in combined
@@ -2560,6 +2574,11 @@ def resolve_positions_on_paths(
         ]
     entered = within.entered if within is not None else frozenset()
     return [(Path(trail, entered), answers) for trail, answers in combined]
+
+
+def _crosses_out_of(trail: "_Trail", callees: AbstractSet[str]) -> bool:
+    """Whether a read's own path crossed out of one of `callees` to a caller of it."""
+    return any(step.context[0] == _CALLER_OF and step.context[1] in callees for step in trail)
 
 
 def producers_of(
@@ -2714,8 +2733,8 @@ class Path:
 
     def entered_twice(self) -> frozenset[str]:
         """The callees this path descended into the return of on two calls (`log(log(v))`).
-        `_entered` holds the first call of each (OI-537), so a value read in one of them on
-        this path is the first call's alone."""
+        `_entered` holds the first call of each (OI-537), so a value read through one of them
+        on this path is not read (`resolve_positions_on_paths`)."""
         seen: dict[str, set[Any]] = {}
         for step in self.trail:
             if step.context[0] == _RETURN_OF:
@@ -2921,7 +2940,6 @@ def producer_paths(
     which_object: bool = False,
     counting: Counting = None,
     read_sites: AbstractSet[tuple[str, int]] = frozenset(),
-    dropped: list[Producer] | None = None,
     functions: bool = False,
     declared_sites: AbstractSet[tuple[str, int]] = frozenset(),
     declared_types: bool = False,
@@ -2939,8 +2957,9 @@ def producer_paths(
     ran the helper — so the path carries both spellings, and a later read within it
     (`resolve_positions(..., within=)`) reaching the helper's parameter agrees only with the
     call the descent came through. A path that descends into ONE helper on two different
-    calls holds the first call's crossing alone (`_entered`, OI-537), so a read within it of
-    that helper's parameter is the first call's (`Path.entered_twice` names such helpers);
+    calls holds the first call's crossing alone (`_entered`, OI-537), so a read within it
+    that crosses out of that helper is not read (`Path.entered_twice` names such helpers,
+    `resolve_positions_on_paths` answers `not_readable`);
     the path records which steps were written for an entry (`Path.entered`), so a reader can
     tell two paths that differ only by the call of one helper from two paths through
     different callers (`Path.two_calls_of_one_helper`).
@@ -2952,10 +2971,6 @@ def producer_paths(
     call that hands back a DIFFERENT object: that object is the call's result, and a walk
     from it ends at that call, so the identity ends there. Off, the default, every reader
     keeps the window it had.
-
-    `dropped`, where handed a list, receives the end of every path `_entered` cannot hold
-    (none since a helper entered through two of its calls is held, OI-537) — so a reader can
-    tell a complete answer from one missing a path.
 
     `functions` is for the reader asking what a CALL of the value runs (ruling R29, task 9a
     fix round 2): a function value (`lambda`) ends its path as a `symbol` literal naming the
@@ -3005,12 +3020,7 @@ def producer_paths(
         else:
             producer = Producer(ended_at=answer)
         entered = _entered(trail, index)
-        if entered is not None:
-            found.append((producer, Path(entered, frozenset(entered) - frozenset(trail))))
-        elif dropped is not None:
-            # A path no `Path` can hold is left out of the answer; a caller that must know the
-            # answer is incomplete asks for these.
-            dropped.append(producer)
+        found.append((producer, Path(entered, frozenset(entered) - frozenset(trail))))
     # Keyed with `made_by`, which is outside `Producer`'s equality: two paths ending at two
     # library calls are two ends to this reader (`_Walk._distinct`).
     return tuple({(pair, pair[0].made_by): pair for pair in found}.values())
@@ -3079,7 +3089,7 @@ def _stated_decorators(
     return tuple(found), held
 
 
-def _entered(trail: "_Trail", index: ValueIndex) -> "_Trail | None":
+def _entered(trail: "_Trail", index: ValueIndex) -> "_Trail":
     """`trail` with each descent into a callee's return also written as the caller crossing
     that call is (`producer_paths`). A callee entered on two calls keeps the first crossing;
     the second is on the path as its own return step (OI-537)."""

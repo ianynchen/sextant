@@ -7513,6 +7513,47 @@ def test_one_decorator_factory_applied_twice_stands_for_the_view(tmp_path: Path)
     assert _registered(tmp_path, source) == [["view"]]
 
 
+@pytest.mark.parametrize(
+    ("registered", "read"),
+    [
+        ("register(only(['GET'])(page))\n", [(values.LITERAL, "GET")]),
+        (
+            "register(only(['GET'])(only(['POST'])(page)))\n",
+            [(values.UNRESOLVED, values.NOT_READABLE)],
+        ),
+    ],
+    ids=["one-call", "two-calls"],
+)
+def test_a_value_read_through_a_helper_the_path_entered_on_two_calls_is_not_read(
+    tmp_path: Path, registered: str, read: list[tuple[str, str]]
+):
+    """`only(['GET'])(only(['POST'])(page))`: the path to `page` enters `only` on two calls and
+    holds the first alone, so `ms` read within it would be `GET` for both entries. Every reader
+    of a value on that path gets `not_readable` (ruled 2026-11-25, R6; the guard is the
+    walk's, `resolve_positions_on_paths`); a path that entered it once reads its own call."""
+    import test_receiver_binding
+
+    source = (
+        "def note(v):\n    return None\n"
+        "def only(ms):\n    def d(f):\n        note(ms)\n        return f\n    return d\n"
+    )
+    workspace = test_receiver_binding._resolved(
+        tmp_path, {"a.py": _REGISTER + _PAGE + source + registered}
+    )
+    index = value_index(workspace)
+    sites = {row["name"]: dict(row) for row in workspace.query("call_sites")}
+    found = [
+        (answers["v"].kind, answers["v"].reason or answers["v"].value)
+        for _, path in producer_paths(index, sites["register"], 0, frozenset(), functions=True)
+        for answers in values.resolve_positions(
+            workspace, {"v": (sites["note"], 0)}, index, within=path
+        )
+    ]
+    workspace.close()
+
+    assert found == read
+
+
 def test_a_recursive_wrapper_is_a_cycle(tmp_path: Path):
     """A wrapper that calls its own decorator again on the call it was made by is a real
     recursion: the same body entered again under the same call is `cycle`, never the view

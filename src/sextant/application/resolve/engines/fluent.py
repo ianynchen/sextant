@@ -4725,9 +4725,9 @@ def _walked_verbs(
     """A verb list read through the value walk (N8, M1): one verb per value the walk reads
     (a module constant's elements, a parameter's arguments), respelled; the `absent` verb for
     an explicit `None`; no verb at all where every value is an empty list (a refusal); and an
-    unread argument (no verb) for each value not read, beside the rest. A value read through a
-    callee the path entered on two calls (`Path.entered_twice`) is the first call's alone, so
-    it is not read (OI-537). Beside the verbs, the writes under a test each was read through,
+    unread argument (no verb) for each value not read, beside the rest (one read through a
+    callee the path entered on two calls is not read: the walk's rule,
+    `resolve_positions_on_paths`). Beside the verbs, the writes under a test each was read through,
     one entry per path that read it (`Path.written_under`)."""
     case, absent = declared[VERBS_TO_READ]
     at = declared.get(_CAPTURED_AT)
@@ -4740,14 +4740,11 @@ def _walked_verbs(
         return None, {}
     verbs: list[Any] = []
     under: dict[Any, list[tuple[tuple[str, str], ...]]] = {}
-    twice = frozenset() if context.path is None else context.path.entered_twice()
     for read, answers in resolve_positions_on_paths(
         context.workspace, {"verb": (site, int(at[2]))}, context.values, within=context.path
     ):
         answer = answers["verb"]
-        if twice & set(read.calls_into()):
-            verbs.append(None)
-        elif answer.kind == LITERAL and answer.literal_kind == STRING and not answer.inexact:
+        if answer.kind == LITERAL and answer.literal_kind == STRING and not answer.inexact:
             verbs.append(respell_verb(str(answer.value), case))
         elif answer.kind == ABSENT and answer.null:
             verbs.append(absent)
