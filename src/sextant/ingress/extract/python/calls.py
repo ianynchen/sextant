@@ -2277,7 +2277,8 @@ class BodyReader:
     def _concat(self, parts: list[ast.expr], scope: Scope) -> CallArgument:
         """A string the code assembles: the template with `{}` for each value, and the
         `dynamic` site whose arguments are those values (D00 §5 `concat`). With no value
-        in it, it is the string itself, as javac folds a constant concatenation."""
+        in it, it is the string itself, as javac folds a constant concatenation. Where its
+        text holds `{}` beside a value, the template cannot tell it from a hole: unread."""
         template: list[str] = []
         operands: list[CallArgument] = []
         for part in parts:
@@ -2292,6 +2293,9 @@ class BodyReader:
         text = "".join(template)
         if not operands:
             return CallArgument(kind="string", value=text)
+        if text.count(_HOLE) != len(operands):
+            # The text holds a `{}` (`{{}}`), which the template cannot tell from a hole.
+            return _UNKNOWN
         site = Callee(_target(_STRING, _FORMAT), "dynamic")
         produced = self._invoke(site, operands, scope)
         return CallArgument(kind="concat", value=text, source=produced.source)
@@ -2303,7 +2307,8 @@ class BodyReader:
         field has a conversion, a format spec, an attribute or an index, where automatic and
         numbered fields are mixed, where an argument is unpacked, or where a field has no
         argument: Python raises for the last two of those, and the others make text this
-        reader does not model."""
+        reader does not model. So is a text that holds `{}` (`{{}}`) beside a field: the
+        template cannot tell it from a hole (OI-519)."""
         func = node.func
         if not (
             isinstance(func, ast.Attribute)
@@ -2343,6 +2348,9 @@ class BodyReader:
                 return None
             holes.append(filled)
             template.append(_HOLE)
+        if "".join(template).count(_HOLE) != len(holes):
+            # The text holds a `{}` (`{{}}`), which the template cannot tell from a hole.
+            return None
         # Python evaluates every argument, in the order written, before it formats.
         values = {id(a): self._value(a, scope) for a in [*node.args, *named.values()]}
         text = "".join(template)

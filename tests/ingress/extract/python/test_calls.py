@@ -1049,6 +1049,27 @@ def test_format_the_reader_does_not_model_is_unread(tmp_path: Path):
         assert not [s for s in _calls(tree, method) if s.invoke_kind == "dynamic"], shape
 
 
+def test_a_template_whose_text_holds_braces_that_are_no_hole(tmp_path: Path):
+    """`{{` and `}}` are a brace of the text. Where the text then holds `{}`, the template
+    (whose holes are `{}`) cannot tell it from a hole: the value is unread (OI-519). Other
+    braces of the text are kept as they are."""
+    shapes = ["'/x/{{}}/{}'.format(x)", "f'/x/{{}}/{x}'"]
+    kept = "'/x/{{id}}/{}'.format(x)"
+    text = "".join(
+        f"def f{at}(x):\n    return {shape}\n" for at, shape in enumerate([*shapes, kept])
+    )
+    tree = _scan(tmp_path, {"app/m.py": text})
+
+    for at, shape in enumerate(shapes):
+        method = f"app/m#f{at}({DIS})."
+        (returned,) = _returns(tree, method)
+        assert returned.value is not None and returned.value.kind == "unresolved", shape
+        assert not [s for s in _calls(tree, method) if s.invoke_kind == "dynamic"], shape
+    (returned,) = _returns(tree, f"app/m#f{len(shapes)}({DIS}).")
+    assert returned.value is not None
+    assert (returned.value.kind, returned.value.value) == ("concat", "/x/{id}/{}")
+
+
 # -- held lists in order (plan 2026-11-23 Task 6) -----------------------------------------
 
 _A = CallArgument(kind="string", value="a")
