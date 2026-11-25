@@ -1009,6 +1009,74 @@ def test_a_list_added_under_a_test_the_code_fixes_is_decided(tmp_path, libraries
         assert _conditions(workspace) == conditions
 
 
+def test_a_test_on_a_list_written_more_than_once_is_not_decided(tmp_path, libraries):
+    """Ruling R2: a name with several writes on one path is not decided, and an addition to a
+    held list is a write. `api = []`, then an addition, then `if api:`: the test is not
+    evaluated and the routes under it stay, with the condition. The list tested can be the one
+    the rows are in, or the list of another module."""
+    condition = [("/x/p/", "api", "unresolved")]
+    for position, (urls, extra, rows, conditions) in enumerate(
+        (
+            (
+                (
+                    "api = []\napi.append(path('p/', v))\nurlpatterns = [path('a/', v)]\n"
+                    "if api:\n    urlpatterns += [path('x/', include(api))]\n"
+                ),
+                {},
+                [_row("/a/"), _row("/x/p/")],
+                condition,
+            ),
+            (
+                (
+                    "api = []\napi += [path('p/', v)]\nurlpatterns = [path('a/', v)]\n"
+                    "if api:\n    urlpatterns += [path('x/', include(api))]\n"
+                ),
+                {},
+                [_row("/a/"), _row("/x/p/")],
+                condition,
+            ),
+            (
+                (
+                    "urlpatterns = []\nurlpatterns += [path('a/', v)]\n"
+                    "if urlpatterns:\n    urlpatterns += [path('b/', v)]\n"
+                ),
+                {},
+                [_row("/a/"), _row("/b/")],
+                [("/b/", "urlpatterns", "unresolved")],
+            ),
+            (
+                (
+                    "from app import api\nurlpatterns = [path('a/', v)]\n"
+                    "if api.urlpatterns:\n    urlpatterns += [path('x/', include(api.urlpatterns))]\n"
+                ),
+                {"api.py": "urlpatterns = []\nurlpatterns += [path('p/', v)]\n"},
+                [_row("/a/"), _row("/x/p/")],
+                [("/x/p/", "api.urlpatterns", "unresolved")],
+            ),
+        )
+    ):
+        workspace = _program(tmp_path / str(position), libraries, {**extra, "urls.py": urls})
+
+        assert _rows(workspace) == rows, position
+        assert _conditions(workspace) == conditions, position
+
+
+def test_a_test_on_an_empty_list_never_written_again_is_decided(tmp_path, libraries):
+    """The control: `api = []` and no other write, `if api:` is decided false, the write under
+    it gives nothing."""
+    workspace = _program(
+        tmp_path,
+        libraries,
+        {
+            "urls.py": "api = []\nurlpatterns = [path('a/', v)]\n"
+            "if api:\n    urlpatterns += [path('x/', v)]\n",
+        },
+    )
+
+    assert _rows(workspace) == [_row("/a/")]
+    assert _conditions(workspace) == []
+
+
 def test_a_list_added_under_a_test_the_language_decides_false_gives_nothing(tmp_path, libraries):
     """`if False: urlpatterns += dev_urls.urlpatterns` (OI-562): the arm never runs, so the
     write gives nothing, as a write under a test the resolver decides false. The other list is

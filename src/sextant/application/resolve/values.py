@@ -7609,14 +7609,22 @@ class _Walk:
         # it would refuse is a change to the value, which a function, `None` and a written
         # text or number do not have. An empty list can be filled, so there it decides nothing.
         entered = value.get("kind") == "parameter" and value.get("value") is not None
+        # The value is read on the calls of `trail` alone. A choice `trail` made among the
+        # values of a name (an element of one write of a list, a write under a test) is a
+        # choice of what the row reads, not of what the test sees: joined to it, the other
+        # writes of the tested name are refused and one of several values is counted as ONE
+        # (`api = []`, `api.append(v)`, `if api: ... include(api)` was decided false).
+        calls = tuple(
+            step for step in trail if step.context[0] in (_CALLER_OF, _RETURN_OF, _FILLED_BY)
+        )
         reached = (
-            self._resolve((_PARAMETER, method, int(str(value["value"]))), trail, frames)
+            self._resolve((_PARAMETER, method, int(str(value["value"]))), calls, frames)
             if entered
-            else self._entry(value, method, (_TEST_OF, method), trail, frames)
+            else self._entry(value, method, (_TEST_OF, method), calls, frames)
         )
         by_caller: dict[_Trail, list[tuple[_Trail, Answer]]] = {}
         for path, answer in reached:
-            crossed = tuple(step for step in path if step not in trail)
+            crossed = tuple(step for step in path if step not in calls)
             callers = tuple(step for step in crossed if step.context[0] == _CALLER_OF)
             by_caller.setdefault(callers, []).append((crossed, answer))
         found: list[tuple[_Trail, bool | None]] = []
