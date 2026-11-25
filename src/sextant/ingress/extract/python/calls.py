@@ -758,14 +758,7 @@ class BodyReader:
                 value = self._value(operand, scope)
             finally:
                 self._rereading = held
-            # A name a star import of its module may bind too has no one value this reading
-            # can state: the star may replace what the module wrote. Nothing is decided.
-            headers = self._context.index.headers
-            replaced = headers is not None and any(
-                target.member is not None and headers.star_may_rebind(target.module, target.member)
-                for target in self._targets(operand, scope) or ()
-            )
-            if value.kind != _UNKNOWN.kind and not replaced:
+            if value.kind != _UNKNOWN.kind:
                 found = (value, when)
         self._tests[id(test)] = found
         return found
@@ -1404,8 +1397,17 @@ class BodyReader:
                 value=None if isinstance(parameter, int) else value,
                 written_by=scope.body.caller,
                 guards=list(scope.guards) or None,
+                replaceable=self._replaceable(written),
             )
         )
+
+    def _replaceable(self, written: str) -> bool | None:
+        """`field_write.replaceable` of a write to the field `written`: true for a name of a
+        module that a star import of that module can replace (ruling R10 of 2026-11-25)."""
+        headers, owner = self._context.index.headers, owner_of(written)
+        if headers is None or owner is None:
+            return None
+        return headers.replaceable_field(owner, member_name(written)) or None
 
     def _in_order(self, written: str, value: CallArgument, scope: Scope) -> CallArgument:
         """A write to a module-level name, read in the order the body runs: the name is a

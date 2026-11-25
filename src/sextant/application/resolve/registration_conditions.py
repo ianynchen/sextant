@@ -48,10 +48,9 @@ root exist where the root setting names it, `shapes/mounts.py`) is a guard like 
 **The seam for deciding a test on a setting** (the approved note's last step, NOT built): in
 `existence_rows`, a `property` guard on one key whose value in an environment is one literal
 could be decided there (`holds` true or false, `resolution` `resolved`) where nothing a
-deployment sets is in the chain. It needs a fact the resolver does not have: whether the
-settings module takes names from code outside the repository (a star import of an absent
-module, an `exec` of a file), which only the scanner knows (`ProjectHeaders.star_may_rebind`).
-OI-570.
+deployment sets is in the chain. Whether a settings module takes a name from code outside
+the repository (a star import of an absent module) is the mark on the write since ruling R10
+(`field_write.replaceable`, `ValueIndex.replaceable`). OI-570.
 
 **A test on a value the code fixes is decided** (ruling R2 of 2026-11-25). Where a test is
 one name (`if x:`), its negation, or its comparison with `None` by `is` (`guards[].value`,

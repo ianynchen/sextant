@@ -197,6 +197,12 @@ SEXTANT_VERSION = version("sextant")
 #             value the test reads and what of it makes the test true. A fact set of the older
 #             vintage has neither, so a reader would take every return of a function for one
 #             that may run and decide no test; it is refused and re-extracted.
+#     25      a Python `field_write` gains `replaceable`: a star import of the written name's
+#             module can replace the name (ruling R10 of 2026-11-25); and a module-level
+#             `from m import *` of a file of the module writes one `field_write` per variable
+#             it takes (R3, written since c3afab36 with no increment). A fact set of the older
+#             vintage has neither, so a reader would decide a test on a value a deployment's
+#             own file may replace; it is refused and re-extracted.
 #
 #   graph schema
 #     (pre-2) 1.0.0, then 1.1.0 when the derived set gained `roots` and
@@ -341,6 +347,6 @@ SEXTANT_VERSION = version("sextant")
 #             2026-11-05-one-reason-list §3a, §4; the bump ruled by the user 2026-11-05). A
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
-FACT_SCHEMA_VERSION = 24
+FACT_SCHEMA_VERSION = 25
 GRAPH_SCHEMA_VERSION = 18
 BOUNDARY_VOCABULARY_VERSION = 5

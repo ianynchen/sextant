@@ -580,6 +580,12 @@ class Answer:
     # reader saying which one the code holds tells them apart by this (`receiver_binding`).
     # Part of what the answer is: no value and an empty collection are two values.
     null: bool = False
+    # **A star import can replace the name this value was written to** (ruling R10 of
+    # 2026-11-25, D00 §5 `field_write.replaceable`): set only where the walk reads such a
+    # write (`_Walk._binding_writes`), and carried through every hop after. Read by the step
+    # that decides a test alone (`_truth`). Not part of what the answer IS, so it is outside
+    # equality, as `parameter` is: every other reader sees the answer it saw before.
+    replaceable: bool = dataclass_field(default=False, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -936,6 +942,10 @@ class ValueIndex:
     # written method, or a `__setitem__` / `__delitem__` call. A read the language makes
     # (`for v in x`, `x[0]`, `v in x`) is none.
     changed_lists: frozenset[str] = frozenset()
+    # The names a star import of their module can replace (D00 §5 `field_write.replaceable`,
+    # ruling R10 of 2026-11-25): the value a write of one states is not the one value the
+    # name holds. Read by the step that decides a test alone (`Answer.replaceable`).
+    replaceable: frozenset[str] = frozenset()
     captured_as: Mapping[tuple[str, int, int], tuple[str, int]] = dataclass_field(
         default_factory=dict
     )
@@ -1697,8 +1707,11 @@ def value_index(
     instance_fields = frozenset(
         bare_descriptor(str(row["symbol"])) for row in field_rows if not row["static"]
     )
+    replaceable: set[str] = set()
     for row in workspace.query("field_writes"):
         _record_store(row, stored, stored_parameters)
+        if row.get("replaceable") and row["field"] is not None:
+            replaceable.add(str(row["field"]))
         written = row.get("value")
         if written is None or row["field"] is None:
             continue
@@ -1825,6 +1838,7 @@ def value_index(
             if by_name
             else frozenset()
         ),
+        replaceable=frozenset(replaceable),
         lambda_types=frozenset(shapes.lambda_types),
         not_hand_offs=shapes.not_hand_offs,
         stated=frozenset(
@@ -3459,7 +3473,7 @@ def _truth(answer: Answer) -> tuple[bool, bool] | None:
     None for a value that is not one written literal: an expression (a configuration key, an
     environment read), an object built from a class (its class decides its truth), one of
     several, a value not read."""
-    if answer.inexact or answer.narrowed or answer.declared:
+    if answer.inexact or answer.narrowed or answer.declared or answer.replaceable:
         return None
     if answer.kind == ABSENT:
         return False, answer.null
@@ -7811,6 +7825,9 @@ class _Walk:
         if not reached and (constants or produced):
             # Every write is under a test decided false: nothing writes the name here.
             return _only(trail, _unresolved(NO_WRITER))
+        if symbol in self._index.replaceable:
+            # A star import can replace the name: the mark the decide step reads (`_truth`).
+            reached = [(path, replace(answer, replaceable=True)) for path, answer in reached]
         return self._distinct(reached)
 
     def _names_a_list(self, symbol: str, seen: set[str]) -> bool:

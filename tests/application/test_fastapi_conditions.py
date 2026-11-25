@@ -637,3 +637,204 @@ def test_a_value_read_through_a_return_under_a_test_carries_the_test(tmp_path: P
     # `GET` is in both arms: it is served either way, and carries both arms' tests where it
     # should carry none (OI-564, the same for a write in both arms).
     assert existence[("GET", "/e")] == [_open(0, "w", holds=False), _open(1, "w")]
+
+
+_MAY_BE_REPLACED = (
+    "DOCS = False\ntry:\n    from .local_config import *\nexcept ImportError:\n    pass\n"
+)
+_X = "def x() -> str:\n    return ''\n"
+_THROUGH = {
+    "a parameter": (
+        (
+            "def create_app(docs):\n"
+            "    made = FastAPI()\n"
+            "    if docs:\n"
+            "        made.add_api_route('/x', x)\n"
+            "    return made\n"
+            "made = create_app(config.DOCS)\n"
+        ),
+        "docs",
+    ),
+    "a local name": (
+        (
+            "def reg():\n"
+            "    docs = config.DOCS\n"
+            "    if docs:\n"
+            "        app.add_api_route('/x', x)\n"
+            "reg()\n"
+        ),
+        "docs",
+    ),
+    "a second module name": (
+        "SHOW = config.DOCS\nif SHOW:\n    app.add_api_route('/x', x)\n",
+        "SHOW",
+    ),
+    "a return": (
+        (
+            "def docs():\n    return config.DOCS\n"
+            "def reg():\n"
+            "    shown = docs()\n"
+            "    if shown:\n"
+            "        app.add_api_route('/x', x)\n"
+            "reg()\n"
+        ),
+        "shown",
+    ),
+    "a parameter of a parameter": (
+        (
+            "def inner(shown):\n"
+            "    if shown:\n"
+            "        app.add_api_route('/x', x)\n"
+            "def outer(docs):\n    inner(docs)\n"
+            "outer(config.DOCS)\n"
+        ),
+        "shown",
+    ),
+}
+
+
+@pytest.mark.parametrize("through", sorted(_THROUGH))
+def test_a_value_a_star_import_can_replace_decides_nothing_at_any_depth(
+    tmp_path: Path, libraries, through: str
+):
+    """Ruling R10 of 2026-11-25: `DOCS = False`, then `try: from .local_config import *` with
+    no `local_config` in the repository. The deployment's file may give `DOCS` another value,
+    so a test whose value comes from that write is not decided, however far the value
+    travelled to the test: the row exists, "not evaluated". Never the row removed."""
+    body, test = _THROUGH[through]
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {"config.py": _MAY_BE_REPLACED, "main.py": "from app import config\n" + _APP + _X + body},
+    )
+
+    assert [(row[0], row[1]) for row in _rows(workspace)] == [("GET", "/x")]
+    assert _existence(workspace) == {("GET", "/x"): [_open(0, test)]}
+
+
+@pytest.mark.parametrize("through", sorted(_THROUGH))
+def test_a_value_no_star_import_can_replace_is_decided_at_any_depth(
+    tmp_path: Path, libraries, through: str
+):
+    """The controls of R10: with no star import the same test is decided on the one written
+    value. `True`: the row, no condition. `False`: no row. A star import of a module that is
+    read and does not bind the name replaces nothing."""
+    if through == "a return":
+        pytest.skip("a value a local name takes from a call is no test value (never decided)")
+    body, _ = _THROUGH[through]
+    main = "from app import config\n" + _APP + _X + body
+
+    served = _resolved(tmp_path / "on", libraries, {"config.py": "DOCS = True\n", "main.py": main})
+    assert [(row[0], row[1], row[3]) for row in _rows(served)] == [("GET", "/x", "resolved")]
+    assert _existence(served) == {}
+
+    off = _resolved(tmp_path / "off", libraries, {"config.py": "DOCS = False\n", "main.py": main})
+    assert _rows(off) == []
+
+    unbound = _resolved(
+        tmp_path / "unbound",
+        libraries,
+        {
+            "local_config.py": "OTHER = True\n",
+            "config.py": "DOCS = False\nfrom .local_config import *\n",
+            "main.py": main,
+        },
+    )
+    assert _rows(unbound) == []
+
+
+def test_a_name_star_imports_alone_give_is_decided_on_the_last_that_gives_it(
+    tmp_path: Path, libraries
+):
+    """A name a module takes by star imports alone has the value of the last star that gives
+    it (Python's rule): decided. Where that source's own value can be replaced, or a star of
+    the module is not read, the name has no one value this reading can state: not decided."""
+    served = [("GET", "/x", "resolved")]
+    one = _resolved(
+        tmp_path / "one",
+        libraries,
+        {"base.py": "DOCS = True\n", "config.py": "from .base import *\n", "main.py": _BY_CONFIG},
+    )
+    assert [(row[0], row[1], row[3]) for row in _rows(one)] == served
+    assert _existence(one) == {}
+
+    two = _resolved(
+        tmp_path / "two",
+        libraries,
+        {
+            "base.py": "DOCS = False\n",
+            "more.py": "DOCS = True\n",
+            "config.py": "from .base import *\nfrom .more import *\n",
+            "main.py": _BY_CONFIG,
+        },
+    )
+    assert [(row[0], row[1], row[3]) for row in _rows(two)] == served
+    assert _existence(two) == {}
+
+    both = {
+        ("GET", "/nx"): [_open(0, "not config.DOCS")],
+        ("GET", "/x"): [_open(0, "config.DOCS")],
+    }
+    absent = "try:\n    from .local import *\nexcept ImportError:\n    pass\n"
+    replaced = _resolved(
+        tmp_path / "replaced",
+        libraries,
+        {
+            "base.py": "DOCS = True\n" + absent,
+            "config.py": "from .base import *\n",
+            "main.py": _BY_CONFIG,
+        },
+    )
+    assert _existence(replaced) == both
+
+    unread = _resolved(
+        tmp_path / "unread",
+        libraries,
+        {
+            "base.py": "DOCS = True\n",
+            "config.py": "from .base import *\n" + absent,
+            "main.py": _BY_CONFIG,
+        },
+    )
+    assert _existence(unread) == both
+
+    library = _resolved(
+        tmp_path / "library",
+        libraries,
+        {
+            "base.py": "DOCS = True\n",
+            "config.py": "from .base import *\nfrom fastapi import *\n",
+            "main.py": _BY_CONFIG,
+        },
+    )
+    assert _existence(library) == both
+
+
+def test_a_plain_read_of_a_value_a_star_import_can_replace_is_not_changed(
+    tmp_path: Path, libraries
+):
+    """Only the step that decides a test reads the mark (R10): a verb read from a name a star
+    import can replace is the written value, as before (the fault of that read is OI-565)."""
+    absent = "try:\n    from .local import *\nexcept ImportError:\n    pass\n"
+    main = (
+        "from app import config\n"
+        + _APP
+        + "@app.api_route('/v', methods=[config.VERB])\ndef v() -> str:\n    return ''\n"
+    )
+    own = _resolved(
+        tmp_path / "own", libraries, {"config.py": "VERB = 'put'\n" + absent, "main.py": main}
+    )
+    assert [(row[0], row[1], row[3]) for row in _rows(own)] == [("PUT", "/v", "resolved")]
+    assert _existence(own) == {}
+
+    taken = _resolved(
+        tmp_path / "taken",
+        libraries,
+        {
+            "base.py": "VERB = 'put'\n",
+            "config.py": "from .base import *\n" + absent,
+            "main.py": main,
+        },
+    )
+    assert [(row[0], row[1], row[3]) for row in _rows(taken)] == [("PUT", "/v", "resolved")]
+    assert _existence(taken) == {}

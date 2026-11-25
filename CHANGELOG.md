@@ -38,6 +38,17 @@ here would restate those documents rather than add anything.
 
 ### Fixed
 
+- **A value a star import can replace decides no test, at any depth** (ruling R10 of
+  2026-11-25; fact schema 25). `config.py`: `DOCS = False`, then `try: from .local_config
+  import *` with no such file in the repository. A test on `config.DOCS` itself was already
+  not decided; `create_app(config.DOCS)` with `if docs:` inside, and `docs = config.DOCS`
+  then `if docs:`, were decided false and the route under the test got no row. The scanner now
+  writes one mark on the write of such a name (`field_write.replaceable`), and the step that
+  decides a test reads it wherever the value travelled: the row exists, "not evaluated". No
+  other read of the value changes. A name star imports alone give is decided on the last star
+  that gives it. Fact sets of the older schema are re-extracted, which also gives a workspace
+  analysed before the settings-module build its star-import writes.
+
 - **An opted-in Python library's outbound call in a class the module extends is published**
   (ruling R9 of 2026-11-25, OI-560). The bodies of a library class a module class extends are
   in the header document, and with `extract_libraries` naming the library they are in its own

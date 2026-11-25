@@ -102,7 +102,7 @@ _NAMED_QUERIES = {
     # the ladder's own reader skips them. NULLS LAST keeps the parameter writes — the rung
     # that reads this — ahead of the constant ones in the tie-break order (NFR-1).
     "field_writes": (
-        "SELECT field, from_parameter, value, written_by, guards FROM field_writes "
+        "SELECT field, from_parameter, value, written_by, guards, replaceable FROM field_writes "
         # `value` is in the key as well: one method can write one field from several
         # constants, and the other three columns are equal on those rows, so without it the
         # order between them is whatever the engine happens to produce (NFR-1).
@@ -1812,7 +1812,7 @@ _EXPORT_QUERIES = {
     "field_writes": f"""
         SELECT w.document_id, w.field, w.from_parameter,
                coalesce(j.masked::JSON, w.value) AS value, w.written_by,
-               coalesce(g.masked, w.guards) AS guards
+               coalesce(g.masked, w.guards) AS guards, w.replaceable
         FROM field_writes w
         LEFT JOIN {_REDACTED_JSON} j ON j.original = w.value::VARCHAR
         LEFT JOIN {_REDACTED_JSON} g ON g.original = w.guards

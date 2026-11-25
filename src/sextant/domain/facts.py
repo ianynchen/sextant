@@ -755,6 +755,11 @@ class FieldWriteFact(BaseModel):
     # under within its own body, outermost first, in the format and by the rules of
     # `CallSiteFact.guards`; absent where it runs under none, and on every JVM write (OI-552).
     guards: list[CallGuard] | None = None
+    # Ruling R10 of 2026-11-25 (fact schema 25): a star import of the written name's module
+    # can replace this name, so the value written here is not the one value the name holds
+    # (`DOCS = False`, then `from .local_config import *`). True or absent; absent on every
+    # JVM write. Read by the step that decides a test alone (`values._Walk._decided`).
+    replaceable: bool | None = None
 
     @model_validator(mode="after")
     def _one_source(self) -> "FieldWriteFact":

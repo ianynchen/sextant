@@ -143,6 +143,8 @@ class ProjectHeaders:
         # written from (handed in, as `structure` is the module that reads files).
         self._read = read
         self._headers: dict[str, ModuleHeader | None] = {}
+        # Each module file by its type symbol (`replaceable_field`), built when first asked.
+        self._by_symbol: dict[str, str] | None = None
         self._hashes: dict[str, str | None] = {}
         # Each answer, with the modules whose headers it read.
         self._canonical: dict[str, tuple[str, frozenset[str]]] = {}
@@ -257,6 +259,51 @@ class ProjectHeaders:
             if name in source.names or self.star_may_rebind(base, name, seen | {module}):
                 return True
         return False
+
+    def replaceable(self, module: str, name: str, seen: frozenset[str] = frozenset()) -> bool:
+        """Whether a star import can give `module.name` another value than the one a write of
+        it states (ruling R10 of 2026-11-25, `field_write.replaceable`). A name the module's
+        own statements bind: where a star may bind it too (`star_may_rebind`). A name the
+        module takes by a star alone (`starred_names`, the last star that gives it, as
+        `_starred` reads it): where a star of the module is not read, or the name is
+        replaceable in the module that gives it."""
+        header = self.header(module)
+        if header is None or module in seen:
+            return False
+        if name in header.names:
+            return self.star_may_rebind(module, name)
+        if header.stars_unread or any(self.header(base) is None for base in header.stars):
+            return True
+        for base in reversed(header.stars):
+            source = self.header(base)
+            assert source is not None
+            if name not in source.exports if source.exports is not None else name.startswith("_"):
+                continue
+            if name in source.names or name in self.starred_names(base):
+                return self.replaceable(base, name, seen | {module})
+        return False
+
+    def replaceable_field(self, owner: str, name: str) -> bool:
+        """`replaceable`, for the name `name` of the module file whose type symbol is `owner`;
+        false for any other owner (a class)."""
+        if self._by_symbol is None:
+            self._by_symbol = {type_symbol(Target(module)): module for module in self._files}
+        module = self._by_symbol.get(owner)
+        return module is not None and self.replaceable(module, name)
+
+    def replaced_star(self, module: str, name: str, defined: tuple[Target, ...]) -> bool:
+        """Whether `module.name`, defined at `defined` (`member`), is a variable `module` takes
+        by a star import alone and another star import can replace (`replaceable`): a read of
+        it is then a read of `module`'s own name, never of the name where it is defined."""
+        header = self.header(module)
+        return (
+            header is not None
+            and name not in header.names
+            and len(defined) == 1
+            and defined[0].member is not None
+            and self.replaceable(module, name)
+            and self.names_a_variable(defined[0].module, defined[0].member)
+        )
 
     def names_a_value(self, module: str, name: str) -> bool:
         """Whether `module.name`, followed to where it is defined, is bound to a value, a

@@ -1515,7 +1515,10 @@ SELECT document_id,
        payload ->> 'written_by'                AS written_by,
        -- D00 §5 (fact schema 23, OI-508, OI-509): the undecided tests the write runs under
        -- within its own body, as `call_sites.guards`; NULL where under none and on the JVM.
-       payload ->> 'guards'                    AS guards
+       payload ->> 'guards'                    AS guards,
+       -- D00 §5 (fact schema 25, ruling R10 of 2026-11-25): a star import of the name's module
+       -- can replace the name; NULL where none can and on the JVM.
+       (payload ->> 'replaceable')::BOOLEAN    AS replaceable
 FROM raw_facts WHERE kind = 'field_write'
   AND document_id IN (SELECT document_id FROM selected_documents);
 

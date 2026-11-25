@@ -501,6 +501,7 @@ class _Writer(BodyReader):
                         ),
                         written_by=scope.body.caller,
                         guards=list(scope.guards) or None,
+                        replaceable=self._replaceable(descriptor),
                     )
                 )
 
@@ -595,6 +596,7 @@ class _Writer(BodyReader):
                 value=applied,
                 written_by=scope.body.caller,
                 guards=list(scope.guards) or None,
+                replaceable=self._replaceable(descriptor),
             )
         )
 
