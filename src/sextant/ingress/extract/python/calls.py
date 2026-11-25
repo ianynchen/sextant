@@ -908,7 +908,7 @@ class BodyReader:
             scope.flow.raises()
             scope.flow.join([skipped, passed])
         elif isinstance(node, ast.Delete):
-            for target in node.targets:
+            for target in _deleted(node.targets):
                 if isinstance(target, ast.Subscript):
                     self._subscript(target, scope, _DELITEM)
                 else:
@@ -3276,6 +3276,17 @@ def _added(node: ast.expr) -> list[ast.expr]:
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
         return [*_added(node.left), *_added(node.right)]
     return [node]
+
+
+def _deleted(targets: list[ast.expr]) -> list[ast.expr]:
+    """The targets `del` deletes, a tuple's or a list's taken apart (`del (x[0], y)`)."""
+    return [
+        part
+        for target in targets
+        for part in (
+            _deleted(target.elts) if isinstance(target, ast.Tuple | ast.List) else [target]
+        )
+    ]
 
 
 def _as_load(node: ast.expr) -> ast.expr:

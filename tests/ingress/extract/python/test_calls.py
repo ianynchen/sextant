@@ -826,6 +826,31 @@ def test_an_element_store_and_delete_are_the_calls_the_language_makes(tmp_path: 
     ]
 
 
+def test_an_element_inside_a_tuple_target_is_stored_or_deleted(tmp_path: Path):
+    """`x[0], b = v` stores into the element at module level as in a function, and
+    `del (x[0], b)` deletes it (OI-515)."""
+    tree = _scan(
+        tmp_path,
+        {
+            "app/m.py": (
+                "VERBS = ['get']\n"
+                "VERBS[0], b = 'post', 1\n"
+                "del (VERBS[0], b)\n"
+                "def f():\n"
+                "    VERBS[0], c = 'post', 1\n"
+                "    del (VERBS[0], c)\n"
+            )
+        },
+    )
+
+    for caller in (f"app/m#<clinit>({DIS}).", f"app/m#f({DIS})."):
+        assert [
+            c.target.name
+            for c in _calls(tree, caller)
+            if c.receiver_field == "app/m#VERBS." and c.target.owner == "builtins/list#"
+        ] == ["__setitem__", "__delitem__"], caller
+
+
 def test_an_augmented_element_store_reads_its_object_and_index_once(tmp_path: Path):
     """`x[f()] += v` runs `f()` once (OI-513): the store takes the object and the index the
     read took."""

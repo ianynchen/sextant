@@ -515,7 +515,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-512 | SEXTANT-TBD | a read-only list method written as a call makes a held list `escapes` (plan 2026-11-23-python-django-redesign, low) |
 | OI-513 | SEXTANT-TBD | `x[f()] += v` writes the call `f()` twice (plan 2026-11-23-python-django-redesign, low) (fixed on `fix/django-open-issues`: the target's object and index are read once, and the store takes the values the read took; `tests/ingress/extract/python/test_calls.py::test_an_augmented_element_store_reads_its_object_and_index_once`) |
 | OI-514 | SEXTANT-TBD | a value stored by `d[k] = obj` counts as handed on (plan 2026-11-23-python-django-redesign, low) |
-| OI-515 | SEXTANT-TBD | some changes to a held list record no change (plan 2026-11-23-python-django-redesign, low) |
+| OI-515 | SEXTANT-TBD | some changes to a held list record no change (plan 2026-11-23-python-django-redesign, low) (partly fixed on `fix/django-open-issues`: an element inside a tuple target is stored at module level as in a function, and `del (x[0], y)` deletes it; `tests/ingress/extract/python/test_calls.py::test_an_element_inside_a_tuple_target_is_stored_or_deleted`. Still open: a store two levels down, `x[0][1] = v`, and a call on a field a base class declares) |
 | OI-516 | SEXTANT-TBD | a list changed through a second name stays known by its first name (plan 2026-11-23-python-django-redesign, low) |
 | OI-517 | SEXTANT-TBD | an alias write adds its members to the PATH_CAP exemption (plan 2026-11-23-python-django-redesign, low) |
 | OI-518 | SEXTANT-TBD | the scanner's list-name table does not follow `global X` or a function body's order (plan 2026-11-23-python-django-redesign, low) |

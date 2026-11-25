@@ -438,6 +438,11 @@ class _Writer(BodyReader):
                 self._store(target, value, scope)
                 continue
             named = target if isinstance(target, ast.Name) else None
+            if value is not None:
+                # An element or an attribute inside an unpacking takes a part of the value
+                # this scanner does not split, stored as a target of its own is (OI-515).
+                for part in _parts_stored(target):
+                    self._store(part, CallArgument(kind="unresolved"), scope)
             for name in _names(target):
                 descriptor = f"{scope.owner}{name}."
                 dead = id(node) in self._never_runs
@@ -1211,6 +1216,17 @@ def _is_setter(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
         and decorator.value.id == node.name
         for decorator in node.decorator_list
     )
+
+
+def _parts_stored(target: ast.expr) -> list[ast.expr]:
+    """The elements and attributes inside an unpacking target, in order."""
+    if isinstance(target, ast.Tuple | ast.List):
+        return [part for element in target.elts for part in _parts_stored(element)]
+    if isinstance(target, ast.Starred):
+        return _parts_stored(target.value)
+    if isinstance(target, ast.Subscript | ast.Attribute):
+        return [target]
+    return []
 
 
 def _names(target: ast.expr) -> list[str]:
