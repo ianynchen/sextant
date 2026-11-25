@@ -199,6 +199,7 @@ from sextant.application.resolve.values import (
     Producer,
     ValueIndex,
     argument_slot,
+    bound_owner,
     cached_value_index,
     called_function,
     decorators_passed,
@@ -1015,7 +1016,11 @@ def _entry_handlers(
     for producer, path in producer_paths(index, site, slot, frozenset(), functions=True):
         if within is not None and path.joined(within) is None:
             continue
-        body = None if producer.ended_at is None else called_function(producer.ended_at)
+        body = (
+            None
+            if producer.ended_at is None
+            else called_function(producer.ended_at) or _called_object(index, producer.ended_at)
+        )
         symbol = None if body is None else method_symbols.get(body)
         if symbol is not None and symbol not in found:
             found.append(symbol)
@@ -1024,6 +1029,24 @@ def _entry_handlers(
             if through is not None:
                 through.extend(path.ran_through())
     return tuple(found)
+
+
+def _called_object(index: ValueIndex, answer: Answer) -> str | None:
+    """The body a call of an OBJECT runs (design 2026-11-23 §4d, OI-539): its class's
+    `__call__`, the first in the class's lookup order (`Dispatch.order_through_headers`), a
+    library base's whose body was read too, bare. None for anything else, a class among them,
+    and where the order meets a type whose methods were not read before it finds one."""
+    dispatch = index.dispatch
+    owner = bound_owner(answer)
+    if owner is None or answer.class_object or dispatch is None:
+        return None
+    for type_ in dispatch.order_through_headers(owner)[0]:
+        body = method_descriptor(type_, "__call__", PY_SIGNATURE)
+        if body in dispatch.declared:
+            return body
+        if type_ not in dispatch.scanned and not dispatch.declared_names.get(type_):
+            return None
+    return None
 
 
 def _entry_paths(

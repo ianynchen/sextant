@@ -693,3 +693,46 @@ def test_an_http_method_names_initkwarg_in_a_helper_leaves_the_verbs_partial(
         ("DELETE", None, "/x/", _handler("delete", "app/urls/Items"), "partial"),
         ("GET", None, "/x/", _handler("get", "app/urls/Items"), "partial"),
     ]
+
+
+def test_a_view_object_names_its_class_call_method(tmp_path: Path, libraries):
+    """OI-539 (design 2026-11-23 §4d): `path('x/', Feed())` hands Django an object, and calling
+    an object runs its class's `__call__`, found by the class lookup (a base's too). That method
+    is the handler of the any-method row; its body reads no method, so the row is `resolved`."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        "class Base:\n    def __call__(self, request):\n        return None\n"
+        "class Feed(Base):\n    pass\n",
+        "path('x/', Feed())",
+    )
+
+    assert rows == [(None, "any", "/x/", _handler("__call__", "app/urls/Base"), "resolved")]
+
+
+def test_a_view_object_of_a_library_class_names_the_librarys_call_method(tmp_path: Path, libraries):
+    """OI-539: the `__call__` a library base defines (bookwyrm's `RssFeed(Feed)`), its body read
+    because a module class extends the class."""
+    rows = _stub_rows(
+        tmp_path,
+        libraries,
+        "class Feed:\n    def __call__(self, request, *a, **k):\n        return None\n",
+        "from stubviews import Feed\n"
+        "class Rss(Feed):\n    pass\n"
+        "urlpatterns = [path('x/', Rss())]\n",
+    )
+
+    assert rows == [(None, "any", "/x/", _STUB + "Feed#__call__(sig_", "resolved")]
+
+
+def test_a_view_object_below_a_base_not_read_names_no_handler(tmp_path: Path, libraries):
+    """OI-539: where the lookup meets a type not read before a `__call__`, that type may define
+    the one that runs: no handler, `partial`, as before."""
+    rows = _views(
+        tmp_path,
+        libraries,
+        "from not_installed import Base\nclass Feed(Base):\n    pass\n",
+        "path('x/', Feed())",
+    )
+
+    assert rows == [(None, "any", "/x/", None, "partial")]

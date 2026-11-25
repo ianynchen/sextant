@@ -539,7 +539,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-536 | SEXTANT-TBD | a capture of a deeper function's own name is recorded (plan 2026-11-23-python-django-redesign, low) |
 | OI-537 | SEXTANT-TBD | one helper entered twice on one path names no handler (plan 2026-11-23-python-django-redesign, low) |
 | OI-538 | SEXTANT-TBD | some reads of the request method are missed, so an any-method row stays `resolved` (plan 2026-11-23-python-django-redesign, high) |
-| OI-539 | SEXTANT-TBD | a view object names no handler (plan 2026-11-23-python-django-redesign, low) |
+| OI-539 | SEXTANT-TBD | a view object names no handler (plan 2026-11-23-python-django-redesign, low) (fixed on `fix/django-open-issues`: the handler is the class's `__call__`, found in its lookup order; `tests/application/test_django_class_views.py::test_a_view_object_names_its_class_call_method`) |
 | OI-540 | SEXTANT-TBD | a doubted any-method row gets no question (plan 2026-11-23-python-django-redesign, medium) |
 | OI-541 | SEXTANT-TBD | a class below an unread base names no handler (plan 2026-11-23-python-django-redesign, low) |
 | OI-542 | SEXTANT-TBD | a library attribute read in an `if` test is written twice (plan 2026-11-23-python-django-redesign, low) |

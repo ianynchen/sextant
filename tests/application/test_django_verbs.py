@@ -692,10 +692,9 @@ def test_a_class_whose_own_dispatch_reads_the_method_is_partial(tmp_path: Path, 
     assert rows == [(None, "any", "/x/", _handler("dispatch", "app/urls/Items"), "partial")]
 
 
-def test_a_view_object_names_no_handler_and_is_partial(tmp_path: Path, libraries):
-    """`path("rss", Feed())`: calling an object runs its class's `__call__` (design §4d). The
-    handler reader does not name that method today, so the row names no handler: `partial`,
-    never a `resolved` any-method row (Task 7a, rule 1)."""
+def test_a_view_object_names_its_call_method(tmp_path: Path, libraries):
+    """`path("rss", Feed())`: calling an object runs its class's `__call__` (design §4d), the
+    handler of the any-method row (OI-539). Its body reads no method: `resolved`."""
     rows = _view(
         tmp_path,
         libraries,
@@ -703,7 +702,7 @@ def test_a_view_object_names_no_handler_and_is_partial(tmp_path: Path, libraries
         "path('x/', Feed())",
     )
 
-    assert rows == [(None, "any", "/x/", None, "partial")]
+    assert rows == [(None, "any", "/x/", _handler("__call__", "app/urls/Feed"), "resolved")]
 
 
 # One reader of one path (final review, C1): the methods are read from the stated calls the
