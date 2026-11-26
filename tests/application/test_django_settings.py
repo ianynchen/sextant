@@ -92,6 +92,36 @@ def test_only_an_upper_case_name_is_a_key(tmp_path: Path, libraries):
     assert sorted({key for _, key in _config(workspace)}) == ["API_V2", "ROOT_URLCONF"]
 
 
+def test_settings_only_the_tests_select_are_no_environment(tmp_path: Path, libraries):
+    """The module the pytest settings name (`DJANGO_SETTINGS_MODULE`) that builds on another
+    settings module is test settings (ruled 2026-11-26; weblate's `settings_test`, which
+    takes `settings_example` with a star): no environment, and no builder, so the module it
+    builds on stays one. A script that starts a process with it (weblate's
+    `scripts/benchmark-search.py`) is test code too and keeps nothing."""
+    files = {
+        "settings.py": "ROOT_URLCONF = 'app.urls'\nDEBUG = False\n",
+        "testing.py": "from app.settings import *\nDEBUG = True\n",
+        "bench.py": _START.format("app.testing"),
+        "urls.py": _URLS,
+    }
+    named = "[pytest]\nDJANGO_SETTINGS_MODULE = app.testing\n"
+    workspace = _resolved(tmp_path / "a", libraries, files, pytest_ini=named)
+    assert sorted({environment for environment, _ in _config(workspace)}) == ["app.settings"]
+
+    # bookwyrm: the pytest settings name the module the deployment runs, which builds on
+    # no other: it stays an environment.
+    workspace = _resolved(
+        tmp_path / "b",
+        libraries,
+        {**files, "manage.py": _START.format("app.settings")},
+        pytest_ini="[pytest]\nDJANGO_SETTINGS_MODULE = app.settings\n",
+    )
+    assert sorted({environment for environment, _ in _config(workspace)}) == [
+        "app.settings",
+        "app.testing",
+    ]
+
+
 @pytest.mark.parametrize("owner", ["Env", "FileAwareEnv"])
 def test_a_read_through_environs_is_the_key_expression(tmp_path: Path, libraries, owner):
     """`env.bool("DEBUG", False)` on an `environs` reader is a read of the key `DEBUG`
@@ -154,6 +184,11 @@ def test_a_settings_module_another_builds_on_is_no_environment(tmp_path: Path, l
     }
     workspace = _resolved(tmp_path / "a", libraries, files)
     assert sorted({environment for environment, _ in _config(workspace)}) == ["app.worker"]
+    # The root is written in the building block: its name is still the key `ROOT_URLCONF`,
+    # decided in the environment that builds on it (zulip's `computed_settings`).
+    assert [row[1:6] for row in _existence(workspace)] == [
+        ("property", "ROOT_URLCONF == 'app.urls'", ("ROOT_URLCONF",), "app.worker", "true")
+    ]
 
     # bookwyrm: `celerywyrm.settings` builds on `bookwyrm.settings`, which `manage.py` starts.
     workspace = _resolved(

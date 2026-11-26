@@ -400,6 +400,23 @@ def settings_reads_of(workspace: Workspace, catalog: Catalog) -> SettingsReads:
     # A settings module is named by its environment (`settings_modules`), so the module of
     # each environment is one whose names are keys.
     modules = {type_descriptor(environment) for environment in config}
+    # So is each module such a module takes a name of (`from .base import *`), itself no
+    # environment (a building block, `settings_modules._environments`): zulip writes
+    # `ROOT_URLCONF` in `computed_settings`, which `settings` takes with a star.
+    gives: dict[str, set[str]] = {}
+    for row in workspace.query("field_writes") if modules else ():
+        text = str(row["value"] or "")
+        if '"field"' not in text:
+            continue
+        symbol = json.loads(text).get("symbol")
+        taker, giver = bare_descriptor(str(row["field"])), bare_descriptor(str(symbol or ""))
+        if symbol and member_name(taker) == member_name(giver):
+            gives.setdefault(str(owner_of(taker)), set()).add(str(owner_of(giver)))
+    pending = list(modules)
+    while pending:
+        for giver in gives.get(pending.pop(), set()) - modules:
+            modules.add(giver)
+            pending.append(giver)
     return SettingsReads(keys, config, frozenset(stated | modules), details)
 
 

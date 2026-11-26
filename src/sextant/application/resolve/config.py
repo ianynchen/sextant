@@ -102,6 +102,9 @@ FROM_MODULE = "from_module_holding"
 KEY_NAMES = "key_names"
 UPPER_CASE = "upper_case"
 NAMED_FILE_LANGUAGE = "dotenv"
+# The document language of the test tool's settings file (`ingress/read/pytest_settings.py`):
+# no source matches it; `resolve/settings_modules.py` reads which settings module it names.
+TEST_TOOL_LANGUAGE = "pytest"
 
 _DEFAULT_PLACEHOLDERS = {"open": "${", "close": "}", "default_separator": ":"}
 

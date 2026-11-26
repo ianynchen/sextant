@@ -29,6 +29,7 @@ from sextant.application.ports.workspace import Workspace
 from sextant.application.resolve.config import (
     FROM_MODULE,
     KEY_NAMES,
+    TEST_TOOL_LANGUAGE,
     config_model_of,
     not_set,
 )
@@ -90,7 +91,7 @@ def record_module_config(workspace: Workspace, catalogs: Sequence[Catalog]) -> N
         one.value_annotations,
         returns_arguments=one.returns_arguments,
     )
-    modules = _environments(catalogs, index, modules, held)
+    modules = _environments(workspace, catalogs, index, modules, held)
     paths = {
         str(row["document_id"]): str(row["relative_path"]) for row in workspace.query("documents")
     }
@@ -136,30 +137,54 @@ def record_module_config(workspace: Workspace, catalogs: Sequence[Catalog]) -> N
 
 
 def _environments(
+    workspace: Workspace,
     catalogs: Sequence[Catalog],
     index: ValueIndex,
     modules: list[str],
     held: Mapping[str, Mapping[str, tuple[str, str, str]]],
 ) -> list[str]:
-    """`modules`, the settings modules, without the building blocks (ruled 2026-11-26, D3):
-    one another settings module takes a name of (`from m import *`), unless code starts a
-    process with it. A start is a stated environment read of a key the model's
-    `profiles.active_keys` names whose default is the module's name as a written text
-    (`os.environ.setdefault("DJANGO_SETTINGS_MODULE", "app.settings")`). A model with no
-    such key keeps every module."""
+    """`modules`, the settings modules, without the building blocks and the test settings
+    (ruled 2026-11-26, D3).
+
+    A building block is a module another settings module takes a name of (`from m import
+    *`), unless code starts a process with it. A start is a stated environment read of a key
+    the model's `profiles.active_keys` names whose default is the module's name as a written
+    text (`os.environ.setdefault("DJANGO_SETTINGS_MODULE", "app.settings")`).
+
+    Test settings are the module the test tool's settings file names with such a key
+    (`DJANGO_SETTINGS_MODULE = app.settings_test` under `[pytest]`), where it builds on
+    another settings module: only the tests select it, so it is test code, and a start with
+    it (a benchmark script) is test code too. It is no environment and no builder. A module
+    the file names that builds on no other is the one the deployment runs as well
+    (bookwyrm). A model with no such key keeps every module."""
     selectors = set(config_model_of(catalogs).get("profiles", {}).get("active_keys") or ())
-    blocks: set[str] = set()
+    if not selectors:
+        return modules
+    # settings module -> the settings modules it takes a name of.
+    builds_on: dict[str, set[str]] = {}
     for module in modules:
         for name, (symbol, _, _) in held[module].items():
             for _, entry in index.constants.get(symbol, ()):
                 source = bare_descriptor(str(entry.get("symbol") or ""))
                 giver = owner_of(source) if entry.get("kind") == "field" else None
                 if giver in modules and giver != module and member_name(source) == name:
-                    blocks.add(giver)
-    if not selectors or not blocks:
-        return modules
+                    builds_on.setdefault(module, set()).add(giver)
+    tool = {
+        str(row["document_id"])
+        for row in workspace.query("documents")
+        if row["language"] == TEST_TOOL_LANGUAGE
+    }
+    named = {
+        str(row["value"])
+        for row in workspace.query("config_entries")
+        if str(row["document_id"]) in tool and row["key_path"] in selectors
+    }
+    tests = {m for m in modules if dotted_type(m) in named and builds_on.get(m)}
+    blocks = {
+        giver for module, givers in builds_on.items() if module not in tests for giver in givers
+    }
     started: set[str] = set()
-    for row in index.sites.values():
+    for row in index.sites.values() if blocks else ():
         stated = index.environment_reads.get((str(row.get("owner")), str(row["name"])))
         if stated is None or stated[1] is None:
             continue
@@ -170,7 +195,7 @@ def _environments(
         ]
         if written[0] in selectors and written[1] is not None:
             started.add(str(written[1]))
-    return [m for m in modules if m not in blocks or dotted_type(m) in started]
+    return [m for m in modules if m not in tests and (m not in blocks or dotted_type(m) in started)]
 
 
 def _settings_named(catalogs: Sequence[Catalog]) -> set[str]:

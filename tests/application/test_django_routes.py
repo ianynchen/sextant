@@ -14,13 +14,15 @@ import pytest
 
 import fixture_python
 from fixture_python import FIXTURES
+from sextant.application.ports.artifacts import ReadRequest
 from sextant.application.ports.detector import LibraryRoot
 from sextant.application.ports.scanner import ScanRequest
 from sextant.application.resolve.pipeline import resolve
-from sextant.domain.factfile import write_fact_file
+from sextant.domain.factfile import config_fact_target, write_fact_file
 from sextant.domain.facts import Document, ModuleFact
 from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
 from sextant.ingress.extract.python.scanner import PythonScanner
+from sextant.ingress.read.pytest_settings import PytestSettingsReader
 from sextant.resources import catalogs_dir
 from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
@@ -51,6 +53,7 @@ def _resolved(
     libraries: tuple[LibraryRoot, ...],
     files: dict[str, str],
     settings: dict[str, str] | None = _SETTINGS,
+    pytest_ini: str | None = None,
 ) -> DuckDbWorkspace:
     """`files` under `app/`, with `settings` beside them where `files` writes none; None for
     a program with no settings module (a reusable app)."""
@@ -72,6 +75,14 @@ def _resolved(
             dependency_archives=libraries,
         )
     )
+    if pytest_ini is not None:
+        # As `analyze` does: the test tool's settings file, read by the reader that claims it.
+        (tmp_path / "pytest.ini").write_text(pytest_ini, encoding="utf-8")
+        request = ReadRequest(
+            module_id="shop", version="1", files=(tmp_path / "pytest.ini",), root=tmp_path
+        )
+        for document, entries in PytestSettingsReader().read(request):
+            write_fact_file(config_fact_target(facts, document.relative_path), document, entries)
     module = Document(
         document_id="module",
         relative_path="pyproject.toml",
