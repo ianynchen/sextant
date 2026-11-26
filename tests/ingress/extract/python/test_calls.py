@@ -1284,8 +1284,9 @@ def test_a_star_import_of_a_variable_is_a_write_of_the_name(tmp_path: Path):
 def test_a_write_of_a_name_a_star_import_can_replace_says_so(tmp_path: Path):
     """D00 §5 `field_write.replaceable` (fact schema 25, ruling R10 of 2026-11-25): a write of
     a module name carries the mark where a star import of that module can replace the name.
-    A name the module writes itself: a star that binds it too, a star whose source is not
-    read, a star in a `try`. A name star imports alone give: where a star of the module is
+    A name the module writes itself: a star written after the write that binds it too
+    (`late`), a star whose source is not read, a star in a `try`; never a star the write
+    comes after (`base`, ruled 2026-11-26). A name star imports alone give: where a star of the module is
     not read, or the name is replaceable where the last star takes it from. A star source
     that is read and does not bind the name replaces nothing. A read from another file of a
     marked name a star alone gives names that module's name, not the one where it is defined
@@ -1298,6 +1299,7 @@ def test_a_write_of_a_name_a_star_import_can_replace_says_so(tmp_path: Path):
             "app/__init__.py": "",
             "app/defaults.py": "TIMEOUT = 5\nDEBUG = True\n",
             "app/base.py": "from app.defaults import *\nDEBUG = False\nROOT = 'app.urls'\n",
+            "app/late.py": "DEBUG = False\nfrom app.defaults import *\n",
             "app/local.py": "from app.base import *\nONLY = 1\n" + absent,
             "app/over.py": "from app.local import *\n",
             "app/reader.py": "from app import base, local\nA = local.ROOT\nB = base.TIMEOUT\n",
@@ -1315,7 +1317,9 @@ def test_a_write_of_a_name_a_star_import_can_replace_says_so(tmp_path: Path):
     assert marked == {
         "app/defaults#TIMEOUT.": (None, None),
         "app/defaults#DEBUG.": (None, None),
-        "app/base#DEBUG.": (True, None),
+        "app/base#DEBUG.": (None, None),
+        "app/late#DEBUG.": (True, None),
+        "app/late#TIMEOUT.": (None, "app/defaults#TIMEOUT."),
         "app/base#ROOT.": (None, None),
         "app/base#TIMEOUT.": (None, "app/defaults#TIMEOUT."),
         "app/local#ONLY.": (True, None),

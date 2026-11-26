@@ -321,9 +321,9 @@ _DOORS = {
         "base.py": "DEBUG = False\n" + _ABSENT,
         "settings.py": "from app.base import *\n" + _ROOT,
     },
-    "a write beside a star import that binds it": {
+    "a write, then a star import that binds it": {
         "base.py": "DEBUG = False\n",
-        "settings.py": "from app.base import *\n" + _ROOT + "DEBUG = True\n",
+        "settings.py": _ROOT + "DEBUG = True\nfrom app.base import *\n",
     },
 }  # fmt: skip
 
@@ -336,12 +336,34 @@ def test_a_test_on_a_setting_with_a_door_in_its_chain_is_not_evaluated(
     written literal or something outside the repository can give the key another value: an
     environment read, a write a star import can replace (ruling R10) anywhere in the chain
     of settings modules the key is read through, a text the module runs as its own code
-    (`exec`), a name with two values. The last case is the limit of OI-565: the order of a
-    write and a star import is not read."""
+    (`exec`), a name with two values. The last case is the limit of OI-565: a write, then a
+    star import that binds the name, is not read as the star's value."""
     workspace = _resolved(tmp_path, libraries, {**_DOORS[door], "urls.py": _DEBUG_URLS})
 
     assert sorted(row["path"] for row in workspace.query("endpoints")) == ["/d/", "/u/"]
     assert _verdicts(workspace, "settings.DEBUG") == {"app.settings": ("unresolved", "unresolved")}
+
+
+def test_a_setting_written_after_the_star_import_is_decided_on_its_own_write(
+    tmp_path: Path, libraries
+):
+    """`from app.base import *`, then `DEBUG = False` (ruled 2026-11-26): what runs last binds
+    the name, so the settings module's own write is its one value and the test is decided on
+    it, whatever the star gives. The common layout of a derived settings module."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "base.py": "ROOT_URLCONF = 'app.urls'\nDEBUG = True\n",
+            "settings.py": "from app.base import *\nDEBUG = False\n",
+            "urls.py": _DEBUG_URLS,
+        },
+    )
+
+    assert _verdicts(workspace, "settings.DEBUG") == {
+        "app.base": ("true", "resolved"),
+        "app.settings": ("false", "resolved"),
+    }
 
 
 def test_a_setting_a_star_import_alone_gives_is_decided_on_its_source(tmp_path: Path, libraries):
