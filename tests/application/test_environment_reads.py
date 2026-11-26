@@ -109,7 +109,16 @@ def test_the_shipped_entries_read_as_the_typeshed_symbols():
         (entry["owner"], entry["method"])
         for entry in YamlCatalogSource(catalogs_dir()).environment_reads()
     }
-    assert found == {("os#", "getenv"), ("os/_Environ#", "__getitem__"), ("os/_Environ#", "get")}
+    assert found == {
+        ("os#", "getenv"),
+        ("os/_Environ#", "__getitem__"),
+        ("os/_Environ#", "get"),
+        *(
+            (f"environs/{owner}#", method)
+            for owner in ("Env", "FileAwareEnv")
+            for method in ("__call__", "str", "bool", "int", "float", "list", "json")
+        ),
+    }
 
 
 @pytest.mark.parametrize(

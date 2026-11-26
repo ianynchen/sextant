@@ -26,7 +26,7 @@ from sextant.storage.duckdb.workspace import DuckDbWorkspace
 
 _PREFIX = "sextant-python pypi shop 1 "
 # The distribution `fixtures/orders-django` locks, read as the program's library.
-_LOCKED = {"django": "5.2.8"}
+_LOCKED = {"django": "5.2.8", "environs": "14.5.0"}
 
 
 @pytest.fixture(scope="session")

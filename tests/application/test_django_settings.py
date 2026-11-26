@@ -73,6 +73,31 @@ def test_each_module_holding_the_root_setting_is_an_environment(tmp_path: Path, 
     assert not [key for _, key in config if key in ("OTHER", "urlpatterns")]
 
 
+@pytest.mark.parametrize("owner", ["Env", "FileAwareEnv"])
+def test_a_read_through_environs_is_the_key_expression(tmp_path: Path, libraries, owner):
+    """`env.bool("DEBUG", False)` on an `environs` reader is a read of the key `DEBUG`
+    (ruled 2026-11-26; `scripts/probes/environs_reads.md`), as `os.environ.get` is. bookwyrm
+    writes its settings this way. `FileAwareEnv` also takes the value from the file
+    `DEBUG_FILE` names: the key the deployment sets is still `DEBUG` (OI-578)."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": f"from environs import {owner}\nenv = {owner}()\n"
+            "ROOT_URLCONF = 'app.urls'\nDEBUG = env.bool('DEBUG', False)\n"
+            "SECRET = env('SECRET_KEY')\nPORT = env.int('PORT', 5432)\n"
+            "NAME = env.str(name='NAME', default='shop')\n",
+            "urls.py": _URLS,
+        },
+    )
+
+    config = _config(workspace)
+    assert config[("app.settings", "DEBUG")] == ("${DEBUG:-False}", None)
+    assert config[("app.settings", "SECRET")] == ("${SECRET_KEY}", None)
+    assert config[("app.settings", "PORT")] == ("${PORT:-5432}", None)
+    assert config[("app.settings", "NAME")] == ("${NAME:-shop}", None)
+
+
 def test_a_settings_module_holds_what_a_star_import_gives_it(tmp_path: Path, libraries):
     """`from app.settings import *`, then one name written again (weblate's `settings_test`; a file a test runner collects is not read):
     the module holds the root setting through the star, so it is an environment; its own
