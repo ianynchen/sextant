@@ -941,6 +941,34 @@ def _existence_entries(
     ]
 
 
+def _shared_root_condition(
+    inbound: Sequence[Mapping[str, object]], existence: Mapping[object, list[Mapping[str, object]]]
+) -> tuple[str | None, dict[object, list[Mapping[str, object]]]]:
+    """The condition on the value of one key that the most rows have in every alternative
+    (the routes of a Django root), and for each such row the conditions it has besides. The
+    document states the shared condition one time (ruled 2026-11-25, Q3); the data has it
+    on every row. None where fewer than two rows share one."""
+    members: dict[str, list[object]] = {}
+    for endpoint in inbound:
+        rows = existence.get(endpoint.get("row_id"), [])
+        routes: dict[object, set[str]] = {}
+        for row in rows:
+            routes.setdefault(row["route"], set()).add(str(row["expression"]))
+        for expression in set.intersection(*routes.values()) if routes else ():
+            if json.loads(expression).get("having_value") is not None:
+                members.setdefault(expression, []).append(endpoint.get("row_id"))
+    shared = max(members, key=lambda one: len(members[one]), default=None)
+    if shared is None or len(members[shared]) < 2:
+        return None, {}
+    besides: dict[object, list[Mapping[str, object]]] = {}
+    for row_id in members[shared]:
+        rest = [row for row in existence[row_id] if str(row["expression"]) != shared]
+        # An alternative with the shared condition alone: the row needs nothing more.
+        whole = {row["route"] for row in existence[row_id]} == {row["route"] for row in rest}
+        besides[row_id] = rest if whole else []
+    return shared, besides
+
+
 def _route_label(via: str | None, bean: str) -> str:
     """A registration route as a reader names it: the factory method, or the scanned class —
     the bean's own, or, for an inherited body, the heir class whose route it runs on."""
@@ -1755,6 +1783,28 @@ def assemble_module_document(
         # longer spells out lives here instead, and with one block per row in
         # table order, correlating a block back to its row needs no shared
         # identity between them.
+        shared, besides = _shared_root_condition(inbound, existence)
+        if shared is not None:
+            said = (
+                f"{len(besides)} endpoints have one condition in common: each endpoint below, "
+                "with the conditions of its own block, unless its block says the common "
+                "condition does not apply"
+            )
+            first = existence[next(iter(besides))]
+            route = min(int(str(row["route"])) for row in first)
+            common = [
+                row
+                for row in first
+                if str(row["expression"]) == shared and int(str(row["route"])) == route
+            ]
+            sections.append(
+                MachineDetail(
+                    (
+                        DetailEntry(_text(said), None, None),
+                        *_existence_entries(common, redactor),
+                    )
+                )
+            )
         for endpoint in inbound:
             request = _descriptor_entry(
                 "Request", endpoint.get("request_shape"), fields_by_shape, shape_names
@@ -1765,10 +1815,18 @@ def assemble_module_document(
             streaming = _streaming_entry(endpoint.get("response_shape"))
             via = _via_entry(endpoint, origin_by_symbol)
             fails_with = _fails_with_entry(endpoint, throws_by_root)
-            conditions = [
-                *_condition_entries(endpoint.get("handler"), beans, endpoint.get("served_by")),
-                *_existence_entries(existence.get(endpoint.get("row_id"), []), redactor),
-            ]
+            conditions = _condition_entries(
+                endpoint.get("handler"), beans, endpoint.get("served_by")
+            )
+            row_id = endpoint.get("row_id")
+            if row_id in besides:
+                conditions += _existence_entries(besides[row_id], redactor)
+            else:
+                if shared is not None:
+                    conditions.append(
+                        DetailEntry(_text("Common condition"), _runs("does not apply"), None)
+                    )
+                conditions += _existence_entries(existence.get(row_id, []), redactor)
             entries = [
                 entry
                 for entry in (via, request, response, streaming, fails_with, *conditions)

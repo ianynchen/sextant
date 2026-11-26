@@ -1307,6 +1307,88 @@ def test_a_condition_on_a_keys_value_reads_as_a_property_condition():
     ) in _block(document, "Users#status")
 
 
+def _root_condition(row_id: int, root: str, holds: str = "unresolved") -> dict[str, object]:
+    """The one `endpoint_existence` row of a route reached through the root `root`."""
+    test = f"ROOT_URLCONF == '{root}'"
+    return {
+        **_existence(0, test, True),
+        "row_id": row_id,
+        "kind": "property",
+        "holds": holds,
+        "expression": json.dumps(
+            {
+                "holds": True,
+                "reads": ["ROOT_URLCONF"],
+                "test": test,
+                "keys": ["ROOT_URLCONF"],
+                "having_value": root,
+            },
+            sort_keys=True,
+        ),
+    }
+
+
+def test_the_condition_of_a_root_is_printed_one_time_for_its_routes():
+    """Ruled 2026-11-25 (Q3, C): the condition "`ROOT_URLCONF` is `shop.urls`" is on every
+    row in the data; the document states it one time, for the routes that have it. Such a
+    route states only the conditions it has besides (weblate: `not URL_PREFIX` on each). A
+    route of another root, or of none, says the common condition does not apply."""
+
+    def at(path: str, row_id: int) -> dict[str, object]:
+        return {**_inbound(USERS + "status()."), "path": path, "row_id": row_id}
+
+    document = _document(
+        endpoints=[at("/a", 7), at("/b", 8), at("/jobs", 9), at("/free", 10)],
+        endpoint_existence=[
+            _root_condition(7, "shop.urls"),
+            _root_condition(8, "shop.urls"),
+            {**_existence(0, "settings.DEBUG", True, 1), "row_id": 8},
+            _root_condition(9, "jobs.urls"),
+        ],
+    )
+
+    said = "the configuration key `ROOT_URLCONF` is `shop.urls`"
+    assert document.count(said) == 1
+    common = _block(document, "2 endpoints have one condition in common")
+    assert f"  - Exists only when: {said}, not evaluated" in common
+    assert "  - Of this module's environments:" in common
+    assert "  - " not in _block(document, "GET /a`")
+    assert (
+        "  - Exists only when: the code's test `settings.DEBUG` is true, not evaluated"
+    ) in _block(document, "GET /b`")
+    other = _block(document, "GET /jobs`")
+    assert "  - Common condition: does not apply" in other
+    assert "the configuration key `ROOT_URLCONF` is `jobs.urls`" in other
+    free = _block(document, "GET /free`")
+    assert "  - Common condition: does not apply" in free and "Exists" not in free
+
+
+def test_a_route_one_alternative_reaches_under_the_root_alone_states_no_more():
+    """Reached two ways, one under the root alone: the root is all it needs."""
+    document = _document(
+        endpoints=[
+            {**_inbound(USERS + "status()."), "path": f"/{row_id}", "row_id": row_id}
+            for row_id in (7, 8)
+        ],
+        endpoint_existence=[
+            _root_condition(7, "shop.urls"),
+            _root_condition(8, "shop.urls"),
+            {**_root_condition(8, "shop.urls"), "route": 1},
+            {**_existence(1, "settings.DEBUG", True, 1), "row_id": 8},
+        ],
+    )
+    assert "  - " not in _block(document, "GET /8`")
+
+
+def test_a_root_condition_one_route_alone_has_stays_in_its_block():
+    document = _document(
+        endpoints=[{**_inbound(USERS + "status()."), "row_id": 7}],
+        endpoint_existence=[_root_condition(7, "shop.urls")],
+    )
+    assert "`ROOT_URLCONF` is `shop.urls`" in _block(document, "Users#status")
+    assert "condition in common" not in document
+
+
 def test_a_test_decided_in_an_environment_states_where_the_row_exists():
     """A test on a setting is decided in an environment whose settings module fixes the key
     (ruling R3 of 2026-11-25): the row's line says where it exists, where it does not and

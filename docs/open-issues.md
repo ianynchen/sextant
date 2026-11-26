@@ -582,6 +582,7 @@ nowhere is the `detect.coordinates` defect and stays an issue.
 | OI-579 | [SEXTANT-572](https://app.plane.so/portolan/browse/SEXTANT-572/) | Python: weblate's environment helper `get_env_str` is not read, about 230 settings: a name assigned in both arms of an `if` is ONE `non_enumerable`; also `typing.cast` and a call of itself (ruled 2026-11-26: recorded, medium) |
 | OI-580 | [SEXTANT-573](https://app.plane.so/portolan/browse/SEXTANT-573/) | Python: Django test files named `tests.py` are scanned as production code where the project has no pytest settings (zulip `zerver/webhooks/*/tests.py`, about 90 files); effect on rows not measured (low) |
 | OI-581 | [SEXTANT-574](https://app.plane.so/portolan/browse/SEXTANT-574/) | Python: with the star-order rule of OI-565, the `replaceable` mark on weblate's `settings_test.py` moves 8 call edges in code far from it; zero with that file out of the scan; cause not found (low) |
+| OI-582 | [SEXTANT-575](https://app.plane.so/portolan/browse/SEXTANT-575/) | Python: a read inside `env.prefixed(p)` (environs) is published as `${name}`, not `${p + name}`; 0 uses in the four Django projects (low) |
 | GAP-1 | [SEXTANT-179](https://app.plane.so/portolan/browse/SEXTANT-179/) | functional routing's BUILDER form is unread, on both stacks · 0 of 20, twice |
 | GAP-2 | [SEXTANT-180](https://app.plane.so/portolan/browse/SEXTANT-180/) | the linking tier does not exist · FR-8, M05, M06 |
 | GAP-3 | [SEXTANT-181](https://app.plane.so/portolan/browse/SEXTANT-181/) | the async SQS client is read for one call · 1 of 28 |
