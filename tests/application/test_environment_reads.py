@@ -113,6 +113,7 @@ def test_the_shipped_entries_read_as_the_typeshed_symbols():
         ("os#", "getenv"),
         ("os/_Environ#", "__getitem__"),
         ("os/_Environ#", "get"),
+        ("os/_Environ#", "setdefault"),
         *(
             (f"environs/{owner}#", method)
             for owner in ("Env", "FileAwareEnv")

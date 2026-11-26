@@ -62,4 +62,16 @@ import inspect
 assert list(inspect.signature(os.getenv).parameters) == ["key", "default"]
 assert list(inspect.signature(os.environ.get).parameters) == ["key", "default"]
 rule("`getenv` and `environ.get` take `key` then `default`, each by position or by keyword")
+
+os.environ.pop(KEY, None)
+assert "setdefault" in vars(type(os.environ))
+assert list(inspect.signature(os.environ.setdefault).parameters) == ["key", "value"]
+assert os.environ.setdefault(KEY, "d") == "d"
+os.environ[KEY] = "set"
+assert (
+    os.environ.setdefault(KEY, "d") == "set" and os.environ.setdefault(key=KEY, value="d") == "set"
+)
+rule(
+    "`environ.setdefault(key, value)` is `_Environ`'s own: it gives what the environment has for the key, else `value` (which it then sets): a read with a default"
+)
 print("OK")

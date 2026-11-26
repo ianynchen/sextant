@@ -135,7 +135,33 @@ def test_a_settings_module_holds_what_a_star_import_gives_it(tmp_path: Path, lib
     assert config[("app.settings_ci", "ROOT_URLCONF")] == ("app.urls", None)
     assert config[("app.settings_ci", "DEBUG")] == ("True", None)
     assert config[("app.settings_ci", "LIMIT")] == ("5", None)
-    assert config[("app.settings", "DEBUG")] == ("False", None)
+
+
+_START = "import os\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', '{}')\n"
+
+
+def test_a_settings_module_another_builds_on_is_no_environment(tmp_path: Path, libraries):
+    """A settings module another settings module builds on is a building block and no
+    environment, unless code starts a process with it (ruled 2026-11-26, D3; zulip's
+    `computed_settings`, which `settings` takes with a star). The start is a read of the key
+    the config model's `profiles.active_keys` names, with the module as its default
+    (`os.environ.setdefault("DJANGO_SETTINGS_MODULE", "app.settings")`)."""
+    files = {
+        "base.py": "ROOT_URLCONF = 'app.urls'\nDEBUG = False\n",
+        "settings.py": "from app.base import *\nDEBUG = True\n",
+        "worker.py": "from app.settings import *\nLIMIT = 5\n",
+        "urls.py": _URLS,
+    }
+    workspace = _resolved(tmp_path / "a", libraries, files)
+    assert sorted({environment for environment, _ in _config(workspace)}) == ["app.worker"]
+
+    # bookwyrm: `celerywyrm.settings` builds on `bookwyrm.settings`, which `manage.py` starts.
+    workspace = _resolved(
+        tmp_path / "b", libraries, {**files, "manage.py": _START.format("app.settings")}
+    )
+    config = _config(workspace)
+    assert sorted({environment for environment, _ in config}) == ["app.settings", "app.worker"]
+    assert config[("app.settings", "LIMIT")] == (None, "external")
 
 
 def test_a_setting_with_no_one_value_states_a_reason(tmp_path: Path, libraries):
@@ -180,6 +206,8 @@ def test_a_list_setting_is_one_key_for_each_member(tmp_path: Path, libraries):
             "settings_ci.py": "ROOT_URLCONF = 'app.urls'\nAPPS = ['one']\n",
             # bookwyrm's `celerywyrm.settings`: the list a star import gives, with one more.
             "settings_job.py": "from app.settings import *\nAPPS = APPS + ['job']\n",
+            # As bookwyrm's `manage.py`: the module another builds on is started, so it stays.
+            "manage.py": _START.format("app.settings"),
             "urls.py": _URLS,
         },
     )
@@ -459,6 +487,7 @@ def test_a_setting_written_after_the_star_import_is_decided_on_its_own_write(
             "base.py": "ROOT_URLCONF = 'app.urls'\nDEBUG = True\n",
             "settings.py": "from app.base import *\nDEBUG = False\n",
             "urls.py": _DEBUG_URLS,
+            "manage.py": _START.format("app.base"),
         },
     )
 

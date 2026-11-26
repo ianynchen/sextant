@@ -6619,6 +6619,18 @@ file, so the file pass skips it; a value that is no word is a `CatalogError`. It
 `pydantic-settings.yml`, the Python family's one config model (`config_model_of` takes one
 model per module), and the setting's name stays in the catalog that owns it. A module with no
 such setting (Flask, FastAPI, a reusable Django app) gets no row from it and stays `default`.
+**Which of those modules are environments (ruled 2026-11-26, D3).** A settings module that
+another settings module takes a name of (`from .base import *`) is a building block and no
+environment, unless code starts a process with it. The start is a stated environment read
+(§1f `environment_reads`) of a key the model's `profiles.active_keys` names, with the module's
+dotted name as its written default: `os.environ.setdefault("DJANGO_SETTINGS_MODULE",
+"bookwyrm.settings")`. `active_keys` has the role it has for Spring (`spring.profiles.active`):
+the key that selects which settings a process has. Measured: zulip `zproject.computed_settings`
+is no environment (`zproject.settings` builds on it, nothing starts it); bookwyrm keeps both
+(`celerywyrm.settings` builds on `bookwyrm.settings`, which `manage.py` starts). A model with
+no `active_keys` keeps every module. Stated limit: a start written `os.environ[key] = module`
+is not read (zulip, 3 scripts, each for a module `manage.py` starts too).
+
 **`key_names: upper_case`** on that source (ruled 2026-11-26) says which names are keys: only
 a name that is upper case by the language's own test (`str.isupper`), which is Django's rule
 (`Settings.__init__`: `if setting.isupper()`). A helper name the module holds

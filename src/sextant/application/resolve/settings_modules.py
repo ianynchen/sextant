@@ -22,7 +22,7 @@ name a setting some module holds: one pass over `field_writes`, and one walk per
 (measured 2026-11-25: zulip 608 names, 893 computes, 0.01 s; weblate 620 names, 1,274
 computes, 0.02 s), on the index the engines share."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
@@ -39,9 +39,12 @@ from sextant.application.resolve.values import (
     LITERAL,
     NOT_READABLE,
     SYMBOL,
+    UNPACKED_SLOT,
     UNRESOLVED,
     Answer,
     Path,
+    ValueIndex,
+    argument_slot,
     cached_value_index,
     resolve_positions_on_paths,
 )
@@ -78,9 +81,6 @@ def record_module_config(workspace: Workspace, catalogs: Sequence[Catalog]) -> N
     modules = sorted(module for module, names in held.items() if settings & names.keys())
     if not modules:
         return
-    paths = {
-        str(row["document_id"]): str(row["relative_path"]) for row in workspace.query("documents")
-    }
     one = catalogs[0]
     index = cached_value_index(
         workspace,
@@ -90,6 +90,10 @@ def record_module_config(workspace: Workspace, catalogs: Sequence[Catalog]) -> N
         one.value_annotations,
         returns_arguments=one.returns_arguments,
     )
+    modules = _environments(catalogs, index, modules, held)
+    paths = {
+        str(row["document_id"]): str(row["relative_path"]) for row in workspace.query("documents")
+    }
     # `key_names: upper_case`: a name the framework does not take as a setting is no key.
     upper = any(
         FROM_MODULE in source and KEY_NAMES in source
@@ -129,6 +133,44 @@ def record_module_config(workspace: Workspace, catalogs: Sequence[Catalog]) -> N
             for name, (value, reason, detail) in _keys(key, reached, spread).items():
                 rows.append(_row(name, environment, value, paths.get(document), reason, detail))
     workspace.derive("resolved_config_insert", rows=rows)
+
+
+def _environments(
+    catalogs: Sequence[Catalog],
+    index: ValueIndex,
+    modules: list[str],
+    held: Mapping[str, Mapping[str, tuple[str, str, str]]],
+) -> list[str]:
+    """`modules`, the settings modules, without the building blocks (ruled 2026-11-26, D3):
+    one another settings module takes a name of (`from m import *`), unless code starts a
+    process with it. A start is a stated environment read of a key the model's
+    `profiles.active_keys` names whose default is the module's name as a written text
+    (`os.environ.setdefault("DJANGO_SETTINGS_MODULE", "app.settings")`). A model with no
+    such key keeps every module."""
+    selectors = set(config_model_of(catalogs).get("profiles", {}).get("active_keys") or ())
+    blocks: set[str] = set()
+    for module in modules:
+        for name, (symbol, _, _) in held[module].items():
+            for _, entry in index.constants.get(symbol, ()):
+                source = bare_descriptor(str(entry.get("symbol") or ""))
+                giver = owner_of(source) if entry.get("kind") == "field" else None
+                if giver in modules and giver != module and member_name(source) == name:
+                    blocks.add(giver)
+    if not selectors or not blocks:
+        return modules
+    started: set[str] = set()
+    for row in index.sites.values():
+        stated = index.environment_reads.get((str(row.get("owner")), str(row["name"])))
+        if stated is None or stated[1] is None:
+            continue
+        arguments = row["arguments"] or []
+        written = [
+            None if slot is None or slot == UNPACKED_SLOT else arguments[slot].get("value")
+            for slot in (argument_slot(arguments, stated[0]), argument_slot(arguments, stated[1]))
+        ]
+        if written[0] in selectors and written[1] is not None:
+            started.add(str(written[1]))
+    return [m for m in modules if m not in blocks or dotted_type(m) in started]
 
 
 def _settings_named(catalogs: Sequence[Catalog]) -> set[str]:
