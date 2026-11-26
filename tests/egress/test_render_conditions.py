@@ -1357,10 +1357,73 @@ def test_the_condition_of_a_root_is_printed_one_time_for_its_routes():
         "  - Exists only when: the code's test `settings.DEBUG` is true, not evaluated"
     ) in _block(document, "GET /b`")
     other = _block(document, "GET /jobs`")
-    assert "  - Common condition: does not apply" in other
+    assert "  - Common condition: does not apply; its own conditions follow" in other
     assert "the configuration key `ROOT_URLCONF` is `jobs.urls`" in other
     free = _block(document, "GET /free`")
-    assert "  - Common condition: does not apply" in free and "Exists" not in free
+    assert "  - Common condition: does not apply\n" in free + "\n" and "Exists" not in free
+
+
+def test_a_route_of_a_root_never_reads_as_existing_where_the_root_does_not_hold():
+    """bookwyrm's two settings modules: the root holds in one and not in the other. A route
+    with one more test, true in both, states that test alone, and its verdict is still of
+    all its conditions: it exists in 1 of 2 environments, never "2 of 2" (review of
+    2026-11-26). A route whose root no environment decides is no member: one statement must
+    be true of each of its routes."""
+
+    def root(row_id: int, holds: tuple[str, str] = ("true", "false")) -> list[dict[str, object]]:
+        return [
+            {**_root_condition(row_id, "shop.urls", held), "environment": environment}
+            for environment, held in zip(("shop.settings", "worker.settings"), holds, strict=True)
+        ]
+
+    document = _document(
+        endpoints=[
+            {**_inbound(USERS + "status()."), "path": f"/{row_id}", "row_id": row_id}
+            for row_id in (7, 8, 9)
+        ],
+        endpoint_existence=[
+            *root(7),
+            *root(8),
+            *(
+                {
+                    **_existence(0, "settings.DEBUG", True, 1),
+                    "row_id": 8,
+                    "environment": environment,
+                    "holds": "true",
+                }
+                for environment in ("shop.settings", "worker.settings")
+            ),
+            *root(9, ("unresolved", "unresolved")),
+        ],
+    )
+
+    assert "2 endpoints have one condition in common" in document
+    member = _block(document, "GET /8`")
+    assert "  - Exists only when: the code's test `settings.DEBUG` is true" in member
+    assert "holds in 1 of 2 environments" in member and "2 of 2" not in member
+    apart = _block(document, "GET /9`")
+    assert "  - Common condition: does not apply; its own conditions follow" in apart
+    assert "the configuration key `ROOT_URLCONF` is `shop.urls`, not evaluated" in apart
+
+
+def test_two_conditions_as_many_routes_share_give_one_document():
+    """A tie is broken by the condition's own text, not by the order a set gives."""
+
+    def both(row_id: int) -> list[dict[str, object]]:
+        return [
+            _root_condition(row_id, "a.urls"),
+            {**_root_condition(row_id, "b.urls"), "position": 1},
+        ]
+
+    document = _document(
+        endpoints=[
+            {**_inbound(USERS + "status()."), "path": f"/{row_id}", "row_id": row_id}
+            for row_id in (7, 8)
+        ],
+        endpoint_existence=[*both(7), *both(8)],
+    )
+    common = _block(document, "2 endpoints have one condition in common")
+    assert "`ROOT_URLCONF` is `b.urls`" in common and "a.urls" not in common
 
 
 def test_a_route_one_alternative_reaches_under_the_root_alone_states_no_more():

@@ -83,13 +83,18 @@ def test_only_an_upper_case_name_is_a_key(tmp_path: Path, libraries):
         libraries,
         {
             "settings.py": "ROOT_URLCONF = 'app.urls'\nloaders = 'x'\nMixed = 2\n"
-            "_private = 3\nAPI_V2 = 'on'\n",
+            "_private = 3\nAPI_V2 = 'on'\n_HIDDEN = 4\nX = 5\n_ = 6\n",
             "settings_dev.py": "ROOT_URLCONF = 'app.urls'\nextra = 1\n",
             "urls.py": _URLS,
         },
     )
 
-    assert sorted({key for _, key in _config(workspace)}) == ["API_V2", "ROOT_URLCONF"]
+    assert sorted({key for _, key in _config(workspace)}) == [
+        "API_V2",
+        "ROOT_URLCONF",
+        "X",
+        "_HIDDEN",
+    ]
 
 
 def test_settings_only_the_tests_select_are_no_environment(tmp_path: Path, libraries):

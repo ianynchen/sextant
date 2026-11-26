@@ -5,8 +5,8 @@ Each module that holds the setting a catalog names with that word (`matches.root
 Django's `ROOT_URLCONF`) is a source, and its module name is the environment, as a profile
 file's name is on the JVM. A module holds a name it writes, and a name a `from m import *`
 gives it (the scanner writes that binding as a field write, as an import of one variable).
-Each name the module holds is a key: one `resolved_config` row per name per settings module (where the source says
-`key_names: upper_case`, per upper-case name, the framework's own rule),
+Each name the module holds is a key: one `resolved_config` row per name per settings module
+(where the source says `key_names: upper_case`, per upper-case name, the framework's own rule),
 and, as for a profile, an `external` row where another settings module holds a name this
 one does not. Nothing here names a framework: the word and the setting are catalog data.
 

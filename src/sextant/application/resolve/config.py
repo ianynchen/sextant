@@ -264,7 +264,7 @@ def _validate_model(catalog: Catalog) -> None:
         ):
             raise CatalogError(
                 f"loading catalog {catalog.source}: config_model.sources `{KEY_NAMES}` is "
-                f"`{UPPER_CASE}` on a `{FROM_MODULE}` source, got {source[KEY_NAMES]!r}"
+                f"`{UPPER_CASE}`, on a `{FROM_MODULE}` source alone, got {source!r}"
             )
 
 
