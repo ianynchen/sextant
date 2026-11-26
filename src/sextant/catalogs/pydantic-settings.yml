@@ -29,7 +29,9 @@ config_model:
     # environment: one row per name the module holds, the value read by the value walk,
     # through `from .base import *`. This model is the Python family's one config model, so
     # the form is written here and the setting's name stays in the catalog that owns it.
-    - { from_module_holding: root_setting }
+    # `key_names: upper_case` (ruled 2026-11-26): Django takes only an upper-case name of
+    # the module as a setting (`Settings.__init__`), so a helper name it holds is no key.
+    - { from_module_holding: root_setting, key_names: upper_case }
   # How a settings class is written: the class-body field holding the config call, and the calls
   # that make it (`SettingsConfigDict(...)`, or a dict display, which the scanner writes as the
   # `dict(...)` it builds). The same forms `shape-models/pydantic.yml` reads in its own context.

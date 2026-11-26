@@ -6619,6 +6619,12 @@ file, so the file pass skips it; a value that is no word is a `CatalogError`. It
 `pydantic-settings.yml`, the Python family's one config model (`config_model_of` takes one
 model per module), and the setting's name stays in the catalog that owns it. A module with no
 such setting (Flask, FastAPI, a reusable Django app) gets no row from it and stays `default`.
+**`key_names: upper_case`** on that source (ruled 2026-11-26) says which names are keys: only
+a name that is upper case by the language's own test (`str.isupper`), which is Django's rule
+(`Settings.__init__`: `if setting.isupper()`). A helper name the module holds
+(`default_loaders = [...]`) is then no key and gets no row. `upper_case` is the one value;
+another value, or the word on a source that is no `from_module_holding`, is a `CatalogError`.
+Absent: every name is a key.
 Stated limits: OI-554 (a template module is an environment; a module the repository does not
 ship is none; which module a process selects is not read), OI-568, OI-569.
 

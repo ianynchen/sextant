@@ -73,6 +73,25 @@ def test_each_module_holding_the_root_setting_is_an_environment(tmp_path: Path, 
     assert not [key for _, key in config if key in ("OTHER", "urlpatterns")]
 
 
+def test_only_an_upper_case_name_is_a_key(tmp_path: Path, libraries):
+    """Django takes a name of a settings module as a setting only where it is upper case
+    (`Settings.__init__`: `if setting.isupper()`), so a helper name the module holds is no
+    key (ruled 2026-11-26; the source's `key_names: upper_case`). bookwyrm's
+    `default_loaders` was a row before."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "ROOT_URLCONF = 'app.urls'\nloaders = 'x'\nMixed = 2\n"
+            "_private = 3\nAPI_V2 = 'on'\n",
+            "settings_dev.py": "ROOT_URLCONF = 'app.urls'\nextra = 1\n",
+            "urls.py": _URLS,
+        },
+    )
+
+    assert sorted({key for _, key in _config(workspace)}) == ["API_V2", "ROOT_URLCONF"]
+
+
 @pytest.mark.parametrize("owner", ["Env", "FileAwareEnv"])
 def test_a_read_through_environs_is_the_key_expression(tmp_path: Path, libraries, owner):
     """`env.bool("DEBUG", False)` on an `environs` reader is a read of the key `DEBUG`

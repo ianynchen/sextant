@@ -5,7 +5,8 @@ Each module that holds the setting a catalog names with that word (`matches.root
 Django's `ROOT_URLCONF`) is a source, and its module name is the environment, as a profile
 file's name is on the JVM. A module holds a name it writes, and a name a `from m import *`
 gives it (the scanner writes that binding as a field write, as an import of one variable).
-Each name the module holds is a key: one `resolved_config` row per name per settings module,
+Each name the module holds is a key: one `resolved_config` row per name per settings module (where the source says
+`key_names: upper_case`, per upper-case name, the framework's own rule),
 and, as for a profile, an `external` row where another settings module holds a name this
 one does not. Nothing here names a framework: the word and the setting are catalog data.
 
@@ -25,7 +26,12 @@ from collections.abc import Sequence
 
 from sextant.application.ports.catalogs import Catalog
 from sextant.application.ports.workspace import Workspace
-from sextant.application.resolve.config import FROM_MODULE, config_model_of, not_set
+from sextant.application.resolve.config import (
+    FROM_MODULE,
+    KEY_NAMES,
+    config_model_of,
+    not_set,
+)
 from sextant.application.resolve.values import (
     ABSENT,
     EXPRESSION,
@@ -84,7 +90,14 @@ def record_module_config(workspace: Workspace, catalogs: Sequence[Catalog]) -> N
         one.value_annotations,
         returns_arguments=one.returns_arguments,
     )
-    keys = sorted({name for module in modules for name in held[module]})
+    # `key_names: upper_case`: a name the framework does not take as a setting is no key.
+    upper = any(
+        FROM_MODULE in source and KEY_NAMES in source
+        for source in config_model_of(catalogs).get("sources", [])
+    )
+    keys = sorted(
+        {name for module in modules for name in held[module] if name.isupper() or not upper}
+    )
     rows: list[dict[str, object]] = []
     for module in modules:
         environment = dotted_type(module)
