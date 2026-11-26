@@ -133,7 +133,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from functools import lru_cache
-from itertools import product
+from itertools import pairwise, product
 from typing import Any, cast
 from weakref import WeakKeyDictionary
 
@@ -2752,6 +2752,21 @@ class Path:
             if step.context[0] == _PASSED
         )
 
+    def members(self) -> tuple[int | None, ...] | None:
+        """The member of a written list this path read, as its index at each depth, outermost
+        first (`K[0][1]` is `(0, 1)`), None in the place of a member that was not read; `()`
+        for a value that is no member. None where the path read members of two lists (a list
+        held by name inside another)."""
+        steps = sorted(
+            (step for step in self.trail if step.context[0] == _ELEMENT_OF),
+            key=lambda step: len(step.context),
+        )
+        if any(b.context[: len(a.context)] != a.context for a, b in pairwise(steps)):
+            return None
+        return tuple(
+            int(index) if (index := step.label.split()[-1]).isdigit() else None for step in steps
+        )
+
     def written_under(self) -> tuple[tuple[str, str], ...]:
         """The writes under a test this path read a value through (`_WRITTEN_UNDER`), each as
         `(writing method, its tests)`, the tests as `field_writes.guards` spells them; and the
@@ -4885,7 +4900,18 @@ class _Walk:
             return _only(trail, Answer(kind=ABSENT))
         return self._enumerated(
             [
-                (index, self._unpacked(element, method, origin, trail, frames))
+                (
+                    index,
+                    self._unpacked(
+                        element,
+                        method,
+                        # A member that is itself a written list is its own aggregate: with
+                        # the outer origin its members' steps would be the outer members'.
+                        (*origin, index) if isinstance(element.get("elements"), list) else origin,
+                        trail,
+                        frames,
+                    ),
+                )
                 for index, element in enumerate(elements)
             ],
             origin,

@@ -391,6 +391,12 @@ def settings_reads_of(workspace: Workspace, catalog: Catalog) -> SettingsReads:
             details.setdefault(str(row["environment"]), {})[str(row["key"])] = str(
                 row["unresolved_detail"]
             )
+    # A key held as a list has one row per member (`K[0]`, `settings_modules._keys`): a test
+    # on `K` reads no one value, and the module does set it.
+    for environment, held in config.items():
+        for key in {key.split("[", 1)[0] for key in held if key.endswith("]")} - held.keys():
+            held[key] = None
+            details.setdefault(environment, {})[key] = f"{key} is a list, one key for each member"
     # A settings module is named by its environment (`settings_modules`), so the module of
     # each environment is one whose names are keys.
     modules = {type_descriptor(environment) for environment in config}

@@ -35,8 +35,9 @@ from sextant.application.resolve.values import (
     SYMBOL,
     UNRESOLVED,
     Answer,
+    Path,
     cached_value_index,
-    resolve_site,
+    resolve_positions_on_paths,
 )
 from sextant.domain.symbols import bare_descriptor, dotted_type, member_name, owner_of
 
@@ -97,9 +98,23 @@ def record_module_config(workspace: Workspace, catalogs: Sequence[Catalog]) -> N
                 "ordinal": -1,
                 "arguments": [{"kind": "field", "symbol": symbol}],
             }
-            answers = [binding.slots[0] for binding in resolve_site(workspace, site, index)]
-            value, reason, detail = _stated(key, answers)
-            rows.append(_row(key, environment, value, paths.get(document), reason, detail))
+            reached = [
+                (path, answers[key])
+                for path, answers in resolve_positions_on_paths(workspace, {key: (site, 0)}, index)
+            ]
+            # Every write of the list unpacks the name itself (`K = K + [...]` on a list a
+            # star import gives): the walk reads the added members alone, at no known place.
+            lists = [
+                entry.get("elements") or []
+                for _, entry in index.constants.get(symbol, ())
+                if entry.get("kind") == "array"
+            ]
+            spread = bool(lists) and all(
+                any(e.get("keyword") and e.get("symbol") == symbol for e in elements)
+                for elements in lists
+            )
+            for name, (value, reason, detail) in _keys(key, reached, spread).items():
+                rows.append(_row(name, environment, value, paths.get(document), reason, detail))
     workspace.derive("resolved_config_insert", rows=rows)
 
 
@@ -119,7 +134,35 @@ def _settings_named(catalogs: Sequence[Catalog]) -> set[str]:
     }
 
 
-def _stated(key: str, answers: Sequence[Answer]) -> tuple[str | None, str | None, str | None]:
+_Stated = tuple[str | None, str | None, str | None]
+
+
+def _keys(key: str, reached: Sequence[tuple[Path, Answer]], spread: bool) -> dict[str, _Stated]:
+    """The keys of one name, each with its `_stated`. A written list is one key per member,
+    `K[0]`, `K[0][1]`, the form a YAML list has (ruled 2026-11-25, Q4 part 2); where a member
+    was not read, the read members and `K` itself with that member's reason. A list a write
+    under a test changes, or one every write of adds to (`spread`), has no one
+    membership: the name alone, with its reason."""
+    if spread:
+        detail = f"{key} adds to a list this module does not write: its members were not read"
+        return {key: (None, NOT_READABLE, detail)}
+    members = [path.members() for path, _ in reached]
+    if not all(members) or any(path.written_under() for path, _ in reached):
+        return {key: _stated(key, [answer for _, answer in reached])}
+    by_member: dict[str, list[Answer]] = {}
+    unread: Answer | None = None
+    for member, (_, answer) in zip(members, reached, strict=True):
+        if member is None or None in member:
+            unread = unread or answer
+        else:
+            by_member.setdefault(key + "".join(f"[{i}]" for i in member), []).append(answer)
+    keys = {name: _stated(name, answers) for name, answers in by_member.items()}
+    if unread is not None:
+        keys[key] = (None, unread.reason or NOT_READABLE, f"a member of {key} was not read")
+    return keys
+
+
+def _stated(key: str, answers: Sequence[Answer]) -> _Stated:
     """`(value, reason, detail)` of one name: its one value as text, or why it has none."""
     distinct = list(dict.fromkeys(answers))
     if len(distinct) != 1:

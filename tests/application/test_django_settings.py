@@ -135,10 +135,68 @@ def test_a_setting_with_no_one_value_states_a_reason(tmp_path: Path, libraries):
 
     config = _config(workspace)
     assert config[("app.settings", "MODE")] == (None, "not_readable")
-    assert config[("app.settings", "APPS")] == (None, "not_readable")
+    assert config[("app.settings", "APPS[0]")] == ("one", None)
+    assert config[("app.settings", "APPS[1]")] == ("two", None)
+    assert ("app.settings", "APPS") not in config
     assert config[("app.settings", "NAME")][0] is None
     assert config[("app.settings", "NAME")][1] is not None
     assert config[("app.settings", "NOTHING")] == (None, "not_readable")
+
+
+def test_a_list_setting_is_one_key_for_each_member(tmp_path: Path, libraries):
+    """A setting written as a list is one key per member, `K[0]`, `K[1]`, the form a YAML
+    list has (ruled 2026-11-25, Q4 part 2), a member that is a list `K[0][1]`. An addition
+    to the list is a write of it, so its members are keys too. Where a member is not read,
+    the read members are keys and `K` keeps one reason. A list with a member added under a
+    test has no one membership: `K` keeps its reason and no member is a key."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "settings.py": "import os\nimport socket\nROOT_URLCONF = 'app.urls'\n"
+            "APPS = ['one', 'two']\nAPPS += ['three']\n"
+            "LANGUAGES = [('en', 'English'), ('de', 'German')]\n"
+            "HOSTS = ['localhost', socket.gethostname()]\n"
+            "EXTRA = ['one']\nif os.environ.get('X'):\n    EXTRA += ['two']\n",
+            "settings_ci.py": "ROOT_URLCONF = 'app.urls'\nAPPS = ['one']\n",
+            # bookwyrm's `celerywyrm.settings`: the list a star import gives, with one more.
+            "settings_job.py": "from app.settings import *\nAPPS = APPS + ['job']\n",
+            "urls.py": _URLS,
+        },
+    )
+
+    config = _config(workspace)
+    assert config[("app.settings_job", "APPS")] == (None, "not_readable")
+    assert ("app.settings_job", "APPS[0]") not in config
+    held = {
+        key: value for (environment, key), value in config.items() if environment == "app.settings"
+    }
+    assert {key: held[key] for key in held if key.startswith("APPS")} == {
+        "APPS[0]": ("one", None),
+        "APPS[1]": ("two", None),
+        "APPS[2]": ("three", None),
+    }
+    assert {key: held[key] for key in held if key.startswith("LANGUAGES")} == {
+        "LANGUAGES[0][0]": ("en", None),
+        "LANGUAGES[0][1]": ("English", None),
+        "LANGUAGES[1][0]": ("de", None),
+        "LANGUAGES[1][1]": ("German", None),
+    }
+    assert held["HOSTS[0]"] == ("localhost", None)
+    assert held["HOSTS"][0] is None and held["HOSTS"][1] is not None
+    assert "HOSTS[1]" not in held
+    assert held["EXTRA"] == (None, "not_readable")
+    assert not [key for key in held if key.startswith("EXTRA[")]
+    # The other settings module holds the name with one member: no "not set" row for it or
+    # for a member it does not have; a name it does not hold at all is not set, as before.
+    other = {
+        key: value
+        for (environment, key), value in config.items()
+        if environment == "app.settings_ci"
+    }
+    assert {key for key in other if key.startswith("APPS")} == {"APPS[0]"}
+    assert other["HOSTS"] == (None, "external")
+    assert not [key for key in other if key.startswith(("HOSTS[", "LANGUAGES["))]
 
 
 def test_a_program_with_no_root_setting_has_no_environment(tmp_path: Path, libraries):
@@ -428,11 +486,11 @@ def test_a_setting_written_with_no_one_value_says_why_in_the_evidence(tmp_path: 
         str(row["key"]): str(row["unresolved_detail"]) for row in workspace.query("resolved_config")
     }
     evidence = {row[3]: row[6] for row in _existence(workspace) if row[3] != ("ROOT_URLCONF",)}
+    details["APPS"] = "APPS is a list, one key for each member"
     assert evidence == {
         (key,): f"`{key}{_SET}app.settings` configuration sets no readable value: {details[key]}"
         for key in ("APPS", "MODE", "NOTHING")
     }
-    assert details["APPS"].endswith("not one value")
     assert "placeholder" not in "".join(evidence.values())
 
 
