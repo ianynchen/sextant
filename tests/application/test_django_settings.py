@@ -413,8 +413,10 @@ def test_a_setting_written_with_no_one_value_says_why_in_the_evidence(tmp_path: 
 
 def test_the_routes_of_a_root_exist_where_the_root_setting_names_it(tmp_path: Path, libraries):
     """Two settings modules name two roots: each root's routes carry the condition
-    "`ROOT_URLCONF` is `<root>`", kind `property`, "not evaluated" in every environment, with
-    what each environment sets as evidence. No row is removed and none is copied."""
+    "`ROOT_URLCONF` is `<root>`", kind `property`, with what each environment sets as
+    evidence. It is decided in each environment on the one text that settings module writes
+    for the root (ruled 2026-11-26), by the rule of a test on a setting: true where the module
+    names this root, false where it names the other. No row is removed and none is copied."""
     workspace = _resolved(
         tmp_path,
         libraries,
@@ -429,18 +431,32 @@ def test_the_routes_of_a_root_exist_where_the_root_setting_names_it(tmp_path: Pa
     assert sorted(row["path"] for row in workspace.query("endpoints")) == ["/a/", "/u/"]
     assert _existence(workspace) == [
         ("/a/", "property", "ROOT_URLCONF == 'app.admin_urls'", ("ROOT_URLCONF",), "app.settings",
-         "unresolved", f"`ROOT_URLCONF{_SET}app.settings` configuration sets `app.urls`"),
+         "false", f"`ROOT_URLCONF{_SET}app.settings` configuration sets `app.urls`"),
         ("/a/", "property", "ROOT_URLCONF == 'app.admin_urls'", ("ROOT_URLCONF",),
-         "app.settings_admin", "unresolved",
+         "app.settings_admin", "true",
          f"`ROOT_URLCONF{_SET}app.settings_admin` configuration sets `app.admin_urls`"),
         ("/u/", "property", "ROOT_URLCONF == 'app.urls'", ("ROOT_URLCONF",), "app.settings",
-         "unresolved", f"`ROOT_URLCONF{_SET}app.settings` configuration sets `app.urls`"),
+         "true", f"`ROOT_URLCONF{_SET}app.settings` configuration sets `app.urls`"),
         ("/u/", "property", "ROOT_URLCONF == 'app.urls'", ("ROOT_URLCONF",), "app.settings_admin",
-         "unresolved",
+         "false",
          f"`ROOT_URLCONF{_SET}app.settings_admin` configuration sets `app.admin_urls`"),
     ]  # fmt: skip
     expression = json.loads(str(workspace.query("endpoint_existence")[0]["expression"]))
     assert expression["having_value"] in ("app.urls", "app.admin_urls")
+
+
+def test_a_root_a_star_import_can_replace_is_not_decided(tmp_path: Path, libraries):
+    """The door of every decided test (ruling R10): a root the settings module writes before
+    a star import of a file that is not read has no one value there. "Not evaluated"."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {"settings.py": "ROOT_URLCONF = 'app.urls'\n" + _ABSENT, "urls.py": _URLS},
+    )
+
+    assert _verdicts(workspace, "ROOT_URLCONF == 'app.urls'") == {
+        "app.settings": ("unresolved", "unresolved")
+    }
 
 
 def test_two_settings_modules_naming_one_root_give_one_condition(tmp_path: Path, libraries):

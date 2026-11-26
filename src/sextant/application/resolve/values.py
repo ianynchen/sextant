@@ -3497,7 +3497,7 @@ class Tests:
 
     def __init__(self, index: ValueIndex, identities: "Identities" = ()) -> None:
         self._walk = _Walk(index, identities, functions=True, deps=[])
-        # Each written name by its bare symbol (`setting`), built when first asked.
+        # Each written name by its bare symbol (`_symbol`), built when first asked.
         self._written: dict[str, str] | None = None
 
     def setting(self, name: str, when: str, method: str) -> bool | None:
@@ -3507,17 +3507,44 @@ class Tests:
         the walk gives the name exactly one written literal and nothing a deployment sets is
         in its chain (an environment read, a write a star import can replace). None where it
         is not decided, and for a name nothing writes."""
-        if self._written is None:
-            index = self._walk._index
-            self._written = {
-                bare_descriptor(symbol): symbol for symbol in (*index.constants, *index.produced)
-            }
-        symbol, judged = self._written.get(name), _WHEN.get(when)
+        symbol, judged = self._symbol(name), _WHEN.get(when)
         if symbol is None or judged is None:
             return None
         self._walk._computes = 0
         found = self._walk._decided({"kind": "field", "symbol": symbol}, judged, method, (), ())
         return found[0][1] if len(found) == 1 else None
+
+    def setting_is(self, name: str, value: str, method: str) -> bool | None:
+        """Whether the module name `name` is the written text `value` there (the root
+        condition, ruled 2026-11-26), by the rule of `setting`: decided on exactly one written
+        literal with nothing a deployment sets in its chain. None where it is not decided."""
+        symbol = self._symbol(name)
+        if symbol is None:
+            return None
+        self._walk._computes = 0
+        reached = self._walk._entry(
+            {"kind": "field", "symbol": symbol}, method, (_TEST_OF, method), (), ()
+        )
+        if len(reached) != 1:
+            return None
+        path, answer = reached[0]
+        if (
+            any(step.context[0] in (_ELEMENT_OF, _WRITTEN_UNDER) for step in path)
+            or _truth(answer) is None
+            or answer.kind != LITERAL
+            or answer.literal_kind == SYMBOL
+        ):
+            return None
+        return str(answer.value) == value
+
+    def _symbol(self, name: str) -> str | None:
+        """The written name whose bare symbol is `name`, built when first asked."""
+        if self._written is None:
+            index = self._walk._index
+            self._written = {
+                bare_descriptor(symbol): symbol for symbol in (*index.constants, *index.produced)
+            }
+        return self._written.get(name)
 
     def ran(
         self, method: str, guards: str, within: "Path | None"

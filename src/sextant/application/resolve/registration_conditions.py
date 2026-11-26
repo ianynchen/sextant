@@ -43,7 +43,8 @@ value model states is read by key (`key_reads`: `settings.DEBUG` on Django's set
 and of a name of a settings module (an environment, `settings_modules`) is a read of a key
 the same way (ruling R3 of 2026-11-25), each environment's value as evidence.
 A condition a reader states itself on the value of a key (`having_value`: the routes of a
-root exist where the root setting names it, `shapes/mounts.py`) is a guard like the others.
+root exist where the root setting names it, `shapes/mounts.py`) is a guard like the others,
+and it is decided per environment like a test on a setting (ruled 2026-11-26).
 
 **A test on a setting is decided per environment** (the approved note's last step): in
 `existence_rows`, a `property` guard on one key whose test has one of the forms below is
@@ -131,6 +132,8 @@ class Decider(Protocol):
 
     def setting(self, name: str, when: str, method: str) -> bool | None: ...
 
+    def setting_is(self, name: str, value: str, method: str) -> bool | None: ...
+
 
 @dataclass
 class Conditions:
@@ -154,12 +157,19 @@ class Conditions:
         """Whether `guard`, a test on the one key `key`, goes its way in `environment` (the
         approved note of R3, 2026-11-25): decided where the test has one of the R2 forms and
         the environment's settings module gives the key one written literal with no door
-        (`Decider.setting`). None where it is not decided: "not evaluated", as before."""
-        when = self.whens.get(guard)
-        if when is None or self.decider is None:
+        (`Decider.setting`). A condition on the value of the key (`having_value`, the routes
+        of a root) is decided the same way on that one written text (`Decider.setting_is`,
+        ruled 2026-11-26). None where it is not decided: "not evaluated", as before."""
+        if self.decider is None:
             return None
         name = f"{type_descriptor(environment)}{key}."
-        true = self.decider.setting(name, when, guard[0])
+        if guard[5] is not None:
+            true = self.decider.setting_is(name, str(guard[5]), guard[0])
+        else:
+            when = self.whens.get(guard)
+            if when is None:
+                return None
+            true = self.decider.setting(name, when, guard[0])
         return None if true is None else true == guard[2]
 
     def of_sites(
@@ -459,7 +469,7 @@ def existence_rows(
                     # condition is in its own environment (`Conditions.setting_holds`).
                     decided = (
                         conditions.setting_holds(guard, keys[0], environment)
-                        if conditions is not None and len(keys) == 1 and guard[5] is None
+                        if conditions is not None and len(keys) == 1
                         else None
                     )
                     written.append(
