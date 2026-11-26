@@ -89,6 +89,18 @@ def _loaded(directory, text: str):
     return YamlCatalogSource(directory).environment_reads()
 
 
+def test_a_text_parameter_joined_into_another_text_is_still_read(tmp_path, libraries):
+    """Rule 7 in Python (ruled 2026-11-26): no call can change a `str`, so `key + "_FILE"`
+    handed to a call before the read is no hand-off of `key` (healthchecks' `envsecret`)."""
+    body = (
+        "    requests.get(read('U'))\n"
+        "def read(key: str) -> str | None:\n"
+        "    os.getenv(key + '_FILE')\n"
+        "    return os.getenv(key)\n"
+    )
+    assert _addresses(tmp_path, libraries, body) == [(None, "${U}", "resolved")]
+
+
 def test_the_shipped_entries_read_as_the_typeshed_symbols():
     from sextant.ingress.catalogs.yaml_source import YamlCatalogSource
     from sextant.resources import catalogs_dir

@@ -75,7 +75,10 @@ Two marks on an answer: `inexact` (a URL publishes at `partial`; a channel is re
    two or more make every row `partial` (`values.py:3505-3535`; `TV:6364`, `TV:6382`).
 6. **A field is read per object and per write** (`TV:4428`, `TV:4441`).
 7. **A value handed to code we do not have `escapes`.** An immutable value (a string) is never
-   a hand-off (`TV:5562`, `TV:5599`).
+   a hand-off (`TV:5562`, `TV:5599`). In Python too (ruled 2026-11-26): a parameter written
+   `str`, `bytes`, `int`, `float` or `bool`
+   (`tests/application/test_environment_reads.py::test_a_text_parameter_joined_into_another_text_is_still_read`).
+   A parameter with no written type is OI-497.
 8. **What a deployment can change is "not evaluated"**: the row exists and its condition is
    stated (`tests/application/test_bean_conditions.py:2826`†; Python
    `tests/application/test_fastapi_conditions.py:59`). A test on a value the code fixes is

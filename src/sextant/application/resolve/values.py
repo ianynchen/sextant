@@ -408,6 +408,8 @@ DEPTH_CAP = 80
 # primitives, `String` and the boxed primitives, as a descriptor spells a type. A property of
 # the TYPE, never of a method: read off the site's own descriptor for the parameter a value is
 # handed to, and off the facts for the VALUE's own type (fix round 1, M1 — `_Walk._type_of`).
+# Python's own (ruled 2026-11-26): `str`, `bytes` and the numbers, as `slot_of_type` spells
+# the type a parameter is written with (`key: str`).
 _UNCHANGEABLE = frozenset(
     {
         "Z",
@@ -427,6 +429,11 @@ _UNCHANGEABLE = frozenset(
         "Ljava/lang/Long;",
         "Ljava/lang/Float;",
         "Ljava/lang/Double;",
+        "Lbuiltins/str;",
+        "Lbuiltins/bytes;",
+        "Lbuiltins/int;",
+        "Lbuiltins/float;",
+        "Lbuiltins/bool;",
     }
 )
 # Where in a body a field write sits, which the fact does not say (D00 §5's `field_write`
