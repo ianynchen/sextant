@@ -6,3 +6,4 @@
 -- leaves an empty table rather than a stale previous run's rows (2F design
 -- §2).
 DELETE FROM resolved_config;
+DELETE FROM config_existence;

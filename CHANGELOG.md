@@ -17,6 +17,19 @@ here would restate those documents rather than add anything.
 
 ### Added
 
+- **A config row says when it is conditional and when it is not exact** (ruled 2026-11-27;
+  graph schema 19). `resolved_config` gains `resolution`. A key whose one write runs under a
+  test the analysis does not decide keeps its value and gets `config_existence` rows, the
+  role of `endpoint_existence` (`if USE_S3: AWS_ACCESS_KEY_ID = env(...)`; measured: bookwyrm
+  17 keys, weblate 6, healthchecks 1 were stated with no condition). A text with a part not
+  read is `partial` with the hole named, `<not read>/accounts/login/`, where it read
+  `{}/accounts/login/` as a plain value (weblate 10, healthchecks 2, zulip 1). The default of
+  an environment read that is no literal is stated in the row: `${SECRET_KEY:-None}`,
+  `${ALLOWED_HOSTS:-["*"]}`, another read nested (`${A:-${B:-5}}`), and `${KEY:-<default>}`
+  at `partial` where it was not read; the row read `${KEY}`, as a key the deployment must
+  set (bookwyrm 20 reads, healthchecks 3). The document names a partial key and a key set
+  only under a test in Coverage.
+
 - **A Django settings module is an environment** (ruling R3 of 2026-11-25, design note approved
   2026-11-25; OI-554). A new config-model source form, `{from_module_holding: root_setting}`:
   each module that holds the root setting (`ROOT_URLCONF`) is a source of configuration and its

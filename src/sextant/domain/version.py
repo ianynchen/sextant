@@ -321,6 +321,14 @@ SEXTANT_VERSION = version("sextant")
 #             `unresolved` (OI-368, approved by the user 2026-11-09). A workspace of the older
 #             vintage has no such table, so a reader would take every such row for one served
 #             wherever the module runs; it is refused and re-analysed.
+#     19      `resolved_config` gains `resolution` (`resolved`, `partial`, `unresolved`): a
+#             `partial` row holds a `value` with a named hole beside its reason, where a row
+#             had a value or a reason and never both. `config_existence`, a new derived
+#             table: where a config row exists when the write its value was read through runs
+#             under a test not decided (ruled by the user 2026-11-27, the role of
+#             `endpoint_existence`). A workspace of the older vintage has neither, so a
+#             reader would take a value with a hole, or one written under a test, for a
+#             plain one; it is refused and re-analysed.
 #
 #   boundary vocabulary
 #     1       the first generation (spec 2026-10-22-boundary-vocabulary-and-diff, FR-21):
@@ -348,5 +356,5 @@ SEXTANT_VERSION = version("sextant")
 #             consumer comparing two bundles would otherwise read a change of wording as a
 #             change of the value.
 FACT_SCHEMA_VERSION = 25
-GRAPH_SCHEMA_VERSION = 18
+GRAPH_SCHEMA_VERSION = 19
 BOUNDARY_VOCABULARY_VERSION = 5

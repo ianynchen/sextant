@@ -145,13 +145,40 @@ CREATE TABLE IF NOT EXISTS resolved_config (
     -- for this environment at all, so no file ever won it (D01).
     source            TEXT,
     environment       TEXT,
-    -- NULL exactly when `value` is non-NULL. One word of the general reason list
+    -- NULL where the value is read whole. One word of the general reason list
     -- (`values._REASONS`): `external` for a key the deployment sets or a remote import,
-    -- `cycle` for a placeholder chain that loops.
+    -- `cycle` for a placeholder chain that loops. Beside a `value` on a `partial` row: the
+    -- reason of the part that was not read.
     unresolved_reason TEXT,
     -- Text for a person that names the key and the place (`orders.url is not set`).
     -- The environment is a column of the row. NULL exactly when `unresolved_reason` is. No code branches on it.
-    unresolved_detail TEXT
+    unresolved_detail TEXT,
+    -- `resolved`: `value` is what the repository states. `partial`: `value` holds a named
+    -- hole (`<not read>/login/`, `${KEY:-<default>}`) for a part that was not read, and the
+    -- reason says why (ruled 2026-11-27, as an endpoint row with a hole in its path).
+    -- `unresolved`: no `value`. Set by the insert from the two columns above.
+    resolution        TEXT
+);
+
+-- Where a `resolved_config` row EXISTS when the write its value was read through runs under
+-- a test of the code (ruled 2026-11-27; the role of `endpoint_existence` for a registered
+-- row): `if USE_S3: AWS_ACCESS_KEY_ID = ...` gives the key that test. `key` and `environment`
+-- name the row. `route` numbers the alternatives (AND within, OR across), `position` orders
+-- the tests of one, outermost first, `via` is the method whose body holds the test,
+-- `expression` is JSON `{test, holds, reads}` as in `endpoint_existence`. `holds` and
+-- `resolution` are `unresolved`: the test is not evaluated, and `evidence` says so. A test
+-- the code fixes is decided by the walk and gives no entry. Replaced whole per resolve.
+CREATE TABLE IF NOT EXISTS config_existence (
+    key         TEXT,
+    environment TEXT,
+    route       INTEGER,
+    position    INTEGER,
+    via         TEXT,
+    kind        TEXT,
+    expression  TEXT,
+    holds       TEXT,
+    resolution  TEXT,
+    evidence    TEXT
 );
 
 -- The 2K hand-off ledger (2G design §6): one row per question a programmatic

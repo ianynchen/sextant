@@ -101,6 +101,9 @@ class ResolveReport:
     # Where each registered row exists when the calls registering it run only under tests the
     # analysis does not decide (OI-368), keyed by the row's `row_id`.
     endpoint_existence: list[dict[str, object]] = field(default_factory=list)
+    # Where a config row exists when the write its value was read through runs under a test
+    # not decided (ruled 2026-11-27), by `(environment, key)`.
+    config_existence: list[dict[str, object]] = field(default_factory=list)
     # The types the expansion reached and could not open: no field facts and
     # no catalog entry describing them. Carried rather than counted, because a
     # count cannot be acted on and a catalog only grows from observation
@@ -480,5 +483,6 @@ def report_of(
         symbol_beans=workspace.query("symbol_beans"),
         candidate_presence=workspace.query("candidate_presence"),
         endpoint_existence=workspace.query("endpoint_existence"),
+        config_existence=workspace.query("config_existence"),
         unexpanded_types=unexpanded_types,
     )

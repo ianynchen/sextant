@@ -695,8 +695,14 @@ _NAMED_QUERIES = {
     # `environment, key` so "unresolved for prod, resolved for dev" reads as
     # two adjacent rows rather than an arbitrary interleaving (NFR-1).
     "resolved_config": """
-        SELECT key, value, source, environment, unresolved_reason, unresolved_detail
+        SELECT key, value, source, environment, unresolved_reason, unresolved_detail,
+               resolution
         FROM resolved_config ORDER BY environment, key
+    """,
+    # Where a config row exists (ruled 2026-11-27), by the row, every column in the order.
+    "config_existence": """
+        SELECT * FROM config_existence
+        ORDER BY environment, key, route, position, via, kind, expression
     """,
     # The 2K hand-off ledger (2G design §6). Ordered by the wire identity the
     # row carries, `question` breaking a tie where one endpoint raises both
@@ -1540,10 +1546,20 @@ _EXPORT_QUERIES = {
     # value pattern's is not.
     "resolved_config": f"""
         SELECT c.key, coalesce(m.masked, c.value) AS value, c.source, c.environment,
-               c.unresolved_reason, c.unresolved_detail
+               c.unresolved_reason, c.unresolved_detail, c.resolution
         FROM resolved_config c
         LEFT JOIN {_REDACTED_CONFIG_VALUES} m ON m.key = c.key AND m.value = c.value
         ORDER BY c.environment, c.key
+    """,
+    # Where a config row exists: `expression` and `evidence` quote the code's test, masked
+    # as `endpoint_existence`'s are.
+    "config_existence": f"""
+        SELECT x.* REPLACE (coalesce(j.masked, x.expression) AS expression,
+                            coalesce(t.masked, x.evidence) AS evidence)
+        FROM config_existence x
+        LEFT JOIN {_REDACTED_JSON} j ON j.original = x.expression
+        LEFT JOIN {_REDACTED_EVIDENCE} t ON t.original = x.evidence
+        ORDER BY x.environment, x.key, x.route, x.position, x.via, x.kind, x.expression
     """,
     "shapes": _NAMED_QUERIES["shapes"],
     "shape_fields": _NAMED_QUERIES["shape_fields"],
@@ -2005,6 +2021,7 @@ _NAMED_DERIVATIONS = {
     "shapes_reset": "reset_shapes.sql",
     "resolved_config_reset": "reset_resolved_config.sql",
     "resolved_config_insert": "insert_resolved_config.sql",
+    "config_existence_insert": "insert_config_existence.sql",
     "stamp_media": "stamp_media.sql",
     "stamp_declared_response": "stamp_declared_response.sql",
     "stamp_declared_request": "stamp_declared_request.sql",
@@ -2961,7 +2978,8 @@ class DuckDbWorkspace:
             "UNION SELECT DISTINCT guards FROM call_sites WHERE guards IS NOT NULL "
             "UNION SELECT DISTINCT guards FROM field_writes WHERE guards IS NOT NULL "
             "UNION SELECT DISTINCT guards FROM method_returns WHERE guards IS NOT NULL "
-            "UNION SELECT DISTINCT expression FROM endpoint_existence WHERE expression IS NOT NULL"
+            "UNION SELECT DISTINCT expression FROM endpoint_existence WHERE expression IS NOT NULL "
+            "UNION SELECT DISTINCT expression FROM config_existence WHERE expression IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_JSON,
@@ -2983,7 +3001,8 @@ class DuckDbWorkspace:
         evidence_rows = self._connection.execute(
             "SELECT DISTINCT evidence FROM bean_conditions WHERE evidence IS NOT NULL "
             "UNION SELECT DISTINCT evidence FROM bean_presence WHERE evidence IS NOT NULL "
-            "UNION SELECT DISTINCT evidence FROM endpoint_existence WHERE evidence IS NOT NULL"
+            "UNION SELECT DISTINCT evidence FROM endpoint_existence WHERE evidence IS NOT NULL "
+            "UNION SELECT DISTINCT evidence FROM config_existence WHERE evidence IS NOT NULL"
         ).fetchall()
         self._stage_map(
             _REDACTED_EVIDENCE,

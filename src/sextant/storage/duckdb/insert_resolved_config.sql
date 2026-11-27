@@ -11,12 +11,16 @@
 --   $rows -- {key, value, source, environment, unresolved_reason,
 --             unresolved_detail} rows, one per key per profile the pass resolved
 --             (D01: "resolved_config is one row per key per environment"). `value`
---             is NULL exactly when `unresolved_reason` is set, one word of the
+--             is NULL where nothing was read; `unresolved_reason` is one word of the
 --             general reason list (`values._REASONS`); `unresolved_detail` says where,
---             for a person.
+--             for a person. A `value` beside a reason is a `partial` row: the value
+--             holds a named hole. `resolution` is set here from the two.
 INSERT INTO resolved_config (key, value, source, environment, unresolved_reason,
-                             unresolved_detail)
-SELECT r.key, r.value, r.source, r.environment, r.unresolved_reason, r.unresolved_detail
+                             unresolved_detail, resolution)
+SELECT r.key, r.value, r.source, r.environment, r.unresolved_reason, r.unresolved_detail,
+       CASE WHEN r.value IS NULL THEN 'unresolved'
+            WHEN r.unresolved_reason IS NULL THEN 'resolved'
+            ELSE 'partial' END
 FROM (SELECT UNNEST(
     $rows::STRUCT(
         key VARCHAR, value VARCHAR, source VARCHAR, environment VARCHAR,
