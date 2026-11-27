@@ -183,6 +183,10 @@ class ProjectNames(Protocol):
         """The names `module` binds by a star import alone, sorted."""
         ...
 
+    def star_giver(self, module: str, name: str) -> str | None:
+        """The module whose own statements bind the `name` that `module` takes by a star."""
+        ...
+
     def shape_of(self, symbol: str) -> "ClassShape | None":
         """A class another file of the module defines, by its header."""
         ...

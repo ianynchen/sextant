@@ -175,6 +175,35 @@ def test_a_settings_module_holds_what_a_star_import_gives_it(tmp_path: Path, lib
 _START = "import os\nos.environ.setdefault('DJANGO_SETTINGS_MODULE', '{}')\n"
 
 
+def test_a_star_import_gives_a_name_its_source_imports_and_writes_again(tmp_path: Path, libraries):
+    """zulip's `computed_settings`: `from .configured_settings import STATIC_URL`, then
+    `if STATIC_URL is None: STATIC_URL = ...`. `settings` takes the name with a star: it
+    holds what the source's own statements leave in the name, never only the value of the
+    import (measured 2026-11-27: 5 settings of `zproject.settings` had no row)."""
+    workspace = _resolved(
+        tmp_path,
+        libraries,
+        {
+            "defaults.py": "STATIC_URL = None\nHOST = 'h'\nLIMIT = 1\n",
+            "computed.py": (
+                "from app.defaults import STATIC_URL, HOST, LIMIT\n"
+                "ROOT_URLCONF = 'app.urls'\n"
+                "LIMIT = 5\n"
+                "if STATIC_URL is None:\n"
+                "    STATIC_URL = '/static/'\n"
+            ),
+            "settings.py": "from app.computed import *\n",
+            "manage.py": _START.format("app.settings"),
+            "urls.py": _URLS,
+        },
+    )
+
+    config = _config(workspace)
+    assert config[("app.settings", "HOST")] == ("h", None)
+    assert config[("app.settings", "LIMIT")] == ("5", None)
+    assert ("app.settings", "STATIC_URL") in config
+
+
 def _conditions(workspace) -> dict[tuple[str, str], list[tuple[object, ...]]]:
     found: dict[tuple[str, str], list[tuple[object, ...]]] = {}
     for row in workspace.query("config_existence"):
