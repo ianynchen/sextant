@@ -6,6 +6,8 @@ implements the declared `style`: that is knowledge of `application/resolve`,
 which this layer must not import, so the style is checked where the engines
 are — carrying `Catalog.source` so the error still names the file."""
 
+import functools
+import pickle
 import re
 from dataclasses import replace
 from enum import StrEnum
@@ -28,8 +30,16 @@ from sextant.domain.symbols import descriptor_slots, parameter_types, type_descr
 _SAFE_LOADER: type[yaml.SafeLoader] = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 
+@functools.cache
+def _parsed(text: str) -> bytes:
+    return pickle.dumps(yaml.load(text, Loader=_SAFE_LOADER))
+
+
 def _load(text: str) -> Any:
-    return yaml.load(text, Loader=_SAFE_LOADER)
+    # One `load` reads every file several times (once per table it builds), and a process
+    # that resolves more than once reads them all again. Parsed once per TEXT; each caller
+    # gets its own objects, so one that alters what it was given alters no other's.
+    return pickle.loads(_parsed(text))
 
 
 class YamlCatalogSource:
