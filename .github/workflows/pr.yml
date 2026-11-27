@@ -22,9 +22,18 @@ jobs:
     # tidier and were a lie: the Python end-to-end tests load the shaded jar,
     # so a Python job without a JVM either fails or skips the tests that matter
     # most — and a green run that skipped them is worse than a red one.
-    name: All gates
+    #
+    # Three copies of it, each with a third of the test files (`tests/conftest.py` deals
+    # them out). MEASURED on run 45907987130 (2026-11-27): the test step alone took 36 of
+    # the run's 40 minutes on the runner's four cores. Each copy does the whole setup,
+    # because every third has tests that need the jar and the primed fixtures.
+    name: All gates (${{ matrix.shard }}/3)
+    strategy:
+      matrix:
+        shard: [1, 2, 3]
     runs-on: ubuntu-latest
     env:
+      SEXTANT_TEST_SHARD: ${{ matrix.shard }}/3
       # `.python-version` names 3.14, which `uv` would obey. This job is the 3.12 floor.
       UV_PYTHON: "3.12"
     steps:

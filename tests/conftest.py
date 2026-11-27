@@ -122,6 +122,15 @@ _PIPELINE_FILES = (
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    # CI runs the suite as parallel jobs (`SEXTANT_TEST_SHARD=2/3`, .github/workflows/pr.yml):
+    # the files in name order, dealt in turn, so each file runs in exactly one job.
+    shard = os.environ.get("SEXTANT_TEST_SHARD")
+    if shard:
+        index, count = (int(part) for part in shard.split("/"))
+        files = sorted({i.path for i in items})
+        mine = {f for n, f in enumerate(files) if n % count == index - 1}
+        config.hook.pytest_deselected(items=[i for i in items if i.path not in mine])
+        items[:] = [i for i in items if i.path in mine]
     root = Path(str(config.rootpath))
     slow = [i for i in items if str(Path(i.path).relative_to(root)) in _PIPELINE_FILES]
     fast = [i for i in items if str(Path(i.path).relative_to(root)) not in _PIPELINE_FILES]
